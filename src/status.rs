@@ -50,6 +50,7 @@ pub struct Git {
 pub struct Item {
     pub review: Option<(usize, usize)>,
     pub web: bool,
+    pub jobs: bool,
     pub name: String,
     pub place: String,
     pub repo: Option<PathBuf>,
@@ -110,6 +111,7 @@ impl Item {
             })),
             "review": self.review.map(|(read, total)| json!({ "read": read, "files": total })),
             "web": self.web,
+            "jobs": self.jobs,
             "git": self.git.as_ref().map(|git| json!({
                 "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed,
             })),
@@ -210,12 +212,11 @@ pub fn gather() -> Result<Vec<Item>> {
                 .and_then(|id| agents.iter().find(|agent| agent["workspace_id"].as_str() == Some(id.as_str())))
                 .map(agent_from);
             let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
-            let web = workspace.as_ref()
-                .and_then(|id| herdr::workspace_tokens(id).ok())
-                .is_some_and(|tokens| tokens["web"].is_string());
+            let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             items.push(Item {
                 review: review_progress(&slot.path, &upstream),
-                web,
+                web: tokens["web"].is_string(),
+                jobs: tokens["jobs"].is_string(),
                 name: task,
                 place: name_of(repo),
                 repo: Some(repo.clone()),
@@ -236,6 +237,7 @@ pub fn gather() -> Result<Vec<Item>> {
         items.push(Item {
             review: None,
             web: false,
+            jobs: false,
             name: agent.title.clone(),
             place: label,
             repo: None,

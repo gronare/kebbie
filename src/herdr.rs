@@ -102,10 +102,9 @@ pub fn split_right(pane_id: &str, cwd: &Path, ratio: &str) -> Result<String> {
     text(&result["pane"]["pane_id"]).ok_or_else(|| "herdr pane split returned no pane".to_string())
 }
 
-// A working agent's history can only be scrolled back while it is idle, so fall back to what is on screen.
-pub fn read_agent(pane_id: &str, lines: usize) -> Result<String> {
-    run(&herdr(), &["agent", "read", pane_id, "--source", "recent-unwrapped", "--lines", &lines.to_string()], None)
-        .or_else(|_| run(&herdr(), &["agent", "read", pane_id, "--source", "visible"], None))
+// Only what is on screen: reading further back makes herdr scroll an idle agent's pane and restore it.
+pub fn read_agent(pane_id: &str) -> Result<String> {
+    run(&herdr(), &["agent", "read", pane_id, "--source", "visible"], None)
 }
 
 pub fn prompt_agent(pane_id: &str, message: &str) -> Result<()> {
@@ -114,4 +113,24 @@ pub fn prompt_agent(pane_id: &str, message: &str) -> Result<()> {
 
 pub fn workspace_tokens(workspace_id: &str) -> Result<Value> {
     Ok(call(&["workspace", "get", workspace_id])?["workspace"]["tokens"].clone())
+}
+
+pub fn panes_in(workspace_id: &str) -> Result<Vec<Value>> {
+    Ok(call(&["pane", "list", "--workspace", workspace_id])?["panes"].as_array().cloned().unwrap_or_default())
+}
+
+// The command a pane runs in the foreground, as argv; none while its shell waits at the prompt.
+pub fn foreground(pane_id: &str) -> Result<Option<Vec<String>>> {
+    let info = call(&["pane", "process-info", "--pane", pane_id])?["process_info"].clone();
+    let process = &info["foreground_processes"][0];
+    if process.is_null() || process["pid"] == info["shell_pid"] {
+        return Ok(None);
+    }
+    Ok(Some(process["argv"].as_array().into_iter().flatten().filter_map(|arg| arg.as_str().map(str::to_string)).collect()))
+}
+
+pub fn send_keys(pane_id: &str, keys: &[&str]) -> Result<()> {
+    let mut args = vec!["pane", "send-keys", pane_id];
+    args.extend_from_slice(keys);
+    call(&args).map(|_| ())
 }

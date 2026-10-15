@@ -43,23 +43,47 @@ enum Column {
 
 struct Choice {
     key: char,
-    label: &'static str,
-    about: &'static str,
+    label: String,
+    about: String,
 }
 
-const TASK_CHOICES: [Choice; 6] = [
-    Choice { key: 'g', label: "Go to its Space", about: "jump to the task's Space" },
-    Choice { key: 'p', label: "Message its Claude", about: "send it a line without leaving" },
-    Choice { key: 'r', label: "Open the review", about: "the review split next to its Claude" },
-    Choice { key: 'l', label: "Ready to push", about: "rebase, check, show the push command" },
-    Choice { key: 'd', label: "Done", about: "after you pushed: close it and free the worktree" },
-    Choice { key: 'x', label: "Drop", about: "throw the task away (asks first)" },
-];
+fn choice(key: char, label: &str, about: &str) -> Choice {
+    Choice { key, label: label.to_string(), about: about.to_string() }
+}
 
-const BACKLOG_CHOICES: [Choice; 2] = [
-    Choice { key: 'g', label: "Start as task", about: "a worktree, a Space and Claude with this as its prompt" },
-    Choice { key: 'R', label: "Refresh the backlog", about: "the lead fetches the vault and Linear again" },
-];
+fn task_choices(item: Option<&Item>) -> Vec<Choice> {
+    let mut choices = vec![
+        choice('g', "Go to its Space", "jump to the task's Space"),
+        choice('p', "Message its Claude", "send it a line without leaving"),
+        choice('r', "Open the review", "the review split next to its Claude"),
+    ];
+    if item.and_then(|item| item.path.as_ref()).is_some_and(|path| path.join("dev.yml").exists()) {
+        let item = item.unwrap();
+        choices.push(if item.web {
+            choice('w', "Stop the web server", "ctrl-c to its dev web")
+        } else {
+            choice('w', "Start the web server", "dev web in a tab of its Space")
+        });
+        choices.push(if item.jobs {
+            choice('b', "Stop the worker", "ctrl-c to its dev worker")
+        } else {
+            choice('b', "Start the worker", "dev worker in a tab of its Space")
+        });
+    }
+    choices.extend([
+        choice('l', "Ready to push", "rebase, check, show the push command"),
+        choice('d', "Done", "after you pushed: close it and free the worktree"),
+        choice('x', "Drop", "throw the task away (asks first)"),
+    ]);
+    choices
+}
+
+fn backlog_choices() -> Vec<Choice> {
+    vec![
+        choice('g', "Start as task", "a worktree, a Space and Claude with this as its prompt"),
+        choice('R', "Refresh the backlog", "the lead fetches the vault and Linear again"),
+    ]
+}
 
 enum Purpose {
     TaskName,
@@ -234,10 +258,10 @@ impl App {
         self.backlog.entries.get(self.backlog_selected).cloned()
     }
 
-    fn choices(&self) -> &'static [Choice] {
+    fn choices(&self) -> Vec<Choice> {
         match self.column {
-            Column::Work => &TASK_CHOICES,
-            Column::Backlog => &BACKLOG_CHOICES,
+            Column::Work => task_choices(self.tasks.get(self.work_selected)),
+            Column::Backlog => backlog_choices(),
         }
     }
 
@@ -247,7 +271,7 @@ impl App {
         {
             return message.clone();
         }
-        let message = last_message(&herdr::read_agent(pane, 120).unwrap_or_default());
+        let message = last_message(&herdr::read_agent(pane).unwrap_or_default());
         self.messages.insert(pane.to_string(), (Instant::now(), message.clone()));
         message
     }
@@ -295,8 +319,10 @@ impl App {
                     KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::Options(index.saturating_sub(1)),
                     KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::Options((index + 1).min(count - 1)),
                     KeyCode::Enter => {
-                        let key = self.choices()[index].key;
-                        self.act(key);
+                        if let Some(choice) = self.choices().get(index) {
+                            let key = choice.key;
+                            self.act(key);
+                        }
                     }
                     KeyCode::Char(character) if self.choices().iter().any(|choice| choice.key == character) => self.act(character),
                     KeyCode::Esc => {}
@@ -393,6 +419,8 @@ impl App {
                         }
                     }
                     'r' => self.open_review(&item),
+                    'w' => self.toggle_server(&item, "web", item.web),
+                    'b' => self.toggle_server(&item, "worker", item.jobs),
                     'l' | 'd' | 'x' => {
                         let Some(path) = item.path.clone() else { return };
                         match key {
@@ -405,6 +433,29 @@ impl App {
                 }
             }
         }
+    }
+
+    // A server runs as `dev web` or `dev worker` in a tab of the task's Space; stopping it is ctrl-c to that tab.
+    fn toggle_server(&mut self, item: &Item, kind: &str, running: bool) {
+        let (Some(workspace), Some(path)) = (&item.workspace, &item.path) else {
+            self.mode = Mode::Message(format!("{} has no Space open.", item.name));
+            return;
+        };
+        let result = if running {
+            let pane = herdr::panes_in(workspace).unwrap_or_default().into_iter()
+                .filter_map(|pane| pane["pane_id"].as_str().map(str::to_string))
+                .find(|pane| herdr::foreground(pane).ok().flatten()
+                    .is_some_and(|argv| argv.iter().any(|arg| arg.ends_with("dev")) && argv.iter().any(|arg| arg == kind)));
+            match pane {
+                Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping dev {kind} in {}.", item.name)),
+                None => Err(format!("No dev {kind} found in {}'s Space.", item.name)),
+            }
+        } else {
+            herdr::create_tab(workspace, path, kind)
+                .and_then(|pane| herdr::run_in_pane(&pane, &format!("dev {kind}")))
+                .map(|_| format!("Started dev {kind} in a {kind} tab of {}'s Space.", item.name))
+        };
+        self.show(result);
     }
 
     // The review opens next to the task's own Claude, so comments reach that agent.
@@ -724,7 +775,7 @@ fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width: u16
     frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
-fn options_lines(choices: &[Choice], index: usize, width: usize) -> Vec<Line<'static>> {
+fn options_lines(choices: Vec<Choice>, index: usize, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for (position, choice) in choices.iter().enumerate() {
         let active = position == index;
@@ -733,10 +784,10 @@ fn options_lines(choices: &[Choice], index: usize, width: usize) -> Vec<Line<'st
         let gap = width.saturating_sub(choice.label.chars().count() + key.chars().count() + 2).max(1);
         let background = if active { Style::new().bg(SURFACE) } else { Style::new() };
         lines.push(Line::from(vec![
-            Span::raw(if active { "▸ " } else { "  " }), Span::styled(choice.label, label_style),
+            Span::raw(if active { "▸ " } else { "  " }), Span::styled(choice.label.clone(), label_style),
             Span::raw(" ".repeat(gap)), Span::styled(key, style(MUTED)),
         ]).style(background));
-        lines.push(Line::from(vec![Span::raw("  "), Span::styled(choice.about, style(MUTED))]).style(background));
+        lines.push(Line::from(vec![Span::raw("  "), Span::styled(choice.about.clone(), style(MUTED))]).style(background));
     }
     lines.push(Line::from(Span::styled("↑ ↓ choose · ⏎ run · esc close", style(FAINT))));
     lines
@@ -746,7 +797,7 @@ fn help_lines() -> Vec<Line<'static>> {
     [
         ("⏎", "options for the selected task or backlog item"), ("← → tab", "switch between work and backlog"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
-        ("r", "open the task's review next to its Claude"), ("l", "ready to push: rebase and check (on a task)"), ("d", "done: after you pushed"),
+        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's web server"), ("b", "start or stop the task's worker"), ("l", "ready to push: rebase and check (on a task)"), ("d", "done: after you pushed"),
         ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
