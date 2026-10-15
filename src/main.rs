@@ -90,7 +90,13 @@ fn status_text() -> Result<String> {
     }
     let mut lines = Vec::new();
     let mut group = None;
+    let mut tasks = true;
     for item in &items {
+        if tasks && !item.is_task() {
+            tasks = false;
+            group = None;
+            lines.push("\n— other Claude sessions —".to_string());
+        }
         if group != Some(item.group()) {
             group = Some(item.group());
             lines.push(format!("\n{}", item.group().title()));
