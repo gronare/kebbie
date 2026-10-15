@@ -1,0 +1,24 @@
+id = "kelpie"
+name = "kelpie"
+version = "0.3.0"
+min_herdr_version = "0.9.0"
+description = "Tasks in pooled git worktrees with Claude, and a sidebar sync"
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+[[startup]]
+command = ["sh", "scripts/herdr-startup.sh"]
+
+[[actions]]
+id = "tasks"
+title = "Task menu"
+contexts = ["workspace"]
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin kelpie --entrypoint tasks --placement popup --width 70% --height 20"]
+
+[[panes]]
+id = "tasks"
+title = "kelpie"
+placement = "popup"
+command = ["sh", "scripts/herdr-tasks.sh"]

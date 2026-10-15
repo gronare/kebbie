@@ -1,0 +1,54 @@
+onboarding = false
+
+# catppuccin is the default theme; these match the herdr.dev demo
+[theme.custom]
+accent = "#cba6f7"
+sidebar_bg = "#181825"
+surface_dim = "#313244" # separator lines; the default equals the terminal background
+panel_bg = "reset"      # tab bar and panes use Ghostty's own background
+
+[ui]
+pane_borders = "always"                 # frame a lone pane too
+pane_scrollbars = false                 # the scrollbar column made frames uneven
+show_agent_labels_on_pane_borders = true
+status_indicators = "symbols"           # blocked / working / done distinguishable by shape, not just color
+agent_panel_sort = "priority"           # agents waiting on you float to the top
+window_title = "{workspace} · {tab}"    # hostname is always the devbox; drop it
+tab_bar_right = [
+  { type = "zoom" },
+  { type = "command", command = "~/.local/share/kelpie/current/scripts/sync.sh", interval_seconds = 3, timeout_seconds = 3 }, # kelpie's sidebar sync; prints nothing
+  { type = "datetime", format = "%H:%M" },
+]
+
+# $web / $jobs are reported by sync.sh while `dev web` / `dev worker` runs in the Space.
+# The default branch is the norm, so it fades; any other branch stands out.
+[ui.sidebar.spaces]
+row_gap = 1
+rows = [
+  ["state_icon", "workspace", { token = "$web", fg = "#a6e3a1" }, { token = "$jobs", fg = "#89b4fa" }],
+  [{ token = "branch", fg = "#fab387", bold = true, rules = [
+    { equals = "master", fg = "#6c7086", bold = false },
+    { equals = "main", fg = "#6c7086", bold = false },
+  ] }, "git_status"],
+]
+
+[ui.sidebar.agents]
+row_gap = 1
+
+# Claude's task title, plus model and context in use ($model / $ctx from sync.sh) in place of the agent and tab names.
+[ui.sidebar.agents.rows_by_agent]
+claude = [
+  ["state_icon", "workspace", { token = "$model", dim = true }, { token = "$ctx", fg = "#f9e2af" }],
+  [{ token = "terminal_title_stripped", fg = "#bac2de" }],
+]
+
+# Claude finishing or asking in a background Space; Ghostty shows it as a macOS notification
+[ui.toast]
+delivery = "terminal"
+delay_seconds = 3
+
+[[keys.command]]
+key = "prefix+t"
+type = "plugin_action"
+command = "kelpie.tasks"
+description = "kelpie task menu"

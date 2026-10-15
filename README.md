@@ -6,7 +6,7 @@ kelpie starts each task in its own git worktree with Claude, and reviews a task'
 
 ## Requirements
 
-Claude Code running inside herdr, plus `fzf`, `nvim` 0.10 or later, `jq`, `git` and `curl` on `PATH`; `tig` for the history split. The scripts use POSIX `sh` and short flags, so they run with the BSD tools on macOS as well.
+Claude Code running inside herdr, plus `fzf`, `nvim` 0.10 or later, `jq`, `git` and `curl` on `PATH`; `tig` for the history split; `cargo` to build the `kelpie` binary. The scripts use POSIX `sh` and short flags, so they run with the BSD tools on macOS as well.
 
 ## Install
 
@@ -29,7 +29,36 @@ claude plugin install kelpie@kelpie
 
 Git is the only state: a worktree on a task branch is busy, a clean one that is detached or on its own `wt<N>` branch is free. Worktrees are kept and reused, so only the first task in a new worktree pays for setup.
 
-Build it with `cargo build --release` (a few seconds) and put `target/release/kelpie` on your `PATH`.
+### In herdr
+
+The repo is also a herdr plugin. Install it (herdr builds the binary with `cargo`, so the Rust toolchain must be installed):
+
+```bash
+herdr plugin install gronare/kelpie
+```
+
+Then bind its task menu in your herdr `config.toml`:
+
+```toml
+[[keys.command]]
+key = "prefix+t"
+type = "plugin_action"
+command = "kelpie.tasks"
+description = "kelpie task menu"
+```
+
+`prefix+t` opens a popup for the Space you are in: the pool's worktrees, and `s` to start a task (name, then an optional prompt for Claude), `l` to land it (and push, if you answer `y`), `d` for done and `x` to drop. On startup the plugin links `~/.local/share/kelpie/current` to wherever herdr installed it, so configs can use a stable path. Outside herdr, run the binary from there: `~/.local/share/kelpie/current/target/release/kelpie`.
+
+### Sidebar sync (optional)
+
+`scripts/sync.sh` fills the sidebar with what each Space and pane is doing: `web` / `jobs` tags while `dev web` / `dev worker` run, Claude's task title on its pane border, model and context in use on its Agents row, and tab names. It also fetches each repo every 5 minutes, so behind-counts stay current. Run it from herdr's tab bar, with an example sidebar layout in [`examples/herdr-config.toml`](examples/herdr-config.toml):
+
+```toml
+[ui]
+tab_bar_right = [
+  { type = "command", command = "~/.local/share/kelpie/current/scripts/sync.sh", interval_seconds = 3, timeout_seconds = 3 },
+]
+```
 
 ## Review
 
