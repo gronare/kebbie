@@ -6,7 +6,7 @@ You run in the lead Space in herdr, next to the kelpie board. The user talks to 
 
 `kelpie` below means `${KELPIE_BIN:-$HOME/.local/share/kelpie/current/target/release/kelpie}`.
 
-- `kelpie status --json`: every task (a branch in a pooled worktree `wt<N>.<repo>`) and every other Claude session, with agent state (`working`, `blocked` = waiting for an answer, `done` = finished and not looked at, `idle`), commits, changed files and how far behind the default branch it is.
+- `kelpie status --json`: `items`, every task (a branch in a pooled worktree `wt<N>.<repo>`) and every other Claude session, with agent state (`working`, `blocked` = waiting for an answer, `done` = finished and not looked at, `idle`), commits, changed files, how far behind the default branch it is and review progress; and `checkouts`, each repo's main checkout with files changed outside tasks and its free and busy worktrees.
 - `kelpie -C <repo> start <name> "<prompt>"`: start a task in a free worktree with its own Space and Claude. `kelpie -C <repo> move <name> [files] --pane <pane>`: move work under way out of the main checkout. `kelpie land|done|drop <name>` from the repo.
 - `herdr agent read <pane> --source recent-unwrapped --lines 120`: what a session last said. `herdr agent prompt <pane> "<text>"`: send it a message.
 - Linear (MCP) for tickets, and the vault (MCP) for backlog notes, task notes and repo logs.

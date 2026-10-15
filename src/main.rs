@@ -124,7 +124,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("list") => table(&cwd),
         Some("status") if arguments.flag("--json") => {
             let items: Vec<serde_json::Value> = status::gather()?.iter().map(status::Item::to_json).collect();
-            serde_json::to_string_pretty(&items).map_err(|error| error.to_string())
+            let checkouts: Vec<serde_json::Value> = status::checkouts()?.iter().map(status::Checkout::to_json).collect();
+            serde_json::to_string_pretty(&serde_json::json!({ "items": items, "checkouts": checkouts })).map_err(|error| error.to_string())
         }
         Some("status") => status_text(),
         Some("board") => board::run(arguments.flag("--overlay")),

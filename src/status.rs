@@ -153,6 +153,34 @@ fn agent_from(value: &Value) -> Agent {
     }
 }
 
+pub struct Checkout {
+    pub name: String,
+    pub changed: usize,
+    pub free_slots: usize,
+    pub busy_slots: usize,
+}
+
+impl Checkout {
+    pub fn to_json(&self) -> Value {
+        json!({ "repo": self.name, "changed": self.changed, "free_worktrees": self.free_slots, "busy_worktrees": self.busy_slots })
+    }
+}
+
+// The main checkout of every repo open in herdr: leftover uncommitted files there, and its worktree pool.
+pub fn checkouts() -> Result<Vec<Checkout>> {
+    let repos: BTreeSet<PathBuf> = herdr::workspaces()?.iter()
+        .filter_map(|workspace| workspace["worktree"]["repo_root"].as_str()).map(PathBuf::from).collect();
+    repos.iter().map(|repo| {
+        let pool = slots(repo)?;
+        Ok(Checkout {
+            name: name_of(repo),
+            changed: changed_count(repo)?,
+            free_slots: pool.iter().filter(|slot| slot.free).count(),
+            busy_slots: pool.iter().filter(|slot| !slot.free).count(),
+        })
+    }).collect()
+}
+
 // Every task in a pooled worktree of a repo open in herdr, then every other Claude session, sorted by what they need.
 pub fn gather() -> Result<Vec<Item>> {
     let workspaces = herdr::workspaces()?;

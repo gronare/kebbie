@@ -79,12 +79,9 @@ auto_rename() {
   fi
 }
 
-# A pane label hides the agent label on the border, so Claude panes get none.
-jq -rn --argjson panes "$panes" --argjson programs "$programs" '
-  $panes.result.panes[]
-  | (if .agent == "claude" then "-" else $programs[.pane_id].name end) as $name
-  | select($name != null)
-  | [.pane_id, (.label // "-"), $name] | @tsv' |
+# Pane frames carry no labels; this clears the ones earlier versions set, and leaves yours alone.
+jq -rn --argjson panes "$panes" '
+  $panes.result.panes[] | select(.label != null) | [.pane_id, .label, "-"] | @tsv' |
 while IFS="$(printf '\t')" read -r pane label name; do
   auto_rename "$pane" "$label" "$name" pane
 done

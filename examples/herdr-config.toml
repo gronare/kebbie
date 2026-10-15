@@ -8,9 +8,9 @@ surface_dim = "#313244" # separator lines; the default equals the terminal backg
 panel_bg = "reset"      # tab bar and panes use Ghostty's own background
 
 [ui]
-pane_borders = "always"                 # frame a lone pane too
+pane_borders = "auto"                   # frames only between split panes
 pane_scrollbars = false                 # the scrollbar column made frames uneven
-show_agent_labels_on_pane_borders = true
+show_agent_labels_on_pane_borders = false
 status_indicators = "symbols"           # blocked / working / done distinguishable by shape, not just color
 agent_panel_sort = "priority"           # agents waiting on you float to the top
 window_title = "{workspace} · {tab}"    # hostname is always the devbox; drop it

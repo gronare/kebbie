@@ -273,7 +273,6 @@ list() {
 open_split() {
   root=$(git rev-parse --show-toplevel)
   pane=$("$herdr" pane split --pane "$HERDR_PANE_ID" --direction right --cwd "$root" "--${3:-focus}" | jq -r '.result.pane.pane_id')
-  "$herdr" pane rename "$pane" "$1" >/dev/null
   "$herdr" pane run "$pane" "$2; exit" >/dev/null
   echo "$pane"
 }

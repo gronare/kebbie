@@ -67,7 +67,7 @@ fn create() -> Result<String> {
     let space = herdr::create_workspace(&dir, LEAD_LABEL)?;
     let board = space.root_pane_id.ok_or("herdr created the lead Space without a pane")?;
     herdr::run_in_pane(&board, &format!("'{}' board", executable()?.display()))?;
-    let chat = herdr::split_right(&board, &dir, "0.5")?;
+    let chat = herdr::split_right(&board, &dir, "0.68")?;
     let role = root.join("roles/lead.md");
     if let Err(error) = herdr::start_agent("lead", "claude", &chat, &["--append-system-prompt-file", &role.to_string_lossy()])
         && !error.contains("agent_not_ready")
