@@ -101,10 +101,11 @@ pub struct Start<'a> {
     pub focus: bool,
     pub from: Option<&'a str>,
     pub mode: Option<&'a str>,
+    pub dev: bool,
 }
 
 pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
-    let Start { prompt, focus, from, mode } = *options;
+    let Start { prompt, focus, from, mode, dev } = *options;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
@@ -132,7 +133,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
         Some(pane) => pane,
         None => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
     };
-    if slot.path.join("dev.yml").exists() {
+    if dev && slot.path.join("dev.yml").exists() {
         herdr::run_in_pane(&herdr::create_tab(&space.workspace_id, &slot.path, "dev")?, "dev")?;
     }
     let agent_name: String = task.chars().take(32).collect();

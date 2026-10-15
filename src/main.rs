@@ -17,7 +17,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie start <name> [prompt]    start a task in a pooled worktree, in its own Space, with Claude
                                   (--repo <name> finds or clones that repo, --from <ref> branches off it
                                   instead of the default branch, --mode <mode> is Claude's permission mode,
-                                  --no-focus keeps you where you are)
+                                  --no-dev skips running dev, --no-focus keeps you where you are)
   kelpie move <name> [file ...]   move work under way in the main checkout into a task: branch <name> if it
                                   exists, else the unpushed commits, plus the given uncommitted files
                                   (--pane <id> moves that herdr pane along, --no-focus stays put)
@@ -115,7 +115,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let prompt = arguments.positionals[2..].join(" ");
             let prompt = (!prompt.is_empty()).then_some(prompt.as_str());
             let repo = arguments.value("--repo").map(repo::locate).transpose()?.unwrap_or(cwd);
-            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode") };
+            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), dev: !arguments.flag("--no-dev") };
             tasks::start(&repo, name, &options)
         }
         Some("move") => {

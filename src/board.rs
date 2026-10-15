@@ -505,7 +505,7 @@ impl App {
             Purpose::TaskPrompt(name) => {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
-                let options = tasks::Start { prompt: prompt.as_deref(), focus: true, from: None, mode: None };
+                let options = tasks::Start { prompt: prompt.as_deref(), focus: true, from: None, mode: None, dev: true };
                 let result = outside(terminal, || tasks::start(&repo, &name, &options));
                 self.show(result);
             }
@@ -514,7 +514,7 @@ impl App {
                     "linear" => format!("Work on Linear issue {}: {}. Read the issue first, then plan with me before changing code.", entry.reference, entry.title),
                     _ => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first, then plan with me before changing code.", entry.reference, entry.title),
                 };
-                let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None };
+                let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, dev: true };
                 let known = self.repo_named(&entry.area);
                 let result = outside(terminal, || {
                     let repo = known.map_or_else(|| repo::locate(&entry.area), Ok)?;
