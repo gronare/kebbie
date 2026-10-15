@@ -104,6 +104,20 @@ pub struct Start<'a> {
     pub dev: bool,
 }
 
+// A new pane's shell takes a moment to reach its prompt; until then herdr calls the pane busy.
+fn start_claude(name: &str, pane: &str, args: &[&str]) -> Result<()> {
+    for _ in 0..30 {
+        match herdr::start_agent(name, "claude", pane, args) {
+            Err(error) if error.contains("agent_pane_busy") => std::thread::sleep(std::time::Duration::from_secs(1)),
+            Err(error) if error.contains("agent_not_ready") => {
+                return Err(format!("Claude started in {pane} but is waiting for an answer there (folder trust?); answer it, then send the prompt"));
+            }
+            result => return result,
+        }
+    }
+    Err(format!("The shell in {pane} never became ready for Claude"))
+}
+
 pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let Start { prompt, focus, from, mode, dev } = *options;
     let repo = main_checkout(cwd)?;
@@ -139,15 +153,12 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let agent_name: String = task.chars().take(32).collect();
     let mut agent_args: Vec<&str> = mode.map(|mode| vec!["--permission-mode", mode]).unwrap_or_default();
     agent_args.extend(["--settings", NO_PUSH]);
-    agent_args.extend(prompt);
-    if let Err(error) = herdr::start_agent(&agent_name, "claude", &claude_pane, &agent_args) {
-        // Claude is up but waiting (e.g. folder trust); starting it again would type into it.
-        if error.contains("agent_not_ready") {
-            return Ok(format!("Started {task} in {}; Claude is waiting for an answer in its Space.", slot.path.display()));
-        }
-        let quoted: Vec<String> = agent_args.iter().map(|arg| serde_json::to_string(arg).unwrap_or_default()).collect();
-        let command = format!("claude {}", quoted.join(" ")).trim_end().to_string();
-        herdr::run_in_pane(&claude_pane, &command)?;
+    start_claude(&agent_name, &claude_pane, &agent_args)?;
+    // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
+    if let Some(prompt) = prompt
+        && let Err(error) = herdr::prompt_agent(&agent_name, prompt)
+    {
+        return Err(format!("Started {task} in {}, but sending the prompt failed: {error}", slot.path.display()));
     }
     Ok(format!("Started {task} in {}.", slot.path.display()))
 }
