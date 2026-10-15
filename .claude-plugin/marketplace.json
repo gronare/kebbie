@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "kelpie",
+  "description": "Kelpie: herding coding agents in herdr",
+  "owner": {
+    "name": "Carl Green"
+  },
+  "plugins": [
+    {
+      "name": "kelpie",
+      "description": "Review a task's changes in a herdr split next to Claude: unified diffs in nvim, line comments typed into Claude's input box, read marks, scoped and live reviews, worktree-aware bases.",
+      "author": {
+        "name": "Carl Green"
+      },
+      "category": "development",
+      "source": "./",
+      "homepage": "https://github.com/gronare/kelpie"
+    }
+  ]
+}
