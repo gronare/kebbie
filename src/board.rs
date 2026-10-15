@@ -244,6 +244,21 @@ fn spawn_refresher() -> (Receiver<std::result::Result<Snapshot, String>>, Sender
     (snapshot_rx, refresh_tx)
 }
 
+// A tab of that name from an earlier run, with its shell back at the prompt, gets reused.
+fn idle_tab_pane(workspace: &str, label: &str) -> Option<String> {
+    let tabs: Vec<String> = herdr::tabs_in(workspace).ok()?.into_iter()
+        .filter(|tab| tab["label"] == label).filter_map(|tab| tab["tab_id"].as_str().map(str::to_string)).collect();
+    herdr::panes_in(workspace).ok()?.into_iter()
+        .filter(|pane| pane["tab_id"].as_str().is_some_and(|tab| tabs.iter().any(|candidate| candidate == tab)))
+        .filter_map(|pane| pane["pane_id"].as_str().map(str::to_string))
+        .find(|pane| matches!(herdr::foreground(pane), Ok(None)))
+}
+
+fn address(item: &Item) -> Option<String> {
+    let path = item.path.as_ref()?;
+    path.join("dev.yml").exists().then(|| format!("https://{}.devbox", name_of(path)))
+}
+
 fn review_script() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
     Some(exe.ancestors().nth(3)?.join("scripts/review.sh"))
@@ -451,9 +466,9 @@ impl App {
                 None => Err(format!("No dev {kind} found in {}'s Space.", item.name)),
             }
         } else {
-            herdr::create_tab(workspace, path, kind)
+            idle_tab_pane(workspace, kind).map(Ok).unwrap_or_else(|| herdr::create_tab(workspace, path, kind))
                 .and_then(|pane| herdr::run_in_pane(&pane, &format!("dev {kind}")))
-                .map(|_| format!("Started dev {kind} in a {kind} tab of {}'s Space.", item.name))
+                .map(|_| format!("Started dev {kind} in the {kind} tab of {}'s Space.", item.name))
         };
         self.show(result);
     }
@@ -692,6 +707,9 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     }
     if !facts.is_empty() {
         lines.push(chips(facts));
+    }
+    if item.web && let Some(address) = address(item) {
+        lines.push(Line::from(vec![Span::raw("   "), Span::styled("web ", style(GREEN)), Span::styled(address, style(TEAL))]).style(Style::new().bg(SURFACE)));
     }
     match &item.agent {
         Some(agent) => {

@@ -35,10 +35,14 @@ programs=$(echo "$panes" | jq -r '.result.panes[] | select(.agent != "claude") |
 jq -rn --argjson panes "$panes" --argjson programs "$programs" '
   $panes.result.panes | group_by(.workspace_id)[]
   | [$programs[.[].pane_id].name?] as $running
-  | [.[0].workspace_id, any($running[]; . == "web"), any($running[]; . == "worker")] | @tsv' |
-while IFS="$(printf '\t')" read -r ws web jobs; do
+  | ([.[] | select($programs[.pane_id].name? == "web") | .cwd][0] // "-") as $web_cwd
+  | [.[0].workspace_id, any($running[]; . == "web"), any($running[]; . == "worker"), $web_cwd] | @tsv' |
+while IFS="$(printf '\t')" read -r ws web jobs web_cwd; do
   set -- --source sync --ttl-ms 15000
   if [ "$web" = true ]; then set -- "$@" --token web=web; else set -- "$@" --clear-token web; fi
+  # devbox serves each checkout at <directory name>.devbox.
+  checkout=$(git -C "$web_cwd" rev-parse --show-toplevel 2>/dev/null)
+  if [ "$web" = true ] && [ -n "$checkout" ]; then set -- "$@" --token "url=$(basename "$checkout").devbox"; else set -- "$@" --clear-token url; fi
   if [ "$jobs" = true ]; then set -- "$@" --token jobs=jobs; else set -- "$@" --clear-token jobs; fi
   "$herdr" workspace report-metadata "$ws" "$@" >/dev/null 2>&1
 done

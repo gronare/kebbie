@@ -20,7 +20,7 @@ tab_bar_right = [
   { type = "datetime", format = "%H:%M" },
 ]
 
-# $web / $jobs are reported by sync.sh while `dev web` / `dev worker` runs in the Space.
+# $web / $jobs / $url are reported by sync.sh while `dev web` / `dev worker` runs in the Space.
 # The default branch is the norm, so it fades; any other branch stands out.
 [ui.sidebar.spaces]
 row_gap = 1
@@ -30,6 +30,7 @@ rows = [
     { equals = "master", fg = "#6c7086", bold = false },
     { equals = "main", fg = "#6c7086", bold = false },
   ] }, "git_status"],
+  [{ token = "$url", fg = "#94e2d5" }],
 ]
 
 [ui.sidebar.agents]
