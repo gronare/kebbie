@@ -532,6 +532,35 @@ fn row(selected: bool, focused: bool, icon: Span<'static>, name: &str, place: Op
     if selected && focused { line.style(Style::new().bg(SURFACE)) } else { line }
 }
 
+// The selected row with its whole name, wrapped, and the facts on its first line.
+fn wrapped_row(icon: Span<'static>, name: &str, facts: &str, width: usize) -> Vec<Line<'static>> {
+    let name_width = width.saturating_sub(facts.chars().count() + 5);
+    let chunks = wrap(name, name_width, 4);
+    let highlight = Style::new().bg(SURFACE);
+    chunks.into_iter().enumerate().map(|(index, chunk)| {
+        if index == 0 {
+            let padding = name_width.saturating_sub(chunk.chars().count());
+            Line::from(vec![
+                Span::styled("▌", style(MAUVE)), icon.clone(), Span::raw(" "), Span::styled(chunk, bold(TEXT)),
+                Span::raw(" ".repeat(padding + 2)), Span::styled(facts.to_string(), style(MUTED)),
+            ]).style(highlight)
+        } else {
+            Line::from(vec![Span::raw("   "), Span::styled(chunk, bold(TEXT))]).style(highlight)
+        }
+    }).collect()
+}
+
+// A line's background only covers its text, so highlighted lines are padded to the column's width.
+fn fill(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    lines.into_iter().map(|mut line| {
+        if line.style.bg == Some(SURFACE) && line.width() < width {
+            let missing = width - line.width();
+            line.spans.push(Span::raw(" ".repeat(missing)));
+        }
+        line
+    }).collect()
+}
+
 fn chips(chips: Vec<(String, Color)>) -> Line<'static> {
     let mut spans = vec![Span::raw("   ")];
     for (text, color) in chips {
@@ -646,22 +675,20 @@ fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize) {
             selected_line = lines.len();
         }
         let icon = Span::styled(priority_icon(&entry.priority), style(priority_color(&entry.priority)));
-        lines.push(row(selected, focused, icon, &entry.title, None, &entry.age, width));
         if selected && focused {
-            if entry.title.chars().count() + 12 > width {
-                for text in wrap(&entry.title, width.saturating_sub(4), 3) {
-                    lines.push(Line::from(vec![Span::raw("   "), Span::styled(text, bold(TEXT))]).style(Style::new().bg(SURFACE)));
-                }
-            }
+            lines.extend(wrapped_row(icon, &entry.title, &entry.age, width));
             let mut facts = vec![(entry.area.clone(), TEAL), (if entry.source == "linear" { entry.reference.clone() } else { "vault note".to_string() }, SUBTEXT)];
             if !entry.age.is_empty() {
                 facts.push((format!("{} old", entry.age), SUBTEXT));
             }
             lines.push(chips(facts));
-            let about = if entry.summary.is_empty() { "its context and plan".to_string() } else { entry.summary.clone() };
-            let label = format!("starts as {}, with", suggested_name(&entry.title));
-            lines.extend(card_text(&label, &about, FAINT, width, 2));
+            if !entry.summary.is_empty() {
+                lines.extend(card_text("about", &entry.summary, FAINT, width, 2));
+            }
+            lines.extend(card_text("starts as", &suggested_name(&entry.title), FAINT, width, 2));
             lines.push(options_hint());
+        } else {
+            lines.push(row(selected, focused, icon, &entry.title, None, &entry.age, width));
         }
     }
     if app.backlog.entries.is_empty() {
@@ -671,6 +698,7 @@ fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize) {
 }
 
 fn render_column(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>, selected_line: usize) {
+    let lines = fill(lines, area.width as usize);
     let scroll = selected_line.saturating_sub(area.height.saturating_sub(6) as usize) as u16;
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
 }
