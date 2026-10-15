@@ -2,7 +2,7 @@
 
 Herding coding agents in [herdr](https://herdr.dev). A kelpie is the Australian working dog that keeps a herd moving while the drover directs; here herdr holds the agents and kelpie keeps their work moving towards you.
 
-Today kelpie reviews a task's changes in a split next to the Claude pane and sends your comments back to Claude without leaving the diff. Starting tasks in their own worktrees, a board over Linear and a backlog, and agent roles are on the way.
+kelpie starts each task in its own git worktree with Claude, and reviews a task's changes in a split next to the Claude pane, sending your comments back to Claude without leaving the diff. A board over Linear and a backlog, and agent roles, are on the way.
 
 ## Requirements
 
@@ -14,6 +14,22 @@ Claude Code running inside herdr, plus `fzf`, `nvim` 0.10 or later, `jq`, `git` 
 claude plugin marketplace add https://github.com/gronare/kelpie
 claude plugin install kelpie@kelpie
 ```
+
+## Tasks in worktrees
+
+`kelpie` is a small command-line tool (Rust, one binary) that runs each task in a pooled git worktree with its own herdr Space and Claude:
+
+| Command | What it does |
+| --- | --- |
+| `kelpie start <name> [prompt]` | Takes a free worktree from the pool (`wt<N>.<repo>` next to the main checkout), or creates one with the repo's `script/set_up_worktree` when it has one, else `git worktree add`. Puts it on a new branch `<name>` from the remote's default branch, opens it as a Space labelled `<name>`, runs `dev` in a second tab when the repo has a `dev.yml`, and starts Claude with the prompt. `--no-focus` keeps you where you are. A task that is already running is just shown. |
+| `kelpie list [--json]` | The pool's worktrees: their task, or `free`, with uncommitted changes and commits ahead and behind. |
+| `kelpie land [name]` | Rebases the task onto the default branch and checks it (no uncommitted changes, no merge commits, no `Co-Authored-By` trailers), then prints the push command. It never pushes. |
+| `kelpie done [name]` | Once the commits are on the default branch: closes the Space, deletes the branch, frees the worktree, and fast-forwards the main checkout when it is clean. |
+| `kelpie drop [name] [--force]` | Throws the task away; refuses while it has uncommitted changes or unpushed commits unless `--force`. |
+
+Git is the only state: a worktree on a task branch is busy, a clean one that is detached or on its own `wt<N>` branch is free. Worktrees are kept and reused, so only the first task in a new worktree pays for setup.
+
+Build it with `cargo build --release` (a few seconds) and put `target/release/kelpie` on your `PATH`.
 
 ## Review
 

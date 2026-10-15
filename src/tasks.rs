@@ -1,0 +1,247 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
+
+use crate::herdr;
+use crate::repo::{
+    ahead_behind, branch_exists, changed_count, default_branch, git, is_clean, main_checkout, name_of, slot_number,
+    slot_path, worktrees,
+};
+use crate::sh::{Result, run_visibly};
+
+// Git is the only state: a slot on a task branch is busy; a clean detached or wt<N> slot is free.
+pub struct Slot {
+    pub number: usize,
+    pub path: PathBuf,
+    pub task: Option<String>,
+    pub free: bool,
+}
+
+pub fn slots(repo: &Path) -> Result<Vec<Slot>> {
+    let mut list = Vec::new();
+    for worktree in worktrees(repo)? {
+        let Some(number) = slot_number(repo, &worktree.path) else { continue };
+        if !worktree.path.exists() {
+            continue;
+        }
+        let placeholder = worktree.branch.as_deref().is_none_or(|branch| branch == format!("wt{number}"));
+        let free = placeholder && is_clean(&worktree.path)?;
+        let task = if placeholder { None } else { worktree.branch };
+        list.push(Slot { number, path: worktree.path, task, free });
+    }
+    list.sort_by_key(|slot| slot.number);
+    Ok(list)
+}
+
+pub fn slug(name: &str) -> Result<String> {
+    let mut slug = String::new();
+    for character in name.to_lowercase().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug: String = slug.chars().take(40).collect::<String>().trim_end_matches('-').to_string();
+    if !slug.starts_with(|character: char| character.is_ascii_lowercase()) {
+        return Err(format!("\"{name}\" needs to start with a letter to work as a task name"));
+    }
+    Ok(slug)
+}
+
+fn find_task(repo: &Path, name: Option<&str>, cwd: &Path) -> Result<Slot> {
+    let wanted = name.map(slug).transpose()?;
+    let found = slots(repo)?.into_iter().find(|slot| match &wanted {
+        Some(task) => slot.task.as_ref() == Some(task),
+        None => slot.task.is_some() && cwd.starts_with(&slot.path),
+    });
+    found.ok_or_else(|| match name {
+        Some(name) => format!("No task \"{name}\" in {}'s worktrees", name_of(repo)),
+        None => "Not inside a task's worktree; name the task".to_string(),
+    })
+}
+
+fn task_of(slot: &Slot) -> &str {
+    slot.task.as_deref().unwrap_or_default()
+}
+
+fn fetch(repo: &Path) -> Result<()> {
+    git(repo, &["fetch", "--quiet", "origin"]).map(|_| ())
+}
+
+fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
+    let taken: HashSet<usize> = worktrees(repo)?.iter().filter_map(|worktree| slot_number(repo, &worktree.path)).collect();
+    let mut number = 1;
+    while taken.contains(&number) || slot_path(repo, number).exists() {
+        number += 1;
+    }
+    let path = slot_path(repo, number);
+    let script = repo.join("script/set_up_worktree");
+    if script.exists() {
+        eprintln!("Creating {} with script/set_up_worktree (a couple of minutes the first time)…", name_of(&path));
+        run_visibly(&script.to_string_lossy(), &[&format!("wt{number}")], Some(repo))?;
+    } else {
+        git(repo, &["worktree", "add", "--detach", &path.to_string_lossy(), upstream])?;
+    }
+    Ok(Slot { number, path, task: None, free: true })
+}
+
+fn open_space(repo: &Path, slot: &Slot, task: &str, focus: bool) -> Result<herdr::Space> {
+    let space = herdr::open_worktree(repo, &slot.path, task, focus)?;
+    herdr::rename_workspace(&space.workspace_id, task)?;
+    Ok(space)
+}
+
+pub fn start(cwd: &Path, name: &str, prompt: Option<&str>, focus: bool) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let task = slug(name)?;
+    if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
+        let space = open_space(&repo, &existing, &task, focus)?;
+        if focus {
+            herdr::focus_workspace(&space.workspace_id)?;
+        }
+        return Ok(format!("{task} is already running in {}.", existing.path.display()));
+    }
+    fetch(&repo)?;
+    let upstream = default_branch(&repo)?;
+    let slot = match slots(&repo)?.into_iter().find(|slot| slot.free) {
+        Some(slot) => slot,
+        None => create_slot(&repo, &upstream)?,
+    };
+    if branch_exists(&repo, &task) {
+        git(&slot.path, &["switch", "--quiet", &task])?;
+    } else {
+        git(&slot.path, &["switch", "--quiet", "-c", &task, &upstream])?;
+    }
+
+    let space = open_space(&repo, &slot, &task, focus)?;
+    let claude_pane = match space.root_pane_id {
+        Some(pane) => pane,
+        None => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
+    };
+    if slot.path.join("dev.yml").exists() {
+        herdr::run_in_pane(&herdr::create_tab(&space.workspace_id, &slot.path, "dev")?, "dev")?;
+    }
+    let agent_name: String = task.chars().take(32).collect();
+    let agent_args: Vec<&str> = prompt.into_iter().collect();
+    if let Err(error) = herdr::start_agent(&agent_name, "claude", &claude_pane, &agent_args) {
+        // Claude is up but waiting (e.g. folder trust); starting it again would type into it.
+        if error.contains("agent_not_ready") {
+            return Ok(format!("Started {task} in {}; Claude is waiting for an answer in its Space.", slot.path.display()));
+        }
+        let command = match prompt {
+            Some(prompt) => format!("claude {}", serde_json::to_string(prompt).unwrap_or_default()),
+            None => "claude".to_string(),
+        };
+        herdr::run_in_pane(&claude_pane, &command)?;
+    }
+    Ok(format!("Started {task} in {}.", slot.path.display()))
+}
+
+pub fn list(cwd: &Path) -> Result<Vec<Value>> {
+    let repo = main_checkout(cwd)?;
+    let upstream = default_branch(&repo)?;
+    slots(&repo)?.into_iter().map(|slot| {
+        let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
+        Ok(json!({
+            "slot": name_of(&slot.path),
+            "path": slot.path,
+            "task": slot.task,
+            "free": slot.free,
+            "changed": changed_count(&slot.path)?,
+            "ahead": ahead,
+            "behind": behind,
+        }))
+    }).collect()
+}
+
+pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    let task = task_of(&slot);
+    if !is_clean(&slot.path)? {
+        return Err(format!("{task} has uncommitted changes in {}; commit or stash them first", slot.path.display()));
+    }
+    fetch(&repo)?;
+    let upstream = default_branch(&repo)?;
+    if ahead_behind(&slot.path, &upstream)?.0 == 0 {
+        return Err(format!("{task} has no commits to land"));
+    }
+    if git(&slot.path, &["rebase", "--quiet", &upstream]).is_err() {
+        return Err(format!("Rebasing {task} onto {upstream} stopped on a conflict in {}; resolve it there and run land again", slot.path.display()));
+    }
+    let range = format!("{upstream}..HEAD");
+    let mut problems = Vec::new();
+    if !git(&slot.path, &["rev-list", "--merges", &range])?.is_empty() {
+        problems.push("it contains merge commits");
+    }
+    if git(&slot.path, &["log", "--format=%B", &range])?.lines().any(|line| line.to_lowercase().starts_with("co-authored-by:")) {
+        problems.push("a commit has a Co-Authored-By trailer");
+    }
+    let commits = git(&slot.path, &["log", "--oneline", &range])?;
+    if !problems.is_empty() {
+        return Err(format!("{task} is rebased but not ready: {}.\n{commits}", problems.join("; ")));
+    }
+    let target = upstream.trim_start_matches("origin/");
+    Ok(format!(
+        "{task} is rebased onto {upstream} and ready:\n{commits}\n\nPush with:  git -C {} push origin HEAD:{target}\nThen:       kelpie done {task}",
+        slot.path.display()
+    ))
+}
+
+fn free(repo: &Path, slot: &Slot, upstream: &str, delete_flag: &str) -> Result<()> {
+    if let Some(workspace) = herdr::workspace_for(&slot.path)? {
+        herdr::close_workspace(&workspace)?;
+    }
+    git(&slot.path, &["switch", "--quiet", "--detach", upstream])?;
+    git(repo, &["branch", delete_flag, task_of(slot)]).map(|_| ())
+}
+
+fn fast_forward_main(repo: &Path, upstream: &str) -> Result<String> {
+    let local = upstream.trim_start_matches("origin/");
+    let name = name_of(repo);
+    if git(repo, &["branch", "--show-current"])? != local || !is_clean(repo)? {
+        return Ok(format!("{name} left as is (not a clean {local})."));
+    }
+    Ok(match git(repo, &["merge", "--quiet", "--ff-only", upstream]) {
+        Ok(_) => format!("{name} fast-forwarded to {upstream}."),
+        Err(_) => format!("{name} could not fast-forward to {upstream}."),
+    })
+}
+
+pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    let task = task_of(&slot);
+    fetch(&repo)?;
+    let upstream = default_branch(&repo)?;
+    if !is_clean(&slot.path)? {
+        return Err(format!("{task} has uncommitted changes; land or drop them first"));
+    }
+    if ahead_behind(&slot.path, &upstream)?.0 > 0 {
+        return Err(format!("{task} has commits that are not on {upstream} yet; push them first, or use drop"));
+    }
+    free(&repo, &slot, &upstream, "-d")?;
+    Ok(format!("{task} is done; {} is free again. {}", name_of(&slot.path), fast_forward_main(&repo, &upstream)?))
+}
+
+pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    let task = task_of(&slot);
+    let upstream = default_branch(&repo)?;
+    let changed = changed_count(&slot.path)?;
+    let (ahead, _) = ahead_behind(&slot.path, &upstream)?;
+    if !force && (changed > 0 || ahead > 0) {
+        return Err(format!(
+            "{task} has {changed} uncommitted change(s) and {ahead} commit(s) not on {upstream}; drop --force discards them"
+        ));
+    }
+    if force {
+        git(&slot.path, &["reset", "--quiet", "--hard"])?;
+        git(&slot.path, &["clean", "-fdq"])?;
+    }
+    free(&repo, &slot, &upstream, "-D")?;
+    Ok(format!("{task} dropped; {} is free again.", name_of(&slot.path)))
+}

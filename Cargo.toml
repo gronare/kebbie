@@ -1,0 +1,13 @@
+[package]
+name = "kelpie"
+version = "0.2.0"
+edition = "2024"
+description = "Herding coding agents in herdr"
+license = "MIT"
+repository = "https://github.com/gronare/kelpie"
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+strip = true

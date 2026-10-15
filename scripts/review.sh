@@ -1,20 +1,6 @@
 #!/bin/sh
-# Review a repo's changes in a herdr split: an fzf list of changed files with a diff preview, Enter opens that diff
-# in nvim, and c there sends a file:line comment into the Claude pane's input box.
-# Files marked read stay out of the list until their contents change. The list reloads itself as files change.
-#
-#   review.sh split [base [path ...]]  open the review split next to the calling pane (run from Claude's pane), or
-#                                      rescope the one already open; paths scope the list, in review order
-#   review.sh history                  open tig (commit history) in a split instead
-#   review.sh hook                     PreToolUse hook: opens a live review on Claude's first edit, when enabled
-#   review.sh list <review dir>        the file list itself, run inside the split
-#
-# Each Claude pane has one review, kept in a directory: base, label, agent (the Claude pane), pane (the review
-# split), and optionally scope (paths in review order), baseline (files already changed when the work started, with
-# their content hash), session (the Claude session the hook opened it for), view/ flags and fzf.sock.
-#
-# base defaults to HEAD when the work tree has changes, else the upstream branch (unpushed commits).
-# Short flags throughout: the script is shared, and BSD awk/wc/cut on macOS lack the GNU long forms.
+# Usage: review.sh split [base [path ...]] | history | hook
+# Short flags: BSD awk/wc/cut on macOS lack the GNU long forms.
 
 set -eu
 
@@ -23,7 +9,7 @@ herdr="${HERDR_BIN_PATH:-herdr}"
 tab="$(printf '\t')"
 state="${XDG_STATE_HOME:-$HOME/.local/state}/kelpie"
 
-# The remote's default branch, e.g. origin/master; origin/HEAD is unset in some older clones.
+# origin/HEAD is unset in some older clones.
 default_branch() {
   git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null && return
   for candidate in origin/main origin/master; do
@@ -36,13 +22,11 @@ in_linked_worktree() {
   [ "$(git rev-parse --path-format=absolute --git-dir)" != "$(git rev-parse --path-format=absolute --git-common-dir)" ]
 }
 
-# In a linked worktree all of its work counts: base is where its branch left the default branch, so the review
-# keeps showing the task's commits as the default branch moves on.
+# A worktree's base is its fork point, so its commits stay in the review as the default branch moves on.
 worktree_base() {
   in_linked_worktree && branch=$(default_branch) && git merge-base HEAD "$branch"
 }
 
-# How the status line names a base: the worktree's fork point by its branch, anything else as given.
 describe_base() {
   if [ "$1" = "$(worktree_base 2>/dev/null)" ]; then
     echo "$(git branch --show-current) since $(default_branch) ($(git rev-parse --short "$1"))"
@@ -65,7 +49,6 @@ review_dir() {
   echo "$state/reviews/$(echo "$1" | tr ':/' '__')"
 }
 
-# path<TAB>+added -deleted for tracked changes, then untracked files as all-new.
 changed_files() {
   git diff --numstat "$1" | awk -F '\t' '{ printf "%s\t+%s -%s\n", $3, $1, $2 }'
   git ls-files --others --exclude-standard | while read -r path; do
@@ -81,7 +64,6 @@ status_of() {
   fi
 }
 
-# $3 is always or never.
 unified_diff() {
   case "$(status_of "$1" "$2")" in
     A) git diff --color="$3" --no-index /dev/null "$2" || true ;;
@@ -89,8 +71,7 @@ unified_diff() {
   esac
 }
 
-# Read marks, one "path<TAB>content hash" per line and repo. Keyed on the file's contents rather than its diff, so
-# committing a file keeps it read and any edit brings it back.
+# Read marks are keyed on contents: committing keeps a file read, any edit brings it back.
 read_marks() {
   mkdir -p "$state"
   echo "$state/$(git rev-parse --show-toplevel | tr '/' '_')"
@@ -119,9 +100,6 @@ toggle_read() {
   if is_read "$1"; then unmark_read "$1"; else mark_read "$1"; fi
 }
 
-# path<TAB>stats lines tagged "scope" or "other". With a scope file, its paths come first in its order. With a
-# baseline instead, files still as they were when the work started are other, the rest are newest first. Without
-# either, every change is in scope.
 categorized() {
   changes=$(changed_files "$(cat "$1/base")")
   if [ -f "$1/scope" ]; then
@@ -143,7 +121,6 @@ categorized() {
 $changes
 EOF
     [ -n "$new_work" ] || return 0
-    # Newest first: ls -t sorts the files that still exist, deleted ones follow.
     echo "$new_work" | while read -r path; do [ -e "$path" ] && printf '%s\0' "$path"; done | xargs -0 ls -td -- 2>/dev/null |
       while read -r path; do echo "$changes" | awk -F '\t' -v path="$path" '$1 == path { print "scope\t" $0 }'; done
     echo "$new_work" | while read -r path; do
@@ -156,8 +133,6 @@ EOF
   return 0
 }
 
-# One list row: the path for fzf's {1}, then what is displayed (--with-nth 2): +added -deleted in a fixed-width column,
-# the path, and a note. $4 is an ANSI style for the whole row, e.g. dim for read files.
 row() {
   added=${2%% *} deleted=${2#* }
   if [ "$deleted" = new ]; then deleted=""; note=" new"; else note=""; fi
@@ -165,8 +140,6 @@ row() {
     "$1" "$4" "$added" "$4" "$deleted" "$4" "$1" "$note" "$3"
 }
 
-# The list for fzf: a status line (fzf's --header-lines 1), then unread files in scope, unread other changes when
-# view/other exists, and read files dimmed when view/read exists.
 rows() {
   dim="$(printf '\033[2m')"
   in_scope=0 others=0 read_count=0 main="" rest="" read=""
@@ -192,7 +165,6 @@ rows() {
   done <<EOF
 $(categorized "$1")
 EOF
-  # against <base> · 5 to review · 3 other hidden · 1 read hidden · ? help, counts in yellow.
   count() { printf '\033[33m%s\033[0m %s' "$1" "$2"; }
   status="$(printf '\033[35m%s\033[0m' "$(cat "$1/label")")"
   if [ -f "$1/scope" ] || [ -f "$1/baseline" ]; then
@@ -213,7 +185,6 @@ EOF
   return 0
 }
 
-# Shown in the preview pane by ?, until the cursor moves.
 help() {
   heading() { printf '\n \033[1;35m%s\033[0m\n' "$1"; }
   key() { printf '   \033[1m%-12s\033[0m%s\n' "$1" "$2"; }
@@ -247,7 +218,6 @@ open() {
     nvim -S "$(dirname "$script")/review.lua" - || true
 }
 
-# What the list shows, cheaply: the review's settings, the diff against base and the untracked files' contents.
 signature() {
   base=$(cat "$1/base")
   {
@@ -262,7 +232,6 @@ reload_list() {
   curl -s --max-time 2 --unix-socket "$1/fzf.sock" -X POST http://localhost -d "reload-sync(sh '$script' rows '$1')" >/dev/null || true
 }
 
-# Polls every 2 s while the list runs and reloads it when what it shows has changed.
 watch() {
   last=$(signature "$1")
   while kill -0 "$2" 2>/dev/null; do
@@ -301,8 +270,6 @@ list() {
     --bind 'esc:ignore,ctrl-q:ignore,ctrl-g:ignore' || true
 }
 
-# Opens a split right of the calling pane, labelled $1, running $2, focused unless $3 is no-focus; the split closes
-# when $2 exits.
 open_split() {
   root=$(git rev-parse --show-toplevel)
   pane=$("$herdr" pane split --pane "$HERDR_PANE_ID" --direction right --cwd "$root" "--${3:-focus}" | jq -r '.result.pane.pane_id')
@@ -311,12 +278,11 @@ open_split() {
   echo "$pane"
 }
 
-# The review split for directory $1 is open while its pane exists and its list is listening.
 review_open() {
   [ -f "$1/pane" ] && [ -S "$1/fzf.sock" ] && "$herdr" pane get "$(cat "$1/pane")" >/dev/null 2>&1
 }
 
-# Reviews whose Claude pane is gone; pane IDs are never reused, so they can't come back.
+# herdr never reuses pane IDs, so a review whose Claude pane is gone can go.
 prune_reviews() {
   for dir in "$state"/reviews/*; do
     [ -f "$dir/agent" ] || continue
@@ -331,8 +297,6 @@ open_review() {
   echo "$pane"
 }
 
-# split [base [path ...]]: paths limit the list to the work under review, the rest of the changes one key away. An open
-# review for this Claude pane is rescoped in place instead of opening a second split.
 split() {
   d=$(review_dir "$HERDR_PANE_ID")
   base="${1:-$(default_base)}"
@@ -355,9 +319,7 @@ split() {
   fi
 }
 
-# PreToolUse on Claude's file edits. With the auto_open setting on and Claude in herdr, the first edit of a session
-# opens a live review next to Claude without taking focus: base is HEAD, and the files already changed before it count
-# as other. Closed from herdr, it stays closed for the rest of that session.
+# A review closed from herdr stays closed for the rest of that Claude session.
 hook() {
   [ "${CLAUDE_PLUGIN_OPTION_AUTO_OPEN:-false}" = true ] || return 0
   [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ] || return 0
@@ -378,7 +340,6 @@ hook() {
   mkdir -p "$d"
   echo "$session" > "$d/session"
   echo "$HERDR_PANE_ID" > "$d/agent"
-  # A worktree holds only this work, so everything since it left the default branch is in scope.
   if base=$(worktree_base 2>/dev/null); then
     echo "$base" > "$d/base"
     describe_base "$base" > "$d/label"

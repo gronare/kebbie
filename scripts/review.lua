@@ -1,7 +1,3 @@
--- Loaded by review.sh on a unified diff read from stdin. In the diff: c comments, o opens the real file in a float over
--- the diff, - opens its folder there, r marks the file read, q or Esc goes back to the list. Anywhere: <leader>m
--- comments, ctrl-q closes the float. Comments are typed into the Claude pane's input box as "path:line — text"
--- (not submitted), and files saved from the float are reported there too.
 local agent_pane = vim.env.REVIEW_AGENT_PANE
 local path = vim.env.REVIEW_PATH
 local diff_buf = vim.api.nvim_get_current_buf()
@@ -9,12 +5,11 @@ local diff_win = vim.api.nvim_get_current_win()
 local marks = vim.api.nvim_create_namespace("review")
 local sent = 0
 local float_win
--- Real files opened in the float: buffer -> lines as last reported to Claude (as read from disk at first), and the
--- buffers saved since. Only saves count as your edits, so a file Claude changes on disk is not reported back to it.
+-- Only saved buffers count as the user's edits, so files Claude changes on disk aren't reported back to it.
 local baseline = {}
 local saved = {}
 
--- The window options the diff changes below, as the user's config left them, for the float to show files as usual.
+-- Captured before the diff changes them, so the float shows files with the user's own options.
 local float_options = {}
 for _, option in ipairs({ "number", "relativenumber", "signcolumn", "winbar", "wrap", "breakindent", "showbreak", "linebreak" }) do
   float_options[option] = vim.api.nvim_get_option_value(option, { win = diff_win })
@@ -26,13 +21,11 @@ vim.bo.filetype = "diff"
 vim.wo.number = false
 vim.wo.relativenumber = false
 vim.wo.signcolumn = "yes"
--- Wrapped continuations are indented and marked so they don't read as context lines; unwrapped, scroll a column at a time.
 vim.wo.breakindent = true
 vim.wo.showbreak = "↪ "
 vim.wo.linebreak = true
 vim.o.sidescroll = 1
 
--- Diff buffer line -> { old = n } for removed lines, { new = n } for added, both for context lines.
 local numbers
 local function number_lines()
   numbers = {}
@@ -59,7 +52,6 @@ local function span(low, high)
   return low == high and tostring(low) or (low .. "-" .. high)
 end
 
--- path:12, path:12-14, or path:7 (before) when the selection only covers removed lines.
 local function diff_location(first, last)
   local function side_span(side)
     local low, high
@@ -76,7 +68,7 @@ local function diff_location(first, last)
   return path
 end
 
--- Repo-relative; the repo root itself, which :. leaves absolute or empty, is ./.
+-- :. leaves the repo root absolute or empty.
 local function relative(buf)
   local name = vim.api.nvim_buf_get_name(buf)
   local rel = vim.fn.fnamemodify(name, ":.")
@@ -87,7 +79,6 @@ local function is_real_file(buf)
   return vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= ""
 end
 
--- Set when the file's diff no longer matches the buffer; u reloads it.
 local stale = false
 
 local function update_winbar()
@@ -113,7 +104,6 @@ local function show_sent(buf, last, text, ok)
   })
 end
 
--- A small centred box over everything: Enter submits the text, Esc cancels.
 local function prompt(title, footer, on_submit)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.b[buf].copilot_enabled = false
@@ -148,7 +138,6 @@ local function prompt(title, footer, on_submit)
   vim.cmd.startinsert()
 end
 
--- Comments on lines first..last of the current buffer: the diff, or a real file opened in the float.
 local function comment(first, last)
   if not agent_pane or agent_pane == "" then
     vim.notify("No Claude pane to send to", vim.log.levels.WARN)
@@ -186,7 +175,6 @@ local function comment_on_selection()
   comment(first, last)
 end
 
--- Unsaved edits block closing the float or leaving the review until saved or discarded.
 local function unsaved()
   local bufs = {}
   for buf in pairs(baseline) do
@@ -230,7 +218,6 @@ local function guard(action)
   vim.keymap.set("n", "<Esc>", close, { buffer = buf })
 end
 
--- "path:3-5, 12 — edited by me during the review" for each file saved with changes since the last report.
 local function report_edits()
   local reviewed_changed = false
   for buf, before in pairs(baseline) do
@@ -255,7 +242,6 @@ local function report_edits()
   return reviewed_changed
 end
 
--- Reloads the diff after the reviewed file changed; the sent markers go, since their lines moved.
 local function refresh_diff()
   local result = vim.system({ "sh", vim.env.REVIEW_SCRIPT, "diff", vim.env.REVIEW_BASE, path }, { text = true }):wait()
   if result.code ~= 0 then return end
@@ -269,7 +255,6 @@ local function refresh_diff()
   update_winbar()
 end
 
--- Checks every 3 s whether the diff on disk moved on, without touching what is on screen.
 local function diff_lines(stdout)
   return vim.split(stdout, "\n", { trimempty = true })
 end
@@ -285,7 +270,6 @@ vim.uv.new_timer():start(3000, 3000, vim.schedule_wrap(function()
   end))
 end))
 
--- How the footer names <leader>, which differs per config.
 local function leader_name()
   local leader = vim.g.mapleader or "\\"
   return leader == " " and "space" or leader
@@ -314,7 +298,6 @@ local function reset_window_options(win)
   end
 end
 
--- Opens target (a file or a folder) in the float, creating it over the diff when needed.
 local function open_in_float(target, line)
   if not (float_win and vim.api.nvim_win_is_valid(float_win)) then
     float_win = vim.api.nvim_open_win(diff_buf, true, float_config(diff_buf))
@@ -323,7 +306,7 @@ local function open_in_float(target, line)
     vim.api.nvim_set_current_win(float_win)
   end
   vim.cmd.edit(vim.fn.fnameescape(target))
-  -- A buffer brings back the window options it last had, the diff window's if it passed through there.
+  -- A buffer restores the window options it last had.
   reset_window_options(float_win)
   if line then pcall(vim.api.nvim_win_set_cursor, float_win, { line, 0 }) end
   vim.cmd("normal! zz")
@@ -337,7 +320,6 @@ local function close_float()
   end)
 end
 
--- The file line for the diff line under the cursor: removed lines take the next line that still exists.
 local function file_line()
   local lnum = vim.fn.line(".")
   for l = lnum, vim.api.nvim_buf_line_count(diff_buf) do
@@ -357,8 +339,7 @@ local function open_file()
   open_in_float(path, file_line())
 end
 
--- Neo-tree's own float when it is installed, else whatever handles folders (netrw by default) inside the review float.
--- Configs that lazy-load neo-tree on a key have no :Neotree command until lazy.nvim loads it.
+-- Configs that lazy-load neo-tree on a key have no :Neotree until lazy loads it.
 local function neo_tree()
   if vim.fn.exists(":Neotree") ~= 2 then
     pcall(function() require("lazy").load({ plugins = { "neo-tree.nvim" } }) end)
@@ -369,7 +350,7 @@ end
 local function open_folder()
   local folder = vim.fn.fnamemodify(path, ":h")
   if vim.fn.filereadable(path) == 1 and neo_tree() then
-    -- Neo-tree opens no float from inside another float, so it starts from the diff window.
+    -- Neo-tree opens no float from inside another float.
     vim.api.nvim_set_current_win(diff_win)
     vim.cmd("Neotree float reveal_file=" .. vim.fn.fnameescape(vim.fn.fnamemodify(path, ":p")))
   else
@@ -398,7 +379,7 @@ vim.api.nvim_create_autocmd("BufWritePost", {
   end,
 })
 
--- A file opened into the diff window (neo-tree opens into the last regular window) moves to the float instead.
+-- Neo-tree opens files in the last regular window, which is the diff's.
 vim.api.nvim_create_autocmd("BufWinEnter", {
   callback = function(event)
     if vim.api.nvim_get_current_win() ~= diff_win or event.buf == diff_buf or not is_real_file(event.buf) then return end
@@ -410,7 +391,6 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
   end,
 })
 
--- Keeps the float's title on the file it shows, wherever the user navigates inside it.
 vim.api.nvim_create_autocmd("BufWinEnter", {
   callback = function(event)
     if float_win and vim.api.nvim_get_current_win() == float_win then
@@ -420,7 +400,6 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
   end,
 })
 
--- However the float closes (ctrl-q or :q), saved edits are reported and the diff catches up.
 vim.api.nvim_create_autocmd("WinClosed", {
   callback = function(event)
     if float_win and tonumber(event.match) == float_win then
