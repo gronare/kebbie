@@ -6,13 +6,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
+use crate::backlog::{self, Backlog, Entry};
 use crate::herdr;
+use crate::repo::name_of;
 use crate::sh::Result;
 use crate::status::{self, Group, Item};
 use crate::tasks;
@@ -20,18 +22,30 @@ use crate::tasks;
 const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
 const SUBTEXT: Color = Color::Rgb(0xa6, 0xad, 0xc8);
 const MUTED: Color = Color::Rgb(0x6c, 0x70, 0x86);
+const FAINT: Color = Color::Rgb(0x45, 0x47, 0x5a);
 const SURFACE: Color = Color::Rgb(0x31, 0x32, 0x44);
+const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
 const MAUVE: Color = Color::Rgb(0xcb, 0xa6, 0xf7);
 const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
 const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
+const TEAL: Color = Color::Rgb(0x94, 0xe2, 0xd5);
 const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
+
+const REFRESH_BACKLOG: &str = "Refresh the kelpie backlog: take the vault backlog and my open Linear issues and pipe them as one JSON array to `$HOME/.local/share/kelpie/current/target/release/kelpie backlog save`. Fields per entry: source (vault or linear), title, priority (urgent, high, medium, low or none), area (the repo, e.g. auctionet), ref (vault path or Linear id), summary (one line), age (e.g. 3 d). Reply in one line when saved.";
+
+#[derive(Clone, Copy, PartialEq)]
+enum View {
+    Work,
+    Backlog,
+}
 
 enum Purpose {
     TaskName,
     TaskPrompt(String),
     Message(String, String),
+    BacklogName(Entry),
 }
 
 enum Mode {
@@ -43,15 +57,27 @@ enum Mode {
 }
 
 struct App {
+    view: View,
     items: Vec<Item>,
-    selected: usize,
+    backlog: Backlog,
+    work_selected: usize,
+    backlog_selected: usize,
+    show_sessions: bool,
     mode: Mode,
     overlay: bool,
     loaded: bool,
     error: Option<String>,
-    output: HashMap<String, (Instant, Vec<String>)>,
+    messages: HashMap<String, (Instant, String)>,
     refresh: Sender<()>,
     quit: bool,
+}
+
+fn style(color: Color) -> Style {
+    Style::new().fg(color)
+}
+
+fn bold(color: Color) -> Style {
+    Style::new().fg(color).add_modifier(Modifier::BOLD)
 }
 
 fn group_color(group: Group) -> Color {
@@ -63,13 +89,30 @@ fn group_color(group: Group) -> Color {
     }
 }
 
+fn priority_color(priority: &str) -> Color {
+    match priority {
+        "urgent" => RED,
+        "high" => PEACH,
+        "medium" => YELLOW,
+        _ => MUTED,
+    }
+}
+
+fn priority_icon(priority: &str) -> &'static str {
+    match priority {
+        "urgent" | "high" => "▲",
+        "medium" => "■",
+        _ => "·",
+    }
+}
+
 fn status_icon(item: &Item) -> Span<'static> {
     match item.agent.as_ref().map(|agent| agent.status.as_str()) {
-        Some("blocked") => Span::styled("●", Style::new().fg(PEACH)),
-        Some("done") => Span::styled("✓", Style::new().fg(GREEN)),
-        Some("working") => Span::styled("◐", Style::new().fg(BLUE)),
-        Some(_) => Span::styled("○", Style::new().fg(MUTED)),
-        None => Span::styled("·", Style::new().fg(MUTED)),
+        Some("blocked") => Span::styled("●", style(PEACH)),
+        Some("done") => Span::styled("✓", style(GREEN)),
+        Some("working") => Span::styled("◐", style(BLUE)),
+        Some(_) => Span::styled("○", style(MUTED)),
+        None => Span::styled("·", style(MUTED)),
     }
 }
 
@@ -81,6 +124,44 @@ fn status_words(status: &str) -> &'static str {
         "idle" => "idle",
         _ => "state unknown",
     }
+}
+
+fn plural(count: usize, noun: &str) -> String {
+    if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
+
+fn row_facts(item: &Item) -> String {
+    let Some(git) = &item.git else { return String::new() };
+    let mut parts = Vec::new();
+    if git.ahead > 0 {
+        parts.push(plural(git.ahead, "commit"));
+    }
+    if git.changed > 0 {
+        parts.push(plural(git.changed, "file"));
+    }
+    if git.behind > 0 {
+        parts.push(format!("{} behind", git.behind));
+    }
+    if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
+}
+
+fn suggested_name(title: &str) -> String {
+    const FILLER: [&str; 12] = ["a", "an", "the", "and", "of", "for", "to", "on", "in", "with", "s", "before"];
+    title.to_lowercase().split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty() && !FILLER.contains(word)).take(4).collect::<Vec<_>>().join("-")
+}
+
+// Claude's last message is the last "● " block on screen, up to its footer lines.
+fn last_message(output: &str) -> String {
+    let lines: Vec<&str> = output.lines().map(str::trim_end).collect();
+    let Some(start) = lines.iter().rposition(|line| line.trim_start().starts_with("● ")) else { return String::new() };
+    let stop = |line: &str| {
+        let line = line.trim_start();
+        ["✻", "※", "─", "❯", "⏵", "╭", "╰", "· "].iter().any(|marker| line.starts_with(marker))
+    };
+    lines[start..].iter().take_while(|line| !stop(line))
+        .map(|line| line.trim()).filter(|line| !line.is_empty())
+        .collect::<Vec<_>>().join(" ").trim_start_matches("● ").to_string()
 }
 
 fn spawn_refresher() -> (Receiver<std::result::Result<Vec<Item>, String>>, Sender<()>) {
@@ -97,36 +178,69 @@ fn spawn_refresher() -> (Receiver<std::result::Result<Vec<Item>, String>>, Sende
     (items_rx, refresh_tx)
 }
 
+fn review_script() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    Some(exe.ancestors().nth(3)?.join("scripts/review.sh"))
+}
+
 impl App {
-    fn selected_item(&self) -> Option<&Item> {
-        self.items.get(self.selected)
+    fn work(&self) -> Vec<&Item> {
+        self.items.iter().filter(|item| item.is_task() || self.show_sessions).collect()
     }
 
-    fn agent_output(&mut self, pane: &str) -> Vec<String> {
-        if let Some((at, lines)) = self.output.get(pane)
+    fn session_count(&self) -> usize {
+        self.items.iter().filter(|item| !item.is_task()).count()
+    }
+
+    fn selected_item(&self) -> Option<Item> {
+        self.work().get(self.work_selected).map(|item| (*item).clone())
+    }
+
+    fn selected_entry(&self) -> Option<Entry> {
+        self.backlog.entries.get(self.backlog_selected).cloned()
+    }
+
+    fn agent_message(&mut self, pane: &str) -> String {
+        if let Some((at, message)) = self.messages.get(pane)
             && at.elapsed() < Duration::from_secs(4)
         {
-            return lines.clone();
+            return message.clone();
         }
-        let lines: Vec<String> = herdr::read_agent(pane, 80).unwrap_or_default().lines()
-            .map(str::trim_end)
-            .filter(|line| !line.trim().is_empty() && !line.contains("──") && !line.contains("╌") && !line.trim_start().starts_with('❯'))
-            .map(str::to_string)
-            .collect();
-        let tail = lines[lines.len().saturating_sub(16)..].to_vec();
-        self.output.insert(pane.to_string(), (Instant::now(), tail.clone()));
-        tail
+        let message = last_message(&herdr::read_agent(pane, 120).unwrap_or_default());
+        self.messages.insert(pane.to_string(), (Instant::now(), message.clone()));
+        message
     }
 
-    fn repo_for_start(&self) -> PathBuf {
-        self.selected_item().and_then(|item| item.repo.clone())
+    fn repo_named(&self, name: &str) -> Option<PathBuf> {
+        self.items.iter().filter_map(|item| item.repo.clone()).find(|repo| name_of(repo) == name)
+    }
+
+    fn any_repo(&self) -> PathBuf {
+        self.selected_item().and_then(|item| item.repo)
             .or_else(|| self.items.iter().find_map(|item| item.repo.clone()))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+    }
+
+    fn lead_pane(&self) -> Option<String> {
+        herdr::agents().ok()?.into_iter().find(|agent| agent["name"] == "lead")
+            .and_then(|agent| agent["pane_id"].as_str().map(str::to_string))
     }
 
     fn show(&mut self, result: Result<String>) {
         self.mode = Mode::Message(result.unwrap_or_else(|error| error));
         let _ = self.refresh.send(());
+    }
+
+    fn move_selection(&mut self, step: isize) {
+        let length = match self.view {
+            View::Work => self.work().len(),
+            View::Backlog => self.backlog.entries.len(),
+        };
+        let selected = match self.view {
+            View::Work => &mut self.work_selected,
+            View::Backlog => &mut self.backlog_selected,
+        };
+        *selected = selected.saturating_add_signed(step).min(length.saturating_sub(1));
     }
 
     fn handle(&mut self, key: KeyEvent, terminal: &mut DefaultTerminal) {
@@ -164,36 +278,64 @@ impl App {
     }
 
     fn handle_normal(&mut self, key: KeyEvent) {
-        let item = self.selected_item().cloned();
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => self.selected = (self.selected + 1).min(self.items.len().saturating_sub(1)),
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Tab | KeyCode::BackTab => self.view = if self.view == View::Work { View::Backlog } else { View::Work },
             KeyCode::Esc | KeyCode::Char('q') if self.overlay => self.quit = true,
             KeyCode::Char('?') => self.mode = Mode::Help,
-            KeyCode::Char('r') => {
-                let _ = self.refresh.send(());
-            }
             KeyCode::Char('s') => {
                 self.mode = Mode::Input { purpose: Purpose::TaskName, label: "New task: name".to_string(), buffer: String::new() };
             }
+            _ if self.view == View::Backlog => self.handle_backlog(key),
+            _ => self.handle_work(key),
+        }
+    }
+
+    fn handle_backlog(&mut self, key: KeyEvent) {
+        match key.code {
             KeyCode::Enter => {
-                if let Some(workspace) = item.and_then(|item| item.workspace) {
-                    let _ = herdr::focus_workspace(&workspace);
+                if let Some(entry) = self.selected_entry() {
+                    let buffer = suggested_name(&entry.title);
+                    self.mode = Mode::Input { purpose: Purpose::BacklogName(entry), label: "Start as task: name".to_string(), buffer };
+                }
+            }
+            KeyCode::Char('R') => {
+                let result = match self.lead_pane() {
+                    Some(pane) => herdr::prompt_agent(&pane, REFRESH_BACKLOG)
+                        .map(|_| "Asked the lead to refresh the backlog; it updates here when it is saved.".to_string()),
+                    None => Err("No lead is running; prefix+space starts it.".to_string()),
+                };
+                self.show(result);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_work(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Char('o') {
+            self.show_sessions = !self.show_sessions;
+            self.work_selected = 0;
+            return;
+        }
+        let Some(item) = self.selected_item() else { return };
+        match key.code {
+            KeyCode::Enter => {
+                if let Some(workspace) = &item.workspace {
+                    let _ = herdr::focus_workspace(workspace);
                     if self.overlay {
                         self.quit = true;
                     }
                 }
             }
             KeyCode::Char('p') => {
-                if let Some(item) = item
-                    && let Some(agent) = item.agent
-                {
+                if let Some(agent) = item.agent {
                     let label = format!("Message to {}", item.name);
                     self.mode = Mode::Input { purpose: Purpose::Message(agent.pane, item.name), label, buffer: String::new() };
                 }
             }
+            KeyCode::Char('r') => self.open_review(&item),
             KeyCode::Char(command @ ('l' | 'd' | 'x')) => {
-                let Some(item) = item else { return };
                 let Some(path) = item.path.clone() else {
                     self.mode = Mode::Message(format!("{} is a session, not a task in a worktree.", item.name));
                     return;
@@ -208,20 +350,51 @@ impl App {
         }
     }
 
+    // The review opens next to the task's own Claude, so comments reach that agent.
+    fn open_review(&mut self, item: &Item) {
+        let (Some(path), Some(agent), Some(script)) = (&item.path, &item.agent, review_script()) else {
+            self.mode = Mode::Message("A review needs a task with its Claude running.".to_string());
+            return;
+        };
+        let output = std::process::Command::new("sh").arg(&script).arg("split").current_dir(path)
+            .env("HERDR_PANE_ID", &agent.pane).output();
+        match output {
+            Ok(output) if output.status.success() => {
+                if let Some(workspace) = &item.workspace {
+                    let _ = herdr::focus_workspace(workspace);
+                }
+                if self.overlay {
+                    self.quit = true;
+                }
+            }
+            Ok(output) => self.mode = Mode::Message(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+            Err(error) => self.mode = Mode::Message(error.to_string()),
+        }
+    }
+
     fn submit(&mut self, purpose: Purpose, text: String, terminal: &mut DefaultTerminal) {
         match purpose {
-            Purpose::TaskName if text.is_empty() => {}
+            Purpose::TaskName | Purpose::BacklogName(_) if text.is_empty() => {}
             Purpose::TaskName => {
-                self.mode = Mode::Input {
-                    purpose: Purpose::TaskPrompt(text),
-                    label: "What should Claude do? (optional)".to_string(),
-                    buffer: String::new(),
-                };
+                let label = "What should Claude do? (optional)".to_string();
+                self.mode = Mode::Input { purpose: Purpose::TaskPrompt(text), label, buffer: String::new() };
             }
             Purpose::TaskPrompt(name) => {
-                let repo = self.repo_for_start();
+                let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
                 let result = outside(terminal, || tasks::start(&repo, &name, prompt.as_deref(), true));
+                self.show(result);
+            }
+            Purpose::BacklogName(entry) => {
+                let Some(repo) = self.repo_named(&entry.area) else {
+                    self.mode = Mode::Message(format!("No checkout of {} is open in herdr; open it as a Space first.", entry.area));
+                    return;
+                };
+                let prompt = match entry.source.as_str() {
+                    "linear" => format!("Work on Linear issue {}: {}. Read the issue first, then plan with me before changing code.", entry.reference, entry.title),
+                    _ => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first, then plan with me before changing code.", entry.reference, entry.title),
+                };
+                let result = outside(terminal, || tasks::start(&repo, &text, Some(&prompt), true));
                 self.show(result);
             }
             Purpose::Message(_, _) if text.is_empty() => {}
@@ -245,104 +418,258 @@ fn outside(terminal: &mut DefaultTerminal, step: impl FnOnce() -> Result<String>
     result
 }
 
-fn header(app: &App) -> Line<'static> {
+fn header(app: &App, width: u16) -> Line<'static> {
     let tasks = app.items.iter().filter(|item| item.is_task()).count();
-    let needs = app.items.iter().filter(|item| item.group() == Group::NeedsYou).count();
-    let working = app.items.iter().filter(|item| item.group() == Group::Working).count();
-    let mut spans = vec![Span::styled(" kelpie ", Style::new().fg(MAUVE).add_modifier(Modifier::BOLD))];
-    let mut part = |text: String, color: Color| {
-        spans.push(Span::styled(" · ", Style::new().fg(MUTED)));
-        spans.push(Span::styled(text, Style::new().fg(color)));
+    let tab = |label: &str, count: usize, active: bool| -> Vec<Span<'static>> {
+        let label_style = if active { bold(MAUVE).add_modifier(Modifier::UNDERLINED) } else { style(MUTED) };
+        vec![
+            Span::styled(label.to_string(), label_style),
+            Span::styled(format!(" {count}"), style(if active { TEXT } else { MUTED })),
+            Span::raw("   "),
+        ]
     };
-    part(format!("{tasks} {}", if tasks == 1 { "task" } else { "tasks" }), SUBTEXT);
-    if needs > 0 {
-        part(format!("{needs} need you"), PEACH);
-    }
-    if working > 0 {
-        part(format!("{working} working"), BLUE);
-    }
+    let mut spans = vec![Span::styled("kelpie", bold(MAUVE)), Span::raw("   ")];
+    spans.extend(tab("Work", tasks, app.view == View::Work));
+    spans.extend(tab("Backlog", app.backlog.entries.len(), app.view == View::Backlog));
+    let fresh = format!("backlog {}", backlog::age(app.backlog.updated));
+    let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    let gap = (width as usize).saturating_sub(used + fresh.chars().count()).max(1);
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.push(Span::styled(fresh, style(MUTED)));
     Line::from(spans)
 }
 
-fn list_lines(app: &App, width: u16) -> (Vec<Line<'static>>, usize) {
+fn group_line(title: &str, count: usize, color: Color) -> Line<'static> {
+    Line::from(vec![Span::styled(title.to_string(), bold(color)), Span::styled(format!("  {count}"), style(FAINT))])
+}
+
+// The name gives way when the pane is narrow; place and facts stay readable on the right.
+fn row(selected: bool, icon: Span<'static>, name: &str, place: &str, facts: &str, width: usize) -> Line<'static> {
+    let facts = if facts.is_empty() { String::new() } else { format!(" · {facts}") };
+    let right_width = (place.chars().count() + facts.chars().count()).min(width / 2);
+    let name_width = width.saturating_sub(right_width + 6);
+    let name_count = name.chars().count();
+    let mut shown: String = name.chars().take(name_width).collect();
+    if name_count > name_width && name_width > 1 {
+        shown = name.chars().take(name_width - 1).collect::<String>() + "…";
+    }
+    let padding = name_width.saturating_sub(shown.chars().count());
+    let bar = if selected { Span::styled("▌", style(MAUVE)) } else { Span::raw(" ") };
+    let name_style = if selected { bold(TEXT) } else { style(TEXT) };
+    let right: String = format!("{place}{facts}").chars().take(right_width).collect();
+    let (place_part, facts_part) = match right.split_once(" · ") {
+        Some((place, facts)) => (place.to_string(), format!(" · {facts}")),
+        None => (right, String::new()),
+    };
+    let line = Line::from(vec![
+        bar, icon, Span::raw(" "), Span::styled(shown, name_style), Span::raw(" ".repeat(padding + 2)),
+        Span::styled(place_part, style(TEAL)), Span::styled(facts_part, style(MUTED)),
+    ]);
+    if selected { line.style(Style::new().bg(SURFACE)) } else { line }
+}
+
+fn work_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize) {
     let mut lines = Vec::new();
     let mut selected_line = 0;
-    let mut current: Option<Group> = None;
-    for (index, item) in app.items.iter().enumerate() {
-        let group = item.group();
-        if current != Some(group) {
+    let mut current: Option<Option<Group>> = None;
+    let work = app.work();
+    let section = |item: &Item| item.is_task().then(|| item.group());
+    for (index, item) in work.iter().enumerate() {
+        let key = section(item);
+        if current != Some(key) {
             if current.is_some() {
                 lines.push(Line::default());
             }
-            let count = app.items.iter().filter(|other| other.group() == group).count();
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {}", group.title()), Style::new().fg(group_color(group)).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("  {count}"), Style::new().fg(MUTED)),
-            ]));
-            current = Some(group);
+            let count = work.iter().filter(|other| section(other) == key).count();
+            lines.push(if item.is_task() {
+                group_line(item.group().title(), count, group_color(item.group()))
+            } else {
+                group_line("OTHER SESSIONS", count, MUTED)
+            });
+            current = Some(key);
         }
-        let selected = index == app.selected;
-        if selected {
+        if index == app.work_selected {
             selected_line = lines.len();
         }
-        let background = if selected { Style::new().bg(SURFACE) } else { Style::new() };
-        let bar = if selected { Span::styled("▌", Style::new().fg(MAUVE)) } else { Span::raw(" ") };
-        let name_style = if selected { Style::new().fg(TEXT).add_modifier(Modifier::BOLD) } else { Style::new().fg(TEXT) };
-        let place = format!("{} ", item.place);
-        let used = 4 + item.name.chars().count() + place.chars().count();
-        let gap = (width as usize).saturating_sub(used).max(1);
+        let facts = if item.is_task() { row_facts(item) } else { String::new() };
+        lines.push(row(index == app.work_selected, status_icon(item), &item.name, &item.place, &facts, width));
+    }
+    if work.is_empty() {
+        lines.push(Line::from(Span::styled("No tasks yet. s starts one; tab shows the backlog.", style(MUTED))));
+    }
+    let sessions = app.session_count();
+    if !app.show_sessions && sessions > 0 {
+        lines.push(Line::default());
+        let text = format!("+ {sessions} other Claude {}", if sessions == 1 { "session" } else { "sessions" });
+        let gap = width.saturating_sub(text.chars().count() + 12).max(1);
         lines.push(Line::from(vec![
-            bar.clone(), Span::raw(" "), status_icon(item), Span::raw(" "),
-            Span::styled(item.name.clone(), name_style),
-            Span::raw(" ".repeat(gap)),
-            Span::styled(place, Style::new().fg(MUTED)),
-        ]).style(background));
-        lines.push(Line::from(vec![
-            bar, Span::raw("   "),
-            Span::styled(item.summary(), Style::new().fg(SUBTEXT)),
-        ]).style(background));
+            Span::styled(format!("  {text}"), style(MUTED)), Span::raw(" ".repeat(gap)),
+            Span::styled("o", style(MAUVE)), Span::styled(" to show", style(MUTED)),
+        ]));
     }
     (lines, selected_line)
 }
 
-fn detail_lines(app: &mut App) -> Vec<Line<'static>> {
-    let Some(item) = app.selected_item().cloned() else { return Vec::new() };
-    let mut lines = vec![Line::from(Span::styled(
-        match &item.path {
-            Some(path) => format!("task in {} · {}", item.place, path.file_name().unwrap_or_default().to_string_lossy()),
-            None => format!("session in {}", item.place),
-        },
-        Style::new().fg(SUBTEXT),
-    ))];
-    if item.is_task() {
-        lines.push(Line::from(Span::styled(item.summary(), Style::new().fg(TEXT))));
+fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize) {
+    let mut lines = Vec::new();
+    let mut selected_line = 0;
+    let mut current: Option<&str> = None;
+    for (index, entry) in app.backlog.entries.iter().enumerate() {
+        if current != Some(entry.priority.as_str()) {
+            if current.is_some() {
+                lines.push(Line::default());
+            }
+            let count = app.backlog.entries.iter().filter(|other| other.priority == entry.priority).count();
+            lines.push(group_line(&entry.priority.to_uppercase(), count, priority_color(&entry.priority)));
+            current = Some(&entry.priority);
+        }
+        if index == app.backlog_selected {
+            selected_line = lines.len();
+        }
+        let icon = Span::styled(priority_icon(&entry.priority), style(priority_color(&entry.priority)));
+        let facts = if entry.age.is_empty() { entry.source.clone() } else { format!("{} · {}", entry.source, entry.age) };
+        lines.push(row(index == app.backlog_selected, icon, &entry.title, &entry.area, &facts, width));
     }
+    (lines, selected_line)
+}
+
+fn chip(text: String, color: Color) -> Vec<Span<'static>> {
+    vec![Span::styled(format!(" {text} "), Style::new().fg(color).bg(MANTLE)), Span::raw(" ")]
+}
+
+// Wrapped by hand so every line keeps the margin, and cut to the lines the box has left.
+fn quote(who: &str, text: String, accent: Color, width: usize, room: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![Span::styled("┃ ", style(accent)), Span::styled(who.to_string(), style(MUTED))])];
+    let width = width.saturating_sub(2).max(10);
+    let mut wrapped: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > width {
+            wrapped.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        wrapped.push(current);
+    }
+    let room = room.saturating_sub(1).max(1);
+    if wrapped.len() > room {
+        wrapped.truncate(room);
+        let last = wrapped.last_mut().unwrap();
+        let keep = width.saturating_sub(1).min(last.chars().count());
+        *last = last.chars().take(keep).collect::<String>() + "…";
+    }
+    lines.extend(wrapped.into_iter().map(|text| Line::from(vec![Span::styled("┃ ", style(accent)), Span::styled(text, style(SUBTEXT))])));
+    lines
+}
+
+fn title_line(name: &str, right: String, width: usize) -> Line<'static> {
+    let gap = width.saturating_sub(name.chars().count() + right.chars().count()).max(1);
+    Line::from(vec![Span::styled(name.to_string(), bold(MAUVE)), Span::raw(" ".repeat(gap)), Span::styled(right, style(MUTED))])
+}
+
+fn work_detail(app: &mut App, width: usize, height: usize) -> Vec<Line<'static>> {
+    let Some(item) = app.selected_item() else {
+        return vec![Line::from(Span::styled("Nothing selected.", style(MUTED)))];
+    };
+    let mut lines = vec![title_line(&item.name, item.place.clone(), width)];
+    let blocked = item.agent.as_ref().is_some_and(|agent| agent.status == "blocked");
     if let Some(agent) = &item.agent {
-        let mut spans = vec![status_icon(&item), Span::raw(" "), Span::styled(status_words(&agent.status), Style::new().fg(TEXT))];
+        let mut spans = vec![status_icon(&item), Span::raw(" "), Span::styled(status_words(&agent.status), style(TEXT))];
         if let Some(context) = &agent.context {
-            spans.push(Span::styled(format!("  ·  {context} context"), Style::new().fg(MUTED)));
+            spans.push(Span::styled(format!(" · {context} context"), style(MUTED)));
         }
         lines.push(Line::from(spans));
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled("Last from the agent", Style::new().fg(MUTED).add_modifier(Modifier::BOLD))));
-        let pane = agent.pane.clone();
-        for line in app.agent_output(&pane) {
-            lines.push(Line::from(Span::styled(line, Style::new().fg(SUBTEXT))));
+    }
+    let mut chips = Vec::new();
+    if let Some(path) = &item.path {
+        chips.extend(chip(name_of(path), SUBTEXT));
+    }
+    if let Some(git) = &item.git {
+        if git.ahead > 0 {
+            chips.extend(chip(plural(git.ahead, "commit"), SUBTEXT));
         }
-    } else {
-        lines.push(Line::from(Span::styled("No agent running in its Space.", Style::new().fg(MUTED))));
+        if git.changed > 0 {
+            chips.extend(chip(format!("{} changed", plural(git.changed, "file")), SUBTEXT));
+        }
+        if git.behind > 0 {
+            chips.extend(chip(format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")), YELLOW));
+        }
+    }
+    if let Some((read, total)) = item.review {
+        chips.extend(chip(format!("review {read}/{total} read"), if read == total { GREEN } else { SUBTEXT }));
+    }
+    if item.web {
+        chips.extend(chip("web ●".to_string(), GREEN));
+    }
+    if !chips.is_empty() {
+        lines.push(Line::from(chips));
+    }
+    match &item.agent {
+        Some(agent) => {
+            let message = app.agent_message(&agent.pane);
+            if !message.is_empty() {
+                let (who, accent) = if blocked { ("asks", PEACH) } else { ("last said", FAINT) };
+                let room = height.saturating_sub(lines.len());
+                lines.extend(quote(who, message, accent, width, room));
+            }
+        }
+        None => lines.push(Line::from(Span::styled("No Claude running in its Space.", style(MUTED)))),
     }
     lines
 }
 
-fn footer(app: &App) -> Line<'static> {
-    let mut keys = vec![("⏎", "go"), ("s", "start"), ("p", "message"), ("l", "ready to push"), ("d", "done"), ("x", "drop"), ("?", "help")];
-    if app.overlay {
-        keys.push(("esc", "close"));
+fn backlog_detail(app: &App, width: usize, height: usize) -> Vec<Line<'static>> {
+    let Some(entry) = app.selected_entry() else {
+        return vec![
+            Line::from(Span::styled("The backlog is empty.", style(SUBTEXT))),
+            Line::from(Span::styled("R asks the lead to fill it from the vault and Linear.", style(MUTED))),
+        ];
+    };
+    let mut lines = vec![title_line(&entry.title, format!("{} · {}", entry.priority, entry.area), width)];
+    let mut chips = chip(if entry.source == "linear" { entry.reference.clone() } else { "vault note".to_string() }, SUBTEXT);
+    if !entry.age.is_empty() {
+        chips.extend(chip(format!("{} old", entry.age), SUBTEXT));
     }
-    Line::from(keys.into_iter().flat_map(|(key, label)| [
-        Span::styled(format!(" {key}"), Style::new().fg(MAUVE)),
-        Span::styled(format!(" {label} "), Style::new().fg(MUTED)),
+    chips.extend(chip(format!("⏎ start as {}", suggested_name(&entry.title)), GREEN));
+    lines.push(Line::from(chips));
+    let about = if entry.summary.is_empty() {
+        format!("the {}'s context and plan, in a free worktree of {}", if entry.source == "linear" { "issue" } else { "note" }, entry.area)
+    } else {
+        entry.summary.clone()
+    };
+    let room = height.saturating_sub(lines.len());
+    lines.extend(quote("the task's Claude starts with", about, FAINT, width, room));
+    lines
+}
+
+fn footer(app: &App, width: usize) -> Line<'static> {
+    let mut keys: Vec<(&str, &str)> = match app.view {
+        View::Backlog => vec![("⏎", "start as task"), ("R", "refresh"), ("s", "new task"), ("tab", "work")],
+        View::Work => {
+            let task = app.selected_item().is_some_and(|item| item.is_task());
+            let mut keys = vec![("⏎", "go"), ("p", "message")];
+            if task {
+                keys.extend([("r", "review"), ("l", "ready to push"), ("d", "done"), ("x", "drop")]);
+            }
+            keys.extend([("s", "start"), ("o", "sessions"), ("tab", "backlog")]);
+            keys
+        }
+    };
+    let mut tail = vec![("?", "help")];
+    if app.overlay {
+        tail.push(("esc", "close"));
+    }
+    let length = |keys: &[(&str, &str)]| keys.iter().map(|(key, label)| key.chars().count() + label.chars().count() + 4).sum::<usize>();
+    while !keys.is_empty() && length(&keys) + length(&tail) > width {
+        keys.pop();
+    }
+    Line::from(keys.into_iter().chain(tail).flat_map(|(key, label)| [
+        Span::styled(key.to_string(), style(MAUVE)),
+        Span::styled(format!(" {label}   "), style(MUTED)),
     ]).collect::<Vec<_>>())
 }
 
@@ -356,78 +683,81 @@ fn modal(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>, width: u16) 
     let height = lines.len() as u16 + 2;
     let area = centered(frame.area(), width, height);
     frame.render_widget(Clear, area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(MAUVE)).padding(Padding::horizontal(1))
-        .title(Span::styled(format!(" {title} "), Style::new().fg(MAUVE).add_modifier(Modifier::BOLD)));
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
+        .title(Span::styled(format!(" {title} "), bold(MAUVE)));
     frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
-fn help_lines() -> Vec<Line<'static>> {
-    [
-        ("⏎", "go to the task's or session's Space"), ("j k ↑ ↓", "move"), ("s", "start a task in a free worktree"),
-        ("p", "send the agent a message without leaving"), ("l", "rebase and check; shows the push command"),
-        ("d", "after you pushed: close the task, free its worktree"), ("x", "drop the task (asks first)"),
-        ("r", "refresh now"), ("esc", "close this, or the board when it is an overlay"),
-    ].into_iter().map(|(key, text)| Line::from(vec![
-        Span::styled(format!(" {key:<9}"), Style::new().fg(MAUVE)),
-        Span::styled(text.to_string(), Style::new().fg(TEXT)),
-    ])).collect()
+fn help_lines(view: View) -> Vec<Line<'static>> {
+    let keys: Vec<(&str, &str)> = match view {
+        View::Work => vec![
+            ("⏎", "go to the task's or session's Space"), ("p", "send its Claude a message without leaving"),
+            ("r", "open the task's review next to its Claude"), ("l", "rebase and check; shows the push command"),
+            ("d", "after you pushed: close the task, free its worktree"), ("x", "drop the task (asks first)"),
+            ("s", "start a new task"), ("o", "show or hide Claude sessions outside tasks"),
+        ],
+        View::Backlog => vec![
+            ("⏎", "start the item as a task (name suggested, editable)"), ("R", "ask the lead to refresh the backlog"),
+            ("s", "start a task of your own"),
+        ],
+    };
+    keys.into_iter().chain([("tab", "switch between work and backlog"), ("j k ↑ ↓", "move"), ("esc", "close this, or the board when it is an overlay")])
+        .map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))]))
+        .collect()
 }
 
 fn draw(frame: &mut Frame, app: &mut App) {
-    let [top, body, bottom] = Layout::vertical([Constraint::Length(2), Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-    frame.render_widget(Paragraph::new(header(app)), top);
-    frame.render_widget(Paragraph::new(footer(app)), bottom);
+    let area = frame.area().inner(Margin { horizontal: 1, vertical: 0 });
+    let detail_height = 9.min(area.height / 2);
+    let [top, rule, body, detail_area, bottom] = Layout::vertical([
+        Constraint::Length(1), Constraint::Length(1), Constraint::Min(3), Constraint::Length(detail_height), Constraint::Length(1),
+    ]).areas(area);
+    frame.render_widget(Paragraph::new(header(app, top.width)), top);
+    frame.render_widget(Paragraph::new(Span::styled("─".repeat(rule.width as usize), style(SURFACE))), rule);
+    frame.render_widget(Paragraph::new(footer(app, bottom.width as usize)), bottom);
 
-    let wide = body.width >= 90;
-    let [list_area, detail_area] = if wide {
-        Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)]).areas(body)
-    } else {
-        [body, Rect::default()]
-    };
-
+    let width = body.width as usize;
     if let Some(error) = &app.error {
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(format!(" {error}"), Style::new().fg(RED)))).wrap(Wrap { trim: false }), list_area);
+        frame.render_widget(Paragraph::new(Span::styled(error.clone(), style(RED))).wrap(Wrap { trim: false }), body);
     } else if !app.loaded {
-        frame.render_widget(Paragraph::new(Span::styled(" looking around…", Style::new().fg(MUTED))), list_area);
-    } else if app.items.is_empty() {
-        frame.render_widget(Paragraph::new(vec![
-            Line::from(Span::styled(" Nothing running yet.", Style::new().fg(SUBTEXT))),
-            Line::from(Span::styled(" Press s to start a task.", Style::new().fg(MUTED))),
-        ]), list_area);
+        frame.render_widget(Paragraph::new(Span::styled("looking around…", style(MUTED))), body);
     } else {
-        let (lines, selected_line) = list_lines(app, list_area.width.saturating_sub(1));
-        let scroll = selected_line.saturating_sub(list_area.height.saturating_sub(3) as usize) as u16;
-        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), list_area);
+        let (lines, selected_line) = match app.view {
+            View::Work => work_lines(app, width),
+            View::Backlog => backlog_lines(app, width),
+        };
+        let scroll = selected_line.saturating_sub(body.height.saturating_sub(2) as usize) as u16;
+        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
     }
 
-    if wide && let Some(item) = app.selected_item().cloned() {
-        let title = Span::styled(format!(" {} ", item.name), Style::new().fg(MAUVE).add_modifier(Modifier::BOLD));
-        let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(MUTED)).title(title).padding(Padding::horizontal(1));
-        let lines = detail_lines(app);
-        let inner_height = detail_area.height.saturating_sub(2) as usize;
-        let scroll = lines.len().saturating_sub(inner_height) as u16;
-        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }).scroll((scroll, 0)), detail_area);
-    }
+    let inner_width = detail_area.width.saturating_sub(4) as usize;
+    let inner_height = detail_area.height.saturating_sub(2) as usize;
+    let lines = match app.view {
+        View::Work => work_detail(app, inner_width, inner_height),
+        View::Backlog => backlog_detail(app, inner_width, inner_height),
+    };
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(FAINT)).padding(Padding::horizontal(1));
+    frame.render_widget(Paragraph::new(lines).block(block), detail_area);
 
     match &app.mode {
         Mode::Normal => {}
-        Mode::Help => modal(frame, "keys", help_lines(), 64),
+        Mode::Help => modal(frame, "keys", help_lines(app.view), 70),
         Mode::Message(text) => {
-            let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), Style::new().fg(TEXT)))).collect();
-            lines.push(Line::from(Span::styled("any key to close", Style::new().fg(MUTED))));
+            let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
+            lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
             modal(frame, "kelpie", lines, 96);
         }
         Mode::ConfirmDrop { name, force, .. } => {
             let question = if *force { "Discard its changes and commits?" } else { "Drop this task?" };
             modal(frame, "drop", vec![
-                Line::from(Span::styled(name.clone(), Style::new().fg(TEXT))),
+                Line::from(Span::styled(name.clone(), style(TEXT))),
                 Line::default(),
-                Line::from(vec![Span::styled(question, Style::new().fg(YELLOW)), Span::styled("  y / n", Style::new().fg(MUTED))]),
+                Line::from(vec![Span::styled(question, style(YELLOW)), Span::styled("  y / n", style(MUTED))]),
             ], 72);
         }
         Mode::Input { label, buffer, .. } => modal(frame, label, vec![
-            Line::from(vec![Span::styled(buffer.clone(), Style::new().fg(TEXT)), Span::styled("▏", Style::new().fg(MAUVE))]),
-            Line::from(Span::styled("enter to continue · esc to cancel", Style::new().fg(MUTED))),
+            Line::from(vec![Span::styled(buffer.clone(), style(TEXT)), Span::styled("▏", style(MAUVE))]),
+            Line::from(Span::styled("enter to continue · esc to cancel", style(MUTED))),
         ], 72),
     }
 }
@@ -435,8 +765,9 @@ fn draw(frame: &mut Frame, app: &mut App) {
 pub fn run(overlay: bool) -> Result<String> {
     let (items_rx, refresh) = spawn_refresher();
     let mut app = App {
-        items: Vec::new(), selected: 0, mode: Mode::Normal, overlay, loaded: false, error: None,
-        output: HashMap::new(), refresh, quit: false,
+        view: View::Work, items: Vec::new(), backlog: backlog::load(), work_selected: 0, backlog_selected: 0,
+        show_sessions: false, mode: Mode::Normal, overlay, loaded: false, error: None, messages: HashMap::new(),
+        refresh, quit: false,
     };
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {
@@ -444,11 +775,13 @@ pub fn run(overlay: bool) -> Result<String> {
             while let Ok(update) = items_rx.try_recv() {
                 match update {
                     Ok(items) => {
-                        let previous = app.selected_item().map(|item| (item.name.clone(), item.place.clone()));
+                        let previous = app.selected_item().map(|item| (item.name, item.place));
                         app.items = items;
-                        app.selected = previous
-                            .and_then(|(name, place)| app.items.iter().position(|item| item.name == name && item.place == place))
-                            .unwrap_or(app.selected.min(app.items.len().saturating_sub(1)));
+                        let work = app.work();
+                        let position = previous.and_then(|(name, place)| work.iter().position(|item| item.name == name && item.place == place));
+                        app.work_selected = position.unwrap_or(app.work_selected.min(work.len().saturating_sub(1)));
+                        app.backlog = backlog::load();
+                        app.backlog_selected = app.backlog_selected.min(app.backlog.entries.len().saturating_sub(1));
                         app.error = None;
                     }
                     Err(error) => app.error = Some(error),

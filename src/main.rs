@@ -1,3 +1,4 @@
+mod backlog;
 mod board;
 mod herdr;
 mod lead;
@@ -22,6 +23,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie status [--json]          every task and Claude session, grouped by what it needs from you
   kelpie board [--overlay]        the board: tasks and sessions, with keys to act on them
   kelpie lead                     go to the lead Space (creating it), or back to where you were
+  kelpie backlog [save]           show the backlog the lead keeps; save reads a JSON array on stdin
   kelpie land [name]              rebase a task onto the default branch and check it; prints the push command
   kelpie done [name]              after pushing: close the task and free its worktree
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
@@ -127,6 +129,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("status") => status_text(),
         Some("board") => board::run(arguments.flag("--overlay")),
         Some("lead") => lead::toggle(),
+        Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
+        Some("backlog") => Ok(backlog::show()),
         Some("land") => tasks::land(&cwd, name),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),

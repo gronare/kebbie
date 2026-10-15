@@ -1,10 +1,11 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::herdr;
-use crate::repo::{ahead_behind, changed_count, default_branch, name_of};
+use crate::repo::{ahead_behind, changed_count, default_branch, git, name_of};
 use crate::sh::Result;
 use crate::tasks::slots;
 
@@ -47,6 +48,8 @@ pub struct Git {
 
 #[derive(Clone)]
 pub struct Item {
+    pub review: Option<(usize, usize)>,
+    pub web: bool,
     pub name: String,
     pub place: String,
     pub repo: Option<PathBuf>,
@@ -105,11 +108,35 @@ impl Item {
             "agent": self.agent.as_ref().map(|agent| json!({
                 "pane": agent.pane, "status": agent.status, "title": agent.title, "context": agent.context,
             })),
+            "review": self.review.map(|(read, total)| json!({ "read": read, "files": total })),
+            "web": self.web,
             "git": self.git.as_ref().map(|git| json!({
                 "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed,
             })),
         })
     }
+}
+
+// Files the task changed since it left the default branch, and how many of them the review has marked read
+// (marks are "path<TAB>content hash" lines, kept per worktree by scripts/review.sh).
+fn review_progress(path: &Path, upstream: &str) -> Option<(usize, usize)> {
+    let base = git(path, &["merge-base", "HEAD", upstream]).ok()?;
+    let mut files: Vec<String> = git(path, &["diff", "--name-only", &base]).ok()?.lines().map(str::to_string).collect();
+    files.extend(git(path, &["ls-files", "--others", "--exclude-standard"]).ok()?.lines().map(str::to_string));
+    if files.is_empty() {
+        return None;
+    }
+    let marks_dir = std::env::var("XDG_STATE_HOME").map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".local/state"))).ok()?;
+    let marks = fs::read_to_string(marks_dir.join("kelpie").join(path.to_string_lossy().replace('/', "_"))).unwrap_or_default();
+    let existing: Vec<&String> = files.iter().filter(|file| path.join(file).exists()).collect();
+    let mut args = vec!["hash-object", "--"];
+    args.extend(existing.iter().map(|file| file.as_str()));
+    let hashes = if existing.is_empty() { String::new() } else { git(path, &args).unwrap_or_default() };
+    let read = existing.iter().zip(hashes.lines())
+        .filter(|(file, hash)| marks.lines().any(|line| line == format!("{file}\t{hash}")))
+        .count();
+    Some((read, files.len()))
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -155,7 +182,12 @@ pub fn gather() -> Result<Vec<Item>> {
                 .and_then(|id| agents.iter().find(|agent| agent["workspace_id"].as_str() == Some(id.as_str())))
                 .map(agent_from);
             let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
+            let web = workspace.as_ref()
+                .and_then(|id| herdr::workspace_tokens(id).ok())
+                .is_some_and(|tokens| tokens["web"].is_string());
             items.push(Item {
+                review: review_progress(&slot.path, &upstream),
+                web,
                 name: task,
                 place: name_of(repo),
                 repo: Some(repo.clone()),
@@ -174,6 +206,8 @@ pub fn gather() -> Result<Vec<Item>> {
         }
         let agent = agent_from(agent);
         items.push(Item {
+            review: None,
+            web: false,
             name: agent.title.clone(),
             place: label,
             repo: None,
@@ -183,6 +217,6 @@ pub fn gather() -> Result<Vec<Item>> {
             git: None,
         });
     }
-    items.sort_by_key(|item| (item.group(), !item.is_task()));
+    items.sort_by_key(|item| (!item.is_task(), item.group()));
     Ok(items)
 }

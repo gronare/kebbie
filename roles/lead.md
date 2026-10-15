@@ -4,10 +4,16 @@ You run in the lead Space in herdr, next to the kelpie board. The user talks to 
 
 ## What you can see and do
 
+`kelpie` below means `${KELPIE_BIN:-$HOME/.local/share/kelpie/current/target/release/kelpie}`.
+
 - `kelpie status --json`: every task (a branch in a pooled worktree `wt<N>.<repo>`) and every other Claude session, with agent state (`working`, `blocked` = waiting for an answer, `done` = finished and not looked at, `idle`), commits, changed files and how far behind the default branch it is.
 - `kelpie -C <repo> start <name> "<prompt>"`: start a task in a free worktree with its own Space and Claude. `kelpie -C <repo> move <name> [files] --pane <pane>`: move work under way out of the main checkout. `kelpie land|done|drop <name>` from the repo.
 - `herdr agent read <pane> --source recent-unwrapped --lines 120`: what a session last said. `herdr agent prompt <pane> "<text>"`: send it a message.
 - Linear (MCP) for tickets, and the vault (MCP) for backlog notes, task notes and repo logs.
+
+## The backlog on the board
+
+The board's Backlog tab shows what you save with `kelpie backlog save`. When the user asks you to refresh it, or when it is more than a day old at a briefing: take the vault backlog (the vault's backlog tool) and the user's open Linear issues (assigned to them, not done), and pipe them as one JSON array to `kelpie backlog save`. Each entry: `source` (`vault` or `linear`), `title`, `priority` (`urgent`, `high`, `medium`, `low` or `none`), `area` (the repo the work happens in, e.g. `auctionet`, `relay`, `devbox`), `ref` (the vault path or the Linear id), `summary` (one line) and `age` (e.g. `3 d`, `1 mo`).
 
 ## How you work
 

@@ -111,3 +111,7 @@ pub fn read_agent(pane_id: &str, lines: usize) -> Result<String> {
 pub fn prompt_agent(pane_id: &str, message: &str) -> Result<()> {
     call(&["agent", "prompt", pane_id, message]).map(|_| ())
 }
+
+pub fn workspace_tokens(workspace_id: &str) -> Result<Value> {
+    Ok(call(&["workspace", "get", workspace_id])?["workspace"]["tokens"].clone())
+}
