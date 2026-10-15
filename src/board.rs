@@ -14,7 +14,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::backlog::{self, Backlog, Entry};
 use crate::herdr;
-use crate::repo::name_of;
+use crate::repo::{self, name_of};
 use crate::sh::Result;
 use crate::status::{self, Checkout, Group, Item};
 use crate::tasks;
@@ -505,19 +505,21 @@ impl App {
             Purpose::TaskPrompt(name) => {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
-                let result = outside(terminal, || tasks::start(&repo, &name, prompt.as_deref(), true));
+                let options = tasks::Start { prompt: prompt.as_deref(), focus: true, from: None, mode: None };
+                let result = outside(terminal, || tasks::start(&repo, &name, &options));
                 self.show(result);
             }
             Purpose::BacklogName(entry) => {
-                let Some(repo) = self.repo_named(&entry.area) else {
-                    self.mode = Mode::Message(format!("No checkout of {} is open in herdr; open it as a Space first.", entry.area));
-                    return;
-                };
                 let prompt = match entry.source.as_str() {
                     "linear" => format!("Work on Linear issue {}: {}. Read the issue first, then plan with me before changing code.", entry.reference, entry.title),
                     _ => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first, then plan with me before changing code.", entry.reference, entry.title),
                 };
-                let result = outside(terminal, || tasks::start(&repo, &text, Some(&prompt), true));
+                let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None };
+                let known = self.repo_named(&entry.area);
+                let result = outside(terminal, || {
+                    let repo = known.map_or_else(|| repo::locate(&entry.area), Ok)?;
+                    tasks::start(&repo, &text, &options)
+                });
                 self.show(result);
             }
             Purpose::Message(_, _) if text.is_empty() => {}

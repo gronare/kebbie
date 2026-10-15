@@ -87,13 +87,24 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
     Ok(Slot { number, path, task: None, free: true })
 }
 
+// Pushing stays the user's step; the push URL rewrite catches what the deny rule's pattern misses (git -C dir push).
+const NO_PUSH: &str = r#"{"env":{"GIT_CONFIG_COUNT":"1","GIT_CONFIG_KEY_0":"url.kelpie-blocks-push:.pushInsteadOf","GIT_CONFIG_VALUE_0":""},"permissions":{"deny":["Bash(git push:*)"]}}"#;
+
 fn open_space(repo: &Path, slot: &Slot, task: &str, focus: bool) -> Result<herdr::Space> {
     let space = herdr::open_worktree(repo, &slot.path, task, focus)?;
     herdr::rename_workspace(&space.workspace_id, task)?;
     Ok(space)
 }
 
-pub fn start(cwd: &Path, name: &str, prompt: Option<&str>, focus: bool) -> Result<String> {
+pub struct Start<'a> {
+    pub prompt: Option<&'a str>,
+    pub focus: bool,
+    pub from: Option<&'a str>,
+    pub mode: Option<&'a str>,
+}
+
+pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
+    let Start { prompt, focus, from, mode } = *options;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
@@ -105,6 +116,7 @@ pub fn start(cwd: &Path, name: &str, prompt: Option<&str>, focus: bool) -> Resul
     }
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
+    let base = from.unwrap_or(&upstream);
     let slot = match slots(&repo)?.into_iter().find(|slot| slot.free) {
         Some(slot) => slot,
         None => create_slot(&repo, &upstream)?,
@@ -112,7 +124,7 @@ pub fn start(cwd: &Path, name: &str, prompt: Option<&str>, focus: bool) -> Resul
     if branch_exists(&repo, &task) {
         git(&slot.path, &["switch", "--quiet", &task])?;
     } else {
-        git(&slot.path, &["switch", "--quiet", "-c", &task, &upstream])?;
+        git(&slot.path, &["switch", "--quiet", "-c", &task, base])?;
     }
 
     let space = open_space(&repo, &slot, &task, focus)?;
@@ -124,16 +136,16 @@ pub fn start(cwd: &Path, name: &str, prompt: Option<&str>, focus: bool) -> Resul
         herdr::run_in_pane(&herdr::create_tab(&space.workspace_id, &slot.path, "dev")?, "dev")?;
     }
     let agent_name: String = task.chars().take(32).collect();
-    let agent_args: Vec<&str> = prompt.into_iter().collect();
+    let mut agent_args: Vec<&str> = mode.map(|mode| vec!["--permission-mode", mode]).unwrap_or_default();
+    agent_args.extend(["--settings", NO_PUSH]);
+    agent_args.extend(prompt);
     if let Err(error) = herdr::start_agent(&agent_name, "claude", &claude_pane, &agent_args) {
         // Claude is up but waiting (e.g. folder trust); starting it again would type into it.
         if error.contains("agent_not_ready") {
             return Ok(format!("Started {task} in {}; Claude is waiting for an answer in its Space.", slot.path.display()));
         }
-        let command = match prompt {
-            Some(prompt) => format!("claude {}", serde_json::to_string(prompt).unwrap_or_default()),
-            None => "claude".to_string(),
-        };
+        let quoted: Vec<String> = agent_args.iter().map(|arg| serde_json::to_string(arg).unwrap_or_default()).collect();
+        let command = format!("claude {}", quoted.join(" ")).trim_end().to_string();
         herdr::run_in_pane(&claude_pane, &command)?;
     }
     Ok(format!("Started {task} in {}.", slot.path.display()))

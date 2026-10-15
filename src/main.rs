@@ -15,7 +15,9 @@ use sh::Result;
 const USAGE: &str = "kelpie: herding coding agents in herdr
 
   kelpie start <name> [prompt]    start a task in a pooled worktree, in its own Space, with Claude
-                                  (--no-focus keeps you where you are)
+                                  (--repo <name> finds or clones that repo, --from <ref> branches off it
+                                  instead of the default branch, --mode <mode> is Claude's permission mode,
+                                  --no-focus keeps you where you are)
   kelpie move <name> [file ...]   move work under way in the main checkout into a task: branch <name> if it
                                   exists, else the unpushed commits, plus the given uncommitted files
                                   (--pane <id> moves that herdr pane along, --no-focus stays put)
@@ -42,7 +44,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if argument == "--pane" || argument == "-C" {
+            if ["--pane", "-C", "--repo", "--from", "--mode"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -112,7 +114,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             let name = name.ok_or("kelpie start needs a task name")?;
             let prompt = arguments.positionals[2..].join(" ");
             let prompt = (!prompt.is_empty()).then_some(prompt.as_str());
-            tasks::start(&cwd, name, prompt, !arguments.flag("--no-focus"))
+            let repo = arguments.value("--repo").map(repo::locate).transpose()?.unwrap_or(cwd);
+            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode") };
+            tasks::start(&repo, name, &options)
         }
         Some("move") => {
             let name = name.ok_or("kelpie move needs a task name")?;

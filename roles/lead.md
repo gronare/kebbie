@@ -7,13 +7,13 @@ You run in the lead Space in herdr, next to the kelpie board. The user talks to 
 `kelpie` below means `${KELPIE_BIN:-$HOME/.local/share/kelpie/current/target/release/kelpie}`.
 
 - `kelpie status --json`: `items`, every task (a branch in a pooled worktree `wt<N>.<repo>`) and every other Claude session, with agent state (`working`, `blocked` = waiting for an answer, `done` = finished and not looked at, `idle`), commits, changed files, how far behind the default branch it is and review progress; and `checkouts`, each repo's main checkout with files changed outside tasks and its free and busy worktrees.
-- `kelpie -C <repo> start <name> "<prompt>"`: start a task in a free worktree with its own Space and Claude. `kelpie -C <repo> move <name> [files] --pane <pane>`: move work under way out of the main checkout. `kelpie land|done|drop <name>` from the repo.
+- `kelpie start <name> "<prompt>" --repo <repo>`: start a task in a free worktree of that repo (found on disk, cloned when missing) with its own Space and Claude. `--from <ref>` branches off a local ref instead of the default branch; `--mode auto` for work that runs while the user is away; `--no-focus` leaves the user where they are. `kelpie -C <repo> move <name> [files] --pane <pane>`: move work under way out of the main checkout. `kelpie land|done|drop <name>` from the repo.
 - `herdr agent read <pane> --source recent-unwrapped --lines 120`: what a session last said. `herdr agent prompt <pane> "<text>"`: send it a message.
 - Linear (MCP) for tickets, and the vault (MCP) for backlog notes, task notes and repo logs.
 
 ## The backlog on the board
 
-The board's Backlog tab shows what you save with `kelpie backlog save`. When the user asks you to refresh it, or when it is more than a day old at a briefing: take the vault backlog (the vault's backlog tool) and the user's open Linear issues (assigned to them, not done), and pipe them as one JSON array to `kelpie backlog save`. Each entry: `source` (`vault` or `linear`), `title`, `priority` (`urgent`, `high`, `medium`, `low` or `none`), `area` (the repo the work happens in, e.g. `auctionet`, `relay`, `devbox`), `ref` (the vault path or the Linear id), `summary` (one line) and `age` (e.g. `3 d`, `1 mo`).
+The board's Backlog tab shows what you save with `kelpie backlog save`. When the user asks you to refresh it, or when it is more than a day old at a briefing: take the vault backlog (the vault's backlog tool) and the user's open Linear issues (assigned to them, not done), and pipe them as one JSON array to `kelpie backlog save`. Each entry: `source` (`vault` or `linear`), `title`, `priority` (`urgent`, `high`, `medium`, `low` or `none`), `area` (the folder name of the repo the work happens in, e.g. `auctionet`, `devbox`, `notes-vault-mcp`; not the vault area when the two differ, since starting the task looks the repo up by this name), `ref` (the vault path or the Linear id), `summary` (one line) and `age` (e.g. `3 d`, `1 mo`).
 
 ## How you work
 

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::sh::{Result, run, succeeds};
+use crate::sh::{Result, run, run_visibly, succeeds};
 
 pub struct Worktree {
     pub path: PathBuf,
@@ -82,4 +82,63 @@ pub fn slot_number(repo: &Path, path: &Path) -> Option<usize> {
         return None;
     }
     digits.parse().ok()
+}
+
+fn roots() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dirs = std::env::var("KELPIE_REPO_DIRS").unwrap_or_else(|_| format!("{home}/projects:{home}/personal:{home}/src:{home}/code"));
+    dirs.split(':').filter(|dir| !dir.is_empty()).map(PathBuf::from).filter(|dir| dir.is_dir()).collect()
+}
+
+// Repos sit in a root or one level down (~/projects/<org>/<repo>).
+fn checkouts_under(root: &Path) -> Vec<PathBuf> {
+    let children = |dir: &Path| -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+        let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+        paths.sort();
+        paths
+    };
+    let mut found = Vec::new();
+    for child in children(root) {
+        if child.join(".git").is_dir() {
+            found.push(child);
+        } else {
+            found.extend(children(&child).into_iter().filter(|grandchild| grandchild.join(".git").is_dir()));
+        }
+    }
+    found
+}
+
+fn origin(repo: &Path) -> Option<String> {
+    git(repo, &["remote", "get-url", "origin"]).ok()
+}
+
+// Clones from the first owner among your checkouts that has the repo, next to that owner's other repos.
+fn clone(name: &str, roots: &[PathBuf]) -> Result<PathBuf> {
+    let mut tried = Vec::new();
+    for sibling in roots.iter().flat_map(|root| checkouts_under(root)) {
+        let Some(url) = origin(&sibling) else { continue };
+        let Some(base) = url.strip_suffix(".git").unwrap_or(&url).rsplit_once('/').map(|(base, _)| base.to_string()) else { continue };
+        let parent = sibling.parent().ok_or("checkout has no parent")?.to_path_buf();
+        if tried.contains(&(base.clone(), parent.clone())) {
+            continue;
+        }
+        tried.push((base.clone(), parent.clone()));
+        let candidate = format!("{base}/{name}.git");
+        if succeeds("git", &["ls-remote", "--quiet", &candidate, "HEAD"], None) {
+            let path = parent.join(name);
+            eprintln!("Cloning {candidate} into {}…", path.display());
+            run_visibly("git", &["clone", &candidate, &path.to_string_lossy()], None)?;
+            return Ok(path);
+        }
+    }
+    Err(format!("No checkout of {name} under {} and no remote of your other repos has it", roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>().join(", ")))
+}
+
+pub fn locate(name: &str) -> Result<PathBuf> {
+    let roots = roots();
+    match roots.iter().flat_map(|root| checkouts_under(root)).find(|path| name_of(path) == name) {
+        Some(path) => Ok(path),
+        None => clone(name, &roots),
+    }
 }
