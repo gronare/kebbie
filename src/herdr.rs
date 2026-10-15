@@ -72,3 +72,9 @@ pub fn start_agent(name: &str, kind: &str, pane_id: &str, agent_args: &[&str]) -
     args.extend_from_slice(agent_args);
     call(&args).map(|_| ())
 }
+
+pub fn move_pane_to_new_tab(pane_id: &str, workspace_id: &str, label: &str, focus: bool) -> Result<String> {
+    let focus = if focus { "--focus" } else { "--no-focus" };
+    let result = call(&["pane", "move", pane_id, "--new-tab", "--workspace", workspace_id, "--label", label, focus])?;
+    text(&result["move_result"]["pane"]["pane_id"]).ok_or_else(|| "herdr pane move returned no pane".to_string())
+}

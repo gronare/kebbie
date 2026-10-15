@@ -12,6 +12,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
 
   kelpie start <name> [prompt]    start a task in a pooled worktree, in its own Space, with Claude
                                   (--no-focus keeps you where you are)
+  kelpie move <name> [file ...]   move work under way in the main checkout into a task: branch <name> if it
+                                  exists, else the unpushed commits, plus the given uncommitted files
+                                  (--pane <id> moves that herdr pane along, --no-focus stays put)
   kelpie list [--json]            the pool's worktrees and their tasks
   kelpie land [name]              rebase a task onto the default branch and check it; prints the push command
   kelpie done [name]              after pushing: close the task and free its worktree
@@ -22,12 +25,27 @@ Without a name, land, done and drop act on the task whose worktree you are in.";
 struct Arguments {
     positionals: Vec<String>,
     flags: Vec<String>,
+    values: Vec<(String, String)>,
 }
 
 impl Arguments {
     fn parse() -> Self {
-        let (flags, positionals) = std::env::args().skip(1).partition(|argument| argument.starts_with('-'));
-        Self { positionals, flags }
+        let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
+        let mut input = std::env::args().skip(1);
+        while let Some(argument) = input.next() {
+            if argument == "--pane" {
+                arguments.values.push((argument, input.next().unwrap_or_default()));
+            } else if argument.starts_with('-') {
+                arguments.flags.push(argument);
+            } else {
+                arguments.positionals.push(argument);
+            }
+        }
+        arguments
+    }
+
+    fn value(&self, name: &str) -> Option<&str> {
+        self.values.iter().find(|(flag, _)| flag == name).map(|(_, value)| value.as_str())
     }
 
     fn flag(&self, name: &str) -> bool {
@@ -66,6 +84,10 @@ fn run(arguments: &Arguments) -> Result<String> {
             let prompt = arguments.positionals[2..].join(" ");
             let prompt = (!prompt.is_empty()).then_some(prompt.as_str());
             tasks::start(&cwd, name, prompt, !arguments.flag("--no-focus"))
+        }
+        Some("move") => {
+            let name = name.ok_or("kelpie move needs a task name")?;
+            tasks::move_work(&cwd, name, &arguments.positionals[2..], arguments.value("--pane"), !arguments.flag("--no-focus"))
         }
         Some("list") if arguments.flag("--json") => {
             serde_json::to_string_pretty(&tasks::list(&cwd)?).map_err(|error| error.to_string())

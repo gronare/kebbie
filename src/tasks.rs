@@ -201,8 +201,8 @@ fn free(repo: &Path, slot: &Slot, upstream: &str, delete_flag: &str) -> Result<(
 fn fast_forward_main(repo: &Path, upstream: &str) -> Result<String> {
     let local = upstream.trim_start_matches("origin/");
     let name = name_of(repo);
-    if git(repo, &["branch", "--show-current"])? != local || !is_clean(repo)? {
-        return Ok(format!("{name} left as is (not a clean {local})."));
+    if git(repo, &["branch", "--show-current"])? != local {
+        return Ok(format!("{name} left as is (not on {local})."));
     }
     Ok(match git(repo, &["merge", "--quiet", "--ff-only", upstream]) {
         Ok(_) => format!("{name} fast-forwarded to {upstream}."),
@@ -244,4 +244,67 @@ pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
     }
     free(&repo, &slot, &upstream, "-D")?;
     Ok(format!("{task} dropped; {} is free again.", name_of(&slot.path)))
+}
+
+fn stash_index(repo: &Path, message: &str) -> Result<Option<usize>> {
+    Ok(git(repo, &["stash", "list", "--format=%gs"])?.lines().position(|line| line.ends_with(message)))
+}
+
+fn claim_slot(repo: &Path, upstream: &str) -> Result<Slot> {
+    match slots(repo)?.into_iter().find(|slot| slot.free) {
+        Some(slot) => Ok(slot),
+        None => create_slot(repo, upstream),
+    }
+}
+
+pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, focus: bool) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let task = slug(name)?;
+    if slots(&repo)?.iter().any(|slot| slot.task.as_deref() == Some(task.as_str())) {
+        return Err(format!("{task} already has a worktree; use kelpie start {task} to go there"));
+    }
+    fetch(&repo)?;
+    let upstream = default_branch(&repo)?;
+    let local = upstream.trim_start_matches("origin/");
+    let current = git(&repo, &["branch", "--show-current"])?;
+    let existing = branch_exists(&repo, &task);
+    if !existing && current != local {
+        return Err(format!("The main checkout is on {current}, not {local}; to move that work, use its branch name: kelpie move {current}"));
+    }
+
+    let message = format!("kelpie move {task}");
+    if !files.is_empty() {
+        let mut args = vec!["stash", "push", "--include-untracked", "--message", message.as_str(), "--"];
+        args.extend(files.iter().map(String::as_str));
+        git(&repo, &args)?;
+    }
+    let stashed = |error: String| -> String {
+        if files.is_empty() { error } else { format!("{error}\nThe moved files are kept in the stash \"{message}\" (git stash list).") }
+    };
+
+    if existing && current == task {
+        git(&repo, &["switch", "--quiet", local]).map_err(stashed)?;
+    } else if !existing {
+        git(&repo, &["branch", &task]).map_err(stashed)?;
+        if ahead_behind(&repo, &upstream)?.0 > 0 {
+            git(&repo, &["reset", "--quiet", "--keep", &upstream]).map_err(stashed)?;
+        }
+    }
+
+    let slot = claim_slot(&repo, &upstream).map_err(stashed)?;
+    git(&slot.path, &["switch", "--quiet", &task]).map_err(stashed)?;
+    if let Some(index) = stash_index(&repo, &message)? {
+        git(&slot.path, &["stash", "pop", "--quiet", &format!("stash@{{{index}}}")]).map_err(stashed)?;
+    }
+
+    let space = open_space(&repo, &slot, &task, focus)?;
+    if let Some(root) = &space.root_pane_id
+        && slot.path.join("dev.yml").exists()
+    {
+        herdr::run_in_pane(root, "dev")?;
+    }
+    if let Some(pane) = pane {
+        herdr::move_pane_to_new_tab(pane, &space.workspace_id, "claude", focus)?;
+    }
+    Ok(format!("Moved {task} to {}. {}", slot.path.display(), fast_forward_main(&repo, &upstream)?))
 }
