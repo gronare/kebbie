@@ -297,12 +297,8 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
         git(&slot.path, &["stash", "pop", "--quiet", &format!("stash@{{{index}}}")]).map_err(stashed)?;
     }
 
+    // No `dev` here: on a branch behind the default one it dumps the shared database's newer schema into the worktree.
     let space = open_space(&repo, &slot, &task, focus)?;
-    if let Some(root) = &space.root_pane_id
-        && slot.path.join("dev.yml").exists()
-    {
-        herdr::run_in_pane(root, "dev")?;
-    }
     if let Some(pane) = pane {
         herdr::move_pane_to_new_tab(pane, &space.workspace_id, "claude", focus)?;
     }

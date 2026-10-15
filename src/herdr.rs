@@ -78,3 +78,36 @@ pub fn move_pane_to_new_tab(pane_id: &str, workspace_id: &str, label: &str, focu
     let result = call(&["pane", "move", pane_id, "--new-tab", "--workspace", workspace_id, "--label", label, focus])?;
     text(&result["move_result"]["pane"]["pane_id"]).ok_or_else(|| "herdr pane move returned no pane".to_string())
 }
+
+pub fn workspaces() -> Result<Vec<Value>> {
+    Ok(call(&["workspace", "list"])?["workspaces"].as_array().cloned().unwrap_or_default())
+}
+
+pub fn agents() -> Result<Vec<Value>> {
+    Ok(call(&["agent", "list"])?["agents"].as_array().cloned().unwrap_or_default())
+}
+
+pub fn create_workspace(cwd: &Path, label: &str) -> Result<Space> {
+    let cwd = cwd.to_string_lossy();
+    let result = call(&["workspace", "create", "--cwd", &cwd, "--label", label, "--focus"])?;
+    Ok(Space {
+        workspace_id: text(&result["workspace"]["workspace_id"]).ok_or("herdr workspace create returned no workspace")?,
+        root_pane_id: text(&result["root_pane"]["pane_id"]),
+    })
+}
+
+pub fn split_right(pane_id: &str, cwd: &Path, ratio: &str) -> Result<String> {
+    let cwd = cwd.to_string_lossy();
+    let result = call(&["pane", "split", pane_id, "--direction", "right", "--ratio", ratio, "--cwd", &cwd, "--focus"])?;
+    text(&result["pane"]["pane_id"]).ok_or_else(|| "herdr pane split returned no pane".to_string())
+}
+
+// A working agent's history can only be scrolled back while it is idle, so fall back to what is on screen.
+pub fn read_agent(pane_id: &str, lines: usize) -> Result<String> {
+    run(&herdr(), &["agent", "read", pane_id, "--source", "recent-unwrapped", "--lines", &lines.to_string()], None)
+        .or_else(|_| run(&herdr(), &["agent", "read", pane_id, "--source", "visible"], None))
+}
+
+pub fn prompt_agent(pane_id: &str, message: &str) -> Result<()> {
+    call(&["agent", "prompt", pane_id, message]).map(|_| ())
+}

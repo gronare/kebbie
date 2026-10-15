@@ -48,7 +48,13 @@ delivery = "terminal"
 delay_seconds = 3
 
 [[keys.command]]
+key = "prefix+space"
+type = "plugin_action"
+command = "kelpie.lead"
+description = "kelpie: go to the lead, or back"
+
+[[keys.command]]
 key = "prefix+t"
 type = "plugin_action"
-command = "kelpie.tasks"
-description = "kelpie task menu"
+command = "kelpie.board"
+description = "kelpie board"

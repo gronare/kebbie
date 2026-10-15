@@ -29,6 +29,14 @@ claude plugin install kelpie@kelpie
 
 Git is the only state: a worktree on a task branch is busy, a clean one that is detached or on its own `wt<N>` branch is free. Worktrees are kept and reused, so only the first task in a new worktree pays for setup.
 
+### The lead and the board
+
+`prefix+space` takes you to the **lead** Space, and back to where you were on the next press. The first time, it creates it: the **board** on the left, and on the right a Claude started with [`roles/lead.md`](roles/lead.md), the session you talk to most. It knows what every other session is doing, finds work in Linear and the vault, and starts, moves and checks on tasks; the work itself is discussed in each task's own Space.
+
+The board (`kelpie board`, also over any Space with `prefix+t`) groups every task and Claude session by what it needs from you: *needs you* (an agent waiting for an answer, or finished and not looked at), *working*, *ready to push* and *waiting for work*, each in plain words, with the selected one's latest output beside it. Keys: `⏎` go there, `s` start a task, `p` message its agent without leaving, `l` rebase and check (ready to push), `d` done, `x` drop, `?` all keys.
+
+`kelpie status [--json]` gives the same picture on the command line, for the lead and for scripts.
+
 ### In herdr
 
 The repo is also a herdr plugin. Install it (herdr builds the binary with `cargo`, so the Rust toolchain must be installed):
@@ -37,17 +45,23 @@ The repo is also a herdr plugin. Install it (herdr builds the binary with `cargo
 herdr plugin install gronare/kelpie
 ```
 
-Then bind its task menu in your herdr `config.toml`:
+Then bind its keys in your herdr `config.toml`:
 
 ```toml
 [[keys.command]]
+key = "prefix+space"
+type = "plugin_action"
+command = "kelpie.lead"
+description = "kelpie: go to the lead, or back"
+
+[[keys.command]]
 key = "prefix+t"
 type = "plugin_action"
-command = "kelpie.tasks"
-description = "kelpie task menu"
+command = "kelpie.board"
+description = "kelpie board"
 ```
 
-`prefix+t` opens a popup for the Space you are in: the pool's worktrees, and `s` to start a task (name, then an optional prompt for Claude), `l` to land it (and push, if you answer `y`), `d` for done and `x` to drop. On startup the plugin links `~/.local/share/kelpie/current` to wherever herdr installed it, so configs can use a stable path. Outside herdr, run the binary from there: `~/.local/share/kelpie/current/target/release/kelpie`.
+ On startup the plugin links `~/.local/share/kelpie/current` to wherever herdr installed it, so configs can use a stable path. Outside herdr, run the binary from there: `~/.local/share/kelpie/current/target/release/kelpie`.
 
 ### Sidebar sync (optional)
 
