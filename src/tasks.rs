@@ -266,6 +266,37 @@ pub fn push(cwd: &Path, name: Option<&str>) -> Result<String> {
     done(cwd, name).map(|closed| format!("Pushed {ahead} commit(s) to {upstream}. {closed}"))
 }
 
+pub struct Commit {
+    pub sha: String,
+    pub message: String,
+}
+
+// Oldest first, as they will land.
+pub fn commits(path: &Path) -> Result<Vec<Commit>> {
+    let upstream = default_branch(&main_checkout(path)?)?;
+    let log = git(path, &["log", "--reverse", "--format=%H%x00%B%x1e", &format!("{upstream}..HEAD")])?;
+    Ok(log.split('\x1e').filter_map(|entry| {
+        let (sha, message) = entry.trim_start().split_once('\0')?;
+        Some(Commit { sha: sha.to_string(), message: message.trim().to_string() })
+    }).collect())
+}
+
+// Same tree, parent and author with a new message, then the later commits replayed on top; their trees are unchanged, so nothing can conflict.
+pub fn reword(path: &Path, sha: &str, message: &str) -> Result<()> {
+    let author = git(path, &["show", "-s", "--format=%an%x00%ae%x00%aI", sha])?;
+    let mut fields = author.split('\0');
+    let (name, email, date) = (fields.next().unwrap_or_default(), fields.next().unwrap_or_default(), fields.next().unwrap_or_default());
+    let output = std::process::Command::new("git")
+        .args(["commit-tree", &format!("{sha}^{{tree}}"), "-p", &format!("{sha}^"), "-m", message])
+        .env("GIT_AUTHOR_NAME", name).env("GIT_AUTHOR_EMAIL", email).env("GIT_AUTHOR_DATE", date)
+        .current_dir(path).output().map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(format!("git commit-tree failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    let new = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    git(path, &["rebase", "--quiet", "--onto", &new, sha]).map(|_| ())
+}
+
 fn free(repo: &Path, slot: &Slot, upstream: &str, delete_flag: &str) -> Result<()> {
     if let Some(workspace) = herdr::workspace_for(&slot.path)? {
         herdr::close_workspace(&workspace)?;
@@ -379,4 +410,35 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
         herdr::move_pane_to_new_tab(pane, &space.workspace_id, "claude", focus)?;
     }
     Ok(format!("Moved {task} to {}. {}", slot.path.display(), fast_forward_main(&repo, &upstream)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kelpie-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "--quiet"]).unwrap();
+        for (file, message) in [("a", "first"), ("b", "second"), ("c", "third")] {
+            std::fs::write(dir.join(file), file).unwrap();
+            git(&dir, &["add", file]).unwrap();
+            git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", message]).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn reword_changes_one_message_and_keeps_the_tree_and_author() {
+        let dir = repo();
+        let tree = git(&dir, &["rev-parse", "HEAD^{tree}"]).unwrap();
+        let second = git(&dir, &["rev-parse", "HEAD~1"]).unwrap();
+        reword(&dir, &second, "second, reworded\n\nwith a body").unwrap();
+        assert_eq!(git(&dir, &["log", "--format=%s", "-3"]).unwrap(), "third\nsecond, reworded\nfirst");
+        assert_eq!(git(&dir, &["log", "-1", "--format=%b", "HEAD~1"]).unwrap(), "with a body");
+        assert_eq!(git(&dir, &["rev-parse", "HEAD^{tree}"]).unwrap(), tree);
+        assert_eq!(git(&dir, &["log", "--format=%an", "-3"]).unwrap(), "Ada\nAda\nAda");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

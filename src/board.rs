@@ -102,7 +102,7 @@ enum Mode {
     Input { purpose: Purpose, label: String, buffer: String },
     Message(String),
     ConfirmDrop { path: PathBuf, name: String, force: bool },
-    ConfirmPush { path: PathBuf, summary: String },
+    ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize },
     Help,
 }
 
@@ -361,12 +361,31 @@ impl App {
                     }
                 }
             }
-            Mode::ConfirmPush { path, .. } => {
-                if key.code == KeyCode::Char('y') {
+            Mode::ConfirmPush { path, commits, selected } => match key.code {
+                KeyCode::Char('y') => {
                     let result = outside(terminal, || tasks::push(&path, None));
                     self.show(result);
                 }
-            }
+                KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1) },
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let selected = (selected + 1).min(commits.len().saturating_sub(1));
+                    self.mode = Mode::ConfirmPush { path, commits, selected };
+                }
+                KeyCode::Char('e') => {
+                    let Some(commit) = commits.get(selected) else { return };
+                    let edited = edit_in_editor(terminal, &commit.message);
+                    let result = match edited {
+                        Ok(Some(message)) if message != commit.message => tasks::reword(&path, &commit.sha, &message).and_then(|_| tasks::commits(&path)),
+                        Ok(_) => Ok(commits),
+                        Err(error) => Err(error),
+                    };
+                    match result {
+                        Ok(commits) => self.mode = Mode::ConfirmPush { path, commits, selected },
+                        Err(error) => self.show(Err(error)),
+                    }
+                }
+                _ => {}
+            },
             Mode::Input { purpose, label, mut buffer } => match key.code {
                 KeyCode::Esc => {}
                 KeyCode::Enter => self.submit(purpose, buffer.trim().to_string(), terminal),
@@ -458,10 +477,10 @@ impl App {
                         let Some(path) = item.path.clone() else { return };
                         match key {
                             'l' => match tasks::land(&path, None) {
-                                Ok(summary) => {
-                                    let summary = summary.split("\n\nPush with:").next().unwrap_or_default().to_string();
-                                    self.mode = Mode::ConfirmPush { path, summary };
-                                }
+                                Ok(_) => match tasks::commits(&path) {
+                                    Ok(commits) => self.mode = Mode::ConfirmPush { path, commits, selected: 0 },
+                                    Err(error) => self.show(Err(error)),
+                                },
                                 error => self.show(error),
                             },
                             'd' => self.show(tasks::done(&path, None)),
@@ -557,6 +576,23 @@ impl App {
             }
         }
     }
+}
+
+// The user's editor on a commit message, in this pane; an empty result keeps the old message.
+fn edit_in_editor(terminal: &mut DefaultTerminal, message: &str) -> Result<Option<String>> {
+    let file = std::env::temp_dir().join(format!("kelpie-{}-COMMIT_EDITMSG", std::process::id()));
+    let help = "\n\n# Edit the commit message. Lines starting with # are ignored; an empty message keeps the old one.\n";
+    std::fs::write(&file, format!("{message}{help}")).map_err(|error| error.to_string())?;
+    ratatui::restore();
+    let status = Command::new("sh").args(["-c", "${VISUAL:-${EDITOR:-vi}} \"$1\"", "sh"]).arg(&file).status();
+    *terminal = ratatui::init();
+    let edited = std::fs::read_to_string(&file).map_err(|error| error.to_string());
+    let _ = std::fs::remove_file(&file);
+    if !status.map_err(|error| error.to_string())?.success() {
+        return Ok(None);
+    }
+    let message = edited?.lines().filter(|line| !line.starts_with('#')).collect::<Vec<_>>().join("\n").trim().to_string();
+    Ok((!message.is_empty()).then_some(message))
 }
 
 // Leaves the TUI for a step that prints as it goes (creating a worktree takes a while), then comes back.
@@ -901,10 +937,30 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 Line::from(vec![Span::styled(question, style(YELLOW)), Span::styled("  y / n", style(MUTED))]),
             ], 72);
         }
-        Mode::ConfirmPush { summary, .. } => {
-            let mut lines: Vec<Line> = summary.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
+        Mode::ConfirmPush { commits, selected, .. } => {
+            let mut lines: Vec<Line> = Vec::new();
+            for (index, commit) in commits.iter().enumerate() {
+                let subject = commit.message.lines().next().unwrap_or_default().to_string();
+                let active = index == *selected;
+                lines.push(Line::from(vec![
+                    Span::raw(if active { "▸ " } else { "  " }),
+                    Span::styled(commit.sha.chars().take(7).collect::<String>(), style(MUTED)),
+                    Span::raw(" "),
+                    Span::styled(subject, if active { bold(MAUVE) } else { style(TEXT) }),
+                ]).style(if active { Style::new().bg(SURFACE) } else { Style::new() }));
+            }
+            if let Some(commit) = commits.get(*selected) {
+                lines.push(Line::default());
+                for line in commit.message.lines() {
+                    let wrapped = if line.is_empty() { vec![String::new()] } else { wrap(line, 88, 6) };
+                    lines.extend(wrapped.into_iter().map(|part| Line::from(Span::styled(part, style(TEXT)))));
+                }
+            }
             lines.push(Line::default());
-            lines.push(Line::from(vec![Span::styled("Push these and close the task?", style(YELLOW)), Span::styled("  y / n", style(MUTED))]));
+            lines.push(Line::from(vec![
+                Span::styled("Push these and close the task?  ", style(YELLOW)),
+                Span::styled("y push · e edit message · ↑ ↓ commit · esc cancel", style(MUTED)),
+            ]));
             modal(frame, "push".to_string(), lines, 96);
         }
         Mode::Input { label, buffer, .. } => modal(frame, label.clone(), vec![
