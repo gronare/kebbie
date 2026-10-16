@@ -209,9 +209,23 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
     }
     let target = upstream.trim_start_matches("origin/");
     Ok(format!(
-        "{task} is rebased onto {upstream} and ready:\n{commits}\n\nPush with:  git -C {} push origin HEAD:{target}\nThen:       kelpie done {task}",
+        "{task} is rebased onto {upstream} and ready:\n{commits}\n\nPush with:  kelpie push {task}   (or git -C {} push origin HEAD:{target}, then kelpie done {task})",
         slot.path.display()
     ))
+}
+
+// After land: pushes the rebased task to the default branch and closes it.
+pub fn push(cwd: &Path, name: Option<&str>) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    let upstream = default_branch(&repo)?;
+    let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
+    if ahead == 0 || behind > 0 || !is_clean(&slot.path)? {
+        return Err(format!("{} is not landed; run land first", task_of(&slot)));
+    }
+    let target = format!("HEAD:{}", upstream.trim_start_matches("origin/"));
+    run_visibly("git", &["push", "origin", &target], Some(&slot.path))?;
+    done(cwd, name).map(|closed| format!("Pushed {ahead} commit(s) to {upstream}. {closed}"))
 }
 
 fn free(repo: &Path, slot: &Slot, upstream: &str, delete_flag: &str) -> Result<()> {

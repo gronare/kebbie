@@ -27,10 +27,11 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie lead                     go to the lead Space (creating it), or back to where you were
   kelpie backlog [save]           show the backlog the lead keeps; save reads a JSON array on stdin
   kelpie land [name]              rebase a task onto the default branch and check it; prints the push command
+  kelpie push [name]              after land: push the task to the default branch, then close it as done
   kelpie done [name]              after pushing: close the task and free its worktree
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
 
-Without a name, land, done and drop act on the task whose worktree you are in.
+Without a name, land, push, done and drop act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>.";
 
 struct Arguments {
@@ -143,6 +144,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
         Some("backlog") => Ok(backlog::show()),
         Some("land") => tasks::land(&cwd, name),
+        Some("push") => tasks::push(&cwd, name),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
         None | Some("help") => Ok(USAGE.to_string()),

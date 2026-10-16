@@ -73,8 +73,8 @@ fn task_choices(item: Option<&Item>) -> Vec<Choice> {
         });
     }
     choices.extend([
-        choice('l', "Ready to push", "rebase, check, show the push command"),
-        choice('d', "Done", "after you pushed: close it and free the worktree"),
+        choice('l', "Push and close", "rebase, check, show the commits, then push if you say so"),
+        choice('d', "Done", "already pushed elsewhere: close it and free the worktree"),
         choice('x', "Drop", "throw the task away (asks first)"),
     ]);
     choices
@@ -100,6 +100,7 @@ enum Mode {
     Input { purpose: Purpose, label: String, buffer: String },
     Message(String),
     ConfirmDrop { path: PathBuf, name: String, force: bool },
+    ConfirmPush { path: PathBuf, summary: String },
     Help,
 }
 
@@ -358,6 +359,12 @@ impl App {
                     }
                 }
             }
+            Mode::ConfirmPush { path, .. } => {
+                if key.code == KeyCode::Char('y') {
+                    let result = outside(terminal, || tasks::push(&path, None));
+                    self.show(result);
+                }
+            }
             Mode::Input { purpose, label, mut buffer } => match key.code {
                 KeyCode::Esc => {}
                 KeyCode::Enter => self.submit(purpose, buffer.trim().to_string(), terminal),
@@ -442,7 +449,13 @@ impl App {
                     'l' | 'd' | 'x' => {
                         let Some(path) = item.path.clone() else { return };
                         match key {
-                            'l' => self.show(tasks::land(&path, None)),
+                            'l' => match tasks::land(&path, None) {
+                                Ok(summary) => {
+                                    let summary = summary.split("\n\nPush with:").next().unwrap_or_default().to_string();
+                                    self.mode = Mode::ConfirmPush { path, summary };
+                                }
+                                error => self.show(error),
+                            },
                             'd' => self.show(tasks::done(&path, None)),
                             _ => self.mode = Mode::ConfirmDrop { path, name: item.name, force: false },
                         }
@@ -875,6 +888,12 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 Line::default(),
                 Line::from(vec![Span::styled(question, style(YELLOW)), Span::styled("  y / n", style(MUTED))]),
             ], 72);
+        }
+        Mode::ConfirmPush { summary, .. } => {
+            let mut lines: Vec<Line> = summary.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
+            lines.push(Line::default());
+            lines.push(Line::from(vec![Span::styled("Push these and close the task?", style(YELLOW)), Span::styled("  y / n", style(MUTED))]));
+            modal(frame, "push".to_string(), lines, 96);
         }
         Mode::Input { label, buffer, .. } => modal(frame, label.clone(), vec![
             Line::from(vec![Span::styled(buffer.clone(), style(TEXT)), Span::styled("▏", style(MAUVE))]),
