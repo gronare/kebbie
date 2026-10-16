@@ -103,7 +103,11 @@ impl Item {
         }
     }
 
+    // A turn under way has most likely taken up what the last report asked.
     pub fn next_for_you(&self) -> Option<&str> {
+        if self.agent.as_ref().is_some_and(|agent| agent.status == "working") {
+            return None;
+        }
         self.report.as_ref()?.next_for_you()
     }
 
@@ -320,6 +324,15 @@ mod tests {
     fn a_turn_under_way_or_a_question_on_screen_outranks_the_report() {
         assert!(task(Some("working"), Some("needs-you"), 0).group() == Group::Working);
         assert!(task(Some("blocked"), Some("working"), 0).group() == Group::NeedsYou);
+    }
+
+    #[test]
+    fn the_next_step_is_hidden_while_a_turn_is_under_way() {
+        let mut item = task(Some("idle"), Some("needs-you"), 0);
+        item.report.as_mut().unwrap().report.as_mut().unwrap().next = "answer: which queue?".to_string();
+        assert_eq!(item.next_for_you(), Some("answer: which queue?"));
+        item.agent.as_mut().unwrap().status = "working".to_string();
+        assert_eq!(item.next_for_you(), None);
     }
 
     #[test]
