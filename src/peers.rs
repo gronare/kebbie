@@ -75,6 +75,20 @@ pub fn me(cwd: &Path) -> Option<String> {
         .then(|| LEAD_LABEL.to_string())
 }
 
+// `task` reaches every half of that task but the sender's own; `task@repo` and `lead` reach one session.
+pub fn resolve<'a>(to: &str, from: &str, sessions: &'a [Session]) -> Result<Vec<&'a Session>> {
+    let found: Vec<&Session> = if to == LEAD_LABEL || to.contains('@') {
+        sessions.iter().filter(|session| session.address == to).collect()
+    } else {
+        sessions.iter().filter(|session| session.task.as_deref() == Some(to)).collect()
+    };
+    let found: Vec<&Session> = found.into_iter().filter(|session| session.address != from).collect();
+    if found.is_empty() {
+        return Err(format!("No session \"{to}\" to tell (other than you); kelpie peers lists them"));
+    }
+    Ok(found)
+}
+
 pub fn list(me: Option<&str>, sessions: &[Session]) -> String {
     let task = me.and_then(|me| me.split_once('@')).map(|(task, _)| task);
     let line = |session: &Session| format!("  {:<36} {}", session.address, session.state());
@@ -139,6 +153,32 @@ mod tests {
 
     fn sessions() -> Vec<Session> {
         vec![session("lead", Some("idle")), session("posthog@auctionet", Some("working")), session("posthog@relay", Some("blocked")), session("turnstile@auctionet", None)]
+    }
+
+    fn addresses(found: Result<Vec<&Session>>) -> Vec<String> {
+        found.unwrap().iter().map(|session| session.address.clone()).collect()
+    }
+
+    #[test]
+    fn a_task_name_reaches_its_other_halves() {
+        let all = sessions();
+        assert_eq!(addresses(resolve("posthog", "posthog@auctionet", &all)), ["posthog@relay"]);
+        assert_eq!(addresses(resolve("posthog", "lead", &all)), ["posthog@auctionet", "posthog@relay"]);
+    }
+
+    #[test]
+    fn an_address_or_the_lead_reaches_one_session() {
+        let all = sessions();
+        assert_eq!(addresses(resolve("turnstile@auctionet", "posthog@relay", &all)), ["turnstile@auctionet"]);
+        assert_eq!(addresses(resolve("lead", "posthog@relay", &all)), ["lead"]);
+    }
+
+    #[test]
+    fn nobody_tells_themselves_or_an_unknown_session() {
+        let all = sessions();
+        assert!(resolve("turnstile", "turnstile@auctionet", &all).is_err());
+        assert!(resolve("lead", "lead", &all).is_err());
+        assert!(resolve("billing", "lead", &all).is_err());
     }
 
     #[test]

@@ -2,6 +2,7 @@ mod backlog;
 mod board;
 mod herdr;
 mod lead;
+mod messages;
 mod peers;
 mod repo;
 mod sh;
@@ -27,6 +28,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie board [--overlay]        the board: tasks and sessions, with keys to act on them
   kelpie lead                     go to the lead Space (creating it), or back to where you were
   kelpie peers                    who you are and the other task sessions, with what each is doing
+  kelpie tell <to> <text>         message another session: a task (every half of it), task@repo, or lead; held
+                                  while it waits for an answer, and logged
+  kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30
   kelpie backlog [save]           show the backlog the lead keeps; save reads a JSON array on stdin
   kelpie land [name]              rebase a task onto the default branch (folding fixup! commits) and check it; on a
                                   conflict, its Claude resolves the rebase
@@ -146,6 +150,14 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("board") => board::run(arguments.flag("--overlay")),
         Some("lead") => lead::toggle(),
         Some("peers") => peers::peers(&cwd),
+        Some("tell") => {
+            let to = name.ok_or("kelpie tell needs a recipient: a task, task@repo or lead")?;
+            // Taken as given, since a message can start with "-".
+            let text: Vec<String> = std::env::args().skip_while(|argument| argument != "tell").skip(2).collect();
+            messages::tell(&cwd, to, &text.join(" "))
+        }
+        Some("messages") if arguments.flag("--print") => Ok(messages::print(30)),
+        Some("messages") => messages::run(),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
         Some("backlog") => Ok(backlog::show()),
         Some("land") => tasks::land(&cwd, name),

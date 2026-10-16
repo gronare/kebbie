@@ -26,18 +26,18 @@ use crate::sh::Result;
 use crate::status::{self, Checkout, Group, Item};
 use crate::tasks;
 
-const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
-const SUBTEXT: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-const MUTED: Color = Color::Rgb(0x6c, 0x70, 0x86);
-const FAINT: Color = Color::Rgb(0x45, 0x47, 0x5a);
-const SURFACE: Color = Color::Rgb(0x31, 0x32, 0x44);
+pub const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
+pub const SUBTEXT: Color = Color::Rgb(0xa6, 0xad, 0xc8);
+pub const MUTED: Color = Color::Rgb(0x6c, 0x70, 0x86);
+pub const FAINT: Color = Color::Rgb(0x45, 0x47, 0x5a);
+pub const SURFACE: Color = Color::Rgb(0x31, 0x32, 0x44);
 const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
-const MAUVE: Color = Color::Rgb(0xcb, 0xa6, 0xf7);
-const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
+pub const MAUVE: Color = Color::Rgb(0xcb, 0xa6, 0xf7);
+pub const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
 const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
 const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
-const TEAL: Color = Color::Rgb(0x94, 0xe2, 0xd5);
+pub const TEAL: Color = Color::Rgb(0x94, 0xe2, 0xd5);
 const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 
 const REFRESH_BACKLOG: &str = "Refresh the kelpie backlog: take the vault backlog and my open Linear issues and pipe them as one JSON array to `$HOME/.local/share/kelpie/current/target/release/kelpie backlog save`. Fields per entry: source (vault or linear), title, priority (urgent, high, medium, low or none), area (the repo, e.g. auctionet), ref (vault path or Linear id), summary (one line), age (e.g. 3 d). Reply in one line when saved.";
@@ -195,11 +195,11 @@ struct App {
     hits: Vec<(Rect, Hit)>,
 }
 
-fn style(color: Color) -> Style {
+pub fn style(color: Color) -> Style {
     Style::new().fg(color)
 }
 
-fn bold(color: Color) -> Style {
+pub fn bold(color: Color) -> Style {
     Style::new().fg(color).add_modifier(Modifier::BOLD)
 }
 

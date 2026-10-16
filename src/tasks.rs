@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::herdr;
+use crate::messages;
 use crate::peers;
 use crate::repo::{
     ahead_behind, branch_exists, changed_count, default_branch, git, is_clean, main_checkout, name_of, slot_number,
@@ -167,6 +168,9 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
         && let Err(error) = herdr::prompt_agent(&agent_name, prompt)
     {
         return Err(format!("Started {task} in {}, but sending the prompt failed: {error}", slot.path.display()));
+    }
+    if let Err(error) = messages::announce(&task, &name_of(&repo)) {
+        eprintln!("Could not tell {task}'s other halves it started: {error}");
     }
     Ok(format!("Started {task} in {}.", slot.path.display()))
 }
