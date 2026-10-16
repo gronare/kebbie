@@ -7,8 +7,8 @@ use crate::herdr;
 use crate::messages;
 use crate::peers;
 use crate::repo::{
-    ahead_behind, branch_exists, changed_count, default_branch, git, is_clean, main_checkout, name_of, slot_number,
-    slot_path, worktrees,
+    ahead_behind, branch_exists, changed_count, default_branch, git, is_clean, main_checkout, name_of, push_as_user,
+    slot_number, slot_path, worktrees,
 };
 use crate::sh::{Result, run_visibly};
 
@@ -280,16 +280,7 @@ pub fn push(cwd: &Path, name: Option<&str>) -> Result<String> {
         return Err(format!("{} is not landed; run land first", task_of(&slot)));
     }
     let target = format!("HEAD:{}", upstream.trim_start_matches("origin/"));
-    // Nobody may see a prompt, so git and ssh fail instead of waiting for a password or passphrase.
-    let mut command = std::process::Command::new("git");
-    command.args(["push", "--quiet", "origin", &target]).current_dir(&slot.path).stdin(std::process::Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
-    if std::env::var_os("GIT_SSH_COMMAND").is_none() {
-        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
-    }
-    let output = command.output().map_err(|error| format!("git push: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("Pushing {} failed: {}", task_of(&slot), String::from_utf8_lossy(&output.stderr).trim()));
-    }
+    push_as_user(&slot.path, &[&target]).map_err(|error| format!("Pushing {} failed: {error}", task_of(&slot)))?;
     done(cwd, name).map(|closed| format!("Pushed {ahead} commit(s) to {upstream}. {closed}"))
 }
 

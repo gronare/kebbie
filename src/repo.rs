@@ -62,6 +62,17 @@ pub fn ahead_behind(path: &Path, upstream: &str) -> Result<(usize, usize)> {
     Ok((numbers.next().unwrap_or(0), numbers.next().unwrap_or(0)))
 }
 
+// Pushes to origin as the user from the board, where nobody may see a prompt: git and ssh fail instead of waiting for a password or passphrase.
+pub fn push_as_user(path: &Path, refspecs: &[&str]) -> Result<()> {
+    let mut command = std::process::Command::new("git");
+    command.args(["push", "--quiet", "origin"]).args(refspecs).current_dir(path).stdin(std::process::Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    }
+    let output = command.output().map_err(|error| format!("git push: {error}"))?;
+    if output.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+}
+
 pub fn branch_exists(repo: &Path, branch: &str) -> bool {
     succeeds("git", &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")], Some(repo))
 }
@@ -135,10 +146,10 @@ fn clone(name: &str, roots: &[PathBuf]) -> Result<PathBuf> {
     Err(format!("No checkout of {name} under {} and no remote of your other repos has it", roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>().join(", ")))
 }
 
+pub fn checkout_named(name: &str) -> Option<PathBuf> {
+    roots().iter().flat_map(|root| checkouts_under(root)).find(|path| name_of(path) == name)
+}
+
 pub fn locate(name: &str) -> Result<PathBuf> {
-    let roots = roots();
-    match roots.iter().flat_map(|root| checkouts_under(root)).find(|path| name_of(path) == name) {
-        Some(path) => Ok(path),
-        None => clone(name, &roots),
-    }
+    checkout_named(name).map_or_else(|| clone(name, &roots()), Ok)
 }
