@@ -138,3 +138,8 @@ pub fn send_keys(pane_id: &str, keys: &[&str]) -> Result<()> {
 pub fn tabs_in(workspace_id: &str) -> Result<Vec<Value>> {
     Ok(call(&["tab", "list", "--workspace", workspace_id])?["tabs"].as_array().cloned().unwrap_or_default())
 }
+
+// Right-clicks in this pane go to the app in it instead of herdr's pane menu.
+pub fn route_right_clicks_to_pane(pane_id: &str) -> Result<()> {
+    call(&["pane", "input", "--pane", pane_id, "--right-click", "pane"]).map(|_| ())
+}
