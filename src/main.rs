@@ -1,3 +1,5 @@
+mod actions;
+mod areas;
 mod backlog;
 mod board;
 mod herdr;
@@ -9,6 +11,7 @@ mod report;
 mod sh;
 mod status;
 mod tasks;
+mod vault;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -28,6 +31,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie list [--json]            the pool's worktrees and their tasks
   kelpie status [--json]          every task and Claude session, grouped by what it needs from you
   kelpie board [--overlay]        the board: tasks and sessions, with keys to act on them
+  kelpie areas                    the vault's areas with their repo: main against origin, last release, notes, actions
   kelpie lead                     go to the lead Space (creating it), or back to where you were
   kelpie peers                    who you are and the other task sessions, with what each is doing
   kelpie tell <to> <text>         message another session: a task (every half of it), task@repo, or lead; held
@@ -175,6 +179,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("status") => status_text(),
         Some("board") => board::run(arguments.flag("--overlay")),
+        Some("areas") => areas::print(),
         Some("lead") => lead::toggle(),
         Some("peers") => peers::peers(&cwd),
         Some("tell") => {
