@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -25,13 +26,29 @@ pub struct Message {
     pub to: String,
     pub text: String,
     pub held: bool,
+    pub report: Option<Report>,
+}
+
+// What a task's Claude says at the end of a turn: where it stands, and what the user should do next.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Report {
+    pub state: String,
+    pub next: String,
+}
+
+impl Message {
+    // A report the user has nothing to do for says "nothing".
+    pub fn next_for_you(&self) -> Option<&str> {
+        let next = self.report.as_ref()?.next.trim();
+        (!next.is_empty() && !next.eq_ignore_ascii_case("nothing")).then_some(next)
+    }
 }
 
 fn log_file() -> Result<PathBuf> {
     Ok(state_dir()?.join("messages.jsonl"))
 }
 
-fn now() -> u64 {
+pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0)
 }
 
@@ -49,6 +66,10 @@ pub fn fold(log: &str) -> Vec<Message> {
                 to: record["to"].as_str().unwrap_or_default().to_string(),
                 text: text.to_string(),
                 held,
+                report: record["report"]["state"].as_str().map(|state| Report {
+                    state: state.to_string(),
+                    next: record["report"]["next"].as_str().unwrap_or_default().to_string(),
+                }),
             }),
             None => {
                 if let Some(message) = messages.iter_mut().find(|message| message.id == id) {
@@ -172,7 +193,22 @@ pub fn announce(task: &str, repo: &str) -> Result<()> {
     send("kelpie", &halves, &format!("{me} has started: the same task, in {repo}. Keep it informed of changes it depends on."), &sessions).map(|_| ())
 }
 
-fn age(at: u64) -> String {
+// A report goes to the lead through the log only: typed into its chat, every turn of every task would start a turn of the lead.
+pub fn log_report(from: &str, report: &Report, text: &str) -> Result<()> {
+    let id = format!("{}-{}-report", now(), std::process::id());
+    append(&json!({ "id": id, "at": now(), "from": from, "to": LEAD_LABEL, "text": text, "state": "logged", "report": { "state": report.state, "next": report.next } }))
+}
+
+// Each session's latest report, by its address.
+pub fn latest_reports(messages: &[Message]) -> HashMap<String, Message> {
+    messages.iter().filter(|message| message.report.is_some()).map(|message| (message.from.clone(), message.clone())).collect()
+}
+
+fn between_sessions(messages: Vec<Message>) -> Vec<Message> {
+    messages.into_iter().filter(|message| message.report.is_none()).collect()
+}
+
+pub fn age(at: u64) -> String {
     let seconds = now().saturating_sub(at);
     match seconds {
         0..60 => "now".to_string(),
@@ -183,7 +219,7 @@ fn age(at: u64) -> String {
 }
 
 pub fn print(count: usize) -> String {
-    let messages = load();
+    let messages = between_sessions(load());
     if messages.is_empty() {
         return "No messages yet.".to_string();
     }
@@ -193,26 +229,39 @@ pub fn print(count: usize) -> String {
     }).collect::<Vec<_>>().join("\n")
 }
 
-// The lead's copy: what sessions told each other since it last looked, given to it with each of the user's prompts.
+// The lead's copy: what sessions told each other since it last looked, and their latest reports, given to it with each of the user's prompts.
 pub fn unread_for_lead() -> Result<String> {
     let mark = state_dir()?.join("messages-lead-read");
     let seen: usize = fs::read_to_string(&mark).ok().and_then(|count| count.trim().parse().ok()).unwrap_or(0);
     let messages = load();
     fs::write(&mark, messages.len().to_string()).map_err(|error| error.to_string())?;
-    let unread = copies_for_lead(&messages, seen);
-    if unread.is_empty() {
-        return Ok(String::new());
+    let (reports, told): (Vec<&Message>, Vec<&Message>) = copies_for_lead(&messages, seen).into_iter().partition(|message| message.report.is_some());
+    let mut sections = Vec::new();
+    if !told.is_empty() {
+        let lines: Vec<String> = told.iter().map(|message| {
+            let held = if message.held { " (held)" } else { "" };
+            format!("- {} → {}{held}: {}", message.from, message.to, message.text)
+        }).collect();
+        sections.push(format!("Messages between sessions since you last looked (kelpie messages --print for more):\n{}", lines.join("\n")));
     }
-    let lines: Vec<String> = unread.iter().map(|message| {
-        let held = if message.held { " (held)" } else { "" };
-        format!("- {} → {}{held}: {}", message.from, message.to, message.text)
-    }).collect();
-    Ok(format!("Messages between sessions since you last looked (kelpie messages --print for more):\n{}", lines.join("\n")))
+    let latest = latest_reports(&reports.into_iter().cloned().collect::<Vec<_>>());
+    if !latest.is_empty() {
+        let mut lines: Vec<String> = latest.values().map(report_line).collect();
+        lines.sort();
+        sections.push(format!("Task reports since you last looked (each task's latest; kelpie status --json has them all):\n{}", lines.join("\n")));
+    }
+    Ok(sections.join("\n\n"))
 }
 
-// Messages to or from the lead are already in its chat.
+pub fn report_line(message: &Message) -> String {
+    let state = message.report.as_ref().map(|report| report.state.as_str()).unwrap_or_default();
+    format!("- {} ({state}): {} — you: {}", message.from, message.text, message.next_for_you().unwrap_or("nothing"))
+}
+
+// Messages to or from the lead are already in its chat; reports to it are not.
 fn copies_for_lead(messages: &[Message], seen: usize) -> Vec<&Message> {
-    messages.iter().skip(seen.min(messages.len())).filter(|message| message.from != LEAD_LABEL && message.to != LEAD_LABEL).collect()
+    messages.iter().skip(seen.min(messages.len()))
+        .filter(|message| message.report.is_some() || (message.from != LEAD_LABEL && message.to != LEAD_LABEL)).collect()
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -282,7 +331,7 @@ pub fn run() -> Result<String> {
                 let _ = flush();
                 flushed = SystemTime::now();
             }
-            let messages = load();
+            let messages = between_sessions(load());
             terminal.draw(|frame| draw(frame, &messages, scroll)).map_err(|error| error.to_string())?;
             if event::poll(Duration::from_millis(500)).map_err(|error| error.to_string())?
                 && let Event::Key(key) = event::read().map_err(|error| error.to_string())?
@@ -344,12 +393,39 @@ mod tests {
 
     #[test]
     fn the_lead_is_copied_on_new_messages_between_others() {
-        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false };
+        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false, report: None };
         let messages = [message("1", "a@x", "b@x"), message("2", "a@x", "lead"), message("3", "lead", "b@x"), message("4", "b@x", "a@x")];
         let ids = |seen| copies_for_lead(&messages, seen).iter().map(|message| message.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(0), ["1", "4"]);
         assert_eq!(ids(1), ["4"]);
         assert!(ids(9).is_empty());
+    }
+
+    #[test]
+    fn a_report_folds_with_its_state_and_next_step() {
+        let log = [
+            r#"{"id":"1","at":10,"from":"posthog@relay","to":"lead","text":"payload renamed","state":"logged","report":{"state":"working","next":"nothing"}}"#,
+            r#"{"id":"2","at":20,"from":"posthog@relay","to":"lead","text":"plan written","state":"logged","report":{"state":"needs-you","next":"approve the plan: keep the branch field?"}}"#,
+            r#"{"id":"3","at":30,"from":"turnstile@auctionet","to":"lead","text":"rebase on main","state":"delivered"}"#,
+        ].join("\n");
+        let messages = fold(&log);
+        assert_eq!(messages[1].report, Some(Report { state: "needs-you".to_string(), next: "approve the plan: keep the branch field?".to_string() }));
+        assert!(!messages[1].held);
+        assert_eq!(messages[0].next_for_you(), None);
+        assert_eq!(messages[1].next_for_you(), Some("approve the plan: keep the branch field?"));
+        assert_eq!(messages[2].report, None);
+        let latest = latest_reports(&messages);
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest["posthog@relay"].text, "plan written");
+        assert_eq!(between_sessions(messages).len(), 1);
+    }
+
+    #[test]
+    fn the_lead_is_copied_on_reports_to_it() {
+        let report = Some(Report { state: "ready".to_string(), next: "push and close".to_string() });
+        let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report }];
+        assert_eq!(copies_for_lead(&messages, 0).len(), 1);
+        assert_eq!(report_line(&messages[0]), "- a@x (ready): done — you: push and close");
     }
 
     #[test]

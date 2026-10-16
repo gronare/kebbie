@@ -90,10 +90,14 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 }
 
 // Pushing stays the user's step; the push URL rewrite catches what the deny rule's pattern misses (git -C dir push).
+// The hooks ask for a report at the end of every turn.
 fn settings(kelpie: &str) -> String {
+    let hook = json!([{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook") }] }]);
+    let allow = ["peers", "tell", "report"].map(|command| format!("Bash({kelpie} {command}:*)"));
     json!({
         "env": { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" },
-        "permissions": { "deny": ["Bash(git push:*)"], "allow": [format!("Bash({kelpie} peers:*)"), format!("Bash({kelpie} tell:*)")] },
+        "permissions": { "deny": ["Bash(git push:*)"], "allow": allow },
+        "hooks": { "UserPromptSubmit": hook, "Stop": hook },
     }).to_string()
 }
 

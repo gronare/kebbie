@@ -5,6 +5,7 @@ mod lead;
 mod messages;
 mod peers;
 mod repo;
+mod report;
 mod sh;
 mod status;
 mod tasks;
@@ -31,6 +32,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie peers                    who you are and the other task sessions, with what each is doing
   kelpie tell <to> <text>         message another session: a task (every half of it), task@repo, or lead; held
                                   while it waits for an answer, and logged
+  kelpie report --state <state> --next <step> <summary>
+                                  run by a task's Claude at the end of a turn: where it stands (needs-you, ready,
+                                  working, blocked) and what you should do next, for the board and the lead
+  kelpie hook                     the hooks kelpie gives a task's Claude (reads the hook's JSON on stdin)
   kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30,
                                   --unread those the lead has not seen (its prompt hook)
   kelpie backlog [save]           show the backlog the lead keeps; save reads a JSON array on stdin
@@ -55,7 +60,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -171,6 +176,12 @@ fn run(arguments: &Arguments) -> Result<String> {
             // Taken as given, since a message can start with "-".
             let text: Vec<String> = std::env::args().skip_while(|argument| argument != "tell").skip(2).collect();
             messages::tell(&cwd, to, &text.join(" "))
+        }
+        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), &arguments.positionals[1..].join(" ")),
+        Some("hook") => {
+            let mut input = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
+            Ok(report::hook(&input))
         }
         Some("messages") if arguments.flag("--print") => Ok(messages::print(30)),
         Some("messages") if arguments.flag("--unread") => messages::unread_for_lead(),

@@ -117,6 +117,12 @@ pub fn prompt_agent(pane_id: &str, message: &str) -> Result<()> {
     call(&["agent", "prompt", pane_id, message]).map(|_| ())
 }
 
+pub fn report_metadata(pane_id: &str, args: &[&str]) -> Result<()> {
+    let mut all = vec!["pane", "report-metadata", pane_id];
+    all.extend_from_slice(args);
+    call(&all).map(|_| ())
+}
+
 pub fn workspace_tokens(workspace_id: &str) -> Result<Value> {
     Ok(call(&["workspace", "get", workspace_id])?["workspace"]["tokens"].clone())
 }
