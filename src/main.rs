@@ -2,6 +2,7 @@ mod backlog;
 mod board;
 mod herdr;
 mod lead;
+mod peers;
 mod repo;
 mod sh;
 mod status;
@@ -25,6 +26,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie status [--json]          every task and Claude session, grouped by what it needs from you
   kelpie board [--overlay]        the board: tasks and sessions, with keys to act on them
   kelpie lead                     go to the lead Space (creating it), or back to where you were
+  kelpie peers                    who you are and the other task sessions, with what each is doing
   kelpie backlog [save]           show the backlog the lead keeps; save reads a JSON array on stdin
   kelpie land [name]              rebase a task onto the default branch (folding fixup! commits) and check it; on a
                                   conflict, its Claude resolves the rebase
@@ -143,6 +145,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("status") => status_text(),
         Some("board") => board::run(arguments.flag("--overlay")),
         Some("lead") => lead::toggle(),
+        Some("peers") => peers::peers(&cwd),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
         Some("backlog") => Ok(backlog::show()),
         Some("land") => tasks::land(&cwd, name),

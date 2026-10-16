@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::herdr;
+use crate::peers;
 use crate::repo::{
     ahead_behind, branch_exists, changed_count, default_branch, git, is_clean, main_checkout, name_of, slot_number,
     slot_path, worktrees,
@@ -88,7 +89,12 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 }
 
 // Pushing stays the user's step; the push URL rewrite catches what the deny rule's pattern misses (git -C dir push).
-const NO_PUSH: &str = r#"{"env":{"GIT_CONFIG_COUNT":"1","GIT_CONFIG_KEY_0":"url.kelpie-blocks-push:.pushInsteadOf","GIT_CONFIG_VALUE_0":""},"permissions":{"deny":["Bash(git push:*)"]}}"#;
+fn settings(kelpie: &str) -> String {
+    json!({
+        "env": { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" },
+        "permissions": { "deny": ["Bash(git push:*)"], "allow": [format!("Bash({kelpie} peers:*)"), format!("Bash({kelpie} tell:*)")] },
+    }).to_string()
+}
 
 fn open_space(repo: &Path, slot: &Slot, task: &str, focus: bool) -> Result<herdr::Space> {
     let space = herdr::open_worktree(repo, &slot.path, task, focus)?;
@@ -152,7 +158,9 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     }
     let agent_name: String = task.chars().take(32).collect();
     let mut agent_args: Vec<&str> = mode.map(|mode| vec!["--permission-mode", mode]).unwrap_or_default();
-    agent_args.extend(["--settings", NO_PUSH]);
+    let settings = settings(&peers::kelpie_command()?);
+    let role = peers::role_file(&task, &name_of(&repo))?.to_string_lossy().to_string();
+    agent_args.extend(["--settings", &settings, "--append-system-prompt-file", &role]);
     start_claude(&agent_name, &claude_pane, &agent_args)?;
     // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
     if let Some(prompt) = prompt

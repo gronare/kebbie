@@ -7,7 +7,7 @@ use crate::herdr;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 
-fn state_dir() -> Result<PathBuf> {
+pub fn state_dir() -> Result<PathBuf> {
     let base = std::env::var("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".local/state")))
@@ -22,7 +22,7 @@ fn executable() -> Result<PathBuf> {
 }
 
 // The binary sits in <repo>/target/release, next to roles/.
-fn install_root() -> Result<PathBuf> {
+pub fn install_root() -> Result<PathBuf> {
     executable()?.ancestors().nth(3).map(PathBuf::from).ok_or_else(|| "Cannot locate kelpie's files".to_string())
 }
 
