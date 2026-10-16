@@ -13,6 +13,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
+use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::backlog::{self, Backlog, Entry};
 use crate::herdr;
@@ -103,7 +104,60 @@ enum Mode {
     Message(String),
     ConfirmDrop { path: PathBuf, name: String, force: bool },
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize },
+    EditMessage(Box<MessageEditor>),
     Help,
+}
+
+enum Rewrite {
+    Reword(String),
+    Squash,
+}
+
+// Commit message editing inside the board, like lazygit's; ctrl-o hands the text to the user's editor.
+struct MessageEditor {
+    path: PathBuf,
+    commits: Vec<tasks::Commit>,
+    selected: usize,
+    rewrite: Rewrite,
+    text: TextArea<'static>,
+    draft: Option<Receiver<Result<String>>>,
+}
+
+impl MessageEditor {
+    fn new(path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, rewrite: Rewrite, message: &str) -> Self {
+        let mut editor = Self { path, commits, selected, rewrite, text: TextArea::default(), draft: None };
+        editor.set_text(message);
+        editor
+    }
+
+    fn set_text(&mut self, message: &str) {
+        let mut text = TextArea::new(message.lines().map(str::to_string).collect());
+        text.set_wrap_mode(WrapMode::WordOrGlyph);
+        text.set_cursor_line_style(Style::new());
+        text.set_style(style(TEXT));
+        self.text = text;
+    }
+
+    fn message(&self) -> String {
+        self.text.lines().join("\n").trim().to_string()
+    }
+
+    // The squash draft arrives from a background Claude; typing before it arrives keeps what was typed.
+    fn poll_draft(&mut self) {
+        let Some(receiver) = &self.draft else { return };
+        let Ok(result) = receiver.try_recv() else { return };
+        self.draft = None;
+        if self.message().is_empty() {
+            match result {
+                Ok(message) => self.set_text(&message),
+                Err(error) => {
+                    let joined: Vec<&str> = self.commits.iter().map(|commit| commit.message.as_str()).collect();
+                    self.set_text(&joined.join("\n\n"));
+                    self.text.set_placeholder_text(error);
+                }
+            }
+        }
+    }
 }
 
 struct Snapshot {
@@ -372,37 +426,61 @@ impl App {
                     self.mode = Mode::ConfirmPush { path, commits, selected };
                 }
                 KeyCode::Char('s') if commits.len() > 1 => {
-                    ratatui::restore();
-                    println!("\nClaude is writing a message for the {} commits squashed into one…", commits.len());
-                    let draft = tasks::draft_squash_message(&path).unwrap_or_else(|error| {
-                        let joined: Vec<&str> = commits.iter().map(|commit| commit.message.as_str()).collect();
-                        format!("{}\n\n# {error}", joined.join("\n\n"))
+                    let (sender, receiver) = mpsc::channel();
+                    let draft_path = path.clone();
+                    thread::spawn(move || {
+                        let _ = sender.send(tasks::draft_squash_message(&draft_path));
                     });
-                    let result = match edit_in_editor(terminal, &draft) {
-                        Ok(Some(message)) => tasks::squash(&path, &message).and_then(|_| tasks::commits(&path)),
-                        Ok(None) => Ok(commits),
-                        Err(error) => Err(error),
-                    };
-                    match result {
-                        Ok(commits) => self.mode = Mode::ConfirmPush { path, commits, selected: 0 },
-                        Err(error) => self.show(Err(error)),
-                    }
+                    let mut editor = MessageEditor::new(path, commits, 0, Rewrite::Squash, "");
+                    editor.text.set_placeholder_text("Claude is drafting a message from the commits and the diff…");
+                    editor.draft = Some(receiver);
+                    self.mode = Mode::EditMessage(Box::new(editor));
                 }
                 KeyCode::Char('e') => {
                     let Some(commit) = commits.get(selected) else { return };
-                    let edited = edit_in_editor(terminal, &commit.message);
-                    let result = match edited {
-                        Ok(Some(message)) if message != commit.message => tasks::reword(&path, &commit.sha, &message).and_then(|_| tasks::commits(&path)),
-                        Ok(_) => Ok(commits),
-                        Err(error) => Err(error),
-                    };
-                    match result {
-                        Ok(commits) => self.mode = Mode::ConfirmPush { path, commits, selected },
-                        Err(error) => self.show(Err(error)),
-                    }
+                    let (sha, message) = (commit.sha.clone(), commit.message.clone());
+                    self.mode = Mode::EditMessage(Box::new(MessageEditor::new(path, commits, selected, Rewrite::Reword(sha), &message)));
                 }
                 _ => {}
             },
+            Mode::EditMessage(mut editor) => {
+                let control = key.modifiers.contains(KeyModifiers::CONTROL);
+                match key.code {
+                    KeyCode::Esc => {
+                        let MessageEditor { path, commits, selected, .. } = *editor;
+                        self.mode = Mode::ConfirmPush { path, commits, selected };
+                    }
+                    KeyCode::Char('s') if control => {
+                        let message = editor.message();
+                        if message.is_empty() {
+                            self.mode = Mode::EditMessage(editor);
+                            return;
+                        }
+                        let MessageEditor { path, selected, rewrite, .. } = *editor;
+                        let result = match &rewrite {
+                            Rewrite::Reword(sha) => tasks::reword(&path, sha, &message),
+                            Rewrite::Squash => tasks::squash(&path, &message),
+                        }.and_then(|_| tasks::commits(&path));
+                        match result {
+                            Ok(fresh) => {
+                                let selected = if matches!(rewrite, Rewrite::Squash) { 0 } else { selected.min(fresh.len().saturating_sub(1)) };
+                                self.mode = Mode::ConfirmPush { path, commits: fresh, selected };
+                            }
+                            Err(error) => self.show(Err(error)),
+                        }
+                    }
+                    KeyCode::Char('o') if control => {
+                        if let Ok(Some(message)) = edit_in_editor(terminal, &editor.message()) {
+                            editor.set_text(&message);
+                        }
+                        self.mode = Mode::EditMessage(editor);
+                    }
+                    _ => {
+                        editor.text.input(key);
+                        self.mode = Mode::EditMessage(editor);
+                    }
+                }
+            }
             Mode::Input { purpose, label, mut buffer } => match key.code {
                 KeyCode::Esc => {}
                 KeyCode::Enter => self.submit(purpose, buffer.trim().to_string(), terminal),
@@ -980,6 +1058,24 @@ fn draw(frame: &mut Frame, app: &mut App) {
             ]));
             modal(frame, "push".to_string(), lines, 96);
         }
+        Mode::EditMessage(editor) => {
+            let area = centered(frame.area(), 80, frame.area().height.saturating_sub(4).min(24));
+            frame.render_widget(Clear, area);
+            let title = match editor.rewrite { Rewrite::Reword(_) => " commit message ", Rewrite::Squash => " squashed commit message " };
+            let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
+                .title(Span::styled(title, bold(MAUVE)));
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            let [text_area, footer] = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).areas(inner);
+            frame.render_widget(&editor.text, text_area);
+            let subject = editor.text.lines().first().map(|line| line.chars().count()).unwrap_or(0);
+            let count = Span::styled(format!("subject {subject}/72  "), style(if subject > 72 { YELLOW } else { MUTED }));
+            let keys = if editor.draft.is_some() { "drafting…  " } else { "" };
+            frame.render_widget(Paragraph::new(vec![
+                Line::default(),
+                Line::from(vec![count, Span::styled(keys, style(YELLOW)), Span::styled("ctrl-s save · esc back · ctrl-o open in your editor", style(MUTED))]),
+            ]), footer);
+        }
         Mode::Input { label, buffer, .. } => modal(frame, label.clone(), vec![
             Line::from(vec![Span::styled(buffer.clone(), style(TEXT)), Span::styled("▏", style(MAUVE))]),
             Line::from(Span::styled("enter to continue · esc to cancel", style(MUTED))),
@@ -1048,6 +1144,9 @@ pub fn run(overlay: bool) -> Result<String> {
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {
         while !app.quit {
+            if let Mode::EditMessage(editor) = &mut app.mode {
+                editor.poll_draft();
+            }
             while let Ok(update) = snapshots.try_recv() {
                 match update {
                     Ok(snapshot) => {

@@ -8,6 +8,7 @@ repository = "https://github.com/gronare/kelpie"
 
 [dependencies]
 ratatui = "0.30"
+ratatui-textarea = "0.9"
 serde_json = "1"
 
 [profile.release]
