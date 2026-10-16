@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::io::BufRead;
-use std::path::PathBuf;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
@@ -120,6 +122,7 @@ struct App {
     messages: HashMap<String, (Instant, String)>,
     refresh: Sender<()>,
     quit: bool,
+    wanted_task: Option<String>,
 }
 
 fn style(color: Color) -> Style {
@@ -880,12 +883,64 @@ fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
+const RESTART_STATE: &str = "KELPIE_BOARD_STATE";
+
+fn built(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok().filter(|metadata| metadata.len() > 0).and_then(|metadata| metadata.modified().ok())
+}
+
+// A rebuilt binary takes over the open board, keeping the column and selection; it must look the same on two checks so a half-written one never runs.
+struct Rebuild {
+    path: Option<PathBuf>,
+    started: Option<SystemTime>,
+    last: Option<SystemTime>,
+    checked: Instant,
+}
+
+impl Rebuild {
+    fn new() -> Self {
+        let path = std::env::current_exe().ok();
+        let started = path.as_deref().and_then(built);
+        Self { path, started, last: started, checked: Instant::now() }
+    }
+
+    fn ready(&mut self) -> bool {
+        if self.checked.elapsed() < Duration::from_secs(2) {
+            return false;
+        }
+        self.checked = Instant::now();
+        let now = self.path.as_deref().and_then(built);
+        let ready = now.is_some() && now != self.started && now == self.last;
+        self.last = now;
+        ready
+    }
+
+    fn restart(&self, app: &App) -> String {
+        let Some(path) = &self.path else { return "Cannot tell where kelpie's binary is".to_string() };
+        let column = if app.column == Column::Backlog { "backlog" } else { "work" };
+        let task = app.selected_task().map(|item| item.name).unwrap_or_default();
+        let state = format!("{column}\t{}\t{task}", app.backlog_selected);
+        ratatui::restore();
+        let error = Command::new(path).args(std::env::args_os().skip(1)).env(RESTART_STATE, state).exec();
+        format!("Restarting on the rebuilt kelpie failed: {error}")
+    }
+}
+
 pub fn run(overlay: bool) -> Result<String> {
     let (snapshots, refresh) = spawn_refresher();
     let mut app = App {
         column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog: backlog::load(), work_selected: 0, backlog_selected: 0,
-        mode: Mode::Normal, overlay, loaded: false, error: None, messages: HashMap::new(), refresh, quit: false,
+        mode: Mode::Normal, overlay, loaded: false, error: None, messages: HashMap::new(), refresh, quit: false, wanted_task: None,
     };
+    if let Ok(state) = std::env::var(RESTART_STATE) {
+        let mut parts = state.splitn(3, '\t');
+        if parts.next() == Some("backlog") {
+            app.column = Column::Backlog;
+        }
+        app.backlog_selected = parts.next().and_then(|index| index.parse().ok()).unwrap_or(0);
+        app.wanted_task = parts.next().filter(|name| !name.is_empty()).map(str::to_string);
+    }
+    let mut rebuild = Rebuild::new();
     let mut terminal = ratatui::init();
     let result = (|| -> Result<()> {
         while !app.quit {
@@ -895,7 +950,9 @@ pub fn run(overlay: bool) -> Result<String> {
                         let previous = app.selected_task().map(|item| (item.name, item.place));
                         app.tasks = snapshot.items.into_iter().filter(Item::is_task).collect();
                         app.checkouts = snapshot.checkouts;
-                        let position = previous.and_then(|(name, place)| app.tasks.iter().position(|item| item.name == name && item.place == place));
+                        let wanted = app.wanted_task.take();
+                        let position = previous.and_then(|(name, place)| app.tasks.iter().position(|item| item.name == name && item.place == place))
+                            .or_else(|| wanted.and_then(|name| app.tasks.iter().position(|item| item.name == name)));
                         app.work_selected = position.unwrap_or(app.work_selected.min(app.tasks.len().saturating_sub(1)));
                         app.backlog = backlog::load();
                         app.backlog_selected = app.backlog_selected.min(app.backlog.entries.len().saturating_sub(1));
@@ -904,6 +961,11 @@ pub fn run(overlay: bool) -> Result<String> {
                     Err(error) => app.error = Some(error),
                 }
                 app.loaded = true;
+            }
+            if matches!(app.mode, Mode::Normal | Mode::Message(_) | Mode::Help) && rebuild.ready() {
+                let error = rebuild.restart(&app);
+                terminal = ratatui::init();
+                app.mode = Mode::Message(error);
             }
             terminal.draw(|frame| draw(frame, &mut app)).map_err(|error| error.to_string())?;
             if event::poll(Duration::from_millis(250)).map_err(|error| error.to_string())?
