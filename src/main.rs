@@ -1,4 +1,5 @@
 mod actions;
+mod area_page;
 mod areas;
 mod backlog;
 mod board;

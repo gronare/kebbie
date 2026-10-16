@@ -44,6 +44,37 @@ The board (`kelpie board`, also over any Space with `prefix+t`) shows only what 
 
 `kelpie status [--json]` gives the same picture on the command line, for the lead and for scripts.
 
+### Areas
+
+`tab` switches the board between **Work** and **Areas** (or click the tabs top right). Areas lists the vault's system notes (`Areas/*.md`) with their repo, grouped into needs you (main ahead of origin, commits since the last release, or a task waiting on you), active and quiet: running tasks, open notes and backlog, main against origin, the last tag and commits since, and the last log line. Areas without a repo on this machine still list. The repo is the system note's `path`, else where the vault's hooks saw it, else a checkout named after the area. kelpie reads [notes-vault-mcp](https://github.com/gronare/notes-vault-mcp)'s local index (found through the vault plugin's options in Claude Code, or `VAULT_PATH` / `S3_*` and `VAULT_CACHE_DIR` as the server takes them), so a vault on S3 needs no credentials here; it is as fresh as the last session that used the vault. `kelpie areas` prints the same on the command line.
+
+`⏎` lists an area's actions, and `← →` moves into the detail to pick one; each has a letter that also works directly, and the mouse works as on Work. Built in: open its Space (`g`), start a task in its repo told the area's notes (`s`), ask the lead to refresh its backlog (`b`), its vault log (`l`), and push main (`u`, only when main is ahead: shows the commits and pushes as you on `y`, like Push and close).
+
+A repo adds its own actions in a `.kelpie.toml`, reviewed like any other code:
+
+```toml
+[[actions]]
+key = "R"                     # one character, not one of g s b l u j k q ?
+title = "Release"
+about = "bump, commit, tag, push"
+ask = "version"               # asked in turn; a version is prefilled with the next patch
+bump = ["pyproject.toml", { file = "uv.lock", after = 'name = "notes-vault-mcp"' }]
+run = ["uv build"]            # shell commands in the main checkout, after the bump
+commit = "{version}"
+tag = "v{version}"
+push = true                   # asks again, then pushes main and the tag as you
+then = ["claude-plugins:bump-pin"]   # repo:action offered once this is done, never run on its own
+
+[[actions]]
+id = "bump-pin"               # defaults to the title, slugged
+key = "P"
+title = "Bump a pin"
+ask = ["plugin", "version"]
+task = "Bump {plugin}'s pin to {version}; commit."   # starts a kelpie task with a Claude instead
+```
+
+A script action runs in the main checkout, which must be on the default branch, clean and not behind origin. The window shows each step first (the exact lines a bump changes, only lines that say version and hold the current one; `after` limits a file to the first such line after a marker), and nothing changes until `y`; pushing asks once more. [`examples/notes-vault-mcp.kelpie.toml`](examples/notes-vault-mcp.kelpie.toml) is the release for notes-vault-mcp. For a repo you don't own, put the same in `~/.config/kelpie/actions/<repo>.toml` (`$KELPIE_ACTIONS_DIR` overrides the folder; keep it in a private repo): an action there with the same `id` replaces the repo's own, others are added.
+
 ### In herdr
 
 The repo is also a herdr plugin. Install it (herdr builds the binary with `cargo`, so the Rust toolchain must be installed):

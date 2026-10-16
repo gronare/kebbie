@@ -18,6 +18,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 use ratatui_textarea::{TextArea, WrapMode};
 
+use crate::area_page::{self, Effect};
 use crate::backlog::{self, Backlog, Entry};
 use crate::herdr;
 use crate::messages;
@@ -31,16 +32,22 @@ pub const SUBTEXT: Color = Color::Rgb(0xa6, 0xad, 0xc8);
 pub const MUTED: Color = Color::Rgb(0x6c, 0x70, 0x86);
 pub const FAINT: Color = Color::Rgb(0x45, 0x47, 0x5a);
 pub const SURFACE: Color = Color::Rgb(0x31, 0x32, 0x44);
-const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
+pub const MANTLE: Color = Color::Rgb(0x18, 0x18, 0x25);
 pub const MAUVE: Color = Color::Rgb(0xcb, 0xa6, 0xf7);
 pub const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
-const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
-const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
-const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
+pub const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
+pub const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
+pub const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
 pub const TEAL: Color = Color::Rgb(0x94, 0xe2, 0xd5);
-const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
+pub const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 
-const REFRESH_BACKLOG: &str = "Refresh the kelpie backlog: take the vault backlog and my open Linear issues and pipe them as one JSON array to `$HOME/.local/share/kelpie/current/target/release/kelpie backlog save`. Fields per entry: source (vault or linear), title, priority (urgent, high, medium, low or none), area (the repo, e.g. auctionet), ref (vault path or Linear id), summary (one line), age (e.g. 3 d). Reply in one line when saved.";
+pub const REFRESH_BACKLOG: &str = "Refresh the kelpie backlog: take the vault backlog and my open Linear issues and pipe them as one JSON array to `$HOME/.local/share/kelpie/current/target/release/kelpie backlog save`. Fields per entry: source (vault or linear), title, priority (urgent, high, medium, low or none), area (the repo, e.g. auctionet), ref (vault path or Linear id), summary (one line), age (e.g. 3 d). Reply in one line when saved.";
+
+#[derive(Clone, Copy, PartialEq)]
+enum Page {
+    Work,
+    Areas,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Column {
@@ -48,13 +55,13 @@ enum Column {
     Backlog,
 }
 
-struct Choice {
-    key: char,
-    label: String,
-    about: String,
+pub struct Choice {
+    pub key: char,
+    pub label: String,
+    pub about: String,
 }
 
-fn choice(key: char, label: &str, about: &str) -> Choice {
+pub fn choice(key: char, label: &str, about: &str) -> Choice {
     Choice { key, label: label.to_string(), about: about.to_string() }
 }
 
@@ -119,6 +126,7 @@ enum Hit {
     Entry(usize),
     Choice(usize),
     Commit(usize),
+    Tab(Page),
 }
 
 enum Rewrite {
@@ -194,6 +202,8 @@ struct App {
     quit: bool,
     wanted_task: Option<String>,
     hits: Vec<(Rect, Hit)>,
+    page: Page,
+    areas: area_page::Page,
 }
 
 pub fn style(color: Color) -> Style {
@@ -240,7 +250,7 @@ fn status_icon(item: &Item) -> Span<'static> {
     }
 }
 
-fn plural(count: usize, noun: &str) -> String {
+pub fn plural(count: usize, noun: &str) -> String {
     if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
 }
 
@@ -259,7 +269,7 @@ fn row_facts(item: &Item) -> String {
     if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
 }
 
-fn suggested_name(title: &str) -> String {
+pub fn suggested_name(title: &str) -> String {
     const FILLER: [&str; 12] = ["a", "an", "the", "and", "of", "for", "to", "on", "in", "with", "s", "before"];
     title.to_lowercase().split(|character: char| !character.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty() && !FILLER.contains(word)).take(4).collect::<Vec<_>>().join("-")
@@ -287,7 +297,7 @@ fn recap(output: &str) -> String {
         .trim_start_matches("※ recap:").replace("(disable recaps in /config)", "").trim().to_string()
 }
 
-fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
+pub fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
     let width = width.max(10);
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -391,6 +401,11 @@ impl App {
             .and_then(|agent| agent["pane_id"].as_str().map(str::to_string))
     }
 
+    // Pages switch only when nothing is open on either.
+    fn at_rest(&self) -> bool {
+        matches!(self.mode, Mode::Normal) && self.areas.is_normal()
+    }
+
     fn show(&mut self, result: Result<String>) {
         self.mode = Mode::Message(result.unwrap_or_else(|error| error));
         let _ = self.refresh.send(());
@@ -407,6 +422,16 @@ impl App {
     // A click selects a row, a click on the selected row opens its options, and the wheel moves through whatever is in front.
     fn mouse(&mut self, event: MouseEvent, terminal: &mut DefaultTerminal) {
         let hit = self.hits.iter().find(|(area, _)| area.contains(Position::new(event.column, event.row))).map(|(_, hit)| *hit);
+        if let (Some(Hit::Tab(page)), MouseEventKind::Down(MouseButton::Left)) = (hit, event.kind) {
+            self.page = page;
+            return;
+        }
+        if self.page == Page::Areas {
+            if let Effect::Left = self.areas.mouse(event, terminal) {
+                self.quit = self.overlay;
+            }
+            return;
+        }
         match event.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 if let Mode::EditMessage(editor) = &mut self.mode {
@@ -455,6 +480,19 @@ impl App {
     fn handle(&mut self, key: KeyEvent, terminal: &mut DefaultTerminal) {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.quit = true;
+            return;
+        }
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) && self.at_rest() {
+            self.page = if self.page == Page::Work { Page::Areas } else { Page::Work };
+            return;
+        }
+        if self.page == Page::Areas {
+            let leaving = matches!(key.code, KeyCode::Esc | KeyCode::Char('q'));
+            match self.areas.handle(key, terminal) {
+                Effect::Left => self.quit = self.overlay,
+                Effect::Unhandled if leaving => self.quit = self.overlay,
+                _ => {}
+            }
             return;
         }
         match std::mem::replace(&mut self.mode, Mode::Normal) {
@@ -576,7 +614,7 @@ impl App {
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+            KeyCode::Left | KeyCode::Right => {
                 self.column = if self.column == Column::Work { Column::Backlog } else { Column::Work };
             }
             KeyCode::Esc | KeyCode::Char('q') if self.overlay => self.quit = true,
@@ -765,19 +803,19 @@ fn edit_in_editor(terminal: &mut DefaultTerminal, message: &str) -> Result<Optio
     Ok((!message.is_empty()).then_some(message))
 }
 
-fn init_terminal() -> DefaultTerminal {
+pub fn init_terminal() -> DefaultTerminal {
     let terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
     terminal
 }
 
-fn restore_terminal() {
+pub fn restore_terminal() {
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
 }
 
 // Leaves the TUI for a step that prints as it goes (creating a worktree takes a while), then comes back; the board shows the result.
-fn outside(terminal: &mut DefaultTerminal, step: impl FnOnce() -> Result<String>) -> Result<String> {
+pub fn outside(terminal: &mut DefaultTerminal, step: impl FnOnce() -> Result<String>) -> Result<String> {
     restore_terminal();
     let result = step();
     *terminal = init_terminal();
@@ -789,7 +827,7 @@ fn pill(text: String, color: Color, lit: bool) -> Vec<Span<'static>> {
     vec![Span::styled(format!(" {text} "), Style::new().fg(color).bg(MANTLE)), Span::raw(" ")]
 }
 
-fn header(app: &App, width: u16) -> Line<'static> {
+fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     let count = |group: Group| app.tasks.iter().filter(|item| item.group() == group).count();
     let (needs, working, ready) = (count(Group::NeedsYou), count(Group::Working), count(Group::ReadyToPush));
     let mut spans = vec![Span::styled("kelpie", bold(MAUVE)), Span::raw("   ")];
@@ -797,16 +835,30 @@ fn header(app: &App, width: u16) -> Line<'static> {
     spans.extend(pill(format!("◐ {working} working"), BLUE, working > 0));
     spans.extend(pill(format!("✓ {ready} ready to push"), GREEN, ready > 0));
     let sources = if app.backlog.entries.iter().any(|entry| entry.source == "linear") { "vault + Linear" } else { "vault" };
-    let fresh = format!("backlog: {sources}, {}", backlog::age(app.backlog.updated));
+    let fresh = match app.page {
+        Page::Work => format!("backlog: {sources}, {}   ", backlog::age(app.backlog.updated)),
+        Page::Areas => format!("vault index: {}   ", backlog::age(app.areas.synced)),
+    };
+    let tabs = [(" Work ", Page::Work), (" Areas ", Page::Areas)];
+    let tabs_width: usize = tabs.iter().map(|(label, _)| label.chars().count()).sum();
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    if used + fresh.chars().count() < width as usize {
-        spans.push(Span::raw(" ".repeat(width as usize - used - fresh.chars().count())));
+    let fresh = if used + fresh.chars().count() + tabs_width < width as usize { fresh } else { String::new() };
+    let mut places = Vec::new();
+    if used + fresh.chars().count() + tabs_width <= width as usize {
+        spans.push(Span::raw(" ".repeat(width as usize - used - fresh.chars().count() - tabs_width)));
         spans.push(Span::styled(fresh, style(MUTED)));
+        let mut x = width as usize - tabs_width;
+        for (label, page) in tabs {
+            let lit = app.page == page;
+            spans.push(Span::styled(label, if lit { bold(MAUVE).bg(SURFACE) } else { style(MUTED) }));
+            places.push((x as u16, label.chars().count() as u16, page));
+            x += label.chars().count();
+        }
     }
-    Line::from(spans)
+    (Line::from(spans), places)
 }
 
-fn column_title(title: &str, right: String, focused: bool, width: usize) -> Vec<Line<'static>> {
+pub fn column_title(title: &str, right: String, focused: bool, width: usize) -> Vec<Line<'static>> {
     let gap = width.saturating_sub(title.chars().count() + right.chars().count()).max(1);
     vec![
         Line::from(vec![Span::styled(title.to_string(), bold(if focused { MAUVE } else { MUTED })), Span::raw(" ".repeat(gap)), Span::styled(right, style(MUTED))]),
@@ -814,12 +866,12 @@ fn column_title(title: &str, right: String, focused: bool, width: usize) -> Vec<
     ]
 }
 
-fn group_line(title: &str, count: usize, color: Color) -> Line<'static> {
+pub fn group_line(title: &str, count: usize, color: Color) -> Line<'static> {
     Line::from(vec![Span::styled(title.to_string(), bold(color)), Span::styled(format!("  {count}"), style(FAINT))])
 }
 
 // The name gives way when the column is narrow; the facts stay readable on the right.
-fn row(selected: bool, focused: bool, icon: Span<'static>, name: &str, place: Option<&str>, facts: &str, width: usize) -> Line<'static> {
+pub fn row(selected: bool, focused: bool, icon: Span<'static>, name: &str, place: Option<&str>, facts: &str, width: usize) -> Line<'static> {
     let place_text = place.map(|place| if facts.is_empty() { place.to_string() } else { format!("{place} · ") }).unwrap_or_default();
     let wanted_right = place_text.chars().count() + facts.chars().count();
     let name_floor = name.chars().count().min(width * 45 / 100);
@@ -860,7 +912,7 @@ fn wrapped_row(icon: Span<'static>, name: &str, facts: &str, width: usize) -> Ve
 }
 
 // A line's background only covers its text, so highlighted lines are padded to the column's width.
-fn fill(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+pub fn fill(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
     lines.into_iter().map(|mut line| {
         if line.style.bg == Some(SURFACE) && line.width() < width {
             let missing = width - line.width();
@@ -870,7 +922,7 @@ fn fill(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
     }).collect()
 }
 
-fn chips(chips: Vec<(String, Color)>) -> Line<'static> {
+pub fn chips(chips: Vec<(String, Color)>) -> Line<'static> {
     let mut spans = vec![Span::raw("   ")];
     for (text, color) in chips {
         spans.push(Span::styled(format!(" {text} "), Style::new().fg(color).bg(MANTLE)));
@@ -893,7 +945,7 @@ fn you_line(next: &str, highlighted: bool, width: usize) -> Line<'static> {
     if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
 }
 
-fn card_text(label: &str, text: &str, accent: Color, width: usize, max_lines: usize) -> Vec<Line<'static>> {
+pub fn card_text(label: &str, text: &str, accent: Color, width: usize, max_lines: usize) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![Span::raw("   "), Span::styled("┃ ", style(accent)), Span::styled(label.to_string(), style(MUTED))])];
     for text in wrap(text, width.saturating_sub(6), max_lines) {
         lines.push(Line::from(vec![Span::raw("   "), Span::styled("┃ ", style(accent)), Span::styled(text, style(SUBTEXT))]));
@@ -901,7 +953,7 @@ fn card_text(label: &str, text: &str, accent: Color, width: usize, max_lines: us
     lines.into_iter().map(|line| line.style(Style::new().bg(SURFACE))).collect()
 }
 
-fn options_hint() -> Line<'static> {
+pub fn options_hint() -> Line<'static> {
     Line::from(vec![Span::raw("   "), Span::styled("⏎", style(MAUVE)), Span::styled(" options", style(MUTED))]).style(Style::new().bg(SURFACE))
 }
 
@@ -1045,7 +1097,7 @@ fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
     (lines, selected_line, rows)
 }
 
-fn render_column(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>, selected_line: usize, rows: Rows, hits: &mut Vec<(Rect, Hit)>) {
+pub fn render_column<H: Copy>(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>, selected_line: usize, rows: Vec<(usize, usize, H)>, hits: &mut Vec<(Rect, H)>) {
     let lines = fill(lines, area.width as usize);
     let scroll = selected_line.saturating_sub(area.height.saturating_sub(6) as usize);
     frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), area);
@@ -1059,18 +1111,18 @@ fn render_column(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>, selec
 }
 
 fn hint_line() -> Line<'static> {
-    Line::from([("⏎", "options"), ("← →", "work · backlog"), ("↑ ↓", "move"), ("s", "new task"), ("?", "all keys")]
+    Line::from([("⏎", "options"), ("← →", "work · backlog"), ("↑ ↓", "move"), ("tab", "work · areas"), ("s", "new task"), ("?", "all keys")]
         .into_iter().flat_map(|(key, label)| [Span::styled(key.to_string(), style(MAUVE)), Span::styled(format!(" {label}    "), style(MUTED))])
         .collect::<Vec<_>>())
 }
 
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(4));
     let height = height.min(area.height.saturating_sub(2));
     Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
 }
 
-fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width: u16) -> Rect {
+pub fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width: u16) -> Rect {
     let height = lines.len() as u16 + 2;
     let area = centered(frame.area(), width, height);
     frame.render_widget(Clear, area);
@@ -1080,7 +1132,7 @@ fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width: u16
     area
 }
 
-fn options_lines(choices: Vec<Choice>, index: usize, width: usize) -> Vec<Line<'static>> {
+pub fn options_lines(choices: Vec<Choice>, index: usize, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for (position, choice) in choices.iter().enumerate() {
         let active = position == index;
@@ -1100,7 +1152,7 @@ fn options_lines(choices: Vec<Choice>, index: usize, width: usize) -> Vec<Line<'
 
 fn help_lines() -> Vec<Line<'static>> {
     [
-        ("⏎", "options for the selected task or backlog item"), ("← → tab", "switch between work and backlog"), ("↑ ↓ j k", "move"),
+        ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("tab", "switch between the work and areas pages"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
         ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's web server"), ("b", "start or stop the task's worker"), ("l", "ready to push: rebase and check (on a task)"), ("d", "done: after you pushed"),
         ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("esc", "close this, or the board when it is an overlay"),
@@ -1111,7 +1163,15 @@ fn draw(frame: &mut Frame, app: &mut App) {
     app.hits.clear();
     let area = frame.area().inner(Margin { horizontal: 2, vertical: 1 });
     let [top, _, body, bottom] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)]).areas(area);
-    frame.render_widget(Paragraph::new(header(app, top.width)), top);
+    let (line, tabs) = header(app, top.width);
+    frame.render_widget(Paragraph::new(line), top);
+    let tab_hits: Vec<(Rect, Hit)> = tabs.into_iter().map(|(x, width, page)| (Rect::new(top.x + x, top.y, width, 1), Hit::Tab(page))).collect();
+    if app.page == Page::Areas {
+        frame.render_widget(Paragraph::new(area_page::Page::hint_line()), bottom);
+        app.areas.draw(frame, body);
+        app.hits = if app.areas.is_normal() { tab_hits } else { Vec::new() };
+        return;
+    }
     frame.render_widget(Paragraph::new(hint_line()), bottom);
 
     if let Some(error) = &app.error {
@@ -1230,7 +1290,9 @@ fn draw(frame: &mut Frame, app: &mut App) {
         ], 72);
         }
     }
-    if !matches!(app.mode, Mode::Normal) {
+    if matches!(app.mode, Mode::Normal) {
+        app.hits.extend(tab_hits);
+    } else {
         app.hits = modal_hits;
     }
 }
@@ -1269,7 +1331,11 @@ impl Rebuild {
 
     fn restart(&self, app: &App) -> String {
         let Some(path) = &self.path else { return "Cannot tell where kelpie's binary is".to_string() };
-        let column = if app.column == Column::Backlog { "backlog" } else { "work" };
+        let column = match (app.page, app.column) {
+            (Page::Areas, _) => "areas",
+            (_, Column::Backlog) => "backlog",
+            _ => "work",
+        };
         let task = app.selected_task().map(|item| item.name).unwrap_or_default();
         let state = format!("{column}\t{}\t{task}", app.backlog_selected);
         restore_terminal();
@@ -1283,11 +1349,14 @@ pub fn run(overlay: bool) -> Result<String> {
     let mut app = App {
         column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog: backlog::load(), work_selected: 0, backlog_selected: 0,
         mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(),
+        page: Page::Work, areas: area_page::Page::new(),
     };
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
-        if parts.next() == Some("backlog") {
-            app.column = Column::Backlog;
+        match parts.next() {
+            Some("backlog") => app.column = Column::Backlog,
+            Some("areas") => app.page = Page::Areas,
+            _ => {}
         }
         app.backlog_selected = parts.next().and_then(|index| index.parse().ok()).unwrap_or(0);
         app.wanted_task = parts.next().filter(|name| !name.is_empty()).map(str::to_string);
@@ -1309,6 +1378,7 @@ pub fn run(overlay: bool) -> Result<String> {
                     Ok(snapshot) => {
                         let previous = app.selected_task().map(|item| (item.name, item.place));
                         app.tasks = snapshot.items.into_iter().filter(Item::is_task).collect();
+                        app.areas.tasks = app.tasks.clone();
                         app.checkouts = snapshot.checkouts;
                         let wanted = app.wanted_task.take();
                         let position = previous.and_then(|(name, place)| app.tasks.iter().position(|item| item.name == name && item.place == place))
@@ -1322,7 +1392,10 @@ pub fn run(overlay: bool) -> Result<String> {
                 }
                 app.loaded = true;
             }
-            if matches!(app.mode, Mode::Normal | Mode::Message(_) | Mode::Help) && rebuild.ready() {
+            if app.page == Page::Areas {
+                app.areas.tick();
+            }
+            if matches!(app.mode, Mode::Normal | Mode::Message(_) | Mode::Help) && app.areas.is_idle() && rebuild.ready() {
                 let error = rebuild.restart(&app);
                 terminal = init_terminal();
                 app.mode = Mode::Message(error);
