@@ -68,11 +68,13 @@ fn create() -> Result<String> {
     let board = space.root_pane_id.ok_or("herdr created the lead Space without a pane")?;
     herdr::run_in_pane(&board, &format!("'{}' board", executable()?.display()))?;
     let chat = herdr::split_right(&board, &dir, "0.68")?;
+    let messages = herdr::split_down(&board, &dir, "0.65")?;
+    herdr::run_in_pane(&messages, &format!("'{}' messages", executable()?.display()))?;
     let role = root.join("roles/lead.md");
     if let Err(error) = herdr::start_agent("lead", "claude", &chat, &["--append-system-prompt-file", &role.to_string_lossy()])
         && !error.contains("agent_not_ready")
     {
         return Err(error);
     }
-    Ok("Lead Space created: the board on the left, the lead on the right.".to_string())
+    Ok("Lead Space created: the board on the left over the sessions' messages, the lead on the right.".to_string())
 }

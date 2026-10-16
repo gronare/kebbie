@@ -102,6 +102,12 @@ pub fn split_right(pane_id: &str, cwd: &Path, ratio: &str) -> Result<String> {
     text(&result["pane"]["pane_id"]).ok_or_else(|| "herdr pane split returned no pane".to_string())
 }
 
+pub fn split_down(pane_id: &str, cwd: &Path, ratio: &str) -> Result<String> {
+    let cwd = cwd.to_string_lossy();
+    let result = call(&["pane", "split", pane_id, "--direction", "down", "--ratio", ratio, "--cwd", &cwd, "--no-focus"])?;
+    text(&result["pane"]["pane_id"]).ok_or_else(|| "herdr pane split returned no pane".to_string())
+}
+
 // Only what is on screen: reading further back makes herdr scroll an idle agent's pane and restore it.
 pub fn read_agent(pane_id: &str) -> Result<String> {
     run(&herdr(), &["agent", "read", pane_id, "--source", "visible"], None)
