@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::herdr;
+use crate::messages::{self, Message};
+use crate::peers;
 use crate::repo::{ahead_behind, changed_count, default_branch, git, name_of};
 use crate::sh::Result;
 use crate::tasks::slots;
@@ -58,6 +60,7 @@ pub struct Item {
     pub workspace: Option<String>,
     pub agent: Option<Agent>,
     pub git: Option<Git>,
+    pub report: Option<Message>,
 }
 
 impl Item {
@@ -65,15 +68,43 @@ impl Item {
         self.git.is_some()
     }
 
+    fn rebased(&self) -> bool {
+        self.git.as_ref().is_some_and(|git| git.ahead > 0 && git.behind == 0 && git.changed == 0)
+    }
+
+    pub fn report_state(&self) -> Option<&str> {
+        self.report.as_ref()?.report.as_ref().map(|report| report.state.as_str())
+    }
+
+    // Between turns the task's own report says what it needs; herdr's "done" only says nobody has looked yet.
     pub fn group(&self) -> Group {
-        match self.agent.as_ref().map(|agent| agent.status.as_str()) {
-            Some("blocked" | "done") => Group::NeedsYou,
-            Some("working") => Group::Working,
-            _ => match &self.git {
-                Some(git) if git.ahead > 0 && git.behind == 0 && git.changed == 0 => Group::ReadyToPush,
-                _ => Group::Idle,
-            },
+        let status = self.agent.as_ref().map(|agent| agent.status.as_str());
+        match (status, self.report_state()) {
+            (Some("blocked"), _) => Group::NeedsYou,
+            (Some("working"), _) | (_, Some("working")) => Group::Working,
+            (_, Some("needs-you")) => Group::NeedsYou,
+            (_, Some("ready")) => if self.rebased() { Group::ReadyToPush } else { Group::NeedsYou },
+            (_, Some("blocked")) => Group::Idle,
+            (Some("done"), _) => Group::NeedsYou,
+            _ => if self.rebased() { Group::ReadyToPush } else { Group::Idle },
         }
+    }
+
+    // Within Needs you: a question on screen first, then what the task asks of you, then what is ready, then the rest.
+    pub fn urgency(&self) -> u8 {
+        if self.group() != Group::NeedsYou {
+            return 0;
+        }
+        match (self.agent.as_ref().map(|agent| agent.status.as_str()), self.report_state()) {
+            (Some("blocked"), _) => 0,
+            (_, Some("needs-you")) => 1,
+            (_, Some("ready")) => 2,
+            _ => 3,
+        }
+    }
+
+    pub fn next_for_you(&self) -> Option<&str> {
+        self.report.as_ref()?.next_for_you()
     }
 
     pub fn summary(&self) -> String {
@@ -110,6 +141,9 @@ impl Item {
                 "pane": agent.pane, "status": agent.status, "title": agent.title, "context": agent.context,
             })),
             "review": self.review.map(|(read, total)| json!({ "read": read, "files": total })),
+            "report": self.report.as_ref().and_then(|message| Some(json!({
+                "state": message.report.as_ref()?.state, "next": message.report.as_ref()?.next, "summary": message.text, "age": messages::age(message.at),
+            }))),
             "web": self.web,
             "jobs": self.jobs,
             "git": self.git.as_ref().map(|git| json!({
@@ -198,6 +232,7 @@ pub fn gather() -> Result<Vec<Item>> {
     let repos: BTreeSet<PathBuf> = workspaces.iter()
         .filter_map(|workspace| workspace["worktree"]["repo_root"].as_str()).map(PathBuf::from).collect();
 
+    let reports = messages::latest_reports(&messages::load());
     let mut items = Vec::new();
     let mut task_workspaces = BTreeSet::new();
     for repo in &repos {
@@ -217,13 +252,14 @@ pub fn gather() -> Result<Vec<Item>> {
                 review: review_progress(&slot.path, &upstream),
                 web: tokens["web"].is_string(),
                 jobs: tokens["jobs"].is_string(),
-                name: task,
                 place: name_of(repo),
                 repo: Some(repo.clone()),
                 path: Some(slot.path.clone()),
                 workspace,
                 agent,
                 git: Some(Git { upstream: upstream.clone(), ahead, behind, changed: changed_count(&slot.path)? }),
+                report: reports.get(&peers::address(&task, &name_of(repo))).cloned(),
+                name: task,
             });
         }
     }
@@ -245,9 +281,57 @@ pub fn gather() -> Result<Vec<Item>> {
             workspace: Some(workspace),
             agent: Some(agent),
             git: None,
+            report: None,
         });
     }
-    // A task's halves in different repos sit together within a group.
-    items.sort_by(|one, other| (!one.is_task(), one.group(), &one.name).cmp(&(!other.is_task(), other.group(), &other.name)));
+    // A task's halves in different repos sit together within a group, after what needs you most.
+    items.sort_by(|one, other| (!one.is_task(), one.group(), one.urgency(), &one.name).cmp(&(!other.is_task(), other.group(), other.urgency(), &other.name)));
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::messages::Report;
+
+    fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
+        Item {
+            review: None, web: false, jobs: false, name: "posthog".to_string(), place: "relay".to_string(), repo: None, path: None, workspace: None,
+            agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
+            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0 }),
+            report: report.map(|state| Message {
+                id: "1".to_string(), at: 0, from: "posthog@relay".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
+                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }),
+            }),
+        }
+    }
+
+    #[test]
+    fn between_turns_the_report_decides_the_group() {
+        assert!(task(Some("idle"), Some("needs-you"), 0).group() == Group::NeedsYou);
+        assert!(task(Some("idle"), Some("ready"), 0).group() == Group::NeedsYou);
+        assert!(task(Some("done"), Some("ready"), 2).group() == Group::ReadyToPush);
+        assert!(task(Some("done"), Some("working"), 0).group() == Group::Working);
+        assert!(task(Some("done"), Some("blocked"), 0).group() == Group::Idle);
+        assert!(task(None, Some("needs-you"), 0).group() == Group::NeedsYou);
+    }
+
+    #[test]
+    fn a_turn_under_way_or_a_question_on_screen_outranks_the_report() {
+        assert!(task(Some("working"), Some("needs-you"), 0).group() == Group::Working);
+        assert!(task(Some("blocked"), Some("working"), 0).group() == Group::NeedsYou);
+    }
+
+    #[test]
+    fn without_a_report_herdr_decides_as_before() {
+        assert!(task(Some("done"), None, 0).group() == Group::NeedsYou);
+        assert!(task(Some("idle"), None, 1).group() == Group::ReadyToPush);
+        assert!(task(Some("idle"), None, 0).group() == Group::Idle);
+    }
+
+    #[test]
+    fn needs_you_puts_questions_then_asks_then_ready_first() {
+        let urgency = |status, report| task(Some(status), report, 0).urgency();
+        assert_eq!([urgency("blocked", None), urgency("idle", Some("needs-you")), urgency("idle", Some("ready")), urgency("done", None)], [0, 1, 2, 3]);
+    }
 }

@@ -20,6 +20,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::backlog::{self, Backlog, Entry};
 use crate::herdr;
+use crate::messages;
 use crate::repo::{self, name_of};
 use crate::sh::Result;
 use crate::status::{self, Checkout, Group, Item};
@@ -188,7 +189,7 @@ struct App {
     overlay: bool,
     loaded: bool,
     error: Option<String>,
-    messages: HashMap<String, (Instant, String)>,
+    screens: HashMap<String, (Instant, String)>,
     refresh: Sender<()>,
     quit: bool,
     wanted_task: Option<String>,
@@ -277,6 +278,15 @@ fn last_message(output: &str) -> String {
         .collect::<Vec<_>>().join(" ").trim_start_matches("● ").to_string()
 }
 
+// Fallback for a session that has not reported yet: Claude Code's own "※ recap:" under a finished run, free text that can be switched off.
+fn recap(output: &str) -> String {
+    let lines: Vec<&str> = output.lines().map(str::trim_end).collect();
+    let Some(start) = lines.iter().rposition(|line| line.starts_with("※ recap:")) else { return String::new() };
+    let continued = lines[start + 1..].iter().take_while(|line| line.starts_with("  ") && !line.trim().is_empty());
+    std::iter::once(&lines[start]).chain(continued).map(|line| line.trim()).collect::<Vec<_>>().join(" ")
+        .trim_start_matches("※ recap:").replace("(disable recaps in /config)", "").trim().to_string()
+}
+
 fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
     let width = width.max(10);
     let mut lines: Vec<String> = Vec::new();
@@ -353,15 +363,15 @@ impl App {
         }
     }
 
-    fn agent_message(&mut self, pane: &str) -> String {
-        if let Some((at, message)) = self.messages.get(pane)
+    fn agent_screen(&mut self, pane: &str) -> String {
+        if let Some((at, screen)) = self.screens.get(pane)
             && at.elapsed() < Duration::from_secs(4)
         {
-            return message.clone();
+            return screen.clone();
         }
-        let message = last_message(&herdr::read_agent(pane).unwrap_or_default());
-        self.messages.insert(pane.to_string(), (Instant::now(), message.clone()));
-        message
+        let screen = herdr::read_agent(pane).unwrap_or_default();
+        self.screens.insert(pane.to_string(), (Instant::now(), screen.clone()));
+        screen
     }
 
     fn repo_named(&self, name: &str) -> Option<PathBuf> {
@@ -869,6 +879,20 @@ fn chips(chips: Vec<(String, Color)>) -> Line<'static> {
     Line::from(spans).style(Style::new().bg(SURFACE))
 }
 
+fn ago(at: u64) -> String {
+    match messages::age(at).as_str() {
+        "now" => "just now".to_string(),
+        age => format!("{age} ago"),
+    }
+}
+
+// What the task's last report asks of the user, under its row.
+fn you_line(next: &str, highlighted: bool, width: usize) -> Line<'static> {
+    let text = wrap(next, width.saturating_sub(8), 1).into_iter().next().unwrap_or_default();
+    let line = Line::from(vec![Span::raw("   "), Span::styled("you: ", style(PEACH)), Span::styled(text, style(SUBTEXT))]);
+    if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
+}
+
 fn card_text(label: &str, text: &str, accent: Color, width: usize, max_lines: usize) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![Span::raw("   "), Span::styled("┃ ", style(accent)), Span::styled(label.to_string(), style(MUTED))])];
     for text in wrap(text, width.saturating_sub(6), max_lines) {
@@ -907,6 +931,9 @@ fn work_lines(app: &mut App, width: usize) -> (Vec<Line<'static>>, usize, Rows) 
         let place = (app.checkouts.len() > 1).then_some(item.place.as_str());
         let start = lines.len();
         lines.push(row(selected, focused, status_icon(item), &item.name, place, &row_facts(item), width));
+        if let Some(next) = item.next_for_you() {
+            lines.push(you_line(next, selected && focused, width));
+        }
         if selected && focused {
             lines.extend(task_card(app, item, width));
         }
@@ -955,10 +982,17 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     }
     match &item.agent {
         Some(agent) => {
-            let message = app.agent_message(&agent.pane);
-            if !message.is_empty() {
-                let (label, accent) = if agent.status == "blocked" { ("asks", PEACH) } else { ("last said", FAINT) };
-                lines.extend(card_text(label, &message, accent, width, 3));
+            let screen = app.agent_screen(&agent.pane);
+            let (label, text, accent) = match &item.report {
+                _ if agent.status == "blocked" => ("asks".to_string(), last_message(&screen), PEACH),
+                Some(report) => (format!("reported {}", ago(report.at)), report.text.clone(), FAINT),
+                None => match recap(&screen) {
+                    recap if !recap.is_empty() => ("recap (no report yet)".to_string(), recap, FAINT),
+                    _ => ("last said".to_string(), last_message(&screen), FAINT),
+                },
+            };
+            if !text.is_empty() {
+                lines.extend(card_text(&label, &text, accent, width, 3));
             }
         }
         None => lines.extend(card_text("no Claude", "No Claude is running in its Space.", FAINT, width, 1)),
@@ -1248,7 +1282,7 @@ pub fn run(overlay: bool) -> Result<String> {
     let (snapshots, refresh) = spawn_refresher();
     let mut app = App {
         column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog: backlog::load(), work_selected: 0, backlog_selected: 0,
-        mode: Mode::Normal, overlay, loaded: false, error: None, messages: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(),
+        mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(),
     };
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
@@ -1306,4 +1340,16 @@ pub fn run(overlay: bool) -> Result<String> {
     })();
     restore_terminal();
     result.map(|_| String::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_recap_is_the_last_one_on_screen_with_its_continuation() {
+        let screen = "※ recap: An older one.\n\n● Done.\n\n※ recap: We're adding Turnstile; the branch is rebased. Next, leave your\n  comments in the split. (disable recaps in /config)\n\n❯ \n";
+        assert_eq!(recap(screen), "We're adding Turnstile; the branch is rebased. Next, leave your comments in the split.");
+        assert_eq!(recap("● Nothing to recap.\n"), "");
+    }
 }

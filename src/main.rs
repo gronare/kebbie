@@ -124,6 +124,12 @@ fn status_text() -> Result<String> {
         let halves: Vec<&str> = items.iter().filter(|other| other.is_task() && other.name == item.name && other.place != item.place).map(|other| other.place.as_str()).collect();
         let place = if halves.is_empty() || !item.is_task() { item.place.clone() } else { format!("{}, same task in {}", item.place, halves.join(", ")) };
         lines.push(format!("  {}  ({place})\n    {}", item.name, item.summary()));
+        if let Some(report) = &item.report {
+            lines.push(format!("    {} ({})", report.text, messages::age(report.at)));
+        }
+        if let Some(next) = item.next_for_you() {
+            lines.push(format!("    you: {next}"));
+        }
     }
     Ok(lines.join("\n").trim_start().to_string())
 }
