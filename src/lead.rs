@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::herdr;
+use crate::peers;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 
@@ -60,6 +61,15 @@ pub fn toggle() -> Result<String> {
     }
 }
 
+// Each of the user's prompts carries what sessions told each other since the lead last looked.
+fn settings(kelpie: &str) -> String {
+    let allow = ["peers", "tell", "messages", "status"].map(|command| format!("Bash({kelpie} {command}:*)"));
+    json!({
+        "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' messages --unread") }] }] },
+        "permissions": { "allow": allow },
+    }).to_string()
+}
+
 fn create() -> Result<String> {
     let root = install_root()?;
     let dir = std::env::var("KELPIE_LEAD_DIR").or_else(|_| std::env::var("HOME")).map(PathBuf::from)
@@ -71,7 +81,8 @@ fn create() -> Result<String> {
     let messages = herdr::split_down(&board, &dir, "0.65")?;
     herdr::run_in_pane(&messages, &format!("'{}' messages", executable()?.display()))?;
     let role = root.join("roles/lead.md");
-    if let Err(error) = herdr::start_agent("lead", "claude", &chat, &["--append-system-prompt-file", &role.to_string_lossy()])
+    let settings = settings(&peers::kelpie_command()?);
+    if let Err(error) = herdr::start_agent("lead", "claude", &chat, &["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings])
         && !error.contains("agent_not_ready")
     {
         return Err(error);

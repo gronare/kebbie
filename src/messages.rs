@@ -15,6 +15,7 @@ use crate::herdr;
 use crate::lead::state_dir;
 use crate::peers::{self, Session};
 use crate::sh::Result;
+use crate::status::LEAD_LABEL;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
@@ -192,6 +193,28 @@ pub fn print(count: usize) -> String {
     }).collect::<Vec<_>>().join("\n")
 }
 
+// The lead's copy: what sessions told each other since it last looked, given to it with each of the user's prompts.
+pub fn unread_for_lead() -> Result<String> {
+    let mark = state_dir()?.join("messages-lead-read");
+    let seen: usize = fs::read_to_string(&mark).ok().and_then(|count| count.trim().parse().ok()).unwrap_or(0);
+    let messages = load();
+    fs::write(&mark, messages.len().to_string()).map_err(|error| error.to_string())?;
+    let unread = copies_for_lead(&messages, seen);
+    if unread.is_empty() {
+        return Ok(String::new());
+    }
+    let lines: Vec<String> = unread.iter().map(|message| {
+        let held = if message.held { " (held)" } else { "" };
+        format!("- {} → {}{held}: {}", message.from, message.to, message.text)
+    }).collect();
+    Ok(format!("Messages between sessions since you last looked (kelpie messages --print for more):\n{}", lines.join("\n")))
+}
+
+// Messages to or from the lead are already in its chat.
+fn copies_for_lead(messages: &[Message], seen: usize) -> Vec<&Message> {
+    messages.iter().skip(seen.min(messages.len())).filter(|message| message.from != LEAD_LABEL && message.to != LEAD_LABEL).collect()
+}
+
 fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.lines() {
@@ -317,6 +340,16 @@ mod tests {
         let held = r#"{"id":"1","at":10,"from":"a@x","to":"b@x","text":"hi","state":"held"}"#;
         assert!(fold(held)[0].held);
         assert!(!fold(&format!("{held}\n{{\"id\":\"1\",\"at\":11,\"state\":\"delivered\"}}"))[0].held);
+    }
+
+    #[test]
+    fn the_lead_is_copied_on_new_messages_between_others() {
+        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false };
+        let messages = [message("1", "a@x", "b@x"), message("2", "a@x", "lead"), message("3", "lead", "b@x"), message("4", "b@x", "a@x")];
+        let ids = |seen| copies_for_lead(&messages, seen).iter().map(|message| message.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(0), ["1", "4"]);
+        assert_eq!(ids(1), ["4"]);
+        assert!(ids(9).is_empty());
     }
 
     #[test]

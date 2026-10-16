@@ -31,7 +31,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie peers                    who you are and the other task sessions, with what each is doing
   kelpie tell <to> <text>         message another session: a task (every half of it), task@repo, or lead; held
                                   while it waits for an answer, and logged
-  kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30
+  kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30,
+                                  --unread those the lead has not seen (its prompt hook)
   kelpie backlog [save]           show the backlog the lead keeps; save reads a JSON array on stdin
   kelpie land [name]              rebase a task onto the default branch (folding fixup! commits) and check it; on a
                                   conflict, its Claude resolves the rebase
@@ -172,6 +173,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             messages::tell(&cwd, to, &text.join(" "))
         }
         Some("messages") if arguments.flag("--print") => Ok(messages::print(30)),
+        Some("messages") if arguments.flag("--unread") => messages::unread_for_lead(),
         Some("messages") => messages::run(),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
         Some("backlog") => Ok(backlog::show()),
