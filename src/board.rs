@@ -371,6 +371,23 @@ impl App {
                     let selected = (selected + 1).min(commits.len().saturating_sub(1));
                     self.mode = Mode::ConfirmPush { path, commits, selected };
                 }
+                KeyCode::Char('s') if commits.len() > 1 => {
+                    ratatui::restore();
+                    println!("\nClaude is writing a message for the {} commits squashed into one…", commits.len());
+                    let draft = tasks::draft_squash_message(&path).unwrap_or_else(|error| {
+                        let joined: Vec<&str> = commits.iter().map(|commit| commit.message.as_str()).collect();
+                        format!("{}\n\n# {error}", joined.join("\n\n"))
+                    });
+                    let result = match edit_in_editor(terminal, &draft) {
+                        Ok(Some(message)) => tasks::squash(&path, &message).and_then(|_| tasks::commits(&path)),
+                        Ok(None) => Ok(commits),
+                        Err(error) => Err(error),
+                    };
+                    match result {
+                        Ok(commits) => self.mode = Mode::ConfirmPush { path, commits, selected: 0 },
+                        Err(error) => self.show(Err(error)),
+                    }
+                }
                 KeyCode::Char('e') => {
                     let Some(commit) = commits.get(selected) else { return };
                     let edited = edit_in_editor(terminal, &commit.message);
@@ -581,7 +598,7 @@ impl App {
 // The user's editor on a commit message, in this pane; an empty result keeps the old message.
 fn edit_in_editor(terminal: &mut DefaultTerminal, message: &str) -> Result<Option<String>> {
     let file = std::env::temp_dir().join(format!("kelpie-{}-COMMIT_EDITMSG", std::process::id()));
-    let help = "\n\n# Edit the commit message. Lines starting with # are ignored; an empty message keeps the old one.\n";
+    let help = "\n\n# Edit the commit message. Lines starting with # are ignored; an empty message cancels.\n";
     std::fs::write(&file, format!("{message}{help}")).map_err(|error| error.to_string())?;
     ratatui::restore();
     let status = Command::new("sh").args(["-c", "${VISUAL:-${EDITOR:-vi}} \"$1\"", "sh"]).arg(&file).status();
@@ -959,7 +976,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
             lines.push(Line::default());
             lines.push(Line::from(vec![
                 Span::styled("Push these and close the task?  ", style(YELLOW)),
-                Span::styled("y push · e edit message · ↑ ↓ commit · esc cancel", style(MUTED)),
+                Span::styled(if commits.len() > 1 { "y push · e edit message · s squash into one · ↑ ↓ commit · esc cancel" } else { "y push · e edit message · esc cancel" }, style(MUTED)),
             ]));
             modal(frame, "push".to_string(), lines, 96);
         }
