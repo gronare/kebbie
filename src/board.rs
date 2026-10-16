@@ -940,6 +940,10 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
             facts.push((format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")), YELLOW));
         }
     }
+    let halves: Vec<String> = app.tasks.iter().filter(|other| other.name == item.name && other.place != item.place).map(|other| other.place.clone()).collect();
+    if !halves.is_empty() {
+        facts.push((format!("same task in {}", halves.join(", ")), TEAL));
+    }
     if let Some((read, total)) = item.review {
         facts.push((format!("review {read}/{total} read"), if read == total { GREEN } else { SUBTEXT }));
     }

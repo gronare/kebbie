@@ -247,6 +247,7 @@ pub fn gather() -> Result<Vec<Item>> {
             git: None,
         });
     }
-    items.sort_by_key(|item| (!item.is_task(), item.group()));
+    // A task's halves in different repos sit together within a group.
+    items.sort_by(|one, other| (!one.is_task(), one.group(), &one.name).cmp(&(!other.is_task(), other.group(), &other.name)));
     Ok(items)
 }

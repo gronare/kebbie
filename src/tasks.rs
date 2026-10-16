@@ -157,7 +157,9 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     if dev && slot.path.join("dev.yml").exists() {
         herdr::run_in_pane(&herdr::create_tab(&space.workspace_id, &slot.path, "dev")?, "dev")?;
     }
-    let agent_name: String = task.chars().take(32).collect();
+    // herdr's agent names are global, so a task's half in another repo is named with its repo.
+    let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task.as_str());
+    let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(&repo))?) } else { task.clone() }.chars().take(32).collect();
     let mut agent_args: Vec<&str> = mode.map(|mode| vec!["--permission-mode", mode]).unwrap_or_default();
     let settings = settings(&peers::kelpie_command()?);
     let role = peers::role_file(&task, &name_of(&repo))?.to_string_lossy().to_string();

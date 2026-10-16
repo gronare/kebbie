@@ -17,7 +17,8 @@ use sh::Result;
 const USAGE: &str = "kelpie: herding coding agents in herdr
 
   kelpie start <name> [prompt]    start a task in a pooled worktree, in its own Space, with Claude
-                                  (--repo <name> finds or clones that repo, --from <ref> branches off it
+                                  (--repo <name> finds or clones that repo, repeated for a task across repos,
+                                  --from <ref> branches off it
                                   instead of the default branch, --mode <mode> is Claude's permission mode,
                                   --no-dev skips running dev, --no-focus keeps you where you are)
   kelpie move <name> [file ...]   move work under way in the main checkout into a task: branch <name> if it
@@ -68,6 +69,10 @@ impl Arguments {
         self.values.iter().find(|(flag, _)| flag == name).map(|(_, value)| value.as_str())
     }
 
+    fn values_of(&self, name: &str) -> Vec<&str> {
+        self.values.iter().filter(|(flag, _)| flag == name).map(|(_, value)| value.as_str()).collect()
+    }
+
     fn flag(&self, name: &str) -> bool {
         self.flags.iter().any(|flag| flag == name)
     }
@@ -110,7 +115,9 @@ fn status_text() -> Result<String> {
             group = Some(item.group());
             lines.push(format!("\n{}", item.group().title()));
         }
-        lines.push(format!("  {}  ({})\n    {}", item.name, item.place, item.summary()));
+        let halves: Vec<&str> = items.iter().filter(|other| other.is_task() && other.name == item.name && other.place != item.place).map(|other| other.place.as_str()).collect();
+        let place = if halves.is_empty() || !item.is_task() { item.place.clone() } else { format!("{}, same task in {}", item.place, halves.join(", ")) };
+        lines.push(format!("  {}  ({place})\n    {}", item.name, item.summary()));
     }
     Ok(lines.join("\n").trim_start().to_string())
 }
@@ -129,9 +136,17 @@ fn run(arguments: &Arguments) -> Result<String> {
             let name = name.ok_or("kelpie start needs a task name")?;
             let prompt = arguments.positionals[2..].join(" ");
             let prompt = (!prompt.is_empty()).then_some(prompt.as_str());
-            let repo = arguments.value("--repo").map(repo::locate).transpose()?.unwrap_or(cwd);
+            let mut repos = arguments.values_of("--repo").into_iter().map(repo::locate).collect::<Result<Vec<_>>>()?;
+            if repos.is_empty() {
+                repos.push(cwd);
+            }
             let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), dev: !arguments.flag("--no-dev") };
-            tasks::start(&repo, name, &options)
+            // One task across repos: a half per repo, the first one focused.
+            let started: Vec<Result<String>> = repos.iter().enumerate()
+                .map(|(index, repo)| tasks::start(repo, name, &tasks::Start { focus: options.focus && index == 0, ..options }))
+                .collect();
+            let report = started.iter().map(|result| match result { Ok(text) | Err(text) => text.as_str() }).collect::<Vec<_>>().join("\n");
+            if started.iter().any(Result::is_err) { Err(report) } else { Ok(report) }
         }
         Some("move") => {
             let name = name.ok_or("kelpie move needs a task name")?;
