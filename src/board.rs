@@ -394,7 +394,7 @@ impl App {
         *selected = selected.saturating_add_signed(step).min(length.saturating_sub(1));
     }
 
-    // A click selects a row, a click on the selected row or a right-click opens its options, and the wheel moves through whatever is in front.
+    // A click selects a row, a click on the selected row opens its options, and the wheel moves through whatever is in front.
     fn mouse(&mut self, event: MouseEvent, terminal: &mut DefaultTerminal) {
         let hit = self.hits.iter().find(|(area, _)| area.contains(Position::new(event.column, event.row))).map(|(_, hit)| *hit);
         match event.kind {
@@ -410,24 +410,6 @@ impl App {
                 }
                 let code = if event.kind == MouseEventKind::ScrollUp { KeyCode::Up } else { KeyCode::Down };
                 self.handle(KeyEvent::from(code), terminal);
-            }
-            MouseEventKind::Down(MouseButton::Right) => {
-                let on_row = match (hit, &self.mode) {
-                    (Some(Hit::Task(index)), Mode::Normal) => {
-                        self.column = Column::Work;
-                        self.work_selected = index;
-                        true
-                    }
-                    (Some(Hit::Entry(index)), Mode::Normal) => {
-                        self.column = Column::Backlog;
-                        self.backlog_selected = index;
-                        true
-                    }
-                    _ => false,
-                };
-                if on_row {
-                    self.mode = Mode::Options(0);
-                }
             }
             MouseEventKind::Down(MouseButton::Left) => match (hit, &mut self.mode) {
                 (Some(Hit::Task(index)), Mode::Normal) => {
@@ -1268,9 +1250,6 @@ pub fn run(overlay: bool) -> Result<String> {
         }
         app.backlog_selected = parts.next().and_then(|index| index.parse().ok()).unwrap_or(0);
         app.wanted_task = parts.next().filter(|name| !name.is_empty()).map(str::to_string);
-    }
-    if let Ok(pane) = std::env::var("HERDR_PANE_ID") {
-        let _ = herdr::route_right_clicks_to_pane(&pane);
     }
     let mut rebuild = Rebuild::new();
     let mut terminal = init_terminal();
