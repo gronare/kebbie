@@ -144,3 +144,7 @@ pub fn send_keys(pane_id: &str, keys: &[&str]) -> Result<()> {
 pub fn tabs_in(workspace_id: &str) -> Result<Vec<Value>> {
     Ok(call(&["tab", "list", "--workspace", workspace_id])?["tabs"].as_array().cloned().unwrap_or_default())
 }
+
+pub fn layout(pane_id: &str) -> Result<Value> {
+    Ok(call(&["pane", "layout", "--pane", pane_id])?["layout"].clone())
+}

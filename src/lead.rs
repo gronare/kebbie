@@ -75,41 +75,63 @@ fn lead_dir() -> Result<PathBuf> {
     std::env::var("KELPIE_LEAD_DIR").or_else(|_| std::env::var("HOME")).map(PathBuf::from).map_err(|_| "Set KELPIE_LEAD_DIR or HOME".to_string())
 }
 
-// A board or messages pane quit or closed since the lead Space was made comes back when the user goes there.
+// The panes by where create put them: the chat on the right, the board above the messages on the left.
+struct Places {
+    board: Option<String>,
+    messages: Option<String>,
+    chat: Option<String>,
+}
+
+fn places(lead: &str) -> Result<Places> {
+    let first = herdr::panes_in(lead)?.iter().find_map(|pane| pane["pane_id"].as_str().map(str::to_string)).ok_or("The lead Space has no panes")?;
+    let layout = herdr::layout(&first)?;
+    let mut panes: Vec<(u64, u64, String)> = layout["panes"].as_array().into_iter().flatten()
+        .filter_map(|pane| Some((pane["rect"]["x"].as_u64()?, pane["rect"]["y"].as_u64()?, pane["pane_id"].as_str()?.to_string())))
+        .collect();
+    let right = panes.iter().map(|(x, _, _)| *x).max().unwrap_or(0);
+    let chat = (right > 0).then(|| panes.iter().find(|(x, _, _)| *x == right).map(|(_, _, id)| id.clone())).flatten();
+    panes.retain(|(x, _, _)| *x < right || right == 0);
+    panes.sort_by_key(|(_, y, _)| *y);
+    let mut left = panes.into_iter().map(|(_, _, id)| id);
+    Ok(Places { board: left.next(), messages: left.next(), chat })
+}
+
+fn runs_kelpie(pane: &str, command: &str) -> bool {
+    herdr::foreground(pane).ok().flatten().is_some_and(|argv| argv.iter().any(|arg| arg.ends_with("kelpie")) && argv.iter().any(|arg| arg == command))
+}
+
+fn start_chat(pane: &str) -> Result<()> {
+    let role = install_root()?.join("roles/lead.md");
+    let settings = settings(&peers::kelpie_command()?);
+    match herdr::start_agent("lead", "claude", pane, &["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings]) {
+        Err(error) if !error.contains("agent_not_ready") => Err(error),
+        _ => Ok(()),
+    }
+}
+
+// Whatever was quit or closed since the lead Space was made comes back when the user goes there: the board, the messages, or the lead's Claude.
 fn repair(lead: &str) -> Result<()> {
     let executable = executable()?.display().to_string();
-    let mut board = None;
-    let mut messages = None;
-    let mut shells = Vec::new();
-    for pane in herdr::panes_in(lead)?.iter().filter_map(|pane| pane["pane_id"].as_str().map(str::to_string)) {
-        match herdr::foreground(&pane)? {
-            None => shells.push(pane),
-            Some(argv) if argv.iter().any(|arg| arg.ends_with("kelpie")) && argv.iter().any(|arg| arg == "board") => board = Some(pane),
-            Some(argv) if argv.iter().any(|arg| arg.ends_with("kelpie")) && argv.iter().any(|arg| arg == "messages") => messages = Some(pane),
-            Some(_) => {}
-        }
+    let places = places(lead)?;
+    let board = places.board.ok_or("The lead Space has lost its board pane; close the Space and open the lead again")?;
+    if !runs_kelpie(&board, "board") && herdr::foreground(&board)?.is_none() {
+        herdr::run_in_pane(&board, &format!("'{executable}' board"))?;
     }
-    let mut shells = shells.into_iter();
-    let board = match board {
-        Some(pane) => pane,
-        None => {
-            let pane = shells.next().ok_or("The lead Space has no free pane for the board; close it and open the lead again")?;
-            herdr::run_in_pane(&pane, &format!("'{executable}' board"))?;
-            pane
-        }
-    };
-    if messages.is_none() {
-        let pane = match shells.next() {
-            Some(pane) => pane,
-            None => herdr::split_down(&board, &lead_dir()?, "0.65")?,
-        };
-        herdr::run_in_pane(&pane, &format!("'{executable}' messages"))?;
+    match places.messages {
+        Some(pane) if runs_kelpie(&pane, "messages") => {}
+        Some(pane) if herdr::foreground(&pane)?.is_none() => herdr::run_in_pane(&pane, &format!("'{executable}' messages"))?,
+        Some(_) => {}
+        None => herdr::run_in_pane(&herdr::split_down(&board, &lead_dir()?, "0.65")?, &format!("'{executable}' messages"))?,
+    }
+    match places.chat {
+        Some(pane) if herdr::foreground(&pane)?.is_none() => start_chat(&pane)?,
+        Some(_) => {}
+        None => start_chat(&herdr::split_right(&board, &lead_dir()?, "0.68")?)?,
     }
     Ok(())
 }
 
 fn create() -> Result<String> {
-    let root = install_root()?;
     let dir = lead_dir()?;
     let space = herdr::create_workspace(&dir, LEAD_LABEL)?;
     let board = space.root_pane_id.ok_or("herdr created the lead Space without a pane")?;
@@ -117,12 +139,6 @@ fn create() -> Result<String> {
     let chat = herdr::split_right(&board, &dir, "0.68")?;
     let messages = herdr::split_down(&board, &dir, "0.65")?;
     herdr::run_in_pane(&messages, &format!("'{}' messages", executable()?.display()))?;
-    let role = root.join("roles/lead.md");
-    let settings = settings(&peers::kelpie_command()?);
-    if let Err(error) = herdr::start_agent("lead", "claude", &chat, &["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings])
-        && !error.contains("agent_not_ready")
-    {
-        return Err(error);
-    }
+    start_chat(&chat)?;
     Ok("Lead Space created: the board on the left over the sessions' messages, the lead on the right.".to_string())
 }
