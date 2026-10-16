@@ -192,8 +192,18 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
     if ahead_behind(&slot.path, &upstream)?.0 == 0 {
         return Err(format!("{task} has no commits to land"));
     }
-    if git(&slot.path, &["rebase", "--quiet", &upstream]).is_err() {
-        return Err(format!("Rebasing {task} onto {upstream} stopped on a conflict in {}; resolve it there and run land again", slot.path.display()));
+    if git(&slot.path, &["rebase", "--quiet", "--autosquash", &upstream]).is_err() {
+        git(&slot.path, &["rebase", "--abort"])?;
+        let Some(pane) = claude_of(&slot.path) else {
+            return Err(format!("{task} conflicts with {upstream} and has no Claude to resolve it; rebase it in {}", slot.path.display()));
+        };
+        herdr::prompt_agent(&pane, &format!(
+            "kelpie tried to land this task and rebasing onto {upstream} conflicts (already fetched). Rebase this branch onto {upstream} \
+             with git rebase --autosquash {upstream} (no -i), resolve each conflict keeping the intent of both sides (read the upstream \
+             commits that touched the file), run the tests for the files involved, and continue until the rebase is finished. Do not \
+             push. Then tell me in a few lines what conflicted and how you resolved it."
+        ))?;
+        return Err(format!("{task} conflicts with {upstream}; its Claude is resolving the rebase. Push and close again when it reports back."));
     }
     let range = format!("{upstream}..HEAD");
     let mut problems = Vec::new();
@@ -212,6 +222,34 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
         "{task} is rebased onto {upstream} and ready:\n{commits}\n\nPush with:  kelpie push {task}   (or git -C {} push origin HEAD:{target}, then kelpie done {task})",
         slot.path.display()
     ))
+}
+
+fn claude_of(path: &Path) -> Option<String> {
+    let workspace = herdr::workspace_for(path).ok()??;
+    herdr::agents().ok()?.into_iter()
+        .find(|agent| agent["agent"] == "claude" && agent["workspace_id"].as_str() == Some(workspace.as_str()))
+        .and_then(|agent| agent["pane_id"].as_str().map(str::to_string))
+}
+
+// Agents have no interactive git, so the prompt names the non-interactive ways to reshape history.
+pub fn tidy(cwd: &Path, name: Option<&str>, note: &str) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    let task = task_of(&slot);
+    let pane = claude_of(&slot.path).ok_or_else(|| format!("{task} has no Claude running to tidy its commits"))?;
+    let upstream = default_branch(&repo)?;
+    let mut prompt = format!(
+        "Tidy this branch's commits on top of {upstream} for review before it is pushed: one commit per logical change, the functional \
+         change before refactors, fixups and review-response commits squashed into the commit they belong to, messages that say why. \
+         Interactive git is not available: use git commit --fixup with git rebase --autosquash, git rebase with GIT_SEQUENCE_EDITOR \
+         editing the todo, or git reset --soft and recommit. The final tree must be identical: git diff against the old head must be \
+         empty. Do not push. Show the commit list before and after."
+    );
+    if !note.trim().is_empty() {
+        prompt.push_str(&format!(" From the user: {}", note.trim()));
+    }
+    herdr::prompt_agent(&pane, &prompt)?;
+    Ok(format!("Asked {task}'s Claude to tidy its commits."))
 }
 
 // After land: pushes the rebased task to the default branch and closes it.

@@ -73,6 +73,7 @@ fn task_choices(item: Option<&Item>) -> Vec<Choice> {
         });
     }
     choices.extend([
+        choice('t', "Tidy commits", "its Claude squashes, reorders and rewords them for review"),
         choice('l', "Push and close", "rebase, check, show the commits, then push if you say so"),
         choice('d', "Done", "already pushed elsewhere: close it and free the worktree"),
         choice('x', "Drop", "throw the task away (asks first)"),
@@ -92,6 +93,7 @@ enum Purpose {
     TaskPrompt(String),
     Message(String, String),
     BacklogName(Entry),
+    Tidy(PathBuf),
 }
 
 enum Mode {
@@ -444,6 +446,12 @@ impl App {
                         }
                     }
                     'r' => self.open_review(&item),
+                    't' => {
+                        if let Some(path) = item.path.clone() {
+                            let label = "How should the commits look? (optional, enter to let Claude decide)".to_string();
+                            self.mode = Mode::Input { purpose: Purpose::Tidy(path), label, buffer: String::new() };
+                        }
+                    }
                     'w' => self.toggle_server(&item, "web", item.web),
                     'b' => self.toggle_server(&item, "worker", item.jobs),
                     'l' | 'd' | 'x' => {
@@ -536,6 +544,10 @@ impl App {
                     let repo = known.map_or_else(|| repo::locate(&entry.area), Ok)?;
                     tasks::start(&repo, &text, &options)
                 });
+                self.show(result);
+            }
+            Purpose::Tidy(path) => {
+                let result = tasks::tidy(&path, None, &text);
                 self.show(result);
             }
             Purpose::Message(_, _) if text.is_empty() => {}
