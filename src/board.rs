@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::BufRead;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -109,6 +108,7 @@ enum Mode {
     ConfirmDrop { path: PathBuf, name: String, force: bool },
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize },
     EditMessage(Box<MessageEditor>),
+    Working { label: String, result: Receiver<Result<String>> },
     Help,
 }
 
@@ -466,6 +466,7 @@ impl App {
                 }
             }
             Mode::Help | Mode::Message(_) => {}
+            working @ Mode::Working { .. } => self.mode = working,
             Mode::ConfirmDrop { path, name, force } => {
                 if key.code == KeyCode::Char('y') {
                     match tasks::drop(&path, None, force) {
@@ -478,8 +479,11 @@ impl App {
             }
             Mode::ConfirmPush { path, commits, selected } => match key.code {
                 KeyCode::Char('y') => {
-                    let result = outside(terminal, || tasks::push(&path, None));
-                    self.show(result);
+                    let (sender, result) = mpsc::channel();
+                    thread::spawn(move || {
+                        let _ = sender.send(tasks::push(&path, None));
+                    });
+                    self.mode = Mode::Working { label: format!("Pushing {} and closing the task…", plural(commits.len(), "commit")), result };
                 }
                 KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1) },
                 KeyCode::Down | KeyCode::Char('j') => {
@@ -762,14 +766,10 @@ fn restore_terminal() {
     ratatui::restore();
 }
 
-// Leaves the TUI for a step that prints as it goes (creating a worktree takes a while), then comes back.
+// Leaves the TUI for a step that prints as it goes (creating a worktree takes a while), then comes back; the board shows the result.
 fn outside(terminal: &mut DefaultTerminal, step: impl FnOnce() -> Result<String>) -> Result<String> {
     restore_terminal();
     let result = step();
-    match &result {
-        Ok(output) | Err(output) => println!("\n{output}\n\nPress Enter to return to the board."),
-    }
-    let _ = std::io::stdin().lock().lines().next();
     *terminal = init_terminal();
     result
 }
@@ -1168,6 +1168,9 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 }
             }
         }
+        Mode::Working { label, .. } => {
+            modal(frame, "kelpie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
+        }
         Mode::EditMessage(editor) => {
             let area = centered(frame.area(), 80, frame.area().height.saturating_sub(4).min(24));
             frame.render_widget(Clear, area);
@@ -1261,6 +1264,11 @@ pub fn run(overlay: bool) -> Result<String> {
         while !app.quit {
             if let Mode::EditMessage(editor) = &mut app.mode {
                 editor.poll_draft();
+            }
+            if let Mode::Working { result, .. } = &app.mode
+                && let Ok(result) = result.try_recv()
+            {
+                app.show(result);
             }
             while let Ok(update) = snapshots.try_recv() {
                 match update {

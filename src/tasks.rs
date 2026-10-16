@@ -276,7 +276,16 @@ pub fn push(cwd: &Path, name: Option<&str>) -> Result<String> {
         return Err(format!("{} is not landed; run land first", task_of(&slot)));
     }
     let target = format!("HEAD:{}", upstream.trim_start_matches("origin/"));
-    run_visibly("git", &["push", "origin", &target], Some(&slot.path))?;
+    // Nobody may see a prompt, so git and ssh fail instead of waiting for a password or passphrase.
+    let mut command = std::process::Command::new("git");
+    command.args(["push", "--quiet", "origin", &target]).current_dir(&slot.path).stdin(std::process::Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    }
+    let output = command.output().map_err(|error| format!("git push: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("Pushing {} failed: {}", task_of(&slot), String::from_utf8_lossy(&output.stderr).trim()));
+    }
     done(cwd, name).map(|closed| format!("Pushed {ahead} commit(s) to {upstream}. {closed}"))
 }
 
