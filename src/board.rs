@@ -7,7 +7,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::execute;
+use ratatui::layout::Position;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -108,6 +112,14 @@ enum Mode {
     Help,
 }
 
+#[derive(Clone, Copy)]
+enum Hit {
+    Task(usize),
+    Entry(usize),
+    Choice(usize),
+    Commit(usize),
+}
+
 enum Rewrite {
     Reword(String),
     Squash,
@@ -180,6 +192,7 @@ struct App {
     refresh: Sender<()>,
     quit: bool,
     wanted_task: Option<String>,
+    hits: Vec<(Rect, Hit)>,
 }
 
 fn style(color: Color) -> Style {
@@ -379,6 +392,54 @@ impl App {
             Column::Backlog => (&mut self.backlog_selected, self.backlog.entries.len()),
         };
         *selected = selected.saturating_add_signed(step).min(length.saturating_sub(1));
+    }
+
+    // A click selects a row, a click on the selected row opens its options, and the wheel moves through whatever is in front.
+    fn mouse(&mut self, event: MouseEvent, terminal: &mut DefaultTerminal) {
+        let hit = self.hits.iter().find(|(area, _)| area.contains(Position::new(event.column, event.row))).map(|(_, hit)| *hit);
+        match event.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if let Mode::EditMessage(editor) = &mut self.mode {
+                    editor.text.input(event);
+                    return;
+                }
+                match hit {
+                    Some(Hit::Task(_)) if matches!(self.mode, Mode::Normal) => self.column = Column::Work,
+                    Some(Hit::Entry(_)) if matches!(self.mode, Mode::Normal) => self.column = Column::Backlog,
+                    _ => {}
+                }
+                let code = if event.kind == MouseEventKind::ScrollUp { KeyCode::Up } else { KeyCode::Down };
+                self.handle(KeyEvent::from(code), terminal);
+            }
+            MouseEventKind::Down(MouseButton::Left) => match (hit, &mut self.mode) {
+                (Some(Hit::Task(index)), Mode::Normal) => {
+                    let again = self.column == Column::Work && self.work_selected == index;
+                    self.column = Column::Work;
+                    self.work_selected = index;
+                    if again {
+                        self.mode = Mode::Options(0);
+                    }
+                }
+                (Some(Hit::Entry(index)), Mode::Normal) => {
+                    let again = self.column == Column::Backlog && self.backlog_selected == index;
+                    self.column = Column::Backlog;
+                    self.backlog_selected = index;
+                    if again {
+                        self.mode = Mode::Options(0);
+                    }
+                }
+                (Some(Hit::Choice(index)), Mode::Options(_)) => {
+                    if let Some(key) = self.choices().get(index).map(|choice| choice.key) {
+                        self.mode = Mode::Normal;
+                        self.act(key);
+                    }
+                }
+                (Some(Hit::Commit(index)), Mode::ConfirmPush { selected, .. }) => *selected = index,
+                (None, Mode::Options(_) | Mode::Message(_) | Mode::Help) => self.mode = Mode::Normal,
+                _ => {}
+            },
+            _ => {}
+        }
     }
 
     fn handle(&mut self, key: KeyEvent, terminal: &mut DefaultTerminal) {
@@ -678,9 +739,9 @@ fn edit_in_editor(terminal: &mut DefaultTerminal, message: &str) -> Result<Optio
     let file = std::env::temp_dir().join(format!("kelpie-{}-COMMIT_EDITMSG", std::process::id()));
     let help = "\n\n# Edit the commit message. Lines starting with # are ignored; an empty message cancels.\n";
     std::fs::write(&file, format!("{message}{help}")).map_err(|error| error.to_string())?;
-    ratatui::restore();
+    restore_terminal();
     let status = Command::new("sh").args(["-c", "${VISUAL:-${EDITOR:-vi}} \"$1\"", "sh"]).arg(&file).status();
-    *terminal = ratatui::init();
+    *terminal = init_terminal();
     let edited = std::fs::read_to_string(&file).map_err(|error| error.to_string());
     let _ = std::fs::remove_file(&file);
     if !status.map_err(|error| error.to_string())?.success() {
@@ -690,15 +751,26 @@ fn edit_in_editor(terminal: &mut DefaultTerminal, message: &str) -> Result<Optio
     Ok((!message.is_empty()).then_some(message))
 }
 
+fn init_terminal() -> DefaultTerminal {
+    let terminal = ratatui::init();
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    terminal
+}
+
+fn restore_terminal() {
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    ratatui::restore();
+}
+
 // Leaves the TUI for a step that prints as it goes (creating a worktree takes a while), then comes back.
 fn outside(terminal: &mut DefaultTerminal, step: impl FnOnce() -> Result<String>) -> Result<String> {
-    ratatui::restore();
+    restore_terminal();
     let result = step();
     match &result {
         Ok(output) | Err(output) => println!("\n{output}\n\nPress Enter to return to the board."),
     }
     let _ = std::io::stdin().lock().lines().next();
-    *terminal = ratatui::init();
+    *terminal = init_terminal();
     result
 }
 
@@ -809,13 +881,16 @@ fn options_hint() -> Line<'static> {
     Line::from(vec![Span::raw("   "), Span::styled("⏎", style(MAUVE)), Span::styled(" options", style(MUTED))]).style(Style::new().bg(SURFACE))
 }
 
-fn work_lines(app: &mut App, width: usize) -> (Vec<Line<'static>>, usize) {
+type Rows = Vec<(usize, usize, Hit)>;
+
+fn work_lines(app: &mut App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
     let focused = app.column == Column::Work;
     let free: usize = app.checkouts.iter().map(|checkout| checkout.free_slots).sum();
     let mut lines = column_title("WORK", format!("{} · {} free", plural(app.tasks.len(), "task"), plural(free, "worktree")), focused, width);
     let mut selected_line = 0;
     let mut current: Option<Group> = None;
     let tasks = app.tasks.clone();
+    let mut rows = Vec::new();
     for (index, item) in tasks.iter().enumerate() {
         if current != Some(item.group()) {
             if current.is_some() {
@@ -830,10 +905,12 @@ fn work_lines(app: &mut App, width: usize) -> (Vec<Line<'static>>, usize) {
             selected_line = lines.len();
         }
         let place = (app.checkouts.len() > 1).then_some(item.place.as_str());
+        let start = lines.len();
         lines.push(row(selected, focused, status_icon(item), &item.name, place, &row_facts(item), width));
         if selected && focused {
             lines.extend(task_card(app, item, width));
         }
+        rows.push((start, lines.len(), Hit::Task(index)));
     }
     if tasks.is_empty() {
         lines.push(Line::from(Span::styled("No tasks. s starts one, or pick one from the backlog.", style(MUTED))));
@@ -846,7 +923,7 @@ fn work_lines(app: &mut App, width: usize) -> (Vec<Line<'static>>, usize) {
             lines.push(Line::from(vec![Span::styled("! ", style(YELLOW)), Span::styled(leftover, style(MUTED))]));
         }
     }
-    (lines, selected_line)
+    (lines, selected_line, rows)
 }
 
 fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
@@ -886,11 +963,12 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize) {
+fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
     let focused = app.column == Column::Backlog;
     let mut lines = column_title("BACKLOG", format!("{} items", app.backlog.entries.len()), focused, width);
     let mut selected_line = 0;
     let mut current: Option<&str> = None;
+    let mut rows = Vec::new();
     for (index, entry) in app.backlog.entries.iter().enumerate() {
         if current != Some(entry.priority.as_str()) {
             if current.is_some() {
@@ -905,6 +983,7 @@ fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize) {
             selected_line = lines.len();
         }
         let icon = Span::styled(priority_icon(&entry.priority), style(priority_color(&entry.priority)));
+        let start = lines.len();
         if selected && focused {
             lines.extend(wrapped_row(icon, &entry.title, &entry.age, width));
             let mut facts = vec![(entry.area.clone(), TEAL), (if entry.source == "linear" { entry.reference.clone() } else { "vault note".to_string() }, SUBTEXT)];
@@ -920,17 +999,25 @@ fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize) {
         } else {
             lines.push(row(selected, focused, icon, &entry.title, None, &entry.age, width));
         }
+        rows.push((start, lines.len(), Hit::Entry(index)));
     }
     if app.backlog.entries.is_empty() {
         lines.push(Line::from(Span::styled("Empty. R asks the lead to fill it from the vault and Linear.", style(MUTED))));
     }
-    (lines, selected_line)
+    (lines, selected_line, rows)
 }
 
-fn render_column(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>, selected_line: usize) {
+fn render_column(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>, selected_line: usize, rows: Rows, hits: &mut Vec<(Rect, Hit)>) {
     let lines = fill(lines, area.width as usize);
-    let scroll = selected_line.saturating_sub(area.height.saturating_sub(6) as usize) as u16;
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
+    let scroll = selected_line.saturating_sub(area.height.saturating_sub(6) as usize);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), area);
+    for (start, end, hit) in rows {
+        let top = start.max(scroll) - scroll;
+        let bottom = end.saturating_sub(scroll).min(area.height as usize);
+        if bottom > top {
+            hits.push((Rect::new(area.x, area.y + top as u16, area.width, (bottom - top) as u16), hit));
+        }
+    }
 }
 
 fn hint_line() -> Line<'static> {
@@ -945,13 +1032,14 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
 }
 
-fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width: u16) {
+fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width: u16) -> Rect {
     let height = lines.len() as u16 + 2;
     let area = centered(frame.area(), width, height);
     frame.render_widget(Clear, area);
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
         .title(Span::styled(format!(" {title} "), bold(MAUVE)));
     frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+    area
 }
 
 fn options_lines(choices: Vec<Choice>, index: usize, width: usize) -> Vec<Line<'static>> {
@@ -982,6 +1070,7 @@ fn help_lines() -> Vec<Line<'static>> {
 }
 
 fn draw(frame: &mut Frame, app: &mut App) {
+    app.hits.clear();
     let area = frame.area().inner(Margin { horizontal: 2, vertical: 1 });
     let [top, _, body, bottom] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)]).areas(area);
     frame.render_widget(Paragraph::new(header(app, top.width)), top);
@@ -993,21 +1082,23 @@ fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(Span::styled("looking around…", style(MUTED))), body);
     } else if body.width >= 86 {
         let [work_area, _, backlog_area] = Layout::horizontal([Constraint::Percentage(54), Constraint::Length(4), Constraint::Min(20)]).areas(body);
-        let (work, work_selected) = work_lines(app, work_area.width as usize);
-        render_column(frame, work_area, work, work_selected);
-        let (backlog, backlog_selected) = backlog_lines(app, backlog_area.width as usize);
-        render_column(frame, backlog_area, backlog, backlog_selected);
+        let (work, work_selected, work_rows) = work_lines(app, work_area.width as usize);
+        render_column(frame, work_area, work, work_selected, work_rows, &mut app.hits);
+        let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, backlog_area.width as usize);
+        render_column(frame, backlog_area, backlog, backlog_selected, backlog_rows, &mut app.hits);
     } else {
         let width = body.width as usize;
-        let (mut lines, work_selected) = work_lines(app, width);
+        let (mut lines, work_selected, mut rows) = work_lines(app, width);
         let offset = lines.len() + 1;
-        let (backlog, backlog_selected) = backlog_lines(app, width);
+        let (backlog, backlog_selected, backlog_rows) = backlog_lines(app, width);
         lines.push(Line::default());
         lines.extend(backlog);
+        rows.extend(backlog_rows.into_iter().map(|(start, end, hit)| (start + offset, end + offset, hit)));
         let selected = if app.column == Column::Work { work_selected } else { offset + backlog_selected };
-        render_column(frame, body, lines, selected);
+        render_column(frame, body, lines, selected, rows, &mut app.hits);
     }
 
+    let mut modal_hits = Vec::new();
     match &app.mode {
         Mode::Normal => {}
         Mode::Options(index) => {
@@ -1016,9 +1107,18 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 Column::Backlog => app.selected_entry().map(|entry| entry.title).unwrap_or_default(),
             };
             let title: String = title.chars().take(52).collect();
-            modal(frame, title, options_lines(app.choices(), *index, 56), 62);
+            let count = app.choices().len();
+            let area = modal(frame, title, options_lines(app.choices(), *index, 56), 62);
+            for choice in 0..count {
+                let y = area.y + 1 + 2 * choice as u16;
+                if y + 1 < area.bottom() {
+                    modal_hits.push((Rect::new(area.x, y, area.width, 2), Hit::Choice(choice)));
+                }
+            }
         }
-        Mode::Help => modal(frame, "keys".to_string(), help_lines(), 72),
+        Mode::Help => {
+            modal(frame, "keys".to_string(), help_lines(), 72);
+        }
         Mode::Message(text) => {
             let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
             lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
@@ -1056,7 +1156,13 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 Span::styled("Push these and close the task?  ", style(YELLOW)),
                 Span::styled(if commits.len() > 1 { "y push · e edit message · s squash into one · ↑ ↓ commit · esc cancel" } else { "y push · e edit message · esc cancel" }, style(MUTED)),
             ]));
-            modal(frame, "push".to_string(), lines, 96);
+            let area = modal(frame, "push".to_string(), lines, 96);
+            for index in 0..commits.len() {
+                let y = area.y + 1 + index as u16;
+                if y < area.bottom().saturating_sub(1) {
+                    modal_hits.push((Rect::new(area.x, y, area.width, 1), Hit::Commit(index)));
+                }
+            }
         }
         Mode::EditMessage(editor) => {
             let area = centered(frame.area(), 80, frame.area().height.saturating_sub(4).min(24));
@@ -1076,10 +1182,15 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 Line::from(vec![count, Span::styled(keys, style(YELLOW)), Span::styled("ctrl-s save · esc back · ctrl-o open in your editor", style(MUTED))]),
             ]), footer);
         }
-        Mode::Input { label, buffer, .. } => modal(frame, label.clone(), vec![
+        Mode::Input { label, buffer, .. } => {
+            modal(frame, label.clone(), vec![
             Line::from(vec![Span::styled(buffer.clone(), style(TEXT)), Span::styled("▏", style(MAUVE))]),
             Line::from(Span::styled("enter to continue · esc to cancel", style(MUTED))),
-        ], 72),
+        ], 72);
+        }
+    }
+    if !matches!(app.mode, Mode::Normal) {
+        app.hits = modal_hits;
     }
 }
 
@@ -1120,7 +1231,7 @@ impl Rebuild {
         let column = if app.column == Column::Backlog { "backlog" } else { "work" };
         let task = app.selected_task().map(|item| item.name).unwrap_or_default();
         let state = format!("{column}\t{}\t{task}", app.backlog_selected);
-        ratatui::restore();
+        restore_terminal();
         let error = Command::new(path).args(std::env::args_os().skip(1)).env(RESTART_STATE, state).exec();
         format!("Restarting on the rebuilt kelpie failed: {error}")
     }
@@ -1130,7 +1241,7 @@ pub fn run(overlay: bool) -> Result<String> {
     let (snapshots, refresh) = spawn_refresher();
     let mut app = App {
         column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog: backlog::load(), work_selected: 0, backlog_selected: 0,
-        mode: Mode::Normal, overlay, loaded: false, error: None, messages: HashMap::new(), refresh, quit: false, wanted_task: None,
+        mode: Mode::Normal, overlay, loaded: false, error: None, messages: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(),
     };
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
@@ -1141,7 +1252,7 @@ pub fn run(overlay: bool) -> Result<String> {
         app.wanted_task = parts.next().filter(|name| !name.is_empty()).map(str::to_string);
     }
     let mut rebuild = Rebuild::new();
-    let mut terminal = ratatui::init();
+    let mut terminal = init_terminal();
     let result = (|| -> Result<()> {
         while !app.quit {
             if let Mode::EditMessage(editor) = &mut app.mode {
@@ -1167,19 +1278,20 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             if matches!(app.mode, Mode::Normal | Mode::Message(_) | Mode::Help) && rebuild.ready() {
                 let error = rebuild.restart(&app);
-                terminal = ratatui::init();
+                terminal = init_terminal();
                 app.mode = Mode::Message(error);
             }
             terminal.draw(|frame| draw(frame, &mut app)).map_err(|error| error.to_string())?;
-            if event::poll(Duration::from_millis(250)).map_err(|error| error.to_string())?
-                && let Event::Key(key) = event::read().map_err(|error| error.to_string())?
-                && key.kind == KeyEventKind::Press
-            {
-                app.handle(key, &mut terminal);
+            if event::poll(Duration::from_millis(250)).map_err(|error| error.to_string())? {
+                match event::read().map_err(|error| error.to_string())? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => app.handle(key, &mut terminal),
+                    Event::Mouse(mouse) => app.mouse(mouse, &mut terminal),
+                    _ => {}
+                }
             }
         }
         Ok(())
     })();
-    ratatui::restore();
+    restore_terminal();
     result.map(|_| String::new())
 }
