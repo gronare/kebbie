@@ -36,11 +36,13 @@ rows = [
 [ui.sidebar.agents]
 row_gap = 1
 
-# Claude's task title, plus model and context in use ($model / $ctx from sync.sh) in place of the agent and tab names.
+# Claude's task title, plus model and context in use ($model / $ctx from sync.sh) in place of the agent and tab names,
+# and a kelpie task's last report: its state in place of idle or done, and your next step ($next).
 [ui.sidebar.agents.rows_by_agent]
 claude = [
   ["state_icon", "workspace", { token = "$model", dim = true }, { token = "$ctx", fg = "#f9e2af" }],
   [{ token = "terminal_title_stripped", fg = "#bac2de" }],
+  ["state_text", { token = "$next", fg = "#fab387" }],
 ]
 
 # Claude finishing or asking in a background Space; Ghostty shows it as a macOS notification
