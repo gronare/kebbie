@@ -12,10 +12,12 @@ use ratatui::text::{Line, Span};
 
 use crate::actions::{self, Action, Answers, Step, Work};
 use crate::areas::{self, Area, Areas};
+use crate::backlog;
 use crate::board::{
     self, BLUE, Choice, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, choice, column_title,
     group_line, modal, options_lines, plural, render_column, row, style, wrap,
 };
+use crate::config::Source;
 use crate::herdr;
 use crate::repo::{self, git, push_as_user};
 use crate::sh::Result;
@@ -123,6 +125,7 @@ pub struct Page {
     mode: Mode,
     updates: Option<(Receiver<Result<Areas>>, Sender<()>)>,
     pub hits: Vec<(Rect, Hit)>,
+    sources: Vec<Source>,
 }
 
 fn spawn_refresher() -> (Receiver<Result<Areas>>, Sender<()>) {
@@ -227,10 +230,10 @@ fn first_next(action: &Action, answers: &Answers) -> Option<Next> {
 }
 
 impl Page {
-    pub fn new() -> Self {
+    pub fn new(sources: Vec<Source>) -> Self {
         Self {
             areas: Vec::new(), synced: None, tasks: Vec::new(), loaded: false, error: None, selected: None, focus: Focus::List, action: 0,
-            mode: Mode::Normal, updates: None, hits: Vec::new(),
+            mode: Mode::Normal, updates: None, hits: Vec::new(), sources,
         }
     }
 
@@ -309,13 +312,14 @@ impl Page {
         }
     }
 
-    fn choices(area: &Area) -> Vec<Choice> {
+    fn choices(&self, area: &Area) -> Vec<Choice> {
         let mut choices = Vec::new();
         if area.repo.is_some() {
             choices.push(choice('g', "Open its Space", "the main checkout's Space, opened if needed"));
             choices.push(choice('s', "Start a task here", "a worktree, a Space and Claude, told the area's notes"));
         }
-        choices.push(choice('b', "Refresh its backlog", "the lead reads the vault backlog and Linear again"));
+        let refresh = if self.sources.is_empty() { "no backlog source is configured".to_string() } else { format!("the lead reads {} again", backlog::from(&self.sources)) };
+        choices.push(choice('b', "Refresh its backlog", &refresh));
         choices.push(choice('l', "Show its log", "the vault log, newest first"));
         if let Some(git) = area.git.as_ref().filter(|git| git.ahead > 0) {
             choices.push(Choice { key: 'u', label: format!("Push {}", git.branch), about: format!("{} on {} to push: shows them, asks first", plural(git.ahead, "commit"), git.branch) });
@@ -340,7 +344,7 @@ impl Page {
             Mode::Normal => return self.handle_normal(key),
             Mode::Options(index) => {
                 let Some(area) = self.current() else { return Effect::Handled };
-                let choices = Self::choices(&area);
+                let choices = self.choices(&area);
                 match key.code {
                     KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::Options(index.saturating_sub(1)),
                     KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::Options((index + 1).min(choices.len().saturating_sub(1))),
@@ -380,7 +384,7 @@ impl Page {
                         self.mode = Mode::Working { label: format!("{title}…"), result };
                     }
                     Go::Task { repo, name, prompt } => {
-                        let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, dev: true };
+                        let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None };
                         let result = board::outside(terminal, || tasks::start(&repo, &name, &options));
                         self.show(result);
                     }
@@ -424,7 +428,7 @@ impl Page {
 
     fn handle_normal(&mut self, key: KeyEvent) -> Effect {
         let Some(area) = self.current() else { return Effect::Unhandled };
-        let choices = Self::choices(&area);
+        let choices = self.choices(&area);
         match key.code {
             KeyCode::Up | KeyCode::Char('k') if self.focus == Focus::Detail => self.action = self.action.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') if self.focus == Focus::Detail => self.action = (self.action + 1).min(choices.len().saturating_sub(1)),
@@ -491,11 +495,13 @@ impl Page {
     }
 
     fn refresh_backlog(&mut self, area: &Area) {
-        let prompt = format!("{} Then check that the vault backlog for [[{}]] is current: close what is done, park what is stale.", board::REFRESH_BACKLOG, area.stem);
-        let result = match lead_pane() {
-            Some(pane) => herdr::prompt_agent(&pane, &prompt).map(|_| format!("Asked the lead to refresh the backlog and [[{}]]'s notes; this page catches up once the vault index does.", area.stem)),
+        let vault = self.sources.contains(&Source::Vault);
+        let result = backlog::refresh_prompt(&self.sources).and_then(|prompt| match lead_pane() {
+            Some(pane) if vault => herdr::prompt_agent(&pane, &format!("{prompt} Then check that the vault backlog for [[{}]] is current: close what is done, park what is stale.", area.stem))
+                .map(|_| format!("Asked the lead to refresh the backlog and [[{}]]'s notes; this page catches up once the vault index does.", area.stem)),
+            Some(pane) => herdr::prompt_agent(&pane, &prompt).map(|_| "Asked the lead to refresh the backlog; the board's Backlog tab updates when it is saved.".to_string()),
             None => Err("No lead is running; prefix+space starts it.".to_string()),
-        };
+        });
         self.show(result);
     }
 
@@ -653,14 +659,14 @@ impl Page {
                 (Some(Hit::Action(index)), Mode::Normal) => {
                     self.focus = Focus::Detail;
                     self.action = index;
-                    match self.current().and_then(|area| Self::choices(&area).get(index).map(|choice| choice.key)) {
+                    match self.current().and_then(|area| self.choices(&area).get(index).map(|choice| choice.key)) {
                         Some(key) => self.act(key),
                         None => Effect::Handled,
                     }
                 }
                 (Some(Hit::Choice(index)), Mode::Options(_)) => {
                     self.mode = Mode::Normal;
-                    match self.current().and_then(|area| Self::choices(&area).get(index).map(|choice| choice.key)) {
+                    match self.current().and_then(|area| self.choices(&area).get(index).map(|choice| choice.key)) {
                         Some(key) => self.act(key),
                         None => Effect::Handled,
                     }
@@ -761,7 +767,7 @@ impl Page {
         let focused = self.focus == Focus::Detail;
         lines.extend(column_title("ACTIONS", "⏎ or the key".to_string(), focused, width));
         let (mut selected_line, mut rows) = (0, Vec::new());
-        for (index, choice) in Self::choices(area).iter().enumerate() {
+        for (index, choice) in self.choices(area).iter().enumerate() {
             let active = focused && index == self.action;
             if active {
                 selected_line = lines.len();
@@ -818,7 +824,7 @@ impl Page {
             Mode::Normal => return,
             Mode::Options(index) => {
                 let Some(area) = self.current() else { return };
-                let choices = Self::choices(&area);
+                let choices = self.choices(&area);
                 let count = choices.len();
                 let window = modal(frame, area.stem.clone(), options_lines(choices, *index, 56), 62);
                 for choice in 0..count {

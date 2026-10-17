@@ -81,9 +81,18 @@ pub fn name_of(path: &Path) -> String {
     path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default()
 }
 
-// devbox derives ports and hostnames from the wt<N>.<app> directory name.
 pub fn slot_path(repo: &Path, number: usize) -> PathBuf {
     repo.with_file_name(format!("wt{number}.{}", name_of(repo)))
+}
+
+pub fn setup_note(worktree: &Path) -> Result<PathBuf> {
+    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kelpie-setup.md"))
+}
+
+pub fn setup_line(worktree: &Path) -> Option<String> {
+    let note = std::fs::read_to_string(setup_note(worktree).ok()?).ok()?;
+    let line = note.lines().next()?.trim_start_matches('#').trim();
+    (!line.is_empty()).then(|| line.to_string())
 }
 
 pub fn slot_number(repo: &Path, path: &Path) -> Option<usize> {

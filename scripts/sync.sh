@@ -1,7 +1,8 @@
 #!/bin/sh
 # Run by a herdr tab_bar_right command entry every few seconds; prints nothing.
 
-herdr="${HERDR_BIN_PATH:-$(command -v herdr || echo /devbox/tmp/devbox/binwrappers/herdr)}"
+herdr="${HERDR_BIN_PATH:-$(command -v herdr)}"
+[ -n "$herdr" ] || exit 0
 state="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-sync"
 mkdir -p "$state"
 
@@ -26,24 +27,19 @@ programs=$(echo "$panes" | jq -r '.result.panes[] | select(.agent != "claude") |
       | $i.foreground_processes[0] as $f
       | select($f != null)
       | if $f.pid == $i.shell_pid then [$f.name, "idle"]
-        elif $f.name == "dev" then [($f.argv[2] // "dev"), "busy"]
         elif ($f.argv | join(" ") | test("rails (c|console)")) then ["console", "busy"]
         else [$f.name, "busy"] end
       | [$pane, .[0], .[1]] | @tsv'
   done | jq -Rn '[inputs | split("\t") | { (.[0]): { name: .[1], idle: (.[2] == "idle") } }] | add // {}')
 
-jq -rn --argjson panes "$panes" --argjson programs "$programs" '
-  $panes.result.panes | group_by(.workspace_id)[]
-  | [$programs[.[].pane_id].name?] as $running
-  | ([.[] | select($programs[.pane_id].name? == "web") | .cwd][0] // "-") as $web_cwd
-  | [.[0].workspace_id, any($running[]; . == "web"), any($running[]; . == "worker"), $web_cwd] | @tsv' |
-while IFS="$(printf '\t')" read -r ws web jobs web_cwd; do
+# The board's w key runs worktree.dev_server in a tab labelled server.
+jq -rn --argjson panes "$panes" --argjson tabs "$tabs" --argjson programs "$programs" '
+  [$tabs.result.tabs[] | select(.label == "server") | .tab_id] as $server
+  | $panes.result.panes | group_by(.workspace_id)[]
+  | [.[0].workspace_id, any(.[]; .tab_id as $tab | any($server[]; . == $tab) and ($programs[.pane_id] | . != null and (.idle | not)))] | @tsv' |
+while IFS="$(printf '\t')" read -r ws server; do
   set -- --source sync --ttl-ms 15000
-  if [ "$web" = true ]; then set -- "$@" --token web=web; else set -- "$@" --clear-token web; fi
-  # devbox serves each checkout at <directory name>.devbox.
-  checkout=$(git -C "$web_cwd" rev-parse --show-toplevel 2>/dev/null)
-  if [ "$web" = true ] && [ -n "$checkout" ]; then set -- "$@" --token "url=$(basename "$checkout").devbox"; else set -- "$@" --clear-token url; fi
-  if [ "$jobs" = true ]; then set -- "$@" --token jobs=jobs; else set -- "$@" --clear-token jobs; fi
+  if [ "$server" = true ]; then set -- "$@" --token server=server; else set -- "$@" --clear-token server; fi
   "$herdr" workspace report-metadata "$ws" "$@" >/dev/null 2>&1
 done
 
@@ -97,9 +93,7 @@ jq -rn --argjson panes "$panes" --argjson tabs "$tabs" --argjson programs "$prog
    | {
        tab: $tab.tab_id, ws: $tab.workspace_id, label: $tab.label,
        words: ([$p[] | select(.agent == "claude") | .terminal_title_stripped][0] | if . then ascii_downcase | split(" ") | map(select(. != "")) else null end),
-       name: (if any($running[]; . == "web") then "web"
-              elif any($running[]; . == "worker") then "worker"
-              else ($running[0] // ($tab.number | tostring)) end)
+       name: ($running[0] // ($tab.number | tostring))
      }]
   | group_by(.ws)[]
   | . as $space

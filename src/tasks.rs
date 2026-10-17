@@ -3,14 +3,15 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::config;
 use crate::herdr;
 use crate::messages;
 use crate::peers;
 use crate::repo::{
     ahead_behind, branch_exists, changed_count, default_branch, git, is_clean, main_checkout, name_of, push_as_user,
-    slot_number, slot_path, worktrees,
+    setup_line, slot_number, slot_path, worktrees,
 };
-use crate::sh::{Result, run_visibly};
+use crate::sh::Result;
 
 // Git is the only state: a slot on a task branch is busy; a clean detached or wt<N> slot is free.
 pub struct Slot {
@@ -79,13 +80,7 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
         number += 1;
     }
     let path = slot_path(repo, number);
-    let script = repo.join("script/set_up_worktree");
-    if script.exists() {
-        eprintln!("Creating {} with script/set_up_worktree (a couple of minutes the first time)…", name_of(&path));
-        run_visibly(&script.to_string_lossy(), &[&format!("wt{number}")], Some(repo))?;
-    } else {
-        git(repo, &["worktree", "add", "--detach", &path.to_string_lossy(), upstream])?;
-    }
+    git(repo, &["worktree", "add", "--detach", &path.to_string_lossy(), upstream])?;
     Ok(Slot { number, path, task: None, free: true })
 }
 
@@ -112,7 +107,6 @@ pub struct Start<'a> {
     pub focus: bool,
     pub from: Option<&'a str>,
     pub mode: Option<&'a str>,
-    pub dev: bool,
 }
 
 // A new pane's shell takes a moment to reach its prompt; until then herdr calls the pane busy.
@@ -130,9 +124,10 @@ fn start_claude(name: &str, pane: &str, args: &[&str]) -> Result<()> {
 }
 
 pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
-    let Start { prompt, focus, from, mode, dev } = *options;
+    let Start { prompt, focus, from, mode } = *options;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
+    let setup_skill = config::resolve(Some(&repo))?.settings.setup_skill.value;
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
         let space = open_space(&repo, &existing, &task, focus)?;
         if focus {
@@ -143,10 +138,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
     let base = from.unwrap_or(&upstream);
-    let slot = match slots(&repo)?.into_iter().find(|slot| slot.free) {
-        Some(slot) => slot,
-        None => create_slot(&repo, &upstream)?,
-    };
+    let slot = claim_slot(&repo, &upstream)?;
     if branch_exists(&repo, &task) {
         git(&slot.path, &["switch", "--quiet", &task])?;
     } else {
@@ -158,15 +150,12 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
         Some(pane) => pane,
         None => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
     };
-    if dev && slot.path.join("dev.yml").exists() {
-        herdr::run_in_pane(&herdr::create_tab(&space.workspace_id, &slot.path, "dev")?, "dev")?;
-    }
     // herdr's agent names are global, so a task's half in another repo is named with its repo.
     let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task.as_str());
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(&repo))?) } else { task.clone() }.chars().take(32).collect();
     let mut agent_args: Vec<&str> = mode.map(|mode| vec!["--permission-mode", mode]).unwrap_or_default();
     let settings = settings(&peers::kelpie_command()?);
-    let role = peers::role_file(&task, &name_of(&repo))?.to_string_lossy().to_string();
+    let role = peers::role_file(&task, &peers::Place { repo: &repo, worktree: &slot.path, setup_skill: &setup_skill })?.to_string_lossy().to_string();
     agent_args.extend(["--settings", &settings, "--append-system-prompt-file", &role]);
     start_claude(&agent_name, &claude_pane, &agent_args)?;
     // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
@@ -192,6 +181,7 @@ pub fn list(cwd: &Path) -> Result<Vec<Value>> {
             "task": slot.task,
             "free": slot.free,
             "changed": changed_count(&slot.path)?,
+            "setup": setup_line(&slot.path),
             "ahead": ahead,
             "behind": behind,
         }))
@@ -428,6 +418,7 @@ fn claim_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, focus: bool) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
+    let setup_skill = config::resolve(Some(&repo))?.settings.setup_skill.value;
     if slots(&repo)?.iter().any(|slot| slot.task.as_deref() == Some(task.as_str())) {
         return Err(format!("{task} already has a worktree; use kelpie start {task} to go there"));
     }
@@ -465,12 +456,12 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
         git(&slot.path, &["stash", "pop", "--quiet", &format!("stash@{{{index}}}")]).map_err(stashed)?;
     }
 
-    // No `dev` here: on a branch behind the default one it dumps the shared database's newer schema into the worktree.
     let space = open_space(&repo, &slot, &task, focus)?;
     if let Some(pane) = pane {
         herdr::move_pane_to_new_tab(pane, &space.workspace_id, "claude", focus)?;
     }
-    Ok(format!("Moved {task} to {}. {}", slot.path.display(), fast_forward_main(&repo, &upstream)?))
+    let main = fast_forward_main(&repo, &upstream)?;
+    Ok(format!("Moved {task} to {}. {main}\nSet it up: run the skill {setup_skill} in {}.", slot.path.display(), slot.path.display()))
 }
 
 #[cfg(test)]
@@ -488,6 +479,22 @@ mod tests {
             git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", message]).unwrap();
         }
         dir
+    }
+
+    #[test]
+    fn a_slot_is_a_detached_worktree_with_its_setup_note_in_its_git_dir() {
+        let dir = repo();
+        let slot = create_slot(&dir, "HEAD").unwrap();
+        assert!(slot.path.join("a").exists());
+        assert_eq!(slot.path, slot_path(&dir, 1));
+        assert_eq!(setup_line(&slot.path), None);
+        let note = crate::repo::setup_note(&slot.path).unwrap();
+        assert!(note.parent().unwrap().canonicalize().unwrap().starts_with(dir.join(".git/worktrees").canonicalize().unwrap()), "{}", note.display());
+        std::fs::write(&note, "# wt1.app set up 2026-10-17 by task billing\n- gems: bundle install\n").unwrap();
+        assert_eq!(setup_line(&slot.path).as_deref(), Some("wt1.app set up 2026-10-17 by task billing"));
+        assert!(is_clean(&slot.path).unwrap());
+        git(&dir, &["worktree", "remove", "--force", &slot.path.to_string_lossy()]).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

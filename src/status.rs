@@ -51,8 +51,7 @@ pub struct Git {
 #[derive(Clone)]
 pub struct Item {
     pub review: Option<(usize, usize)>,
-    pub web: bool,
-    pub jobs: bool,
+    pub server: bool,
     pub name: String,
     pub place: String,
     pub repo: Option<PathBuf>,
@@ -148,8 +147,7 @@ impl Item {
             "report": self.report.as_ref().and_then(|message| Some(json!({
                 "state": message.report.as_ref()?.state, "next": message.report.as_ref()?.next, "summary": message.text, "age": messages::age(message.at),
             }))),
-            "web": self.web,
-            "jobs": self.jobs,
+            "server": self.server,
             "git": self.git.as_ref().map(|git| json!({
                 "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed,
             })),
@@ -254,8 +252,7 @@ pub fn gather() -> Result<Vec<Item>> {
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             items.push(Item {
                 review: review_progress(&slot.path, &upstream),
-                web: tokens["web"].is_string(),
-                jobs: tokens["jobs"].is_string(),
+                server: tokens["server"].is_string(),
                 place: name_of(repo),
                 repo: Some(repo.clone()),
                 path: Some(slot.path.clone()),
@@ -276,8 +273,7 @@ pub fn gather() -> Result<Vec<Item>> {
         let agent = agent_from(agent);
         items.push(Item {
             review: None,
-            web: false,
-            jobs: false,
+            server: false,
             name: agent.title.clone(),
             place: label,
             repo: None,
@@ -300,11 +296,11 @@ mod tests {
 
     fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         Item {
-            review: None, web: false, jobs: false, name: "posthog".to_string(), place: "relay".to_string(), repo: None, path: None, workspace: None,
+            review: None, server: false, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0 }),
             report: report.map(|state| Message {
-                id: "1".to_string(), at: 0, from: "posthog@relay".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
+                id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string() }),
             }),
         }

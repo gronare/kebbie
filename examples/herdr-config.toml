@@ -13,24 +13,23 @@ pane_scrollbars = false                 # the scrollbar column made frames uneve
 show_agent_labels_on_pane_borders = false
 status_indicators = "symbols"           # blocked / working / done distinguishable by shape, not just color
 agent_panel_sort = "priority"           # agents waiting on you float to the top
-window_title = "{workspace} · {tab}"    # hostname is always the devbox; drop it
+window_title = "{workspace} · {tab}"    # the hostname rarely helps; drop it
 tab_bar_right = [
   { type = "zoom" },
   { type = "command", command = "~/.local/share/kelpie/current/scripts/sync.sh", interval_seconds = 3, timeout_seconds = 3 }, # kelpie's sidebar sync; prints nothing
   { type = "datetime", format = "%H:%M" },
 ]
 
-# $web / $jobs / $url are reported by sync.sh while `dev web` / `dev worker` runs in the Space.
+# $server is reported by sync.sh while the dev server the board's w key started runs in the Space.
 # The default branch is the norm, so it fades; any other branch stands out.
 [ui.sidebar.spaces]
 row_gap = 1
 rows = [
-  ["state_icon", "workspace", { token = "$web", fg = "#a6e3a1" }, { token = "$jobs", fg = "#89b4fa" }],
+  ["state_icon", "workspace", { token = "$server", fg = "#a6e3a1" }],
   [{ token = "branch", fg = "#fab387", bold = true, rules = [
     { equals = "master", fg = "#6c7086", bold = false },
     { equals = "main", fg = "#6c7086", bold = false },
   ] }, "git_status"],
-  [{ token = "$url", fg = "#94e2d5" }],
 ]
 
 [ui.sidebar.agents]

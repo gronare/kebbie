@@ -21,12 +21,12 @@ claude plugin install kelpie@kelpie
 
 | Command | What it does |
 | --- | --- |
-| `kelpie start <name> [prompt]` | Takes a free worktree from the pool (`wt<N>.<repo>` next to the main checkout), or creates one with the repo's `script/set_up_worktree` when it has one, else `git worktree add`. Puts it on a new branch `<name>` from the remote's default branch, opens it as a Space labelled `<name>`, runs `dev` in a second tab when the repo has a `dev.yml` (unless `--no-dev`), and starts Claude with the prompt and [`roles/task.md`](roles/task.md): which task and repo it is, its peers, and how to message them. `--repo <name>` starts in that repo instead of the current one (repeat it for one task across repos, e.g. `--repo auctionet --repo relay`: a half in each, the same branch name, each Claude told of the other): a checkout named so under `~/projects`, `~/personal`, `~/src` or `~/code` (or one level down; `KELPIE_REPO_DIRS` overrides the list), else a clone from the first owner among your other checkouts' remotes that has it. `--from <ref>` branches off that ref instead, `--mode <mode>` is Claude's permission mode (the task's Claude is never allowed `git push`; pushing stays yours), `--no-focus` keeps you where you are. A task that is already running is just shown. |
+| `kelpie start <name> [prompt]` | Takes a free worktree from the pool (`wt<N>.<repo>` next to the main checkout), or creates a bare one with `git worktree add --detach`. Puts it on a new branch `<name>` from the remote's default branch, opens it as a Space labelled `<name>`, and starts Claude with the prompt and [`roles/task.md`](roles/task.md): which task and repo it is, its worktree and the setup skill to run before anything else (see [Worktree setup](#worktree-setup)), its peers, and how to message them. `--repo <name>` starts in that repo instead of the current one (repeat it for one task across repos, e.g. `--repo api --repo web`: a half in each, the same branch name, each Claude told of the other): a checkout named so under `~/projects`, `~/personal`, `~/src` or `~/code` (or one level down; `KELPIE_REPO_DIRS` overrides the list), else a clone from the first owner among your other checkouts' remotes that has it. `--from <ref>` branches off that ref instead, `--mode <mode>` is Claude's permission mode (the task's Claude is never allowed `git push`; pushing stays yours), `--no-focus` keeps you where you are. A task that is already running is just shown. |
 | `kelpie peers` | Who you are (by the worktree you are in) and the other task sessions with what each is doing, the same task's halves in other repos first. |
 | `kelpie tell <to> <text>` | Run by a session to message another: a task (every repo it spans), `task@repo`, or `lead`. It arrives in that Claude's chat as `[from <task>@<repo>] <text>`. A session waiting for an answer, or with no Claude running, has the message held and delivered once it is free; nothing is ever typed into a question. Every message goes to `~/.local/state/kelpie/messages.jsonl`. The task role tells Claude that a peer's message is information, never your instruction, and pushing stays yours. |
 | `kelpie report --state <state> --next "<step>" "<summary>"` | Run by a task's Claude at the end of every turn, as [`roles/task.md`](roles/task.md) tells it: where the task stands (`needs-you`, `ready`, `working`, `blocked`), what you should do next (`nothing` when it carries on alone) and a one-line summary. It goes to the lead through the message log (not typed into its chat), the board shows it on the task's row, and herdr's sidebar gets the next step as `$next` and the state in place of idle or done. A task that stops without one is sent back once by a Stop hook kelpie gives it (`kelpie hook`). |
 | `kelpie messages [--print]` | The messages between sessions, live, newest at the bottom (`↑` `↓` scroll); it also delivers held messages as their sessions free up. `--print` prints the last 30. Reports are left out; the board shows them. The lead is copied: each of your prompts to it carries what sessions told each other and their latest reports since it last looked (`--unread`, run by a prompt hook kelpie gives the lead), so the traffic stays out of the chat. |
-| `kelpie list [--json]` | The pool's worktrees: their task, or `free`, with uncommitted changes and commits ahead and behind. |
+| `kelpie list [--json]` | The pool's worktrees: their task, or `free`, with uncommitted changes, commits ahead and behind, and the first line of the worktree's setup note (`not set up` without one). |
 | `kelpie land [name]` | Rebases the task onto the default branch, folding `fixup!` and `squash!` commits into the commits they fix, and checks it (no uncommitted changes, no merge commits, no `Co-Authored-By` trailers), then prints the push command. It never pushes. On a conflict it aborts its rebase, leaving the worktree as it was, and hands the rebase to the task's Claude, which resolves it and reports back. |
 | Push and close (board) | Lists the commits that will land, with the selected one's full message. `e` edits that message in the board; `s` squashes them into one, with a message Claude drafts in the background from the commits and the diff, ready to edit; ctrl-s saves, esc goes back, ctrl-o opens the text in your editor; `y` pushes. Only messages and the squash change; the code stays identical. |
 | `kelpie tidy <name> [note]` | Asks the task's Claude to reshape its commits for review (one per logical change, functional change before refactors, fixups squashed in, messages that say why), keeping the final tree identical. The note says how, e.g. "squash into one". |
@@ -34,13 +34,13 @@ claude plugin install kelpie@kelpie
 | `kelpie done [name]` | Once the commits are on the default branch: closes the Space, deletes the branch, frees the worktree, and fast-forwards the main checkout when it is clean. |
 | `kelpie drop [name] [--force]` | Throws the task away; refuses while it has uncommitted changes or unpushed commits unless `--force`. |
 
-Git is the only state: a worktree on a task branch is busy, a clean one that is detached or on its own `wt<N>` branch is free. Worktrees are kept and reused, so only the first task in a new worktree pays for setup.
+Git is the only state: a worktree on a task branch is busy, a clean one that is detached or on its own `wt<N>` branch is free. Worktrees are kept and reused; the setup note each one keeps makes setting it up again for the next task a quick check.
 
 ### The lead and the board
 
-`prefix+space` takes you to the **lead** Space, and back to where you were on the next press. The first time, it creates it: the **board** on the left, the **messages** between sessions under it (`kelpie messages`), and on the right a Claude started with [`roles/lead.md`](roles/lead.md), the session you talk to most. It is the master of all work: it holds the whole picture, finds work in Linear and the vault, writes informed task prompts, starts and checks tasks, reviews what they produce, relays between them, does small cross-cutting fixes itself and brings you recommendations; feature work happens in each task's own Space, and nobody pushes but you.
+`prefix+space` takes you to the **lead** Space, and back to where you were on the next press. The first time, it creates it: the **board** on the left, the **messages** between sessions under it (`kelpie messages`), and on the right a Claude started with [`roles/lead.md`](roles/lead.md), the session you talk to most. It is the master of all work: it holds the whole picture, finds work in Linear and the vault, writes informed task prompts, starts and checks tasks, reviews what they produce, passes on what one task needs to know from another, does small cross-cutting fixes itself and brings you recommendations; feature work happens in each task's own Space, and nobody pushes but you.
 
-The board (`kelpie board`, also over any Space with `prefix+t`) shows only what herdr's sidebar doesn't. A status line counts tasks that need you, are working or are ready to push. **Work** and **Backlog** sit side by side (stacked in a narrow pane; `←` `→` switch). Work lists your tasks grouped by what they need (a task's halves in other repos next to each other), with commits, changed files and how far behind master, and under each a `you:` line with the next step from the task's last report. Between turns the report decides the group, and Needs you puts open questions first, then what tasks ask of you, then what is ready. The selected one opens in place with review progress and its agent's open question, its report, or, until it first reports, Claude's recap, and warns about files changed in a main checkout outside any task. Backlog lists the vault backlog and Linear issues by priority. `⏎` brings up the options for the selected row (go to its Space, message its Claude, open the review, tidy commits, push and close, done, drop; or start a backlog item as a task), each with a letter that also works directly. The lead keeps the backlog with `kelpie backlog save`; `R` asks it to refresh. `?` lists every key. The mouse works too: click a row to select it and again for its options, click an option or a commit, scroll to move, click outside a window to close it.
+The board (`kelpie board`, also over any Space with `prefix+t`) shows only what herdr's sidebar doesn't. A status line counts tasks that need you, are working or are ready to push. **Work** and **Backlog** sit side by side (stacked in a narrow pane; `←` `→` switch). Work lists your tasks grouped by what they need (a task's halves in other repos next to each other), with commits, changed files and how far behind master, and under each a `you:` line with the next step from the task's last report. Between turns the report decides the group, and Needs you puts open questions first, then what tasks ask of you, then what is ready. The selected one opens in place with review progress and its agent's open question, its report, or, until it first reports, Claude's recap, and warns about files changed in a main checkout outside any task. Backlog lists the vault backlog and Linear issues by priority. `⏎` brings up the options for the selected row (go to its Space, message its Claude, open the review, start or stop its dev server when the repo sets `worktree.dev_server`, tidy commits, push and close, done, drop; or start a backlog item as a task), each with a letter that also works directly. The lead keeps the backlog with `kelpie backlog save`; `R` asks it to refresh. `?` lists every key. The mouse works too: click a row to select it and again for its options, click an option or a commit, scroll to move, click outside a window to close it.
 
 `kelpie status [--json]` gives the same picture on the command line, for the lead and for scripts.
 
@@ -103,7 +103,7 @@ description = "kelpie board"
 
 ### Sidebar sync (optional)
 
-`scripts/sync.sh` fills the sidebar with what each Space and pane is doing: `web` / `jobs` tags while `dev web` / `dev worker` run, Claude's task title on its pane border, model and context in use on its Agents row, and tab names. It also fetches each repo every 5 minutes, so behind-counts stay current. Run it from herdr's tab bar, with an example sidebar layout in [`examples/herdr-config.toml`](examples/herdr-config.toml):
+`scripts/sync.sh` fills the sidebar with what each Space and pane is doing: a `server` tag while the dev server the board's `w` started runs in the Space, Claude's task title on its pane border, model and context in use on its Agents row, and tab names. It also fetches each repo every 5 minutes, so behind-counts stay current. Run it from herdr's tab bar, with an example sidebar layout in [`examples/herdr-config.toml`](examples/herdr-config.toml):
 
 ```toml
 [ui]
@@ -111,6 +111,66 @@ tab_bar_right = [
   { type = "command", command = "~/.local/share/kelpie/current/scripts/sync.sh", interval_seconds = 3, timeout_seconds = 3 },
 ]
 ```
+
+## Configuration
+
+Three layers, read key by key; the first that sets a key wins:
+
+1. The repo's own `.kelpie.toml`, read from the main checkout and never from a worktree, so it may be gitignored.
+2. The machine config, `~/.config/kelpie/config.toml` (`$XDG_CONFIG_HOME/kelpie/config.toml`; `KELPIE_CONFIG` names another file).
+3. kelpie's built-in defaults.
+
+An unknown key in either file is an error that names the file and the key.
+
+| Key | Where | Default | What it does |
+| --- | --- | --- | --- |
+| `[board.backlog] sources` | machine config | `[]` | Where the lead finds work for the board's Backlog tab: `"vault"`, `"linear"` or both. |
+| `[worktree] setup_skill` | both | `"kelpie:set-up-worktree"` | The skill a task's Claude runs first to make its worktree runnable: `plugin:skill` for a plugin's skill, a bare name for one in `~/.claude/skills` or the repo's `.claude/skills`. |
+| `[worktree] dev_server` | `.kelpie.toml` | none | The shell command the board's `w` runs in a `server` tab of the task's Space, and `w` again stops with ctrl-c. Without it the board has no `w`. |
+
+`dev_server` is a repo key; the machine config accepts it too, for every repo that sets none.
+
+A machine config:
+
+```toml
+[board.backlog]
+sources = ["vault", "linear"]
+
+[worktree]
+setup_skill = "my-tools:set-up-worktree"
+```
+
+A repo's `.kelpie.toml`, next to its [actions](#areas):
+
+```toml
+[worktree]
+dev_server = "bin/dev"
+```
+
+## Worktree setup
+
+kelpie creates a bare worktree; the task's Claude makes it runnable as its first step, with the skill `worktree.setup_skill` names. Its role text gives it the worktree's path, its slot, the main checkout and that skill.
+
+`/kelpie:set-up-worktree` is the default. It runs the repo's `bin/setup-worktree` when there is one, else follows a worktree section in AGENTS.md, CLAUDE.md, README.md or CONTRIBUTING.md, else works the setup out from `bin/setup`, the lockfiles and CI: dependencies, the gitignored keys and `.env` files copied from the main checkout, the worktree's own databases, a free port, then one fast check. It asks before anything that deleting the worktree does not undo, and never writes to the main checkout, except to add `[worktree] dev_server` to its `.kelpie.toml` when you say yes. What it did goes in a note at `$(git rev-parse --git-dir)/kelpie-setup.md`, outside `git status`, so the next task in that worktree only checks what has drifted. `kelpie move` and `/kelpie:move-to-worktree` run the same skill.
+
+`bin/setup-worktree` is the repo's own answer: executable, no arguments, idempotent, run from inside a worktree, with no knowledge of kelpie, so a colleague who runs `git worktree add` by hand gets the same result:
+
+```sh
+#!/bin/sh
+set -eu
+main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+for f in config/master.key .env; do [ -e "$f" ] || cp "$main/$f" "$f"; done
+bundle check >/dev/null || bundle install
+bin/rails db:prepare
+```
+
+`/kelpie:make-worktree-safe` audits a repo for what breaks across worktrees (fixed ports, shared databases and services, gitignored inputs, absolute paths, shared caches) and, when you say yes, writes `bin/setup-worktree`, the port fix and a `## Working in a worktree` section in a worktree for you to review. You run it; Claude never starts it on its own.
+
+## Check the install
+
+`kelpie doctor` checks that this machine has what kelpie needs: the tools and their versions, the herdr and Claude Code plugins, the `current` link, the state directories, both config files, and that the plugin of the setup skill in effect is installed and enabled in Claude Code. Each warning or failure comes with its fix for macOS and Linux.
+
+`kelpie config [--repo <path>]` prints the three layers it found, then every key with its value in effect, the layer it comes from (`.kelpie.toml`, `machine config` or `default`) and what it does. Inside a repo it reads that repo's `.kelpie.toml`; `--repo` names another.
 
 ## Review
 

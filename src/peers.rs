@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::herdr;
 use crate::lead::{install_root, state_dir};
-use crate::repo::{main_checkout, name_of};
+use crate::repo::{main_checkout, name_of, setup_note};
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 use crate::tasks::slots;
@@ -126,19 +126,41 @@ pub fn kelpie_command() -> Result<String> {
     Ok(if stable.canonicalize().ok() == Some(exe.clone()) { stable } else { exe }.to_string_lossy().to_string())
 }
 
+pub struct Place<'a> {
+    pub repo: &'a Path,
+    pub worktree: &'a Path,
+    pub setup_skill: &'a str,
+}
+
+pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
+    values.iter().fold(template.to_string(), |text, (name, value)| text.replace(&format!("{{{name}}}"), value))
+}
+
+pub fn worktree_values(place: &Place) -> Result<Vec<(&'static str, String)>> {
+    Ok(vec![
+        ("path", place.worktree.display().to_string()),
+        ("slot", name_of(place.worktree)),
+        ("main", place.repo.display().to_string()),
+        ("note", setup_note(place.worktree)?.display().to_string()),
+        ("setup_skill", place.setup_skill.to_string()),
+    ])
+}
+
 // roles/task.md filled in for this task, written to the state dir for --append-system-prompt-file.
-pub fn role_file(task: &str, repo: &str) -> Result<PathBuf> {
+pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     let template = fs::read_to_string(install_root()?.join("roles/task.md")).map_err(|error| format!("roles/task.md: {error}"))?;
-    let me = address(task, repo);
+    let repo = name_of(place.repo);
+    let me = address(task, &repo);
     let sessions = sessions()?;
     let listed = list(Some(&me), &sessions);
-    let peers = listed.split_once('\n').map(|(_, rest)| rest).unwrap_or_default();
-    let role = template.replace("{address}", &me).replace("{task}", task).replace("{repo}", repo)
-        .replace("{kelpie}", &kelpie_command()?).replace("{peers}", peers);
+    let peers = listed.split_once('\n').map(|(_, rest)| rest).unwrap_or_default().to_string();
+    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("kelpie", kelpie_command()?), ("peers", peers)];
+    values.extend(worktree_values(place)?);
+    let pairs: Vec<(&str, &str)> = values.iter().map(|(name, value)| (*name, value.as_str())).collect();
     let dir = state_dir()?.join("roles");
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     let file = dir.join(format!("{me}.md"));
-    fs::write(&file, role).map_err(|error| error.to_string())?;
+    fs::write(&file, fill(&template, &pairs)).map_err(|error| error.to_string())?;
     Ok(file)
 }
 
@@ -152,7 +174,7 @@ mod tests {
     }
 
     fn sessions() -> Vec<Session> {
-        vec![session("lead", Some("idle")), session("posthog@auctionet", Some("working")), session("posthog@relay", Some("blocked")), session("turnstile@auctionet", None)]
+        vec![session("lead", Some("idle")), session("billing@api", Some("working")), session("billing@web", Some("blocked")), session("search@api", None)]
     }
 
     fn addresses(found: Result<Vec<&Session>>) -> Vec<String> {
@@ -162,30 +184,49 @@ mod tests {
     #[test]
     fn a_task_name_reaches_its_other_halves() {
         let all = sessions();
-        assert_eq!(addresses(resolve("posthog", "posthog@auctionet", &all)), ["posthog@relay"]);
-        assert_eq!(addresses(resolve("posthog", "lead", &all)), ["posthog@auctionet", "posthog@relay"]);
+        assert_eq!(addresses(resolve("billing", "billing@api", &all)), ["billing@web"]);
+        assert_eq!(addresses(resolve("billing", "lead", &all)), ["billing@api", "billing@web"]);
     }
 
     #[test]
     fn an_address_or_the_lead_reaches_one_session() {
         let all = sessions();
-        assert_eq!(addresses(resolve("turnstile@auctionet", "posthog@relay", &all)), ["turnstile@auctionet"]);
-        assert_eq!(addresses(resolve("lead", "posthog@relay", &all)), ["lead"]);
+        assert_eq!(addresses(resolve("search@api", "billing@web", &all)), ["search@api"]);
+        assert_eq!(addresses(resolve("lead", "billing@web", &all)), ["lead"]);
     }
 
     #[test]
     fn nobody_tells_themselves_or_an_unknown_session() {
         let all = sessions();
-        assert!(resolve("turnstile", "turnstile@auctionet", &all).is_err());
+        assert!(resolve("search", "search@api", &all).is_err());
         assert!(resolve("lead", "lead", &all).is_err());
-        assert!(resolve("billing", "lead", &all).is_err());
+        assert!(resolve("payments", "lead", &all).is_err());
+    }
+
+    #[test]
+    fn the_setup_skill_reaches_the_role_from_each_layer() {
+        use crate::config::{Machine, Worktree, parse_machine, parse_repo, settings};
+        let template = include_str!("../roles/task.md");
+        let machine = parse_machine("[worktree]\nsetup_skill = \"my-tools:set-up-worktree\"\n", "config.toml").unwrap();
+        let own = parse_repo("[worktree]\nsetup_skill = \"app-tools:set-up-worktree\"\n", ".kelpie.toml").unwrap();
+        for (own, machine, skill) in [
+            (own.clone(), machine.clone(), "app-tools:set-up-worktree"),
+            (Worktree::default(), machine, "my-tools:set-up-worktree"),
+            (Worktree::default(), Machine::default(), "kelpie:set-up-worktree"),
+        ] {
+            let skill_value = settings(&own, &machine).setup_skill.value;
+            let role = fill(template, &[("path", "/src/wt2.app"), ("slot", "wt2.app"), ("main", "/src/app"), ("note", "/src/app/.git/worktrees/wt2.app/kelpie-setup.md"), ("setup_skill", &skill_value)]);
+            assert!(role.contains(&format!("run the skill `{skill}` and follow it")), "{role}");
+            assert!(role.contains("You are in `/src/wt2.app`, worktree wt2.app of `/src/app`"));
+            assert!(role.contains("a note in `/src/app/.git/worktrees/wt2.app/kelpie-setup.md`"));
+        }
     }
 
     #[test]
     fn the_list_puts_the_other_halves_first() {
-        let listed = list(Some("posthog@auctionet"), &sessions());
-        assert!(listed.starts_with("You are posthog@auctionet.\nSame task, other repos:\n  posthog@relay"), "{listed}");
-        assert!(listed.contains("Other tasks:\n  turnstile@auctionet"));
+        let listed = list(Some("billing@api"), &sessions());
+        assert!(listed.starts_with("You are billing@api.\nSame task, other repos:\n  billing@web"), "{listed}");
+        assert!(listed.contains("Other tasks:\n  search@api"));
         assert!(listed.lines().last().unwrap().starts_with("  lead"));
     }
 }

@@ -356,7 +356,7 @@ mod tests {
     use super::*;
 
     fn session(pane: Option<&str>, status: Option<&str>) -> Session {
-        Session { address: "posthog@relay".to_string(), task: Some("posthog".to_string()), pane: pane.map(str::to_string), status: status.map(str::to_string) }
+        Session { address: "billing@web".to_string(), task: Some("billing".to_string()), pane: pane.map(str::to_string), status: status.map(str::to_string) }
     }
 
     #[test]
@@ -371,11 +371,11 @@ mod tests {
     #[test]
     fn the_log_folds_into_messages_with_their_latest_state() {
         let log = [
-            r#"{"id":"1","at":10,"from":"posthog@auctionet","to":"posthog@relay","text":"person_id replaces user_id","state":"held"}"#,
-            r#"{"id":"2","at":11,"from":"lead","to":"turnstile@auctionet","text":"rebase on main","state":"delivered"}"#,
+            r#"{"id":"1","at":10,"from":"billing@api","to":"billing@web","text":"person_id replaces user_id","state":"held"}"#,
+            r#"{"id":"2","at":11,"from":"lead","to":"search@api","text":"rebase on main","state":"delivered"}"#,
             "not json",
             r#"{"id":"1","at":20,"state":"delivered"}"#,
-            r#"{"id":"3","at":30,"from":"posthog@relay","to":"posthog@auctionet","text":"done","state":"held"}"#,
+            r#"{"id":"3","at":30,"from":"billing@web","to":"billing@api","text":"done","state":"held"}"#,
         ].join("\n");
         let messages = fold(&log);
         assert_eq!(messages.len(), 3);
@@ -404,9 +404,9 @@ mod tests {
     #[test]
     fn a_report_folds_with_its_state_and_next_step() {
         let log = [
-            r#"{"id":"1","at":10,"from":"posthog@relay","to":"lead","text":"payload renamed","state":"logged","report":{"state":"working","next":"nothing"}}"#,
-            r#"{"id":"2","at":20,"from":"posthog@relay","to":"lead","text":"plan written","state":"logged","report":{"state":"needs-you","next":"approve the plan: keep the branch field?"}}"#,
-            r#"{"id":"3","at":30,"from":"turnstile@auctionet","to":"lead","text":"rebase on main","state":"delivered"}"#,
+            r#"{"id":"1","at":10,"from":"billing@web","to":"lead","text":"payload renamed","state":"logged","report":{"state":"working","next":"nothing"}}"#,
+            r#"{"id":"2","at":20,"from":"billing@web","to":"lead","text":"plan written","state":"logged","report":{"state":"needs-you","next":"approve the plan: keep the branch field?"}}"#,
+            r#"{"id":"3","at":30,"from":"search@api","to":"lead","text":"rebase on main","state":"delivered"}"#,
         ].join("\n");
         let messages = fold(&log);
         assert_eq!(messages[1].report, Some(Report { state: "needs-you".to_string(), next: "approve the plan: keep the branch field?".to_string() }));
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(messages[2].report, None);
         let latest = latest_reports(&messages);
         assert_eq!(latest.len(), 1);
-        assert_eq!(latest["posthog@relay"].text, "plan written");
+        assert_eq!(latest["billing@web"].text, "plan written");
         assert_eq!(between_sessions(messages).len(), 1);
     }
 

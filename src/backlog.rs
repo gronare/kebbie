@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
+use crate::config::{self, Source};
 use crate::sh::Result;
 
 #[derive(Clone)]
@@ -91,6 +92,86 @@ pub fn save() -> Result<String> {
     Ok(format!("Saved {count} backlog entries to {}.", path.display()))
 }
 
+fn joined(sources: &[Source], part: fn(Source) -> &'static str, word: &str) -> String {
+    sources.iter().map(|source| part(*source)).collect::<Vec<_>>().join(word)
+}
+
+fn wanted(source: Source) -> &'static str {
+    match source {
+        Source::Vault => "the vault backlog",
+        Source::Linear => "my open Linear issues",
+    }
+}
+
+fn reference(source: Source) -> &'static str {
+    match source {
+        Source::Vault => "the vault path",
+        Source::Linear => "the Linear id",
+    }
+}
+
+pub fn from(sources: &[Source]) -> String {
+    joined(sources, |source| if source == Source::Vault { "the vault" } else { "Linear" }, " and ")
+}
+
+pub fn label(sources: &[Source]) -> String {
+    if sources.is_empty() { "no source".to_string() } else { joined(sources, Source::title, " + ") }
+}
+
+pub fn not_configured() -> String {
+    format!("No backlog source is configured; set [board.backlog] sources = [\"vault\", \"linear\"] (either or both) in {}.", config::path().display())
+}
+
+pub fn refresh_prompt(sources: &[Source]) -> Result<String> {
+    if sources.is_empty() {
+        return Err(not_configured());
+    }
+    Ok(format!(
+        "Refresh the kelpie backlog: take {} and pipe them as one JSON array to `$HOME/.local/share/kelpie/current/target/release/kelpie backlog save`. \
+         Fields per entry: source ({}), title, priority (urgent, high, medium, low or none), area (the folder name of the repo the work happens in), \
+         ref ({}), summary (one line), age (e.g. 3 d). Reply in one line when saved.",
+        joined(sources, wanted, " and "), joined(sources, Source::key, " or "), joined(sources, reference, " or "),
+    ))
+}
+
+pub fn task_prompt(entry: &Entry, sources: &[Source]) -> String {
+    match entry.source.as_str() {
+        "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then plan with me before changing code.", entry.reference, entry.title),
+        "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first, then plan with me before changing code.", entry.reference, entry.title),
+        _ => format!("Work on: {}. {} Plan with me before changing code.", entry.title, entry.summary),
+    }
+}
+
+fn role_wanted(source: Source) -> &'static str {
+    match source {
+        Source::Vault => "the vault backlog (the vault's backlog tool)",
+        Source::Linear => "the user's open Linear issues (assigned to them, not done; Linear's MCP)",
+    }
+}
+
+fn role_finding(source: Source) -> &'static str {
+    match source {
+        Source::Vault => "the vault backlog by priority",
+        Source::Linear => "Linear (assigned to the user, current cycle)",
+    }
+}
+
+// Filled into roles/lead.md: {finding} and {backlog}.
+pub fn role_texts(sources: &[Source]) -> (String, String) {
+    if sources.is_empty() {
+        let backlog = format!("No backlog source is configured (`[board.backlog] sources` in {}), so the Backlog tab stays empty and there is nothing to refresh.", config::path().display());
+        return ("ask the user what to work on".to_string(), backlog);
+    }
+    let backlog = format!(
+        "The board's Backlog tab shows what you save with `kelpie backlog save`. When the user asks you to refresh it, or when it is more than a day old at a briefing: \
+         take {} and pipe them as one JSON array to `kelpie backlog save`. Each entry: `source` ({}), `title`, `priority` (`urgent`, `high`, `medium`, `low` or `none`), \
+         `area` (the folder name of the repo the work happens in; not the vault area when the two differ, since starting the task looks the repo up by this name), \
+         `ref` ({}), `summary` (one line) and `age` (e.g. `3 d`, `1 mo`).",
+        joined(sources, role_wanted, " and "), joined(sources, |source| if source == Source::Vault { "`vault`" } else { "`linear`" }, " or "), joined(sources, reference, " or "),
+    );
+    (joined(sources, role_finding, " and "), backlog)
+}
+
 pub fn show() -> String {
     let backlog = load();
     if backlog.entries.is_empty() {
@@ -101,4 +182,46 @@ pub fn show() -> String {
         lines.push(format!("  [{}] {}  ({} · {})", entry.priority, entry.title, entry.source, entry.area));
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(source: &str) -> Entry {
+        Entry { source: source.to_string(), title: "Fix it".to_string(), priority: "high".to_string(), area: "app".to_string(), reference: "ABC-1".to_string(), summary: "It broke.".to_string(), age: "3 d".to_string() }
+    }
+
+    #[test]
+    fn the_refresh_prompt_names_only_the_configured_sources() {
+        let both = refresh_prompt(&[Source::Vault, Source::Linear]).unwrap();
+        assert!(both.starts_with("Refresh the kelpie backlog: take the vault backlog and my open Linear issues and pipe"));
+        assert!(both.contains("source (vault or linear)") && both.contains("ref (the vault path or the Linear id)"));
+        let vault = refresh_prompt(&[Source::Vault]).unwrap();
+        assert!(vault.contains("take the vault backlog and pipe") && vault.contains("source (vault)") && !vault.contains("Linear"));
+        let linear = refresh_prompt(&[Source::Linear]).unwrap();
+        assert!(linear.contains("take my open Linear issues and pipe") && !linear.contains("vault"));
+        let none = refresh_prompt(&[]).unwrap_err();
+        assert!(none.starts_with("No backlog source is configured") && none.contains("[board.backlog] sources"));
+    }
+
+    #[test]
+    fn labels_and_the_role_follow_the_sources() {
+        assert_eq!(label(&[Source::Vault, Source::Linear]), "vault + Linear");
+        assert_eq!(label(&[]), "no source");
+        assert_eq!(from(&[Source::Vault]), "the vault");
+        let (finding, backlog) = role_texts(&[Source::Vault]);
+        assert_eq!(finding, "the vault backlog by priority");
+        assert!(!backlog.contains("Linear") && backlog.contains("`source` (`vault`)"));
+        let (finding, backlog) = role_texts(&[]);
+        assert!(!finding.contains("Linear") && !backlog.contains("Linear") && backlog.contains("No backlog source"));
+        assert!(role_texts(&[Source::Linear, Source::Vault]).1.contains("Linear issues (assigned to them, not done; Linear's MCP) and the vault backlog"));
+    }
+
+    #[test]
+    fn a_task_prompt_reads_the_source_only_when_it_is_configured() {
+        assert!(task_prompt(&entry("linear"), &[Source::Linear]).starts_with("Work on Linear issue ABC-1: Fix it."));
+        assert!(task_prompt(&entry("linear"), &[Source::Vault]).starts_with("Work on: Fix it. It broke."));
+        assert!(task_prompt(&entry("vault"), &[Source::Vault]).starts_with("Work on the vault note ABC-1"));
+    }
 }

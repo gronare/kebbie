@@ -3,6 +3,8 @@ mod area_page;
 mod areas;
 mod backlog;
 mod board;
+mod config;
+mod doctor;
 mod herdr;
 mod lead;
 mod messages;
@@ -25,7 +27,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   (--repo <name> finds or clones that repo, repeated for a task across repos,
                                   --from <ref> branches off it
                                   instead of the default branch, --mode <mode> is Claude's permission mode,
-                                  --no-dev skips running dev, --no-focus keeps you where you are)
+                                  --no-focus keeps you where you are)
   kelpie move <name> [file ...]   move work under way in the main checkout into a task: branch <name> if it
                                   exists, else the unpushed commits, plus the given uncommitted files
                                   (--pane <id> moves that herdr pane along, --no-focus stays put)
@@ -50,6 +52,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie push [name]              after land: push the task to the default branch, then close it as done
   kelpie done [name]              after pushing: close the task and free its worktree
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
+  kelpie config [--repo <path>]   the config layers found (.kelpie.toml, machine config, defaults) and every
+                                  setting in effect with the layer it comes from
+  kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap
 
 Without a name, land, push, done and drop act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>.";
@@ -100,11 +105,12 @@ fn table(cwd: &Path) -> Result<String> {
     }
     Ok(rows.iter().map(|row| {
         let slot = row["slot"].as_str().unwrap_or_default();
+        let setup = row["setup"].as_str().unwrap_or("not set up");
         if row["free"].as_bool() == Some(true) {
-            return format!("{slot:<22} free");
+            return format!("{slot:<22} free  · {setup}");
         }
         let task = row["task"].as_str().unwrap_or("(not free: uncommitted changes)");
-        format!("{slot:<22} {task}  {} changed  ↑{} ↓{}", row["changed"], row["ahead"], row["behind"])
+        format!("{slot:<22} {task}  {} changed  ↑{} ↓{}  · {setup}", row["changed"], row["ahead"], row["behind"])
     }).collect::<Vec<_>>().join("\n"))
 }
 
@@ -157,7 +163,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             if repos.is_empty() {
                 repos.push(cwd);
             }
-            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), dev: !arguments.flag("--no-dev") };
+            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode") };
             // One task across repos: a half per repo, the first one focused.
             let started: Vec<Result<String>> = repos.iter().enumerate()
                 .map(|(index, repo)| tasks::start(repo, name, &tasks::Start { focus: options.focus && index == 0, ..options }))
@@ -205,13 +211,24 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
+        Some("config") => config::show(&cwd, arguments.value("--repo")),
         None | Some("help") => Ok(USAGE.to_string()),
         Some(other) => Err(format!("Unknown command \"{other}\"\n\n{USAGE}")),
     }
 }
 
+fn doctor() -> ExitCode {
+    let checks = doctor::checks(&doctor::Env::current());
+    println!("{}", doctor::render(&checks));
+    if doctor::failed(&checks) { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+}
+
 fn main() -> ExitCode {
-    match run(&Arguments::parse()) {
+    let arguments = Arguments::parse();
+    if arguments.positional(0) == Some("doctor") {
+        return doctor();
+    }
+    match run(&arguments) {
         Ok(output) => {
             println!("{output}");
             ExitCode::SUCCESS

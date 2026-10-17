@@ -20,6 +20,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::area_page::{self, Effect};
 use crate::backlog::{self, Backlog, Entry};
+use crate::config::{self, Source};
 use crate::herdr;
 use crate::messages;
 use crate::repo::{self, name_of};
@@ -41,7 +42,6 @@ pub const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
 pub const TEAL: Color = Color::Rgb(0x94, 0xe2, 0xd5);
 pub const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 
-pub const REFRESH_BACKLOG: &str = "Refresh the kelpie backlog: take the vault backlog and my open Linear issues and pipe them as one JSON array to `$HOME/.local/share/kelpie/current/target/release/kelpie backlog save`. Fields per entry: source (vault or linear), title, priority (urgent, high, medium, low or none), area (the repo, e.g. auctionet), ref (vault path or Linear id), summary (one line), age (e.g. 3 d). Reply in one line when saved.";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
@@ -65,23 +65,17 @@ pub fn choice(key: char, label: &str, about: &str) -> Choice {
     Choice { key, label: label.to_string(), about: about.to_string() }
 }
 
-fn task_choices(item: Option<&Item>) -> Vec<Choice> {
+fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
     let mut choices = vec![
         choice('g', "Go to its Space", "jump to the task's Space"),
         choice('p', "Message its Claude", "send it a line without leaving"),
         choice('r', "Open the review", "the review split next to its Claude"),
     ];
-    if item.and_then(|item| item.path.as_ref()).is_some_and(|path| path.join("dev.yml").exists()) {
-        let item = item.unwrap();
-        choices.push(if item.web {
-            choice('w', "Stop the web server", "ctrl-c to its dev web")
+    if let Some(command) = dev_server {
+        choices.push(if item.is_some_and(|item| item.server) {
+            choice('w', "Stop the dev server", "ctrl-c to its server tab")
         } else {
-            choice('w', "Start the web server", "dev web in a tab of its Space")
-        });
-        choices.push(if item.jobs {
-            choice('b', "Stop the worker", "ctrl-c to its dev worker")
-        } else {
-            choice('b', "Start the worker", "dev worker in a tab of its Space")
+            choice('w', "Start the dev server", &format!("{command} in a tab of its Space"))
         });
     }
     choices.extend([
@@ -93,10 +87,11 @@ fn task_choices(item: Option<&Item>) -> Vec<Choice> {
     choices
 }
 
-fn backlog_choices() -> Vec<Choice> {
+fn backlog_choices(sources: &[Source]) -> Vec<Choice> {
+    let refresh = if sources.is_empty() { "no backlog source is configured".to_string() } else { format!("the lead fetches {} again", backlog::from(sources)) };
     vec![
         choice('g', "Start as task", "a worktree, a Space and Claude with this as its prompt"),
-        choice('R', "Refresh the backlog", "the lead fetches the vault and Linear again"),
+        choice('R', "Refresh the backlog", &refresh),
     ]
 }
 
@@ -204,6 +199,7 @@ struct App {
     hits: Vec<(Rect, Hit)>,
     page: Page,
     areas: area_page::Page,
+    sources: Vec<Source>,
 }
 
 pub fn style(color: Color) -> Style {
@@ -347,9 +343,20 @@ fn idle_tab_pane(workspace: &str, label: &str) -> Option<String> {
         .find(|pane| matches!(herdr::foreground(pane), Ok(None)))
 }
 
-fn address(item: &Item) -> Option<String> {
-    let path = item.path.as_ref()?;
-    path.join("dev.yml").exists().then(|| format!("https://{}.devbox", name_of(path)))
+// scripts/sync.sh reports a running dev server from a busy pane in a tab with this label.
+const SERVER_TAB: &str = "server";
+
+fn dev_server(item: &Item) -> Option<String> {
+    config::resolve(Some(item.repo.as_deref()?)).ok()?.settings.dev_server.value
+}
+
+fn busy_server_pane(workspace: &str) -> Option<String> {
+    let tabs: Vec<String> = herdr::tabs_in(workspace).ok()?.into_iter()
+        .filter(|tab| tab["label"] == SERVER_TAB).filter_map(|tab| tab["tab_id"].as_str().map(str::to_string)).collect();
+    herdr::panes_in(workspace).ok()?.into_iter()
+        .filter(|pane| pane["tab_id"].as_str().is_some_and(|tab| tabs.iter().any(|candidate| candidate == tab)))
+        .filter_map(|pane| pane["pane_id"].as_str().map(str::to_string))
+        .find(|pane| matches!(herdr::foreground(pane), Ok(Some(_))))
 }
 
 fn review_script() -> Option<PathBuf> {
@@ -368,8 +375,11 @@ impl App {
 
     fn choices(&self) -> Vec<Choice> {
         match self.column {
-            Column::Work => task_choices(self.tasks.get(self.work_selected)),
-            Column::Backlog => backlog_choices(),
+            Column::Work => {
+                let item = self.tasks.get(self.work_selected);
+                task_choices(item, item.and_then(dev_server).as_deref())
+            }
+            Column::Backlog => backlog_choices(&self.sources),
         }
     }
 
@@ -646,11 +656,11 @@ impl App {
                     }
                 }
                 'R' => {
-                    let result = match self.lead_pane() {
-                        Some(pane) => herdr::prompt_agent(&pane, REFRESH_BACKLOG)
+                    let result = backlog::refresh_prompt(&self.sources).and_then(|prompt| match self.lead_pane() {
+                        Some(pane) => herdr::prompt_agent(&pane, &prompt)
                             .map(|_| "Asked the lead to refresh the backlog; it updates here when it is saved.".to_string()),
                         None => Err("No lead is running; prefix+space starts it.".to_string()),
-                    };
+                    });
                     self.show(result);
                 }
                 _ => {}
@@ -679,8 +689,7 @@ impl App {
                             self.mode = Mode::Input { purpose: Purpose::Tidy(path), label, buffer: String::new() };
                         }
                     }
-                    'w' => self.toggle_server(&item, "web", item.web),
-                    'b' => self.toggle_server(&item, "worker", item.jobs),
+                    'w' => self.toggle_server(&item),
                     'l' | 'd' | 'x' => {
                         let Some(path) = item.path.clone() else { return };
                         match key {
@@ -701,25 +710,21 @@ impl App {
         }
     }
 
-    // A server runs as `dev web` or `dev worker` in a tab of the task's Space; stopping it is ctrl-c to that tab.
-    fn toggle_server(&mut self, item: &Item, kind: &str, running: bool) {
+    // The dev server runs in the Space's server tab; stopping it is ctrl-c to that tab.
+    fn toggle_server(&mut self, item: &Item) {
         let (Some(workspace), Some(path)) = (&item.workspace, &item.path) else {
             self.mode = Mode::Message(format!("{} has no Space open.", item.name));
             return;
         };
-        let result = if running {
-            let pane = herdr::panes_in(workspace).unwrap_or_default().into_iter()
-                .filter_map(|pane| pane["pane_id"].as_str().map(str::to_string))
-                .find(|pane| herdr::foreground(pane).ok().flatten()
-                    .is_some_and(|argv| argv.iter().any(|arg| arg.ends_with("dev")) && argv.iter().any(|arg| arg == kind)));
-            match pane {
-                Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping dev {kind} in {}.", item.name)),
-                None => Err(format!("No dev {kind} found in {}'s Space.", item.name)),
-            }
-        } else {
-            idle_tab_pane(workspace, kind).map(Ok).unwrap_or_else(|| herdr::create_tab(workspace, path, kind))
-                .and_then(|pane| herdr::run_in_pane(&pane, &format!("dev {kind}")))
-                .map(|_| format!("Started dev {kind} in the {kind} tab of {}'s Space.", item.name))
+        let Some(command) = dev_server(item) else {
+            self.mode = Mode::Message(format!("{} has no worktree.dev_server; kelpie config shows where to set one.", item.place));
+            return;
+        };
+        let result = match busy_server_pane(workspace) {
+            Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping the dev server in {}.", item.name)),
+            None => idle_tab_pane(workspace, SERVER_TAB).map(Ok).unwrap_or_else(|| herdr::create_tab(workspace, path, SERVER_TAB))
+                .and_then(|pane| herdr::run_in_pane(&pane, &command))
+                .map(|_| format!("Started {command} in the server tab of {}'s Space.", item.name)),
         };
         self.show(result);
     }
@@ -756,16 +761,13 @@ impl App {
             Purpose::TaskPrompt(name) => {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
-                let options = tasks::Start { prompt: prompt.as_deref(), focus: true, from: None, mode: None, dev: true };
+                let options = tasks::Start { prompt: prompt.as_deref(), focus: true, from: None, mode: None };
                 let result = outside(terminal, || tasks::start(&repo, &name, &options));
                 self.show(result);
             }
             Purpose::BacklogName(entry) => {
-                let prompt = match entry.source.as_str() {
-                    "linear" => format!("Work on Linear issue {}: {}. Read the issue first, then plan with me before changing code.", entry.reference, entry.title),
-                    _ => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first, then plan with me before changing code.", entry.reference, entry.title),
-                };
-                let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, dev: true };
+                let prompt = backlog::task_prompt(&entry, &self.sources);
+                let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None };
                 let known = self.repo_named(&entry.area);
                 let result = outside(terminal, || {
                     let repo = known.map_or_else(|| repo::locate(&entry.area), Ok)?;
@@ -834,7 +836,7 @@ fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     spans.extend(pill(format!("● {needs} need you"), PEACH, needs > 0));
     spans.extend(pill(format!("◐ {working} working"), BLUE, working > 0));
     spans.extend(pill(format!("✓ {ready} ready to push"), GREEN, ready > 0));
-    let sources = if app.backlog.entries.iter().any(|entry| entry.source == "linear") { "vault + Linear" } else { "vault" };
+    let sources = backlog::label(&app.sources);
     let fresh = match app.page {
         Page::Work => format!("backlog: {sources}, {}   ", backlog::age(app.backlog.updated)),
         Page::Areas => format!("vault index: {}   ", backlog::age(app.areas.synced)),
@@ -1026,11 +1028,11 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     if let Some((read, total)) = item.review {
         facts.push((format!("review {read}/{total} read"), if read == total { GREEN } else { SUBTEXT }));
     }
+    if item.server {
+        facts.push(("dev server running".to_string(), GREEN));
+    }
     if !facts.is_empty() {
         lines.push(chips(facts));
-    }
-    if item.web && let Some(address) = address(item) {
-        lines.push(Line::from(vec![Span::raw("   "), Span::styled("web ", style(GREEN)), Span::styled(address, style(TEAL))]).style(Style::new().bg(SURFACE)));
     }
     match &item.agent {
         Some(agent) => {
@@ -1092,7 +1094,8 @@ fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
         rows.push((start, lines.len(), Hit::Entry(index)));
     }
     if app.backlog.entries.is_empty() {
-        lines.push(Line::from(Span::styled("Empty. R asks the lead to fill it from the vault and Linear.", style(MUTED))));
+        let empty = if app.sources.is_empty() { backlog::not_configured() } else { format!("Empty. R asks the lead to fill it from {}.", backlog::from(&app.sources)) };
+        lines.push(Line::from(Span::styled(empty, style(MUTED))));
     }
     (lines, selected_line, rows)
 }
@@ -1154,7 +1157,7 @@ fn help_lines() -> Vec<Line<'static>> {
     [
         ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("tab", "switch between the work and areas pages"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
-        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's web server"), ("b", "start or stop the task's worker"), ("l", "ready to push: rebase and check (on a task)"), ("d", "done: after you pushed"),
+        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("l", "ready to push: rebase and check (on a task)"), ("d", "done: after you pushed"),
         ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
@@ -1345,11 +1348,12 @@ impl Rebuild {
 }
 
 pub fn run(overlay: bool) -> Result<String> {
+    let sources = config::sources()?;
     let (snapshots, refresh) = spawn_refresher();
     let mut app = App {
         column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog: backlog::load(), work_selected: 0, backlog_selected: 0,
         mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(),
-        page: Page::Work, areas: area_page::Page::new(),
+        page: Page::Work, areas: area_page::Page::new(sources.clone()), sources,
     };
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
@@ -1420,9 +1424,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn w_is_offered_only_with_a_dev_server() {
+        let keys = |dev_server: Option<&str>| task_choices(None, dev_server).iter().map(|choice| choice.key).collect::<String>();
+        assert_eq!(keys(None), "gprtldx");
+        assert_eq!(keys(Some("bin/dev")), "gprwtldx");
+        let start = task_choices(None, Some("npm run dev"));
+        assert_eq!((start[3].label.as_str(), start[3].about.as_str()), ("Start the dev server", "npm run dev in a tab of its Space"));
+    }
+
+    #[test]
     fn the_recap_is_the_last_one_on_screen_with_its_continuation() {
-        let screen = "※ recap: An older one.\n\n● Done.\n\n※ recap: We're adding Turnstile; the branch is rebased. Next, leave your\n  comments in the split. (disable recaps in /config)\n\n❯ \n";
-        assert_eq!(recap(screen), "We're adding Turnstile; the branch is rebased. Next, leave your comments in the split.");
+        let screen = "※ recap: An older one.\n\n● Done.\n\n※ recap: We're adding search; the branch is rebased. Next, leave your\n  comments in the split. (disable recaps in /config)\n\n❯ \n";
+        assert_eq!(recap(screen), "We're adding search; the branch is rebased. Next, leave your comments in the split.");
         assert_eq!(recap("● Nothing to recap.\n"), "");
     }
 }

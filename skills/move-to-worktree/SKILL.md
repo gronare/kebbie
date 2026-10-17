@@ -16,6 +16,7 @@ disable-model-invocation: true
    - Your uncommitted files: only the ones you changed in this session. Leave the rest; ask if unsure.
 3. Run `kelpie move <name> --pane "$HERDR_PANE_ID" <your files>` from the main checkout. Add `--no-focus` if the user wants to stay where they are.
 4. Switch into the worktree it printed with EnterWorktree and `path`.
-5. Reply in two lines: where the work is now (worktree and branch), and what stayed behind in the main checkout.
+5. Run the skill its last line names (`Set it up: run the skill <skill>`) and follow it; it makes the worktree runnable without touching the main checkout.
+6. Reply in two lines: where the work is now (worktree and branch), and what stayed behind in the main checkout.
 
-In the worktree, `/kelpie:review-split` reviews everything since the branch left the default branch, specs use the worktree's own test database, and the development database is still shared, so do not run migrations there without asking.
+In the worktree, `/kelpie:review-split` reviews everything since the branch left the default branch.

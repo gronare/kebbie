@@ -57,7 +57,7 @@ pub fn index_name(options: &Value) -> Option<String> {
     Some(format!("{}.sqlite", &sha1_smol::Sha1::from(seed).digest().to_string()[..12]))
 }
 
-fn index_path() -> Result<PathBuf> {
+pub fn index_path() -> Result<PathBuf> {
     let options = plugin_options();
     let cache = setting("VAULT_CACHE_DIR", &options).map(|dir| expand(&dir)).unwrap_or_else(|| home().join(".cache/notes-vault-mcp"));
     let name = index_name(&options).ok_or("No vault configured: set the vault plugin's options in Claude Code, or VAULT_PATH")?;
@@ -189,7 +189,7 @@ mod tests {
     fn an_areas_log_is_its_own_note_and_lines_that_link_it_newest_first() {
         let logs = vec![
             ("Log/kelpie-log.md".to_string(), "- [2026-10-15] first | [[kelpie]]\n- [2026-10-16] second\n".to_string()),
-            ("Log/devbox-log.md".to_string(), "- [2026-10-14] devbox only | [[devbox]]\n- [2026-10-16] for kelpie too | [[kelpie]]\n".to_string()),
+            ("Log/api-log.md".to_string(), "- [2026-10-14] api only | [[api]]\n- [2026-10-16] for kelpie too | [[kelpie]]\n".to_string()),
         ];
         let texts: Vec<String> = log_for(&logs, "kelpie", Some("kelpie")).into_iter().map(|line| line.text).collect();
         assert_eq!(texts, ["for kelpie too", "second", "first"]);

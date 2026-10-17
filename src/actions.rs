@@ -42,6 +42,7 @@ pub struct Action {
 }
 
 pub type Answers = Vec<(String, String)>;
+type Parsed = (Vec<Action>, Vec<String>);
 
 fn string(table: &Table, field: &str) -> Result<Option<String>> {
     match table.get(field) {
@@ -128,7 +129,27 @@ fn action(table: &Table, source: &str) -> Result<Action> {
 }
 
 // A .kelpie.toml's [[actions]]; a broken action is reported and the rest still load.
-pub fn parse(text: &str, source: &str) -> (Vec<Action>, Vec<String>) {
+pub fn parse(text: &str, source: &str) -> Parsed {
+    let (actions, mut errors) = parse_actions(text, source);
+    if text.parse::<Table>().is_ok()
+        && let Err(error) = crate::config::parse_repo(text, source)
+    {
+        errors.push(error);
+    }
+    (actions, errors)
+}
+
+fn parse_override(text: &str, source: &str) -> Parsed {
+    let (actions, mut errors) = parse_actions(text, source);
+    if let Ok(table) = text.parse::<Table>()
+        && let Err(error) = crate::config::unknown_keys(&table, "", &["actions"])
+    {
+        errors.push(format!("{source}: {error}"));
+    }
+    (actions, errors)
+}
+
+fn parse_actions(text: &str, source: &str) -> Parsed {
     let table: Table = match text.parse() {
         Ok(table) => table,
         Err(error) => return (Vec::new(), vec![format!("{source}: {}", error.to_string().lines().next().unwrap_or_default())]),
@@ -150,9 +171,7 @@ pub fn overrides_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("KELPIE_ACTIONS_DIR") {
         return PathBuf::from(dir);
     }
-    let config = std::env::var("XDG_CONFIG_HOME").map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"));
-    config.join("kelpie/actions")
+    crate::config::dir().join("actions")
 }
 
 // An override with the same id replaces the repo's action; the rest are added. Two actions on one key keep the first.
@@ -171,13 +190,13 @@ pub fn merge(own: Vec<Action>, overrides: Vec<Action>) -> (Vec<Action>, Vec<Stri
 }
 
 pub fn load(repo: &Path) -> (Vec<Action>, Vec<String>) {
-    let read = |path: PathBuf, source: String| match std::fs::read_to_string(&path) {
+    let read = |path: PathBuf, source: String, parse: fn(&str, &str) -> Parsed| match std::fs::read_to_string(&path) {
         Ok(text) => parse(&text, &source),
         Err(_) => (Vec::new(), Vec::new()),
     };
-    let (own, mut errors) = read(repo.join(".kelpie.toml"), ".kelpie.toml".to_string());
+    let (own, mut errors) = read(repo.join(".kelpie.toml"), ".kelpie.toml".to_string(), parse);
     let file = overrides_dir().join(format!("{}.toml", name_of(repo)));
-    let (overrides, override_errors) = read(file.clone(), file.display().to_string());
+    let (overrides, override_errors) = read(file.clone(), file.display().to_string(), parse_override);
     errors.extend(override_errors);
     let (actions, merge_errors) = merge(own, overrides);
     errors.extend(merge_errors);
@@ -433,6 +452,16 @@ task = "Bump {plugin}'s pin to {version}; commit."
         assert_eq!(errors, [".kelpie.toml, action 1: key g is the Areas page's own", ".kelpie.toml, action 3: needs task, or script steps (bump, run, commit, tag, push)"]);
         assert_eq!(parse("not toml [", "x").1.len(), 1);
         assert!(parse("[[actions]]\nkey = \"V\"\ntitle = \"v\"\nbump = [\"a\"]\n", "x").1[0].contains("ask = \"version\""));
+    }
+
+    #[test]
+    fn a_repo_file_takes_worktree_next_to_actions_and_names_unknown_keys() {
+        let text = "[worktree]\ndev_server = \"npm run dev\"\n\n[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n";
+        assert_eq!(parse(text, ".kelpie.toml"), (parse_actions(text, ".kelpie.toml").0, Vec::new()));
+        let (actions, errors) = parse(&format!("colour = 1\n{text}"), "/src/app/.kelpie.toml");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(errors, ["/src/app/.kelpie.toml: colour: unknown key; known keys here: actions, worktree"]);
+        assert_eq!(parse_override(text, "app.toml").1, ["app.toml: worktree: unknown key; known keys here: actions"]);
     }
 
     #[test]

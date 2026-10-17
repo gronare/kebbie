@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
+use crate::backlog;
+use crate::config::{self, Source};
 use crate::herdr;
 use crate::peers;
 use crate::sh::Result;
@@ -100,8 +102,24 @@ fn runs_kelpie(pane: &str, command: &str) -> bool {
     herdr::foreground(pane).ok().flatten().is_some_and(|argv| argv.iter().any(|arg| arg.ends_with("kelpie")) && argv.iter().any(|arg| arg == command))
 }
 
+pub fn role_text(template: &str, sources: &[Source]) -> String {
+    let (finding, backlog) = backlog::role_texts(sources);
+    template.replace("{finding}", &finding).replace("{backlog}", &backlog)
+}
+
+// roles/lead.md filled in for the configured backlog sources, written to the state dir for --append-system-prompt-file.
+fn role_file() -> Result<PathBuf> {
+    let template = fs::read_to_string(install_root()?.join("roles/lead.md")).map_err(|error| format!("roles/lead.md: {error}"))?;
+    let role = role_text(&template, &config::sources()?);
+    let dir = state_dir()?.join("roles");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let file = dir.join("lead.md");
+    fs::write(&file, role).map_err(|error| error.to_string())?;
+    Ok(file)
+}
+
 fn start_chat(pane: &str) -> Result<()> {
-    let role = install_root()?.join("roles/lead.md");
+    let role = role_file()?;
     let settings = settings(&peers::kelpie_command()?);
     match herdr::start_agent("lead", "claude", pane, &["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings]) {
         Err(error) if !error.contains("agent_not_ready") => Err(error),
@@ -141,4 +159,18 @@ fn create() -> Result<String> {
     herdr::run_in_pane(&messages, &format!("'{}' messages", executable()?.display()))?;
     start_chat(&chat)?;
     Ok("Lead Space created: the board on the left over the sessions' messages, the lead on the right.".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_lead_role_mentions_linear_only_when_it_is_a_source() {
+        let template = include_str!("../roles/lead.md");
+        assert!(!role_text(template, &[Source::Vault]).contains("Linear"));
+        assert!(!role_text(template, &[]).contains("Linear"));
+        let both = role_text(template, &[Source::Vault, Source::Linear]);
+        assert!(both.contains("Linear (assigned to the user, current cycle)") && !both.contains("{backlog}") && !both.contains("{finding}"));
+    }
 }
