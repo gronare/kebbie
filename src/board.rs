@@ -78,13 +78,20 @@ fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
             choice('w', "Start the dev server", &format!("{command} in a tab of its Space"))
         });
     }
-    choices.extend([
-        choice('t', "Tidy commits", "its Claude squashes, reorders and rewords them for review"),
-        choice('l', "Push and close", "rebase, check, show the commits, then push if you say so"),
-        choice('d', "Done", "already pushed elsewhere: close it and free the worktree"),
-        choice('x', "Drop", "throw the task away (asks first)"),
-    ]);
+    if !item.is_some_and(busy) {
+        choices.extend([
+            choice('t', "Tidy commits", "its Claude squashes, reorders and rewords them for review"),
+            choice('l', "Push and close", "rebase, check, show the commits, then push if you say so"),
+            choice('d', "Done", "already pushed elsewhere: close it and free the worktree"),
+        ]);
+    }
+    choices.push(choice('x', "Drop", "throw the task away (asks first)"));
     choices
+}
+
+// While its Claude works, the branch can still move, so the steps that rewrite, push or close it wait.
+fn busy(item: &Item) -> bool {
+    item.group() == Group::Working
 }
 
 fn backlog_choices(sources: &[Source]) -> Vec<Choice> {
@@ -692,6 +699,7 @@ impl App {
                         }
                     }
                     'r' => self.open_review(&item),
+                    't' | 'l' | 'd' if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
                     't' => {
                         if let Some(path) = item.path.clone() {
                             let label = "How should the commits look? (optional, enter to let Claude decide)".to_string();
@@ -1470,6 +1478,13 @@ mod tests {
         let checkout = |name: &str, free_slots| Checkout { name: name.to_string(), changed: 0, free_slots, busy_slots: 0 };
         assert_eq!(free_worktrees(&[checkout("kelpie", 1), checkout("web", 0), checkout("api", 2)]), " · free worktrees: kelpie 1, api 2");
         assert_eq!(free_worktrees(&[checkout("web", 0)]), "");
+    }
+
+    #[test]
+    fn a_working_task_offers_no_tidy_push_or_done() {
+        let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
+        assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprtldx");
     }
 
     #[test]

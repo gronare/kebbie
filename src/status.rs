@@ -290,11 +290,11 @@ pub fn gather() -> Result<Vec<Item>> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::messages::Report;
 
-    fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
+    pub(crate) fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         Item {
             review: None, server: false, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
