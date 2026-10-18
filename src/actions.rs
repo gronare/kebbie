@@ -460,7 +460,7 @@ task = "Bump {plugin}'s pin to {version}; commit."
         assert_eq!(parse(text, ".kelpie.toml"), (parse_actions(text, ".kelpie.toml").0, Vec::new()));
         let (actions, errors) = parse(&format!("colour = 1\n{text}"), "/src/app/.kelpie.toml");
         assert_eq!(actions.len(), 1);
-        assert_eq!(errors, ["/src/app/.kelpie.toml: colour: unknown key; known keys here: actions, worktree"]);
+        assert_eq!(errors, ["/src/app/.kelpie.toml: colour: unknown key; known keys here: actions, worktree, task"]);
         assert_eq!(parse_override(text, "app.toml").1, ["app.toml: worktree: unknown key; known keys here: actions"]);
     }
 

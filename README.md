@@ -127,6 +127,7 @@ An unknown key in either file is an error that names the file and the key.
 | `[board.backlog] sources` | machine config | `[]` | Where the lead finds work for the board's Backlog tab: `"vault"`, `"linear"` or both. |
 | `[worktree] setup_skill` | both | `"kelpie:set-up-worktree"` | The skill a task's Claude runs first to make its worktree runnable: `plugin:skill` for a plugin's skill, a bare name for one in `~/.claude/skills` or the repo's `.claude/skills`. |
 | `[worktree] dev_server` | `.kelpie.toml` | none | The shell command the board's `w` runs in a `server` tab of the task's Space, and `w` again stops with ctrl-c. Without it the board has no `w`. |
+| `[task] rules_skill` | both | none | A skill with your rules for how work is planned, built and committed (a mock before a new screen, commit style, what never to do). A task's Claude runs it after the setup skill and follows it for the rest of the task. Named like `setup_skill`. |
 
 `dev_server` is a repo key; the machine config accepts it too, for every repo that sets none.
 
@@ -138,6 +139,9 @@ sources = ["vault", "linear"]
 
 [worktree]
 setup_skill = "my-tools:set-up-worktree"
+
+[task]
+rules_skill = "my-rules"
 ```
 
 A repo's `.kelpie.toml`, next to its [actions](#areas):

@@ -177,7 +177,8 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let Start { prompt, focus, from, mode } = *options;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
-    let setup_skill = config::resolve(Some(&repo))?.settings.setup_skill.value;
+    let config::Settings { setup_skill, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
+    let (setup_skill, rules_skill) = (setup_skill.value, rules_skill.value);
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
         let space = open_space(&repo, &existing, &task, focus)?;
         if focus {
@@ -205,7 +206,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(&repo))?) } else { task.clone() }.chars().take(32).collect();
     let mut agent_args: Vec<&str> = mode.map(|mode| vec!["--permission-mode", mode]).unwrap_or_default();
     let settings = settings(&peers::kelpie_command()?);
-    let role = peers::role_file(&task, &peers::Place { repo: &repo, worktree: &slot.path, setup_skill: &setup_skill })?.to_string_lossy().to_string();
+    let role = peers::role_file(&task, &peers::Place { repo: &repo, worktree: &slot.path, setup_skill: &setup_skill, rules_skill: rules_skill.as_deref() })?.to_string_lossy().to_string();
     agent_args.extend(["--settings", &settings, "--append-system-prompt-file", &role]);
     let started = start_claude(&agent_name, &claude_pane, &agent_args, trusted_by_user(&repo));
     // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.

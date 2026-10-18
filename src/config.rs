@@ -36,6 +36,7 @@ pub const REPO_FILE: &str = ".kelpie.toml";
 pub struct Worktree {
     pub setup_skill: Option<String>,
     pub dev_server: Option<String>,
+    pub rules_skill: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -72,6 +73,7 @@ pub struct Settings {
     pub sources: Setting<Vec<Source>>,
     pub setup_skill: Setting<String>,
     pub dev_server: Setting<Option<String>>,
+    pub rules_skill: Setting<Option<String>>,
 }
 
 pub struct Loaded {
@@ -163,7 +165,16 @@ fn worktree(table: &Table) -> Result<Worktree> {
     Ok(Worktree {
         setup_skill: text(worktree, "setup_skill", "worktree.setup_skill")?,
         dev_server: text(worktree, "dev_server", "worktree.dev_server")?,
+        rules_skill: None,
     })
+}
+
+fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
+    if let Some(task) = subtable(table, "task", "task")? {
+        unknown_keys(task, "task.", &["rules_skill"])?;
+        worktree.rules_skill = text(task, "rules_skill", "task.rules_skill")?;
+    }
+    Ok(worktree)
 }
 
 fn table(text: &str, source: &str) -> Result<Table> {
@@ -173,16 +184,17 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["board", "worktree"]).map_err(fail)?;
-    Ok(Machine { sources: board(&table).map_err(fail)?, worktree: worktree(&table).map_err(fail)? })
+    unknown_keys(&table, "", &["board", "worktree", "task"]).map_err(fail)?;
+    let worktree = worktree(&table).and_then(|worktree| with_task(&table, worktree)).map_err(fail)?;
+    Ok(Machine { sources: board(&table).map_err(fail)?, worktree })
 }
 
 // The [[actions]] are actions.rs's to check.
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["actions", "worktree"]).map_err(fail)?;
-    worktree(&table).map_err(fail)
+    unknown_keys(&table, "", &["actions", "worktree", "task"]).map_err(fail)?;
+    worktree(&table).and_then(|worktree| with_task(&table, worktree)).map_err(fail)
 }
 
 fn pick<T: Clone>(repo: Option<&T>, machine: Option<&T>) -> Option<Setting<T>> {
@@ -199,10 +211,12 @@ fn or_default<T>(setting: Option<Setting<T>>, value: T) -> Setting<T> {
 
 pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
     let dev_server = pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref());
+    let rules_skill = pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref());
     Settings {
         sources: or_default(pick(None, machine.sources.as_ref()), Vec::new()),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),
         dev_server: or_default(dev_server.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None),
+        rules_skill: or_default(rules_skill.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None),
     }
 }
 
@@ -226,7 +240,7 @@ fn found(path: &Path) -> &'static str {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, dev_server } = &loaded.settings;
+    let Settings { sources, setup_skill, dev_server, rules_skill } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => format!("{} ({})", path.display(), found(path)),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -248,6 +262,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "The skill a task's Claude runs first to make its worktree runnable.");
     key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer,
         "The shell command the board's w key runs in a tab of the task's Space; without one there is no w.");
+    key("task.rules_skill", rules_skill.value.as_ref().map_or("none".to_string(), |skill| format!("{skill:?}")), rules_skill.layer,
+        "The skill with your rules for how work is planned, built and committed; a task's Claude runs it after the setup skill and follows it.");
     lines.join("\n")
 }
 
@@ -348,8 +364,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -360,7 +376,7 @@ mod tests {
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/src/app/.kelpie.toml").unwrap_err();
-        assert_eq!(repo_error("[board.backlog]\nsources = []\n"), "/src/app/.kelpie.toml: board: unknown key; known keys here: actions, worktree");
+        assert_eq!(repo_error("[board.backlog]\nsources = []\n"), "/src/app/.kelpie.toml: board: unknown key; known keys here: actions, worktree, task");
         assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/src/app/.kelpie.toml: worktree.port: unknown key; known keys here: setup_skill, dev_server");
     }
 

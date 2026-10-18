@@ -130,6 +130,7 @@ pub struct Place<'a> {
     pub repo: &'a Path,
     pub worktree: &'a Path,
     pub setup_skill: &'a str,
+    pub rules_skill: Option<&'a str>,
 }
 
 pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
@@ -143,7 +144,12 @@ pub fn worktree_values(place: &Place) -> Result<Vec<(&'static str, String)>> {
         ("main", place.repo.display().to_string()),
         ("note", setup_note(place.worktree)?.display().to_string()),
         ("setup_skill", place.setup_skill.to_string()),
+        ("rules", rules_line(place.rules_skill)),
     ])
+}
+
+fn rules_line(rules_skill: Option<&str>) -> String {
+    rules_skill.map_or(String::new(), |skill| format!("\n\nThen run the skill `{skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here."))
 }
 
 // roles/task.md filled in for this task, written to the state dir for --append-system-prompt-file.
@@ -220,6 +226,21 @@ mod tests {
             assert!(role.contains("You are in `/src/wt2.app`, worktree wt2.app of `/src/app`"));
             assert!(role.contains("a note in `/src/app/.git/worktrees/wt2.app/kelpie-setup.md`"));
         }
+    }
+
+    #[test]
+    fn the_rules_skill_reaches_the_role_only_when_configured() {
+        use crate::config::{Machine, parse_machine, parse_repo, settings};
+        let template = include_str!("../roles/task.md");
+        let machine = parse_machine("[task]\nrules_skill = \"my-rules\"\n", "config.toml").unwrap();
+        let own = parse_repo("[task]\nrules_skill = \"app-rules\"\n", ".kelpie.toml").unwrap();
+        assert_eq!(settings(&own, &machine).rules_skill.value.as_deref(), Some("app-rules"));
+        assert_eq!(settings(&Default::default(), &machine).rules_skill.value.as_deref(), Some("my-rules"));
+        assert_eq!(settings(&Default::default(), &Machine::default()).rules_skill.value, None);
+        let with = fill(template, &[("rules", &rules_line(Some("my-rules")))]);
+        assert!(with.contains("Then run the skill `my-rules` and follow it for the rest of this task"), "{with}");
+        let without = fill(template, &[("rules", &rules_line(None))]);
+        assert!(!without.contains("{rules}") && !without.contains("Then run the skill"));
     }
 
     #[test]
