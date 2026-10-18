@@ -76,7 +76,7 @@ fn count(text: &str) -> usize {
     text.trim().parse().unwrap_or(0)
 }
 
-// Main against its upstream, and the last tag on main with the commits since; no fetch, the sidebar sync keeps remotes fresh.
+// Main against its upstream, and the last tag on main with the commits since; no fetch, the board's fetcher keeps remotes fresh.
 fn repo_state(repo: &Path) -> Result<RepoState> {
     let upstream = default_branch(repo)?;
     let branch = upstream.trim_start_matches("origin/").to_string();

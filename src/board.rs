@@ -21,6 +21,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 use crate::area_page::{self, Effect};
 use crate::backlog::{self, Backlog, Entry};
 use crate::config::{self, Source};
+use crate::fetch::{self, Fetcher};
 use crate::herdr;
 use crate::messages;
 use crate::repo::{self, name_of};
@@ -209,6 +210,7 @@ struct App {
     page: Page,
     areas: area_page::Page,
     sources: Vec<Source>,
+    fetch_failures: Vec<String>,
 }
 
 pub fn style(color: Color) -> Style {
@@ -897,6 +899,7 @@ fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
         Page::Work => format!("backlog: {sources}, {}   ", backlog::age(app.backlog.updated)),
         Page::Areas => format!("vault index: {}   ", backlog::age(app.areas.synced)),
     };
+    let fresh = format!("{}{fresh}", fetch::failed_note(&app.fetch_failures));
     let tabs = [(" Work ", Page::Work), (" Areas ", Page::Areas)];
     let tabs_width: usize = tabs.iter().map(|(label, _)| label.chars().count()).sum();
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
@@ -1423,7 +1426,7 @@ pub fn run(overlay: bool) -> Result<String> {
     let mut app = App {
         column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog: backlog::load(), work_selected: 0, backlog_selected: 0,
         mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(),
-        page: Page::Work, areas: area_page::Page::new(sources.clone()), sources,
+        page: Page::Work, areas: area_page::Page::new(sources.clone()), sources, fetch_failures: Vec::new(),
     };
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
@@ -1436,6 +1439,7 @@ pub fn run(overlay: bool) -> Result<String> {
         app.wanted_task = parts.next().filter(|name| !name.is_empty()).map(str::to_string);
     }
     let mut rebuild = Rebuild::new();
+    let mut fetcher = Fetcher::new();
     let mut terminal = init_terminal();
     let result = (|| -> Result<()> {
         while !app.quit {
@@ -1472,6 +1476,14 @@ pub fn run(overlay: bool) -> Result<String> {
             if app.page == Page::Areas {
                 app.areas.tick();
             }
+            let mut repos: Vec<PathBuf> = app.tasks.iter().filter_map(|item| item.repo.clone()).chain(app.areas.repos()).collect();
+            repos.sort();
+            repos.dedup();
+            if fetcher.tick(repos) {
+                let _ = app.refresh.send(());
+                app.areas.refresh();
+            }
+            app.fetch_failures = fetcher.failures();
             if matches!(app.mode, Mode::Normal | Mode::Message(_) | Mode::Help) && app.areas.is_idle() && rebuild.ready() {
                 let error = rebuild.restart(&app);
                 terminal = init_terminal();

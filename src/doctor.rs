@@ -69,7 +69,6 @@ pub fn tools(min_herdr: &str) -> Vec<Tool> {
         tool("tig", false, "the history split", None, "brew install tig", "sudo apt install tig"),
         tool("curl", false, "the review list reloading when files change", None, "brew install curl", "sudo apt install curl"),
         tool("cargo", false, "herdr building the kelpie plugin", None, "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
-        tool("setsid", false, "the sidebar sync's background git fetch (scripts/sync.sh)", None, "none yet: macOS has no setsid, so sync.sh fetches nothing there", "sudo apt install util-linux"),
     ]
 }
 
@@ -189,7 +188,6 @@ pub fn state_dirs(kelpie: &Path, own: bool, state_home: &Path, data_home: &Path)
         (kelpie.join("turns"), "task reports"),
         (kelpie.join("reviews"), "review splits"),
         (state_home.join("herdr-sync"), "sidebar sync"),
-        (state_home.join("herdr-sync-fetch"), "sidebar sync's fetch stamps"),
         (data_home.join("kelpie"), "the current link"),
     ]
 }
@@ -427,9 +425,7 @@ mod tests {
         let missing = tool(named(&tools, "jq"), None, None);
         assert_eq!((missing.level, missing.fix.len()), (Level::Fail, 2));
         assert!(missing.fix[0].starts_with("macOS: brew") && missing.fix[1].starts_with("Linux: "));
-        let setsid = tool(named(&tools, "setsid"), None, None);
-        assert_eq!(setsid.level, Level::Warn);
-        assert!(setsid.fact.contains("sync.sh"));
+        assert!(tools.iter().all(|tool| tool.name != "setsid"), "the board fetches; nothing needs setsid");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -521,7 +517,8 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         let _ = std::fs::remove_dir_all(base);
         let dirs = state_dirs(Path::new("/s/kelpie"), false, Path::new("/s"), Path::new("/d"));
-        assert!(dirs.iter().any(|(dir, _)| dir == Path::new("/s/herdr-sync-fetch")) && dirs.iter().any(|(dir, _)| dir == Path::new("/d/kelpie")));
+        assert!(dirs.iter().any(|(dir, _)| dir == Path::new("/s/herdr-sync")) && dirs.iter().any(|(dir, _)| dir == Path::new("/d/kelpie")));
+        assert!(dirs.iter().all(|(dir, _)| dir != Path::new("/s/herdr-sync-fetch")));
     }
 
     #[test]

@@ -5,6 +5,7 @@ mod backlog;
 mod board;
 mod config;
 mod doctor;
+mod fetch;
 mod herdr;
 mod lead;
 mod messages;

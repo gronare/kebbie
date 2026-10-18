@@ -108,7 +108,7 @@ ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie
 
 ### Sidebar sync (optional)
 
-`scripts/sync.sh` fills the sidebar with what each Space and pane is doing: a `server` tag while the dev server the board's `w` started runs in the Space, Claude's task title on its pane border, model and context in use on its Agents row, and tab names. It also fetches each repo every 5 minutes, so behind-counts stay current. Run it from herdr's tab bar, with an example sidebar layout in [`examples/herdr-config.toml`](examples/herdr-config.toml):
+`scripts/sync.sh` fills the sidebar with what each Space and pane is doing: a `server` tag while the dev server the board's `w` started runs in the Space, Claude's task title on its pane border, model and context in use on its Agents row, and tab names. Fetching is the board's: while it runs, the board fetches each repo it shows (tasks' main checkouts and the Areas page's repos) every 5 minutes in the background, one fetch per repo at a time, and names a repo whose fetch failed in its header. Run it from herdr's tab bar, with an example sidebar layout in [`examples/herdr-config.toml`](examples/herdr-config.toml):
 
 ```toml
 [ui]

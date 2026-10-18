@@ -250,7 +250,11 @@ impl Page {
         format!("{} · {} with a repo", plural(self.areas.len(), "area"), repos)
     }
 
-    fn refresh(&self) {
+    pub fn repos(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        self.areas.iter().filter_map(|area| area.repo.clone())
+    }
+
+    pub fn refresh(&self) {
         if let Some((_, refresh)) = &self.updates {
             let _ = refresh.send(());
         }

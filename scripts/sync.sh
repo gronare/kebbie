@@ -9,18 +9,6 @@ mkdir -p "$state"
 panes=$("$herdr" pane list 2>/dev/null) || exit 0
 tabs=$("$herdr" tab list 2>/dev/null) || exit 0
 
-# git_status only moves on fetch; stamps live outside $state, which is pruned to live pane and tab IDs.
-fetched="$state-fetch"
-mkdir -p "$fetched"
-echo "$panes" | jq -r '.result.panes[].cwd // empty' | sort -u |
-while read -r dir; do
-  repo=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || continue
-  stamp="$fetched/$(echo "$repo" | tr '/' '_')"
-  [ -n "$(find "$stamp" -mmin -5 2>/dev/null)" ] && continue
-  touch "$stamp"
-  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes" setsid git -C "$repo" fetch --quiet --no-tags >/dev/null 2>&1 < /dev/null &
-done
-
 programs=$(echo "$panes" | jq -r '.result.panes[] | select(.agent != "claude") | .pane_id' |
   while read -r pane; do
     "$herdr" pane process-info --pane "$pane" 2>/dev/null | jq -r --arg pane "$pane" '.result.process_info as $i
