@@ -95,6 +95,34 @@ pub fn setup_line(worktree: &Path) -> Option<String> {
     (!line.is_empty()).then(|| line.to_string())
 }
 
+// set-up-worktree records the worktree's port as PORT in its .env, else as `port <n>` on the setup note's dev server line.
+pub fn worktree_port(worktree: &Path) -> Option<u16> {
+    let env = std::fs::read_to_string(worktree.join(".env")).ok();
+    env.as_deref().and_then(port_in_env)
+        .or_else(|| port_in_note(&std::fs::read_to_string(setup_note(worktree).ok()?).ok()?))
+}
+
+pub fn port_in_env(text: &str) -> Option<u16> {
+    text.lines().rev().find_map(|line| {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").map_or(line, str::trim_start);
+        let value = line.strip_prefix("PORT")?.trim_start().strip_prefix('=')?;
+        let value = value.split('#').next()?.trim().trim_matches(|character| character == '"' || character == '\'');
+        value.parse().ok().filter(|port| *port > 0)
+    })
+}
+
+pub fn port_in_note(text: &str) -> Option<u16> {
+    text.lines().find_map(|line| {
+        let lower = line.to_lowercase();
+        lower.match_indices("port").find_map(|(at, word)| {
+            let rest = lower[at + word.len()..].trim_start_matches([' ', ':', '=', '\t', '`']);
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok().filter(|port| *port > 0)
+        })
+    })
+}
+
 pub fn slot_number(repo: &Path, path: &Path) -> Option<usize> {
     let name = name_of(path);
     let digits = name.strip_suffix(&format!(".{}", name_of(repo)))?.strip_prefix("wt")?;
@@ -161,4 +189,48 @@ pub fn checkout_named(name: &str) -> Option<PathBuf> {
 
 pub fn locate(name: &str) -> Result<PathBuf> {
     checkout_named(name).map_or_else(|| clone(name, &roots()), Ok)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_port_is_read_from_env_lines_in_their_usual_shapes() {
+        assert_eq!(port_in_env("RAILS_ENV=development\nPORT=3002\n"), Some(3002));
+        assert_eq!(port_in_env("export PORT=\"4001\" # set-up-worktree\n"), Some(4001));
+        assert_eq!(port_in_env("PORT = '5173'"), Some(5173));
+        assert_eq!(port_in_env("PORT=3000\nPORT=3003\n"), Some(3003), "the last assignment wins, as in a dotenv loader");
+        assert_eq!(port_in_env("DATABASE_PORT=5432\nPORTAL=1\n# PORT=3009\n"), None);
+        assert_eq!(port_in_env("PORT=\n"), None);
+    }
+
+    #[test]
+    fn the_port_is_read_from_the_setup_notes_dev_server_line() {
+        let note = "# wt2.app set up 2026-10-18 by task search\n- branch search at abc1234\n- dev server `bin/dev` on port 3002\n- verified one test file\n";
+        assert_eq!(port_in_note(note), Some(3002));
+        assert_eq!(port_in_note("- dev server `bin/rails s --port=3004`"), Some(3004));
+        assert_eq!(port_in_note("- dev server PORT=3005 npm run dev"), Some(3005));
+        assert_eq!(port_in_note("- reported done\n- no port picked"), None);
+    }
+
+    #[test]
+    fn a_worktrees_port_comes_from_its_env_else_its_setup_note_else_nowhere() {
+        let dir = std::env::temp_dir().join(format!("kelpie-port-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let main = dir.join("app");
+        let tree = dir.join("wt2.app");
+        std::fs::create_dir_all(&main).unwrap();
+        for args in [&["init", "--quiet"][..], &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "--allow-empty", "-m", "one"]] {
+            git(&main, args).unwrap();
+        }
+        git(&main, &["worktree", "add", "--quiet", "--detach", tree.to_str().unwrap()]).unwrap();
+        assert_eq!(worktree_port(&tree), None);
+        std::fs::write(setup_note(&tree).unwrap(), "# wt2.app set up\n- dev server `bin/dev` on port 3002\n").unwrap();
+        assert_eq!(worktree_port(&tree), Some(3002));
+        std::fs::write(tree.join(".env"), "PORT=3012\n").unwrap();
+        assert_eq!(worktree_port(&tree), Some(3012));
+        assert_eq!(worktree_port(&main), None, "the main checkout's note is not a worktree's");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

@@ -379,6 +379,11 @@ fn dev_server(item: &Item) -> Option<String> {
     config::resolve(Some(item.repo.as_deref()?)).ok()?.settings.dev_server.value
 }
 
+// export rather than a PORT= prefix, so the port reaches every part of a compound command; bash, zsh and fish all take it.
+fn server_command(command: &str, port: Option<u16>) -> String {
+    port.map_or_else(|| command.to_string(), |port| format!("export PORT={port}; {command}"))
+}
+
 fn busy_server_pane(workspace: &str) -> Option<String> {
     let tabs: Vec<String> = herdr::tabs_in(workspace).ok()?.into_iter()
         .filter(|tab| tab["label"] == SERVER_TAB).filter_map(|tab| tab["tab_id"].as_str().map(str::to_string)).collect();
@@ -764,9 +769,13 @@ impl App {
         };
         let result = match busy_server_pane(workspace) {
             Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping the dev server in {}.", item.name)),
-            None => idle_tab_pane(workspace, SERVER_TAB).map(Ok).unwrap_or_else(|| herdr::create_tab(workspace, path, SERVER_TAB))
-                .and_then(|pane| herdr::run_in_pane(&pane, &command))
-                .map(|_| format!("Started {command} in the server tab of {}'s Space.", item.name)),
+            None => {
+                let port = repo::worktree_port(path);
+                let on = port.map(|port| format!(" on port {port}")).unwrap_or_default();
+                idle_tab_pane(workspace, SERVER_TAB).map(Ok).unwrap_or_else(|| herdr::create_tab(workspace, path, SERVER_TAB))
+                    .and_then(|pane| herdr::run_in_pane(&pane, &server_command(&command, port)))
+                    .map(|_| format!("Started {command}{on} in the server tab of {}'s Space.", item.name))
+            }
         };
         self.show(result);
     }
@@ -1544,6 +1553,12 @@ mod tests {
         assert_eq!(keys(Some("bin/dev")), "gprwtldzx");
         let start = task_choices(None, Some("npm run dev"));
         assert_eq!((start[3].label.as_str(), start[3].about.as_str()), ("Start the dev server", "npm run dev in a tab of its Space"));
+    }
+
+    #[test]
+    fn w_exports_the_worktrees_port_only_when_one_is_recorded() {
+        assert_eq!(server_command("bin/dev", Some(3002)), "export PORT=3002; bin/dev");
+        assert_eq!(server_command("bin/dev", None), "bin/dev");
     }
 
     #[test]
