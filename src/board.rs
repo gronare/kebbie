@@ -638,12 +638,21 @@ impl App {
                     self.mode = Mode::Options(0);
                 }
             }
+            KeyCode::Char('R') => self.refresh_backlog(),
             KeyCode::Char('s') => {
                 self.mode = Mode::Input { purpose: Purpose::TaskName, label: "New task: name".to_string(), buffer: String::new() };
             }
             KeyCode::Char(character) if self.choices().iter().any(|choice| choice.key == character) => self.act(character),
             _ => {}
         }
+    }
+
+    fn refresh_backlog(&mut self) {
+        let result = backlog::refresh_prompt(&self.sources).and_then(|prompt| match self.lead_pane() {
+            Some(pane) => herdr::prompt_agent(&pane, &prompt).map(|_| "Asked the lead to refresh the backlog; it updates here when it is saved.".to_string()),
+            None => Err("No lead is running; prefix+space starts it.".to_string()),
+        });
+        self.show(result);
     }
 
     fn act(&mut self, key: char) {
@@ -655,14 +664,7 @@ impl App {
                         self.mode = Mode::Input { purpose: Purpose::BacklogName(entry), label: "Start as task: name".to_string(), buffer };
                     }
                 }
-                'R' => {
-                    let result = backlog::refresh_prompt(&self.sources).and_then(|prompt| match self.lead_pane() {
-                        Some(pane) => herdr::prompt_agent(&pane, &prompt)
-                            .map(|_| "Asked the lead to refresh the backlog; it updates here when it is saved.".to_string()),
-                        None => Err("No lead is running; prefix+space starts it.".to_string()),
-                    });
-                    self.show(result);
-                }
+                'R' => self.refresh_backlog(),
                 _ => {}
             },
             Column::Work => {
