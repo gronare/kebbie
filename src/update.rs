@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::herdr;
+use crate::lead;
+use crate::peers;
 use crate::sh::{self, Result};
 
 pub fn run(claude_dir: &Path) -> Result<String> {
@@ -71,10 +73,30 @@ fn reload_for(agent: &Value) -> Option<Reload> {
     Some(if waiting && agent["interactive_ready"] == true { Reload::Now } else { Reload::Busy })
 }
 
+// The lead reads its role and settings only at start, so it is restarted instead, by the binary just built.
+fn lead_line(reload: &Reload, restart: impl FnOnce() -> Result<String>) -> String {
+    match reload {
+        Reload::Now => match restart() {
+            Ok(said) => format!("  lead: {said}"),
+            Err(error) => format!("  lead: {error}"),
+        },
+        Reload::Focused | Reload::Busy => "  lead: restart the lead when it waits: kelpie lead --restart".to_string(),
+    }
+}
+
+fn restart_lead() -> Result<String> {
+    sh::run(&peers::kelpie_command()?, &["lead", "--restart"], None)
+}
+
 fn reload() -> Result<Vec<String>> {
     let mut lines = Vec::new();
+    let lead = lead::lead_workspace(&herdr::workspaces()?);
     for agent in herdr::agents()? {
         let Some(reload) = reload_for(&agent) else { continue };
+        if lead.is_some() && agent["workspace_id"].as_str() == lead.as_deref() {
+            lines.push(lead_line(&reload, restart_lead));
+            continue;
+        }
         let pane = agent["pane_id"].as_str().unwrap_or_default();
         let name = agent["name"].as_str().or(agent["display_agent"].as_str()).unwrap_or(pane);
         lines.push(match reload {
@@ -108,5 +130,17 @@ mod tests {
         assert_eq!(reload_for(&agent("blocked", true, false)), Some(Reload::Busy));
         assert_eq!(reload_for(&agent("idle", false, false)), Some(Reload::Busy));
         assert_eq!(reload_for(&json!({ "agent": "codex", "agent_status": "idle" })), None);
+    }
+
+    #[test]
+    fn update_restarts_a_waiting_lead_and_otherwise_says_how_to_restart_it() {
+        let restarted = std::cell::Cell::new(0);
+        let restart = || { restarted.set(restarted.get() + 1); Ok("Restarted the lead with its current role and settings, resuming its conversation.".to_string()) };
+        assert_eq!(lead_line(&Reload::Now, restart), "  lead: Restarted the lead with its current role and settings, resuming its conversation.");
+        assert_eq!(lead_line(&Reload::Now, || Err("The lead is working; run kelpie lead --restart when it is idle.".to_string())), "  lead: The lead is working; run kelpie lead --restart when it is idle.");
+        for reload in [Reload::Focused, Reload::Busy] {
+            assert_eq!(lead_line(&reload, restart), "  lead: restart the lead when it waits: kelpie lead --restart");
+        }
+        assert_eq!(restarted.get(), 1);
     }
 }

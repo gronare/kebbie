@@ -119,22 +119,28 @@ fn settings(kelpie: &str) -> String {
     }).to_string()
 }
 
-enum Session {
+pub(crate) enum Session {
     New(String),
     Resume(String),
+}
+
+impl Session {
+    pub(crate) fn args(&self) -> [String; 2] {
+        match self {
+            Session::New(id) => ["--session-id".to_string(), id.clone()],
+            Session::Resume(id) => ["--resume".to_string(), id.clone()],
+        }
+    }
 }
 
 fn claude_args(mode: Option<&str>, settings: &Path, role: &Path, session: &Session) -> Vec<String> {
     let mut args: Vec<String> = mode.map(|mode| vec!["--permission-mode".to_string(), mode.to_string()]).unwrap_or_default();
     args.extend(["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), role.to_string_lossy().to_string()]);
-    args.extend(match session {
-        Session::New(id) => ["--session-id".to_string(), id.clone()],
-        Session::Resume(id) => ["--resume".to_string(), id.clone()],
-    });
+    args.extend(session.args());
     args
 }
 
-fn new_session_id() -> Result<String> {
+pub(crate) fn new_session_id() -> Result<String> {
     use std::io::Read;
     let mut bytes = [0u8; 16];
     std::fs::File::open("/dev/urandom").and_then(|mut random| random.read_exact(&mut bytes)).map_err(|error| error.to_string())?;
@@ -162,7 +168,7 @@ fn forget_session(task: &str, repo: &Path) {
 }
 
 // Claude Code keeps a folder's conversations as <session id>.jsonl under its projects dir, the folder's path with every other character than a letter or digit as '-'.
-fn transcripts_dir(claude_home: &Path, folder: &Path) -> PathBuf {
+pub(crate) fn transcripts_dir(claude_home: &Path, folder: &Path) -> PathBuf {
     let name: String = folder.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect();
     claude_home.join("projects").join(name)
 }
@@ -307,6 +313,25 @@ pub fn start_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Res
         std::thread::sleep(Duration::from_secs(1));
     }
     Err(format!("The shell in {pane} never became ready for Claude; herdr said: {last}"))
+}
+
+// Escape clears what is typed or interrupts; Claude Code exits on its second ctrl-c, and a ctrl-c more would reach the shell.
+pub fn end_claude(pane: &str) -> Result<()> {
+    end_with(|key| herdr::send_keys(pane, &[key]), || Ok(herdr::foreground(pane)?.is_none()), || std::thread::sleep(Duration::from_millis(500)), 10)
+        .map_err(|_| format!("Claude in {pane} did not exit after escape and ctrl-c; see what holds it there"))
+}
+
+fn end_with(mut send: impl FnMut(&str) -> Result<()>, mut at_shell: impl FnMut() -> Result<bool>, mut pause: impl FnMut(), tries: usize) -> Result<()> {
+    send("esc")?;
+    pause();
+    for _ in 0..tries {
+        if at_shell()? {
+            return Ok(());
+        }
+        send("ctrl+c")?;
+        pause();
+    }
+    if at_shell()? { Ok(()) } else { Err("still running".to_string()) }
 }
 
 // Claude asks about a folder it has not seen with "No, exit" selected; a prompt sent before it is ready is lost.
@@ -1204,6 +1229,20 @@ mod tests {
         assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} ask:*)"))), "a task asks the user without a permission prompt");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ending_a_claude_sends_escape_then_ctrl_c_only_until_the_shell_is_back() {
+        let run = |exits_after: usize, tries: usize| {
+            let keys = std::cell::RefCell::new(Vec::new());
+            let result = end_with(|key| { keys.borrow_mut().push(key.to_string()); Ok(()) }, || Ok(keys.borrow().iter().filter(|key| *key == "ctrl+c").count() >= exits_after), || {}, tries);
+            (result, keys.into_inner())
+        };
+        assert_eq!(run(2, 10), (Ok(()), vec!["esc".to_string(), "ctrl+c".to_string(), "ctrl+c".to_string()]));
+        assert_eq!(run(0, 10), (Ok(()), vec!["esc".to_string()]));
+        let (result, keys) = run(usize::MAX, 3);
+        assert!(result.is_err());
+        assert_eq!(keys.len(), 4, "{keys:?}");
     }
 
     #[test]

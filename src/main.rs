@@ -44,7 +44,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie board [--overlay]        the board: tasks and sessions, with keys to act on them
   kelpie areas                    the vault's areas with their repo: main against origin, last release, notes, actions
   kelpie lead                     go to the lead Space (creating it), or back to where you were
-                                  (--first only moves the lead Space to the top of herdr's Spaces)
+                                  (--first only moves the lead Space to the top of herdr's Spaces; --restart
+                                  restarts an idle lead's Claude on its current role and settings, resuming
+                                  its conversation)
   kelpie peers                    who you are and the other task sessions, with what each is doing
   kelpie tell <to> <text>         message another session: a task (every half of it), task@repo, or lead; held
                                   while it waits for an answer, and logged
@@ -95,8 +97,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie config [--repo <path>]   the config layers found (.kelpie.toml, machine config, defaults) and every
                                   setting in effect with the layer it comes from
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap
-  kelpie update                   update the herdr and Claude Code plugins, rebuild, and reload the plugins in
-                                  every waiting Claude session
+  kelpie update                   update the herdr and Claude Code plugins, rebuild, reload the plugins in
+                                  every waiting Claude session, and restart an idle lead on its new role
 
 Without a name, land, review, push, done, drop and reset act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>.";
@@ -233,6 +235,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("board") => board::run(arguments.flag("--overlay")),
         Some("areas") => areas::print(),
         Some("lead") if arguments.flag("--first") => lead::keep_first(),
+        Some("lead") if arguments.flag("--restart") => lead::restart(),
         Some("lead") => lead::toggle(),
         Some("peers") => peers::peers(&cwd),
         Some("tell") => {

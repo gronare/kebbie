@@ -9,7 +9,7 @@ use crate::herdr;
 use crate::peers;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
-use crate::tasks;
+use crate::tasks::{self, Session};
 
 pub const STATE_DIR_VAR: &str = "KELPIE_STATE_DIR";
 
@@ -160,15 +160,97 @@ fn role_file() -> Result<PathBuf> {
     Ok(file)
 }
 
-fn chat_args(role: &Path, settings: &Path) -> Vec<String> {
-    ["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings.to_string_lossy()].map(str::to_string).to_vec()
+fn chat_args(role: &Path, settings: &Path, session: &Session) -> Vec<String> {
+    let mut args = ["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings.to_string_lossy()].map(str::to_string).to_vec();
+    args.extend(session.args());
+    args
 }
 
-fn start_chat(pane: &str) -> Result<()> {
+fn session_file() -> Result<PathBuf> {
+    Ok(state_dir()?.join("lead-session"))
+}
+
+fn session_id(session: &Session) -> &str {
+    match session {
+        Session::New(id) | Session::Resume(id) => id,
+    }
+}
+
+fn start_chat(pane: &str, session: Session) -> Result<()> {
     let role = role_file()?;
     let settings = write_settings(&roles_dir()?, LEAD_LABEL, &settings(&peers::kelpie_command()?))?;
-    let args = chat_args(&role, &settings);
-    tasks::start_claude("lead", pane, &args.iter().map(String::as_str).collect::<Vec<_>>(), true)
+    let args = chat_args(&role, &settings, &session);
+    tasks::start_claude("lead", pane, &args.iter().map(String::as_str).collect::<Vec<_>>(), true)?;
+    fs::write(session_file()?, session_id(&session)).map_err(|error| error.to_string())
+}
+
+fn new_chat(pane: &str) -> Result<()> {
+    start_chat(pane, Session::New(tasks::new_session_id()?))
+}
+
+// The lead's directory is its own, so its newest conversation there is the lead's; the recorded one wins unless a newer one exists, as after /clear.
+fn lead_session(dir: &Path, recorded: Option<&str>) -> Option<String> {
+    let transcripts: Vec<(std::time::SystemTime, String)> = fs::read_dir(dir).ok()?.flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "jsonl"))
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path().file_stem()?.to_string_lossy().to_string())))
+        .collect();
+    let newest = transcripts.iter().map(|(modified, _)| *modified).max()?;
+    recorded.filter(|id| transcripts.iter().any(|(modified, stem)| stem == id && *modified == newest)).map(str::to_string)
+        .or_else(|| transcripts.iter().find(|(modified, _)| *modified == newest).map(|(_, stem)| stem.clone()))
+}
+
+#[derive(Debug, PartialEq)]
+enum Restart {
+    Nothing,
+    Working,
+    Asking,
+    Go,
+}
+
+fn restart_verdict(agent: Option<&Value>) -> Restart {
+    let Some(agent) = agent.filter(|agent| agent["agent"] == "claude") else { return Restart::Nothing };
+    match agent["agent_status"].as_str().unwrap_or_default() {
+        "blocked" => Restart::Asking,
+        "idle" | "done" if agent["interactive_ready"] == true => Restart::Go,
+        _ => Restart::Working,
+    }
+}
+
+pub fn lead_workspace(workspaces: &[Value]) -> Option<String> {
+    workspaces.iter().find(|workspace| workspace["label"] == LEAD_LABEL).and_then(workspace_id)
+}
+
+pub fn lead_agent<'a>(agents: &'a [Value], lead: &str) -> Option<&'a Value> {
+    agents.iter().find(|agent| agent["agent"] == "claude" && agent["workspace_id"].as_str() == Some(lead))
+}
+
+pub fn restart() -> Result<String> {
+    let nothing = "No lead is running, so there is nothing to restart.".to_string();
+    let Some(lead) = lead_workspace(&herdr::workspaces()?) else { return Ok(nothing) };
+    let agents = herdr::agents()?;
+    let agent = lead_agent(&agents, &lead);
+    match restart_verdict(agent) {
+        Restart::Nothing => return Ok(nothing),
+        Restart::Working => return Err("The lead is working; run kelpie lead --restart when it is idle.".to_string()),
+        Restart::Asking => return Err("The lead is waiting on a question; answer it, then run kelpie lead --restart when the lead is idle.".to_string()),
+        Restart::Go => {}
+    }
+    let pane = agent.and_then(|agent| agent["pane_id"].as_str()).ok_or("The lead's Claude has no pane")?.to_string();
+    let dir = lead_dir()?;
+    let recorded = fs::read_to_string(session_file()?).ok().map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
+    let previous = tasks::claude_home().and_then(|home| {
+        let canonical = dir.canonicalize().ok();
+        [Some(dir.clone()), canonical].into_iter().flatten().find_map(|dir| lead_session(&tasks::transcripts_dir(&home, &dir), recorded.as_deref()))
+    });
+    let resumed = previous.is_some();
+    let session = match previous {
+        Some(id) => Session::Resume(id),
+        None => Session::New(tasks::new_session_id()?),
+    };
+    tasks::end_claude(&pane)?;
+    start_chat(&pane, session)?;
+    let how = if resumed { "resuming its conversation" } else { "with a new conversation, as none of its own was found" };
+    Ok(format!("Restarted the lead with its current role and settings, {how}."))
 }
 
 // Whatever was quit or closed since the lead Space was made comes back when the user goes there: the board, the messages, or the lead's Claude.
@@ -186,9 +268,9 @@ fn repair(lead: &str) -> Result<()> {
         None => herdr::run_in_pane(&herdr::split_down(&board, &lead_dir()?, "0.65")?, &format!("'{executable}' messages"))?,
     }
     match places.chat {
-        Some(pane) if herdr::foreground(&pane)?.is_none() => start_chat(&pane)?,
+        Some(pane) if herdr::foreground(&pane)?.is_none() => new_chat(&pane)?,
         Some(_) => {}
-        None => start_chat(&herdr::split_right(&board, &lead_dir()?, "0.68")?)?,
+        None => new_chat(&herdr::split_right(&board, &lead_dir()?, "0.68")?)?,
     }
     Ok(())
 }
@@ -201,7 +283,7 @@ fn create() -> Result<String> {
     let chat = herdr::split_right(&board, &dir, "0.68")?;
     let messages = herdr::split_down(&board, &dir, "0.65")?;
     herdr::run_in_pane(&messages, &format!("'{}' messages", executable()?.display()))?;
-    let started = start_chat(&chat);
+    let started = new_chat(&chat);
     herdr::focus_workspace(&space.workspace_id)?;
     started?;
     Ok("Lead Space created: the board on the left over the sessions' messages, the lead on the right.".to_string())
@@ -286,10 +368,11 @@ mod tests {
         let kelpie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kelpie", "nested/".repeat(20));
         let file = write_settings(&dir, LEAD_LABEL, &settings(&kelpie)).unwrap();
         assert_eq!(file, dir.join("lead.settings.json"));
-        let args = chat_args(&dir.join("lead.md"), &file);
+        let args = chat_args(&dir.join("lead.md"), &file, &Session::New("0b5e8c1e-4a52-4c1b-9b7e-2f6a1d3c9e40".to_string()));
         let line = args.join(" ");
         assert!(!line.contains('{') && line.len() < 512, "{line}");
         assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
+        assert_eq!(args[args.len() - 2..], ["--session-id".to_string(), "0b5e8c1e-4a52-4c1b-9b7e-2f6a1d3c9e40".to_string()]);
         let written: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
         assert_eq!(written["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], format!("'{kelpie}' messages --unread"));
@@ -297,5 +380,57 @@ mod tests {
         assert!(written["permissions"]["deny"].is_null() && written["env"].is_null(), "the lead may push on the user's word, outside kelpie push too");
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} push:*)"))));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_restart_resumes_the_recorded_conversation_unless_a_newer_one_is_in_the_leads_folder() {
+        let dir = std::env::temp_dir().join(format!("kelpie-lead-session-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(lead_session(&dir, Some("recorded")), None);
+        let at = |name: &str, seconds: u64| {
+            let file = fs::File::create(dir.join(name)).unwrap();
+            file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
+        };
+        at("older.jsonl", 100);
+        at("recorded.jsonl", 200);
+        at("newest.txt", 900);
+        assert_eq!(lead_session(&dir, Some("recorded")).as_deref(), Some("recorded"));
+        assert_eq!(lead_session(&dir, None).as_deref(), Some("recorded"));
+        assert_eq!(lead_session(&dir, Some("gone")).as_deref(), Some("recorded"));
+        at("after-clear.jsonl", 300);
+        assert_eq!(lead_session(&dir, Some("recorded")).as_deref(), Some("after-clear"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_restart_goes_ahead_only_for_an_idle_lead_and_says_why_otherwise() {
+        let agent = |status: &str, ready: bool| json!({ "agent": "claude", "agent_status": status, "interactive_ready": ready, "workspace_id": "w_lead", "pane_id": "p_9" });
+        assert_eq!(restart_verdict(Some(&agent("idle", true))), Restart::Go);
+        assert_eq!(restart_verdict(Some(&agent("done", true))), Restart::Go);
+        assert_eq!(restart_verdict(Some(&agent("working", true))), Restart::Working);
+        assert_eq!(restart_verdict(Some(&agent("idle", false))), Restart::Working);
+        assert_eq!(restart_verdict(Some(&agent("blocked", true))), Restart::Asking);
+        assert_eq!(restart_verdict(None), Restart::Nothing);
+        assert_eq!(restart_verdict(Some(&json!({ "agent": "codex", "agent_status": "idle" }))), Restart::Nothing);
+    }
+
+    #[test]
+    fn the_leads_claude_is_the_one_in_the_lead_space() {
+        let workspaces = [json!({ "label": "api", "workspace_id": "w_1" }), json!({ "label": LEAD_LABEL, "workspace_id": "w_lead" })];
+        assert_eq!(lead_workspace(&workspaces).as_deref(), Some("w_lead"));
+        assert_eq!(lead_workspace(&workspaces[..1]), None);
+        let agents = [json!({ "agent": "claude", "workspace_id": "w_1", "pane_id": "p_1" }), json!({ "agent": "codex", "workspace_id": "w_lead", "pane_id": "p_2" }), json!({ "agent": "claude", "workspace_id": "w_lead", "pane_id": "p_3" })];
+        assert_eq!(lead_agent(&agents, "w_lead").unwrap()["pane_id"], "p_3");
+        assert!(lead_agent(&agents[..2], "w_lead").is_none());
+    }
+
+    #[test]
+    fn every_start_of_the_leads_claude_records_a_session_id() {
+        let source = include_str!("lead.rs");
+        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        assert!(body("start_chat").contains("fs::write(session_file()?"));
+        for caller in ["repair", "create"] {
+            assert!(body(caller).contains("new_chat(") && !body(caller).contains("start_chat("), "{caller}");
+        }
     }
 }
