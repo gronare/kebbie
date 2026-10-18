@@ -46,7 +46,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   while it waits for an answer, and logged
   kelpie report --state <state> --next <step> <summary>
                                   run by a task's Claude at the end of a turn: where it stands (needs-you, ready,
-                                  working, blocked) and what you should do next, for the board and the lead
+                                  working, blocked) and what you should do next, for the board and the lead;
+                                  with ready, --card <file> is the sign-off card the push dialog shows above the commits
   kelpie ask --option \"<label>: <meaning>\" … --recommend <n> <question>
                                   run by a task's Claude to put a question to the user: two to four options, one
                                   recommended (--plan <file> asks to approve a plan instead); it waits in kelpie's
@@ -60,11 +61,14 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie land [name]              rebase a task onto the default branch and check it is clean; on a conflict, its
                                   Claude resolves the rebase
   kelpie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
-  kelpie review [name]            a separate, read-only Claude reviews the task's commits in the background, by the
-                                  skill kelpie:review and the rules skill; its verdict goes to the lead and the board
+  kelpie review [name]            send the task to review: a separate, read-only Claude reviews its commits in the
+                                  background, by the skill kelpie:review and the rules skill; the task waits under To
+                                  review, and push with it, until a verdict ok on its current code
   kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
                                   changes, the board shows it ready to push
   kelpie push [name]              after land: push the task to the default branch, then close it as done
+                                  (--through <sha> pushes its commits up to that one and keeps the task open, the rest
+                                  of its branch on top of what was pushed)
   kelpie done [name]              after pushing: close the task and free its worktree
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
   kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
@@ -89,7 +93,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -218,7 +222,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let text: Vec<String> = std::env::args().skip_while(|argument| argument != "tell").skip(2).collect();
             messages::tell(&cwd, to, &text.join(" "))
         }
-        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), &arguments.positionals[1..].join(" ")),
+        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.positionals[1..].join(" ")),
         Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.positionals[1..].join(" ")),
         Some("answered") => questions::answered(name.ok_or("kelpie answered needs the task whose question is settled")?),
         Some("hook") => {
@@ -232,7 +236,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
         Some("backlog") => Ok(backlog::show()),
         Some("land") => tasks::land(&cwd, name),
-        Some("push") => tasks::push(&cwd, name),
+        Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
         Some("review") if arguments.flag("--run") => review::run(&cwd),
         Some("review") => review::request(&cwd, name),

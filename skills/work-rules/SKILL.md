@@ -10,7 +10,7 @@ The branch is the task's **history**: what a reviewer reads, one commit at a tim
 1. **Subject, blank line, body.** The subject names what changed. The body says why the change was needed and what the code now does, so a reader who sees only this commit understands it.
 2. **One logical change per commit.** A reviewer reads one idea at a time and a revert takes one idea back. A refactor the change needs gets its own commit beside it.
 3. **Explicit file lists.** Stage with `git add <file> <file>…`, naming each file the commit carries, so it holds only this change even when other sessions share the repo.
-4. **The user pushes.** The task ends at a branch reported ready; the push goes through kelpie's Push and close on the user's word.
+4. **The user pushes.** The task ends at a branch reported ready; the push goes through kelpie's Push on the user's word.
 
 Example:
 

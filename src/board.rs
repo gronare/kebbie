@@ -25,6 +25,7 @@ use crate::fetch::{self, Fetcher};
 use crate::herdr;
 use crate::messages;
 use crate::repo::{self, name_of};
+use crate::report;
 use crate::sh::Result;
 use crate::status::{self, Checkout, Group, Item};
 use crate::tasks;
@@ -86,13 +87,13 @@ fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
     }
     if !item.is_some_and(busy) {
         if item.and_then(|item| item.git.as_ref()).is_some_and(|git| git.ahead > 0) {
-            choices.push(choice('v', "Request review", "a separate, read-only Claude reviews its commits in the background; the verdict goes to the lead"));
+            choices.push(choice('v', "Send to review", "a separate, read-only Claude reviews its commits; the task waits under To review until it passes them"));
         }
-        choices.extend([
-            choice('t', "Tidy commits", "its Claude reshapes them by the rules skill"),
-            choice('l', "Push and close", "rebase, check, show the commits, then push if you say so"),
-            choice('d', "Done", "already pushed elsewhere: close it and free the worktree"),
-        ]);
+        choices.push(choice('t', "Tidy commits", "its Claude reshapes them by the rules skill"));
+        if !item.is_some_and(Item::awaiting_review) {
+            choices.push(choice('l', "Push", "rebase, then its card and commits: push them all and close, or the first few and keep it open"));
+        }
+        choices.push(choice('d', "Done", "already pushed elsewhere: close it and free the worktree"));
     }
     choices.push(choice('z', "Reset", "stop it for good: its work goes, its backlog item comes back (asks first)"));
     choices.push(choice('x', "Drop", "throw the task away (asks first)"));
@@ -127,7 +128,7 @@ enum Mode {
     Message(String),
     ConfirmDrop { path: PathBuf, name: String, force: bool },
     ConfirmReset { path: PathBuf, name: String },
-    ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize },
+    ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)> },
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
     Help,
@@ -152,14 +153,15 @@ struct MessageEditor {
     path: PathBuf,
     commits: Vec<tasks::Commit>,
     selected: usize,
+    card: Option<(report::Card, bool)>,
     rewrite: Rewrite,
     text: TextArea<'static>,
     draft: Option<Receiver<Result<String>>>,
 }
 
 impl MessageEditor {
-    fn new(path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, rewrite: Rewrite, message: &str) -> Self {
-        let mut editor = Self { path, commits, selected, rewrite, text: TextArea::default(), draft: None };
+    fn new(path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, rewrite: Rewrite, message: &str) -> Self {
+        let mut editor = Self { path, commits, selected, card, rewrite, text: TextArea::default(), draft: None };
         editor.set_text(message);
         editor
     }
@@ -233,6 +235,7 @@ fn group_color(group: Group) -> Color {
     match group {
         Group::NeedsYou => PEACH,
         Group::Working => BLUE,
+        Group::ToReview => TEAL,
         Group::ReadyToPush => GREEN,
         Group::Idle => MUTED,
     }
@@ -293,6 +296,7 @@ fn row_facts(item: &Item) -> String {
     if item.unchecked() {
         parts.push(crate::status::UNCHECKED.to_string());
     }
+    parts.extend(item.review_note());
     if parts.len() == usize::from(absence(item).is_some()) {
         parts.push("nothing yet".to_string());
     }
@@ -597,18 +601,23 @@ impl App {
                     }
                 }
             }
-            Mode::ConfirmPush { path, commits, selected } => match key.code {
-                KeyCode::Char('y') => {
+            Mode::ConfirmPush { path, commits, selected, card } => match key.code {
+                KeyCode::Char(key @ ('y' | 'p')) => {
+                    let keep_open = key == 'p';
+                    let through = if keep_open { commits.get(selected) } else { commits.last() };
+                    let Some(through) = through.map(|commit| commit.sha.clone()) else { return };
+                    let count = if keep_open { selected + 1 } else { commits.len() };
                     let (sender, result) = mpsc::channel();
                     thread::spawn(move || {
-                        let _ = sender.send(tasks::push(&path, None));
+                        let _ = sender.send(tasks::push(&path, None, Some(&through), keep_open));
                     });
-                    self.mode = Mode::Working { label: format!("Pushing {} and closing the task…", plural(commits.len(), "commit")), result };
+                    let label = if keep_open { format!("Pushing {}; the task stays open…", plural(count, "commit")) } else { format!("Pushing {} and closing the task…", plural(count, "commit")) };
+                    self.mode = Mode::Working { label, result };
                 }
-                KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1) },
+                KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1), card },
                 KeyCode::Down | KeyCode::Char('j') => {
                     let selected = (selected + 1).min(commits.len().saturating_sub(1));
-                    self.mode = Mode::ConfirmPush { path, commits, selected };
+                    self.mode = Mode::ConfirmPush { path, commits, selected, card };
                 }
                 KeyCode::Char('s') if commits.len() > 1 => {
                     let (sender, receiver) = mpsc::channel();
@@ -616,7 +625,7 @@ impl App {
                     thread::spawn(move || {
                         let _ = sender.send(tasks::draft_squash_message(&draft_path));
                     });
-                    let mut editor = MessageEditor::new(path, commits, 0, Rewrite::Squash, "");
+                    let mut editor = MessageEditor::new(path, commits, 0, card, Rewrite::Squash, "");
                     editor.text.set_placeholder_text("Claude is drafting a message from the commits and the diff…");
                     editor.draft = Some(receiver);
                     self.mode = Mode::EditMessage(Box::new(editor));
@@ -624,7 +633,7 @@ impl App {
                 KeyCode::Char('e') => {
                     let Some(commit) = commits.get(selected) else { return };
                     let (sha, message) = (commit.sha.clone(), commit.message.clone());
-                    self.mode = Mode::EditMessage(Box::new(MessageEditor::new(path, commits, selected, Rewrite::Reword(sha), &message)));
+                    self.mode = Mode::EditMessage(Box::new(MessageEditor::new(path, commits, selected, card, Rewrite::Reword(sha), &message)));
                 }
                 _ => {}
             },
@@ -632,8 +641,8 @@ impl App {
                 let control = key.modifiers.contains(KeyModifiers::CONTROL);
                 match key.code {
                     KeyCode::Esc => {
-                        let MessageEditor { path, commits, selected, .. } = *editor;
-                        self.mode = Mode::ConfirmPush { path, commits, selected };
+                        let MessageEditor { path, commits, selected, card, .. } = *editor;
+                        self.mode = Mode::ConfirmPush { path, commits, selected, card };
                     }
                     KeyCode::Char('s') if control => {
                         let message = editor.message();
@@ -641,7 +650,7 @@ impl App {
                             self.mode = Mode::EditMessage(editor);
                             return;
                         }
-                        let MessageEditor { path, selected, rewrite, .. } = *editor;
+                        let MessageEditor { path, selected, rewrite, card, .. } = *editor;
                         let result = match &rewrite {
                             Rewrite::Reword(sha) => tasks::reword(&path, sha, &message),
                             Rewrite::Squash => tasks::squash(&path, &message),
@@ -649,7 +658,7 @@ impl App {
                         match result {
                             Ok(fresh) => {
                                 let selected = if matches!(rewrite, Rewrite::Squash) { 0 } else { selected.min(fresh.len().saturating_sub(1)) };
-                                self.mode = Mode::ConfirmPush { path, commits: fresh, selected };
+                                self.mode = Mode::ConfirmPush { path, commits: fresh, selected, card };
                             }
                             Err(error) => self.show(Err(error)),
                         }
@@ -758,6 +767,7 @@ impl App {
                     }
                     'r' => self.open_review(&item),
                     't' | 'l' | 'd' | 'v' if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
+                    'l' if item.awaiting_review() => self.show(Err(format!("{} is in review; push opens once its reviewer passes its commits.", item.name))),
                     't' => {
                         if let Some(path) = item.path.clone() {
                             let label = "How should the commits look? (optional, enter to let Claude decide)".to_string();
@@ -780,7 +790,10 @@ impl App {
                         match key {
                             'l' => match tasks::land(&path, None) {
                                 Ok(_) => match tasks::commits(&path) {
-                                    Ok(commits) => self.mode = Mode::ConfirmPush { path, commits, selected: 0 },
+                                    Ok(commits) => {
+                                        let card = report::card_for(&path);
+                                        self.mode = Mode::ConfirmPush { path, commits, selected: 0, card };
+                                    }
                                     Err(error) => self.show(Err(error)),
                                 },
                                 error => self.show(error),
@@ -936,10 +949,13 @@ fn pill(text: String, color: Color, lit: bool) -> Vec<Span<'static>> {
 
 fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     let count = |group: Group| app.tasks.iter().filter(|item| item.group() == group).count();
-    let (needs, working, ready) = (count(Group::NeedsYou), count(Group::Working), count(Group::ReadyToPush));
+    let (needs, working, review, ready) = (count(Group::NeedsYou), count(Group::Working), count(Group::ToReview), count(Group::ReadyToPush));
     let mut spans = vec![Span::styled("kelpie", bold(MAUVE)), Span::raw("   ")];
     spans.extend(pill(format!("● {needs} need you"), PEACH, needs > 0));
     spans.extend(pill(format!("◐ {working} working"), BLUE, working > 0));
+    if review > 0 {
+        spans.extend(pill(format!("◇ {review} to review"), TEAL, true));
+    }
     spans.extend(pill(format!("✓ {ready} ready to push"), GREEN, ready > 0));
     let questions = app.tasks.iter().filter(|item| item.question.is_some()).count();
     spans.extend(pill(format!("? {}", plural(questions, "question")), YELLOW, questions > 0));
@@ -1324,7 +1340,7 @@ fn help_lines() -> Vec<Line<'static>> {
     [
         ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("tab", "switch between the work and areas pages"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
-        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("v", "request an independent, read-only review of the task's commits"), ("l", "ready to push: rebase and check (on a task)"), ("d", "done: after you pushed"),
+        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("v", "send the task to review: a read-only Claude reads its commits"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
         ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
@@ -1408,33 +1424,11 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 Line::from(vec![Span::styled(question, style(YELLOW)), Span::styled("  y / n", style(MUTED))]),
             ], 72);
         }
-        Mode::ConfirmPush { commits, selected, .. } => {
-            let mut lines: Vec<Line> = Vec::new();
-            for (index, commit) in commits.iter().enumerate() {
-                let subject = commit.message.lines().next().unwrap_or_default().to_string();
-                let active = index == *selected;
-                lines.push(Line::from(vec![
-                    Span::raw(if active { "▸ " } else { "  " }),
-                    Span::styled(commit.sha.chars().take(7).collect::<String>(), style(MUTED)),
-                    Span::raw(" "),
-                    Span::styled(subject, if active { bold(MAUVE) } else { style(TEXT) }),
-                ]).style(if active { Style::new().bg(SURFACE) } else { Style::new() }));
-            }
-            if let Some(commit) = commits.get(*selected) {
-                lines.push(Line::default());
-                for line in commit.message.lines() {
-                    let wrapped = if line.is_empty() { vec![String::new()] } else { wrap(line, 88, 6) };
-                    lines.extend(wrapped.into_iter().map(|part| Line::from(Span::styled(part, style(TEXT)))));
-                }
-            }
-            lines.push(Line::default());
-            lines.push(Line::from(vec![
-                Span::styled("Push these and close the task?  ", style(YELLOW)),
-                Span::styled(if commits.len() > 1 { "y push · e edit message · s squash into one · ↑ ↓ commit · esc cancel" } else { "y push · e edit message · esc cancel" }, style(MUTED)),
-            ]));
+        Mode::ConfirmPush { commits, selected, card, .. } => {
+            let (lines, first_commit) = push_lines(card.as_ref(), commits, *selected);
             let area = modal(frame, "push".to_string(), lines, 96);
             for index in 0..commits.len() {
-                let y = area.y + 1 + index as u16;
+                let y = area.y + 1 + (first_commit + index) as u16;
                 if y < area.bottom().saturating_sub(1) {
                     modal_hits.push((Rect::new(area.x, y, area.width, 1), Hit::Commit(index)));
                 }
@@ -1473,6 +1467,67 @@ fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         app.hits = modal_hits;
     }
+}
+
+const CARD_LINES: usize = 16;
+
+// The sign-off card the task wrote when it reported ready, as the user reads it before pushing; an image shows as its path.
+fn card_lines(card: &report::Card, current: bool, width: usize) -> Vec<Line<'static>> {
+    let mut head = vec![Span::styled("card", bold(TEAL)), Span::styled(format!(" · written at {}", card.sha.chars().take(7).collect::<String>()), style(MUTED))];
+    if !current {
+        head.push(Span::styled(" · the code changed since", style(YELLOW)));
+    }
+    let mut body = Vec::new();
+    for line in card.text.lines() {
+        let image = line.trim().strip_prefix("![").and_then(|rest| rest.split_once("](")).map(|(alt, rest)| (alt, rest.trim_end_matches(')')));
+        match image {
+            Some((alt, path)) => body.push(Line::from(vec![Span::styled("▣ ", style(TEAL)), Span::styled(path.to_string(), style(TEXT)), Span::styled(format!("  {alt}"), style(MUTED))])),
+            None if line.trim().is_empty() => body.push(Line::default()),
+            None => body.extend(wrap(line, width, 4).into_iter().map(|part| Line::from(Span::styled(part, style(TEXT))))),
+        }
+    }
+    if body.len() > CARD_LINES {
+        body.truncate(CARD_LINES);
+        body.push(Line::from(Span::styled(format!("… the rest in {}", card.file.display()), style(MUTED))));
+    }
+    let mut lines = vec![Line::from(head)];
+    lines.extend(body);
+    lines
+}
+
+// The push dialog's lines, and the line its first commit is on.
+fn push_lines(card: Option<&(report::Card, bool)>, commits: &[tasks::Commit], selected: usize) -> (Vec<Line<'static>>, usize) {
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some((card, current)) = card {
+        lines.extend(card_lines(card, *current, 88));
+        lines.push(Line::default());
+    }
+    let first_commit = lines.len();
+    for (index, commit) in commits.iter().enumerate() {
+        let subject = commit.message.lines().next().unwrap_or_default().to_string();
+        let active = index == selected;
+        lines.push(Line::from(vec![
+            Span::raw(if active { "▸ " } else { "  " }),
+            Span::styled(commit.sha.chars().take(7).collect::<String>(), style(MUTED)),
+            Span::raw(" "),
+            Span::styled(subject, if active { bold(MAUVE) } else { style(TEXT) }),
+        ]).style(if active { Style::new().bg(SURFACE) } else { Style::new() }));
+    }
+    if let Some(commit) = commits.get(selected) {
+        lines.push(Line::default());
+        for line in commit.message.lines() {
+            let wrapped = if line.is_empty() { vec![String::new()] } else { wrap(line, 88, 6) };
+            lines.extend(wrapped.into_iter().map(|part| Line::from(Span::styled(part, style(TEXT)))));
+        }
+    }
+    lines.push(Line::default());
+    let keys = if commits.len() > 1 {
+        format!("y push all and close · p push the first {} and keep it open · e edit message · s squash into one · ↑ ↓ commit · esc cancel", selected + 1)
+    } else {
+        "y push and close · p push and keep it open · e edit message · esc cancel".to_string()
+    };
+    lines.push(Line::from(vec![Span::styled("Push?  ", style(YELLOW)), Span::styled(keys, style(MUTED))]));
+    (lines, first_commit)
 }
 
 const RESTART_STATE: &str = "KELPIE_BOARD_STATE";
@@ -1638,6 +1693,38 @@ mod tests {
         assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprzx");
         assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprvtldzx");
         assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gprtldzx", "no commits, nothing to review");
+    }
+
+    #[test]
+    fn a_task_in_review_offers_no_push_until_its_reviewer_passes_it() {
+        let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
+        item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
+        assert_eq!(keys(&item), "gprvtdzx");
+        assert_eq!(row_facts(&item), "1 commit · review: 2 findings");
+        item.verdict = Some(crate::status::tests::in_review(true, 0, false, false));
+        assert_eq!(keys(&item), "gprvtldzx");
+        assert_eq!(row_facts(&item), "1 commit · reviewed");
+    }
+
+    #[test]
+    fn the_push_dialog_shows_the_card_above_the_commits_with_its_images_as_paths() {
+        let text = |lines: &[Line]| lines.iter().map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        let commits = vec![tasks::Commit { sha: "1111111aaaa".to_string(), message: "Add refunds\n\nso a customer gets money back".to_string() }, tasks::Commit { sha: "2222222bbbb".to_string(), message: "Show refunds".to_string() }];
+        let card = report::Card { sha: "abcdef0123".to_string(), text: "Refunds show on the billing page.\n\n![the refund row](/tmp/refund.png)\nConfirm: 30 days.".to_string(), file: PathBuf::from("/state/cards/billing@web.md") };
+        let (lines, first) = push_lines(Some(&(card, true)), &commits, 1);
+        let screen = text(&lines);
+        assert!(screen.starts_with("card · written at abcdef0\nRefunds show on the billing page.\n\n▣ /tmp/refund.png  the refund row\nConfirm: 30 days.\n"), "{screen}");
+        assert!(text(&lines[first..first + 1]).contains("1111111 Add refunds"), "the first commit is where the mouse hits are counted from");
+        assert!(screen.contains("p push the first 2 and keep it open"), "{screen}");
+        assert!(!screen.contains("the code changed since"));
+        let stale = report::Card { sha: "abcdef0123".to_string(), text: (0..40).map(|index| format!("line {index}")).collect::<Vec<_>>().join("\n"), file: PathBuf::from("/state/cards/billing@web.md") };
+        let (lines, _) = push_lines(Some(&(stale, false)), &commits, 0);
+        let screen = text(&lines);
+        assert!(screen.contains("the code changed since") && screen.contains("… the rest in /state/cards/billing@web.md") && !screen.contains("line 20"), "{screen}");
+        let (lines, first) = push_lines(None, &commits[..1], 0);
+        assert_eq!(first, 0);
+        assert!(text(&lines).contains("y push and close · p push and keep it open"));
     }
 
     #[test]

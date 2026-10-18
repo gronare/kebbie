@@ -263,6 +263,13 @@ pub fn notify_lead(text: &str) -> Result<()> {
     send("kelpie", &lead, text, &sessions).map(|_| ())
 }
 
+// kelpie's own word to a task, held like any message while it waits for an answer.
+pub fn notify(to: &str, text: &str) -> Result<()> {
+    let sessions = peers::sessions()?;
+    let Ok(recipients) = peers::resolve(to, "kelpie", &sessions) else { return Ok(()) };
+    send("kelpie", &recipients, text, &sessions).map(|_| ())
+}
+
 // When a task starts in another repo, the halves already running learn of it.
 pub fn announce(task: &str, repo: &str) -> Result<()> {
     let sessions = peers::sessions()?;

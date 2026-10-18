@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::board::plural;
 use crate::config;
 use crate::herdr;
 use crate::lead::state_dir;
@@ -459,18 +460,8 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
     if ahead_behind(&slot.path, &upstream)?.0 == 0 {
         return Err(format!("{task} has no commits to land"));
     }
-    if git(&slot.path, &["rebase", "--quiet", &upstream]).is_err() {
-        git(&slot.path, &["rebase", "--abort"])?;
-        let Some(pane) = claude_of(&slot.path) else {
-            return Err(format!("{task} conflicts with {upstream} and has no Claude to resolve it; rebase it in {}", slot.path.display()));
-        };
-        herdr::prompt_agent(&pane, &format!(
-            "kelpie tried to land this task and rebasing onto {upstream} conflicts (already fetched). Rebase this branch onto {upstream} \
-             with git rebase {upstream} (no -i), resolve each conflict keeping the intent of both sides (read the upstream \
-             commits that touched the file), run the tests for the files involved, and continue until the rebase is finished. Do not \
-             push. Then tell me in a few lines what conflicted and how you resolved it."
-        ))?;
-        return Err(format!("{task} conflicts with {upstream}; its Claude is resolving the rebase. Push and close again when it reports back."));
+    if !rebase_or_hand_over(&slot, &upstream, "kelpie tried to land this task")? {
+        return Err(format!("{task} conflicts with {upstream}; its Claude is resolving the rebase. Push again when it reports back."));
     }
     let commits = git(&slot.path, &["log", "--oneline", &format!("{upstream}..HEAD")])?;
     let target = upstream.trim_start_matches("origin/");
@@ -478,6 +469,25 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
         "{task} is rebased onto {upstream} and ready:\n{commits}\n\nPush with:  kelpie push {task}   (or git -C {} push origin HEAD:{target}, then kelpie done {task})",
         slot.path.display()
     ))
+}
+
+// Ok(false) when the rebase conflicted and the task's Claude took it over.
+fn rebase_or_hand_over(slot: &Slot, upstream: &str, why: &str) -> Result<bool> {
+    if git(&slot.path, &["rebase", "--quiet", upstream]).is_ok() {
+        return Ok(true);
+    }
+    git(&slot.path, &["rebase", "--abort"])?;
+    let task = task_of(slot);
+    let Some(pane) = claude_of(&slot.path) else {
+        return Err(format!("{task} conflicts with {upstream} and has no Claude to resolve it; rebase it in {}", slot.path.display()));
+    };
+    herdr::prompt_agent(&pane, &format!(
+        "{why} and rebasing onto {upstream} conflicts (already fetched). Rebase this branch onto {upstream} \
+         with git rebase {upstream} (no -i), resolve each conflict keeping the intent of both sides (read the upstream \
+         commits that touched the file), run the tests for the files involved, and continue until the rebase is finished. Do not \
+         push. Then tell me in a few lines what conflicted and how you resolved it."
+    ))?;
+    Ok(false)
 }
 
 fn claude_of(path: &Path) -> Option<String> {
@@ -507,18 +517,86 @@ pub fn tidy(cwd: &Path, name: Option<&str>, note: &str) -> Result<String> {
     Ok(format!("Asked {task}'s Claude to tidy its commits."))
 }
 
-// After land: pushes the rebased task to the default branch and closes it.
-pub fn push(cwd: &Path, name: Option<&str>) -> Result<String> {
+// After land: pushes the task's commits through `through` (all of them without it) to the default branch, then closes the task, or with keep_open leaves the rest of its branch on top of what was pushed.
+pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bool) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
+    let task = task_of(&slot).to_string();
     let upstream = default_branch(&repo)?;
     let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
     if ahead == 0 || behind > 0 || !is_clean(&slot.path)? {
-        return Err(format!("{} is not landed; run land first", task_of(&slot)));
+        return Err(format!("{task} is not landed; run land first"));
     }
-    let target = format!("HEAD:{}", upstream.trim_start_matches("origin/"));
-    push_as_user(&slot.path, &[&target]).map_err(|error| format!("Pushing {} failed: {error}", task_of(&slot)))?;
-    done(cwd, name).map(|closed| format!("Pushed {ahead} commit(s) to {upstream}. {closed}"))
+    let head = git(&slot.path, &["rev-parse", "HEAD"])?;
+    let sha = pushable_through(&slot.path, &upstream, through.unwrap_or(&head), keep_open)?;
+    let address = peers::address(&task, &name_of(&repo));
+    let covered = |reviewed: &str| same_code(&slot.path, &upstream, reviewed, &head) || same_code(&slot.path, &upstream, reviewed, &sha);
+    crate::review::gate(crate::review::shown(&address, &slot.path, &upstream).as_ref(), covered).map_err(|why| format!("{task} cannot be pushed yet: {why}."))?;
+    let was_approved = approved(&slot.path, &upstream, &address);
+    let count = push_prefix(&slot.path, &upstream, &sha).map_err(|error| format!("Pushing {task} failed: {error}"))?;
+    if !keep_open {
+        return done(cwd, name).map(|closed| format!("Pushed {} to {upstream}. {closed}", plural(count, "commit")));
+    }
+    let (clean, rest) = keep_going(&state_dir()?, &repo, &slot, &upstream, &address, was_approved)?;
+    let short = &sha[..7.min(sha.len())];
+    let target = upstream.trim_start_matches("origin/");
+    let told = format!(
+        "The user pushed {} of this task, through {short}, to {target}; they are on {target} for good. Your branch continues from there with {} on top: reshape only those.",
+        plural(count, "commit"), plural(rest, "commit")
+    );
+    if let Err(error) = messages::notify(&address, &told) {
+        eprintln!("Could not tell {address} about the push: {error}");
+    }
+    let after = if clean { format!("{task} stays open with {} on top.", plural(rest, "commit")) } else { format!("{task} stays open; its Claude is resolving the rebase of the rest.") };
+    Ok(format!("Pushed {} through {short} to {upstream}. {after} {}", plural(count, "commit"), fast_forward_main(&repo, &upstream)?))
+}
+
+// After a push that keeps the task open: the rest of its branch goes on top of the new default branch, an approval of the whole branch holds for the rest, and the card, written for what was pushed, goes.
+fn keep_going(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, was_approved: bool) -> Result<(bool, usize)> {
+    fetch(repo)?;
+    let clean = rebase_or_hand_over(slot, upstream, "kelpie pushed this task's first commits")?;
+    let rest = ahead_behind(&slot.path, upstream)?.0;
+    if clean && was_approved && rest > 0 {
+        record_approval(state, address, &fingerprint(&slot.path, upstream)?)?;
+    }
+    crate::report::forget_card_in(state, address);
+    Ok((clean, rest))
+}
+
+// One of the task's commits not yet on upstream; a full push names HEAD, so a commit that arrived after the dialog opened is never pushed unseen.
+fn pushable_through(path: &Path, upstream: &str, rev: &str, keep_open: bool) -> Result<String> {
+    let sha = git(path, &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")]).map_err(|_| format!("{rev} is not a commit"))?;
+    let on_branch = crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &sha, "HEAD"], Some(path));
+    let new = git(path, &["rev-list", "--count", &format!("{upstream}..{sha}")])?.parse::<usize>().unwrap_or(0) > 0;
+    if !on_branch || !new {
+        return Err(format!("{} is not one of the task's commits to push", &sha[..7.min(sha.len())]));
+    }
+    if !keep_open && sha != git(path, &["rev-parse", "HEAD"])? {
+        return Err(format!("The branch has commits after {} that were not shown; open push again to see them", &sha[..7.min(sha.len())]));
+    }
+    Ok(sha)
+}
+
+// Fast-forwards the default branch on origin to sha; the remote-tracking branch follows.
+fn push_prefix(path: &Path, upstream: &str, sha: &str) -> Result<usize> {
+    let count = git(path, &["rev-list", "--count", &format!("{upstream}..{sha}")])?.parse::<usize>().map_err(|error| error.to_string())?;
+    let target = format!("{sha}:refs/heads/{}", upstream.trim_start_matches("origin/"));
+    push_as_user(path, &[&target])?;
+    Ok(count)
+}
+
+// The change rev makes where it left upstream, without context or line numbers, so a clean rebase, a reworded message or a squash keeps it.
+fn code(path: &Path, upstream: &str, rev: &str) -> Result<String> {
+    let base = git(path, &["merge-base", rev, upstream])?;
+    let diff = git(path, &["diff", "-U0", "--no-color", "--no-ext-diff", &base, rev])?;
+    let lines: Vec<&str> = diff.lines().filter(|line| !(line.starts_with("index ") || line.starts_with("@@"))).collect();
+    let mut hasher = Fnv::default();
+    hasher.write(lines.join("\n").as_bytes());
+    Ok(format!("{:016x}", hasher.0))
+}
+
+pub fn same_code(path: &Path, upstream: &str, one: &str, other: &str) -> bool {
+    one == other || matches!((code(path, upstream, one), code(path, upstream, other)), (Ok(one), Ok(other)) if one == other)
 }
 
 // Every message and every added or removed line, without line numbers or context, so a rebase that applies cleanly keeps the fingerprint.
@@ -726,6 +804,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     forget_session(task_of(&slot), &repo);
     forget_approval(task_of(&slot), &repo);
     crate::review::forget(task_of(&slot), &repo);
+    crate::report::forget_card(task_of(&slot), &repo);
     end_life(task_of(&slot), &repo, "done");
     Ok(finished + &close_space(workspace))
 }
@@ -784,6 +863,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     forget_session(task, &repo);
     forget_approval(task, &repo);
     crate::review::forget(task, &repo);
+    crate::report::forget_card(task, &repo);
     end_life(task, &repo, how);
     Ok(format!("{task} dropped; {} is free again.{}", name_of(&slot.path), close_space(workspace)))
 }
@@ -906,6 +986,7 @@ mod tests {
         assert!(body("discard").contains("forget_approval("));
         assert!(body("reset").contains("discard("));
         assert!(body("done").contains("review::forget(") && body("discard").contains("review::forget("), "a later task by the same name must not show this one's review");
+        assert!(body("done").contains("report::forget_card(") && body("discard").contains("report::forget_card("), "a later task by the same name must not show this one's card");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
     }
 
@@ -1132,6 +1213,73 @@ mod tests {
         assert!(!error.contains("fourth") && !error.contains(&fourth[..7]), "{error}");
         assert!(branch_exists(&dir, "billing"));
         assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "billing");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_code_survives_a_clean_rebase_a_reword_and_a_squash_and_not_a_changed_line() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        commit(&slot.path, "e", "fifth");
+        let reviewed = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        land_on_main(&dir, &upstream, |_| ());
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "rebase", "--quiet", &upstream]).unwrap();
+        let head = || git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        assert_ne!(head(), reviewed);
+        assert!(same_code(&slot.path, &upstream, &reviewed, &head()), "a clean rebase keeps the reviewed code");
+        reword(&slot.path, &head(), "fifth, reworded").unwrap();
+        assert!(same_code(&slot.path, &upstream, &reviewed, &head()), "a new message keeps it");
+        squash(&slot.path, "fourth and fifth").unwrap();
+        assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0));
+        assert!(same_code(&slot.path, &upstream, &reviewed, &head()), "a squash keeps it");
+        commit(&slot.path, "e", "fifth, changed");
+        assert!(!same_code(&slot.path, &upstream, &reviewed, &head()), "a changed line is code the reviewer never read");
+        assert!(!same_code(&slot.path, &upstream, "0000000000000000000000000000000000000000", &head()), "a sha that is gone is not the same code");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn push_takes_one_of_the_tasks_own_commits_and_a_full_push_only_up_to_head() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let fifth = commit(&slot.path, "e", "fifth");
+        assert_eq!(pushable_through(&slot.path, &upstream, &fourth, true).unwrap(), fourth);
+        assert_eq!(pushable_through(&slot.path, &upstream, &fourth[..10], true).unwrap(), fourth);
+        assert_eq!(pushable_through(&slot.path, &upstream, &fifth, false).unwrap(), fifth);
+        let unseen = pushable_through(&slot.path, &upstream, &fourth, false).unwrap_err();
+        assert!(unseen.contains("not shown"), "a commit that arrived after the dialog opened is never pushed unseen: {unseen}");
+        assert!(pushable_through(&slot.path, &upstream, &upstream, true).unwrap_err().contains("not one of the task's commits"));
+        let elsewhere = commit(&dir, "x", "on main only");
+        assert!(pushable_through(&slot.path, &upstream, &elsewhere, true).unwrap_err().contains("not one of the task's commits"));
+        assert!(pushable_through(&slot.path, &upstream, "no-such-ref", true).unwrap_err().contains("is not a commit"));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_of_the_first_commits_leaves_the_task_open_with_the_rest_on_top_and_its_approval() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        commit(&slot.path, "e", "fifth");
+        let state = dir.with_extension("state");
+        let _ = std::fs::remove_dir_all(&state);
+        record_approval(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
+        crate::report::save_card(&state, "billing@app", &fourth, "Refunds on the billing page.").unwrap();
+        assert_eq!(push_prefix(&slot.path, &upstream, &fourth).unwrap(), 1);
+        let branch = upstream.trim_start_matches("origin/");
+        assert_eq!(git(&origin, &["rev-parse", branch]).unwrap(), fourth, "origin has the first commit");
+        let (clean, rest) = keep_going(&state, &dir, &slot, &upstream, "billing@app", true).unwrap();
+        assert!(clean);
+        assert_eq!(rest, 1);
+        assert!(branch_exists(&dir, "billing"), "the task stays open");
+        assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "billing");
+        assert!(slots(&dir).unwrap().iter().any(|busy| busy.path == slot.path && !busy.free), "its worktree stays the task's");
+        assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0), "the rest sits on top of what was pushed");
+        assert_eq!(git(&slot.path, &["log", "--format=%s", &format!("{upstream}..HEAD")]).unwrap(), "fifth", "no pushed commit twice");
+        assert!(approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "an approval of the whole branch holds for the rest");
+        assert!(crate::report::card_in(&state, "billing@app").is_none(), "the card was for what was pushed");
+        let (_, after_unapproved) = keep_going(&state.join("other"), &dir, &slot, &upstream, "billing@app", false).unwrap();
+        assert_eq!(after_unapproved, 1);
+        assert!(!approval_file(&state.join("other"), "billing@app").exists(), "no approval is made up for a branch the lead never approved");
+        std::fs::remove_dir_all(state).unwrap();
         cleanup(dir, origin, &slot);
     }
 

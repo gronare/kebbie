@@ -18,6 +18,7 @@ pub const UNCHECKED: &str = "rules not checked by the lead";
 pub enum Group {
     NeedsYou,
     Working,
+    ToReview,
     ReadyToPush,
     Idle,
 }
@@ -27,6 +28,7 @@ impl Group {
         match self {
             Group::NeedsYou => "NEEDS YOU",
             Group::Working => "WORKING",
+            Group::ToReview => "TO REVIEW",
             Group::ReadyToPush => "READY TO PUSH",
             Group::Idle => "WAITING FOR WORK",
         }
@@ -84,6 +86,23 @@ impl Item {
         self.rebased() && !self.pushable() && self.group() != Group::Working
     }
 
+    // Sent to review and not passed yet: it waits under To review, and push waits with it.
+    pub fn awaiting_review(&self) -> bool {
+        self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(crate::review::Shown::pending)
+    }
+
+    pub fn review_note(&self) -> Option<String> {
+        let shown = self.verdict.as_ref()?;
+        let verdict = shown.verdict.as_ref();
+        Some(match verdict {
+            _ if shown.running => "review running".to_string(),
+            Some(_) if shown.stale => "review stale".to_string(),
+            Some(verdict) if verdict.ok => "reviewed".to_string(),
+            Some(verdict) => format!("review: {}", verdict.summary()),
+            None => return None,
+        })
+    }
+
     pub fn report_state(&self) -> Option<&str> {
         self.report.as_ref()?.report.as_ref().map(|report| report.state.as_str())
     }
@@ -95,8 +114,9 @@ impl Item {
             (Some("blocked"), _) => Group::NeedsYou,
             (Some("working"), _) | (_, Some("working")) => Group::Working,
             (_, Some("needs-you")) => Group::NeedsYou,
-            (_, Some("ready")) => if self.pushable() { Group::ReadyToPush } else { Group::NeedsYou },
             (_, Some("blocked")) => Group::Idle,
+            _ if self.awaiting_review() => Group::ToReview,
+            (_, Some("ready")) => if self.pushable() { Group::ReadyToPush } else { Group::NeedsYou },
             (Some("done"), _) => Group::NeedsYou,
             _ => if self.pushable() { Group::ReadyToPush } else { Group::Idle },
         }
@@ -137,7 +157,8 @@ impl Item {
 
     fn work(&self, git: &Git) -> String {
         if self.group() == Group::ReadyToPush {
-            return format!("{} · rebased, ready to push", plural(git.ahead, "commit"));
+            let review = self.review_note().map(|note| format!(" · {note}")).unwrap_or_default();
+            return format!("{} · rebased, ready to push{review}", plural(git.ahead, "commit"));
         }
         let mut parts = Vec::new();
         if git.ahead > 0 {
@@ -152,6 +173,7 @@ impl Item {
         if self.unchecked() {
             parts.push(UNCHECKED.to_string());
         }
+        parts.extend(self.review_note());
         if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
     }
 
@@ -288,11 +310,10 @@ pub fn gather() -> Result<Vec<Item>> {
             let changed = changed_count(&slot.path)?;
             let address = peers::address(&task, &name_of(repo));
             let approved = ahead > 0 && behind == 0 && changed == 0 && tasks::approved(&slot.path, &upstream, &address);
-            let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap_or_default();
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             items.push(Item {
                 review: review_progress(&slot.path, &upstream),
-                verdict: crate::review::shown(&address, &head),
+                verdict: crate::review::shown(&address, &slot.path, &upstream),
                 server: tokens["server"].is_string(),
                 place: name_of(repo),
                 repo: Some(repo.clone()),
@@ -402,6 +423,46 @@ pub(crate) mod tests {
         let mut behind = task(Some("idle"), Some("ready"), 2);
         behind.git.as_mut().unwrap().behind = 1;
         assert!(behind.group() == Group::NeedsYou);
+    }
+
+    pub(crate) fn in_review(ok: bool, findings: usize, stale: bool, running: bool) -> crate::review::Shown {
+        crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings }), stale, running, file: PathBuf::from("/state/verdicts/billing@web.md") }
+    }
+
+    #[test]
+    fn a_task_sent_to_review_waits_under_to_review_until_its_reviewer_passes_its_code() {
+        let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.verdict = Some(shown); item };
+        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, file: PathBuf::new() });
+        assert!(running.group() == Group::ToReview);
+        assert_eq!(running.summary(), "2 commits · review running");
+        let findings = reviewed(in_review(false, 2, false, false));
+        assert!(findings.group() == Group::ToReview);
+        assert!(findings.summary().ends_with("review: 2 findings"), "{}", findings.summary());
+        let stale = reviewed(in_review(true, 0, true, false));
+        assert!(stale.group() == Group::ToReview, "a pass on older code is not a pass");
+        assert!(stale.summary().ends_with("review stale"));
+        let passed = reviewed(in_review(true, 0, false, false));
+        assert!(passed.group() == Group::ReadyToPush);
+        assert_eq!(passed.summary(), "2 commits · rebased, ready to push · reviewed");
+        assert!(!task(Some("idle"), Some("ready"), 2).awaiting_review(), "a task never sent to review goes straight to push");
+    }
+
+    #[test]
+    fn reviewed_and_approved_are_separate_facts() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.verdict = Some(in_review(true, 0, false, false));
+        item.git.as_mut().unwrap().approved = false;
+        assert!(item.group() == Group::NeedsYou, "the reviewer's pass does not stand in for the lead's rules check");
+        assert!(item.summary().contains(UNCHECKED) && item.summary().contains("reviewed"), "{}", item.summary());
+        let mut working = task(Some("working"), Some("ready"), 2);
+        working.verdict = Some(in_review(false, 1, false, false));
+        assert!(working.group() == Group::Working);
+        let mut asks = task(Some("idle"), Some("needs-you"), 2);
+        asks.verdict = Some(in_review(false, 1, false, false));
+        assert!(asks.group() == Group::NeedsYou);
+        let mut pushed = task(Some("idle"), Some("ready"), 0);
+        pushed.verdict = Some(in_review(false, 1, true, false));
+        assert!(!pushed.awaiting_review(), "nothing left to push, nothing left to review");
     }
 
     #[test]

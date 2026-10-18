@@ -81,6 +81,11 @@ pub struct Shown {
 }
 
 impl Shown {
+    // Sent to review and not yet passed: the reviewer runs, asked for changes, or read older code.
+    pub fn pending(&self) -> bool {
+        self.running || self.stale || !self.verdict.as_ref().is_some_and(|verdict| verdict.ok)
+    }
+
     pub fn to_json(&self) -> Value {
         json!({
             "verdict": self.verdict.as_ref().map(|verdict| if verdict.ok { "ok" } else { "changes" }),
@@ -88,24 +93,56 @@ impl Shown {
             "sha": self.verdict.as_ref().map(|verdict| verdict.sha.chars().take(7).collect::<String>()),
             "stale": self.stale,
             "running": self.running,
+            "reviewed": !self.pending(),
             "file": self.file,
         })
     }
 }
 
-pub fn shown(address: &str, head: &str) -> Option<Shown> {
-    shown_in(&state_path(|name| std::env::var(name).ok()).ok()?, address, head)
+// A verdict holds for HEAD while HEAD makes the change it read, through a clean rebase, a reworded message or a squash.
+pub fn shown(address: &str, path: &Path, upstream: &str) -> Option<Shown> {
+    let head = git(path, &["rev-parse", "HEAD"]).ok()?;
+    shown_in(&state_path(|name| std::env::var(name).ok()).ok()?, address, |sha| tasks::same_code(path, upstream, sha, &head))
 }
 
-pub fn shown_in(state: &Path, address: &str, head: &str) -> Option<Shown> {
+pub fn shown_in(state: &Path, address: &str, current: impl Fn(&str) -> bool) -> Option<Shown> {
     let file = verdict_file(state, address);
     let verdict = fs::read_to_string(&file).ok().and_then(|text| parse_verdict(&text));
     let running = running_in(state, address);
     if verdict.is_none() && !running {
         return None;
     }
-    let stale = verdict.as_ref().is_some_and(|verdict| verdict.sha != head);
+    let stale = verdict.as_ref().is_some_and(|verdict| !current(&verdict.sha));
     Some(Shown { verdict, stale, running, file })
+}
+
+// A task never sent to review pushes freely; one sent pushes only code its reviewer passed, which `covered` says of the reviewed sha.
+pub fn gate(shown: Option<&Shown>, covered: impl Fn(&str) -> bool) -> std::result::Result<(), String> {
+    let Some(shown) = shown else { return Ok(()) };
+    if shown.running {
+        return Err("its review is still running".to_string());
+    }
+    match &shown.verdict {
+        Some(verdict) if verdict.ok && covered(&verdict.sha) => Ok(()),
+        Some(verdict) if !verdict.ok && !shown.stale => Err(format!("its review asks for changes ({})", verdict.summary())),
+        _ => Err("its review read older code; send it to review again".to_string()),
+    }
+}
+
+// A task in review that reports ready again after its verdict went stale is read again, without anyone asking.
+pub fn review_again(shown: Option<&Shown>) -> bool {
+    shown.is_some_and(|shown| !shown.running && shown.stale)
+}
+
+pub fn again_if_stale(cwd: &Path) -> Result<Option<String>> {
+    let repo = main_checkout(cwd)?;
+    let slot = tasks::find_task(&repo, None, cwd)?;
+    let upstream = default_branch(&repo)?;
+    let address = peers::address(tasks::task_of(&slot), &name_of(&repo));
+    if !review_again(shown(&address, &slot.path, &upstream).as_ref()) {
+        return Ok(None);
+    }
+    request(cwd, None).map(Some)
 }
 
 // A marker whose process is gone is a review that died, not one still running.
@@ -420,21 +457,52 @@ mod tests {
     fn a_verdict_goes_stale_when_head_moves_and_is_gone_once_forgotten() {
         let state = std::env::temp_dir().join(format!("kelpie-verdicts-{}", std::process::id()));
         let _ = fs::remove_dir_all(&state);
-        assert_eq!(shown_in(&state, "billing@app", "aaa"), None);
+        let at = |head: &'static str| move |sha: &str| sha == head;
+        assert_eq!(shown_in(&state, "billing@app", at("aaa")), None);
         fs::create_dir_all(dir(&state)).unwrap();
         assert!(!verdict_file(&state, "billing@app").starts_with(state.join("reviews")), "the review split owns reviews/");
         fs::write(verdict_file(&state, "billing@app"), record("verdict: changes\n- a.rs:1 — wrong; breaks x\n", "aaa").unwrap()).unwrap();
-        let current = shown_in(&state, "billing@app", "aaa").unwrap();
+        let current = shown_in(&state, "billing@app", at("aaa")).unwrap();
         assert_eq!((current.stale, current.running, current.verdict.as_ref().unwrap().findings), (false, false, 1));
-        assert!(shown_in(&state, "billing@app", "bbb").unwrap().stale, "a new commit makes the verdict stale");
-        assert_eq!(shown_in(&state, "billing@web", "aaa"), None);
+        assert!(shown_in(&state, "billing@app", at("bbb")).unwrap().stale, "a new commit makes the verdict stale");
+        assert_eq!(shown_in(&state, "billing@web", at("aaa")), None);
         fs::write(running_file(&state, "billing@app"), std::process::id().to_string()).unwrap();
-        assert!(shown_in(&state, "billing@app", "aaa").unwrap().running);
+        assert!(shown_in(&state, "billing@app", at("aaa")).unwrap().running);
         fs::write(running_file(&state, "billing@app"), "999999999").unwrap();
-        assert!(!shown_in(&state, "billing@app", "aaa").unwrap().running, "a review whose process is gone is not running");
+        assert!(!shown_in(&state, "billing@app", at("aaa")).unwrap().running, "a review whose process is gone is not running");
         forget_in(&state, "billing@app");
-        assert_eq!(shown_in(&state, "billing@app", "aaa"), None);
+        assert_eq!(shown_in(&state, "billing@app", at("aaa")), None);
         fs::remove_dir_all(state).unwrap();
+    }
+
+    fn shown_as(ok: Option<bool>, stale: bool, running: bool) -> Shown {
+        Shown { verdict: ok.map(|ok| Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok) * 2 }), stale, running, file: PathBuf::new() }
+    }
+
+    #[test]
+    fn a_task_in_review_pushes_only_code_its_reviewer_passed() {
+        let everything = |_: &str| true;
+        let nothing = |_: &str| false;
+        assert_eq!(gate(None, nothing), Ok(()), "a task never sent to review pushes freely");
+        assert_eq!(gate(Some(&shown_as(Some(true), false, false)), everything), Ok(()));
+        assert!(gate(Some(&shown_as(Some(true), false, false)), nothing).unwrap_err().contains("older code"), "a pass on other code than the pushed one");
+        assert!(gate(Some(&shown_as(Some(true), false, true)), everything).unwrap_err().contains("still running"));
+        assert!(gate(Some(&shown_as(None, false, true)), everything).unwrap_err().contains("still running"));
+        assert!(gate(Some(&shown_as(Some(false), false, false)), everything).unwrap_err().contains("asks for changes (2 findings)"));
+        assert!(gate(Some(&shown_as(Some(false), true, false)), nothing).unwrap_err().contains("send it to review again"));
+        assert!(gate(Some(&shown_as(Some(true), true, false)), |sha| sha == "abc").is_ok(), "the commits up to the reviewed code push while later ones wait");
+    }
+
+    #[test]
+    fn a_stale_verdict_is_read_again_when_the_task_reports_ready_and_a_current_one_is_not() {
+        assert!(review_again(Some(&shown_as(Some(false), true, false))));
+        assert!(review_again(Some(&shown_as(Some(true), true, false))));
+        assert!(!review_again(Some(&shown_as(Some(false), false, false))), "findings on the code as it is stand until the code changes");
+        assert!(!review_again(Some(&shown_as(Some(true), false, false))));
+        assert!(!review_again(Some(&shown_as(Some(true), true, true))), "one reviewer at a time");
+        assert!(!review_again(None), "a task never sent to review is not sent by a report");
+        assert!(shown_as(Some(true), false, false).to_json()["reviewed"] == true);
+        assert!(shown_as(Some(true), true, false).to_json()["reviewed"] == false);
     }
 
     #[test]

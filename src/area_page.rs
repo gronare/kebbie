@@ -630,7 +630,7 @@ impl Page {
                 let mut lines = vec![kv("task", text.clone(), TEXT), kv("in", repo::name_of(&repo), TEAL), Line::default()];
                 lines.extend(text_lines(&prompt, 88));
                 lines.push(Line::default());
-                lines.push(Line::from(Span::styled("you review it and Push and close it like any task", style(MUTED))));
+                lines.push(Line::from(Span::styled("you review it and push it like any task", style(MUTED))));
                 self.mode = Mode::Confirm { title: format!("start a task · {stem}"), lines, question: "Start the task?".to_string(), go: Go::Task { repo, name: text, prompt } };
             }
         }
