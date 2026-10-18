@@ -65,8 +65,16 @@ pub fn load() -> Backlog {
     let parsed: Option<Value> = file().ok().and_then(|path| fs::read_to_string(path).ok()).and_then(|raw| serde_json::from_str(&raw).ok());
     let Some(value) = parsed else { return Backlog { updated: None, entries: Vec::new() } };
     let mut entries: Vec<Entry> = value["entries"].as_array().into_iter().flatten().filter_map(entry).collect();
+    if let Ok(index) = crate::vault::Index::open() {
+        entries = still_backlog(entries, |key| index.status_of(key));
+    }
     entries.sort_by_key(|entry| PRIORITIES.iter().position(|priority| *priority == entry.priority));
     Backlog { updated: value["updated"].as_u64(), entries }
+}
+
+// A vault note picked up or closed since the snapshot leaves the Backlog column without waiting for a refresh.
+fn still_backlog(entries: Vec<Entry>, status: impl Fn(&str) -> Option<String>) -> Vec<Entry> {
+    entries.into_iter().filter(|entry| entry.source != "vault" || status(&entry.reference).as_deref() == Some("backlog")).collect()
 }
 
 pub fn age(updated: Option<u64>) -> String {
@@ -137,7 +145,7 @@ pub fn refresh_prompt(sources: &[Source]) -> Result<String> {
 pub fn task_prompt(entry: &Entry, sources: &[Source]) -> String {
     match entry.source.as_str() {
         "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then plan with me before changing code.", entry.reference, entry.title),
-        "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first, then plan with me before changing code.", entry.reference, entry.title),
+        "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first and set its status to active, then plan with me before changing code.", entry.reference, entry.title),
         _ => format!("Work on: {}. {} Plan with me before changing code.", entry.title, entry.summary),
     }
 }
@@ -219,9 +227,19 @@ mod tests {
     }
 
     #[test]
+    fn a_vault_note_picked_up_since_the_snapshot_leaves_the_backlog() {
+        let note = |reference: &str| Entry { reference: reference.to_string(), ..entry("vault") };
+        let entries = vec![note("Projects/open.md"), note("Projects/started.md"), note("Projects/closed.md"), entry("linear")];
+        let status = |key: &str| match key { "Projects/open.md" => Some("backlog".to_string()), "Projects/started.md" => Some("active".to_string()), _ => None };
+        let kept: Vec<String> = still_backlog(entries, status).into_iter().map(|entry| entry.reference).collect();
+        assert_eq!(kept, ["Projects/open.md", "ABC-1"]);
+    }
+
+    #[test]
     fn a_task_prompt_reads_the_source_only_when_it_is_configured() {
         assert!(task_prompt(&entry("linear"), &[Source::Linear]).starts_with("Work on Linear issue ABC-1: Fix it."));
         assert!(task_prompt(&entry("linear"), &[Source::Vault]).starts_with("Work on: Fix it. It broke."));
         assert!(task_prompt(&entry("vault"), &[Source::Vault]).starts_with("Work on the vault note ABC-1"));
+        assert!(task_prompt(&entry("vault"), &[Source::Vault]).contains("set its status to active"));
     }
 }

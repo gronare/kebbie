@@ -11,7 +11,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use serde_json::{Value, json};
 
-use crate::board::{FAINT, MAUVE, MUTED, PEACH, SUBTEXT, SURFACE, TEAL, TEXT, bold, style};
+use crate::board::{FAINT, MAUVE, MUTED, PEACH, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, style};
 use crate::herdr;
 use crate::lead::state_dir;
 use crate::peers::{self, Session};
@@ -204,8 +204,16 @@ pub fn latest_reports(messages: &[Message]) -> HashMap<String, Message> {
     messages.iter().filter(|message| message.report.is_some()).map(|message| (message.from.clone(), message.clone())).collect()
 }
 
-fn between_sessions(messages: Vec<Message>) -> Vec<Message> {
-    messages.into_iter().filter(|message| message.report.is_none()).collect()
+// What sessions told each other, and the task reports that wait on the user.
+fn shown_in_log(messages: Vec<Message>) -> Vec<Message> {
+    messages.into_iter().filter(|message| message.report.as_ref().is_none_or(|report| report.state != "working")).collect()
+}
+
+fn addressee(message: &Message) -> String {
+    match &message.report {
+        Some(report) => format!("you · {}", report.state.replace('-', " ")),
+        None => message.to.clone(),
+    }
 }
 
 pub fn age(at: u64) -> String {
@@ -219,13 +227,14 @@ pub fn age(at: u64) -> String {
 }
 
 pub fn print(count: usize) -> String {
-    let messages = between_sessions(load());
+    let messages = shown_in_log(load());
     if messages.is_empty() {
         return "No messages yet.".to_string();
     }
     messages[messages.len().saturating_sub(count)..].iter().map(|message| {
         let held = if message.held { "  (held)" } else { "" };
-        format!("{:>4}  {} → {}{held}\n      {}", age(message.at), message.from, message.to, message.text)
+        let next = message.next_for_you().map(|next| format!("\n      you: {next}")).unwrap_or_default();
+        format!("{:>4}  {} → {}{held}\n      {}{next}", age(message.at), message.from, addressee(message), message.text)
     }).collect::<Vec<_>>().join("\n")
 }
 
@@ -287,13 +296,16 @@ fn message_lines(message: &Message, width: usize) -> Vec<Line<'static>> {
         Span::styled(format!("{:>4} ", age(message.at)), style(FAINT)),
         Span::styled(message.from.clone(), style(TEAL)),
         Span::styled(" → ", style(MUTED)),
-        Span::styled(message.to.clone(), style(TEAL)),
+        Span::styled(addressee(message), style(if message.report.is_some() { PEACH } else { TEAL })),
     ];
     if message.held {
         head.push(Span::styled("  held", style(PEACH)));
     }
     let mut lines = vec![Line::from(head)];
     lines.extend(wrap(&message.text, width.saturating_sub(5).max(10)).into_iter().map(|text| Line::from(vec![Span::raw("     "), Span::styled(text, style(SUBTEXT))])));
+    if let Some(next) = message.next_for_you() {
+        lines.extend(wrap(&format!("you: {next}"), width.saturating_sub(5).max(10)).into_iter().map(|text| Line::from(vec![Span::raw("     "), Span::styled(text, style(YELLOW))])));
+    }
     lines.push(Line::default());
     lines
 }
@@ -310,8 +322,8 @@ fn draw(frame: &mut Frame, messages: &[Message], scroll: usize) {
     frame.render_widget(Paragraph::new(Line::from(Span::styled("─".repeat(width), style(SURFACE)))), rule);
     let mut lines: Vec<Line> = messages.iter().flat_map(|message| message_lines(message, width)).collect();
     if lines.is_empty() {
-        lines.push(Line::from(Span::styled("Sessions' messages to each other show here.", style(MUTED))));
-        lines.push(Line::from(Span::styled("They send them with kelpie tell.", style(MUTED))));
+        lines.push(Line::from(Span::styled("Sessions' messages to each other show here,", style(MUTED))));
+        lines.push(Line::from(Span::styled("and task reports that wait on you.", style(MUTED))));
     }
     let height = body.height as usize;
     let bottom = lines.len().saturating_sub(height);
@@ -331,7 +343,7 @@ pub fn run() -> Result<String> {
                 let _ = flush();
                 flushed = SystemTime::now();
             }
-            let messages = between_sessions(load());
+            let messages = shown_in_log(load());
             terminal.draw(|frame| draw(frame, &messages, scroll)).map_err(|error| error.to_string())?;
             if event::poll(Duration::from_millis(500)).map_err(|error| error.to_string())?
                 && let Event::Key(key) = event::read().map_err(|error| error.to_string())?
@@ -417,7 +429,8 @@ mod tests {
         let latest = latest_reports(&messages);
         assert_eq!(latest.len(), 1);
         assert_eq!(latest["billing@web"].text, "plan written");
-        assert_eq!(between_sessions(messages).len(), 1);
+        let shown: Vec<String> = shown_in_log(messages).into_iter().map(|message| message.id).collect();
+        assert_eq!(shown, ["2", "3"]);
     }
 
     #[test]

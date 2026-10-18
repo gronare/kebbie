@@ -763,18 +763,13 @@ impl App {
             Purpose::TaskPrompt(name) => {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
-                let options = tasks::Start { prompt: prompt.as_deref(), focus: true, from: None, mode: None };
-                let result = outside(terminal, || tasks::start(&repo, &name, &options));
-                self.show(result);
+                self.show(start_in_background(&repo, &name, prompt.as_deref()));
             }
             Purpose::BacklogName(entry) => {
                 let prompt = backlog::task_prompt(&entry, &self.sources);
-                let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None };
                 let known = self.repo_named(&entry.area);
-                let result = outside(terminal, || {
-                    let repo = known.map_or_else(|| repo::locate(&entry.area), Ok)?;
-                    tasks::start(&repo, &text, &options)
-                });
+                let result = known.map_or_else(|| outside(terminal, || repo::locate(&entry.area)), Ok)
+                    .and_then(|repo| start_in_background(&repo, &text, Some(&prompt)));
                 self.show(result);
             }
             Purpose::Tidy(path) => {
@@ -788,6 +783,24 @@ impl App {
             }
         }
     }
+}
+
+// The board stays where it is while the task's worktree and Claude come up; the task shows under Work once its Space exists.
+fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>) -> Result<String> {
+    let dir = crate::lead::state_dir()?.join("starts");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let log = dir.join(format!("{}.log", name.replace('/', "-")));
+    let output = std::fs::File::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
+    let errors = output.try_clone().map_err(|error| error.to_string())?;
+    let mut command = Command::new(std::env::current_exe().map_err(|error| error.to_string())?);
+    command.arg("-C").arg(repo).args(["start", name, "--no-focus"]);
+    if let Some(prompt) = prompt {
+        command.arg(prompt);
+    }
+    // Its own process group, so closing the board's popup does not take the start down with it.
+    command.stdin(std::process::Stdio::null()).stdout(output).stderr(errors).process_group(0);
+    command.spawn().map_err(|error| format!("kelpie start: {error}"))?;
+    Ok(format!("Starting {name} in the background; it shows under Work in a moment (output in {}).", log.display()))
 }
 
 // The user's editor on a commit message, in this pane; an empty result keeps the old message.
@@ -819,7 +832,7 @@ pub fn restore_terminal() {
 }
 
 // Leaves the TUI for a step that prints as it goes (creating a worktree takes a while), then comes back; the board shows the result.
-pub fn outside(terminal: &mut DefaultTerminal, step: impl FnOnce() -> Result<String>) -> Result<String> {
+pub fn outside<T>(terminal: &mut DefaultTerminal, step: impl FnOnce() -> Result<T>) -> Result<T> {
     restore_terminal();
     let result = step();
     *terminal = init_terminal();

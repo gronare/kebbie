@@ -104,6 +104,10 @@ impl Index {
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|error| error.to_string())
     }
 
+    pub fn status_of(&self, key: &str) -> Option<String> {
+        self.db.query_row("SELECT status FROM notes WHERE key = ?1", [key], |row| row.get::<_, String>(0)).ok()
+    }
+
     // The system notes, one per app or subsystem.
     pub fn areas(&self) -> Result<Vec<Note>> {
         self.notes("folder = ?1 AND kind = 'system' AND valid = 1", "Areas")
