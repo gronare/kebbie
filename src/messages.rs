@@ -27,6 +27,7 @@ pub struct Message {
     pub text: String,
     pub held: bool,
     pub report: Option<Report>,
+    pub ended: bool,
 }
 
 // What a task's Claude says at the end of a turn: where it stands, and what the user should do next.
@@ -66,6 +67,7 @@ pub fn fold(log: &str) -> Vec<Message> {
                 to: record["to"].as_str().unwrap_or_default().to_string(),
                 text: text.to_string(),
                 held,
+                ended: record["state"] == "ended",
                 report: record["report"]["state"].as_str().map(|state| Report {
                     state: state.to_string(),
                     next: record["report"]["next"].as_str().unwrap_or_default().to_string(),
@@ -206,9 +208,23 @@ pub fn log_report(from: &str, report: &Report, text: &str) -> Result<()> {
     append(&json!({ "id": id, "at": now(), "from": from, "to": LEAD_LABEL, "text": text, "state": "logged", "report": { "state": report.state, "next": report.next } }))
 }
 
-// Each session's latest report, by its address.
+// The end of a task's life, so a later task by the same name does not inherit its reports.
+pub fn log_end(task: &str, repo: &str, how: &str) -> Result<()> {
+    let id = format!("{}-{}-end", now(), std::process::id());
+    append(&json!({ "id": id, "at": now(), "from": "kelpie", "to": peers::address(task, repo), "text": format!("{task} ended ({how})"), "state": "ended" }))
+}
+
+// Each session's latest report since its address last ended, by its address.
 pub fn latest_reports(messages: &[Message]) -> HashMap<String, Message> {
-    messages.iter().filter(|message| message.report.is_some()).map(|message| (message.from.clone(), message.clone())).collect()
+    let mut latest = HashMap::new();
+    for message in messages {
+        if message.ended {
+            latest.remove(&message.to);
+        } else if message.report.is_some() {
+            latest.insert(message.from.clone(), message.clone());
+        }
+    }
+    latest
 }
 
 // What sessions told each other, and the task reports that wait on the user.
@@ -251,7 +267,8 @@ pub fn unread_for_lead() -> Result<String> {
     let seen: usize = fs::read_to_string(&mark).ok().and_then(|count| count.trim().parse().ok()).unwrap_or(0);
     let messages = load();
     fs::write(&mark, messages.len().to_string()).map_err(|error| error.to_string())?;
-    let (reports, told): (Vec<&Message>, Vec<&Message>) = copies_for_lead(&messages, seen).into_iter().partition(|message| message.report.is_some());
+    let copies = copies_for_lead(&messages, seen);
+    let told: Vec<&Message> = copies.iter().copied().filter(|message| is_told(message)).collect();
     let mut sections = Vec::new();
     if !told.is_empty() {
         let lines: Vec<String> = told.iter().map(|message| {
@@ -260,13 +277,18 @@ pub fn unread_for_lead() -> Result<String> {
         }).collect();
         sections.push(format!("Messages between sessions since you last looked (kelpie messages --print for more):\n{}", lines.join("\n")));
     }
-    let latest = latest_reports(&reports.into_iter().cloned().collect::<Vec<_>>());
+    let latest = latest_reports(&copies.into_iter().cloned().collect::<Vec<_>>());
     if !latest.is_empty() {
         let mut lines: Vec<String> = latest.values().map(report_line).collect();
         lines.sort();
         sections.push(format!("Task reports since you last looked (each task's latest; kelpie status --json has them all):\n{}", lines.join("\n")));
     }
     Ok(sections.join("\n\n"))
+}
+
+// What sessions said to each other, not a report or a task's end marker.
+fn is_told(message: &Message) -> bool {
+    message.report.is_none() && !message.ended
 }
 
 pub fn report_line(message: &Message) -> String {
@@ -412,7 +434,7 @@ mod tests {
 
     #[test]
     fn the_lead_is_copied_on_new_messages_between_others() {
-        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false, report: None };
+        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false, report: None, ended: false };
         let messages = [message("1", "a@x", "b@x"), message("2", "a@x", "lead"), message("3", "lead", "b@x"), message("4", "b@x", "a@x")];
         let ids = |seen| copies_for_lead(&messages, seen).iter().map(|message| message.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(0), ["1", "4"]);
@@ -443,9 +465,30 @@ mod tests {
     #[test]
     fn the_lead_is_copied_on_reports_to_it() {
         let report = Some(Report { state: "ready".to_string(), next: "push and close".to_string() });
-        let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report }];
+        let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false }];
         assert_eq!(copies_for_lead(&messages, 0).len(), 1);
         assert_eq!(report_line(&messages[0]), "- a@x (ready): done — you: push and close");
+    }
+
+    #[test]
+    fn a_report_counts_only_until_its_task_ends() {
+        let report = |id: &str, text: &str| format!(r#"{{"id":"{id}","at":10,"from":"billing@web","to":"lead","text":"{text}","state":"logged","report":{{"state":"needs-you","next":"approve the plan"}}}}"#);
+        let end = r#"{"id":"e","at":20,"from":"kelpie","to":"billing@web","text":"billing ended (done)","state":"ended"}"#;
+        let other = r#"{"id":"o","at":15,"from":"search@api","to":"lead","text":"rebased","state":"logged","report":{"state":"ready","next":"push"}}"#;
+        let ended = fold(&[report("1", "old plan"), other.to_string(), end.to_string()].join("\n"));
+        let latest = latest_reports(&ended);
+        assert!(!latest.contains_key("billing@web"));
+        assert_eq!(latest["search@api"].text, "rebased");
+        let reused = fold(&[report("1", "old plan"), end.to_string(), report("2", "new plan")].join("\n"));
+        assert_eq!(latest_reports(&reused)["billing@web"].text, "new plan");
+    }
+
+    #[test]
+    fn an_end_marker_is_not_told_to_the_lead_but_shows_in_messages() {
+        let end = fold(r#"{"id":"e","at":20,"from":"kelpie","to":"billing@web","text":"billing ended (dropped)","state":"ended"}"#);
+        assert!(end[0].ended && end[0].report.is_none());
+        assert!(!copies_for_lead(&end, 0).into_iter().any(is_told));
+        assert_eq!(shown_in_log(end).len(), 1);
     }
 
     #[test]

@@ -162,7 +162,7 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
     let upstream = default_branch(&repo)?;
     let discarded = git(&slot.path, &["log", "--format=%h %s", &format!("{upstream}..HEAD")]).unwrap_or_default();
     let item = forget_start(&task, &repo);
-    let dropped = drop(&repo, Some(&task), true)?;
+    let dropped = discard(&repo, Some(&task), true, "reset")?;
     let mut notice = format!("The user reset {task}: it is gone, and its work was discarded and will never be pushed.");
     if !discarded.is_empty() {
         notice.push_str(&format!(" Discarded: {}.", discarded.lines().collect::<Vec<_>>().join("; ")));
@@ -493,6 +493,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     let upstream = default_branch(&repo)?;
     let workspace = herdr::workspace_for(&slot.path)?;
     let finished = finish(&repo, &slot, &upstream)?;
+    end_life(task_of(&slot), &repo, "done");
     Ok(finished + &close_space(workspace))
 }
 
@@ -510,6 +511,10 @@ fn finish(repo: &Path, slot: &Slot, upstream: &str) -> Result<String> {
 }
 
 pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
+    discard(cwd, name, force, "dropped")
+}
+
+fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
     let task = task_of(&slot);
@@ -528,7 +533,14 @@ pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
     }
     release(&repo, &slot, &upstream)?;
     forget_start(task, &repo);
+    end_life(task, &repo, how);
     Ok(format!("{task} dropped; {} is free again.{}", name_of(&slot.path), close_space(workspace)))
+}
+
+fn end_life(task: &str, repo: &Path, how: &str) {
+    if let Err(error) = messages::log_end(task, &name_of(repo), how) {
+        eprintln!("Could not log the end of {task}: {error}");
+    }
 }
 
 fn stash_index(repo: &Path, message: &str) -> Result<Option<usize>> {
