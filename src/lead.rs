@@ -91,8 +91,11 @@ fn settings(kelpie: &str) -> String {
     }).to_string()
 }
 
+// Claude Code never remembers trust for the home directory, so the lead gets a directory of its own.
 fn lead_dir() -> Result<PathBuf> {
-    std::env::var("KELPIE_LEAD_DIR").or_else(|_| std::env::var("HOME")).map(PathBuf::from).map_err(|_| "Set KELPIE_LEAD_DIR or HOME".to_string())
+    let dir = std::env::var("KELPIE_LEAD_DIR").map(PathBuf::from).or_else(|_| state_dir().map(|dir| dir.join("lead")))?;
+    fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+    Ok(dir)
 }
 
 // The panes by where create put them: the chat on the right, the board above the messages on the left.

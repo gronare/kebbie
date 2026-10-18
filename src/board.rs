@@ -1388,6 +1388,9 @@ pub fn run(overlay: bool) -> Result<String> {
                         let position = previous.and_then(|(name, place)| app.tasks.iter().position(|item| item.name == name && item.place == place))
                             .or_else(|| wanted.and_then(|name| app.tasks.iter().position(|item| item.name == name)));
                         app.work_selected = position.unwrap_or(app.work_selected.min(app.tasks.len().saturating_sub(1)));
+                        if let Ok(sources) = config::sources() {
+                            app.sources = sources;
+                        }
                         app.backlog = backlog::load();
                         app.backlog_selected = app.backlog_selected.min(app.backlog.entries.len().saturating_sub(1));
                         app.error = None;
