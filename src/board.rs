@@ -87,7 +87,11 @@ fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
     }
     if !item.is_some_and(busy) {
         if item.and_then(|item| item.git.as_ref()).is_some_and(|git| git.ahead > 0) {
-            choices.push(choice('v', "Send to review", "a separate, read-only Claude reviews its commits; the task waits under To review until it passes them"));
+            choices.push(if item.is_some_and(Item::awaiting_review) {
+                choice('v', "Withdraw from review", "stop its reviewer and forget its verdict: push is offered again, and the lead is told")
+            } else {
+                choice('v', "Send to review", "a separate, read-only Claude reviews its commits; the task waits under To review until it passes them")
+            });
         }
         choices.push(choice('t', "Tidy commits", "its Claude reshapes them by the rules skill"));
         if !item.is_some_and(Item::awaiting_review) {
@@ -777,7 +781,7 @@ impl App {
                     'w' => self.toggle_server(&item),
                     'v' => {
                         if let Some(path) = &item.path {
-                            self.show(crate::review::request(path, None));
+                            self.show(if item.awaiting_review() { crate::review::withdraw(path, None) } else { crate::review::request(path, None) });
                         }
                     }
                     'z' => {
@@ -1340,7 +1344,7 @@ fn help_lines() -> Vec<Line<'static>> {
     [
         ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("tab", "switch between the work and areas pages"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
-        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("v", "send the task to review: a read-only Claude reads its commits"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
+        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("v", "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
         ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
@@ -1702,6 +1706,12 @@ mod tests {
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         assert_eq!(keys(&item), "gprvtdzx");
         assert_eq!(row_facts(&item), "1 commit · review: 2 findings");
+        let withdraw = task_choices(Some(&item), None).into_iter().find(|choice| choice.key == 'v').unwrap();
+        assert_eq!(withdraw.label, "Withdraw from review", "the push stays the user's: a task in review can always be taken out");
+        item.verdict = None;
+        assert_eq!(keys(&item), "gprvtldzx", "withdrawn, it offers push again");
+        assert_eq!(task_choices(Some(&item), None).into_iter().find(|choice| choice.key == 'v').unwrap().label, "Send to review");
+        item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         item.verdict = Some(crate::status::tests::in_review(true, 0, false, false));
         assert_eq!(keys(&item), "gprvtldzx");
         assert_eq!(row_facts(&item), "1 commit · reviewed");

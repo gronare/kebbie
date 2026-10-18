@@ -63,7 +63,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
   kelpie review [name]            send the task to review: a separate, read-only Claude reviews its commits in the
                                   background, by the skill kelpie:review and the rules skill; the task waits under To
-                                  review, and push with it, until a verdict ok on its current code
+                                  review, and push with it, until a verdict ok on its current code (--withdraw
+                                  takes it out of review: the reviewer stops, its verdict goes, push is offered again)
   kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
                                   changes, the board shows it ready to push
   kelpie push [name]              after land: push the task to the default branch, then close it as done
@@ -239,6 +240,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
         Some("review") if arguments.flag("--run") => review::run(&cwd),
+        Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),
         Some("review") => review::request(&cwd, name),
         Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kelpie approve needs a task name")?)),
         Some("done") => tasks::done(&cwd, name),

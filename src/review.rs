@@ -164,6 +164,32 @@ pub fn forget_in(state: &Path, address: &str) {
     }
 }
 
+// The user's way out of review: the reviewer stops, its verdict goes, and the task leaves To review with push offered again.
+pub fn withdraw(cwd: &Path, name: Option<&str>) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = tasks::find_task(&repo, name, cwd)?;
+    let address = peers::address(tasks::task_of(&slot), &name_of(&repo));
+    if !withdraw_in(&state_dir()?, &address) {
+        return Err(format!("{address} is not in review"));
+    }
+    if let Err(error) = messages::notify_lead(&format!("The user withdrew {address} from review: it pushes without a reviewer's pass now. Drop any findings you have not passed on.")) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    Ok(format!("Withdrew {address} from review; push is offered again."))
+}
+
+// The reviewer runs in a process group of its own, so the signal stops its Claude too, before it can write a verdict.
+pub fn withdraw_in(state: &Path, address: &str) -> bool {
+    let in_review = verdict_file(state, address).exists() || running_in(state, address);
+    if running_in(state, address)
+        && let Ok(pid) = fs::read_to_string(running_file(state, address))
+    {
+        let _ = Command::new("kill").args(["-TERM", &format!("-{}", pid.trim())]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+    forget_in(state, address);
+    in_review
+}
+
 // Starts the reviewer as a process of its own, so neither the board nor the caller waits for it.
 pub fn request(cwd: &Path, name: Option<&str>) -> Result<String> {
     let repo = main_checkout(cwd)?;
@@ -491,6 +517,27 @@ mod tests {
         assert!(gate(Some(&shown_as(Some(false), false, false)), everything).unwrap_err().contains("asks for changes (2 findings)"));
         assert!(gate(Some(&shown_as(Some(false), true, false)), nothing).unwrap_err().contains("send it to review again"));
         assert!(gate(Some(&shown_as(Some(true), true, false)), |sha| sha == "abc").is_ok(), "the commits up to the reviewed code push while later ones wait");
+    }
+
+    #[test]
+    fn withdrawing_takes_the_task_out_of_review_and_opens_the_gate() {
+        let state = std::env::temp_dir().join(format!("kelpie-withdraw-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&state);
+        fs::create_dir_all(dir(&state)).unwrap();
+        fs::write(verdict_file(&state, "billing@app"), record("verdict: changes\n- a.rs:1 — wrong; breaks x\n", "aaa").unwrap()).unwrap();
+        let shown = shown_in(&state, "billing@app", |sha| sha == "aaa");
+        assert!(gate(shown.as_ref(), |_| true).is_err());
+        assert!(withdraw_in(&state, "billing@app"));
+        let shown = shown_in(&state, "billing@app", |sha| sha == "aaa");
+        assert_eq!(shown, None, "the task leaves To review");
+        assert_eq!(gate(shown.as_ref(), |_| false), Ok(()), "and pushes like a task never sent");
+        assert!(!withdraw_in(&state, "billing@app"), "a task not in review has nothing to withdraw");
+        let mut reviewer = Command::new("sleep").arg("30").process_group(0).spawn().unwrap();
+        fs::write(running_file(&state, "billing@app"), reviewer.id().to_string()).unwrap();
+        assert!(withdraw_in(&state, "billing@app"));
+        assert!(!reviewer.wait().unwrap().success(), "a running reviewer is stopped, so no verdict lands after the withdrawal");
+        assert_eq!(shown_in(&state, "billing@app", |_| true), None);
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]
