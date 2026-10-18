@@ -265,9 +265,16 @@ fn row_facts(item: &Item) -> String {
     if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
 }
 
+// A worktree pool is per repo, so free worktrees are counted per repo; start makes a new one when a repo has none.
+fn free_worktrees(checkouts: &[Checkout]) -> String {
+    let free: Vec<String> = checkouts.iter().filter(|checkout| checkout.free_slots > 0)
+        .map(|checkout| format!("{} {}", checkout.name, checkout.free_slots)).collect();
+    if free.is_empty() { String::new() } else { format!(" · free worktrees: {}", free.join(", ")) }
+}
+
 pub fn suggested_name(title: &str) -> String {
     const FILLER: [&str; 12] = ["a", "an", "the", "and", "of", "for", "to", "on", "in", "with", "s", "before"];
-    title.to_lowercase().split(|character: char| !character.is_ascii_alphanumeric())
+    tasks::ascii_fold(&title.to_lowercase()).split(|character: char| !character.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty() && !FILLER.contains(word)).take(4).collect::<Vec<_>>().join("-")
 }
 
@@ -978,8 +985,7 @@ type Rows = Vec<(usize, usize, Hit)>;
 
 fn work_lines(app: &mut App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
     let focused = app.column == Column::Work;
-    let free: usize = app.checkouts.iter().map(|checkout| checkout.free_slots).sum();
-    let mut lines = column_title("WORK", format!("{} · {} free", plural(app.tasks.len(), "task"), plural(free, "worktree")), focused, width);
+    let mut lines = column_title("WORK", format!("{}{}", plural(app.tasks.len(), "task"), free_worktrees(&app.checkouts)), focused, width);
     let mut selected_line = 0;
     let mut current: Option<Group> = None;
     let tasks = app.tasks.clone();
@@ -1440,6 +1446,19 @@ pub fn run(overlay: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_suggested_name_keeps_letters_with_diacritics() {
+        assert_eq!(suggested_name("kelpie – återanvänd worktree tar med förra uppgiftens databas"), "kelpie-ateranvand-worktree-tar");
+        assert_eq!(crate::tasks::slug("Föräldraledighet över jul").unwrap(), "foraldraledighet-over-jul");
+    }
+
+    #[test]
+    fn free_worktrees_are_counted_per_repo() {
+        let checkout = |name: &str, free_slots| Checkout { name: name.to_string(), changed: 0, free_slots, busy_slots: 0 };
+        assert_eq!(free_worktrees(&[checkout("kelpie", 1), checkout("web", 0), checkout("api", 2)]), " · free worktrees: kelpie 1, api 2");
+        assert_eq!(free_worktrees(&[checkout("web", 0)]), "");
+    }
 
     #[test]
     fn w_is_offered_only_with_a_dev_server() {

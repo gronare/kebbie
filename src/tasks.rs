@@ -38,9 +38,30 @@ pub fn slots(repo: &Path) -> Result<Vec<Slot>> {
     Ok(list)
 }
 
+// Task names are ASCII for git and herdr, so a letter with a diacritic becomes its base letter instead of a gap.
+pub fn ascii_fold(text: &str) -> String {
+    text.chars().map(|character| match character {
+        'å' | 'ä' | 'à' | 'á' | 'â' | 'ã' => "a".to_string(),
+        'Å' | 'Ä' | 'À' | 'Á' | 'Â' | 'Ã' => "A".to_string(),
+        'ö' | 'ø' | 'ò' | 'ó' | 'ô' | 'õ' => "o".to_string(),
+        'Ö' | 'Ø' | 'Ò' | 'Ó' | 'Ô' | 'Õ' => "O".to_string(),
+        'é' | 'è' | 'ê' | 'ë' => "e".to_string(),
+        'É' | 'È' | 'Ê' | 'Ë' => "E".to_string(),
+        'ü' | 'ù' | 'ú' | 'û' => "u".to_string(),
+        'Ü' | 'Ù' | 'Ú' | 'Û' => "U".to_string(),
+        'í' | 'ì' | 'î' | 'ï' => "i".to_string(),
+        'ç' => "c".to_string(),
+        'ñ' => "n".to_string(),
+        'æ' => "ae".to_string(),
+        'Æ' => "AE".to_string(),
+        'ß' => "ss".to_string(),
+        other => other.to_string(),
+    }).collect()
+}
+
 pub fn slug(name: &str) -> Result<String> {
     let mut slug = String::new();
-    for character in name.to_lowercase().chars() {
+    for character in ascii_fold(&name.to_lowercase()).chars() {
         if character.is_ascii_alphanumeric() {
             slug.push(character);
         } else if !slug.is_empty() && !slug.ends_with('-') {
