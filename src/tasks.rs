@@ -111,7 +111,7 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 // The hooks ask for a report at the end of every turn.
 fn settings(kelpie: &str) -> String {
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook") }] }]);
-    let allow = ["peers", "tell", "report"].map(|command| format!("Bash({kelpie} {command}:*)"));
+    let allow = ["peers", "tell", "report", "ask"].map(|command| format!("Bash({kelpie} {command}:*)"));
     json!({
         "env": { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" },
         "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)")], "allow": allow },
@@ -948,6 +948,7 @@ mod tests {
         assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
         assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)", format!("Bash({kelpie} approve:*)")]), "a task never pushes nor approves its own commits");
         assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
+        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} ask:*)"))), "a task asks the user without a permission prompt");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

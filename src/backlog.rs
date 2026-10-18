@@ -192,9 +192,9 @@ pub fn refresh_prompt(sources: &[Source]) -> Result<String> {
 
 pub fn task_prompt(entry: &Entry, sources: &[Source]) -> String {
     match entry.source.as_str() {
-        "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then ask me what you need decided, one question at a time, before you plan with me; no code until I approve the plan.", entry.reference, entry.title),
-        "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first and set its status to active, then ask me what you need decided, one question at a time, before you plan with me; no code until I approve the plan.", entry.reference, entry.title),
-        _ => format!("Work on: {}. {} Ask me what you need decided, one question at a time, before you plan with me; no code until I approve the plan.", entry.title, entry.summary),
+        "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan <file>, and write no code until I approve it.", entry.reference, entry.title),
+        "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first and set its status to active, then ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan <file>, and write no code until I approve it.", entry.reference, entry.title),
+        _ => format!("Work on: {}. {} Ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan <file>, and write no code until I approve it.", entry.title, entry.summary),
     }
 }
 
@@ -309,5 +309,9 @@ mod tests {
         assert!(task_prompt(&entry("linear"), &[Source::Vault]).starts_with("Work on: Fix it. It broke."));
         assert!(task_prompt(&entry("vault"), &[Source::Vault]).starts_with("Work on the vault note ABC-1"));
         assert!(task_prompt(&entry("vault"), &[Source::Vault]).contains("set its status to active"));
+        for source in ["linear", "vault", "other"] {
+            let prompt = task_prompt(&entry(source), &[Source::Vault, Source::Linear]);
+            assert!(prompt.contains("with kelpie ask, one question at a time") && prompt.contains("kelpie ask --plan <file>"), "{prompt}");
+        }
     }
 }

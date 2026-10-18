@@ -107,7 +107,7 @@ fn go() -> Result<String> {
 
 // Each of the user's prompts carries what sessions told each other since the lead last looked.
 fn settings(kelpie: &str) -> String {
-    let allow = ["peers", "tell", "messages", "status", "areas", "approve", "review"].map(|command| format!("Bash({kelpie} {command}:*)"));
+    let allow = ["peers", "tell", "answered", "messages", "status", "areas", "approve", "review"].map(|command| format!("Bash({kelpie} {command}:*)"));
     json!({
         "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' messages --unread") }] }] },
         "permissions": { "allow": allow },
@@ -220,6 +220,14 @@ mod tests {
         assert!(both.contains("Linear (assigned to the user, current cycle)") && !both.contains("{backlog}") && !both.contains("{finding}"));
     }
 
+    #[test]
+    fn the_lead_relays_a_tasks_question_to_the_user_and_its_answer_back() {
+        let role = include_str!("../roles/lead.md");
+        for needed in ["AskUserQuestion", "(recommended)", "kelpie tell <task> \"<answer>\"", "kelpie answered <task>", "The plan to read", "a task or a subagent"] {
+            assert!(role.contains(needed), "{needed}");
+        }
+    }
+
     fn env<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'a {
         |name| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string())
     }
@@ -267,6 +275,7 @@ mod tests {
         let written: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
         assert_eq!(written["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], format!("'{kelpie}' messages --unread"));
+        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} answered:*)"))));
         fs::remove_dir_all(dir).unwrap();
     }
 }

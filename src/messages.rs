@@ -15,6 +15,7 @@ use crate::board::{FAINT, MAUVE, MUTED, PEACH, SUBTEXT, SURFACE, TEAL, TEXT, YEL
 use crate::herdr;
 use crate::lead::state_dir;
 use crate::peers::{self, Session};
+use crate::questions;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 
@@ -28,6 +29,18 @@ pub struct Message {
     pub held: bool,
     pub report: Option<Report>,
     pub ended: bool,
+    pub question: Option<Question>,
+    pub about: Option<String>,
+}
+
+// A question a task put to the user through kelpie: its options as (label, meaning), the recommended one (1-based), and the plan to read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Question {
+    pub options: Vec<(String, String)>,
+    pub recommend: usize,
+    pub plan: Option<String>,
+    pub given: bool,
+    pub answered: bool,
 }
 
 // What a task's Claude says at the end of a turn: where it stands, and what the user should do next.
@@ -53,7 +66,15 @@ pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0)
 }
 
-// The log is append-only: a message line, and for a held one a later line with only its id and "delivered".
+fn question_from(record: &Value) -> Option<Question> {
+    let question = record.get("question")?;
+    let options = question["options"].as_array()?.iter()
+        .map(|option| (option["label"].as_str().unwrap_or_default().to_string(), option["meaning"].as_str().unwrap_or_default().to_string()))
+        .collect();
+    Some(Question { options, recommend: question["recommend"].as_u64().unwrap_or(1) as usize, plan: question["plan"].as_str().map(str::to_string), given: false, answered: false })
+}
+
+// The log is append-only: a message line, and later lines with only its id and its new state (delivered, given to the lead, answered).
 pub fn fold(log: &str) -> Vec<Message> {
     let mut messages: Vec<Message> = Vec::new();
     for record in log.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()) {
@@ -72,10 +93,15 @@ pub fn fold(log: &str) -> Vec<Message> {
                     state: state.to_string(),
                     next: record["report"]["next"].as_str().unwrap_or_default().to_string(),
                 }),
+                question: question_from(&record),
+                about: record["about"].as_str().map(str::to_string),
             }),
             None => {
-                if let Some(message) = messages.iter_mut().find(|message| message.id == id) {
-                    message.held = held;
+                let Some(message) = messages.iter_mut().find(|message| message.id == id) else { continue };
+                match (record["state"].as_str(), message.question.as_mut()) {
+                    (Some("given"), Some(question)) => question.given = true,
+                    (Some("answered"), Some(question)) => question.answered = true,
+                    _ => message.held = held,
                 }
             }
         }
@@ -87,7 +113,7 @@ pub fn load() -> Vec<Message> {
     log_file().and_then(|file| fs::read_to_string(file).map_err(|error| error.to_string())).map(|log| fold(&log)).unwrap_or_default()
 }
 
-fn append(record: &Value) -> Result<()> {
+pub fn append(record: &Value) -> Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(log_file()?).map_err(|error| error.to_string())?;
     writeln!(file, "{record}").map_err(|error| error.to_string())
 }
@@ -114,10 +140,10 @@ fn deliver(session: &Session, from: &str, text: &str) -> std::result::Result<(),
 }
 
 // One sender at a time, so a held message is never delivered twice; a lock older than a minute is left over from a crash.
-struct Lock(PathBuf);
+pub struct Lock(PathBuf);
 
 impl Lock {
-    fn take(wait: bool) -> Result<Option<Lock>> {
+    pub fn take(wait: bool) -> Result<Option<Lock>> {
         let path = state_dir()?.join("messages.lock");
         for _ in 0..100 {
             match OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -139,11 +165,28 @@ impl Drop for Lock {
     }
 }
 
+// A task with a question open waits for the user's answer, which only the lead brings; the rest is held until then.
+pub fn question_hold(from: &str, question_open: bool) -> Option<&'static str> {
+    (question_open && from != LEAD_LABEL).then_some("waits for the user's answer to its question")
+}
+
+// A question the lead was to relay that has since been answered or dropped is never typed into its chat.
+fn stale(message: &Message, open: &[&Message]) -> bool {
+    message.about.as_ref().is_some_and(|id| !open.iter().any(|question| &question.id == id))
+}
+
 fn flush_held(sessions: &[Session]) -> Result<usize> {
+    let messages = load();
+    let open = questions::open_now(&messages);
     let mut delivered = 0;
-    for message in load().into_iter().filter(|message| message.held) {
+    for message in messages.iter().filter(|message| message.held) {
+        if stale(message, &open) {
+            append(&json!({ "id": message.id, "at": now(), "state": "dropped" }))?;
+            continue;
+        }
         let Some(session) = sessions.iter().find(|session| session.address == message.to) else { continue };
-        if deliver(session, &message.from, &message.text).is_ok() {
+        let question_open = open.iter().any(|question| question.from == session.address);
+        if question_hold(&message.from, question_open).is_none() && deliver(session, &message.from, &message.text).is_ok() {
             append(&json!({ "id": message.id, "at": now(), "state": "delivered" }))?;
             delivered += 1;
         }
@@ -151,24 +194,50 @@ fn flush_held(sessions: &[Session]) -> Result<usize> {
     Ok(delivered)
 }
 
-// Held messages to sessions that are free again; the messages pane runs this on every tick.
+// Held messages to sessions that are free again, and the next question once the lead has passed one on; the messages pane runs this on every tick.
 pub fn flush() -> Result<usize> {
-    if !load().iter().any(|message| message.held) {
+    let messages = load();
+    if !messages.iter().any(|message| message.held) && questions::next_to_give(&questions::open_now(&messages)).is_none() {
         return Ok(0);
     }
     let Some(_lock) = Lock::take(false)? else { return Ok(0) };
-    flush_held(&peers::sessions()?)
+    let sessions = peers::sessions()?;
+    let delivered = flush_held(&sessions)?;
+    questions::release(&sessions)?;
+    Ok(delivered)
 }
 
 fn send(from: &str, recipients: &[&Session], text: &str, sessions: &[Session]) -> Result<Vec<String>> {
     let _lock = Lock::take(true)?;
+    let report = send_locked(from, recipients, text, sessions, None)?;
+    questions::release(sessions)?;
+    Ok(report)
+}
+
+// The caller holds the lock. The lead's message to a task whose question it was given is the user's answer to it.
+pub fn send_locked(from: &str, recipients: &[&Session], text: &str, sessions: &[Session], about: Option<&str>) -> Result<Vec<String>> {
     flush_held(sessions)?;
     let mut report = Vec::new();
     for (index, session) in recipients.iter().enumerate() {
-        let earlier_held = load().iter().any(|message| message.held && message.to == session.address);
-        let outcome = if earlier_held { Err("still has earlier messages held") } else { deliver(session, from, text) };
+        let messages = load();
+        let open = questions::open_now(&messages);
+        let question = open.iter().find(|question| question.from == session.address);
+        let earlier_held = messages.iter().any(|message| message.held && message.to == session.address);
+        let answering = question.is_some_and(|question| questions::answers(from, question));
+        let outcome = match question_hold(from, question.is_some()) {
+            Some(reason) => Err(reason),
+            None if earlier_held && !answering => Err("still has earlier messages held"),
+            None => deliver(session, from, text),
+        };
         let id = format!("{}-{}-{index}", now(), std::process::id());
-        append(&json!({ "id": id, "at": now(), "from": from, "to": session.address, "text": text, "state": if outcome.is_ok() { "delivered" } else { "held" } }))?;
+        let mut record = json!({ "id": id, "at": now(), "from": from, "to": session.address, "text": text, "state": if outcome.is_ok() { "delivered" } else { "held" } });
+        if let Some(about) = about {
+            record["about"] = json!(about);
+        }
+        append(&record)?;
+        if let Some(question) = question.filter(|_| answering) {
+            append(&json!({ "id": question.id, "at": now(), "state": "answered" }))?;
+        }
         report.push(match outcome {
             Ok(()) => format!("Told {}.", session.address),
             Err(reason) => format!("{} {reason}; held, and delivered when it is free.", session.address),
@@ -240,6 +309,9 @@ fn shown_in_log(messages: Vec<Message>) -> Vec<Message> {
 }
 
 fn addressee(message: &Message) -> String {
+    if message.question.is_some() {
+        return "you · asks".to_string();
+    }
     match &message.report {
         Some(report) => format!("you · {}", report.state.replace('-', " ")),
         None => message.to.clone(),
@@ -441,7 +513,7 @@ mod tests {
 
     #[test]
     fn the_lead_is_copied_on_new_messages_between_others() {
-        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false, report: None, ended: false };
+        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false, report: None, ended: false, question: None, about: None };
         let messages = [message("1", "a@x", "b@x"), message("2", "a@x", "lead"), message("3", "lead", "b@x"), message("4", "b@x", "a@x")];
         let ids = |seen| copies_for_lead(&messages, seen).iter().map(|message| message.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(0), ["1", "4"]);
@@ -472,7 +544,7 @@ mod tests {
     #[test]
     fn the_lead_is_copied_on_reports_to_it() {
         let report = Some(Report { state: "ready".to_string(), next: "push and close".to_string() });
-        let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false }];
+        let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false, question: None, about: None }];
         assert_eq!(copies_for_lead(&messages, 0).len(), 1);
         assert_eq!(report_line(&messages[0]), "- a@x (ready): done — you: push and close");
     }
@@ -496,6 +568,28 @@ mod tests {
         assert!(end[0].ended && end[0].report.is_none());
         assert!(!copies_for_lead(&end, 0).into_iter().any(is_told));
         assert_eq!(shown_in_log(end).len(), 1);
+    }
+
+    #[test]
+    fn a_question_folds_with_its_options_and_its_place_in_the_queue() {
+        let question = r#"{"id":"q1","at":10,"from":"billing@web","to":"lead","text":"Which queue?","state":"asked","question":{"options":[{"label":"A","meaning":"one"},{"label":"B","meaning":"two"}],"recommend":1,"plan":null}}"#;
+        let asked = fold(question);
+        assert_eq!(asked[0].question, Some(Question { options: vec![("A".to_string(), "one".to_string()), ("B".to_string(), "two".to_string())], recommend: 1, plan: None, given: false, answered: false }));
+        assert_eq!(addressee(&asked[0]), "you · asks");
+        let given = fold(&format!("{question}\n{{\"id\":\"q1\",\"at\":11,\"state\":\"given\"}}"));
+        assert!(given[0].question.as_ref().unwrap().given && !given[0].held);
+        let answered = fold(&format!("{question}\n{{\"id\":\"q1\",\"at\":11,\"state\":\"given\"}}\n{{\"id\":\"q1\",\"at\":12,\"state\":\"answered\"}}"));
+        assert!(answered[0].question.as_ref().unwrap().answered);
+    }
+
+    #[test]
+    fn a_held_question_for_the_lead_is_dropped_once_it_is_no_longer_open() {
+        let question = fold(r#"{"id":"q1","at":10,"from":"billing@web","to":"lead","text":"Which queue?","state":"asked","question":{"options":[],"recommend":1}}"#);
+        let relay = fold(r#"{"id":"m1","at":11,"from":"kelpie","to":"lead","text":"billing@web asks the user: Which queue?","state":"held","about":"q1"}"#);
+        assert!(!stale(&relay[0], &[&question[0]]));
+        assert!(stale(&relay[0], &[]));
+        let plain = fold(r#"{"id":"m2","at":11,"from":"kelpie","to":"lead","text":"rebased","state":"held"}"#);
+        assert!(!stale(&plain[0], &[]));
     }
 
     #[test]

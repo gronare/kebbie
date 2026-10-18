@@ -32,13 +32,17 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, summary: &str
     let (report, summary) = parse(state, next, summary)?;
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kelpie report runs in a task's worktree")?;
     messages::log_report(&me, &report, &summary)?;
-    // herdr's sidebar shows the same: the next step as $next, and the state in place of idle or done.
-    if let Ok(pane) = std::env::var("HERDR_PANE_ID") {
-        let args = metadata_args(&report);
-        let _ = herdr::report_metadata(&pane, &args.iter().map(String::as_str).collect::<Vec<_>>());
-    }
+    show_in_sidebar(&report);
     let check = if report.state == "ready" { lead_check(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{check}"))
+}
+
+// herdr's sidebar shows the same as the board: the next step as $next, and the state in place of idle or done.
+pub fn show_in_sidebar(report: &Report) {
+    if let Ok(pane) = std::env::var("HERDR_PANE_ID") {
+        let args = metadata_args(report);
+        let _ = herdr::report_metadata(&pane, &args.iter().map(String::as_str).collect::<Vec<_>>());
+    }
 }
 
 // A ready task waits under Needs you until the lead has checked it against the rules skill.
@@ -79,6 +83,11 @@ fn turn_file(me: &str) -> Result<PathBuf> {
     let dir = state_dir()?.join("turns");
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir.join(me))
+}
+
+// When the task's latest turn began: a prompt typed into it, by the user or as a message.
+pub fn turn_started(me: &str) -> Option<u64> {
+    fs::read_to_string(turn_file(me).ok()?).ok()?.trim().parse().ok()
 }
 
 // Claude Code sets stop_hook_active on the stop that follows a block, so a session is asked once per turn.

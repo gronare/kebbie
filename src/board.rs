@@ -941,6 +941,8 @@ fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     spans.extend(pill(format!("● {needs} need you"), PEACH, needs > 0));
     spans.extend(pill(format!("◐ {working} working"), BLUE, working > 0));
     spans.extend(pill(format!("✓ {ready} ready to push"), GREEN, ready > 0));
+    let questions = app.tasks.iter().filter(|item| item.question.is_some()).count();
+    spans.extend(pill(format!("? {}", plural(questions, "question")), YELLOW, questions > 0));
     let sources = backlog::label(&app.sources);
     let fresh = match app.page {
         Page::Work => format!("backlog: {sources}, {}   ", backlog::age(app.backlog.updated)),
@@ -1061,6 +1063,36 @@ pub fn card_text(label: &str, text: &str, accent: Color, width: usize, max_lines
     lines.into_iter().map(|line| line.style(Style::new().bg(SURFACE))).collect()
 }
 
+// A question the task asked through kelpie, as it asked it: the question, then each option on its own lines.
+pub fn question_text(message: &messages::Message) -> String {
+    let Some(question) = &message.question else { return message.text.clone() };
+    let mut lines = vec![message.text.clone()];
+    for (index, (label, meaning)) in question.options.iter().enumerate() {
+        let recommended = if index + 1 == question.recommend { " (recommended)" } else { "" };
+        lines.push(format!("{}. {label}{recommended}: {meaning}", index + 1));
+    }
+    if let Some(plan) = &question.plan {
+        lines.push(format!("plan: {plan}"));
+    }
+    lines.join("\n")
+}
+
+// A question asked through kelpie shows from the log; a prompt on screen outranks it.
+fn asked_question(item: &Item) -> Option<&messages::Message> {
+    item.question.as_ref().filter(|_| item.agent.as_ref().is_none_or(|agent| agent.status != "blocked"))
+}
+
+fn question_card(message: &messages::Message, width: usize) -> Vec<Line<'static>> {
+    let place = if message.question.as_ref().is_some_and(|question| question.given) { "with the lead" } else { "queued for the lead" };
+    let text = question_text(message);
+    let mut paragraphs = text.lines();
+    let mut lines = card_text(&format!("asks · {} · {place}", ago(message.at)), paragraphs.next().unwrap_or_default(), PEACH, width, 4);
+    for paragraph in paragraphs {
+        lines.extend(card_text("", paragraph, PEACH, width, 2).into_iter().skip(1));
+    }
+    lines
+}
+
 pub fn options_hint() -> Line<'static> {
     Line::from(vec![Span::raw("   "), Span::styled("⏎", style(MAUVE)), Span::styled(" options", style(MUTED))]).style(Style::new().bg(SURFACE))
 }
@@ -1158,26 +1190,30 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     if !facts.is_empty() {
         lines.push(chips(facts));
     }
-    match &item.agent {
-        Some(agent) => {
-            let screen = app.agent_screen(&agent.pane);
-            let question = |text: String| tail(&text, width.saturating_sub(6) * 6);
-            let (label, text, accent, max_lines) = match &item.report {
-                _ if agent.status == "blocked" => ("asks".to_string(), question(last_message(&screen)), PEACH, 6),
-                Some(report) if report.report.as_ref().is_some_and(|report| report.state == "needs-you") && !last_message(&screen).is_empty() => {
-                    (format!("asks · reported {}", ago(report.at)), question(last_message(&screen)), PEACH, 6)
+    if let Some(asked) = asked_question(item) {
+        lines.extend(question_card(asked, width));
+    } else {
+        match &item.agent {
+            Some(agent) => {
+                let screen = app.agent_screen(&agent.pane);
+                let question = |text: String| tail(&text, width.saturating_sub(6) * 6);
+                let (label, text, accent, max_lines) = match &item.report {
+                    _ if agent.status == "blocked" => ("asks".to_string(), question(last_message(&screen)), PEACH, 6),
+                    Some(report) if report.report.as_ref().is_some_and(|report| report.state == "needs-you") && !last_message(&screen).is_empty() => {
+                        (format!("asks · reported {}", ago(report.at)), question(last_message(&screen)), PEACH, 6)
+                    }
+                    Some(report) => (format!("reported {}", ago(report.at)), report.text.clone(), FAINT, 3),
+                    None => match recap(&screen) {
+                        recap if !recap.is_empty() => ("recap (no report yet)".to_string(), recap, FAINT, 3),
+                        _ => ("last said".to_string(), last_message(&screen), FAINT, 3),
+                    },
+                };
+                if !text.is_empty() {
+                    lines.extend(card_text(&label, &text, accent, width, max_lines));
                 }
-                Some(report) => (format!("reported {}", ago(report.at)), report.text.clone(), FAINT, 3),
-                None => match recap(&screen) {
-                    recap if !recap.is_empty() => ("recap (no report yet)".to_string(), recap, FAINT, 3),
-                    _ => ("last said".to_string(), last_message(&screen), FAINT, 3),
-                },
-            };
-            if !text.is_empty() {
-                lines.extend(card_text(&label, &text, accent, width, max_lines));
             }
+            None => lines.extend(card_text("no Claude", "No Claude is running in its Space.", FAINT, width, 1)),
         }
-        None => lines.extend(card_text("no Claude", "No Claude is running in its Space.", FAINT, width, 1)),
     }
     lines.push(options_hint());
     lines
@@ -1659,6 +1695,21 @@ mod tests {
         assert_eq!(last_message(screen), "Fråga 1: Ska push spärras? A (min rekommendation): visa redo först efter godkännande.");
         assert_eq!(tail("one two three four five", 10), "…four five");
         assert_eq!(tail("short", 10), "short");
+    }
+
+    #[test]
+    fn the_card_shows_a_question_asked_through_kelpie_from_the_log_and_a_prompt_on_screen_over_it() {
+        let log = r#"{"id":"q1","at":10,"from":"billing@web","to":"lead","text":"Which queue?","state":"asked","question":{"options":[{"label":"Sidekiq","meaning":"reuse the jobs"},{"label":"Solid Queue","meaning":"one less service"}],"recommend":2,"plan":"/state/plans/billing@web-10.md"}}"#;
+        let asked = messages::fold(log).remove(0);
+        assert_eq!(question_text(&asked), "Which queue?\n1. Sidekiq: reuse the jobs\n2. Solid Queue (recommended): one less service\nplan: /state/plans/billing@web-10.md");
+        let mut item = crate::status::tests::task(Some("idle"), Some("needs-you"), 0);
+        assert!(asked_question(&item).is_none(), "a question in plain text keeps the screen fallback");
+        item.question = Some(asked.clone());
+        assert_eq!(asked_question(&item).map(|message| message.id.as_str()), Some("q1"));
+        item.agent.as_mut().unwrap().status = "blocked".to_string();
+        assert!(asked_question(&item).is_none());
+        let card: String = question_card(&asked, 60).iter().flat_map(|line| line.spans.iter().map(|span| span.content.to_string())).collect();
+        assert!(card.contains("queued for the lead") && card.contains("2. Solid Queue (recommended): one less service"), "{card}");
     }
 
     #[test]

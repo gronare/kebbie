@@ -63,6 +63,7 @@ pub struct Item {
     pub agent: Option<Agent>,
     pub git: Option<Git>,
     pub report: Option<Message>,
+    pub question: Option<Message>,
 }
 
 impl Item {
@@ -172,6 +173,11 @@ impl Item {
             "report": self.report.as_ref().and_then(|message| Some(json!({
                 "state": message.report.as_ref()?.state, "next": message.report.as_ref()?.next, "summary": message.text, "age": messages::age(message.at),
             }))),
+            "question": self.question.as_ref().and_then(|message| {
+                let question = message.question.as_ref()?;
+                let options: Vec<Value> = question.options.iter().map(|(label, meaning)| json!({ "label": label, "meaning": meaning })).collect();
+                Some(json!({ "text": message.text, "options": options, "recommend": question.recommend, "plan": question.plan, "with_lead": question.given, "age": messages::age(message.at) }))
+            }),
             "server": self.server,
             "git": self.git.as_ref().map(|git| json!({
                 "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed, "approved": git.approved,
@@ -261,7 +267,9 @@ pub fn gather() -> Result<Vec<Item>> {
     };
     let repos = known_repos(&workspaces, pooled_checkouts());
 
-    let reports = messages::latest_reports(&messages::load());
+    let log = messages::load();
+    let reports = messages::latest_reports(&log);
+    let questions = crate::questions::open_now(&log);
     let mut items = Vec::new();
     let mut task_workspaces = BTreeSet::new();
     for repo in &repos {
@@ -293,6 +301,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 agent,
                 git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, approved }),
                 report: reports.get(&address).cloned(),
+                question: questions.iter().find(|question| question.from == address).map(|question| (*question).clone()),
                 name: task,
             });
         }
@@ -316,6 +325,7 @@ pub fn gather() -> Result<Vec<Item>> {
             agent: Some(agent),
             git: None,
             report: None,
+            question: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -335,8 +345,9 @@ pub(crate) mod tests {
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, approved: true }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
-                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false,
+                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None,
             }),
+            question: None,
         }
     }
 

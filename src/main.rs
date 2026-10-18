@@ -10,6 +10,7 @@ mod herdr;
 mod lead;
 mod messages;
 mod peers;
+mod questions;
 mod repo;
 mod report;
 mod review;
@@ -46,6 +47,12 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie report --state <state> --next <step> <summary>
                                   run by a task's Claude at the end of a turn: where it stands (needs-you, ready,
                                   working, blocked) and what you should do next, for the board and the lead
+  kelpie ask --option \"<label>: <meaning>\" … --recommend <n> <question>
+                                  run by a task's Claude to put a question to the user: two to four options, one
+                                  recommended (--plan <file> asks to approve a plan instead); it waits in kelpie's
+                                  queue and reaches the lead one question at a time, and the answer comes back as a message
+  kelpie answered <task>          the lead's word that a task's question is settled without a kelpie tell, so the
+                                  next question goes to the lead
   kelpie hook                     the hooks kelpie gives a task's Claude (reads the hook's JSON on stdin)
   kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30,
                                   --unread those the lead has not seen (its prompt hook)
@@ -82,7 +89,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -153,6 +160,9 @@ fn status_text() -> Result<String> {
         if let Some(next) = item.next_for_you() {
             lines.push(format!("    you: {next}"));
         }
+        if let Some(question) = &item.question {
+            lines.push(format!("    {}", board::question_text(question).replace('\n', "\n    ")));
+        }
     }
     Ok(lines.join("\n").trim_start().to_string())
 }
@@ -209,6 +219,8 @@ fn run(arguments: &Arguments) -> Result<String> {
             messages::tell(&cwd, to, &text.join(" "))
         }
         Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), &arguments.positionals[1..].join(" ")),
+        Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.positionals[1..].join(" ")),
+        Some("answered") => questions::answered(name.ok_or("kelpie answered needs the task whose question is settled")?),
         Some("hook") => {
             let mut input = String::new();
             let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);

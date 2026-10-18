@@ -246,8 +246,16 @@ mod tests {
     #[test]
     fn the_role_isolates_a_probe_from_the_users_state_and_packages() {
         let role = fill(include_str!("../roles/task.md"), &[]);
-        for setting in ["KELPIE_STATE_DIR=<temp>/kelpie", "`GEM_HOME` and `BUNDLE_PATH`", "`NPM_CONFIG_PREFIX`", "a virtualenv"] {
+        for setting in ["KELPIE_STATE_DIR=<temp>/kelpie", "`GEM_HOME` and `BUNDLE_PATH`", "`NPM_CONFIG_PREFIX`", "a virtualenv", "`HERDR_BIN_PATH=false`", "HERDR_SOCKET_PATH=<temp>/herdr.sock"] {
             assert!(role.contains(setting), "{setting}");
+        }
+    }
+
+    #[test]
+    fn the_role_asks_the_user_through_kelpie_one_question_at_a_time() {
+        let role = fill(include_str!("../roles/task.md"), &[("kelpie", "/bin/kelpie")]);
+        for needed in ["/bin/kelpie ask --option", "--recommend <n>", "/bin/kelpie ask --plan <file>", "one question per", "the lead's reply to your question"] {
+            assert!(role.contains(needed), "{needed}");
         }
     }
 
