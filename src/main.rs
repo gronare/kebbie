@@ -79,7 +79,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie review [name]            send the task to review: a separate, read-only Claude reviews its commits in the
                                   background, by the skill kelpie:review and the rules skill; the task waits under To
                                   review, and push with it, until a verdict ok on its current code (--withdraw
-                                  takes it out of review: the reviewer stops, its verdict goes, push is offered again)
+                                  takes it out of review, yours only: the reviewer stops, its verdict goes, push is
+                                  offered again)
   kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
                                   changes, the board shows it ready to push
   kelpie push [name]              after land: push the task to the default branch, then close it as done

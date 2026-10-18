@@ -263,6 +263,14 @@ pub fn notify(command: &Setting<Option<String>>) -> Check {
     }
 }
 
+pub fn push_block(repo: &Path) -> Check {
+    match crate::push_block::unsupported(repo) {
+        Ok(None) => ok("push block", format!("task worktrees of {} block git push", repo.display())),
+        Ok(Some(why)) => warn("push block", why, one("move core.worktree, or core.bare = true, from the shared config into the main worktree's config.worktree, then restart the repo's tasks")),
+        Err(error) => warn("push block", error, Vec::new()),
+    }
+}
+
 pub fn backlog(sources: &[Source], vault_index: impl Fn() -> Result<PathBuf, String>, local_file: &Path) -> Vec<Check> {
     if sources.is_empty() {
         return vec![ok("backlog", "no source configured; set [board.backlog] sources to fill the board's Backlog tab")];
@@ -333,6 +341,7 @@ pub struct Env {
     pub claude_dir: PathBuf,
     pub config: PathBuf,
     pub repo_config: Option<PathBuf>,
+    pub repo: Option<PathBuf>,
     pub uid: u32,
 }
 
@@ -349,6 +358,7 @@ impl Env {
             claude_dir: var("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
             config: config::path(),
             repo_config: std::env::current_dir().ok().and_then(|cwd| config::repo_file(&cwd)),
+            repo: std::env::current_dir().ok().and_then(|cwd| crate::repo::main_checkout(&cwd).ok()),
             uid: run("id", &["-u"], None).ok().and_then(|uid| uid.parse().ok()).unwrap_or(u32::MAX),
             home,
         }
@@ -394,6 +404,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
         }
         None => Some(Worktree::default()),
     };
+    checks.extend(env.repo.as_deref().map(push_block));
     let (Some(machine), Some(own)) = (machine, own) else {
         return checks;
     };
@@ -603,6 +614,17 @@ mod tests {
         std::fs::write(&own, "[worktree]\ndev_server = \"bin/dev\"\nport = 3000\n").unwrap();
         let (check, worktree) = repo_file(&own);
         assert!(check.level == Level::Fail && worktree.is_none() && check.fact.contains("worktree.port: unknown key"), "{check:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_repo_whose_shared_config_keeps_the_push_block_off_is_a_warning() {
+        let dir = scratch("push-block");
+        crate::repo::git(&dir, &["init", "--quiet"]).unwrap();
+        assert_eq!(push_block(&dir).level, Level::Ok);
+        crate::repo::git(&dir, &["config", "core.worktree", &dir.to_string_lossy()]).unwrap();
+        let off = push_block(&dir);
+        assert!(off.level == Level::Warn && off.fact.contains("push block is off") && off.fix[0].contains("config.worktree"), "{off:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

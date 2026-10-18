@@ -142,7 +142,7 @@ pub fn away(word: Option<&str>) -> Result<String> {
         None => return Ok(if away_since().is_some() { "Away mode is on: kelpie away off when you are back.".to_string() } else { "Away mode is off.".to_string() }),
         Some(other) => return Err(format!("kelpie away takes on or off, not \"{other}\"")),
     };
-    user_only("away mode")?;
+    user_only("switching away mode")?;
     let Some(since) = set_away_in(&state_dir()?, on, messages::now())? else {
         return Ok(format!("Away mode is already {}.", if on { "on" } else { "off" }));
     };
@@ -185,7 +185,11 @@ fn role_of(args: &str) -> Option<Caller> {
     if program != "claude" && !args.contains("@anthropic-ai/claude-code") {
         return None;
     }
-    let settings = words.iter().position(|word| *word == "--settings").and_then(|index| words.get(index + 1));
+    let at = words.iter().position(|word| *word == "--settings");
+    let settings = at.and_then(|index| words.get(index + 1));
+    if settings.is_some_and(|word| word.starts_with('{')) {
+        return Some(inline_role(&words));
+    }
     let name = settings.and_then(|file| Path::new(file).file_name()).map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
     Some(match name.strip_suffix(".settings.json") {
         Some(crate::status::LEAD_LABEL) => Caller::Lead,
@@ -194,8 +198,19 @@ fn role_of(args: &str) -> Option<Caller> {
     })
 }
 
-// The strictest Claude in the chain decides, so a Claude a task starts with the lead's settings is still the task; a Claude's env with no Claude above is an agent that slipped its parent.
-pub fn caller_in(processes: &[(u32, u32, String)], pid: u32, claude_env: bool) -> Caller {
+// A Claude kelpie started before it wrote settings files carries the JSON inline: the lead's has the messages --unread prompt hook, a task's the kelpie hook command, and a task's role file names it.
+fn inline_role(words: &[&str]) -> Caller {
+    let args = words.join(" ");
+    if args.contains("' hook\"") {
+        let role = words.iter().position(|word| *word == "--append-system-prompt-file").and_then(|index| words.get(index + 1));
+        let address = role.and_then(|file| Path::new(file).file_stem()).map(|stem| stem.to_string_lossy().to_string()).filter(|stem| stem.contains('@'));
+        return Caller::Task(address.unwrap_or_else(|| "started before kelpie wrote settings files".to_string()));
+    }
+    if args.contains("' messages --unread\"") { Caller::Lead } else { Caller::Agent }
+}
+
+// The strictest Claude in the chain decides, so a Claude a task starts with the lead's settings is still the task; no Claude above is the user, since an env variable is no proof either way.
+pub fn caller_in(processes: &[(u32, u32, String)], pid: u32) -> Caller {
     let mut roles = Vec::new();
     let mut current = pid;
     for _ in 0..64 {
@@ -211,7 +226,7 @@ pub fn caller_in(processes: &[(u32, u32, String)], pid: u32, claude_env: bool) -
     if let Some(task) = roles.iter().find(|role| matches!(role, Caller::Task(_))) {
         return task.clone();
     }
-    if roles.contains(&Caller::Agent) || (roles.is_empty() && claude_env) {
+    if roles.contains(&Caller::Agent) {
         return Caller::Agent;
     }
     if roles.contains(&Caller::Lead) { Caller::Lead } else { Caller::User }
@@ -228,13 +243,17 @@ pub fn processes(table: &str) -> Vec<(u32, u32, String)> {
 
 pub fn caller() -> Caller {
     let table = crate::sh::run("ps", &["-A", "-o", "pid=,ppid=,args="], None).unwrap_or_default();
-    caller_in(&processes(&table), std::process::id(), std::env::var_os("CLAUDECODE").is_some())
+    caller_in(&processes(&table), std::process::id())
 }
 
 pub fn user_only(what: &str) -> Result<()> {
-    match caller() {
+    user_only_as(&caller(), what)
+}
+
+pub fn user_only_as(caller: &Caller, what: &str) -> Result<()> {
+    match caller {
         Caller::User => Ok(()),
-        other => Err(format!("{what} is the user's to switch, from the board or their own terminal; {} cannot", describe(&other))),
+        other => Err(format!("{what} is the user's call, from the board or their own terminal; {} cannot", describe(other))),
     }
 }
 
@@ -318,15 +337,28 @@ mod tests {
         let task = "claude --permission-mode acceptEdits --settings /state/roles/billing@app.settings.json --append-system-prompt-file /state/roles/billing@app.md --session-id 1";
         let reviewer = "claude -p --settings /state/roles/billing@app.review.settings.json";
         let table = |claude: &str| processes(&format!("  1     0 /sbin/launchd\n 40     1 /usr/bin/herdr server\n 50    40 {claude}\n 60    50 /bin/zsh -c kelpie push billing\n 70    60 /bin/kelpie push billing\n"));
-        assert_eq!(caller_in(&table(lead), 70, true), Caller::Lead);
-        assert_eq!(caller_in(&table(task), 70, true), Caller::Task("billing@app".to_string()));
-        assert_eq!(caller_in(&table(reviewer), 70, true), Caller::Agent);
-        assert_eq!(caller_in(&table("node /opt/node_modules/@anthropic-ai/claude-code/cli.js"), 70, true), Caller::Agent, "a Claude kelpie did not start is an agent");
-        assert_eq!(caller_in(&table("/bin/zsh -l"), 70, false), Caller::User, "the user's own shell");
-        assert_eq!(caller_in(&table("/bin/zsh -l"), 70, true), Caller::Agent, "a Claude's env with its Claude out of the chain");
+        assert_eq!(caller_in(&table(lead), 70), Caller::Lead);
+        assert_eq!(caller_in(&table(task), 70), Caller::Task("billing@app".to_string()));
+        assert_eq!(caller_in(&table(reviewer), 70), Caller::Agent);
+        assert_eq!(caller_in(&table("node /opt/node_modules/@anthropic-ai/claude-code/cli.js"), 70), Caller::Agent, "a Claude kelpie did not start is an agent");
+        assert_eq!(caller_in(&table("/bin/zsh -l"), 70), Caller::User, "the user's own shell, also when herdr was started from a Claude and its panes inherit CLAUDECODE");
         let disguised = processes(&format!("  1 0 launchd\n 50 1 {task}\n 55 50 claude -p --settings /state/roles/lead.settings.json\n 70 55 kelpie push billing\n"));
-        assert_eq!(caller_in(&disguised, 70, true), Caller::Task("billing@app".to_string()), "a task cannot pass as the lead by starting a Claude with the lead's settings");
-        assert_eq!(caller_in(&processes(" 70 70 /bin/kelpie board\n"), 70, false), Caller::User, "a loop in the table ends the walk");
-        assert_eq!(caller_in(&processes("garbage\n"), 70, false), Caller::User);
+        assert_eq!(caller_in(&disguised, 70), Caller::Task("billing@app".to_string()), "a task cannot pass as the lead by starting a Claude with the lead's settings");
+        assert_eq!(caller_in(&processes(" 70 70 /bin/kelpie board\n"), 70), Caller::User, "a loop in the table ends the walk");
+        assert_eq!(caller_in(&processes("garbage\n"), 70), Caller::User);
+    }
+
+    #[test]
+    fn a_claude_started_with_inline_settings_json_reads_as_the_lead_or_its_task() {
+        let kelpie = "/Users/ada/.local/share/kelpie/current/kelpie";
+        let lead_json = serde_json::json!({ "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' messages --unread") }] }] }, "permissions": { "allow": [format!("Bash({kelpie} push:*)")] } });
+        let hook = serde_json::json!([{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook") }] }]);
+        let task_json = serde_json::json!({ "permissions": { "deny": ["Bash(git push:*)"] }, "hooks": { "UserPromptSubmit": hook, "Stop": hook } });
+        let table = |claude: String| processes(&format!("  1     0 /sbin/launchd\n 50     1 {claude}\n 60    50 /bin/zsh -c kelpie push billing\n 70    60 /bin/kelpie push billing\n"));
+        let lead = format!("claude --append-system-prompt-file /state/roles/lead.md --settings {lead_json}");
+        let task = format!("claude --permission-mode acceptEdits --settings {task_json} --append-system-prompt-file /state/roles/billing@app.md");
+        assert_eq!(caller_in(&table(lead), 70), Caller::Lead, "the user's lead from before settings files still pushes, decides and defers");
+        assert_eq!(caller_in(&table(task), 70), Caller::Task("billing@app".to_string()));
+        assert_eq!(caller_in(&table(format!("claude --settings {}", serde_json::json!({ "model": "opus" }))), 70), Caller::Agent, "other inline settings are no role");
     }
 }

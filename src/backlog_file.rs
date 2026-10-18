@@ -5,7 +5,7 @@ use crate::sh::Result;
 
 pub const PREFIX: &str = "local:";
 pub const FORMAT: &str = "- [priority] Title — one-line summary (area)";
-const HEADER: &str = "<!-- kelpie's backlog: one item per line, - [urgent|high|medium|low] Title — one-line summary (area); the priority, summary and area are optional, and other lines are left as they are. -->\n\n";
+const HEADER: &str = "<!-- kelpie's backlog: one item per line, - [urgent|high|medium|low] Title — one-line summary (area); the priority, summary and area are optional, and other lines (checkboxes, nested bullets, prose) are left as they are. -->\n\n";
 
 pub fn path() -> PathBuf {
     crate::config::path().with_file_name("backlog.md")
@@ -15,12 +15,20 @@ pub fn reference(title: &str) -> String {
     format!("{PREFIX}{title}")
 }
 
+// An item is a top-level bullet whose bracket, if any, is a priority; a checkbox, a nested bullet or prose is the user's own line.
 pub fn parse(line: &str) -> Option<Entry> {
-    let trimmed = line.trim();
+    let trimmed = line.trim_end();
     let rest = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* "))?.trim();
-    let (priority, rest) = match rest.strip_prefix('[').and_then(|inner| inner.split_once(']')) {
-        Some((word, after)) if PRIORITIES.contains(&word.trim().to_lowercase().as_str()) => (word.trim().to_lowercase(), after.trim()),
-        _ => ("none".to_string(), rest),
+    let (priority, rest) = match rest.strip_prefix('[') {
+        Some(inner) => {
+            let (word, after) = inner.split_once(']')?;
+            let word = word.trim().to_lowercase();
+            if !PRIORITIES.contains(&word.as_str()) {
+                return None;
+            }
+            (word, after.trim())
+        }
+        None => ("none".to_string(), rest),
     };
     // The area is a repo's folder name, so a parenthesis with a space in it stays part of the text.
     let (rest, area) = match rest.strip_suffix(')').and_then(|inner| inner.rsplit_once(" (")) {
@@ -59,7 +67,7 @@ pub fn appended(existing: Option<&str>, priority: &str, item: &str) -> Result<(S
         other => return Err(format!("\"{other}\" is not a priority; use urgent, high, medium or low, or leave it empty")),
     };
     let new = line(&priority, item.trim());
-    let entry = parse(&new).ok_or("The item needs a title")?;
+    let entry = parse(&new).ok_or("The item needs a title, one that does not start with [")?;
     let existing = existing.unwrap_or(HEADER);
     if entries(existing).iter().any(|other| other.title == entry.title) {
         return Err(format!("\"{}\" is already in the backlog; its title is how kelpie knows it, so give this one another", entry.title));
@@ -97,11 +105,10 @@ mod tests {
         assert_eq!((item.source.as_str(), item.reference.as_str()), ("local", "local:Fix login"));
         let bare = parse("- Write the docs").unwrap();
         assert_eq!((bare.priority.as_str(), bare.title.as_str(), bare.summary.as_str(), bare.area.as_str()), ("none", "Write the docs", "", ""));
-        assert_eq!(parse("  * [URGENT] Rotate keys (infra)").map(|item| (item.priority, item.area)), Some(("urgent".to_string(), "infra".to_string())));
-        assert_eq!(parse("- [later] Maybe — sometime").map(|item| (item.priority, item.title)), Some(("none".to_string(), "[later] Maybe".to_string())));
+        assert_eq!(parse("* [URGENT] Rotate keys (infra)").map(|item| (item.priority, item.area)), Some(("urgent".to_string(), "infra".to_string())));
         assert_eq!(parse("- Fix it (the old way)").map(|item| (item.title, item.area)), Some(("Fix it (the old way)".to_string(), String::new())), "a parenthesis with a space is text, not an area");
         assert_eq!(parse("- [low] Tidy -- ascii dash (web)").map(|item| item.summary), Some("ascii dash".to_string()));
-        for not_an_item in ["# Backlog", "", "Some prose.", "-", "- [high]", "<!-- note -->"] {
+        for not_an_item in ["# Backlog", "", "Some prose.", "-", "- [high]", "<!-- note -->", "- [x] done", "- [ ] still open", "- [later] Maybe — sometime", "  - a nested note", "    * [high] nested too", "- [unclosed"] {
             assert!(parse(not_an_item).is_none(), "{not_an_item:?}");
         }
     }

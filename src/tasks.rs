@@ -394,7 +394,7 @@ struct Launch<'a> {
 // Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
 fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<()>)> {
     let Launch { repo, task, mode, setup_skill, rules_skill, ref worktree } = *place;
-    crate::push_block::install(worktree, &state_dir()?)?;
+    crate::push_block::warn_if_off(crate::push_block::install(worktree, &state_dir()?)?);
     // herdr's agent names are global, so a task's half in another repo is named with its repo.
     let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
@@ -543,6 +543,7 @@ pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bo
     }
     let head = git(&slot.path, &["rev-parse", "HEAD"])?;
     let sha = pushable_through(&slot.path, &upstream, through.unwrap_or(&head), keep_open)?;
+    let keep_open = stays_open(keep_open, &sha, &head);
     let address = peers::address(&task, &name_of(&repo));
     let shown = crate::review::shown(&address, &slot.path, &upstream);
     let covered = |reviewed: &str| same_code(&slot.path, &upstream, reviewed, &head) || same_code(&slot.path, &upstream, reviewed, &sha);
@@ -562,8 +563,11 @@ pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bo
         return closed.map(|closed| format!("Pushed {} to {upstream}. {closed}", plural(count, "commit")));
     }
     tell_lead_pushed(&landed(false));
-    let (clean, rest) = keep_going(&state, &repo, &slot, &upstream, &address, was_approved)?;
     let short = &sha[..7.min(sha.len())];
+    let (clean, rest) = match keep_going(&state, &repo, &slot, &upstream, &address, was_approved)? {
+        Rest::Rebased { clean, rest } => (clean, rest),
+        Rest::NotFetched(error) => return Ok(format!("Pushed {} through {short} to {upstream}. Fetching afterwards failed ({error}), so the rest of {task} is not rebased onto it yet: run kelpie land {task}.", plural(count, "commit"))),
+    };
     let told = format!(
         "{} pushed {} of this task, through {short}, to {target}; they are on {target} for good. Your branch continues from there with {} on top: reshape only those.",
         capitalized(pusher), plural(count, "commit"), plural(rest, "commit")
@@ -636,16 +640,29 @@ fn tell_lead_pushed(landed: &Landed) {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum Rest {
+    Rebased { clean: bool, rest: usize },
+    NotFetched(String),
+}
+
 // After a push that keeps the task open: the rest of its branch goes on top of the new default branch, an approval of the whole branch holds for the rest, and the card, written for what was pushed, goes.
-fn keep_going(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, was_approved: bool) -> Result<(bool, usize)> {
-    fetch(repo)?;
+fn keep_going(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, was_approved: bool) -> Result<Rest> {
+    crate::report::forget_card_in(state, address);
+    if let Err(error) = fetch(repo) {
+        return Ok(Rest::NotFetched(error));
+    }
     let clean = rebase_or_hand_over(slot, upstream, "kelpie pushed this task's first commits")?;
     let rest = ahead_behind(&slot.path, upstream)?.0;
     if clean && was_approved && rest > 0 {
         record_approval(state, address, &fingerprint(&slot.path, upstream)?)?;
     }
-    crate::report::forget_card_in(state, address);
-    Ok((clean, rest))
+    Ok(Rest::Rebased { clean, rest })
+}
+
+// A push through the last commit leaves nothing to keep the task open for, so it closes like a full push.
+fn stays_open(keep_open: bool, sha: &str, head: &str) -> bool {
+    keep_open && sha != head
 }
 
 // One of the task's commits not yet on upstream; a full push names HEAD, so a commit that arrived after the dialog opened is never pushed unseen.
@@ -740,9 +757,14 @@ fn forget_approval(task: &str, repo: &Path) {
 
 // The lead's word that the task's commits hold to the rules skill, until a commit changes.
 pub fn approve(cwd: &Path, name: Option<&str>) -> Result<String> {
-    let here = std::env::current_dir().map_err(|error| error.to_string())?;
-    if peers::me(&here).is_some_and(|me| me != crate::status::LEAD_LABEL) {
-        return Err("approve is the lead's check; a task cannot approve its own commits".to_string());
+    approve_as(&crate::permit::caller(), cwd, name)
+}
+
+// Read from the Claude above, not the folder, which kelpie -C or a cd sets to anything.
+fn approve_as(caller: &crate::permit::Caller, cwd: &Path, name: Option<&str>) -> Result<String> {
+    use crate::permit::Caller;
+    if !matches!(caller, Caller::Lead | Caller::User) {
+        return Err(format!("approve is the lead's check of a task's commits; {} cannot approve them", crate::permit::describe(caller)));
     }
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
@@ -1012,7 +1034,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     }
 
     let slot = claim_slot(&repo, &upstream).map_err(stashed)?;
-    crate::push_block::install(&slot.path, &state_dir()?).map_err(stashed)?;
+    crate::push_block::warn_if_off(crate::push_block::install(&slot.path, &state_dir()?).map_err(stashed)?);
     git(&slot.path, &["switch", "--quiet", &task]).map_err(stashed)?;
     if let Some(index) = stash_index(&repo, &message)? {
         git(&slot.path, &["stash", "pop", "--quiet", &format!("stash@{{{index}}}")]).map_err(stashed)?;
@@ -1108,6 +1130,18 @@ mod tests {
         assert_eq!(check(Caller::Lead, Some(Permit::Repo), true, true), Ok("the lead"));
         for agent in [Caller::Task("billing@app".to_string()), Caller::Agent] {
             assert!(check(agent, Some(Permit::Task), true, true).unwrap_err().contains("no agent pushes"), "a permission is the lead's, never a task's");
+        }
+    }
+
+    #[test]
+    fn only_the_lead_or_the_user_approves_whatever_folder_it_runs_from() {
+        use crate::permit::Caller;
+        for caller in [Caller::Task("billing@app".to_string()), Caller::Agent] {
+            let refused = approve_as(&caller, Path::new("/nowhere"), Some("billing")).unwrap_err();
+            assert!(refused.contains("lead's check") && refused.contains(&crate::permit::describe(&caller)), "a task's kelpie -C <worktree> approve is refused too: {refused}");
+        }
+        for caller in [Caller::Lead, Caller::User] {
+            assert!(!approve_as(&caller, Path::new("/nowhere"), Some("billing")).unwrap_err().contains("lead's check"));
         }
     }
 
@@ -1405,9 +1439,7 @@ mod tests {
         assert_eq!(push_prefix(&slot.path, &upstream, &fourth, &state).unwrap(), 1);
         let branch = upstream.trim_start_matches("origin/");
         assert_eq!(git(&origin, &["rev-parse", branch]).unwrap(), fourth, "origin has the first commit");
-        let (clean, rest) = keep_going(&state, &dir, &slot, &upstream, "billing@app", true).unwrap();
-        assert!(clean);
-        assert_eq!(rest, 1);
+        assert_eq!(keep_going(&state, &dir, &slot, &upstream, "billing@app", true).unwrap(), Rest::Rebased { clean: true, rest: 1 });
         assert!(branch_exists(&dir, "billing"), "the task stays open");
         assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "billing");
         assert!(slots(&dir).unwrap().iter().any(|busy| busy.path == slot.path && !busy.free), "its worktree stays the task's");
@@ -1415,11 +1447,34 @@ mod tests {
         assert_eq!(git(&slot.path, &["log", "--format=%s", &format!("{upstream}..HEAD")]).unwrap(), "fifth", "no pushed commit twice");
         assert!(approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "an approval of the whole branch holds for the rest");
         assert!(crate::report::card_in(&state, "billing@app").is_none(), "the card was for what was pushed");
-        let (_, after_unapproved) = keep_going(&state.join("other"), &dir, &slot, &upstream, "billing@app", false).unwrap();
-        assert_eq!(after_unapproved, 1);
+        assert!(matches!(keep_going(&state.join("other"), &dir, &slot, &upstream, "billing@app", false).unwrap(), Rest::Rebased { rest: 1, .. }));
         assert!(!approval_file(&state.join("other"), "billing@app").exists(), "no approval is made up for a branch the lead never approved");
         std::fs::remove_dir_all(state).unwrap();
         cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_partial_push_that_landed_is_reported_even_when_the_fetch_after_it_fails() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        commit(&slot.path, "e", "fifth");
+        let state = dir.with_extension("state");
+        let _ = std::fs::remove_dir_all(&state);
+        crate::report::save_card(&state, "billing@app", &fourth, "Refunds on the billing page.").unwrap();
+        push_prefix(&slot.path, &upstream, &fourth, &state).unwrap();
+        git(&dir, &["remote", "set-url", "origin", &dir.with_extension("gone").to_string_lossy()]).unwrap();
+        assert!(matches!(keep_going(&state, &dir, &slot, &upstream, "billing@app", true).unwrap(), Rest::NotFetched(_)), "the commits are on origin, so the push is no failure");
+        assert!(crate::report::card_in(&state, "billing@app").is_none(), "the card was for what was pushed");
+        git(&dir, &["remote", "set-url", "origin", &origin.to_string_lossy()]).unwrap();
+        std::fs::remove_dir_all(state).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_through_the_last_commit_closes_the_task_like_a_full_push() {
+        assert!(!stays_open(true, "abc", "abc"), "p on the last commit, or --through HEAD, leaves no commit to keep open for");
+        assert!(stays_open(true, "abc", "def"));
+        assert!(!stays_open(false, "abc", "def"));
     }
 
     #[test]

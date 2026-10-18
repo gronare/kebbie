@@ -145,11 +145,21 @@ pub fn again_if_stale(cwd: &Path) -> Result<Option<String>> {
     request(cwd, None).map(Some)
 }
 
-// A marker whose process is gone is a review that died, not one still running.
+// A marker whose process is gone, or whose pid now belongs to another program after a reboot, is a review that died.
+fn running_pid(state: &Path, address: &str) -> Option<String> {
+    let pid = fs::read_to_string(running_file(state, address)).ok()?.trim().to_string();
+    if pid.is_empty() || !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    crate::sh::run("ps", &["-p", &pid, "-o", "args="], None).ok().filter(|args| is_reviewer(args)).map(|_| pid)
+}
+
 fn running_in(state: &Path, address: &str) -> bool {
-    let Ok(pid) = fs::read_to_string(running_file(state, address)) else { return false };
-    let pid = pid.trim();
-    !pid.is_empty() && Command::new("kill").args(["-0", pid]).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
+    running_pid(state, address).is_some()
+}
+
+pub fn is_reviewer(args: &str) -> bool {
+    args.contains(" review --run") && args.split_whitespace().any(|word| Path::new(word).file_name().is_some_and(|name| name.to_string_lossy().starts_with("kelpie")))
 }
 
 pub fn forget(task: &str, repo: &Path) {
@@ -166,6 +176,11 @@ pub fn forget_in(state: &Path, address: &str) {
 
 // The user's way out of review: the reviewer stops, its verdict goes, and the task leaves To review with push offered again.
 pub fn withdraw(cwd: &Path, name: Option<&str>) -> Result<String> {
+    withdraw_as(&crate::permit::caller(), cwd, name)
+}
+
+fn withdraw_as(caller: &crate::permit::Caller, cwd: &Path, name: Option<&str>) -> Result<String> {
+    crate::permit::user_only_as(caller, "withdrawing a task from review")?;
     let repo = main_checkout(cwd)?;
     let slot = tasks::find_task(&repo, name, cwd)?;
     let address = peers::address(tasks::task_of(&slot), &name_of(&repo));
@@ -180,11 +195,10 @@ pub fn withdraw(cwd: &Path, name: Option<&str>) -> Result<String> {
 
 // The reviewer runs in a process group of its own, so the signal stops its Claude too, before it can write a verdict.
 pub fn withdraw_in(state: &Path, address: &str) -> bool {
-    let in_review = verdict_file(state, address).exists() || running_in(state, address);
-    if running_in(state, address)
-        && let Ok(pid) = fs::read_to_string(running_file(state, address))
-    {
-        let _ = Command::new("kill").args(["-TERM", &format!("-{}", pid.trim())]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let running = running_pid(state, address);
+    let in_review = verdict_file(state, address).exists() || running.is_some();
+    if let Some(pid) = running {
+        let _ = Command::new("kill").args(["-TERM", &format!("-{pid}")]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
     forget_in(state, address);
     in_review
@@ -202,21 +216,27 @@ pub fn request(cwd: &Path, name: Option<&str>) -> Result<String> {
     let address = peers::address(task, &name_of(&repo));
     let state = state_dir()?;
     fs::create_dir_all(dir(&state)).map_err(|error| error.to_string())?;
-    if running_in(&state, &address) {
-        return Err(format!("A review of {address} is already running; the lead hears when its verdict is in."));
-    }
     let sha = git(&slot.path, &["rev-parse", "--short", "HEAD"])?;
-    let log = log_file(&state, &address);
-    let output = fs::File::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
-    let errors = output.try_clone().map_err(|error| error.to_string())?;
-    Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
-        .arg("-C").arg(&slot.path).args(["review", "--run"])
-        .stdin(Stdio::null()).stdout(output).stderr(errors).process_group(0)
-        .spawn().map_err(|error| format!("kelpie review: {error}"))?;
+    let log = start_reviewer(&state, &address, &std::env::current_exe().map_err(|error| error.to_string())?, &slot.path)?;
     Ok(format!(
         "Reviewing {address} at {sha} in the background; the verdict goes to {} and the lead is told (output in {}).",
         verdict_file(&state, &address).display(), log.display()
     ))
+}
+
+// The marker is written here, from the child's pid, so a second request right after the first finds it running.
+fn start_reviewer(state: &Path, address: &str, kelpie: &Path, worktree: &Path) -> Result<PathBuf> {
+    if running_in(state, address) {
+        return Err(format!("A review of {address} is already running; the lead hears when its verdict is in."));
+    }
+    let log = log_file(state, address);
+    let output = fs::File::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
+    let errors = output.try_clone().map_err(|error| error.to_string())?;
+    let child = Command::new(kelpie).arg("-C").arg(worktree).args(["review", "--run"])
+        .stdin(Stdio::null()).stdout(output).stderr(errors).process_group(0)
+        .spawn().map_err(|error| format!("kelpie review: {error}"))?;
+    fs::write(running_file(state, address), child.id().to_string()).map_err(|error| error.to_string())?;
+    Ok(log)
 }
 
 // The background half: runs the reviewer, saves its verdict and tells the lead, also when it fails.
@@ -492,10 +512,15 @@ mod tests {
         assert_eq!((current.stale, current.running, current.verdict.as_ref().unwrap().findings), (false, false, 1));
         assert!(shown_in(&state, "billing@app", at("bbb")).unwrap().stale, "a new commit makes the verdict stale");
         assert_eq!(shown_in(&state, "billing@web", at("aaa")), None);
-        fs::write(running_file(&state, "billing@app"), std::process::id().to_string()).unwrap();
+        let mut reviewer = fake_reviewer(&state);
+        fs::write(running_file(&state, "billing@app"), reviewer.id().to_string()).unwrap();
         assert!(shown_in(&state, "billing@app", at("aaa")).unwrap().running);
+        reviewer.kill().unwrap();
+        reviewer.wait().unwrap();
         fs::write(running_file(&state, "billing@app"), "999999999").unwrap();
         assert!(!shown_in(&state, "billing@app", at("aaa")).unwrap().running, "a review whose process is gone is not running");
+        fs::write(running_file(&state, "billing@app"), std::process::id().to_string()).unwrap();
+        assert!(!shown_in(&state, "billing@app", at("aaa")).unwrap().running, "a pid another program has now is no review");
         forget_in(&state, "billing@app");
         assert_eq!(shown_in(&state, "billing@app", at("aaa")), None);
         fs::remove_dir_all(state).unwrap();
@@ -532,12 +557,55 @@ mod tests {
         assert_eq!(shown, None, "the task leaves To review");
         assert_eq!(gate(shown.as_ref(), |_| false), Ok(()), "and pushes like a task never sent");
         assert!(!withdraw_in(&state, "billing@app"), "a task not in review has nothing to withdraw");
-        let mut reviewer = Command::new("sleep").arg("30").process_group(0).spawn().unwrap();
+        let mut reviewer = fake_reviewer(&state);
         fs::write(running_file(&state, "billing@app"), reviewer.id().to_string()).unwrap();
         assert!(withdraw_in(&state, "billing@app"));
         assert!(!reviewer.wait().unwrap().success(), "a running reviewer is stopped, so no verdict lands after the withdrawal");
         assert_eq!(shown_in(&state, "billing@app", |_| true), None);
+        let mut reused = Command::new("sleep").arg("30").process_group(0).spawn().unwrap();
+        fs::write(running_file(&state, "billing@app"), reused.id().to_string()).unwrap();
+        assert!(!withdraw_in(&state, "billing@app"), "a leftover marker is no review");
+        assert!(reused.try_wait().unwrap().is_none(), "a pid reused by another program after a reboot is never signalled");
+        reused.kill().unwrap();
+        reused.wait().unwrap();
         fs::remove_dir_all(state).unwrap();
+    }
+
+    fn fake_reviewer(state: &Path) -> std::process::Child {
+        Command::new(fake_kelpie(state)).args(["-C", "/nowhere", "review", "--run"]).process_group(0).spawn().unwrap()
+    }
+
+    fn fake_kelpie(state: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = state.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let file = bin.join("kelpie");
+        fs::write(&file, "#!/bin/sh\nsleep 30\n").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+        file
+    }
+
+    #[test]
+    fn a_review_counts_as_running_from_the_moment_it_is_requested() {
+        let state = std::env::temp_dir().join(format!("kelpie-review-start-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&state);
+        fs::create_dir_all(dir(&state)).unwrap();
+        let kelpie = fake_kelpie(&state);
+        start_reviewer(&state, "billing@app", &kelpie, Path::new("/nowhere")).unwrap();
+        assert!(running_in(&state, "billing@app"), "the marker is there before the reviewer writes its own");
+        assert!(start_reviewer(&state, "billing@app", &kelpie, Path::new("/nowhere")).unwrap_err().contains("already running"), "v twice starts one reviewer");
+        assert!(withdraw_in(&state, "billing@app"));
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn only_the_user_withdraws_a_task_from_review() {
+        use crate::permit::Caller;
+        for caller in [Caller::Lead, Caller::Task("billing@app".to_string()), Caller::Agent] {
+            let refused = withdraw_as(&caller, Path::new("/nowhere"), Some("billing")).unwrap_err();
+            assert!(refused.contains("the user's") && refused.contains(&crate::permit::describe(&caller)), "{refused}");
+        }
+        assert!(!withdraw_as(&Caller::User, Path::new("/nowhere"), Some("billing")).unwrap_err().contains("the user's"), "the user gets past the guard");
     }
 
     #[test]
