@@ -229,13 +229,16 @@ pub fn restart() -> Result<String> {
     let Some(lead) = lead_workspace(&herdr::workspaces()?) else { return Ok(nothing) };
     let agents = herdr::agents()?;
     let agent = lead_agent(&agents, &lead);
-    match restart_verdict(agent) {
-        Restart::Nothing => return Ok(nothing),
+    let pane = match restart_verdict(agent) {
         Restart::Working => return Err("The lead is working; run kelpie lead --restart when it is idle.".to_string()),
         Restart::Asking => return Err("The lead is waiting on a question; answer it, then run kelpie lead --restart when the lead is idle.".to_string()),
-        Restart::Go => {}
-    }
-    let pane = agent.and_then(|agent| agent["pane_id"].as_str()).ok_or("The lead's Claude has no pane")?.to_string();
+        Restart::Go => agent.and_then(|agent| agent["pane_id"].as_str()).ok_or("The lead's Claude has no pane")?.to_string(),
+        // Its Claude already gone, the lead's chat pane at a shell prompt still takes the resumed conversation.
+        Restart::Nothing => match places(&lead)?.chat.filter(|pane| herdr::foreground(pane).ok().flatten().is_none()) {
+            Some(pane) => pane,
+            None => return Ok(nothing),
+        },
+    };
     let dir = lead_dir()?;
     let recorded = fs::read_to_string(session_file()?).ok().map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
     let previous = tasks::claude_home().and_then(|home| {
@@ -247,7 +250,9 @@ pub fn restart() -> Result<String> {
         Some(id) => Session::Resume(id),
         None => Session::New(tasks::new_session_id()?),
     };
-    tasks::end_claude(&pane)?;
+    if agent.is_some() {
+        tasks::end_claude(&pane)?;
+    }
     start_chat(&pane, session)?;
     let how = if resumed { "resuming its conversation" } else { "with a new conversation, as none of its own was found" };
     Ok(format!("Restarted the lead with its current role and settings, {how}."))

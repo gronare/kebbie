@@ -288,9 +288,9 @@ enum Refusal {
     Final,
 }
 
-// A new pane's shell takes a moment to reach its prompt; until then herdr calls the pane busy, or on macOS measures the line against a shorter limit and asks for a retry.
+// A new pane's shell takes a moment to reach its prompt; until then herdr calls the pane busy, or on macOS measures the line against a shorter limit and asks for a retry; a Claude that just exited holds its agent name a moment longer.
 fn refusal(error: &str) -> Refusal {
-    if error.contains("agent_pane_busy") || error.contains("wait for the shell prompt and retry") {
+    if error.contains("agent_pane_busy") || error.contains("wait for the shell prompt and retry") || error.contains("agent_name_taken") {
         Refusal::NotYet
     } else if error.contains("agent_not_ready") || error.contains("timeout") {
         Refusal::Starting
@@ -1248,6 +1248,7 @@ mod tests {
     #[test]
     fn start_retries_while_herdr_asks_for_the_prompt_and_stops_on_any_other_refusal() {
         assert!(matches!(refusal("herdr agent start refused: agent pane p_1 is busy (agent_pane_busy)"), Refusal::NotYet));
+        assert!(matches!(refusal("herdr agent start refused: agent name lead is already used; candidates: … (agent_name_taken)"), Refusal::NotYet), "a Claude that just exited still holds its name");
         assert!(matches!(refusal("herdr agent start refused: input contains a 1100-byte line but the terminal is in canonical mode with a 1024-byte limit; wait for the shell prompt and retry (agent_start_input_failed)"), Refusal::NotYet));
         assert!(matches!(refusal("herdr agent start refused: not ready (agent_not_ready)"), Refusal::Starting));
         assert!(matches!(refusal("herdr agent start refused: agent target pane p_1 not found (agent_pane_not_found)"), Refusal::Final));
