@@ -54,13 +54,15 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie push [name]              after land: push the task to the default branch, then close it as done
   kelpie done [name]              after pushing: close the task and free its worktree
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
+  kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
+                                  the backlog item it was started from back in the Backlog column
   kelpie config [--repo <path>]   the config layers found (.kelpie.toml, machine config, defaults) and every
                                   setting in effect with the layer it comes from
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap
   kelpie update                   update the herdr and Claude Code plugins, rebuild, and reload the plugins in
                                   every waiting Claude session
 
-Without a name, land, push, done and drop act on the task whose worktree you are in.
+Without a name, land, push, done, drop and reset act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>.";
 
 struct Arguments {
@@ -74,7 +76,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -167,7 +169,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             if repos.is_empty() {
                 repos.push(cwd);
             }
-            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode") };
+            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), backlog: arguments.value("--backlog") };
             // One task across repos: a half per repo, the first one focused.
             let started: Vec<Result<String>> = repos.iter().enumerate()
                 .map(|(index, repo)| tasks::start(repo, name, &tasks::Start { focus: options.focus && index == 0, ..options }))
@@ -216,6 +218,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
+        Some("reset") => tasks::reset(&cwd, name),
         Some("config") => config::show(&cwd, arguments.value("--repo")),
         Some("update") => update::run(&doctor::Env::current().claude_dir),
         None | Some("help") => Ok(USAGE.to_string()),

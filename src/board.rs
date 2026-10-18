@@ -85,6 +85,7 @@ fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
             choice('d', "Done", "already pushed elsewhere: close it and free the worktree"),
         ]);
     }
+    choices.push(choice('z', "Reset", "stop it for good: its work goes, its backlog item comes back (asks first)"));
     choices.push(choice('x', "Drop", "throw the task away (asks first)"));
     choices
 }
@@ -116,6 +117,7 @@ enum Mode {
     Input { purpose: Purpose, label: String, buffer: String },
     Message(String),
     ConfirmDrop { path: PathBuf, name: String, force: bool },
+    ConfirmReset { path: PathBuf, name: String },
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize },
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
@@ -550,6 +552,11 @@ impl App {
             }
             Mode::Help | Mode::Message(_) => {}
             working @ Mode::Working { .. } => self.mode = working,
+            Mode::ConfirmReset { path, .. } => {
+                if key.code == KeyCode::Char('y') {
+                    self.show(tasks::reset(&path, None));
+                }
+            }
             Mode::ConfirmDrop { path, name, force } => {
                 if key.code == KeyCode::Char('y') {
                     match tasks::drop(&path, None, force) {
@@ -718,6 +725,11 @@ impl App {
                         }
                     }
                     'w' => self.toggle_server(&item),
+                    'z' => {
+                        if let Some(path) = item.path.clone() {
+                            self.mode = Mode::ConfirmReset { path, name: item.name };
+                        }
+                    }
                     'l' | 'd' | 'x' => {
                         let Some(path) = item.path.clone() else { return };
                         match key {
@@ -789,13 +801,13 @@ impl App {
             Purpose::TaskPrompt(name) => {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
-                self.show(start_in_background(&repo, &name, prompt.as_deref()));
+                self.show(start_in_background(&repo, &name, prompt.as_deref(), None));
             }
             Purpose::BacklogName(entry) => {
                 let prompt = backlog::task_prompt(&entry, &self.sources);
                 let known = self.repo_named(&entry.area);
                 let result = known.map_or_else(|| outside(terminal, || repo::locate(&entry.area)), Ok)
-                    .and_then(|repo| start_in_background(&repo, &text, Some(&prompt)));
+                    .and_then(|repo| start_in_background(&repo, &text, Some(&prompt), Some(&entry.reference)));
                 self.show(result);
             }
             Purpose::Tidy(path) => {
@@ -812,7 +824,7 @@ impl App {
 }
 
 // The board stays where it is while the task's worktree and Claude come up; the task shows under Work once its Space exists.
-fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>) -> Result<String> {
+fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: Option<&str>) -> Result<String> {
     let dir = crate::lead::state_dir()?.join("starts");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     let log = dir.join(format!("{}.log", name.replace('/', "-")));
@@ -820,6 +832,9 @@ fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>) -> Result<
     let errors = output.try_clone().map_err(|error| error.to_string())?;
     let mut command = Command::new(std::env::current_exe().map_err(|error| error.to_string())?);
     command.arg("-C").arg(repo).args(["start", name, "--no-focus"]);
+    if let Some(item) = backlog.filter(|item| !item.is_empty()) {
+        command.args(["--backlog", item]);
+    }
     if let Some(prompt) = prompt {
         command.arg(prompt);
     }
@@ -1205,7 +1220,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("tab", "switch between the work and areas pages"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
         ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("l", "ready to push: rebase and check (on a task)"), ("d", "done: after you pushed"),
-        ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("esc", "close this, or the board when it is an overlay"),
+        ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
 
@@ -1271,6 +1286,14 @@ fn draw(frame: &mut Frame, app: &mut App) {
             let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
             lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
             modal(frame, "kelpie".to_string(), lines, 96);
+        }
+        Mode::ConfirmReset { name, .. } => {
+            modal(frame, "reset".to_string(), vec![
+                Line::from(Span::styled(name.clone(), style(TEXT))),
+                Line::from(Span::styled("Its changes and commits go, its Claude stops, its worktree is freed and its Space closes. The backlog item it came from returns.", style(MUTED))),
+                Line::default(),
+                Line::from(vec![Span::styled("Reset this task?", style(YELLOW)), Span::styled("  y / n", style(MUTED))]),
+            ], 72);
         }
         Mode::ConfirmDrop { name, force, .. } => {
             let question = if *force { "Discard its changes and commits?" } else { "Drop this task?" };
@@ -1498,15 +1521,15 @@ mod tests {
     #[test]
     fn a_working_task_offers_no_tidy_push_or_done() {
         let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprx");
-        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprtldx");
+        assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprzx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprtldzx");
     }
 
     #[test]
     fn w_is_offered_only_with_a_dev_server() {
         let keys = |dev_server: Option<&str>| task_choices(None, dev_server).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!(keys(None), "gprtldx");
-        assert_eq!(keys(Some("bin/dev")), "gprwtldx");
+        assert_eq!(keys(None), "gprtldzx");
+        assert_eq!(keys(Some("bin/dev")), "gprwtldzx");
         let start = task_choices(None, Some("npm run dev"));
         assert_eq!((start[3].label.as_str(), start[3].about.as_str()), ("Start the dev server", "npm run dev in a tab of its Space"));
     }

@@ -185,6 +185,13 @@ pub fn tell(cwd: &Path, to: &str, text: &str) -> Result<String> {
     Ok(send(&from, &recipients, text.trim(), &sessions)?.join("\n"))
 }
 
+// kelpie's own word to the lead, for a change it would otherwise learn of from stale reports.
+pub fn notify_lead(text: &str) -> Result<()> {
+    let sessions = peers::sessions()?;
+    let Ok(lead) = peers::resolve(LEAD_LABEL, "kelpie", &sessions) else { return Ok(()) };
+    send("kelpie", &lead, text, &sessions).map(|_| ())
+}
+
 // When a task starts in another repo, the halves already running learn of it.
 pub fn announce(task: &str, repo: &str) -> Result<()> {
     let sessions = peers::sessions()?;

@@ -104,6 +104,14 @@ impl Index {
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|error| error.to_string())
     }
 
+    // Every live backlog note: key, title, summary, priority, area link and date.
+    pub fn backlog(&self) -> Result<Vec<[String; 6]>> {
+        let sql = "SELECT key, title, summary, priority, area, date FROM notes WHERE status = 'backlog' AND valid = 1 AND folder NOT IN ('Archive', 'Log')";
+        let mut statement = self.db.prepare(sql).map_err(|error| error.to_string())?;
+        let rows = statement.query_map([], |row| Ok([0, 1, 2, 3, 4, 5].map(|column| text(row, column)))).map_err(|error| error.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|error| error.to_string())
+    }
+
     pub fn changed_at(&self, key: &str) -> Option<f64> {
         self.db.query_row("SELECT mtime FROM notes WHERE key = ?1", [key], |row| row.get::<_, f64>(0)).ok()
     }

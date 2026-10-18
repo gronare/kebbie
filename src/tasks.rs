@@ -131,6 +131,50 @@ pub struct Start<'a> {
     pub focus: bool,
     pub from: Option<&'a str>,
     pub mode: Option<&'a str>,
+    pub backlog: Option<&'a str>,
+}
+
+// The backlog item a running task was started from: the Backlog column hides it while the task runs, and a reset brings it back.
+fn started_file(task: &str, repo: &Path) -> Result<PathBuf> {
+    let dir = crate::lead::state_dir()?.join("started");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir.join(peers::address(task, &name_of(repo))))
+}
+
+pub fn started_items() -> HashSet<String> {
+    let Ok(dir) = crate::lead::state_dir().map(|dir| dir.join("started")) else { return HashSet::new() };
+    std::fs::read_dir(dir).into_iter().flatten().flatten()
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok()).map(|item| item.trim().to_string()).collect()
+}
+
+fn forget_start(task: &str, repo: &Path) -> Option<String> {
+    let file = started_file(task, repo).ok()?;
+    let item = std::fs::read_to_string(&file).ok();
+    let _ = std::fs::remove_file(file);
+    item.map(|item| item.trim().to_string())
+}
+
+// Stops a task for good: its work is discarded, its worktree and Space go, and the backlog item it came from returns.
+pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    let task = task_of(&slot).to_string();
+    let upstream = default_branch(&repo)?;
+    let discarded = git(&slot.path, &["log", "--format=%h %s", &format!("{upstream}..HEAD")]).unwrap_or_default();
+    let item = forget_start(&task, &repo);
+    let dropped = drop(&repo, Some(&task), true)?;
+    let mut notice = format!("The user reset {task}: it is gone, and its work was discarded and will never be pushed.");
+    if !discarded.is_empty() {
+        notice.push_str(&format!(" Discarded: {}.", discarded.lines().collect::<Vec<_>>().join("; ")));
+    }
+    if let Some(item) = &item {
+        notice.push_str(&format!(" Nobody works on {item} now: set it back to backlog."));
+    }
+    notice.push_str(" Drop any review or recommendation about it.");
+    if let Err(error) = messages::notify_lead(&notice) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    Ok(format!("{dropped}{}", if item.is_some() { " Its backlog item is back in the Backlog column." } else { "" }))
 }
 
 // A new pane's shell takes a moment to reach its prompt; until then herdr calls the pane busy.
@@ -174,7 +218,7 @@ fn trusted_in(claude: &Value, dir: &Path) -> bool {
 }
 
 pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
-    let Start { prompt, focus, from, mode } = *options;
+    let Start { prompt, focus, from, mode, backlog } = *options;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     let config::Settings { setup_skill, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
@@ -219,6 +263,9 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     }
     started?;
     prompted?;
+    if let Some(item) = backlog {
+        started_file(&task, &repo).and_then(|file| std::fs::write(file, item).map_err(|error| error.to_string()))?;
+    }
     if let Err(error) = messages::announce(&task, &name_of(&repo)) {
         eprintln!("Could not tell {task}'s other halves it started: {error}");
     }
@@ -458,6 +505,7 @@ fn finish(repo: &Path, slot: &Slot, upstream: &str) -> Result<String> {
         return Err(format!("{task} has commits that are not on {upstream} yet; push them first, or use drop"));
     }
     release(repo, slot, upstream)?;
+    forget_start(task, repo);
     Ok(format!("{task} is done; {} is free again. {}", name_of(&slot.path), fast_forward_main(repo, upstream)?))
 }
 
@@ -479,6 +527,7 @@ pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
         git(&slot.path, &["clean", "-fdq"])?;
     }
     release(&repo, &slot, &upstream)?;
+    forget_start(task, &repo);
     Ok(format!("{task} dropped; {} is free again.{}", name_of(&slot.path), close_space(workspace)))
 }
 

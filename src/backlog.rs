@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -67,10 +68,47 @@ pub fn load() -> Backlog {
     let mut entries: Vec<Entry> = value["entries"].as_array().into_iter().flatten().filter_map(entry).collect();
     let index = crate::vault::Index::open().ok();
     if let Some(index) = &index {
-        entries = still_backlog(entries, |key| index.status_of(key));
+        if config::sources().unwrap_or_default().contains(&Source::Vault) {
+            let notes = index.backlog().unwrap_or_default();
+            entries.extend(missing_notes(&entries, &notes, today()));
+        }
+        entries = still_backlog(entries, |key| index.status_of(key), &crate::tasks::started_items());
     }
     sort(&mut entries, |entry| index.as_ref().filter(|_| entry.source == "vault").and_then(|index| index.changed_at(&entry.reference)));
     Backlog { updated: value["updated"].as_u64(), entries }
+}
+
+// Backlog notes the lead's last snapshot does not have yet: filed since, or put back by a reset.
+fn missing_notes(entries: &[Entry], notes: &[[String; 6]], today: i64) -> Vec<Entry> {
+    notes.iter().filter(|[key, ..]| !entries.iter().any(|entry| entry.source == "vault" && &entry.reference == key)).map(|[key, title, summary, priority, area, date]| Entry {
+        source: "vault".to_string(),
+        title: title.clone(),
+        priority: if PRIORITIES.contains(&priority.as_str()) { priority.clone() } else { "none".to_string() },
+        area: area.trim_start_matches("[[").trim_end_matches("]]").to_string(),
+        reference: key.clone(),
+        summary: summary.clone(),
+        age: days_since(date, today).map_or(String::new(), |days| format!("{days} d")),
+    }).collect()
+}
+
+fn today() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs() as i64 / 86_400)
+}
+
+fn days_since(date: &str, today: i64) -> Option<i64> {
+    epoch_day(date).map(|day| (today - day).max(0))
+}
+
+// Days from 1970-01-01 to a YYYY-MM-DD date, by the civil-calendar formula.
+fn epoch_day(date: &str) -> Option<i64> {
+    let mut parts = date.get(..10)?.split('-').map(|part| part.parse::<i64>().ok());
+    let (year, month, day) = (parts.next()??, parts.next()??, parts.next()??);
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    Some(era * 146_097 + day_of_era - 719_468)
 }
 
 // By priority, then newest first: by age in days, and within a day by when the note last changed.
@@ -85,9 +123,12 @@ fn sort(entries: &mut [Entry], changed_at: impl Fn(&Entry) -> Option<f64>) {
     }
 }
 
-// A vault note picked up or closed since the snapshot leaves the Backlog column without waiting for a refresh.
-fn still_backlog(entries: Vec<Entry>, status: impl Fn(&str) -> Option<String>) -> Vec<Entry> {
-    entries.into_iter().filter(|entry| entry.source != "vault" || status(&entry.reference).as_deref() == Some("backlog")).collect()
+// An item a running task came from, or a vault note closed since the snapshot, leaves the Backlog column without waiting for a refresh; a reset task's note shows again even while it still reads active.
+fn still_backlog(entries: Vec<Entry>, status: impl Fn(&str) -> Option<String>, running: &HashSet<String>) -> Vec<Entry> {
+    entries.into_iter()
+        .filter(|entry| !running.contains(&entry.reference))
+        .filter(|entry| entry.source != "vault" || matches!(status(&entry.reference).as_deref(), Some("backlog" | "active")))
+        .collect()
 }
 
 pub fn age(updated: Option<u64>) -> String {
@@ -249,12 +290,23 @@ mod tests {
     }
 
     #[test]
-    fn a_vault_note_picked_up_since_the_snapshot_leaves_the_backlog() {
+    fn backlog_notes_missing_from_the_snapshot_are_added_with_their_age() {
+        let snapshot = vec![Entry { reference: "Projects/known.md".to_string(), ..entry("vault") }];
+        let row = |key: &str| [key.to_string(), "Title".to_string(), "Sum".to_string(), "high".to_string(), "[[kelpie]]".to_string(), "2026-10-15".to_string()];
+        let added = missing_notes(&snapshot, &[row("Projects/known.md"), row("Projects/new.md")], epoch_day("2026-10-18").unwrap());
+        assert_eq!(added.len(), 1);
+        assert_eq!((added[0].reference.as_str(), added[0].area.as_str(), added[0].age.as_str()), ("Projects/new.md", "kelpie", "3 d"));
+        assert_eq!((epoch_day("1970-01-01"), epoch_day("2000-03-01")), (Some(0), Some(11_017)));
+    }
+
+    #[test]
+    fn a_running_or_closed_item_leaves_the_backlog_and_a_reset_one_returns() {
         let note = |reference: &str| Entry { reference: reference.to_string(), ..entry("vault") };
-        let entries = vec![note("Projects/open.md"), note("Projects/started.md"), note("Projects/closed.md"), entry("linear")];
-        let status = |key: &str| match key { "Projects/open.md" => Some("backlog".to_string()), "Projects/started.md" => Some("active".to_string()), _ => None };
-        let kept: Vec<String> = still_backlog(entries, status).into_iter().map(|entry| entry.reference).collect();
-        assert_eq!(kept, ["Projects/open.md", "ABC-1"]);
+        let entries = vec![note("Projects/open.md"), note("Projects/running.md"), note("Projects/reset.md"), note("Projects/closed.md"), entry("linear")];
+        let status = |key: &str| match key { "Projects/open.md" => Some("backlog".to_string()), "Projects/running.md" | "Projects/reset.md" => Some("active".to_string()), _ => None };
+        let running = HashSet::from(["Projects/running.md".to_string()]);
+        let kept: Vec<String> = still_backlog(entries, status, &running).into_iter().map(|entry| entry.reference).collect();
+        assert_eq!(kept, ["Projects/open.md", "Projects/reset.md", "ABC-1"]);
     }
 
     #[test]
