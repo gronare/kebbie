@@ -1146,13 +1146,16 @@ pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
     Rect { x: area.x + (area.width - width) / 2, y: area.y + (area.height - height) / 2, width, height }
 }
 
+// Sized to the wrapped text, so a long line in a narrow pane cannot push the last line, often the keys, out of the window.
 pub fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width: u16) -> Rect {
-    let height = lines.len() as u16 + 2;
-    let area = centered(frame.area(), width, height);
-    frame.render_widget(Clear, area);
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
         .title(Span::styled(format!(" {title} "), bold(MAUVE)));
-    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+    let width = width.min(frame.area().width.saturating_sub(4));
+    let rows = Paragraph::new(lines.clone()).wrap(Wrap { trim: false }).line_count(width.saturating_sub(4));
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let area = centered(frame.area(), width, rows as u16 + 2);
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
     area
 }
 
@@ -1446,6 +1449,15 @@ pub fn run(overlay: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_modal_keeps_its_last_line_when_a_long_line_wraps() {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 20)).unwrap();
+        let lines = vec![Line::from("x ".repeat(80)), Line::default(), Line::from("y push · esc cancel")];
+        terminal.draw(|frame| { modal(frame, "push".to_string(), lines, 96); }).unwrap();
+        let screen: String = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect();
+        assert!(screen.contains("y push · esc cancel"), "{screen}");
+    }
 
     #[test]
     fn a_suggested_name_keeps_letters_with_diacritics() {
