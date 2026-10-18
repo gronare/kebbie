@@ -62,10 +62,16 @@ pub fn ahead_behind(path: &Path, upstream: &str) -> Result<(usize, usize)> {
     Ok((numbers.next().unwrap_or(0), numbers.next().unwrap_or(0)))
 }
 
-// Pushes to origin as the user from the board, where nobody may see a prompt: git and ssh fail instead of waiting for a password or passphrase.
 pub fn push_as_user(path: &Path, refspecs: &[&str]) -> Result<()> {
+    push_from(path, refspecs, &crate::lead::state_dir()?)
+}
+
+// Pushes to origin as the user from the board, where nobody may see a prompt: git and ssh fail instead of waiting for a password or passphrase.
+pub fn push_from(path: &Path, refspecs: &[&str], state: &Path) -> Result<()> {
+    let token = crate::push_block::Token::new(state)?;
     let mut command = std::process::Command::new("git");
-    command.args(["push", "--quiet", "origin"]).args(refspecs).current_dir(path).stdin(std::process::Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
+    command.args(crate::push_block::unblock_args(path)?).args(["push", "--quiet", "origin"]).args(refspecs).current_dir(path).stdin(std::process::Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0").env(crate::push_block::TOKEN_VAR, &token.value);
     if std::env::var_os("GIT_SSH_COMMAND").is_none() {
         command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
     }

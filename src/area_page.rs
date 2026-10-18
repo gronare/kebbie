@@ -19,6 +19,7 @@ use crate::board::{
 };
 use crate::config::Source;
 use crate::herdr;
+use crate::permit;
 use crate::repo::{self, git, push_as_user};
 use crate::sh::Result;
 use crate::status::{Group, Item};
@@ -321,6 +322,11 @@ impl Page {
         if area.repo.is_some() {
             choices.push(choice('g', "Open its Space", "the main checkout's Space, opened if needed"));
             choices.push(choice('s', "Start a task here", "a worktree, a Space and Claude, told the area's notes"));
+            choices.push(if area.repo_name().is_some_and(|repo| permit::repo_permitted(&repo)) {
+                choice('a', "Take back the lead's push permission", "the lead pushes only tasks you gave their own permission")
+            } else {
+                choice('a', "Let the lead push reviewed tasks", "the lead may push any task here once its reviewer passed its current code")
+            });
         }
         let refresh = backlog::refresh_label(&self.sources);
         choices.push(choice('b', "Refresh its backlog", &refresh));
@@ -485,6 +491,7 @@ impl Page {
             's' => self.mode = Mode::Input { purpose: Purpose::TaskName(area.stem), label: "New task here: name".to_string(), buffer: String::new() },
             'b' => self.refresh_backlog(&area),
             'l' => self.mode = Mode::Log { stem: area.stem, scroll: 0 },
+            'a' => self.show(permit::toggle_repo(&repo::name_of(&repo))),
             'u' => match &area.git {
                 Some(git) if git.ahead > 0 => {
                     let commits = commits_between(&repo, &format!("{}..refs/heads/{}", git.upstream, git.branch));
@@ -760,6 +767,10 @@ impl Page {
             }
         }
         lines.push(kv("backlog", plural(area.backlog.len(), "item"), TEXT));
+        if let Some(repo) = area.repo_name() {
+            let (text, color) = if permit::repo_permitted(&repo) { ("the lead may push reviewed tasks", GREEN) } else { ("you, and the lead for tasks you permit", TEXT) };
+            lines.push(kv("pushes", text.to_string(), color));
+        }
         if let Some(line) = area.log.first() {
             lines.push(Line::default());
             lines.extend(card_text("last log", &format!("[{}] {}", line.date, line.text), FAINT, width, 2).into_iter().map(|line| line.style(Style::new())));
@@ -842,7 +853,7 @@ impl Page {
                 let keys = [
                     ("⏎", "actions for the selected area (in the detail: run the selected action)"), ("← →", "list · detail"), ("↑ ↓ j k", "move"),
                     ("tab", "work · areas"), ("g", "open the area's Space"), ("s", "start a task in its repo, with its notes"), ("b", "ask the lead to refresh its backlog"),
-                    ("l", "its vault log"), ("u", "push main when it is ahead (asks first)"), ("A–Z", "the repo's own actions, from .kelpie.toml"),
+                    ("l", "its vault log"), ("a", "let the lead push the repo's reviewed tasks, or take that back"), ("u", "push main when it is ahead (asks first)"), ("A–Z", "the repo's own actions, from .kelpie.toml"),
                 ];
                 let lines = keys.into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect();
                 modal(frame, "keys".to_string(), lines, 76);

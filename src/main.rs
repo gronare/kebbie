@@ -12,6 +12,8 @@ mod lead;
 mod messages;
 mod notify;
 mod peers;
+mod permit;
+mod push_block;
 mod questions;
 mod repo;
 mod report;
@@ -58,6 +60,11 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   next question goes to the lead
   kelpie notify <text>            run notify.command with this text (KELPIE_EVENT=summary): the lead's word to the user
                                   when they are away; tasks that need you or are ready, and questions, notify by themselves
+  kelpie decide <task> <answer>   the lead's own answer to the task's question it holds, only while the user is away and
+                                  only on how, not what; recorded for the user's return
+  kelpie defer <task>             the lead keeps the task's question for the user while they are away; the next one comes
+  kelpie away [on|off]            away mode, the user's switch (also A on the board): the lead settles how-questions,
+                                  keeps what-questions, and writes a summary when you are back
   kelpie hook                     the hooks kelpie gives a task's Claude (reads the hook's JSON on stdin)
   kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30,
                                   --unread those the lead has not seen (its prompt hook)
@@ -77,7 +84,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   changes, the board shows it ready to push
   kelpie push [name]              after land: push the task to the default branch, then close it as done
                                   (--through <sha> pushes its commits up to that one and keeps the task open, the rest
-                                  of its branch on top of what was pushed)
+                                  of its branch on top of what was pushed); the user's step, or the lead's for a task the
+                                  user gave push permission on the board (a), or in a repo they did on the Areas page (a)
+                                  once its reviewer passed its current code; the lead is told what landed
   kelpie done [name]              after pushing: close the task and free its worktree
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
   kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
@@ -217,7 +226,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("status") if arguments.flag("--json") => {
             let items: Vec<serde_json::Value> = status::gather()?.iter().map(status::Item::to_json).collect();
             let checkouts: Vec<serde_json::Value> = status::checkouts()?.iter().map(status::Checkout::to_json).collect();
-            serde_json::to_string_pretty(&serde_json::json!({ "items": items, "checkouts": checkouts })).map_err(|error| error.to_string())
+            serde_json::to_string_pretty(&serde_json::json!({ "away_since": permit::away_since(), "items": items, "checkouts": checkouts })).map_err(|error| error.to_string())
         }
         Some("status") => status_text(),
         Some("board") => board::run(arguments.flag("--overlay")),
@@ -238,6 +247,13 @@ fn run(arguments: &Arguments) -> Result<String> {
             notify::notify(&cwd, &text.join(" "))
         }
         Some("answered") => questions::answered(name.ok_or("kelpie answered needs the task whose question is settled")?),
+        Some("decide") => {
+            let to = name.ok_or("kelpie decide needs the task whose question you answer")?;
+            let answer: Vec<String> = std::env::args().skip_while(|argument| argument != "decide").skip(2).collect();
+            questions::decide(to, &answer.join(" "))
+        }
+        Some("defer") => questions::defer(name.ok_or("kelpie defer needs the task whose question waits for the user")?),
+        Some("away") => permit::away(name),
         Some("hook") => {
             let mut input = String::new();
             let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);

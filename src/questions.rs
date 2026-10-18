@@ -94,12 +94,12 @@ pub fn open_now(messages: &[Message]) -> Vec<&Message> {
     open(messages, report::turn_started)
 }
 
-// The lead relays one question at a time: none while it holds one, else the one that has waited longest.
-pub fn next_to_give<'a>(open: &[&'a Message]) -> Option<&'a Message> {
+// The lead relays one question at a time: none while it holds one, else the one that has waited longest; while the user is away, not one the lead kept for them.
+pub fn next_to_give<'a>(open: &[&'a Message], away: bool) -> Option<&'a Message> {
     if open.iter().any(|question| question.question.as_ref().is_some_and(|question| question.given)) {
         return None;
     }
-    open.first().copied()
+    open.iter().find(|question| !(away && question.question.as_ref().is_some_and(|question| question.waits))).copied()
 }
 
 pub fn answers(from: &str, question: &Message) -> bool {
@@ -135,9 +135,9 @@ pub fn lead_text(message: &Message, waiting_after: usize) -> String {
 pub fn release(sessions: &[Session]) -> Result<()> {
     let messages = messages::load();
     let open = open_now(&messages);
-    let Some(next) = next_to_give(&open) else { return Ok(()) };
+    let Some(next) = next_to_give(&open, crate::permit::away_since().is_some()) else { return Ok(()) };
     let Some(lead) = sessions.iter().find(|session| session.address == LEAD_LABEL) else { return Ok(()) };
-    messages::send_locked("kelpie", &[lead], &lead_text(next, open.len() - 1), sessions, Some(&next.id))?;
+    messages::send_locked("kelpie", &[lead], &lead_text(next, open.len() - 1), sessions, Some(&next.id), None)?;
     messages::append(&json!({ "id": next.id, "at": messages::now(), "state": "given" }))
 }
 
@@ -195,6 +195,61 @@ pub fn answered(to: &str) -> Result<String> {
     }
     let from: Vec<&str> = settled.iter().map(|question| question.from.as_str()).collect();
     Ok(format!("Marked the question from {} answered; the next question, if any, goes to the lead.", from.join(", ")))
+}
+
+// The lead settles a question on its own only while the user is away.
+fn lead_while_away() -> Result<()> {
+    match crate::permit::caller() {
+        crate::permit::Caller::Lead => {}
+        other => return Err(format!("only the lead settles a question while the user is away; {} cannot", crate::permit::describe(&other))),
+    }
+    if crate::permit::away_since().is_none() {
+        return Err("The user is here: put the question to them with AskUserQuestion and pass on their answer with kelpie tell.".to_string());
+    }
+    Ok(())
+}
+
+fn given_to_lead<'a>(open: &[&'a Message], to: &str) -> Result<&'a Message> {
+    given_from(open, to).ok_or_else(|| format!("No question from \"{to}\" is with you; kelpie gives you one question at a time"))
+}
+
+// Only the question kelpie gave the lead is the lead's to settle.
+pub fn given_from<'a>(open: &[&'a Message], to: &str) -> Option<&'a Message> {
+    open.iter().copied().find(|question| {
+        let from = question.from == to || question.from.split_once('@').is_some_and(|(task, _)| task == to);
+        from && question.question.as_ref().is_some_and(|question| question.given)
+    })
+}
+
+// A how-question the lead answers itself while the user is away: the answer goes to the task as the lead's call, recorded for the user's return.
+pub fn decide(to: &str, answer: &str) -> Result<String> {
+    if answer.trim().is_empty() {
+        return Err("kelpie decide needs the answer: kelpie decide <task> \"<answer>\"".to_string());
+    }
+    lead_while_away()?;
+    let sessions = peers::sessions()?;
+    let _lock = Lock::take(true)?;
+    let messages = messages::load();
+    let open = open_now(&messages);
+    let question = given_to_lead(&open, to)?;
+    let task = sessions.iter().find(|session| session.address == question.from).ok_or_else(|| format!("{} has no session to answer", question.from))?;
+    let text = format!("The user is away, so this is the lead's call on your question, not theirs: {}", answer.trim());
+    let report = messages::send_locked(LEAD_LABEL, &[task], &text, &sessions, None, Some("decision"))?;
+    release(&sessions)?;
+    Ok(format!("{} Recorded as your call for the user's return.", report.join(" ")))
+}
+
+// A what-question the lead keeps for the user while they are away; the next question comes, and this one returns to the lead when they are back.
+pub fn defer(to: &str) -> Result<String> {
+    lead_while_away()?;
+    let sessions = peers::sessions()?;
+    let _lock = Lock::take(true)?;
+    let messages = messages::load();
+    let open = open_now(&messages);
+    let question = given_to_lead(&open, to)?;
+    messages::append(&json!({ "id": question.id, "at": messages::now(), "state": "waits" }))?;
+    release(&sessions)?;
+    Ok(format!("Kept {}'s question for the user; it comes back to you when they are back, and the next question comes now.", question.from))
 }
 
 #[cfg(test)]
@@ -260,14 +315,29 @@ mod tests {
         let none = |_: &str| None;
         let questions = [record("q1", 10, "billing@web", &asked(), None), record("q2", 20, "search@api", &asked(), None)];
         let waiting = log(&questions);
-        assert_eq!(next_to_give(&open(&waiting, none)).map(|question| question.id.as_str()), Some("q1"));
+        assert_eq!(next_to_give(&open(&waiting, none), false).map(|question| question.id.as_str()), Some("q1"));
         let given = log(&[questions[0].clone(), questions[1].clone(), state("q1", "given")]);
         let open_given = open(&given, none);
         assert_eq!(open_given.len(), 2);
-        assert!(next_to_give(&open_given).is_none());
+        assert!(next_to_give(&open_given, false).is_none());
         assert!(answers(LEAD_LABEL, open_given[0]) && !answers("search@api", open_given[0]) && !answers(LEAD_LABEL, open_given[1]));
         let passed = log(&[questions[0].clone(), questions[1].clone(), state("q1", "given"), state("q1", "answered")]);
-        assert_eq!(next_to_give(&open(&passed, none)).map(|question| question.id.as_str()), Some("q2"));
+        assert_eq!(next_to_give(&open(&passed, none), false).map(|question| question.id.as_str()), Some("q2"));
+    }
+
+    #[test]
+    fn a_question_the_lead_keeps_for_the_user_waits_while_they_are_away_and_comes_back_after() {
+        let none = |_: &str| None;
+        let questions = [record("q1", 10, "billing@web", &asked(), None), record("q2", 20, "search@api", &asked(), None)];
+        let given = log(&[questions[0].clone(), questions[1].clone(), state("q1", "given")]);
+        assert_eq!(given_from(&open(&given, none), "billing").map(|question| question.id.as_str()), Some("q1"));
+        assert!(given_from(&open(&given, none), "search").is_none(), "only the question the lead holds is the lead's to settle");
+        let kept = log(&[questions[0].clone(), questions[1].clone(), state("q1", "given"), state("q1", "waits")]);
+        let open_kept = open(&kept, none);
+        assert_eq!(open_kept.len(), 2, "a kept question still waits on the user");
+        assert!(given_from(&open_kept, "billing").is_none());
+        assert_eq!(next_to_give(&open_kept, true).map(|question| question.id.as_str()), Some("q2"), "the next question comes while the user is away");
+        assert_eq!(next_to_give(&open_kept, false).map(|question| question.id.as_str()), Some("q1"), "and the kept one first once they are back");
     }
 
     #[test]

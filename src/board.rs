@@ -24,6 +24,8 @@ use crate::config::{self, Source};
 use crate::fetch::{self, Fetcher};
 use crate::herdr;
 use crate::messages;
+use crate::permit::{self, Permit};
+use crate::peers;
 use crate::repo::{self, name_of};
 use crate::report;
 use crate::sh::Result;
@@ -98,6 +100,13 @@ fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
             choices.push(choice('l', "Push", "rebase, then its card and commits: push them all and close, or the first few and keep it open"));
         }
         choices.push(choice('d', "Done", "already pushed elsewhere: close it and free the worktree"));
+    }
+    if item.is_some_and(Item::is_task) {
+        choices.push(if item.is_some_and(|item| item.permit == Some(Permit::Task)) {
+            choice('a', "Take back push permission", "the lead no longer pushes it; it waits for you under Ready to push")
+        } else {
+            choice('a', "Let the lead push it", "the lead may push this task itself once it is landed and approved; done, drop and reset take it back")
+        });
     }
     choices.push(choice('z', "Reset", "stop it for good: its work goes, its backlog item comes back (asks first)"));
     choices.push(choice('x', "Drop", "throw the task away (asks first)"));
@@ -230,6 +239,7 @@ struct App {
     areas: area_page::Page,
     sources: Vec<Source>,
     fetch_failures: Vec<String>,
+    away: bool,
 }
 
 pub fn style(color: Color) -> Style {
@@ -306,6 +316,9 @@ fn row_facts(item: &Item) -> String {
         parts.push(crate::status::UNCHECKED.to_string());
     }
     parts.extend(item.review_note());
+    if item.permit == Some(Permit::Task) {
+        parts.push("lead may push".to_string());
+    }
     if parts.len() == usize::from(absence(item).is_some()) {
         parts.push("nothing yet".to_string());
     }
@@ -719,6 +732,7 @@ impl App {
                 }
             }
             KeyCode::Char('R') => self.refresh_backlog(),
+            KeyCode::Char('A') => self.show(permit::away(Some(if permit::away_since().is_some() { "off" } else { "on" }))),
             KeyCode::Char('s') => {
                 self.mode = Mode::Input { purpose: Purpose::TaskName, label: "New task: name".to_string(), buffer: String::new() };
             }
@@ -788,6 +802,7 @@ impl App {
                         }
                     }
                     'w' => self.toggle_server(&item),
+                    'a' if item.is_task() => self.show(permit::toggle_task(&peers::address(&item.name, &item.place))),
                     'v' => {
                         if let Some(path) = &item.path {
                             self.show(if item.awaiting_review() { crate::review::withdraw(path, None) } else { crate::review::request(path, None) });
@@ -986,6 +1001,9 @@ fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     spans.extend(pill(format!("✓ {ready} ready to push"), GREEN, ready > 0));
     let questions = app.tasks.iter().filter(|item| item.question.is_some()).count();
     spans.extend(pill(format!("? {}", plural(questions, "question")), YELLOW, questions > 0));
+    if app.away {
+        spans.extend(pill("☾ away".to_string(), MAUVE, true));
+    }
     let sources = backlog::label(&app.sources);
     let fresh = match app.page {
         Page::Work => format!("backlog: {sources}, {}   ", backlog::freshness(&app.sources, app.backlog.updated)),
@@ -1200,6 +1218,13 @@ fn verdict_chip(shown: &crate::review::Shown) -> Option<(String, Color)> {
     })
 }
 
+fn permit_chip(permit: Option<Permit>) -> Option<(String, Color)> {
+    match permit? {
+        Permit::Task => Some(("lead may push".to_string(), GREEN)),
+        Permit::Repo => Some(("lead may push once reviewed (repo)".to_string(), TEAL)),
+    }
+}
+
 fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut facts = Vec::new();
@@ -1227,6 +1252,7 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     if let Some(chip) = item.verdict.as_ref().and_then(verdict_chip) {
         facts.push(chip);
     }
+    facts.extend(permit_chip(item.permit));
     if item.server {
         facts.push(("dev server running".to_string(), GREEN));
     }
@@ -1367,8 +1393,8 @@ fn help_lines() -> Vec<Line<'static>> {
     [
         ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("tab", "switch between the work and areas pages"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
-        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("v", "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
-        ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("a", "add an item to the local backlog"), ("esc", "close this, or the board when it is an overlay"),
+        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("v", "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it"), ("a", "let the lead push the task itself, or take that back"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
+        ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("a", "in the Backlog column: add an item to the local backlog"), ("A", "away mode on or off: the lead settles how-questions and keeps what-questions for you"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
 
@@ -1611,6 +1637,7 @@ pub fn run(overlay: bool) -> Result<String> {
         column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog: backlog::load(), work_selected: 0, backlog_selected: 0,
         mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(),
         page: Page::Work, areas: area_page::Page::new(sources.clone()), sources, fetch_failures: Vec::new(),
+        away: permit::away_since().is_some(),
     };
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
@@ -1668,6 +1695,7 @@ pub fn run(overlay: bool) -> Result<String> {
                 app.areas.refresh();
             }
             app.fetch_failures = fetcher.failures();
+            app.away = permit::away_since().is_some();
             if matches!(app.mode, Mode::Normal | Mode::Message(_) | Mode::Help) && app.areas.is_idle() && rebuild.ready() {
                 let error = rebuild.restart(&app);
                 terminal = init_terminal();
@@ -1724,9 +1752,9 @@ mod tests {
     #[test]
     fn a_working_task_offers_no_tidy_push_or_done() {
         let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprzx");
-        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprvtldzx");
-        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gprtldzx", "no commits, nothing to review");
+        assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprazx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprvtldazx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gprtldazx", "no commits, nothing to review");
     }
 
     #[test]
@@ -1734,16 +1762,16 @@ mod tests {
         let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
-        assert_eq!(keys(&item), "gprvtdzx");
+        assert_eq!(keys(&item), "gprvtdazx");
         assert_eq!(row_facts(&item), "1 commit · review: 2 findings");
         let withdraw = task_choices(Some(&item), None).into_iter().find(|choice| choice.key == 'v').unwrap();
         assert_eq!(withdraw.label, "Withdraw from review", "the push stays the user's: a task in review can always be taken out");
         item.verdict = None;
-        assert_eq!(keys(&item), "gprvtldzx", "withdrawn, it offers push again");
+        assert_eq!(keys(&item), "gprvtldazx", "withdrawn, it offers push again");
         assert_eq!(task_choices(Some(&item), None).into_iter().find(|choice| choice.key == 'v').unwrap().label, "Send to review");
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         item.verdict = Some(crate::status::tests::in_review(true, 0, false, false));
-        assert_eq!(keys(&item), "gprvtldzx");
+        assert_eq!(keys(&item), "gprvtldazx");
         assert_eq!(row_facts(&item), "1 commit · reviewed");
     }
 
@@ -1787,6 +1815,25 @@ mod tests {
         let running = crate::status::tests::task(Some("idle"), None, 0);
         assert_eq!(row_facts(&running), "nothing yet");
         assert_eq!(task_choices(Some(&running), None)[0].label, "Go to its Space");
+    }
+
+    #[test]
+    fn the_user_gives_and_takes_back_the_leads_push_permission_per_task_and_the_card_shows_it() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
+        let permission = |item: &Item| task_choices(Some(item), None).into_iter().find(|choice| choice.key == 'a').map(|choice| choice.label);
+        assert_eq!(permission(&item).as_deref(), Some("Let the lead push it"));
+        assert!(!row_facts(&item).contains("lead may push"));
+        item.permit = Some(Permit::Task);
+        assert_eq!(permission(&item).as_deref(), Some("Take back push permission"));
+        assert!(row_facts(&item).ends_with("lead may push"), "{}", row_facts(&item));
+        assert_eq!(permit_chip(item.permit), Some(("lead may push".to_string(), GREEN)));
+        item.permit = Some(Permit::Repo);
+        assert_eq!(permission(&item).as_deref(), Some("Let the lead push it"), "the repo's permission is switched on the Areas page");
+        assert_eq!(permit_chip(item.permit), Some(("lead may push once reviewed (repo)".to_string(), TEAL)));
+        assert_eq!(permit_chip(None), None);
+        let mut session = item.clone();
+        session.git = None;
+        assert_eq!(permission(&session), None, "a session outside a task has nothing to push");
     }
 
     #[test]

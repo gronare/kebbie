@@ -105,9 +105,9 @@ fn go() -> Result<String> {
     }
 }
 
-// Each of the user's prompts carries what sessions told each other since the lead last looked.
+// Each of the user's prompts carries what sessions told each other since the lead last looked; the lead pushes only through kelpie push, which checks the user's permission.
 fn settings(kelpie: &str) -> String {
-    let allow = ["peers", "tell", "answered", "messages", "status", "areas", "approve", "review"].map(|command| format!("Bash({kelpie} {command}:*)"));
+    let allow = ["peers", "tell", "answered", "messages", "status", "areas", "approve", "review", "land", "push", "decide", "defer", "notify"].map(|command| format!("Bash({kelpie} {command}:*)"));
     json!({
         "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' messages --unread") }] }] },
         "permissions": { "allow": allow },
@@ -237,6 +237,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_lead_role_carries_the_push_permission_the_vault_log_after_a_push_and_away_mode() {
+        let role = include_str!("../roles/lead.md");
+        for needed in ["push_permission", "kelpie -C <repo> push <task>", "once its reviewer passed its current code", "log_append", "with those shas", "kelpie away on|off", "kelpie decide <task>", "kelpie defer <task>", "The user is back", "what landed, what you decided and why, and what waits for them"] {
+            assert!(role.contains(needed), "{needed}");
+        }
+        assert!(!role.contains("Nobody pushes without the user: not you"), "the lead pushes under the user's permission");
+    }
+
     fn env<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'a {
         |name| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string())
     }
@@ -285,6 +294,8 @@ mod tests {
         assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
         assert_eq!(written["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], format!("'{kelpie}' messages --unread"));
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} answered:*)"))));
+        assert!(written["permissions"]["deny"].is_null() && written["env"].is_null(), "the lead may push on the user's word, outside kelpie push too");
+        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} push:*)"))));
         fs::remove_dir_all(dir).unwrap();
     }
 }

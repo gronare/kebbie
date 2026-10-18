@@ -11,7 +11,7 @@ use crate::lead::state_dir;
 use crate::messages;
 use crate::peers;
 use crate::repo::{
-    ahead_behind, branch_exists, changed_count, default_branch, git, is_clean, main_checkout, name_of, push_as_user,
+    ahead_behind, branch_exists, changed_count, default_branch, git, is_clean, main_checkout, name_of,
     setup_line, slot_number, slot_path, worktrees,
 };
 use crate::sh::Result;
@@ -108,14 +108,13 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
     Ok(Slot { number, path, task: None, free: true })
 }
 
-// Pushing stays the user's step; the push URL rewrite catches what the deny rule's pattern misses (git -C dir push).
-// The hooks ask for a report at the end of every turn.
+// The deny rules and the env rewrite name the rule; the worktree's own push block (push_block) is what holds when they are slipped.
 fn settings(kelpie: &str) -> String {
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook") }] }]);
     let allow = ["peers", "tell", "report", "ask"].map(|command| format!("Bash({kelpie} {command}:*)"));
     json!({
         "env": { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" },
-        "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)")], "allow": allow },
+        "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)")], "allow": allow },
         "hooks": { "UserPromptSubmit": hook, "Stop": hook },
     }).to_string()
 }
@@ -395,6 +394,7 @@ struct Launch<'a> {
 // Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
 fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<()>)> {
     let Launch { repo, task, mode, setup_skill, rules_skill, ref worktree } = *place;
+    crate::push_block::install(worktree, &state_dir()?)?;
     // herdr's agent names are global, so a task's half in another repo is named with its repo.
     let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
@@ -482,11 +482,7 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
         return Err(format!("{task} conflicts with {upstream}; its Claude is resolving the rebase. Push again when it reports back."));
     }
     let commits = git(&slot.path, &["log", "--oneline", &format!("{upstream}..HEAD")])?;
-    let target = upstream.trim_start_matches("origin/");
-    Ok(format!(
-        "{task} is rebased onto {upstream} and ready:\n{commits}\n\nPush with:  kelpie push {task}   (or git -C {} push origin HEAD:{target}, then kelpie done {task})",
-        slot.path.display()
-    ))
+    Ok(format!("{task} is rebased onto {upstream} and ready:\n{commits}\n\nPush with:  kelpie push {task}"))
 }
 
 // Ok(false) when the rebase conflicted and the task's Claude took it over.
@@ -548,25 +544,96 @@ pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bo
     let head = git(&slot.path, &["rev-parse", "HEAD"])?;
     let sha = pushable_through(&slot.path, &upstream, through.unwrap_or(&head), keep_open)?;
     let address = peers::address(&task, &name_of(&repo));
+    let shown = crate::review::shown(&address, &slot.path, &upstream);
     let covered = |reviewed: &str| same_code(&slot.path, &upstream, reviewed, &head) || same_code(&slot.path, &upstream, reviewed, &sha);
-    crate::review::gate(crate::review::shown(&address, &slot.path, &upstream).as_ref(), covered).map_err(|why| format!("{task} cannot be pushed yet: {why}."))?;
+    crate::review::gate(shown.as_ref(), covered).map_err(|why| format!("{task} cannot be pushed yet: {why}."))?;
     let was_approved = approved(&slot.path, &upstream, &address);
-    let count = push_prefix(&slot.path, &upstream, &sha).map_err(|error| format!("Pushing {task} failed: {error}"))?;
+    let check = Pusher { caller: crate::permit::caller(), permit: crate::permit::of(&address, &name_of(&repo)), reviewed: shown.as_ref().is_some_and(|shown| !shown.pending()), approved: was_approved };
+    let pusher = check.allowed().map_err(|why| format!("{task} cannot be pushed by {}: {why}.", crate::permit::describe(&check.caller)))?;
+    let state = state_dir()?;
+    let pushed = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
+    let note = started_file(&task, &repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).map(|item| item.trim().to_string()).filter(|item| !item.is_empty());
+    let count = push_prefix(&slot.path, &upstream, &sha, &state).map_err(|error| format!("Pushing {task} failed: {error}"))?;
+    let target = upstream.trim_start_matches("origin/").to_string();
+    let landed = |closed: bool| Landed { pusher, address: &address, target: &target, commits: &pushed, closed, note: note.as_deref() };
     if !keep_open {
-        return done(cwd, name).map(|closed| format!("Pushed {} to {upstream}. {closed}", plural(count, "commit")));
+        let closed = done(cwd, name);
+        tell_lead_pushed(&landed(closed.is_ok()));
+        return closed.map(|closed| format!("Pushed {} to {upstream}. {closed}", plural(count, "commit")));
     }
-    let (clean, rest) = keep_going(&state_dir()?, &repo, &slot, &upstream, &address, was_approved)?;
+    tell_lead_pushed(&landed(false));
+    let (clean, rest) = keep_going(&state, &repo, &slot, &upstream, &address, was_approved)?;
     let short = &sha[..7.min(sha.len())];
-    let target = upstream.trim_start_matches("origin/");
     let told = format!(
-        "The user pushed {} of this task, through {short}, to {target}; they are on {target} for good. Your branch continues from there with {} on top: reshape only those.",
-        plural(count, "commit"), plural(rest, "commit")
+        "{} pushed {} of this task, through {short}, to {target}; they are on {target} for good. Your branch continues from there with {} on top: reshape only those.",
+        capitalized(pusher), plural(count, "commit"), plural(rest, "commit")
     );
     if let Err(error) = messages::notify(&address, &told) {
         eprintln!("Could not tell {address} about the push: {error}");
     }
     let after = if clean { format!("{task} stays open with {} on top.", plural(rest, "commit")) } else { format!("{task} stays open; its Claude is resolving the rebase of the rest.") };
     Ok(format!("Pushed {} through {short} to {upstream}. {after} {}", plural(count, "commit"), fast_forward_main(&repo, &upstream)?))
+}
+
+fn capitalized(text: &str) -> String {
+    let mut characters = text.chars();
+    characters.next().map(|first| first.to_uppercase().chain(characters).collect()).unwrap_or_default()
+}
+
+// Who may push this task now: the user always, the lead only with the user's permission and its own rules check, a task or any other Claude never.
+struct Pusher {
+    caller: crate::permit::Caller,
+    permit: Option<crate::permit::Permit>,
+    reviewed: bool,
+    approved: bool,
+}
+
+impl Pusher {
+    fn allowed(&self) -> std::result::Result<&'static str, String> {
+        use crate::permit::Caller;
+        match &self.caller {
+            Caller::User => Ok("the user"),
+            Caller::Lead => {
+                crate::permit::lead_may_push(self.permit, self.reviewed)?;
+                if !self.approved {
+                    return Err("its commits have no rules approval of yours that matches them: check them and run kelpie approve first".to_string());
+                }
+                Ok("the lead")
+            }
+            Caller::Task(_) | Caller::Agent => Err("no agent pushes; the user pushes from the board, or the lead for a task the user gave push permission".to_string()),
+        }
+    }
+}
+
+struct Landed<'a> {
+    pusher: &'a str,
+    address: &'a str,
+    target: &'a str,
+    commits: &'a str,
+    closed: bool,
+    note: Option<&'a str>,
+}
+
+// The lead's cue after every push: what landed, so it writes the vault's log line and settles the task's note.
+fn pushed_notice(landed: &Landed) -> String {
+    let Landed { pusher, address, target, commits, closed, note } = *landed;
+    let count = commits.lines().count();
+    let mut text = format!("{} pushed {address}: {} to {target} ({}).", capitalized(pusher), plural(count, "commit"), commits.lines().collect::<Vec<_>>().join("; "));
+    text.push_str(if closed { " The task is done and closed." } else { " The task stays open with the rest of its branch." });
+    text.push_str(" Write the repo's log line in the vault with what landed and these shas");
+    match (note, closed) {
+        (Some(note), true) => text.push_str(&format!(", and close or update its note {note}.")),
+        (Some(note), false) => text.push_str(&format!(", and note in {note} what landed.")),
+        (None, true) => text.push_str(", and close or update the task's note if it has one."),
+        (None, false) => text.push('.'),
+    }
+    text
+}
+
+fn tell_lead_pushed(landed: &Landed) {
+    if let Err(error) = messages::tell_lead(&pushed_notice(landed), Some("push")) {
+        eprintln!("Could not tell the lead about the push: {error}");
+    }
 }
 
 // After a push that keeps the task open: the rest of its branch goes on top of the new default branch, an approval of the whole branch holds for the rest, and the card, written for what was pushed, goes.
@@ -596,10 +663,10 @@ fn pushable_through(path: &Path, upstream: &str, rev: &str, keep_open: bool) -> 
 }
 
 // Fast-forwards the default branch on origin to sha; the remote-tracking branch follows.
-fn push_prefix(path: &Path, upstream: &str, sha: &str) -> Result<usize> {
+fn push_prefix(path: &Path, upstream: &str, sha: &str, state: &Path) -> Result<usize> {
     let count = git(path, &["rev-list", "--count", &format!("{upstream}..{sha}")])?.parse::<usize>().map_err(|error| error.to_string())?;
     let target = format!("{sha}:refs/heads/{}", upstream.trim_start_matches("origin/"));
-    push_as_user(path, &[&target])?;
+    crate::repo::push_from(path, &[&target], state)?;
     Ok(count)
 }
 
@@ -821,6 +888,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     let finished = finish(&repo, &slot, &upstream)?;
     forget_session(task_of(&slot), &repo);
     forget_approval(task_of(&slot), &repo);
+    crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
     crate::review::forget(task_of(&slot), &repo);
     crate::report::forget_card(task_of(&slot), &repo);
     end_life(task_of(&slot), &repo, "done");
@@ -884,6 +952,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     forget_start(task, &repo);
     forget_session(task, &repo);
     forget_approval(task, &repo);
+    crate::permit::forget(&peers::address(task, &name_of(&repo)));
     crate::review::forget(task, &repo);
     crate::report::forget_card(task, &repo);
     end_life(task, &repo, how);
@@ -943,6 +1012,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     }
 
     let slot = claim_slot(&repo, &upstream).map_err(stashed)?;
+    crate::push_block::install(&slot.path, &state_dir()?).map_err(stashed)?;
     git(&slot.path, &["switch", "--quiet", &task]).map_err(stashed)?;
     if let Some(index) = stash_index(&repo, &message)? {
         git(&slot.path, &["stash", "pop", "--quiet", &format!("stash@{{{index}}}")]).map_err(stashed)?;
@@ -1022,7 +1092,41 @@ mod tests {
         assert!(body("reset").contains("discard("));
         assert!(body("done").contains("review::forget(") && body("discard").contains("review::forget("), "a later task by the same name must not show this one's review");
         assert!(body("done").contains("report::forget_card(") && body("discard").contains("report::forget_card("), "a later task by the same name must not show this one's card");
+        assert!(body("done").contains("permit::forget(") && body("discard").contains("permit::forget("), "done, drop and reset take the push permission back");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
+    }
+
+    #[test]
+    fn only_the_user_pushes_freely_the_lead_with_permission_and_its_approval_and_no_agent_at_all() {
+        use crate::permit::{Caller, Permit};
+        let check = |caller: Caller, permit: Option<Permit>, reviewed: bool, approved: bool| Pusher { caller, permit, reviewed, approved }.allowed();
+        assert_eq!(check(Caller::User, None, false, false), Ok("the user"));
+        assert_eq!(check(Caller::Lead, Some(Permit::Task), false, true), Ok("the lead"));
+        assert!(check(Caller::Lead, None, true, true).unwrap_err().contains("no push permission"));
+        assert!(check(Caller::Lead, Some(Permit::Task), true, false).unwrap_err().contains("kelpie approve"));
+        assert!(check(Caller::Lead, Some(Permit::Repo), false, true).unwrap_err().contains("reviewer passed"));
+        assert_eq!(check(Caller::Lead, Some(Permit::Repo), true, true), Ok("the lead"));
+        for agent in [Caller::Task("billing@app".to_string()), Caller::Agent] {
+            assert!(check(agent, Some(Permit::Task), true, true).unwrap_err().contains("no agent pushes"), "a permission is the lead's, never a task's");
+        }
+    }
+
+    #[test]
+    fn after_a_push_the_lead_hears_what_landed_and_is_cued_to_log_it_and_settle_the_note() {
+        let commits = "a1b2c3d Add refunds\ne4f5a6b Show refunds on the invoice";
+        let done = pushed_notice(&Landed { pusher: "the lead", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing-refunds.md") });
+        assert_eq!(done, "The lead pushed billing@app: 2 commits to main (a1b2c3d Add refunds; e4f5a6b Show refunds on the invoice). The task is done and closed. Write the repo's log line in the vault with what landed and these shas, and close or update its note Projects/billing-refunds.md.");
+        let open = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits: "a1b2c3d Add refunds", closed: false, note: None });
+        assert!(open.starts_with("The user pushed billing@app: 1 commit to main (a1b2c3d Add refunds). The task stays open"), "{open}");
+        assert!(open.ends_with("these shas."), "{open}");
+    }
+
+    #[test]
+    fn every_task_worktree_gets_the_push_block_before_its_claude_or_its_work_arrives() {
+        let source = include_str!("tasks.rs");
+        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        assert!(body("launch").find("push_block::install(").unwrap() < body("launch").find("start_claude(").unwrap(), "a start and a restart both block pushes before Claude runs");
+        assert!(body("move_work").find("push_block::install(").unwrap() < body("move_work").find("stash\", \"pop").unwrap(), "moved work lands in a blocked worktree");
     }
 
     #[test]
@@ -1062,7 +1166,7 @@ mod tests {
         assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
-        assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)", format!("Bash({kelpie} approve:*)")]), "a task never pushes nor approves its own commits");
+        assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)", format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)")]), "a task never pushes nor approves its own commits");
         assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} ask:*)"))), "a task asks the user without a permission prompt");
         std::fs::remove_dir_all(dir).unwrap();
@@ -1298,7 +1402,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&state);
         record_approval(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
         crate::report::save_card(&state, "billing@app", &fourth, "Refunds on the billing page.").unwrap();
-        assert_eq!(push_prefix(&slot.path, &upstream, &fourth).unwrap(), 1);
+        assert_eq!(push_prefix(&slot.path, &upstream, &fourth, &state).unwrap(), 1);
         let branch = upstream.trim_start_matches("origin/");
         assert_eq!(git(&origin, &["rev-parse", branch]).unwrap(), fourth, "origin has the first commit");
         let (clean, rest) = keep_going(&state, &dir, &slot, &upstream, "billing@app", true).unwrap();

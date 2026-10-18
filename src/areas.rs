@@ -130,6 +130,9 @@ pub fn print() -> Result<String> {
             }
         }
         facts.push(format!("{} open, {} backlog", area.open.len(), area.backlog.len()));
+        if area.repo_name().is_some_and(|repo| crate::permit::repo_permitted(&repo)) {
+            facts.push("you may push its reviewed tasks".to_string());
+        }
         let keys: Vec<String> = area.actions.iter().map(|action| format!("{} {}", action.key, action.title)).collect();
         if !keys.is_empty() {
             facts.push(format!("actions: {}", keys.join(", ")));

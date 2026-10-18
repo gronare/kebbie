@@ -56,6 +56,7 @@ pub struct Git {
 pub struct Item {
     pub review: Option<(usize, usize)>,
     pub verdict: Option<crate::review::Shown>,
+    pub permit: Option<crate::permit::Permit>,
     pub server: bool,
     pub name: String,
     pub place: String,
@@ -192,6 +193,7 @@ impl Item {
             })),
             "review": self.review.map(|(read, total)| json!({ "read": read, "files": total })),
             "verdict": self.verdict.as_ref().map(crate::review::Shown::to_json),
+            "push_permission": self.permit.map(|permit| match permit { crate::permit::Permit::Task => "task", crate::permit::Permit::Repo => "repo, once reviewed" }),
             "report": self.report.as_ref().and_then(|message| Some(json!({
                 "state": message.report.as_ref()?.state, "next": message.report.as_ref()?.next, "summary": message.text, "age": messages::age(message.at),
             }))),
@@ -314,6 +316,7 @@ pub fn gather() -> Result<Vec<Item>> {
             items.push(Item {
                 review: review_progress(&slot.path, &upstream),
                 verdict: crate::review::shown(&address, &slot.path, &upstream),
+                permit: crate::permit::of(&address, &name_of(repo)),
                 server: tokens["server"].is_string(),
                 place: name_of(repo),
                 repo: Some(repo.clone()),
@@ -337,6 +340,7 @@ pub fn gather() -> Result<Vec<Item>> {
         items.push(Item {
             review: None,
             verdict: None,
+            permit: None,
             server: false,
             name: agent.title.clone(),
             place: label,
@@ -361,12 +365,12 @@ pub(crate) mod tests {
 
     pub(crate) fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         Item {
-            review: None, verdict: None, server: false, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
+            review: None, verdict: None, permit: None, server: false, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, approved: true }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
-                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None,
+                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None, kind: None,
             }),
             question: None,
         }

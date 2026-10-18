@@ -6,7 +6,7 @@ use crate::repo::{default_branch, git, is_clean, name_of};
 use crate::sh::Result;
 
 // Keys the Areas page keeps for its built-in actions and moving around.
-pub const RESERVED: [char; 9] = ['g', 's', 'b', 'l', 'u', 'j', 'k', 'q', '?'];
+pub const RESERVED: [char; 10] = ['g', 's', 'b', 'l', 'u', 'a', 'j', 'k', 'q', '?'];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bump {
