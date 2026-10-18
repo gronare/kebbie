@@ -65,11 +65,24 @@ pub fn load() -> Backlog {
     let parsed: Option<Value> = file().ok().and_then(|path| fs::read_to_string(path).ok()).and_then(|raw| serde_json::from_str(&raw).ok());
     let Some(value) = parsed else { return Backlog { updated: None, entries: Vec::new() } };
     let mut entries: Vec<Entry> = value["entries"].as_array().into_iter().flatten().filter_map(entry).collect();
-    if let Ok(index) = crate::vault::Index::open() {
+    let index = crate::vault::Index::open().ok();
+    if let Some(index) = &index {
         entries = still_backlog(entries, |key| index.status_of(key));
     }
-    entries.sort_by_key(|entry| PRIORITIES.iter().position(|priority| *priority == entry.priority));
+    sort(&mut entries, |entry| index.as_ref().filter(|_| entry.source == "vault").and_then(|index| index.changed_at(&entry.reference)));
     Backlog { updated: value["updated"].as_u64(), entries }
+}
+
+// By priority, then newest first: by age in days, and within a day by when the note last changed.
+fn sort(entries: &mut [Entry], changed_at: impl Fn(&Entry) -> Option<f64>) {
+    let days = |entry: &Entry| entry.age.split_whitespace().next().and_then(|days| days.parse::<u64>().ok()).unwrap_or(u64::MAX);
+    let mut keyed: Vec<(usize, u64, f64, Entry)> = entries.iter().map(|entry| {
+        (PRIORITIES.iter().position(|priority| *priority == entry.priority).unwrap_or(PRIORITIES.len()), days(entry), -changed_at(entry).unwrap_or(0.0), entry.clone())
+    }).collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.total_cmp(&b.2)));
+    for (slot, (_, _, _, entry)) in entries.iter_mut().zip(keyed) {
+        *slot = entry;
+    }
 }
 
 // A vault note picked up or closed since the snapshot leaves the Backlog column without waiting for a refresh.
@@ -224,6 +237,15 @@ mod tests {
         let (finding, backlog) = role_texts(&[]);
         assert!(!finding.contains("Linear") && !backlog.contains("Linear") && backlog.contains("No backlog source"));
         assert!(role_texts(&[Source::Linear, Source::Vault]).1.contains("Linear issues (assigned to them, not done; Linear's MCP) and the vault backlog"));
+    }
+
+    #[test]
+    fn the_newest_comes_first_within_a_priority() {
+        let note = |reference: &str, priority: &str, age: &str| Entry { reference: reference.to_string(), priority: priority.to_string(), age: age.to_string(), ..entry("vault") };
+        let mut entries = vec![note("old", "high", "9 d"), note("today-early", "high", "0 d"), note("low", "low", "0 d"), note("today-late", "high", "0 d")];
+        sort(&mut entries, |entry| Some(match entry.reference.as_str() { "today-early" => 100.0, "today-late" => 200.0, _ => 50.0 }));
+        let order: Vec<&str> = entries.iter().map(|entry| entry.reference.as_str()).collect();
+        assert_eq!(order, ["today-late", "today-early", "old", "low"]);
     }
 
     #[test]
