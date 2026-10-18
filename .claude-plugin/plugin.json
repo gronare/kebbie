@@ -14,7 +14,7 @@
     "auto_open": {
       "type": "boolean",
       "title": "Open the review pane automatically",
-      "description": "Open a live review split next to Claude on its first file edit in a session (inside herdr only). Closing the pane keeps it closed for that session.",
+      "description": "Open a live review split next to a task's Claude on its first file edit in a session (inside herdr, in a git worktree only). Closing the pane keeps it closed for that session.",
       "default": false,
       "required": false
     }

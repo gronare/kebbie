@@ -208,7 +208,7 @@ The list follows the repo by itself: it reloads when files change, keeping your 
 
 ## Live review (optional)
 
-With the plugin setting **Open the review pane automatically** on, Claude's first file edit in a session opens the review split next to it without taking focus. Files that were already changed before that edit count as other changes (behind ctrl-o); everything changed after it is in scope, newest first. Inside a git worktree, everything since the branch left the default branch is in scope. Close the pane from herdr and it stays closed for that session; `/kelpie:review-split` brings it back, or rescopes the open one to Claude's guide.
+With the plugin setting **Open the review pane automatically** on, the first file edit by a Claude that runs in a git worktree (a task) opens the review split next to it without taking focus; a session in a main checkout or outside any repo never opens one on its own. Files that were already changed before that edit count as other changes (behind ctrl-o); everything changed after it is in scope, newest first. Inside a git worktree, everything since the branch left the default branch is in scope. Close the pane from herdr and it stays closed for that session; `/kelpie:review-split` brings it back, or rescopes the open one to Claude's guide.
 
 The setting is off by default. Turn it on in Claude Code under `/plugin` → Installed → kelpie → Configure, or at install:
 

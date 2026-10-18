@@ -318,11 +318,13 @@ split() {
   fi
 }
 
-# A review closed from herdr stays closed for the rest of that Claude session.
+# Only a session in a linked worktree (a task) opens a review on its own; one closed from herdr stays closed for that session.
 hook() {
   [ "${CLAUDE_PLUGIN_OPTION_AUTO_OPEN:-false}" = true ] || return 0
   [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ] || return 0
   input=$(cat)
+  cwd=$(echo "$input" | jq -r '.cwd // empty')
+  [ -n "$cwd" ] && (cd "$cwd" 2>/dev/null && in_linked_worktree 2>/dev/null) || return 0
   session=$(echo "$input" | jq -r '.session_id // empty')
   d=$(review_dir "$HERDR_PANE_ID")
   [ -n "$session" ] && [ "$(cat "$d/session" 2>/dev/null)" = "$session" ] && return 0
