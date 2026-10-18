@@ -1,22 +1,22 @@
 ---
 name: move-to-worktree
-description: Move this session's work in progress out of the main checkout into its own git worktree and herdr Space, and continue there. Use when the user runs /move-to-worktree or asks to move the current work into a worktree.
+description: Move this session's work in progress out of the main checkout into its own git worktree and herdr Space, and continue there.
 argument-hint: "<task name>"
 disable-model-invocation: true
 ---
 
 # Move to worktree
 
-`kelpie` is `${KELPIE_BIN:-$HOME/.local/share/kelpie/current/target/release/kelpie}`.
+`kelpie` is `${KELPIE_BIN:-$HOME/.local/share/kelpie/current/target/release/kelpie}`. Steps 1 to 3 run from the main checkout.
 
-1. Stop if `HERDR_ENV` is not `1` or `kelpie` is missing, and say why.
-2. Work out what is yours, from the main checkout:
-   - If your work is on its own branch, the task name is that branch.
-   - If it is on the default branch, your unpushed commits (`git log origin/HEAD..HEAD`) move with it. If any of them is not yours, stop and tell the user.
-   - Your uncommitted files: only the ones you changed in this session. Leave the rest; ask if unsure.
-3. Run `kelpie move <name> --pane "$HERDR_PANE_ID" <your files>` from the main checkout. Add `--no-focus` if the user wants to stay where they are.
-4. Switch into the worktree it printed with EnterWorktree and `path`.
-5. Run the skill its last line names (`Set it up: run the skill <skill>`) and follow it; it makes the worktree runnable without touching the main checkout.
-6. Reply in two lines: where the work is now (worktree and branch), and what stayed behind in the main checkout.
+1. **Check.** `HERDR_ENV` is `1` and `kelpie` exists. When one fails, say which and stop.
+2. **Claim what is yours.** Done when you have the task name and your files, or have stopped:
+   - Work on its own branch: the task name is that branch.
+   - Work on the default branch: the task name is `$ARGUMENTS`, and your unpushed commits (`git log origin/HEAD..HEAD`) move with it. When one of them is another session's, stop and tell the user.
+   - Uncommitted files: name only the ones you changed in this session; the rest stay in the main checkout. Ask the user about any you are unsure of.
+3. **Move.** Run `kelpie move <name> --pane "$HERDR_PANE_ID" <your files>`, adding `--no-focus` when the user wants to stay where they are. Done when it prints `Moved <task> to <path>.`
+4. **Enter.** Switch into that path with EnterWorktree and `path`.
+5. **Set up.** The last line it printed, `Set it up: run the skill <skill> in <path>.`, names the setup skill: run it and follow it to its end. It makes the worktree runnable without touching the main checkout.
+6. **Reply** in two lines: where the work is now (worktree and branch), and what stayed behind in the main checkout.
 
 In the worktree, `/kelpie:review-split` reviews everything since the branch left the default branch.
