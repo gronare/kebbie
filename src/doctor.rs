@@ -255,6 +255,14 @@ pub fn setup_skill(skill: &Setting<String>, installed: Option<&Value>, settings:
     ok(name, format!("{shown}: {id}"))
 }
 
+// Reports whether the key is set and never runs the command, so doctor sends nothing.
+pub fn notify(command: &Setting<Option<String>>) -> Check {
+    match &command.value {
+        Some(value) => ok("notify", format!("notify.command {value:?} ({}): run when a task needs you or is ready, a question waits, or the lead notifies; failures go to notify.log in the state dir", command.layer.label())),
+        None => ok("notify", "notify.command not set, so kelpie sends no notifications; set [notify] command to a shell command to get them"),
+    }
+}
+
 pub fn backlog(sources: &[Source], vault_index: impl Fn() -> Result<PathBuf, String>, local_file: &Path) -> Vec<Check> {
     if sources.is_empty() {
         return vec![ok("backlog", "no source configured; set [board.backlog] sources to fill the board's Backlog tab")];
@@ -391,6 +399,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     };
     let settings = config::settings(&own, &machine);
     checks.push(setup_skill(&settings.setup_skill, installed.as_ref(), &claude_settings));
+    checks.push(notify(&settings.notify_command));
     checks.extend(backlog(&settings.sources.value, crate::vault::index_path, &env.config.with_file_name("backlog.md")));
     let claude = read_json(&env.claude_dir.join(".claude.json")).or_else(|| read_json(&env.home.join(".claude.json")));
     let vault = vault_plugin(installed.as_ref(), |file| std::fs::read_to_string(file).ok());
@@ -675,5 +684,18 @@ mod tests {
         assert!(text.starts_with("ok    git  /usr/bin/git\nfail  jq   not on PATH\n             fix: macOS: brew install jq\n"), "{text}");
         assert!(text.ends_with("1 failed, 0 warnings, 1 ok"));
         assert!(failed(&checks) && !failed(&checks[..1]));
+    }
+
+    #[test]
+    fn doctor_says_whether_notify_is_set_and_runs_nothing() {
+        let marker = std::env::temp_dir().join(format!("kelpie-doctor-notify-{}", std::process::id()));
+        let command = format!("touch {}", marker.display());
+        let set = notify(&Setting { value: Some(command.clone()), layer: config::Layer::Repo });
+        assert_eq!(set.level, Level::Ok);
+        assert!(set.fact.contains(&format!("{command:?} (.kelpie.toml)")), "{}", set.fact);
+        assert!(!marker.exists(), "doctor never sends a notification");
+        let unset = notify(&Setting { value: None, layer: config::Layer::Default });
+        assert_eq!(unset.level, Level::Ok);
+        assert!(unset.fact.contains("not set"), "{}", unset.fact);
     }
 }

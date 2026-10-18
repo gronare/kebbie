@@ -10,6 +10,7 @@ mod fetch;
 mod herdr;
 mod lead;
 mod messages;
+mod notify;
 mod peers;
 mod questions;
 mod repo;
@@ -55,6 +56,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   queue and reaches the lead one question at a time, and the answer comes back as a message
   kelpie answered <task>          the lead's word that a task's question is settled without a kelpie tell, so the
                                   next question goes to the lead
+  kelpie notify <text>            run notify.command with this text (KELPIE_EVENT=summary): the lead's word to the user
+                                  when they are away; tasks that need you or are ready, and questions, notify by themselves
   kelpie hook                     the hooks kelpie gives a task's Claude (reads the hook's JSON on stdin)
   kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30,
                                   --unread those the lead has not seen (its prompt hook)
@@ -230,6 +233,10 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.positionals[1..].join(" ")),
         Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.positionals[1..].join(" ")),
+        Some("notify") => {
+            let text: Vec<String> = std::env::args().skip_while(|argument| argument != "notify").skip(1).collect();
+            notify::notify(&cwd, &text.join(" "))
+        }
         Some("answered") => questions::answered(name.ok_or("kelpie answered needs the task whose question is settled")?),
         Some("hook") => {
             let mut input = String::new();
@@ -270,6 +277,11 @@ fn doctor() -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.len() > 2 && argv[0] == "notify" && argv[1] == notify::DELIVER {
+        notify::deliver(&argv[2..]);
+        return ExitCode::SUCCESS;
+    }
     let arguments = Arguments::parse();
     if arguments.positional(0) == Some("doctor") {
         return doctor();

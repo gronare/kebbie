@@ -143,6 +143,7 @@ An unknown key in either file is an error that names the file and the key.
 | `[worktree] setup_skill` | both | `"kelpie:set-up-worktree"` | The skill a task's Claude runs first to make its worktree runnable: `plugin:skill` for a plugin's skill, a bare name for one in `~/.claude/skills` or the repo's `.claude/skills`. |
 | `[worktree] dev_server` | `.kelpie.toml` | none | The shell command the board's `w` runs in a `server` tab of the task's Space, and `w` again stops with ctrl-c. `w` exports `PORT` as the worktree's own port, the one set-up-worktree recorded (`PORT` in the worktree's `.env`, else `port <n>` in its setup note), and sets none when neither has one. Without it the board has no `w`. |
 | `[review] model` | both | none | The model `kelpie review`'s reviewer runs on (`--model`, e.g. `"opus"`); none leaves it to Claude's default. |
+| `[notify] command` | both | none | The shell command kelpie runs when something needs you; see [Notifications](#notifications). None sends nothing. |
 | `[task] rules_skill` | both | `"kelpie:work-rules"` | The skill with your rules for how work is planned, built and committed (a mock before a new screen, commit style, what never to do). A task's Claude runs it after the setup skill and follows it for the rest of the task, the lead checks a ready task against it, and `tidy` reshapes commits by it. Named like `setup_skill`. |
 
 `dev_server` is a repo key; the machine config accepts it too, for every repo that sets none.
@@ -165,6 +166,33 @@ A repo's `.kelpie.toml`, next to its [actions](#areas):
 ```toml
 [worktree]
 dev_server = "bin/dev"
+```
+
+### Notifications
+
+kelpie has no notification service of its own: `[notify] command` names a shell command, and kelpie runs it when something needs you. That is when a task reports `needs-you` or `ready`, when a task's question joins the queue (`kelpie ask`), and when the lead runs `kelpie notify "<text>"`, for instance with its summary while you are away. The command runs through `sh -c`, detached, so the report never waits on it, and is stopped after 10 seconds. It gets the event in its environment:
+
+| Variable | Value |
+| --- | --- |
+| `KELPIE_EVENT` | `needs-you`, `ready`, `question` or `summary` |
+| `KELPIE_TASK` | the task's name; empty for `summary` |
+| `KELPIE_REPO` | the repo's folder name; empty for `summary` |
+| `KELPIE_TEXT` | one line for you, e.g. `billing@app needs you: answer which queue` |
+
+The text is also `$1`, so a script can take it as an argument: `command = "~/bin/notify \"$1\""`. A task gets at most one notification per event a minute. A command that fails or times out never fails the report: its error goes to `notify.log` in the state directory. `kelpie doctor` says whether the key is set and never runs it.
+
+To your phone through [ntfy](https://ntfy.sh), in the machine config:
+
+```toml
+[notify]
+command = 'curl -s -H "Title: kelpie $KELPIE_EVENT" -d "$KELPIE_TEXT" https://ntfy.sh/my-kelpie-topic'
+```
+
+As a macOS notification:
+
+```toml
+[notify]
+command = 'osascript -e "display notification (system attribute \"KELPIE_TEXT\") with title \"kelpie\""'
 ```
 
 ### The local backlog

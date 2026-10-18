@@ -162,6 +162,7 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
     report::show_in_sidebar(&report);
     let id = format!("{at}-{}-question", std::process::id());
     messages::append(&record(&id, at, &me, &asked, plan.as_deref()))?;
+    crate::notify::send(cwd, &crate::notify::Notice::from(crate::notify::Event::Question, &me, format!("{me} asks: {}", asked.text)));
     let ahead = open_now(&messages::load()).len() - 1;
     if let Ok(sessions) = peers::sessions() {
         release(&sessions)?;

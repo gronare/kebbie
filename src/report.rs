@@ -43,6 +43,10 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
         _ => String::new(),
     };
     show_in_sidebar(&report);
+    if let Some(event) = crate::notify::Event::of_state(&report.state) {
+        let text = if event == crate::notify::Event::Ready { format!("{me} is ready: {summary}") } else { format!("{me} needs you: {}", report.next) };
+        crate::notify::send(cwd, &crate::notify::Notice::from(event, &me, text));
+    }
     let check = if report.state == "ready" { lead_check(cwd) + &review_again(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
 }
