@@ -244,6 +244,14 @@ mod tests {
     }
 
     #[test]
+    fn the_role_isolates_a_probe_from_the_users_state_and_packages() {
+        let role = fill(include_str!("../roles/task.md"), &[]);
+        for setting in ["KELPIE_STATE_DIR=<temp>/kelpie", "`GEM_HOME` and `BUNDLE_PATH`", "`NPM_CONFIG_PREFIX`", "a virtualenv"] {
+            assert!(role.contains(setting), "{setting}");
+        }
+    }
+
+    #[test]
     fn the_list_puts_the_other_halves_first() {
         let listed = list(Some("billing@api"), &sessions());
         assert!(listed.starts_with("You are billing@api.\nSame task, other repos:\n  billing@web"), "{listed}");

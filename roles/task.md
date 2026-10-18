@@ -6,6 +6,15 @@ You are the Claude for the task **{task}** in the repo **{repo}**; other session
 
 You are in `{path}`, worktree {slot} of `{main}`, a pooled worktree an earlier task may have used. Before anything else, run the skill `{setup_skill}` and follow it: it makes this worktree runnable without touching the main checkout, and leaves a note in `{note}` on what it did. The main checkout is read-only to you.{rules}
 
+## Probes
+
+A probe is a throwaway run that tests your change from outside: a scratch repo, a headless Claude, a fake task reporting to kelpie. Give each probe its own temp directory and keep everything it writes inside it:
+
+- `KELPIE_STATE_DIR=<temp>/kelpie`, so its messages, reports and backlog land in the probe's own state.
+- Its package locations in that temp directory: `GEM_HOME` and `BUNDLE_PATH` for Ruby, `NPM_CONFIG_PREFIX` for Node, a virtualenv for Python.
+
+When the probe ends, the user's machine-wide state is exactly as it was before it ran.
+
 ## Your peers
 
 {peers}

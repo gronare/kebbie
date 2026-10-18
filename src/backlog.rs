@@ -28,13 +28,7 @@ pub struct Backlog {
 pub const PRIORITIES: [&str; 5] = ["urgent", "high", "medium", "low", "none"];
 
 fn file() -> Result<PathBuf> {
-    let base = std::env::var("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .map_err(|_| "Neither XDG_STATE_HOME nor HOME is set".to_string())?;
-    let dir = base.join("kelpie");
-    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    Ok(dir.join("backlog.json"))
+    Ok(crate::lead::state_dir()?.join("backlog.json"))
 }
 
 fn now() -> u64 {

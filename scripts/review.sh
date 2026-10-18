@@ -7,7 +7,7 @@ set -eu
 script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 herdr="${HERDR_BIN_PATH:-herdr}"
 tab="$(printf '\t')"
-state="${XDG_STATE_HOME:-$HOME/.local/state}/kelpie"
+state="${KELPIE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/kelpie}"
 
 # origin/HEAD is unset in some older clones.
 default_branch() {

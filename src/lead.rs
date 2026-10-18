@@ -11,12 +11,21 @@ use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 use crate::tasks;
 
-pub fn state_dir() -> Result<PathBuf> {
-    let base = std::env::var("XDG_STATE_HOME")
+pub const STATE_DIR_VAR: &str = "KELPIE_STATE_DIR";
+
+pub fn state_path(var: impl Fn(&str) -> Option<String>) -> Result<PathBuf> {
+    if let Some(own) = var(STATE_DIR_VAR).filter(|own| !own.is_empty()) {
+        return Ok(PathBuf::from(own));
+    }
+    var("XDG_STATE_HOME")
         .map(PathBuf::from)
-        .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-        .map_err(|_| "Neither XDG_STATE_HOME nor HOME is set".to_string())?;
-    let dir = base.join("kelpie");
+        .or_else(|| var("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .map(|base| base.join("kelpie"))
+        .ok_or_else(|| "Neither XDG_STATE_HOME nor HOME is set".to_string())
+}
+
+pub fn state_dir() -> Result<PathBuf> {
+    let dir = state_path(|name| std::env::var(name).ok())?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
 }
@@ -195,5 +204,38 @@ mod tests {
         assert!(!role_text(template, &[]).contains("Linear"));
         let both = role_text(template, &[Source::Vault, Source::Linear]);
         assert!(both.contains("Linear (assigned to the user, current cycle)") && !both.contains("{backlog}") && !both.contains("{finding}"));
+    }
+
+    fn env<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        |name| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| value.to_string())
+    }
+
+    #[test]
+    fn kelpie_state_dir_wins_over_the_xdg_default() {
+        let all = [("KELPIE_STATE_DIR", "/tmp/probe"), ("XDG_STATE_HOME", "/x"), ("HOME", "/h")];
+        assert_eq!(state_path(env(&all)).unwrap(), PathBuf::from("/tmp/probe"));
+        assert_eq!(state_path(env(&all[1..])).unwrap(), PathBuf::from("/x/kelpie"));
+        assert_eq!(state_path(env(&all[2..])).unwrap(), PathBuf::from("/h/.local/state/kelpie"));
+        assert_eq!(state_path(env(&[("KELPIE_STATE_DIR", ""), ("HOME", "/h")])).unwrap(), PathBuf::from("/h/.local/state/kelpie"));
+        assert!(state_path(env(&[])).is_err());
+    }
+
+    #[test]
+    fn the_review_script_keeps_its_marks_in_kelpie_state_dir() {
+        let base = std::env::temp_dir().join(format!("kelpie-state-dir-{}", std::process::id()));
+        let (repo, state, home) = (base.join("repo"), base.join("state"), base.join("home"));
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("a.txt"), "a").unwrap();
+        let git = std::process::Command::new("git").args(["init", "-q"]).current_dir(&repo).status().unwrap();
+        assert!(git.success());
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/review.sh");
+        let status = std::process::Command::new("sh").arg(&script).args(["mark-read", "a.txt"]).current_dir(&repo)
+            .env("KELPIE_STATE_DIR", &state).env("HOME", &home).env_remove("XDG_STATE_HOME").status().unwrap();
+        assert!(status.success());
+        let marks: Vec<PathBuf> = fs::read_dir(&state).unwrap().map(|entry| entry.unwrap().path()).collect();
+        assert_eq!(marks.len(), 1, "{marks:?}");
+        assert!(fs::read_to_string(&marks[0]).unwrap().starts_with("a.txt\t"));
+        assert!(!home.exists());
+        let _ = fs::remove_dir_all(base);
     }
 }

@@ -181,12 +181,13 @@ pub fn kelpie_on_path(home: &Path, path: &[PathBuf]) -> Check {
     }
 }
 
-pub fn state_dirs(state_home: &Path, data_home: &Path) -> Vec<(PathBuf, &'static str)> {
+pub fn state_dirs(kelpie: &Path, own: bool, state_home: &Path, data_home: &Path) -> Vec<(PathBuf, &'static str)> {
+    let about = if own { "backlog, messages, lead, review marks; set by KELPIE_STATE_DIR" } else { "backlog, messages, lead, review marks" };
     vec![
-        (state_home.join("kelpie"), "backlog, messages, lead, review marks"),
-        (state_home.join("kelpie/roles"), "task and lead roles"),
-        (state_home.join("kelpie/turns"), "task reports"),
-        (state_home.join("kelpie/reviews"), "review splits"),
+        (kelpie.to_path_buf(), about),
+        (kelpie.join("roles"), "task and lead roles"),
+        (kelpie.join("turns"), "task reports"),
+        (kelpie.join("reviews"), "review splits"),
         (state_home.join("herdr-sync"), "sidebar sync"),
         (state_home.join("herdr-sync-fetch"), "sidebar sync's fetch stamps"),
         (data_home.join("kelpie"), "the current link"),
@@ -273,6 +274,8 @@ pub struct Env {
     pub path: Vec<PathBuf>,
     pub home: PathBuf,
     pub state_home: PathBuf,
+    pub kelpie_state: PathBuf,
+    pub own_state: bool,
     pub data_home: Option<PathBuf>,
     pub claude_dir: PathBuf,
     pub config: PathBuf,
@@ -287,6 +290,8 @@ impl Env {
         Self {
             path: std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default(),
             state_home: var("XDG_STATE_HOME").unwrap_or_else(|| home.join(".local/state")),
+            kelpie_state: crate::lead::state_path(|name| std::env::var(name).ok()).unwrap_or_else(|_| home.join(".local/state/kelpie")),
+            own_state: var(crate::lead::STATE_DIR_VAR).is_some(),
             data_home: var("XDG_DATA_HOME"),
             claude_dir: var("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
             config: config::path(),
@@ -324,7 +329,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
     checks.push(kelpie_on_path(&env.home, &env.path));
     let data_home = env.data_home.clone().unwrap_or_else(|| env.home.join(".local/share"));
-    for (dir, about) in state_dirs(&env.state_home, &data_home) {
+    for (dir, about) in state_dirs(&env.kelpie_state, env.own_state, &env.state_home, &data_home) {
         checks.push(writable(&dir, about, env.uid));
     }
     let (check, machine) = config_file(&env.config);
@@ -515,8 +520,17 @@ mod tests {
         assert!(writable(&base.join("file/kelpie"), "x", me).fact.contains("is not a directory"));
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         let _ = std::fs::remove_dir_all(base);
-        let dirs = state_dirs(Path::new("/s"), Path::new("/d"));
+        let dirs = state_dirs(Path::new("/s/kelpie"), false, Path::new("/s"), Path::new("/d"));
         assert!(dirs.iter().any(|(dir, _)| dir == Path::new("/s/herdr-sync-fetch")) && dirs.iter().any(|(dir, _)| dir == Path::new("/d/kelpie")));
+    }
+
+    #[test]
+    fn an_own_state_dir_holds_every_kelpie_dir_and_says_where_it_came_from() {
+        let dirs = state_dirs(Path::new("/probe/state"), true, Path::new("/s"), Path::new("/d"));
+        let kelpie: Vec<&PathBuf> = dirs.iter().map(|(dir, _)| dir).filter(|dir| !dir.starts_with("/s") && !dir.starts_with("/d")).collect();
+        assert_eq!(kelpie, [Path::new("/probe/state"), Path::new("/probe/state/roles"), Path::new("/probe/state/turns"), Path::new("/probe/state/reviews")]);
+        assert!(!dirs.iter().any(|(dir, _)| dir.starts_with("/s/kelpie")));
+        assert!(dirs[0].1.ends_with("set by KELPIE_STATE_DIR"));
     }
 
     #[test]

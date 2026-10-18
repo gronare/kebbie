@@ -125,6 +125,8 @@ Three layers, read key by key; the first that sets a key wins:
 2. The machine config, `~/.config/kelpie/config.toml` (`$XDG_CONFIG_HOME/kelpie/config.toml`; `KELPIE_CONFIG` names another file).
 3. kelpie's built-in defaults.
 
+kelpie keeps its state (messages, reports, backlog, roles, review marks) in `~/.local/state/kelpie` (`$XDG_STATE_HOME/kelpie`; `KELPIE_STATE_DIR` names another directory, e.g. a temp dir for a throwaway probe). `kelpie doctor` lists the directory in use.
+
 An unknown key in either file is an error that names the file and the key.
 
 | Key | Where | Default | What it does |

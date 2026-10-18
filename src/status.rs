@@ -164,9 +164,8 @@ fn review_progress(path: &Path, upstream: &str) -> Option<(usize, usize)> {
     if files.is_empty() {
         return None;
     }
-    let marks_dir = std::env::var("XDG_STATE_HOME").map(PathBuf::from)
-        .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".local/state"))).ok()?;
-    let marks = fs::read_to_string(marks_dir.join("kelpie").join(path.to_string_lossy().replace('/', "_"))).unwrap_or_default();
+    let marks_dir = crate::lead::state_path(|name| std::env::var(name).ok()).ok()?;
+    let marks = fs::read_to_string(marks_dir.join(path.to_string_lossy().replace('/', "_"))).unwrap_or_default();
     let existing: Vec<&String> = files.iter().filter(|file| path.join(file).exists()).collect();
     let mut args = vec!["hash-object", "--"];
     args.extend(existing.iter().map(|file| file.as_str()));
