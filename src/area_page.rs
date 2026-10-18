@@ -293,7 +293,7 @@ impl Page {
 
     fn position(&self) -> usize {
         let order = self.ordered();
-        self.selected.as_ref().and_then(|stem| order.iter().position(|(index, _)| &self.areas[*index].stem == stem)).unwrap_or(0)
+        self.selected.as_ref().and_then(|key| order.iter().position(|(index, _)| &self.areas[*index].key == key)).unwrap_or(0)
     }
 
     fn current(&self) -> Option<Area> {
@@ -307,7 +307,7 @@ impl Page {
     fn select(&mut self, position: usize) {
         let order = self.ordered();
         if let Some((index, _)) = order.get(position.min(order.len().saturating_sub(1))) {
-            self.selected = Some(self.areas[*index].stem.clone());
+            self.selected = Some(self.areas[*index].key.clone());
             self.action = 0;
         }
     }
@@ -590,7 +590,7 @@ impl Page {
             .and_then(|area| area.actions.iter().find(|action| action.id == id).map(|action| (area.clone(), action.clone())));
         match found {
             Some((area, action)) => {
-                self.selected = Some(area.stem.clone());
+                self.selected = Some(area.key.clone());
                 self.begin(&area, action, next.answers);
             }
             None => self.show(Err(format!("No action {id} in a repo named {repo_name}; is its .kelpie.toml there?"))),
@@ -935,5 +935,24 @@ fn push(window: PushWindow) -> After {
     match push_as_user(&window.repo, &refspecs) {
         Ok(()) => After::Show(Ok(format!("Pushed {what} to origin ({}).", plural(window.commits.len(), "commit"))), window.next),
         Err(error) => After::Show(Err(format!("Pushing {what} failed: {error}")), None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn area(key: &str, stem: &str) -> Area {
+        Area { key: key.to_string(), stem: stem.to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new() }
+    }
+
+    #[test]
+    fn moving_down_reaches_an_area_whose_name_another_area_shares() {
+        let mut page = Page::new(Vec::new());
+        page.areas = vec![area("Areas/a.md", "a"), area("Areas/santa.md", "santa"), area("Areas/apps/santa.md", "santa")];
+        for step in 1..3 {
+            page.select(page.position() + 1);
+            assert_eq!(page.position(), step);
+        }
     }
 }

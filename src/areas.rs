@@ -24,6 +24,7 @@ pub struct RepoState {
 
 #[derive(Clone)]
 pub struct Area {
+    pub key: String,
     pub stem: String,
     pub summary: String,
     pub repo: Option<PathBuf>,
@@ -104,6 +105,7 @@ pub fn gather() -> Result<Areas> {
         list.push(Area {
             log: vault::log_for(&logs, &note.stem, repo.as_deref().map(name_of).as_deref()),
             git: repo.as_deref().and_then(|repo| repo_state(repo).ok()),
+            key: note.key,
             stem: note.stem,
             summary: note.summary,
             repo,
@@ -162,7 +164,7 @@ mod tests {
     }
 
     fn area() -> Area {
-        Area { stem: "kelpie".to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new() }
+        Area { key: "Areas/kelpie.md".to_string(), stem: "kelpie".to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new() }
     }
 
     #[test]

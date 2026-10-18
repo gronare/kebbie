@@ -106,7 +106,7 @@ impl Index {
 
     // The system notes, one per app or subsystem.
     pub fn areas(&self) -> Result<Vec<Note>> {
-        self.notes("folder = ?1 AND valid = 1", "Areas")
+        self.notes("folder = ?1 AND kind = 'system' AND valid = 1", "Areas")
     }
 
     // Live notes that name the area, outside the archive and the log.
