@@ -33,7 +33,25 @@ fn workspace_id(workspace: &Value) -> Option<String> {
     workspace["workspace_id"].as_str().map(str::to_string)
 }
 
+pub fn keep_first() -> Result<String> {
+    let workspaces = herdr::workspaces()?;
+    match workspaces.iter().position(|workspace| workspace["label"] == LEAD_LABEL) {
+        None => Ok("No lead Space.".to_string()),
+        Some(0) => Ok("The lead Space is first.".to_string()),
+        Some(index) => {
+            herdr::move_workspace(&workspace_id(&workspaces[index]).ok_or("The lead Space has no id")?, 0)?;
+            Ok("The lead Space is first again.".to_string())
+        }
+    }
+}
+
 pub fn toggle() -> Result<String> {
+    let answer = go()?;
+    keep_first()?;
+    Ok(answer)
+}
+
+fn go() -> Result<String> {
     let workspaces = herdr::workspaces()?;
     let focused = workspaces.iter().find(|workspace| workspace["focused"] == true).and_then(workspace_id);
     let lead = workspaces.iter().find(|workspace| workspace["label"] == LEAD_LABEL).and_then(workspace_id);

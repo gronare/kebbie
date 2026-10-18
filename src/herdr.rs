@@ -1,6 +1,8 @@
-use std::path::Path;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::sh::{Result, run};
 
@@ -153,4 +155,25 @@ pub fn tabs_in(workspace_id: &str) -> Result<Vec<Value>> {
 
 pub fn layout(pane_id: &str) -> Result<Value> {
     Ok(call(&["pane", "layout", "--pane", pane_id])?["layout"].clone())
+}
+
+fn socket() -> Result<PathBuf> {
+    std::env::var("HERDR_SOCKET_PATH").map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|home| PathBuf::from(home).join(".config/herdr/herdr.sock")))
+        .map_err(|_| "Neither HERDR_SOCKET_PATH nor HOME is set".to_string())
+}
+
+// The CLI has no command for the order of Spaces, so this one goes to the socket API.
+pub fn move_workspace(workspace_id: &str, insert_index: usize) -> Result<()> {
+    let path = socket()?;
+    let mut stream = UnixStream::connect(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let request = json!({ "id": "kelpie", "method": "workspace.move", "params": { "workspace_id": workspace_id, "insert_index": insert_index } });
+    writeln!(stream, "{request}").map_err(|error| error.to_string())?;
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).map_err(|error| error.to_string())?;
+    let reply: Value = serde_json::from_str(&line).map_err(|error| format!("herdr workspace.move: {error}"))?;
+    match reply.get("error") {
+        Some(error) => Err(format!("herdr workspace.move: {error}")),
+        None => Ok(()),
+    }
 }
