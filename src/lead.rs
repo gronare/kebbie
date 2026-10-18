@@ -147,8 +147,8 @@ fn runs_kelpie(pane: &str, command: &str) -> bool {
 }
 
 pub fn role_text(template: &str, sources: &[Source]) -> String {
-    let (finding, backlog) = backlog::role_texts(sources);
-    template.replace("{finding}", &finding).replace("{backlog}", &backlog)
+    let backlog::Role { finding, backlog, intake } = backlog::role_texts(sources);
+    template.replace("{finding}", &finding).replace("{backlog}", &backlog).replace("{intake}", &intake)
 }
 
 // roles/lead.md filled in for the configured backlog sources, written to the state dir for --append-system-prompt-file.
@@ -217,7 +217,16 @@ mod tests {
         assert!(!role_text(template, &[Source::Vault]).contains("Linear"));
         assert!(!role_text(template, &[]).contains("Linear"));
         let both = role_text(template, &[Source::Vault, Source::Linear]);
-        assert!(both.contains("Linear (assigned to the user, current cycle)") && !both.contains("{backlog}") && !both.contains("{finding}"));
+        assert!(both.contains("Linear (assigned to the user, current cycle)") && !both.contains("{backlog}") && !both.contains("{finding}") && !both.contains("{intake}"));
+        assert!(!role_text(template, &[Source::Local]).contains("Linear") && role_text(template, &[Source::Local]).contains("kelpie backlog add"));
+    }
+
+    #[test]
+    fn the_lead_takes_an_idea_in_as_a_draft_and_starts_or_files_it_on_yes() {
+        let role = role_text(include_str!("../roles/lead.md"), &[Source::Vault]);
+        for needed in ["## Taking in ideas", "Draft it as a task note", "start it now as a task, file it in the backlog", "status `backlog`", "--backlog <the note's path>", "stays a plain task", "kelpie -C <repo> link <task>"] {
+            assert!(role.contains(needed), "{needed}");
+        }
     }
 
     #[test]

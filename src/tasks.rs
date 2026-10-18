@@ -229,6 +229,24 @@ pub fn started_items() -> HashSet<String> {
         .filter_map(|entry| std::fs::read_to_string(entry.path()).ok()).map(|item| item.trim().to_string()).collect()
 }
 
+pub fn link(cwd: &Path, name: &str, item: &str) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let task = task_of(&find_task(&repo, Some(name), cwd)?).to_string();
+    let item = item.trim();
+    if item.is_empty() {
+        return Err("kelpie link needs the item: a vault note's path, a Linear id, or local:<Title>".to_string());
+    }
+    let previous = record_start(&started_file(&task, &repo)?, item)?;
+    let was = previous.filter(|previous| previous != item).map_or(String::new(), |previous| format!(" (it was linked to {previous})"));
+    Ok(format!("Linked {task} to {item}{was}: when it is done the lead is told to log and close it, and a reset puts it back in the backlog."))
+}
+
+fn record_start(file: &Path, item: &str) -> Result<Option<String>> {
+    let previous = std::fs::read_to_string(file).ok().map(|item| item.trim().to_string());
+    std::fs::write(file, item).map_err(|error| error.to_string())?;
+    Ok(previous)
+}
+
 fn forget_start(task: &str, repo: &Path) -> Option<String> {
     let file = started_file(task, repo).ok()?;
     let item = std::fs::read_to_string(&file).ok();
@@ -250,7 +268,7 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
         notice.push_str(&format!(" Discarded: {}.", discarded.lines().collect::<Vec<_>>().join("; ")));
     }
     if let Some(item) = &item {
-        notice.push_str(&format!(" Nobody works on {item} now: set it back to backlog."));
+        notice.push_str(&crate::backlog::reset_notice(item));
     }
     notice.push_str(" Drop any review or recommendation about it.");
     if let Err(error) = messages::notify_lead(&notice) {
@@ -819,7 +837,11 @@ fn finish(repo: &Path, slot: &Slot, upstream: &str) -> Result<String> {
         return Err(format!("{task} has changes that are not on {upstream} yet; push them first, or use drop:\n{}", missing.join("\n")));
     }
     release(repo, slot, upstream)?;
-    forget_start(task, repo);
+    if let Some(item) = forget_start(task, repo)
+        && let Err(error) = messages::notify_lead(&crate::backlog::done_notice(task, &item))
+    {
+        eprintln!("Could not tell the lead: {error}");
+    }
     Ok(format!("{task} is done; {} is free again. {}", name_of(&slot.path), fast_forward_main(repo, upstream)?))
 }
 
@@ -976,6 +998,19 @@ mod tests {
         forget_approval_in(&state, "billing@app");
         assert!(!approval_holds(&state, "billing@app", "abc"));
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_link_records_the_item_and_names_the_one_it_replaces() {
+        let file = std::env::temp_dir().join(format!("kelpie-link-{}", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(record_start(&file, "Projects/grown.md").unwrap(), None);
+        assert_eq!(record_start(&file, "local:Fix login").unwrap().as_deref(), Some("Projects/grown.md"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "local:Fix login");
+        std::fs::remove_file(file).unwrap();
+        let source = include_str!("tasks.rs");
+        let finish = &source[source.find("\nfn finish(").unwrap()..];
+        assert!(finish[..finish.find("\n}\n").unwrap()].contains("done_notice("), "a finished task tells the lead which item it came from");
     }
 
     #[test]

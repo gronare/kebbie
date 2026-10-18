@@ -7,15 +7,17 @@ use crate::sh::Result;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Source {
+    Local,
     Vault,
     Linear,
 }
 
 impl Source {
-    pub const ALL: [Source; 2] = [Source::Vault, Source::Linear];
+    pub const ALL: [Source; 3] = [Source::Local, Source::Vault, Source::Linear];
 
     pub fn key(self) -> &'static str {
         match self {
+            Source::Local => "local",
             Source::Vault => "vault",
             Source::Linear => "linear",
         }
@@ -23,6 +25,7 @@ impl Source {
 
     pub fn title(self) -> &'static str {
         match self {
+            Source::Local => "local",
             Source::Vault => "vault",
             Source::Linear => "Linear",
         }
@@ -145,7 +148,7 @@ fn backlog_sources(backlog: &Table) -> Result<Option<Vec<Source>>> {
     let mut found = Vec::new();
     for name in strings(value, "board.backlog.sources")? {
         let source = Source::ALL.into_iter().find(|source| source.key() == name)
-            .ok_or(format!("board.backlog.sources: \"{name}\" is not a source; use \"vault\" or \"linear\""))?;
+            .ok_or(format!("board.backlog.sources: \"{name}\" is not a source; use \"local\", \"vault\" or \"linear\""))?;
         if found.contains(&source) {
             return Err(format!("board.backlog.sources: \"{name}\" is listed twice"));
         }
@@ -228,7 +231,7 @@ fn or_default<T>(setting: Option<Setting<T>>, value: T) -> Setting<T> {
 pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
     let optional = |setting: Option<Setting<String>>| or_default(setting.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None);
     Settings {
-        sources: or_default(pick(None, machine.sources.as_ref()), Vec::new()),
+        sources: or_default(pick(None, machine.sources.as_ref()), vec![Source::Local]),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),
         dev_server: optional(pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref())),
         rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
@@ -273,7 +276,7 @@ pub fn describe(loaded: &Loaded) -> String {
         lines.push(format!("  {about}"));
     };
     key("board.backlog.sources", quoted(&names), sources.layer,
-        "Where the lead finds work for the board's Backlog tab: \"vault\", \"linear\" or both; machine config only.");
+        "Where the board's Backlog tab finds work: \"local\" (backlog.md next to the machine config), \"vault\" and \"linear\", in any combination; machine config only.");
     key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer,
         "The skill a task's Claude runs first to make its worktree runnable.");
     key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer,
@@ -320,7 +323,7 @@ mod tests {
         assert_eq!(load_machine(&missing).unwrap(), Machine::default());
         assert_eq!(load_repo(&missing).unwrap(), Worktree::default());
         let defaults = settings(&Worktree::default(), &Machine::default());
-        assert_eq!(defaults.sources, Setting { value: Vec::new(), layer: Layer::Default });
+        assert_eq!(defaults.sources, Setting { value: vec![Source::Local], layer: Layer::Default }, "a fresh install has a working Backlog column");
         assert_eq!(defaults.setup_skill, Setting { value: DEFAULT_SETUP_SKILL.to_string(), layer: Layer::Default });
         assert_eq!(defaults.dev_server, Setting { value: None, layer: Layer::Default });
         assert_eq!(defaults.rules_skill, Setting { value: DEFAULT_RULES_SKILL.to_string(), layer: Layer::Default });
@@ -334,6 +337,8 @@ mod tests {
         assert_eq!(config.worktree.setup_skill.as_deref(), Some("my-tools:set-up-worktree"));
         assert_eq!(config.worktree.dev_server.as_deref(), Some("bin/dev"));
         assert_eq!(machine("[board.backlog]\nsources = []\n").sources, Some(Vec::new()));
+        assert_eq!(settings(&Worktree::default(), &machine("[board.backlog]\nsources = []\n")).sources.value, Vec::new(), "an explicit empty list turns the backlog off");
+        assert_eq!(machine("[board.backlog]\nsources = [\"local\", \"vault\"]\n").sources, Some(vec![Source::Local, Source::Vault]));
     }
 
     #[test]
@@ -387,7 +392,7 @@ mod tests {
         assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review");
         assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
-        assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"vault\" or \"linear\"");
+        assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
         assert!(error("[board.backlog]\nsources = [\"vault\", \"vault\"]\n").contains("listed twice"));
         assert!(error("[repos.app]\nsetup = [\"x\"]\n").contains("repos: unknown key"));
@@ -420,7 +425,7 @@ mod tests {
         let shown = describe(&loaded(Worktree::default(), Machine::default()));
         assert!(shown.contains("/src/app/.kelpie.toml (not found)"), "{shown}");
         assert!(shown.contains("machine config: /c.toml (not found)"));
-        assert!(shown.contains("board.backlog.sources = []  (default)\n  Where the lead finds work"));
+        assert!(shown.contains("board.backlog.sources = [\"local\"]  (default)\n  Where the board's Backlog tab finds work"));
         assert!(shown.contains("worktree.setup_skill = \"kelpie:set-up-worktree\"  (default)"));
         assert!(shown.contains("worktree.dev_server = none  (default)"));
         let shown = describe(&loaded(repo("[worktree]\ndev_server = \"npm run dev\"\n"), machine(MACHINE)));

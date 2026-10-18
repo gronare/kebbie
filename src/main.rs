@@ -2,6 +2,7 @@ mod actions;
 mod area_page;
 mod areas;
 mod backlog;
+mod backlog_file;
 mod board;
 mod config;
 mod doctor;
@@ -57,7 +58,11 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie hook                     the hooks kelpie gives a task's Claude (reads the hook's JSON on stdin)
   kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30,
                                   --unread those the lead has not seen (its prompt hook)
-  kelpie backlog [save]           show the backlog the lead keeps; save reads a JSON array on stdin
+  kelpie backlog [save]           show the backlog the board shows; save reads the lead's JSON array on stdin
+  kelpie backlog add [--priority <p>] \"<Title> — <summary> (<area>)\"
+                                  add an item to the local backlog (backlog.md next to the machine config)
+  kelpie link <name> <item>       tie a running task to a backlog item or project note, as start --backlog does:
+                                  done tells the lead to close it, reset puts it back in the backlog
   kelpie land [name]              rebase a task onto the default branch and check it is clean; on a conflict, its
                                   Claude resolves the rebase
   kelpie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
@@ -94,7 +99,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -235,7 +240,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("messages") if arguments.flag("--unread") => messages::unread_for_lead(),
         Some("messages") => messages::run(),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
-        Some("backlog") => Ok(backlog::show()),
+        Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), &arguments.positionals[2..].join(" ")),
+        Some("backlog") => backlog::show(),
         Some("land") => tasks::land(&cwd, name),
         Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
@@ -246,6 +252,10 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
         Some("reset") => tasks::reset(&cwd, name),
+        Some("link") => {
+            let name = name.ok_or("kelpie link needs a task name and the item")?;
+            tasks::link(&cwd, name, &arguments.positionals[2..].join(" "))
+        }
         Some("config") => config::show(&cwd, arguments.value("--repo")),
         Some("update") => update::run(&doctor::Env::current().claude_dir),
         None | Some("help") => Ok(USAGE.to_string()),

@@ -322,7 +322,7 @@ impl Page {
             choices.push(choice('g', "Open its Space", "the main checkout's Space, opened if needed"));
             choices.push(choice('s', "Start a task here", "a worktree, a Space and Claude, told the area's notes"));
         }
-        let refresh = if self.sources.is_empty() { "no backlog source is configured".to_string() } else { format!("the lead reads {} again", backlog::from(&self.sources)) };
+        let refresh = backlog::refresh_label(&self.sources);
         choices.push(choice('b', "Refresh its backlog", &refresh));
         choices.push(choice('l', "Show its log", "the vault log, newest first"));
         if let Some(git) = area.git.as_ref().filter(|git| git.ahead > 0) {

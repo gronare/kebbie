@@ -255,17 +255,64 @@ pub fn setup_skill(skill: &Setting<String>, installed: Option<&Value>, settings:
     ok(name, format!("{shown}: {id}"))
 }
 
-pub fn backlog(sources: &[Source], vault_index: impl Fn() -> Result<PathBuf, String>) -> Vec<Check> {
+pub fn backlog(sources: &[Source], vault_index: impl Fn() -> Result<PathBuf, String>, local_file: &Path) -> Vec<Check> {
     if sources.is_empty() {
         return vec![ok("backlog", "no source configured; set [board.backlog] sources to fill the board's Backlog tab")];
     }
     sources.iter().map(|source| match source {
+        Source::Local if local_file.exists() => ok("backlog local", format!("{}: {} items", local_file.display(), crate::backlog_file::read(local_file).len())),
+        Source::Local => ok("backlog local", format!("{} is created by the first item (the board's a, or kelpie backlog add)", local_file.display())),
         Source::Vault => match vault_index() {
             Ok(index) => ok("backlog vault", format!("vault index {}", index.display())),
             Err(error) => warn("backlog vault", error, one("open a Claude session with the vault plugin once; the Areas page reads its index")),
         },
         Source::Linear => ok("backlog linear", "the lead reads Linear through a Linear MCP server in Claude (not checked here)"),
     }).collect()
+}
+
+fn plugin_ids<'a>(installed: Option<&'a Value>, prefix: &'a str) -> impl Iterator<Item = (&'a String, &'a Value)> {
+    installed.and_then(|installed| installed["plugins"].as_object()).into_iter().flatten().filter(move |(id, _)| id.starts_with(prefix))
+}
+
+// The vault plugin that runs notes-vault-mcp, by its marketplace name or its plugin files.
+pub fn vault_plugin(installed: Option<&Value>, read: impl Fn(&Path) -> Option<String>) -> Option<String> {
+    plugin_ids(installed, "vault@").find(|(id, entries)| {
+        id.contains("notes-vault-mcp") || entries.as_array().into_iter().flatten().filter_map(|entry| entry["installPath"].as_str()).any(|root| {
+            [".mcp.json", ".claude-plugin/plugin.json"].iter().any(|file| read(&Path::new(root).join(file)).is_some_and(|text| text.contains("notes-vault-mcp")))
+        })
+    }).map(|(id, _)| id.clone())
+}
+
+// A Linear plugin, or an MCP server named for Linear in Claude Code's user or project config; claude.ai connectors are not visible here.
+pub fn linear_mcp(installed: Option<&Value>, claude: Option<&Value>) -> Option<String> {
+    if let Some((id, _)) = plugin_ids(installed, "linear@").next() {
+        return Some(format!("the plugin {id}"));
+    }
+    let claude = claude?;
+    let servers = std::iter::once(&claude["mcpServers"]).chain(claude["projects"].as_object().into_iter().flatten().map(|(_, project)| &project["mcpServers"]));
+    servers.filter_map(Value::as_object).flatten().map(|(name, _)| name).find(|name| name.to_lowercase().contains("linear")).map(|name| format!("the MCP server {name}"))
+}
+
+pub fn unused_sources(sources: &[Source], vault: Option<String>, linear: Option<String>, config: &Path) -> Vec<Check> {
+    let suggest = |source: Source| {
+        let names: Vec<String> = sources.iter().chain([&source]).map(|source| format!("{:?}", source.key())).collect();
+        one(format!("to use it, set sources = [{}] under [board.backlog] in {}", names.join(", "), config.display()))
+    };
+    let mut checks = Vec::new();
+    if let Some(id) = vault.filter(|_| !sources.contains(&Source::Vault)) {
+        checks.push(ok("backlog vault", format!("the vault plugin {id} is installed in Claude Code, but the vault is not a backlog source")).with(suggest(Source::Vault)));
+    }
+    if let Some(found) = linear.filter(|_| !sources.contains(&Source::Linear)) {
+        checks.push(ok("backlog linear", format!("Claude Code has {found}, but Linear is not a backlog source")).with(suggest(Source::Linear)));
+    }
+    checks
+}
+
+impl Check {
+    fn with(mut self, fix: Vec<String>) -> Self {
+        self.fix = fix;
+        self
+    }
 }
 
 pub struct Env {
@@ -344,7 +391,10 @@ pub fn checks(env: &Env) -> Vec<Check> {
     };
     let settings = config::settings(&own, &machine);
     checks.push(setup_skill(&settings.setup_skill, installed.as_ref(), &claude_settings));
-    checks.extend(backlog(&settings.sources.value, crate::vault::index_path));
+    checks.extend(backlog(&settings.sources.value, crate::vault::index_path, &env.config.with_file_name("backlog.md")));
+    let claude = read_json(&env.claude_dir.join(".claude.json")).or_else(|| read_json(&env.home.join(".claude.json")));
+    let vault = vault_plugin(installed.as_ref(), |file| std::fs::read_to_string(file).ok());
+    checks.extend(unused_sources(&settings.sources.value, vault, linear_mcp(installed.as_ref(), claude.as_ref()), &env.config));
     checks
 }
 
@@ -375,6 +425,7 @@ pub fn failed(checks: &[Check]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
 
     fn scratch(name: &str) -> PathBuf {
@@ -579,12 +630,42 @@ mod tests {
 
     #[test]
     fn backlog_sources_are_checked_per_source() {
-        let none = backlog(&[], || unreachable!());
+        let nowhere = Path::new("/nonexistent/kelpie/backlog.md");
+        let none = backlog(&[], || unreachable!(), nowhere);
         assert_eq!((none.len(), none[0].level), (1, Level::Ok));
-        let missing = backlog(&[Source::Vault, Source::Linear], || Err("No vault index at /x".to_string()));
+        let missing = backlog(&[Source::Vault, Source::Linear], || Err("No vault index at /x".to_string()), nowhere);
         assert_eq!((missing[0].level, missing[0].fact.as_str()), (Level::Warn, "No vault index at /x"));
         assert!(missing[1].level == Level::Ok && missing[1].fact.contains("Linear MCP"));
-        assert_eq!(backlog(&[Source::Vault], || Ok(PathBuf::from("/i.sqlite")))[0].level, Level::Ok);
+        assert_eq!(backlog(&[Source::Vault], || Ok(PathBuf::from("/i.sqlite")), nowhere)[0].level, Level::Ok);
+        let local = backlog(&[Source::Local], || unreachable!(), nowhere);
+        assert!(local[0].level == Level::Ok && local[0].fact.contains("is created by the first item"), "{:?}", local[0]);
+        let dir = std::env::temp_dir().join(format!("kelpie-doctor-local-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("backlog.md"), "# Mine\n- [high] One (app)\n- Two\n").unwrap();
+        assert!(backlog(&[Source::Local], || unreachable!(), &dir.join("backlog.md"))[0].fact.ends_with("backlog.md: 2 items"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_installed_vault_plugin_or_linear_mcp_that_is_not_a_source_is_suggested_with_its_config_line() {
+        let installed = json!({ "plugins": { "vault@gronare": [{ "installPath": "/plugins/vault/1.0" }], "kelpie@kelpie": [{ "installPath": "/plugins/kelpie" }] } });
+        let files = |file: &Path| (file == Path::new("/plugins/vault/1.0/.mcp.json")).then(|| r#"{"mcpServers":{"vault":{"command":"uvx","args":["notes-vault-mcp"]}}}"#.to_string());
+        assert_eq!(vault_plugin(Some(&installed), files).as_deref(), Some("vault@gronare"));
+        assert_eq!(vault_plugin(Some(&installed), |_| None), None, "a vault plugin of some other server is not this one");
+        assert_eq!(vault_plugin(Some(&json!({ "plugins": { "vault@notes-vault-mcp": [] } })), |_| None).as_deref(), Some("vault@notes-vault-mcp"));
+        assert_eq!(vault_plugin(None, files), None);
+        assert_eq!(linear_mcp(Some(&json!({ "plugins": { "linear@claude-plugins": [] } })), None).as_deref(), Some("the plugin linear@claude-plugins"));
+        assert_eq!(linear_mcp(None, Some(&json!({ "mcpServers": { "Linear": {} } }))).as_deref(), Some("the MCP server Linear"));
+        assert_eq!(linear_mcp(None, Some(&json!({ "projects": { "/src/app": { "mcpServers": { "linear-server": {} } } } }))).as_deref(), Some("the MCP server linear-server"));
+        assert_eq!(linear_mcp(Some(&installed), Some(&json!({ "mcpServers": { "github": {} } }))), None);
+        let config = Path::new("/home/u/.config/kelpie/config.toml");
+        let found = unused_sources(&[Source::Local], Some("vault@gronare".to_string()), Some("the MCP server Linear".to_string()), config);
+        assert_eq!(found.len(), 2);
+        assert_eq!((found[0].name.as_str(), found[0].level), ("backlog vault", Level::Ok));
+        assert_eq!(found[0].fix, ["to use it, set sources = [\"local\", \"vault\"] under [board.backlog] in /home/u/.config/kelpie/config.toml"]);
+        assert_eq!(found[1].fix, ["to use it, set sources = [\"local\", \"linear\"] under [board.backlog] in /home/u/.config/kelpie/config.toml"]);
+        assert!(unused_sources(&[Source::Vault, Source::Linear], Some("vault@gronare".to_string()), Some("x".to_string()), config).is_empty(), "an enabled source is not suggested");
+        assert!(unused_sources(&[Source::Local], None, None, config).is_empty());
     }
 
     #[test]

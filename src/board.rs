@@ -110,11 +110,14 @@ fn busy(item: &Item) -> bool {
 }
 
 fn backlog_choices(sources: &[Source]) -> Vec<Choice> {
-    let refresh = if sources.is_empty() { "no backlog source is configured".to_string() } else { format!("the lead fetches {} again", backlog::from(sources)) };
-    vec![
+    let mut choices = vec![
         choice('g', "Start as task", "a worktree, a Space and Claude with this as its prompt"),
-        choice('R', "Refresh the backlog", &refresh),
-    ]
+        choice('R', "Refresh the backlog", &backlog::refresh_label(sources)),
+    ];
+    if sources.contains(&Source::Local) {
+        choices.push(choice('a', "Add an item", "a title and a priority, appended to the local backlog file"));
+    }
+    choices
 }
 
 enum Purpose {
@@ -122,6 +125,8 @@ enum Purpose {
     TaskPrompt(String),
     Message(String, String),
     BacklogName(Entry),
+    BacklogItem,
+    BacklogPriority(String),
     Tidy(PathBuf),
 }
 
@@ -740,6 +745,10 @@ impl App {
                     }
                 }
                 'R' => self.refresh_backlog(),
+                'a' => {
+                    let label = "Add to the backlog: title (— summary and (area) optional)".to_string();
+                    self.mode = Mode::Input { purpose: Purpose::BacklogItem, label, buffer: String::new() };
+                }
                 _ => {}
             },
             Column::Work => {
@@ -859,7 +868,21 @@ impl App {
 
     fn submit(&mut self, purpose: Purpose, text: String, terminal: &mut DefaultTerminal) {
         match purpose {
-            Purpose::TaskName | Purpose::BacklogName(_) if text.is_empty() => {}
+            Purpose::TaskName | Purpose::BacklogName(_) | Purpose::BacklogItem if text.is_empty() => {}
+            Purpose::BacklogItem => {
+                let label = "Priority: urgent, high, medium or low (empty for none)".to_string();
+                self.mode = Mode::Input { purpose: Purpose::BacklogPriority(text), label, buffer: String::new() };
+            }
+            Purpose::BacklogPriority(item) => {
+                let result = crate::backlog_file::add(Some(&text), &item);
+                if result.is_ok() {
+                    self.backlog = backlog::load();
+                }
+                self.show(result);
+            }
+            Purpose::BacklogName(entry) if entry.area.is_empty() => {
+                self.show(Err(format!("\"{}\" names no area, so kelpie cannot tell which repo it is in; add the repo's folder name as (area) at the end of its line.", entry.title)));
+            }
             Purpose::TaskName => {
                 let label = "What should Claude do? (optional)".to_string();
                 self.mode = Mode::Input { purpose: Purpose::TaskPrompt(text), label, buffer: String::new() };
@@ -965,7 +988,7 @@ fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     spans.extend(pill(format!("? {}", plural(questions, "question")), YELLOW, questions > 0));
     let sources = backlog::label(&app.sources);
     let fresh = match app.page {
-        Page::Work => format!("backlog: {sources}, {}   ", backlog::age(app.backlog.updated)),
+        Page::Work => format!("backlog: {sources}, {}   ", backlog::freshness(&app.sources, app.backlog.updated)),
         Page::Areas => format!("vault index: {}   ", backlog::age(app.areas.synced)),
     };
     let fresh = format!("{}{fresh}", fetch::failed_note(&app.fetch_failures));
@@ -1278,7 +1301,7 @@ fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
         rows.push((start, lines.len(), Hit::Entry(index)));
     }
     if app.backlog.entries.is_empty() {
-        let empty = if app.sources.is_empty() { backlog::not_configured() } else { format!("Empty. R asks the lead to fill it from {}.", backlog::from(&app.sources)) };
+        let empty = backlog::empty_text(&app.sources);
         lines.push(Line::from(Span::styled(empty, style(MUTED))));
     }
     (lines, selected_line, rows)
@@ -1345,7 +1368,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("tab", "switch between the work and areas pages"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
         ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("v", "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
-        ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("esc", "close this, or the board when it is an overlay"),
+        ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("a", "add an item to the local backlog"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
 
@@ -1668,6 +1691,13 @@ pub fn run(overlay: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_backlog_column_adds_an_item_only_with_the_local_source() {
+        let keys = |sources: &[Source]| backlog_choices(sources).iter().map(|choice| choice.key).collect::<String>();
+        assert_eq!(keys(&[Source::Local]), "gRa");
+        assert_eq!(keys(&[Source::Vault, Source::Linear]), "gR");
+    }
 
     #[test]
     fn a_modal_keeps_its_last_line_when_a_long_line_wraps() {
