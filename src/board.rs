@@ -288,14 +288,25 @@ pub fn suggested_name(title: &str) -> String {
 // Claude's last message is the last "● " block on screen, up to its footer lines.
 fn last_message(output: &str) -> String {
     let lines: Vec<&str> = output.lines().map(str::trim_end).collect();
-    let Some(start) = lines.iter().rposition(|line| line.trim_start().starts_with("● ")) else { return String::new() };
+    let bullet = |line: &str| ["● ", "⏺ "].iter().any(|marker| line.trim_start().starts_with(marker));
+    let Some(start) = lines.iter().rposition(|line| bullet(line)) else { return String::new() };
     let stop = |line: &str| {
         let line = line.trim_start();
         ["✻", "※", "─", "❯", "⏵", "╭", "╰", "· "].iter().any(|marker| line.starts_with(marker))
     };
     lines[start..].iter().take_while(|line| !stop(line))
         .map(|line| line.trim()).filter(|line| !line.is_empty())
-        .collect::<Vec<_>>().join(" ").trim_start_matches("● ").to_string()
+        .collect::<Vec<_>>().join(" ").trim_start_matches("● ").trim_start_matches("⏺ ").to_string()
+}
+
+// The end of a long message, where Claude puts its question, cut at a word.
+fn tail(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    let rest: String = text.chars().skip(count - max_chars).collect();
+    format!("…{}", rest.split_once(' ').map_or(rest.as_str(), |(_, words)| words))
 }
 
 // Fallback for a session that has not reported yet: Claude Code's own "※ recap:" under a finished run, free text that can be switched off.
@@ -1066,16 +1077,20 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     match &item.agent {
         Some(agent) => {
             let screen = app.agent_screen(&agent.pane);
-            let (label, text, accent) = match &item.report {
-                _ if agent.status == "blocked" => ("asks".to_string(), last_message(&screen), PEACH),
-                Some(report) => (format!("reported {}", ago(report.at)), report.text.clone(), FAINT),
+            let question = |text: String| tail(&text, width.saturating_sub(6) * 6);
+            let (label, text, accent, max_lines) = match &item.report {
+                _ if agent.status == "blocked" => ("asks".to_string(), question(last_message(&screen)), PEACH, 6),
+                Some(report) if report.report.as_ref().is_some_and(|report| report.state == "needs-you") && !last_message(&screen).is_empty() => {
+                    (format!("asks · reported {}", ago(report.at)), question(last_message(&screen)), PEACH, 6)
+                }
+                Some(report) => (format!("reported {}", ago(report.at)), report.text.clone(), FAINT, 3),
                 None => match recap(&screen) {
-                    recap if !recap.is_empty() => ("recap (no report yet)".to_string(), recap, FAINT),
-                    _ => ("last said".to_string(), last_message(&screen), FAINT),
+                    recap if !recap.is_empty() => ("recap (no report yet)".to_string(), recap, FAINT, 3),
+                    _ => ("last said".to_string(), last_message(&screen), FAINT, 3),
                 },
             };
             if !text.is_empty() {
-                lines.extend(card_text(&label, &text, accent, width, 3));
+                lines.extend(card_text(&label, &text, accent, width, max_lines));
             }
         }
         None => lines.extend(card_text("no Claude", "No Claude is running in its Space.", FAINT, width, 1)),
@@ -1494,6 +1509,14 @@ mod tests {
         assert_eq!(keys(Some("bin/dev")), "gprwtldx");
         let start = task_choices(None, Some("npm run dev"));
         assert_eq!((start[3].label.as_str(), start[3].about.as_str()), ("Start the dev server", "npm run dev in a tab of its Space"));
+    }
+
+    #[test]
+    fn the_question_is_the_end_of_claudes_last_message_in_either_bullet() {
+        let screen = "⏺ Read the note.\n\n⏺ Fråga 1: Ska push spärras?\n  A (min rekommendation): visa redo först efter godkännande.\n\n✻ Crunched for 24s\n❯ \n";
+        assert_eq!(last_message(screen), "Fråga 1: Ska push spärras? A (min rekommendation): visa redo först efter godkännande.");
+        assert_eq!(tail("one two three four five", 10), "…four five");
+        assert_eq!(tail("short", 10), "short");
     }
 
     #[test]
