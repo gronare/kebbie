@@ -9,6 +9,7 @@ use crate::herdr;
 use crate::peers;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
+use crate::tasks;
 
 pub fn state_dir() -> Result<PathBuf> {
     let base = std::env::var("XDG_STATE_HOME")
@@ -142,10 +143,7 @@ fn role_file() -> Result<PathBuf> {
 fn start_chat(pane: &str) -> Result<()> {
     let role = role_file()?;
     let settings = settings(&peers::kelpie_command()?);
-    match herdr::start_agent("lead", "claude", pane, &["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings]) {
-        Err(error) if !error.contains("agent_not_ready") => Err(error),
-        _ => Ok(()),
-    }
+    tasks::start_claude("lead", pane, &["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings], true)
 }
 
 // Whatever was quit or closed since the lead Space was made comes back when the user goes there: the board, the messages, or the lead's Claude.
@@ -178,7 +176,9 @@ fn create() -> Result<String> {
     let chat = herdr::split_right(&board, &dir, "0.68")?;
     let messages = herdr::split_down(&board, &dir, "0.65")?;
     herdr::run_in_pane(&messages, &format!("'{}' messages", executable()?.display()))?;
-    start_chat(&chat)?;
+    let started = start_chat(&chat);
+    herdr::focus_workspace(&space.workspace_id)?;
+    started?;
     Ok("Lead Space created: the board on the left over the sessions' messages, the lead on the right.".to_string())
 }
 

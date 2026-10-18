@@ -91,7 +91,7 @@ pub fn agents() -> Result<Vec<Value>> {
 
 pub fn create_workspace(cwd: &Path, label: &str) -> Result<Space> {
     let cwd = cwd.to_string_lossy();
-    let result = call(&["workspace", "create", "--cwd", &cwd, "--label", label, "--focus"])?;
+    let result = call(&["workspace", "create", "--cwd", &cwd, "--label", label, "--no-focus"])?;
     Ok(Space {
         workspace_id: text(&result["workspace"]["workspace_id"]).ok_or("herdr workspace create returned no workspace")?,
         root_pane_id: text(&result["root_pane"]["pane_id"]),
@@ -176,4 +176,13 @@ pub fn move_workspace(workspace_id: &str, insert_index: usize) -> Result<()> {
         Some(error) => Err(format!("herdr workspace.move: {error}")),
         None => Ok(()),
     }
+}
+
+pub fn read_pane(pane_id: &str) -> Result<String> {
+    run(&herdr(), &["pane", "read", pane_id], None)
+}
+
+pub fn agent_ready(name: &str) -> Result<bool> {
+    let agent = call(&["agent", "get", name])?["agent"].clone();
+    Ok(agent["interactive_ready"] == true && agent["agent_status"] != "blocked")
 }

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::Duration;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -110,17 +111,43 @@ pub struct Start<'a> {
 }
 
 // A new pane's shell takes a moment to reach its prompt; until then herdr calls the pane busy.
-fn start_claude(name: &str, pane: &str, args: &[&str]) -> Result<()> {
+pub fn start_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<()> {
     for _ in 0..30 {
         match herdr::start_agent(name, "claude", pane, args) {
-            Err(error) if error.contains("agent_pane_busy") => std::thread::sleep(std::time::Duration::from_secs(1)),
-            Err(error) if error.contains("agent_not_ready") => {
-                return Err(format!("Claude started in {pane} but is waiting for an answer there (folder trust?); answer it, then send the prompt"));
-            }
+            Err(error) if error.contains("agent_pane_busy") => std::thread::sleep(Duration::from_secs(1)),
+            Err(error) if error.contains("agent_not_ready") || error.contains("timeout") => return wait_until_ready(name, pane, trusted),
             result => return result,
         }
     }
     Err(format!("The shell in {pane} never became ready for Claude"))
+}
+
+// Claude asks about a folder it has not seen with "No, exit" selected; a prompt sent before it is ready is lost.
+fn wait_until_ready(name: &str, pane: &str, trusted: bool) -> Result<()> {
+    for _ in 0..120 {
+        let screen = herdr::read_pane(pane)?;
+        if screen.contains("trust this folder") {
+            if !trusted {
+                return Err(format!("Claude in {pane} asks whether you trust its folder; you have not trusted the repo in Claude Code, so that answer is yours"));
+            }
+            herdr::send_keys(pane, &[if screen.contains("❯ Yes, I trust this folder") { "enter" } else { "down" }])?;
+        } else if herdr::agent_ready(name)? {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(format!("Claude in {pane} never became ready; see what it waits for there"))
+}
+
+// Claude Code's own record of the folders the user trusted, counting a folder under a trusted one.
+pub fn trusted_by_user(dir: &Path) -> bool {
+    let config = std::env::var("CLAUDE_CONFIG_DIR").map(PathBuf::from).or_else(|_| std::env::var("HOME").map(PathBuf::from)).map(|dir| dir.join(".claude.json"));
+    let claude = config.ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    claude.is_some_and(|claude| trusted_in(&claude, dir))
+}
+
+fn trusted_in(claude: &Value, dir: &Path) -> bool {
+    dir.ancestors().any(|folder| folder.to_str().is_some_and(|folder| claude["projects"][folder]["hasTrustDialogAccepted"] == true))
 }
 
 pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
@@ -145,7 +172,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
         git(&slot.path, &["switch", "--quiet", "-c", &task, base])?;
     }
 
-    let space = open_space(&repo, &slot, &task, focus)?;
+    let space = open_space(&repo, &slot, &task, false)?;
     let claude_pane = match space.root_pane_id {
         Some(pane) => pane,
         None => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
@@ -157,13 +184,17 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let settings = settings(&peers::kelpie_command()?);
     let role = peers::role_file(&task, &peers::Place { repo: &repo, worktree: &slot.path, setup_skill: &setup_skill })?.to_string_lossy().to_string();
     agent_args.extend(["--settings", &settings, "--append-system-prompt-file", &role]);
-    start_claude(&agent_name, &claude_pane, &agent_args)?;
+    let started = start_claude(&agent_name, &claude_pane, &agent_args, trusted_by_user(&repo));
     // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
-    if let Some(prompt) = prompt
-        && let Err(error) = herdr::prompt_agent(&agent_name, prompt)
-    {
-        return Err(format!("Started {task} in {}, but sending the prompt failed: {error}", slot.path.display()));
+    let prompted = match (&started, prompt) {
+        (Ok(()), Some(prompt)) => herdr::prompt_agent(&agent_name, prompt).map_err(|error| format!("Started {task} in {}, but sending the prompt failed: {error}", slot.path.display())),
+        _ => Ok(()),
+    };
+    if focus {
+        herdr::focus_workspace(&space.workspace_id)?;
     }
+    started?;
+    prompted?;
     if let Err(error) = messages::announce(&task, &name_of(&repo)) {
         eprintln!("Could not tell {task}'s other halves it started: {error}");
     }
@@ -467,6 +498,16 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_counts_as_trusted_when_it_or_a_folder_above_it_is() {
+        let claude = json!({ "projects": { "/home/ada/code": { "hasTrustDialogAccepted": true }, "/home/ada/other": { "hasTrustDialogAccepted": false } } });
+        assert!(trusted_in(&claude, Path::new("/home/ada/code")));
+        assert!(trusted_in(&claude, Path::new("/home/ada/code/shop")));
+        assert!(!trusted_in(&claude, Path::new("/home/ada/other/shop")));
+        assert!(!trusted_in(&claude, Path::new("/home/ada")));
+        assert!(!trusted_in(&json!({}), Path::new("/home/ada/code")));
+    }
 
     fn repo() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("kelpie-test-{}-{:?}", std::process::id(), std::thread::current().id()));
