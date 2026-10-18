@@ -144,9 +144,9 @@ pub fn refresh_prompt(sources: &[Source]) -> Result<String> {
 
 pub fn task_prompt(entry: &Entry, sources: &[Source]) -> String {
     match entry.source.as_str() {
-        "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then plan with me before changing code.", entry.reference, entry.title),
-        "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first and set its status to active, then plan with me before changing code.", entry.reference, entry.title),
-        _ => format!("Work on: {}. {} Plan with me before changing code.", entry.title, entry.summary),
+        "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then ask me what you need decided, one question at a time, before you plan with me; no code until I approve the plan.", entry.reference, entry.title),
+        "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first and set its status to active, then ask me what you need decided, one question at a time, before you plan with me; no code until I approve the plan.", entry.reference, entry.title),
+        _ => format!("Work on: {}. {} Ask me what you need decided, one question at a time, before you plan with me; no code until I approve the plan.", entry.title, entry.summary),
     }
 }
 
