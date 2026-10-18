@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::config;
 use crate::herdr;
+use crate::lead::state_dir;
 use crate::messages;
 use crate::peers;
 use crate::repo::{
@@ -113,10 +114,8 @@ fn settings(kelpie: &str) -> String {
     let allow = ["peers", "tell", "report"].map(|command| format!("Bash({kelpie} {command}:*)"));
     json!({
         "env": { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" },
-        "permissions": { "deny": ["Bash(git push:*)"], "allow": allow },
+        "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)")], "allow": allow },
         "hooks": { "UserPromptSubmit": hook, "Stop": hook },
-        "attribution": { "commit": "", "pr": "" },
-        "includeCoAuthoredBy": false,
     }).to_string()
 }
 
@@ -318,7 +317,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let task = slug(name)?;
     let config::Settings { setup_skill, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
     let (setup_skill, rules_skill) = (setup_skill.value, rules_skill.value);
-    let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, rules_skill: rules_skill.as_deref(), worktree: slot.path.clone() };
+    let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, rules_skill: &rules_skill, worktree: slot.path.clone() };
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
         return restart(&place(&existing), &existing, focus);
     }
@@ -362,7 +361,7 @@ struct Launch<'a> {
     task: &'a str,
     mode: Option<&'a str>,
     setup_skill: &'a str,
-    rules_skill: Option<&'a str>,
+    rules_skill: &'a str,
     worktree: PathBuf,
 }
 
@@ -452,41 +451,20 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
     if ahead_behind(&slot.path, &upstream)?.0 == 0 {
         return Err(format!("{task} has no commits to land"));
     }
-    if git(&slot.path, &["rebase", "--quiet", "--autosquash", &upstream]).is_err() {
+    if git(&slot.path, &["rebase", "--quiet", &upstream]).is_err() {
         git(&slot.path, &["rebase", "--abort"])?;
         let Some(pane) = claude_of(&slot.path) else {
             return Err(format!("{task} conflicts with {upstream} and has no Claude to resolve it; rebase it in {}", slot.path.display()));
         };
         herdr::prompt_agent(&pane, &format!(
             "kelpie tried to land this task and rebasing onto {upstream} conflicts (already fetched). Rebase this branch onto {upstream} \
-             with git rebase --autosquash {upstream} (no -i), resolve each conflict keeping the intent of both sides (read the upstream \
+             with git rebase {upstream} (no -i), resolve each conflict keeping the intent of both sides (read the upstream \
              commits that touched the file), run the tests for the files involved, and continue until the rebase is finished. Do not \
              push. Then tell me in a few lines what conflicted and how you resolved it."
         ))?;
         return Err(format!("{task} conflicts with {upstream}; its Claude is resolving the rebase. Push and close again when it reports back."));
     }
-    let range = format!("{upstream}..HEAD");
-    let mut problems = Vec::new();
-    if !git(&slot.path, &["rev-list", "--merges", &range])?.is_empty() {
-        problems.push("it contains merge commits");
-    }
-    if git(&slot.path, &["log", "--format=%B", &range])?.lines().any(|line| line.to_lowercase().starts_with("co-authored-by:")) {
-        problems.push("a commit has a Co-Authored-By trailer");
-    }
-    let commits = git(&slot.path, &["log", "--oneline", &range])?;
-    if !problems.is_empty() {
-        let found = problems.join("; ");
-        let Some(pane) = claude_of(&slot.path) else {
-            return Err(format!("{task} is rebased but not ready: {found}.\n{commits}"));
-        };
-        herdr::prompt_agent(&pane, &format!(
-            "kelpie tried to land this task and it is not ready: {found}. Rewrite this branch's history so it lands cleanly, keeping the \
-             final tree identical and without git rebase -i: rebase onto {upstream} to drop merge commits, and remove Co-Authored-By lines \
-             with git rebase {upstream} --exec 'git log -1 --format=%B | grep -vi \"^co-authored-by:\" | git commit --amend --quiet -F -'. \
-             Check that git diff against the old tip is empty. Do not push. Then report ready."
-        ))?;
-        return Err(format!("{task} is rebased but not ready: {found}. Its Claude is fixing the history; push and close again when it reports back.\n{commits}"));
-    }
+    let commits = git(&slot.path, &["log", "--oneline", &format!("{upstream}..HEAD")])?;
     let target = upstream.trim_start_matches("origin/");
     Ok(format!(
         "{task} is rebased onto {upstream} and ready:\n{commits}\n\nPush with:  kelpie push {task}   (or git -C {} push origin HEAD:{target}, then kelpie done {task})",
@@ -508,12 +486,11 @@ pub fn tidy(cwd: &Path, name: Option<&str>, note: &str) -> Result<String> {
     let task = task_of(&slot);
     let pane = claude_of(&slot.path).ok_or_else(|| format!("{task} has no Claude running to tidy its commits"))?;
     let upstream = default_branch(&repo)?;
+    let rules = config::resolve(Some(&repo))?.settings.rules_skill.value;
     let mut prompt = format!(
-        "Tidy this branch's commits on top of {upstream} for review before it is pushed: one commit per logical change, the functional \
-         change before refactors, fixups and review-response commits squashed into the commit they belong to, messages that say why. \
-         Interactive git is not available: use git commit --fixup with git rebase --autosquash, git rebase with GIT_SEQUENCE_EDITOR \
-         editing the todo, or git reset --soft and recommit. The final tree must be identical: git diff against the old head must be \
-         empty. Do not push. Show the commit list before and after."
+        "Reshape this branch's commits on top of {upstream} for review, following the skill `{rules}`. Interactive git is not \
+         available: use git rebase with GIT_SEQUENCE_EDITOR editing the todo, git commit --amend, or git reset --soft and recommit. \
+         The final tree must be identical: git diff against the old head must be empty. Do not push. Show the commit list before and after."
     );
     if !note.trim().is_empty() {
         prompt.push_str(&format!(" From the user: {}", note.trim()));
@@ -534,6 +511,102 @@ pub fn push(cwd: &Path, name: Option<&str>) -> Result<String> {
     let target = format!("HEAD:{}", upstream.trim_start_matches("origin/"));
     push_as_user(&slot.path, &[&target]).map_err(|error| format!("Pushing {} failed: {error}", task_of(&slot)))?;
     done(cwd, name).map(|closed| format!("Pushed {ahead} commit(s) to {upstream}. {closed}"))
+}
+
+// Every message and every added or removed line, without line numbers or context, so a rebase that applies cleanly keeps the fingerprint.
+fn fingerprint(path: &Path, upstream: &str) -> Result<String> {
+    let range = format!("{upstream}..HEAD");
+    let messages = git(path, &["log", "--reverse", "--format=%B%x00", &range])?;
+    let changes = git(path, &["log", "--reverse", "-p", "-U0", "--no-color", "--no-ext-diff", "--format=%x00", &range])?;
+    let lines: Vec<&str> = changes.lines().filter(|line| !(line.starts_with("index ") || line.starts_with("@@"))).collect();
+    let mut hasher = Fnv::default();
+    hasher.write(messages.as_bytes());
+    hasher.write(&[0xff]);
+    hasher.write(lines.join("\n").as_bytes());
+    Ok(format!("{:016x}", hasher.0))
+}
+
+// FNV-1a: stable across Rust versions, unlike DefaultHasher, so an approval survives a kelpie upgrade.
+struct Fnv(u64);
+
+impl Default for Fnv {
+    fn default() -> Self {
+        Fnv(0xcbf29ce484222325)
+    }
+}
+
+impl Fnv {
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+        }
+    }
+}
+
+fn approval_file(state: &Path, address: &str) -> PathBuf {
+    state.join("approved").join(address)
+}
+
+fn record_approval(state: &Path, address: &str, fingerprint: &str) -> Result<()> {
+    let file = approval_file(state, address);
+    std::fs::create_dir_all(file.parent().unwrap_or(state)).map_err(|error| error.to_string())?;
+    std::fs::write(file, fingerprint).map_err(|error| error.to_string())
+}
+
+fn approval_holds(state: &Path, address: &str, fingerprint: &str) -> bool {
+    std::fs::read_to_string(approval_file(state, address)).is_ok_and(|stored| stored.trim() == fingerprint)
+}
+
+fn forget_approval_in(state: &Path, address: &str) {
+    let _ = std::fs::remove_file(approval_file(state, address));
+}
+
+fn forget_approval(task: &str, repo: &Path) {
+    if let Ok(state) = state_dir() {
+        forget_approval_in(&state, &peers::address(task, &name_of(repo)));
+    }
+}
+
+// The lead's word that the task's commits hold to the rules skill, until a commit changes.
+pub fn approve(cwd: &Path, name: Option<&str>) -> Result<String> {
+    let here = std::env::current_dir().map_err(|error| error.to_string())?;
+    if peers::me(&here).is_some_and(|me| me != crate::status::LEAD_LABEL) {
+        return Err("approve is the lead's check; a task cannot approve its own commits".to_string());
+    }
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    let task = task_of(&slot);
+    let upstream = default_branch(&repo)?;
+    if ahead_behind(&slot.path, &upstream)?.0 == 0 {
+        return Err(format!("{task} has no commits to approve"));
+    }
+    let address = peers::address(task, &name_of(&repo));
+    record_approval(&state_dir()?, &address, &fingerprint(&slot.path, &upstream)?)?;
+    Ok(format!("Approved {address}'s commits against the rules; a new or changed commit takes the approval back."))
+}
+
+// What the lead is asked when a task reports ready, or None when there is nothing new for it to check.
+pub fn rules_check(cwd: &Path) -> Result<Option<String>> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, None, cwd)?;
+    let task = task_of(&slot);
+    let upstream = default_branch(&repo)?;
+    let address = peers::address(task, &name_of(&repo));
+    if ahead_behind(&slot.path, &upstream)?.0 == 0 || approved(&slot.path, &upstream, &address) {
+        return Ok(None);
+    }
+    let rules = config::resolve(Some(&repo))?.settings.rules_skill.value;
+    let sha = git(&slot.path, &["rev-parse", "--short", "HEAD"])?;
+    Ok(Some(format!(
+        "{address} is ready at {sha}: check its commits against `{rules}` (git -C {} log -p {upstream}..HEAD). When they hold, run \
+         kelpie -C {} approve {task}; when one breaks a rule, kelpie tell {address} which commit and what to fix.",
+        slot.path.display(), repo.display()
+    )))
+}
+
+pub fn approved(path: &Path, upstream: &str, address: &str) -> bool {
+    let Ok(state) = state_dir() else { return false };
+    approval_file(&state, address).exists() && fingerprint(path, upstream).is_ok_and(|current| approval_holds(&state, address, &current))
 }
 
 pub struct Commit {
@@ -594,9 +667,8 @@ pub fn draft_squash_message(path: &Path) -> Result<String> {
     );
     let mut child = std::process::Command::new("claude")
         .args(["-p", "--setting-sources", "", "--strict-mcp-config", "--tools", "", "--model", "sonnet", "--no-session-persistence", "--disable-slash-commands",
-            "Write one git commit message for these commits squashed into one, from what was actually changed. Subject under 72 characters in the \
-             imperative or descriptive style the messages use, a blank line, then a short body saying what changed and why, wrapped at 72. Keep \
-             ticket and Slack references from the messages. Plain text only: no preamble, no code fences, no trailers."])
+            "Write one git commit message for these commits squashed into one, from what was actually changed, in the style the \
+             messages use. Keep the references and trailers the messages carry, and add none. Plain text only: no preamble, no code fences."])
         .current_dir(std::env::temp_dir())
         .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
         .spawn().map_err(|error| format!("claude: {error}"))?;
@@ -644,6 +716,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     let workspace = herdr::workspace_for(&slot.path)?;
     let finished = finish(&repo, &slot, &upstream)?;
     forget_session(task_of(&slot), &repo);
+    forget_approval(task_of(&slot), &repo);
     end_life(task_of(&slot), &repo, "done");
     Ok(finished + &close_space(workspace))
 }
@@ -700,6 +773,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     release(&repo, &slot, &upstream)?;
     forget_start(task, &repo);
     forget_session(task, &repo);
+    forget_approval(task, &repo);
     end_life(task, &repo, how);
     Ok(format!("{task} dropped; {} is free again.{}", name_of(&slot.path), close_space(workspace)))
 }
@@ -775,6 +849,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_clean_rebase_keeps_the_fingerprint_and_a_new_or_changed_commit_loses_it() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let approved = fingerprint(&slot.path, &upstream).unwrap();
+        land_on_main(&dir, &upstream, |_| ());
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "rebase", "--quiet", &upstream]).unwrap();
+        assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0));
+        assert_eq!(fingerprint(&slot.path, &upstream).unwrap(), approved);
+        let amend = |args: &[&str]| git(&slot.path, &[&["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend"], args].concat()).unwrap();
+        amend(&["-m", "fourth, reworded"]);
+        assert_ne!(fingerprint(&slot.path, &upstream).unwrap(), approved);
+        amend(&["-m", "fourth"]);
+        assert_eq!(fingerprint(&slot.path, &upstream).unwrap(), approved);
+        std::fs::write(slot.path.join("d"), "changed").unwrap();
+        git(&slot.path, &["add", "d"]).unwrap();
+        amend(&["--no-edit"]);
+        assert_ne!(fingerprint(&slot.path, &upstream).unwrap(), approved);
+        std::fs::write(slot.path.join("d"), "d").unwrap();
+        git(&slot.path, &["add", "d"]).unwrap();
+        amend(&["--no-edit"]);
+        assert_eq!(fingerprint(&slot.path, &upstream).unwrap(), approved);
+        commit(&slot.path, "e", "fifth");
+        assert_ne!(fingerprint(&slot.path, &upstream).unwrap(), approved);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn an_approval_holds_only_for_the_fingerprint_it_recorded_and_is_gone_once_forgotten() {
+        let state = std::env::temp_dir().join(format!("kelpie-approvals-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        assert!(!approval_holds(&state, "billing@app", "abc"));
+        record_approval(&state, "billing@app", "abc").unwrap();
+        assert!(approval_holds(&state, "billing@app", "abc"));
+        assert!(!approval_holds(&state, "billing@app", "abd"));
+        assert!(!approval_holds(&state, "billing@web", "abc"));
+        forget_approval_in(&state, "billing@app");
+        assert!(!approval_holds(&state, "billing@app", "abc"));
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn done_drop_and_reset_forget_the_approval() {
+        let source = include_str!("tasks.rs");
+        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        assert!(body("done").contains("forget_approval("));
+        assert!(body("discard").contains("forget_approval("));
+        assert!(body("reset").contains("discard("));
+        assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
+    }
+
+    #[test]
+    fn kelpie_carries_no_commit_style_rules() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let banned = [["auto", "squash"].concat(), ["co-authored", "-by"].concat(), ["fix", "up"].concat(), ["merge", " commit"].concat(), ["co", "authored"].concat(), ["attri", "bution"].concat()];
+        let mut files = vec![root.join("README.md")];
+        for dir in ["src", "roles", "skills", "hooks", "scripts"] {
+            let mut stack = vec![root.join(dir)];
+            while let Some(path) = stack.pop() {
+                match std::fs::read_dir(&path) {
+                    Ok(entries) => stack.extend(entries.filter_map(|entry| entry.ok()).map(|entry| entry.path())),
+                    Err(_) => files.push(path),
+                }
+            }
+        }
+        assert!(files.len() > 20, "{files:?}");
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap_or_default().to_lowercase();
+            for word in &banned {
+                assert!(!text.contains(word.as_str()), "{} names a commit rule: {word}", file.display());
+            }
+        }
+    }
+
+    #[test]
     fn a_tasks_start_line_carries_its_settings_as_a_short_path_to_the_same_json() {
         let dir = std::env::temp_dir().join(format!("kelpie-task-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -788,7 +935,7 @@ mod tests {
         assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
-        assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)"]));
+        assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)", format!("Bash({kelpie} approve:*)")]), "a task never pushes nor approves its own commits");
         assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
         std::fs::remove_dir_all(dir).unwrap();
     }

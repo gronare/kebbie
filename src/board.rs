@@ -86,7 +86,7 @@ fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
     }
     if !item.is_some_and(busy) {
         choices.extend([
-            choice('t', "Tidy commits", "its Claude squashes, reorders and rewords them for review"),
+            choice('t', "Tidy commits", "its Claude reshapes them by the rules skill"),
             choice('l', "Push and close", "rebase, check, show the commits, then push if you say so"),
             choice('d', "Done", "already pushed elsewhere: close it and free the worktree"),
         ]);
@@ -286,6 +286,9 @@ fn row_facts(item: &Item) -> String {
     }
     if git.behind > 0 {
         parts.push(format!("{} behind", git.behind));
+    }
+    if item.unchecked() {
+        parts.push(crate::status::UNCHECKED.to_string());
     }
     if parts.len() == usize::from(absence(item).is_some()) {
         parts.push("nothing yet".to_string());
@@ -1574,6 +1577,15 @@ mod tests {
         let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
         assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprzx");
         assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprtldzx");
+    }
+
+    #[test]
+    fn a_ready_task_the_lead_has_not_approved_still_offers_push_and_close() {
+        let mut unchecked = crate::status::tests::task(Some("idle"), Some("ready"), 1);
+        unchecked.git.as_mut().unwrap().approved = false;
+        assert!(unchecked.group() == crate::status::Group::NeedsYou);
+        assert!(task_choices(Some(&unchecked), None).iter().any(|choice| choice.key == 'l'));
+        assert_eq!(row_facts(&unchecked), "1 commit · rules not checked by the lead");
     }
 
     #[test]

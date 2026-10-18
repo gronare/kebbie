@@ -9,9 +9,10 @@ use crate::messages::{self, Message};
 use crate::peers;
 use crate::repo::{ahead_behind, changed_count, default_branch, git, name_of, pooled_checkouts};
 use crate::sh::Result;
-use crate::tasks::slots;
+use crate::tasks::{self, slots};
 
 pub const LEAD_LABEL: &str = "lead";
+pub const UNCHECKED: &str = "rules not checked by the lead";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
@@ -46,6 +47,7 @@ pub struct Git {
     pub ahead: usize,
     pub behind: usize,
     pub changed: usize,
+    pub approved: bool,
 }
 
 #[derive(Clone)]
@@ -71,6 +73,15 @@ impl Item {
         self.git.as_ref().is_some_and(|git| git.ahead > 0 && git.behind == 0 && git.changed == 0)
     }
 
+    // Ready to push takes the lead's check against the rules skill as well as a clean rebase.
+    fn pushable(&self) -> bool {
+        self.rebased() && self.git.as_ref().is_some_and(|git| git.approved)
+    }
+
+    pub fn unchecked(&self) -> bool {
+        self.rebased() && !self.pushable() && self.group() != Group::Working
+    }
+
     pub fn report_state(&self) -> Option<&str> {
         self.report.as_ref()?.report.as_ref().map(|report| report.state.as_str())
     }
@@ -82,10 +93,10 @@ impl Item {
             (Some("blocked"), _) => Group::NeedsYou,
             (Some("working"), _) | (_, Some("working")) => Group::Working,
             (_, Some("needs-you")) => Group::NeedsYou,
-            (_, Some("ready")) => if self.rebased() { Group::ReadyToPush } else { Group::NeedsYou },
+            (_, Some("ready")) => if self.pushable() { Group::ReadyToPush } else { Group::NeedsYou },
             (_, Some("blocked")) => Group::Idle,
             (Some("done"), _) => Group::NeedsYou,
-            _ => if self.rebased() { Group::ReadyToPush } else { Group::Idle },
+            _ => if self.pushable() { Group::ReadyToPush } else { Group::Idle },
         }
     }
 
@@ -136,6 +147,9 @@ impl Item {
         if git.behind > 0 {
             parts.push(format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")));
         }
+        if self.unchecked() {
+            parts.push(UNCHECKED.to_string());
+        }
         if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
     }
 
@@ -158,7 +172,7 @@ impl Item {
             }))),
             "server": self.server,
             "git": self.git.as_ref().map(|git| json!({
-                "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed,
+                "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed, "approved": git.approved,
             })),
         })
     }
@@ -261,6 +275,9 @@ pub fn gather() -> Result<Vec<Item>> {
                 .and_then(|id| agents.iter().find(|agent| agent["workspace_id"].as_str() == Some(id.as_str())))
                 .map(agent_from);
             let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
+            let changed = changed_count(&slot.path)?;
+            let address = peers::address(&task, &name_of(repo));
+            let approved = ahead > 0 && behind == 0 && changed == 0 && tasks::approved(&slot.path, &upstream, &address);
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             items.push(Item {
                 review: review_progress(&slot.path, &upstream),
@@ -270,8 +287,8 @@ pub fn gather() -> Result<Vec<Item>> {
                 path: Some(slot.path.clone()),
                 workspace,
                 agent,
-                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed: changed_count(&slot.path)? }),
-                report: reports.get(&peers::address(&task, &name_of(repo))).cloned(),
+                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, approved }),
+                report: reports.get(&address).cloned(),
                 name: task,
             });
         }
@@ -310,7 +327,7 @@ pub(crate) mod tests {
         Item {
             review: None, server: false, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
-            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0 }),
+            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, approved: true }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false,
@@ -350,6 +367,25 @@ pub(crate) mod tests {
         assert!(task(Some("done"), Some("working"), 0).group() == Group::Working);
         assert!(task(Some("done"), Some("blocked"), 0).group() == Group::Idle);
         assert!(task(None, Some("needs-you"), 0).group() == Group::NeedsYou);
+    }
+
+    #[test]
+    fn a_task_the_lead_has_not_approved_is_not_ready_to_push() {
+        let mut ready = task(Some("idle"), Some("ready"), 2);
+        ready.git.as_mut().unwrap().approved = false;
+        assert!(ready.group() == Group::NeedsYou);
+        assert!(ready.summary().contains("rules not checked by the lead"), "{}", ready.summary());
+        let mut quiet = task(Some("idle"), None, 2);
+        quiet.git.as_mut().unwrap().approved = false;
+        assert!(quiet.group() == Group::Idle);
+        let mut working = task(Some("working"), Some("ready"), 2);
+        working.git.as_mut().unwrap().approved = false;
+        assert!(!working.summary().contains("rules not checked"), "{}", working.summary());
+        let approved = task(Some("idle"), Some("ready"), 2);
+        assert!(approved.group() == Group::ReadyToPush && !approved.summary().contains("rules not checked"));
+        let mut behind = task(Some("idle"), Some("ready"), 2);
+        behind.git.as_mut().unwrap().behind = 1;
+        assert!(behind.group() == Group::NeedsYou);
     }
 
     #[test]

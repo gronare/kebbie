@@ -9,6 +9,7 @@ use crate::messages::{self, Report};
 use crate::peers;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
+use crate::tasks;
 
 pub const STATES: [&str; 4] = ["needs-you", "ready", "working", "blocked"];
 
@@ -36,7 +37,17 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, summary: &str
         let args = metadata_args(&report);
         let _ = herdr::report_metadata(&pane, &args.iter().map(String::as_str).collect::<Vec<_>>());
     }
-    Ok(format!("Reported to the lead and the board as {me}."))
+    let check = if report.state == "ready" { lead_check(cwd) } else { String::new() };
+    Ok(format!("Reported to the lead and the board as {me}.{check}"))
+}
+
+// A ready task waits under Needs you until the lead has checked it against the rules skill.
+fn lead_check(cwd: &Path) -> String {
+    match tasks::rules_check(cwd).and_then(|request| request.map(|text| messages::ask_lead(&text)).transpose()) {
+        Ok(Some(_)) => " The lead checks your commits against the rules next; it tells you if one needs fixing.".to_string(),
+        Ok(None) => String::new(),
+        Err(error) => format!(" The lead could not be asked to check the rules: {error}."),
+    }
 }
 
 fn label(state: &str) -> Option<&'static str> {

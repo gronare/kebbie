@@ -30,6 +30,7 @@ impl Source {
 }
 
 pub const DEFAULT_SETUP_SKILL: &str = "kelpie:set-up-worktree";
+pub const DEFAULT_RULES_SKILL: &str = "kelpie:work-rules";
 pub const REPO_FILE: &str = ".kelpie.toml";
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -73,7 +74,7 @@ pub struct Settings {
     pub sources: Setting<Vec<Source>>,
     pub setup_skill: Setting<String>,
     pub dev_server: Setting<Option<String>>,
-    pub rules_skill: Setting<Option<String>>,
+    pub rules_skill: Setting<String>,
 }
 
 pub struct Loaded {
@@ -211,12 +212,11 @@ fn or_default<T>(setting: Option<Setting<T>>, value: T) -> Setting<T> {
 
 pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
     let dev_server = pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref());
-    let rules_skill = pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref());
     Settings {
         sources: or_default(pick(None, machine.sources.as_ref()), Vec::new()),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),
         dev_server: or_default(dev_server.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None),
-        rules_skill: or_default(rules_skill.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None),
+        rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
     }
 }
 
@@ -262,8 +262,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "The skill a task's Claude runs first to make its worktree runnable.");
     key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer,
         "The shell command the board's w key runs in a tab of the task's Space; without one there is no w.");
-    key("task.rules_skill", rules_skill.value.as_ref().map_or("none".to_string(), |skill| format!("{skill:?}")), rules_skill.layer,
-        "The skill with your rules for how work is planned, built and committed; a task's Claude runs it after the setup skill and follows it.");
+    key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
+        "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the lead checks a finished task against it, tidy reshapes commits by it.");
     lines.join("\n")
 }
 
@@ -305,6 +305,7 @@ mod tests {
         assert_eq!(defaults.sources, Setting { value: Vec::new(), layer: Layer::Default });
         assert_eq!(defaults.setup_skill, Setting { value: DEFAULT_SETUP_SKILL.to_string(), layer: Layer::Default });
         assert_eq!(defaults.dev_server, Setting { value: None, layer: Layer::Default });
+        assert_eq!(defaults.rules_skill, Setting { value: DEFAULT_RULES_SKILL.to_string(), layer: Layer::Default });
     }
 
     #[test]

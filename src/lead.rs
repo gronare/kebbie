@@ -111,8 +111,6 @@ fn settings(kelpie: &str) -> String {
     json!({
         "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' messages --unread") }] }] },
         "permissions": { "allow": allow },
-        "attribution": { "commit": "", "pr": "" },
-        "includeCoAuthoredBy": false,
     }).to_string()
 }
 

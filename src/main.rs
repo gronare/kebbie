@@ -49,9 +49,11 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30,
                                   --unread those the lead has not seen (its prompt hook)
   kelpie backlog [save]           show the backlog the lead keeps; save reads a JSON array on stdin
-  kelpie land [name]              rebase a task onto the default branch (folding fixup! commits) and check it; on a
-                                  conflict, its Claude resolves the rebase
-  kelpie tidy <name> [note]       ask the task's Claude to reshape its commits for review (squash, reorder, reword)
+  kelpie land [name]              rebase a task onto the default branch and check it is clean; on a conflict, its
+                                  Claude resolves the rebase
+  kelpie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
+  kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
+                                  changes, the board shows it ready to push
   kelpie push [name]              after land: push the task to the default branch, then close it as done
   kelpie done [name]              after pushing: close the task and free its worktree
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
@@ -217,6 +219,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("land") => tasks::land(&cwd, name),
         Some("push") => tasks::push(&cwd, name),
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
+        Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kelpie approve needs a task name")?)),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
         Some("reset") => tasks::reset(&cwd, name),

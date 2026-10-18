@@ -130,7 +130,7 @@ pub struct Place<'a> {
     pub repo: &'a Path,
     pub worktree: &'a Path,
     pub setup_skill: &'a str,
-    pub rules_skill: Option<&'a str>,
+    pub rules_skill: &'a str,
 }
 
 pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
@@ -148,8 +148,8 @@ pub fn worktree_values(place: &Place) -> Result<Vec<(&'static str, String)>> {
     ])
 }
 
-fn rules_line(rules_skill: Option<&str>) -> String {
-    rules_skill.map_or(String::new(), |skill| format!("\n\nThen run the skill `{skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here."))
+fn rules_line(rules_skill: &str) -> String {
+    format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, the lead checks your commits against it.")
 }
 
 // roles/task.md filled in for this task, written to the state dir for --append-system-prompt-file.
@@ -227,18 +227,20 @@ mod tests {
     }
 
     #[test]
-    fn the_rules_skill_reaches_the_role_only_when_configured() {
-        use crate::config::{Machine, parse_machine, parse_repo, settings};
+    fn the_rules_skill_reaches_the_role_from_each_layer() {
+        use crate::config::{Machine, Worktree, parse_machine, parse_repo, settings};
         let template = include_str!("../roles/task.md");
         let machine = parse_machine("[task]\nrules_skill = \"my-rules\"\n", "config.toml").unwrap();
         let own = parse_repo("[task]\nrules_skill = \"app-rules\"\n", ".kelpie.toml").unwrap();
-        assert_eq!(settings(&own, &machine).rules_skill.value.as_deref(), Some("app-rules"));
-        assert_eq!(settings(&Default::default(), &machine).rules_skill.value.as_deref(), Some("my-rules"));
-        assert_eq!(settings(&Default::default(), &Machine::default()).rules_skill.value, None);
-        let with = fill(template, &[("rules", &rules_line(Some("my-rules")))]);
-        assert!(with.contains("Then run the skill `my-rules` and follow it for the rest of this task"), "{with}");
-        let without = fill(template, &[("rules", &rules_line(None))]);
-        assert!(!without.contains("{rules}") && !without.contains("Then run the skill"));
+        for (own, machine, skill) in [
+            (own.clone(), machine.clone(), "app-rules"),
+            (Worktree::default(), machine, "my-rules"),
+            (Worktree::default(), Machine::default(), "kelpie:work-rules"),
+        ] {
+            let role = fill(template, &[("rules", &rules_line(&settings(&own, &machine).rules_skill.value))]);
+            assert!(role.contains(&format!("Then run the skill `{skill}` and follow it for the rest of this task")), "{role}");
+            assert!(!role.contains("{rules}"));
+        }
     }
 
     #[test]

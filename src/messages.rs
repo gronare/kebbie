@@ -202,6 +202,13 @@ pub fn announce(task: &str, repo: &str) -> Result<()> {
     send("kelpie", &halves, &format!("{me} has started: the same task, in {repo}. Keep it informed of changes it depends on."), &sessions).map(|_| ())
 }
 
+// From kelpie itself, held like any message while the lead waits for an answer.
+pub fn ask_lead(text: &str) -> Result<String> {
+    let sessions = peers::sessions()?;
+    let lead = sessions.iter().find(|session| session.address == LEAD_LABEL).ok_or("no lead session to check the rules")?;
+    Ok(send("kelpie", &[lead], text, &sessions)?.join("\n"))
+}
+
 // A report goes to the lead through the log only: typed into its chat, every turn of every task would start a turn of the lead.
 pub fn log_report(from: &str, report: &Report, text: &str) -> Result<()> {
     let id = format!("{}-{}-report", now(), std::process::id());
