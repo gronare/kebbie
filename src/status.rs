@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::herdr;
 use crate::messages::{self, Message};
 use crate::peers;
-use crate::repo::{ahead_behind, changed_count, default_branch, git, name_of};
+use crate::repo::{ahead_behind, changed_count, default_branch, git, name_of, pooled_checkouts};
 use crate::sh::Result;
 use crate::tasks::slots;
 
@@ -114,6 +114,15 @@ impl Item {
         let Some(git) = &self.git else {
             return "Claude session outside a task worktree".to_string();
         };
+        let work = self.work(git);
+        match (&self.workspace, &self.agent) {
+            (None, None) => format!("no Space · {work}"),
+            (Some(_), None) => format!("no Claude · {work}"),
+            _ => work,
+        }
+    }
+
+    fn work(&self, git: &Git) -> String {
         if self.group() == Group::ReadyToPush {
             return format!("{} · rebased, ready to push", plural(git.ahead, "commit"));
         }
@@ -203,22 +212,26 @@ impl Checkout {
     }
 }
 
-// The main checkout of every repo open in herdr: leftover uncommitted files there, and its worktree pool.
+// Repos open in herdr and repos with a worktree pool on disk, once each however their paths are spelled.
+fn known_repos(workspaces: &[Value], pooled: Vec<PathBuf>) -> BTreeSet<PathBuf> {
+    workspaces.iter().filter_map(|workspace| workspace["worktree"]["repo_root"].as_str()).map(PathBuf::from).chain(pooled)
+        .map(|repo| repo.canonicalize().unwrap_or(repo)).collect()
+}
+
+// The main checkout of every repo kelpie knows: leftover uncommitted files there, and its worktree pool.
 pub fn checkouts() -> Result<Vec<Checkout>> {
-    let repos: BTreeSet<PathBuf> = herdr::workspaces()?.iter()
-        .filter_map(|workspace| workspace["worktree"]["repo_root"].as_str()).map(PathBuf::from).collect();
-    repos.iter().map(|repo| {
-        let pool = slots(repo)?;
-        Ok(Checkout {
+    Ok(known_repos(&herdr::workspaces()?, pooled_checkouts()).iter().filter_map(|repo| {
+        let pool = slots(repo).ok()?;
+        Some(Checkout {
             name: name_of(repo),
-            changed: changed_count(repo)?,
+            changed: changed_count(repo).ok()?,
             free_slots: pool.iter().filter(|slot| slot.free).count(),
             busy_slots: pool.iter().filter(|slot| !slot.free).count(),
         })
-    }).collect()
+    }).collect())
 }
 
-// Every task in a pooled worktree of a repo open in herdr, then every other Claude session, sorted by what they need.
+// Every task in a pooled worktree of a repo kelpie knows, then every other Claude session, sorted by what they need.
 pub fn gather() -> Result<Vec<Item>> {
     let workspaces = herdr::workspaces()?;
     let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| agent["agent"] == "claude").collect();
@@ -230,15 +243,15 @@ pub fn gather() -> Result<Vec<Item>> {
         workspaces.iter().find(|workspace| workspace["worktree"]["checkout_path"].as_str() == path.to_str())
             .and_then(|workspace| workspace["workspace_id"].as_str()).map(str::to_string)
     };
-    let repos: BTreeSet<PathBuf> = workspaces.iter()
-        .filter_map(|workspace| workspace["worktree"]["repo_root"].as_str()).map(PathBuf::from).collect();
+    let repos = known_repos(&workspaces, pooled_checkouts());
 
     let reports = messages::latest_reports(&messages::load());
     let mut items = Vec::new();
     let mut task_workspaces = BTreeSet::new();
     for repo in &repos {
         let Ok(upstream) = default_branch(repo) else { continue };
-        for slot in slots(repo)? {
+        let Ok(pool) = slots(repo) else { continue };
+        for slot in pool {
             let Some(task) = slot.task else { continue };
             let workspace = workspace_at(&slot.path);
             if let Some(id) = &workspace {
@@ -303,6 +316,30 @@ pub(crate) mod tests {
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false,
             }),
         }
+    }
+
+    #[test]
+    fn a_repo_counts_once_whether_herdr_has_it_open_or_only_its_pool_is_on_disk() {
+        let dir = std::env::temp_dir().join(format!("kelpie-known-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("shop")).unwrap();
+        std::fs::create_dir_all(dir.join("blog")).unwrap();
+        let shop = dir.join("shop").canonicalize().unwrap();
+        let workspaces = [json!({ "worktree": { "repo_root": dir.join("shop") } }), json!({ "label": "lead" })];
+        let known = known_repos(&workspaces, vec![dir.join("./shop"), dir.join("blog")]);
+        assert_eq!(known.into_iter().collect::<Vec<_>>(), [dir.join("blog").canonicalize().unwrap(), shop]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_task_without_its_space_or_its_claude_says_so() {
+        let mut item = task(None, None, 1);
+        item.git.as_mut().unwrap().changed = 2;
+        assert_eq!(item.summary(), "no Space · 1 commit · 2 files changed");
+        item.workspace = Some("w1".to_string());
+        assert_eq!(item.summary(), "no Claude · 1 commit · 2 files changed");
+        item.agent = task(Some("idle"), None, 0).agent;
+        assert_eq!(item.summary(), "1 commit · 2 files changed");
+        assert_eq!(task(None, None, 0).summary(), "no Space · nothing yet");
     }
 
     #[test]

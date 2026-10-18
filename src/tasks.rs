@@ -120,10 +120,78 @@ fn settings(kelpie: &str) -> String {
     }).to_string()
 }
 
-fn claude_args(mode: Option<&str>, settings: &Path, role: &Path) -> Vec<String> {
+enum Session {
+    New(String),
+    Resume(String),
+}
+
+fn claude_args(mode: Option<&str>, settings: &Path, role: &Path, session: &Session) -> Vec<String> {
     let mut args: Vec<String> = mode.map(|mode| vec!["--permission-mode".to_string(), mode.to_string()]).unwrap_or_default();
     args.extend(["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), role.to_string_lossy().to_string()]);
+    args.extend(match session {
+        Session::New(id) => ["--session-id".to_string(), id.clone()],
+        Session::Resume(id) => ["--resume".to_string(), id.clone()],
+    });
     args
+}
+
+fn new_session_id() -> Result<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom").and_then(|mut random| random.read_exact(&mut bytes)).map_err(|error| error.to_string())?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]))
+}
+
+fn session_file(task: &str, repo: &Path) -> Result<PathBuf> {
+    Ok(crate::lead::state_path(|name| std::env::var(name).ok())?.join("sessions").join(peers::address(task, &name_of(repo))))
+}
+
+// The task's Claude session id and permission mode, one per line, so a restart resumes that conversation in the same mode.
+fn recorded_session(task: &str, repo: &Path) -> (Option<String>, Option<String>) {
+    let text = session_file(task, repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default();
+    let mut lines = text.lines().map(str::trim).map(|line| (!line.is_empty()).then(|| line.to_string()));
+    (lines.next().flatten(), lines.next().flatten())
+}
+
+fn forget_session(task: &str, repo: &Path) {
+    if let Ok(file) = session_file(task, repo) {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+// Claude Code keeps a folder's conversations as <session id>.jsonl under its projects dir, the folder's path with every other character than a letter or digit as '-'.
+fn transcripts_dir(claude_home: &Path, folder: &Path) -> PathBuf {
+    let name: String = folder.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect();
+    claude_home.join("projects").join(name)
+}
+
+fn claude_home() -> Option<PathBuf> {
+    std::env::var("CLAUDE_CONFIG_DIR").map(PathBuf::from).ok().or_else(|| std::env::var("HOME").ok().map(|home| Path::new(&home).join(".claude")))
+}
+
+// A slot is reused across tasks, so only a conversation written since this task's branch was created can be this task's.
+fn latest_transcript(dir: &Path, since: std::time::SystemTime) -> Option<String> {
+    std::fs::read_dir(dir).ok()?.flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "jsonl"))
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+        .filter(|(modified, _)| *modified >= since)
+        .max_by_key(|(modified, _)| *modified)
+        .and_then(|(_, path)| path.file_stem().map(|stem| stem.to_string_lossy().to_string()))
+}
+
+fn branch_created(repo: &Path, task: &str) -> Option<std::time::SystemTime> {
+    let times = git(repo, &["reflog", "show", "--format=%ct", &format!("refs/heads/{task}")]).ok()?;
+    let seconds: u64 = times.lines().last()?.trim().parse().ok()?;
+    Some(std::time::UNIX_EPOCH + Duration::from_secs(seconds))
+}
+
+fn previous_session(repo: &Path, slot: &Slot, task: &str, claude_home: &Path, recorded: Option<String>) -> Option<String> {
+    let dir = transcripts_dir(claude_home, &slot.path);
+    recorded.filter(|id| dir.join(format!("{id}.jsonl")).exists())
+        .or_else(|| latest_transcript(&dir, branch_created(repo, task)?))
 }
 
 fn open_space(repo: &Path, slot: &Slot, task: &str, focus: bool) -> Result<herdr::Space> {
@@ -250,12 +318,9 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let task = slug(name)?;
     let config::Settings { setup_skill, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
     let (setup_skill, rules_skill) = (setup_skill.value, rules_skill.value);
+    let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, rules_skill: rules_skill.as_deref(), worktree: slot.path.clone() };
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
-        let space = open_space(&repo, &existing, &task, focus)?;
-        if focus {
-            herdr::focus_workspace(&space.workspace_id)?;
-        }
-        return Ok(format!("{task} is already running in {}.", existing.path.display()));
+        return restart(&place(&existing), &existing, focus);
     }
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
@@ -272,13 +337,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
         Some(pane) => pane,
         None => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
     };
-    // herdr's agent names are global, so a task's half in another repo is named with its repo.
-    let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task.as_str());
-    let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(&repo))?) } else { task.clone() }.chars().take(32).collect();
-    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &peers::address(&task, &name_of(&repo)), &settings(&peers::kelpie_command()?))?;
-    let role = peers::role_file(&task, &peers::Place { repo: &repo, worktree: &slot.path, setup_skill: &setup_skill, rules_skill: rules_skill.as_deref() })?;
-    let agent_args = claude_args(mode, &settings, &role);
-    let started = start_claude(&agent_name, &claude_pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(&repo));
+    let (agent_name, started) = launch(&place(&slot), &claude_pane, Session::New(new_session_id()?))?;
     // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
     let prompted = match (&started, prompt) {
         (Ok(()), Some(prompt)) => herdr::prompt_agent(&agent_name, prompt).map_err(|error| format!("Started {task} in {}, but sending the prompt failed: {error}", slot.path.display())),
@@ -296,6 +355,71 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
         eprintln!("Could not tell {task}'s other halves it started: {error}");
     }
     Ok(format!("Started {task} in {}.", slot.path.display()))
+}
+
+struct Launch<'a> {
+    repo: &'a Path,
+    task: &'a str,
+    mode: Option<&'a str>,
+    setup_skill: &'a str,
+    rules_skill: Option<&'a str>,
+    worktree: PathBuf,
+}
+
+// Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
+fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<()>)> {
+    let Launch { repo, task, mode, setup_skill, rules_skill, ref worktree } = *place;
+    // herdr's agent names are global, so a task's half in another repo is named with its repo.
+    let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
+    let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
+    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &peers::address(task, &name_of(repo)), &settings(&peers::kelpie_command()?))?;
+    let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, rules_skill })?;
+    let agent_args = claude_args(mode, &settings, &role, &session);
+    let started = start_claude(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(repo));
+    if let (Ok(()), Session::New(id)) = (&started, &session) {
+        let record = format!("{id}\n{}\n", mode.unwrap_or_default());
+        let file = session_file(task, repo)?;
+        std::fs::create_dir_all(file.parent().ok_or("session file has no folder")?).and_then(|_| std::fs::write(file, record)).map_err(|error| error.to_string())?;
+    }
+    Ok((agent_name, started))
+}
+
+fn claude_in(workspace: &str) -> Result<bool> {
+    Ok(herdr::agents()?.iter().any(|agent| agent["agent"] == "claude" && agent["workspace_id"].as_str() == Some(workspace)))
+}
+
+// A task whose Space or Claude is gone gets them back, its last conversation resumed and its first prompt not sent again.
+fn restart(place: &Launch, slot: &Slot, focus: bool) -> Result<String> {
+    let task = place.task;
+    let open = herdr::workspace_for(&slot.path)?;
+    if let Some(workspace) = &open
+        && claude_in(workspace)?
+    {
+        if focus {
+            herdr::focus_workspace(workspace)?;
+        }
+        return Ok(format!("{task} is already running in {}.", slot.path.display()));
+    }
+    let space = open_space(place.repo, slot, task, false)?;
+    let pane = match (&open, space.root_pane_id) {
+        (None, Some(pane)) => pane,
+        _ => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
+    };
+    let (recorded, mode) = recorded_session(task, place.repo);
+    let previous = claude_home().and_then(|home| previous_session(place.repo, slot, task, &home, recorded));
+    let place = Launch { mode: place.mode.or(mode.as_deref()), worktree: place.worktree.clone(), ..*place };
+    let resumed = previous.is_some();
+    let session = match previous {
+        Some(id) => Session::Resume(id),
+        None => Session::New(new_session_id()?),
+    };
+    let (_, started) = launch(&place, &pane, session)?;
+    if focus {
+        herdr::focus_workspace(&space.workspace_id)?;
+    }
+    started?;
+    let how = if resumed { "resuming its last conversation" } else { "with a new conversation, as none of its own was found" };
+    Ok(format!("Restarted {task} in {}, {how}.", slot.path.display()))
 }
 
 pub fn list(cwd: &Path) -> Result<Vec<Value>> {
@@ -519,6 +643,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     let upstream = default_branch(&repo)?;
     let workspace = herdr::workspace_for(&slot.path)?;
     let finished = finish(&repo, &slot, &upstream)?;
+    forget_session(task_of(&slot), &repo);
     end_life(task_of(&slot), &repo, "done");
     Ok(finished + &close_space(workspace))
 }
@@ -528,12 +653,27 @@ fn finish(repo: &Path, slot: &Slot, upstream: &str) -> Result<String> {
     if !is_clean(&slot.path)? {
         return Err(format!("{task} has uncommitted changes; land or drop them first"));
     }
-    if ahead_behind(&slot.path, upstream)?.0 > 0 {
-        return Err(format!("{task} has commits that are not on {upstream} yet; push them first, or use drop"));
+    let missing = missing_from(&slot.path, upstream)?;
+    if !missing.is_empty() {
+        return Err(format!("{task} has changes that are not on {upstream} yet; push them first, or use drop:\n{}", missing.join("\n")));
     }
     release(repo, slot, upstream)?;
     forget_start(task, repo);
     Ok(format!("{task} is done; {} is free again. {}", name_of(&slot.path), fast_forward_main(repo, upstream)?))
+}
+
+// The branch's commits whose change upstream lacks, as "sha subject"; empty when every change landed, however it was cherry-picked or squashed.
+fn missing_from(path: &Path, upstream: &str) -> Result<Vec<String>> {
+    let unmatched: Vec<String> = git(path, &["cherry", "-v", "--abbrev", upstream, "HEAD"])?.lines()
+        .filter_map(|line| line.strip_prefix("+ ")).map(str::to_string).collect();
+    if unmatched.is_empty() {
+        return Ok(unmatched);
+    }
+    let merged = git(path, &["merge-tree", "--write-tree", upstream, "HEAD"]);
+    if merged.is_ok_and(|tree| tree.lines().next() == git(path, &["rev-parse", &format!("{upstream}^{{tree}}")]).ok().as_deref()) {
+        return Ok(Vec::new());
+    }
+    Ok(unmatched)
 }
 
 pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
@@ -559,6 +699,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     }
     release(&repo, &slot, &upstream)?;
     forget_start(task, &repo);
+    forget_session(task, &repo);
     end_life(task, &repo, how);
     Ok(format!("{task} dropped; {} is free again.{}", name_of(&slot.path), close_space(workspace)))
 }
@@ -640,7 +781,7 @@ mod tests {
         let kelpie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kelpie", "nested/".repeat(20));
         let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kelpie)).unwrap();
         assert_eq!(file, dir.join("billing@app.settings.json"));
-        let args = claude_args(Some("acceptEdits"), &file, &dir.join("billing@app.md"));
+        let args = claude_args(Some("acceptEdits"), &file, &dir.join("billing@app.md"), &Session::New("0b6a".to_string()));
         let line = args.join(" ");
         assert!(!line.contains('{') && line.len() < 512, "{line}");
         assert_eq!(args[..2], ["--permission-mode", "acceptEdits"]);
@@ -774,6 +915,104 @@ mod tests {
         assert!(finish(&dir, &slot, &upstream).is_err());
         assert!(branch_exists(&dir, "search"));
         assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "search");
+        cleanup(dir, origin, &slot);
+    }
+
+    fn commit(path: &Path, file: &str, message: &str) -> String {
+        std::fs::write(path.join(file), message).unwrap();
+        git(path, &["add", file]).unwrap();
+        git(path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", message]).unwrap();
+        git(path, &["rev-parse", "HEAD"]).unwrap()
+    }
+
+    // Main moves on first, so the landed commits cannot come out with the task's own shas.
+    fn land_on_main(dir: &Path, upstream: &str, land: impl Fn(&Path)) {
+        commit(dir, "elsewhere", "someone else's work");
+        land(dir);
+        git(dir, &["update-ref", &format!("refs/remotes/{upstream}"), "HEAD"]).unwrap();
+    }
+
+    fn pick(dir: &Path, sha: &str) {
+        git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "cherry-pick", sha]).unwrap();
+    }
+
+    #[test]
+    fn done_frees_a_task_whose_commits_were_cherry_picked_onto_upstream() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fifth = commit(&slot.path, "e", "fifth");
+        let fourth = git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap();
+        land_on_main(&dir, &upstream, |dir| { pick(dir, &fourth); pick(dir, &fifth); });
+        assert!(ahead_behind(&slot.path, &upstream).unwrap().0 > 0);
+        finish(&dir, &slot, &upstream).unwrap();
+        assert!(!branch_exists(&dir, "billing"));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn done_frees_a_task_whose_commits_were_squashed_into_one_on_upstream() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        commit(&slot.path, "d", "fifth, rewriting the fourth");
+        land_on_main(&dir, &upstream, |dir| {
+            git(dir, &["merge", "--squash", "--quiet", "billing"]).unwrap();
+            git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "commit", "--quiet", "-m", "billing, squashed"]).unwrap();
+        });
+        assert!(git(&slot.path, &["cherry", &upstream, "HEAD"]).unwrap().contains('+'));
+        finish(&dir, &slot, &upstream).unwrap();
+        assert!(!branch_exists(&dir, "billing"));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn done_refuses_a_task_with_one_change_missing_from_upstream_and_names_that_commit() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fifth = commit(&slot.path, "e", "fifth");
+        let fourth = git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap();
+        land_on_main(&dir, &upstream, |dir| pick(dir, &fourth));
+        let error = finish(&dir, &slot, &upstream).err().unwrap();
+        assert!(error.contains(&fifth[..7]) && error.contains("fifth"), "{error}");
+        assert!(!error.contains("fourth") && !error.contains(&fourth[..7]), "{error}");
+        assert!(branch_exists(&dir, "billing"));
+        assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "billing");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_new_task_names_its_session_and_a_restart_resumes_it_with_the_same_role_and_settings() {
+        let (settings, role) = (Path::new("/state/roles/billing@app.settings.json"), Path::new("/state/roles/billing@app.md"));
+        let new = claude_args(Some("acceptEdits"), settings, role, &Session::New("1f0c".to_string()));
+        let resumed = claude_args(Some("acceptEdits"), settings, role, &Session::Resume("1f0c".to_string()));
+        assert_eq!(new[new.len() - 2..], ["--session-id", "1f0c"]);
+        assert_eq!(resumed[resumed.len() - 2..], ["--resume", "1f0c"]);
+        assert_eq!(new[..new.len() - 2], resumed[..resumed.len() - 2]);
+        assert!(resumed.contains(&"--append-system-prompt-file".to_string()) && resumed.contains(&"--settings".to_string()));
+        assert!(!resumed.iter().any(|arg| arg == "--continue" || arg == "-p"));
+        let id = new_session_id().unwrap();
+        assert_eq!((id.len(), id.matches('-').count(), &id[14..15]), (36, 4, "4"));
+        assert_ne!(id, new_session_id().unwrap());
+    }
+
+    #[test]
+    fn a_restart_resumes_the_conversation_recorded_for_the_task_or_else_the_newest_one_since_its_branch_began() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let home = dir.with_extension("claude");
+        let transcripts = transcripts_dir(&home, &slot.path);
+        assert_eq!(transcripts.parent().unwrap(), home.join("projects"));
+        assert!(!transcripts.file_name().unwrap().to_string_lossy().contains(['/', '.']));
+        std::fs::create_dir_all(&transcripts).unwrap();
+        assert_eq!(previous_session(&dir, &slot, "billing", &home, None), None);
+        let created = branch_created(&dir, "billing").unwrap();
+        let write = |id: &str, at: std::time::SystemTime| {
+            let file = std::fs::File::create(transcripts.join(format!("{id}.jsonl"))).unwrap();
+            file.set_modified(at).unwrap();
+        };
+        write("previous-task", created - Duration::from_secs(60));
+        assert_eq!(previous_session(&dir, &slot, "billing", &home, None), None);
+        write("first", created + Duration::from_secs(10));
+        write("latest", created + Duration::from_secs(20));
+        assert_eq!(previous_session(&dir, &slot, "billing", &home, None).as_deref(), Some("latest"));
+        assert_eq!(previous_session(&dir, &slot, "billing", &home, Some("first".to_string())).as_deref(), Some("first"));
+        assert_eq!(previous_session(&dir, &slot, "billing", &home, Some("gone".to_string())).as_deref(), Some("latest"));
+        std::fs::remove_dir_all(home).unwrap();
         cleanup(dir, origin, &slot);
     }
 }

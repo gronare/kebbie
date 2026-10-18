@@ -67,8 +67,13 @@ pub fn choice(key: char, label: &str, about: &str) -> Choice {
 }
 
 fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
+    let go = if item.is_some_and(|item| item.agent.is_none()) {
+        choice('g', "Restart it", "reopen its Space and its Claude, resuming its last conversation")
+    } else {
+        choice('g', "Go to its Space", "jump to the task's Space")
+    };
     let mut choices = vec![
-        choice('g', "Go to its Space", "jump to the task's Space"),
+        go,
         choice('p', "Message its Claude", "send it a line without leaving"),
         choice('r', "Open the review", "the review split next to its Claude"),
     ];
@@ -261,9 +266,18 @@ pub fn plural(count: usize, noun: &str) -> String {
     if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
 }
 
+// A task can outlive its Space or its Claude; kelpie start brings them back.
+fn absence(item: &Item) -> Option<&'static str> {
+    match (&item.workspace, &item.agent) {
+        (None, None) => Some("no Space"),
+        (Some(_), None) => Some("no Claude"),
+        _ => None,
+    }
+}
+
 fn row_facts(item: &Item) -> String {
     let Some(git) = &item.git else { return String::new() };
-    let mut parts = Vec::new();
+    let mut parts: Vec<String> = absence(item).map(str::to_string).into_iter().collect();
     if git.ahead > 0 {
         parts.push(plural(git.ahead, "commit"));
     }
@@ -273,7 +287,10 @@ fn row_facts(item: &Item) -> String {
     if git.behind > 0 {
         parts.push(format!("{} behind", git.behind));
     }
-    if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
+    if parts.len() == usize::from(absence(item).is_some()) {
+        parts.push("nothing yet".to_string());
+    }
+    parts.join(" · ")
 }
 
 // A worktree pool is per repo, so free worktrees are counted per repo; start makes a new one when a repo has none.
@@ -709,6 +726,16 @@ impl App {
             Column::Work => {
                 let Some(item) = self.selected_task() else { return };
                 match key {
+                    'g' if item.agent.is_none() => {
+                        let Some(path) = item.path.clone() else { return };
+                        let (sender, result) = mpsc::channel();
+                        let name = item.name.clone();
+                        thread::spawn(move || {
+                            let options = tasks::Start { prompt: None, focus: true, from: None, mode: None, backlog: None };
+                            let _ = sender.send(tasks::start(&path, &name, &options));
+                        });
+                        self.mode = Mode::Working { label: format!("Restarting {}…", item.name), result };
+                    }
                     'g' => {
                         if let Some(workspace) = &item.workspace {
                             let _ = herdr::focus_workspace(workspace);
@@ -1077,6 +1104,9 @@ fn work_lines(app: &mut App, width: usize) -> (Vec<Line<'static>>, usize, Rows) 
 fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut facts = Vec::new();
+    if let Some(absent) = absence(item) {
+        facts.push((absent.to_string(), YELLOW));
+    }
     if let Some(git) = &item.git {
         if git.ahead > 0 {
             facts.push((format!("{} to push", plural(git.ahead, "commit")), SUBTEXT));
@@ -1544,6 +1574,19 @@ mod tests {
         let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
         assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprzx");
         assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprtldzx");
+    }
+
+    #[test]
+    fn a_task_without_its_claude_shows_why_and_g_restarts_it() {
+        let gone = crate::status::tests::task(None, None, 1);
+        assert_eq!(row_facts(&gone), "no Space · 1 commit");
+        assert_eq!(task_choices(Some(&gone), None)[0].label, "Restart it");
+        let mut shell_only = crate::status::tests::task(None, None, 0);
+        shell_only.workspace = Some("w1".to_string());
+        assert_eq!(row_facts(&shell_only), "no Claude · nothing yet");
+        let running = crate::status::tests::task(Some("idle"), None, 0);
+        assert_eq!(row_facts(&running), "nothing yet");
+        assert_eq!(task_choices(Some(&running), None)[0].label, "Go to its Space");
     }
 
     #[test]

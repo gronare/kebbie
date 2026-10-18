@@ -183,6 +183,18 @@ fn clone(name: &str, roots: &[PathBuf]) -> Result<PathBuf> {
     Err(format!("No checkout of {name} under {} and no remote of your other repos has it", roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>().join(", ")))
 }
 
+// Main checkouts with a kelpie pool (a wt<N>.<repo> next to them), so a task shows even when no Space of its repo is open.
+pub fn pooled_checkouts() -> Vec<PathBuf> {
+    pooled_under(&roots())
+}
+
+fn pooled_under(roots: &[PathBuf]) -> Vec<PathBuf> {
+    roots.iter().flat_map(|root| checkouts_under(root)).filter(|repo| {
+        let Some(parent) = repo.parent() else { return false };
+        std::fs::read_dir(parent).into_iter().flatten().flatten().any(|entry| slot_number(repo, &entry.path()).is_some())
+    }).collect()
+}
+
 pub fn checkout_named(name: &str) -> Option<PathBuf> {
     roots().iter().flat_map(|root| checkouts_under(root)).find(|path| name_of(path) == name)
 }
@@ -232,5 +244,16 @@ mod tests {
         assert_eq!(worktree_port(&tree), Some(3012));
         assert_eq!(worktree_port(&main), None, "the main checkout's note is not a worktree's");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_checkout_with_a_worktree_pool_next_to_it_is_found_without_a_space_open() {
+        let root = std::env::temp_dir().join(format!("kelpie-pooled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["shop/.git", "wt2.shop", "blog/.git", "wtx.blog", "gronare/api/.git", "gronare/wt1.api", "notes"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        assert_eq!(pooled_under(std::slice::from_ref(&root)), [root.join("gronare/api"), root.join("shop")]);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
