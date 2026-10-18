@@ -166,6 +166,10 @@ bin/rails db:prepare
 
 `/kelpie:make-worktree-safe` audits a repo for what breaks across worktrees (fixed ports, shared databases and services, gitignored inputs, absolute paths, shared caches) and, when you say yes, writes `bin/setup-worktree`, the port fix and a `## Working in a worktree` section in a worktree for you to review. You run it; Claude never starts it on its own.
 
+## Update
+
+`kelpie update` brings everything to the latest version in one go: it updates the herdr plugin (a GitHub install through `herdr plugin update`; a linked checkout is fast-forwarded when it is clean, then built), runs `claude plugin update` for kelpie, and sends `/reload-plugins` to every Claude session that is waiting. The session you are in and the ones still working are listed instead, so nothing types into a prompt you are writing. In herdr, `prefix+u` in the example config opens it as a popup.
+
 ## Check the install
 
 `kelpie doctor` checks that this machine has what kelpie needs: the tools and their versions, the herdr and Claude Code plugins, the `current` link, the state directories, both config files, and that the plugin of the setup skill in effect is installed and enabled in Claude Code. Each warning or failure comes with its fix for macOS and Linux.

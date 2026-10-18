@@ -60,3 +60,9 @@ key = "prefix+t"
 type = "plugin_action"
 command = "kelpie.board"
 description = "kelpie board"
+
+[[keys.command]]
+key = "prefix+u"
+type = "plugin_action"
+command = "kelpie.update"
+description = "kelpie: update and reload"

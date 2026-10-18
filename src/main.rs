@@ -14,6 +14,7 @@ mod report;
 mod sh;
 mod status;
 mod tasks;
+mod update;
 mod vault;
 
 use std::path::Path;
@@ -56,6 +57,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie config [--repo <path>]   the config layers found (.kelpie.toml, machine config, defaults) and every
                                   setting in effect with the layer it comes from
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap
+  kelpie update                   update the herdr and Claude Code plugins, rebuild, and reload the plugins in
+                                  every waiting Claude session
 
 Without a name, land, push, done and drop act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>.";
@@ -214,6 +217,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
         Some("config") => config::show(&cwd, arguments.value("--repo")),
+        Some("update") => update::run(&doctor::Env::current().claude_dir),
         None | Some("help") => Ok(USAGE.to_string()),
         Some(other) => Err(format!("Unknown command \"{other}\"\n\n{USAGE}")),
     }

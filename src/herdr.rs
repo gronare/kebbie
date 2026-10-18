@@ -10,6 +10,10 @@ fn herdr() -> String {
     std::env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string())
 }
 
+pub fn bin() -> String {
+    herdr()
+}
+
 fn call(args: &[&str]) -> Result<Value> {
     let output = run(&herdr(), args, None)?;
     if output.is_empty() {
