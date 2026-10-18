@@ -100,7 +100,11 @@ command = "kelpie.board"
 description = "kelpie board"
 ```
 
- On startup the plugin links `~/.local/share/kelpie/current` to wherever herdr installed it, so configs can use a stable path. Outside herdr, run the binary from there: `~/.local/share/kelpie/current/target/release/kelpie`.
+ On startup the plugin links `~/.local/share/kelpie/current` to wherever herdr installed it, so configs can use a stable path. The lead, tasks and hooks run `kelpie` by name, so link that binary onto your PATH once (with `~/.local/bin` on PATH):
+
+```bash
+ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie
+```
 
 ### Sidebar sync (optional)
 
@@ -177,7 +181,7 @@ bin/rails db:prepare
 
 ## Check the install
 
-`kelpie doctor` checks that this machine has what kelpie needs: the tools and their versions, the herdr and Claude Code plugins, the `current` link, the state directories, both config files, and that the plugin of the setup skill in effect is installed and enabled in Claude Code. Each warning or failure comes with its fix for macOS and Linux.
+`kelpie doctor` checks that this machine has what kelpie needs: the tools and their versions, the herdr and Claude Code plugins, the `current` link, that `kelpie` on PATH is that link's binary, the state directories, both config files, and that the plugin of the setup skill in effect is installed and enabled in Claude Code. Each warning or failure comes with its fix for macOS and Linux.
 
 `kelpie config [--repo <path>]` prints the three layers it found, then every key with its value in effect, the layer it comes from (`.kelpie.toml`, `machine config` or `default`) and what it does. Inside a repo it reads that repo's `.kelpie.toml`; `--repo` names another.
 

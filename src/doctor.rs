@@ -167,6 +167,20 @@ pub fn current_link(home: &Path, data_home: Option<&Path>, plugin_root: Option<&
     }
 }
 
+const LINK_KELPIE: &str = "ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie";
+
+pub fn kelpie_on_path(home: &Path, path: &[PathBuf]) -> Check {
+    let current = home.join(".local/share/kelpie/current/target/release/kelpie");
+    let Some(found) = which("kelpie", path) else {
+        return warn("kelpie on PATH", "not on PATH; the lead, tasks and hooks run kelpie by name", vec![LINK_KELPIE.to_string(), "make sure ~/.local/bin is on PATH".to_string()]);
+    };
+    let resolved = found.canonicalize().unwrap_or_else(|_| found.clone());
+    match current.canonicalize() {
+        Ok(binary) if binary == resolved => ok("kelpie on PATH", format!("{} → {}", found.display(), binary.display())),
+        _ => warn("kelpie on PATH", format!("{} resolves to {}, not {}", found.display(), resolved.display(), current.display()), one(format!("remove {} or put ~/.local/bin ahead of it on PATH, then {LINK_KELPIE}", found.display()))),
+    }
+}
+
 pub fn state_dirs(state_home: &Path, data_home: &Path) -> Vec<(PathBuf, &'static str)> {
     vec![
         (state_home.join("kelpie"), "backlog, messages, lead, review marks"),
@@ -308,6 +322,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let claude_settings = read_json(&env.claude_dir.join("settings.json")).unwrap_or_default();
     checks.push(claude_plugin(installed.as_ref(), &claude_settings));
     checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
+    checks.push(kelpie_on_path(&env.home, &env.path));
     let data_home = env.data_home.clone().unwrap_or_else(|| env.home.join(".local/share"));
     for (dir, about) in state_dirs(&env.state_home, &data_home) {
         checks.push(writable(&dir, about, env.uid));
@@ -457,6 +472,29 @@ mod tests {
         assert_eq!(current_link(&home, None, Some(&root)).level, Level::Ok);
         assert_eq!(current_link(&home, None, Some(&home)).level, Level::Warn);
         assert_eq!(current_link(&home, Some(&home.join("data")), Some(&root)).level, Level::Warn);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn kelpie_on_path_must_be_the_current_links_binary() {
+        let home = scratch("on-path");
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let missing = kelpie_on_path(&home, std::slice::from_ref(&bin));
+        assert!(missing.level == Level::Warn && missing.fix[0] == LINK_KELPIE && missing.fix[1].contains("~/.local/bin is on PATH"));
+        let release = home.join("plugin/target/release");
+        std::fs::create_dir_all(&release).unwrap();
+        executable(&release.join("kelpie"));
+        std::fs::create_dir_all(home.join(".local/share/kelpie")).unwrap();
+        std::os::unix::fs::symlink(home.join("plugin"), home.join(".local/share/kelpie/current")).unwrap();
+        std::os::unix::fs::symlink(home.join(".local/share/kelpie/current/target/release/kelpie"), bin.join("kelpie")).unwrap();
+        assert_eq!(kelpie_on_path(&home, std::slice::from_ref(&bin)).level, Level::Ok);
+        let stale = home.join("cargo/bin");
+        std::fs::create_dir_all(&stale).unwrap();
+        executable(&stale.join("kelpie"));
+        let shadowed = kelpie_on_path(&home, &[stale.clone(), bin.clone()]);
+        assert_eq!(shadowed.level, Level::Warn);
+        assert!(shadowed.fact.contains(&stale.join("kelpie").canonicalize().unwrap().display().to_string()));
         let _ = std::fs::remove_dir_all(home);
     }
 
