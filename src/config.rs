@@ -38,6 +38,7 @@ pub struct Worktree {
     pub setup_skill: Option<String>,
     pub dev_server: Option<String>,
     pub rules_skill: Option<String>,
+    pub review_model: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -75,6 +76,7 @@ pub struct Settings {
     pub setup_skill: Setting<String>,
     pub dev_server: Setting<Option<String>>,
     pub rules_skill: Setting<String>,
+    pub review_model: Setting<Option<String>>,
 }
 
 pub struct Loaded {
@@ -167,6 +169,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         setup_skill: text(worktree, "setup_skill", "worktree.setup_skill")?,
         dev_server: text(worktree, "dev_server", "worktree.dev_server")?,
         rules_skill: None,
+        review_model: None,
     })
 }
 
@@ -178,6 +181,18 @@ fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     Ok(worktree)
 }
 
+fn with_review(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
+    if let Some(review) = subtable(table, "review", "review")? {
+        unknown_keys(review, "review.", &["model"])?;
+        worktree.review_model = text(review, "model", "review.model")?;
+    }
+    Ok(worktree)
+}
+
+fn layers(table: &Table) -> Result<Worktree> {
+    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree))
+}
+
 fn table(text: &str, source: &str) -> Result<Table> {
     text.parse().map_err(|error: toml::de::Error| format!("{source}: {}", error.to_string().trim()))
 }
@@ -185,8 +200,8 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["board", "worktree", "task"]).map_err(fail)?;
-    let worktree = worktree(&table).and_then(|worktree| with_task(&table, worktree)).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review"]).map_err(fail)?;
+    let worktree = layers(&table).map_err(fail)?;
     Ok(Machine { sources: board(&table).map_err(fail)?, worktree })
 }
 
@@ -194,8 +209,8 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["actions", "worktree", "task"]).map_err(fail)?;
-    worktree(&table).and_then(|worktree| with_task(&table, worktree)).map_err(fail)
+    unknown_keys(&table, "", &["actions", "worktree", "task", "review"]).map_err(fail)?;
+    layers(&table).map_err(fail)
 }
 
 fn pick<T: Clone>(repo: Option<&T>, machine: Option<&T>) -> Option<Setting<T>> {
@@ -211,12 +226,13 @@ fn or_default<T>(setting: Option<Setting<T>>, value: T) -> Setting<T> {
 }
 
 pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
-    let dev_server = pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref());
+    let optional = |setting: Option<Setting<String>>| or_default(setting.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None);
     Settings {
         sources: or_default(pick(None, machine.sources.as_ref()), Vec::new()),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),
-        dev_server: or_default(dev_server.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None),
+        dev_server: optional(pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref())),
         rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
+        review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
     }
 }
 
@@ -240,7 +256,7 @@ fn found(path: &Path) -> &'static str {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, dev_server, rules_skill } = &loaded.settings;
+    let Settings { sources, setup_skill, dev_server, rules_skill, review_model } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => format!("{} ({})", path.display(), found(path)),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -264,6 +280,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "The shell command the board's w key runs in a tab of the task's Space; without one there is no w.");
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
         "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the lead checks a finished task against it, tidy reshapes commits by it.");
+    key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
+        "The model kelpie review's independent reviewer runs on; none leaves it to Claude's default.");
     lines.join("\n")
 }
 
@@ -306,6 +324,7 @@ mod tests {
         assert_eq!(defaults.setup_skill, Setting { value: DEFAULT_SETUP_SKILL.to_string(), layer: Layer::Default });
         assert_eq!(defaults.dev_server, Setting { value: None, layer: Layer::Default });
         assert_eq!(defaults.rules_skill, Setting { value: DEFAULT_RULES_SKILL.to_string(), layer: Layer::Default });
+        assert_eq!(defaults.review_model, Setting { value: None, layer: Layer::Default });
     }
 
     #[test]
@@ -365,8 +384,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -377,8 +396,22 @@ mod tests {
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/src/app/.kelpie.toml").unwrap_err();
-        assert_eq!(repo_error("[board.backlog]\nsources = []\n"), "/src/app/.kelpie.toml: board: unknown key; known keys here: actions, worktree, task");
+        assert_eq!(repo_error("[board.backlog]\nsources = []\n"), "/src/app/.kelpie.toml: board: unknown key; known keys here: actions, worktree, task, review");
         assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/src/app/.kelpie.toml: worktree.port: unknown key; known keys here: setup_skill, dev_server");
+    }
+
+    #[test]
+    fn the_review_model_comes_from_either_file_the_repo_first() {
+        let from_machine = machine("[review]\nmodel = \"opus\"\n");
+        assert_eq!(settings(&Worktree::default(), &from_machine).review_model, Setting { value: Some("opus".to_string()), layer: Layer::Machine });
+        let both = settings(&repo("[review]\nmodel = \"sonnet\"\n"), &from_machine);
+        assert_eq!(both.review_model, Setting { value: Some("sonnet".to_string()), layer: Layer::Repo });
+        assert!(parse_repo("[review]\nmodle = \"opus\"\n", ".kelpie.toml").unwrap_err().contains("review.modle: unknown key; known keys here: model"));
+        assert!(parse_machine("[review]\nmodel = \"\"\n", "config.toml").unwrap_err().contains("review.model: must not be empty"));
+        let loaded = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both };
+        assert!(describe(&loaded).contains("review.model = \"sonnet\"  (.kelpie.toml)"));
+        let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
+        assert!(describe(&default).contains("review.model = none  (default)\n  The model kelpie review"));
     }
 
     #[test]

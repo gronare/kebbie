@@ -85,6 +85,9 @@ fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
         });
     }
     if !item.is_some_and(busy) {
+        if item.and_then(|item| item.git.as_ref()).is_some_and(|git| git.ahead > 0) {
+            choices.push(choice('v', "Request review", "a separate, read-only Claude reviews its commits in the background; the verdict goes to the lead"));
+        }
         choices.extend([
             choice('t', "Tidy commits", "its Claude reshapes them by the rules skill"),
             choice('l', "Push and close", "rebase, check, show the commits, then push if you say so"),
@@ -754,7 +757,7 @@ impl App {
                         }
                     }
                     'r' => self.open_review(&item),
-                    't' | 'l' | 'd' if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
+                    't' | 'l' | 'd' | 'v' if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
                     't' => {
                         if let Some(path) = item.path.clone() {
                             let label = "How should the commits look? (optional, enter to let Claude decide)".to_string();
@@ -762,6 +765,11 @@ impl App {
                         }
                     }
                     'w' => self.toggle_server(&item),
+                    'v' => {
+                        if let Some(path) = &item.path {
+                            self.show(crate::review::request(path, None));
+                        }
+                    }
                     'z' => {
                         if let Some(path) = item.path.clone() {
                             self.mode = Mode::ConfirmReset { path, name: item.name };
@@ -1104,6 +1112,19 @@ fn work_lines(app: &mut App, width: usize) -> (Vec<Line<'static>>, usize, Rows) 
     (lines, selected_line, rows)
 }
 
+fn verdict_chip(shown: &crate::review::Shown) -> Option<(String, Color)> {
+    if shown.running {
+        return Some(("review running".to_string(), BLUE));
+    }
+    let verdict = shown.verdict.as_ref()?;
+    let label = if verdict.ok { "review ok".to_string() } else { format!("review: {}", verdict.summary()) };
+    Some(match (shown.stale, verdict.ok) {
+        (true, _) => (format!("{label} (stale)"), MUTED),
+        (false, true) => (label, GREEN),
+        (false, false) => (label, PEACH),
+    })
+}
+
 fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut facts = Vec::new();
@@ -1127,6 +1148,9 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
     }
     if let Some((read, total)) = item.review {
         facts.push((format!("review {read}/{total} read"), if read == total { GREEN } else { SUBTEXT }));
+    }
+    if let Some(chip) = item.verdict.as_ref().and_then(verdict_chip) {
+        facts.push(chip);
     }
     if item.server {
         facts.push(("dev server running".to_string(), GREEN));
@@ -1264,7 +1288,7 @@ fn help_lines() -> Vec<Line<'static>> {
     [
         ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("tab", "switch between the work and areas pages"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
-        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("l", "ready to push: rebase and check (on a task)"), ("d", "done: after you pushed"),
+        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("v", "request an independent, read-only review of the task's commits"), ("l", "ready to push: rebase and check (on a task)"), ("d", "done: after you pushed"),
         ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
@@ -1576,7 +1600,8 @@ mod tests {
     fn a_working_task_offers_no_tidy_push_or_done() {
         let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
         assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprzx");
-        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprtldzx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprvtldzx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gprtldzx", "no commits, nothing to review");
     }
 
     #[test]
@@ -1608,6 +1633,18 @@ mod tests {
         assert_eq!(keys(Some("bin/dev")), "gprwtldzx");
         let start = task_choices(None, Some("npm run dev"));
         assert_eq!((start[3].label.as_str(), start[3].about.as_str()), ("Start the dev server", "npm run dev in a tab of its Space"));
+    }
+
+    #[test]
+    fn the_card_shows_the_review_verdict_and_marks_it_stale_once_head_moves() {
+        let shown = |ok: bool, findings: usize, stale: bool, running: bool| crate::review::Shown {
+            verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings }), stale, running, file: PathBuf::from("/state/verdicts/billing@web.md"),
+        };
+        assert_eq!(verdict_chip(&shown(true, 0, false, false)), Some(("review ok".to_string(), GREEN)));
+        assert_eq!(verdict_chip(&shown(false, 3, false, false)), Some(("review: 3 findings".to_string(), PEACH)));
+        assert_eq!(verdict_chip(&shown(false, 3, true, false)), Some(("review: 3 findings (stale)".to_string(), MUTED)));
+        assert_eq!(verdict_chip(&shown(true, 0, false, true)), Some(("review running".to_string(), BLUE)));
+        assert_eq!(verdict_chip(&crate::review::Shown { verdict: None, stale: false, running: false, file: PathBuf::new() }), None);
     }
 
     #[test]

@@ -76,7 +76,7 @@ pub fn slug(name: &str) -> Result<String> {
     Ok(slug)
 }
 
-fn find_task(repo: &Path, name: Option<&str>, cwd: &Path) -> Result<Slot> {
+pub fn find_task(repo: &Path, name: Option<&str>, cwd: &Path) -> Result<Slot> {
     let wanted = name.map(slug).transpose()?;
     let found = slots(repo)?.into_iter().find(|slot| match &wanted {
         Some(task) => slot.task.as_ref() == Some(task),
@@ -88,7 +88,7 @@ fn find_task(repo: &Path, name: Option<&str>, cwd: &Path) -> Result<Slot> {
     })
 }
 
-fn task_of(slot: &Slot) -> &str {
+pub fn task_of(slot: &Slot) -> &str {
     slot.task.as_deref().unwrap_or_default()
 }
 
@@ -167,7 +167,7 @@ fn transcripts_dir(claude_home: &Path, folder: &Path) -> PathBuf {
     claude_home.join("projects").join(name)
 }
 
-fn claude_home() -> Option<PathBuf> {
+pub fn claude_home() -> Option<PathBuf> {
     std::env::var("CLAUDE_CONFIG_DIR").map(PathBuf::from).ok().or_else(|| std::env::var("HOME").ok().map(|home| Path::new(&home).join(".claude")))
 }
 
@@ -191,6 +191,14 @@ fn previous_session(repo: &Path, slot: &Slot, task: &str, claude_home: &Path, re
     let dir = transcripts_dir(claude_home, &slot.path);
     recorded.filter(|id| dir.join(format!("{id}.jsonl")).exists())
         .or_else(|| latest_transcript(&dir, branch_created(repo, task)?))
+}
+
+// The task's own conversation, where the user's prompt and later word to it are.
+pub fn transcript(repo: &Path, slot: &Slot) -> Option<PathBuf> {
+    let task = slot.task.as_deref()?;
+    let home = claude_home()?;
+    let id = previous_session(repo, slot, task, &home, recorded_session(task, repo).0)?;
+    Some(transcripts_dir(&home, &slot.path).join(format!("{id}.jsonl")))
 }
 
 fn open_space(repo: &Path, slot: &Slot, task: &str, focus: bool) -> Result<herdr::Space> {
@@ -717,6 +725,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     let finished = finish(&repo, &slot, &upstream)?;
     forget_session(task_of(&slot), &repo);
     forget_approval(task_of(&slot), &repo);
+    crate::review::forget(task_of(&slot), &repo);
     end_life(task_of(&slot), &repo, "done");
     Ok(finished + &close_space(workspace))
 }
@@ -774,6 +783,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     forget_start(task, &repo);
     forget_session(task, &repo);
     forget_approval(task, &repo);
+    crate::review::forget(task, &repo);
     end_life(task, &repo, how);
     Ok(format!("{task} dropped; {} is free again.{}", name_of(&slot.path), close_space(workspace)))
 }
@@ -895,6 +905,7 @@ mod tests {
         assert!(body("done").contains("forget_approval("));
         assert!(body("discard").contains("forget_approval("));
         assert!(body("reset").contains("discard("));
+        assert!(body("done").contains("review::forget(") && body("discard").contains("review::forget("), "a later task by the same name must not show this one's review");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
     }
 

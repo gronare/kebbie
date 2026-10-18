@@ -53,6 +53,7 @@ pub struct Git {
 #[derive(Clone)]
 pub struct Item {
     pub review: Option<(usize, usize)>,
+    pub verdict: Option<crate::review::Shown>,
     pub server: bool,
     pub name: String,
     pub place: String,
@@ -167,6 +168,7 @@ impl Item {
                 "pane": agent.pane, "status": agent.status, "title": agent.title, "context": agent.context,
             })),
             "review": self.review.map(|(read, total)| json!({ "read": read, "files": total })),
+            "verdict": self.verdict.as_ref().map(crate::review::Shown::to_json),
             "report": self.report.as_ref().and_then(|message| Some(json!({
                 "state": message.report.as_ref()?.state, "next": message.report.as_ref()?.next, "summary": message.text, "age": messages::age(message.at),
             }))),
@@ -278,9 +280,11 @@ pub fn gather() -> Result<Vec<Item>> {
             let changed = changed_count(&slot.path)?;
             let address = peers::address(&task, &name_of(repo));
             let approved = ahead > 0 && behind == 0 && changed == 0 && tasks::approved(&slot.path, &upstream, &address);
+            let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap_or_default();
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             items.push(Item {
                 review: review_progress(&slot.path, &upstream),
+                verdict: crate::review::shown(&address, &head),
                 server: tokens["server"].is_string(),
                 place: name_of(repo),
                 repo: Some(repo.clone()),
@@ -302,6 +306,7 @@ pub fn gather() -> Result<Vec<Item>> {
         let agent = agent_from(agent);
         items.push(Item {
             review: None,
+            verdict: None,
             server: false,
             name: agent.title.clone(),
             place: label,
@@ -325,7 +330,7 @@ pub(crate) mod tests {
 
     pub(crate) fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         Item {
-            review: None, server: false, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
+            review: None, verdict: None, server: false, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, approved: true }),
             report: report.map(|state| Message {

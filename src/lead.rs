@@ -107,7 +107,7 @@ fn go() -> Result<String> {
 
 // Each of the user's prompts carries what sessions told each other since the lead last looked.
 fn settings(kelpie: &str) -> String {
-    let allow = ["peers", "tell", "messages", "status", "areas"].map(|command| format!("Bash({kelpie} {command}:*)"));
+    let allow = ["peers", "tell", "messages", "status", "areas", "approve", "review"].map(|command| format!("Bash({kelpie} {command}:*)"));
     json!({
         "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' messages --unread") }] }] },
         "permissions": { "allow": allow },

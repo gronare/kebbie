@@ -12,6 +12,7 @@ mod messages;
 mod peers;
 mod repo;
 mod report;
+mod review;
 mod sh;
 mod status;
 mod tasks;
@@ -52,6 +53,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie land [name]              rebase a task onto the default branch and check it is clean; on a conflict, its
                                   Claude resolves the rebase
   kelpie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
+  kelpie review [name]            a separate, read-only Claude reviews the task's commits in the background, by the
+                                  skill kelpie:review and the rules skill; its verdict goes to the lead and the board
   kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
                                   changes, the board shows it ready to push
   kelpie push [name]              after land: push the task to the default branch, then close it as done
@@ -65,7 +68,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie update                   update the herdr and Claude Code plugins, rebuild, and reload the plugins in
                                   every waiting Claude session
 
-Without a name, land, push, done, drop and reset act on the task whose worktree you are in.
+Without a name, land, review, push, done, drop and reset act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>.";
 
 struct Arguments {
@@ -209,7 +212,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("hook") => {
             let mut input = String::new();
             let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
-            Ok(report::hook(&input))
+            Ok(if arguments.flag("--review") { review::guard(&input) } else { report::hook(&input) })
         }
         Some("messages") if arguments.flag("--print") => Ok(messages::print(30)),
         Some("messages") if arguments.flag("--unread") => messages::unread_for_lead(),
@@ -219,6 +222,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("land") => tasks::land(&cwd, name),
         Some("push") => tasks::push(&cwd, name),
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
+        Some("review") if arguments.flag("--run") => review::run(&cwd),
+        Some("review") => review::request(&cwd, name),
         Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kelpie approve needs a task name")?)),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
