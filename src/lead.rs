@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -28,6 +28,19 @@ pub fn state_dir() -> Result<PathBuf> {
     let dir = state_path(|name| std::env::var(name).ok())?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
+}
+
+pub fn roles_dir() -> Result<PathBuf> {
+    let dir = state_dir()?.join("roles");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
+// herdr refuses a start line longer than the terminal's line limit, so Claude's settings go in as a file.
+pub fn write_settings(dir: &Path, name: &str, settings: &str) -> Result<PathBuf> {
+    let file = dir.join(format!("{name}.settings.json"));
+    fs::write(&file, settings).map_err(|error| format!("{}: {error}", file.display()))?;
+    Ok(file)
 }
 
 fn executable() -> Result<PathBuf> {
@@ -144,17 +157,20 @@ pub fn role_text(template: &str, sources: &[Source]) -> String {
 fn role_file() -> Result<PathBuf> {
     let template = fs::read_to_string(install_root()?.join("roles/lead.md")).map_err(|error| format!("roles/lead.md: {error}"))?;
     let role = role_text(&template, &config::sources()?);
-    let dir = state_dir()?.join("roles");
-    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    let file = dir.join("lead.md");
+    let file = roles_dir()?.join("lead.md");
     fs::write(&file, role).map_err(|error| error.to_string())?;
     Ok(file)
 }
 
+fn chat_args(role: &Path, settings: &Path) -> Vec<String> {
+    ["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings.to_string_lossy()].map(str::to_string).to_vec()
+}
+
 fn start_chat(pane: &str) -> Result<()> {
     let role = role_file()?;
-    let settings = settings(&peers::kelpie_command()?);
-    tasks::start_claude("lead", pane, &["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings], true)
+    let settings = write_settings(&roles_dir()?, LEAD_LABEL, &settings(&peers::kelpie_command()?))?;
+    let args = chat_args(&role, &settings);
+    tasks::start_claude("lead", pane, &args.iter().map(String::as_str).collect::<Vec<_>>(), true)
 }
 
 // Whatever was quit or closed since the lead Space was made comes back when the user goes there: the board, the messages, or the lead's Claude.
@@ -237,5 +253,22 @@ mod tests {
         assert!(fs::read_to_string(&marks[0]).unwrap().starts_with("a.txt\t"));
         assert!(!home.exists());
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn the_leads_start_line_carries_its_settings_as_a_short_path_to_the_same_json() {
+        let dir = std::env::temp_dir().join(format!("kelpie-lead-settings-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let kelpie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kelpie", "nested/".repeat(20));
+        let file = write_settings(&dir, LEAD_LABEL, &settings(&kelpie)).unwrap();
+        assert_eq!(file, dir.join("lead.settings.json"));
+        let args = chat_args(&dir.join("lead.md"), &file);
+        let line = args.join(" ");
+        assert!(!line.contains('{') && line.len() < 512, "{line}");
+        assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
+        let written: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
+        assert_eq!(written["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], format!("'{kelpie}' messages --unread"));
+        fs::remove_dir_all(dir).unwrap();
     }
 }

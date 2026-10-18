@@ -120,6 +120,12 @@ fn settings(kelpie: &str) -> String {
     }).to_string()
 }
 
+fn claude_args(mode: Option<&str>, settings: &Path, role: &Path) -> Vec<String> {
+    let mut args: Vec<String> = mode.map(|mode| vec!["--permission-mode".to_string(), mode.to_string()]).unwrap_or_default();
+    args.extend(["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), role.to_string_lossy().to_string()]);
+    args
+}
+
 fn open_space(repo: &Path, slot: &Slot, task: &str, focus: bool) -> Result<herdr::Space> {
     let space = herdr::open_worktree(repo, &slot.path, task, focus)?;
     herdr::rename_workspace(&space.workspace_id, task)?;
@@ -177,16 +183,37 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
     Ok(format!("{dropped}{}", if item.is_some() { " Its backlog item is back in the Backlog column." } else { "" }))
 }
 
-// A new pane's shell takes a moment to reach its prompt; until then herdr calls the pane busy.
+enum Refusal {
+    NotYet,
+    Starting,
+    Final,
+}
+
+// A new pane's shell takes a moment to reach its prompt; until then herdr calls the pane busy, or on macOS measures the line against a shorter limit and asks for a retry.
+fn refusal(error: &str) -> Refusal {
+    if error.contains("agent_pane_busy") || error.contains("wait for the shell prompt and retry") {
+        Refusal::NotYet
+    } else if error.contains("agent_not_ready") || error.contains("timeout") {
+        Refusal::Starting
+    } else {
+        Refusal::Final
+    }
+}
+
 pub fn start_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<()> {
+    let mut last = String::new();
     for _ in 0..30 {
         match herdr::start_agent(name, "claude", pane, args) {
-            Err(error) if error.contains("agent_pane_busy") => std::thread::sleep(Duration::from_secs(1)),
-            Err(error) if error.contains("agent_not_ready") || error.contains("timeout") => return wait_until_ready(name, pane, trusted),
-            result => return result,
+            Ok(()) => return Ok(()),
+            Err(error) => match refusal(&error) {
+                Refusal::NotYet => last = error,
+                Refusal::Starting => return wait_until_ready(name, pane, trusted),
+                Refusal::Final => return Err(format!("herdr would not start Claude in {pane}: {error}")),
+            },
         }
+        std::thread::sleep(Duration::from_secs(1));
     }
-    Err(format!("The shell in {pane} never became ready for Claude"))
+    Err(format!("The shell in {pane} never became ready for Claude; herdr said: {last}"))
 }
 
 // Claude asks about a folder it has not seen with "No, exit" selected; a prompt sent before it is ready is lost.
@@ -248,11 +275,10 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     // herdr's agent names are global, so a task's half in another repo is named with its repo.
     let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task.as_str());
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(&repo))?) } else { task.clone() }.chars().take(32).collect();
-    let mut agent_args: Vec<&str> = mode.map(|mode| vec!["--permission-mode", mode]).unwrap_or_default();
-    let settings = settings(&peers::kelpie_command()?);
-    let role = peers::role_file(&task, &peers::Place { repo: &repo, worktree: &slot.path, setup_skill: &setup_skill, rules_skill: rules_skill.as_deref() })?.to_string_lossy().to_string();
-    agent_args.extend(["--settings", &settings, "--append-system-prompt-file", &role]);
-    let started = start_claude(&agent_name, &claude_pane, &agent_args, trusted_by_user(&repo));
+    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &peers::address(&task, &name_of(&repo)), &settings(&peers::kelpie_command()?))?;
+    let role = peers::role_file(&task, &peers::Place { repo: &repo, worktree: &slot.path, setup_skill: &setup_skill, rules_skill: rules_skill.as_deref() })?;
+    let agent_args = claude_args(mode, &settings, &role);
+    let started = start_claude(&agent_name, &claude_pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(&repo));
     // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
     let prompted = match (&started, prompt) {
         (Ok(()), Some(prompt)) => herdr::prompt_agent(&agent_name, prompt).map_err(|error| format!("Started {task} in {}, but sending the prompt failed: {error}", slot.path.display())),
@@ -606,6 +632,33 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tasks_start_line_carries_its_settings_as_a_short_path_to_the_same_json() {
+        let dir = std::env::temp_dir().join(format!("kelpie-task-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let kelpie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kelpie", "nested/".repeat(20));
+        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kelpie)).unwrap();
+        assert_eq!(file, dir.join("billing@app.settings.json"));
+        let args = claude_args(Some("acceptEdits"), &file, &dir.join("billing@app.md"));
+        let line = args.join(" ");
+        assert!(!line.contains('{') && line.len() < 512, "{line}");
+        assert_eq!(args[..2], ["--permission-mode", "acceptEdits"]);
+        assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
+        assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)"]));
+        assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn start_retries_while_herdr_asks_for_the_prompt_and_stops_on_any_other_refusal() {
+        assert!(matches!(refusal("herdr agent start refused: agent pane p_1 is busy (agent_pane_busy)"), Refusal::NotYet));
+        assert!(matches!(refusal("herdr agent start refused: input contains a 1100-byte line but the terminal is in canonical mode with a 1024-byte limit; wait for the shell prompt and retry (agent_start_input_failed)"), Refusal::NotYet));
+        assert!(matches!(refusal("herdr agent start refused: not ready (agent_not_ready)"), Refusal::Starting));
+        assert!(matches!(refusal("herdr agent start refused: agent target pane p_1 not found (agent_pane_not_found)"), Refusal::Final));
+    }
 
     #[test]
     fn a_folder_counts_as_trusted_when_it_or_a_folder_above_it_is() {

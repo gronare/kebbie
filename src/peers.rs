@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::herdr;
-use crate::lead::{install_root, state_dir};
+use crate::lead::install_root;
 use crate::repo::{main_checkout, name_of, setup_note};
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
@@ -163,9 +163,7 @@ pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("kelpie", kelpie_command()?), ("peers", peers)];
     values.extend(worktree_values(place)?);
     let pairs: Vec<(&str, &str)> = values.iter().map(|(name, value)| (*name, value.as_str())).collect();
-    let dir = state_dir()?.join("roles");
-    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    let file = dir.join(format!("{me}.md"));
+    let file = crate::lead::roles_dir()?.join(format!("{me}.md"));
     fs::write(&file, fill(&template, &pairs)).map_err(|error| error.to_string())?;
     Ok(file)
 }

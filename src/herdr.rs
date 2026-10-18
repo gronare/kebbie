@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::sh::{Result, run};
+use crate::sh::{Result, attempt, run};
 
 fn herdr() -> String {
     std::env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string())
@@ -15,12 +15,23 @@ pub fn bin() -> String {
 }
 
 fn call(args: &[&str]) -> Result<Value> {
-    let output = run(&herdr(), args, None)?;
+    let output = attempt(&herdr(), args, None)?.map_err(|stderr| refused(args, &stderr))?;
     if output.is_empty() {
         return Ok(Value::Null);
     }
     let reply: Value = serde_json::from_str(&output).map_err(|error| format!("herdr {}: {error}", args.join(" ")))?;
     Ok(reply["result"].clone())
+}
+
+// herdr answers a refusal with {"error":{"code","message"}} on stderr; the arguments are left out, as a start's can run long.
+fn refused(args: &[&str], stderr: &str) -> String {
+    let command = args.iter().take_while(|arg| !arg.starts_with('-')).take(2).copied().collect::<Vec<_>>().join(" ");
+    let error = serde_json::from_str::<Value>(stderr).ok().map(|reply| reply["error"].clone());
+    match error.as_ref().and_then(|error| Some((error["message"].as_str()?, error["code"].as_str()?))) {
+        Some((message, code)) => format!("herdr {command} refused: {message} ({code})"),
+        None if stderr.is_empty() => format!("herdr {command} failed"),
+        None => format!("herdr {command} failed: {stderr}"),
+    }
 }
 
 fn text(value: &Value) -> Option<String> {
@@ -189,4 +200,18 @@ pub fn read_pane(pane_id: &str) -> Result<String> {
 pub fn agent_ready(name: &str) -> Result<bool> {
     let agent = call(&["agent", "get", name])?["agent"].clone();
     Ok(agent["interactive_ready"] == true && agent["agent_status"] != "blocked")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refusal_says_herdrs_message_and_code_without_the_arguments() {
+        let args = ["agent", "start", "billing", "--kind", "claude", "--pane", "p_1", "--", "--settings", "/state/roles/billing@app.settings.json"];
+        let stderr = r#"{"error":{"code":"agent_start_input_failed","message":"input contains a 1100-byte line but the terminal is in canonical mode with a 1024-byte limit; wait for the shell prompt and retry"},"id":"cli:agent:start"}"#;
+        assert_eq!(refused(&args, stderr), "herdr agent start refused: input contains a 1100-byte line but the terminal is in canonical mode with a 1024-byte limit; wait for the shell prompt and retry (agent_start_input_failed)");
+        assert_eq!(refused(&args, "boom"), "herdr agent start failed: boom");
+        assert_eq!(refused(&["workspace", "list"], ""), "herdr workspace list failed");
+    }
 }

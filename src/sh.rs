@@ -12,14 +12,20 @@ fn command(program: &str, args: &[&str], cwd: Option<&Path>) -> Command {
     command
 }
 
-pub fn run(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String> {
+// The outer error is a program that would not run; the inner one is its stderr when it failed.
+pub fn attempt(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<std::result::Result<String, String>> {
     let output = command(program, args, cwd).output().map_err(|error| format!("{program}: {error}"))?;
     if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+        return Ok(Ok(String::from_utf8_lossy(&output.stdout).trim().to_string()));
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let detail = if stderr.is_empty() { String::new() } else { format!(": {stderr}") };
-    Err(format!("{program} {} failed{detail}", args.join(" ")))
+    Ok(Err(String::from_utf8_lossy(&output.stderr).trim().to_string()))
+}
+
+pub fn run(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String> {
+    attempt(program, args, cwd)?.map_err(|stderr| {
+        let detail = if stderr.is_empty() { String::new() } else { format!(": {stderr}") };
+        format!("{program} {} failed{detail}", args.join(" "))
+    })
 }
 
 pub fn succeeds(program: &str, args: &[&str], cwd: Option<&Path>) -> bool {
