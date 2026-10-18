@@ -379,12 +379,18 @@ pub fn draft_squash_message(path: &Path) -> Result<String> {
     Ok(message)
 }
 
-fn free(repo: &Path, slot: &Slot, upstream: &str, delete_flag: &str) -> Result<()> {
-    if let Some(workspace) = herdr::workspace_for(&slot.path)? {
-        herdr::close_workspace(&workspace)?;
-    }
+// -D because callers have already checked the commits are on upstream; git's -d checks the main checkout's local branch, which is still behind right after a push.
+fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<()> {
     git(&slot.path, &["switch", "--quiet", "--detach", upstream])?;
-    git(repo, &["branch", delete_flag, task_of(slot)]).map(|_| ())
+    git(repo, &["branch", "-D", task_of(slot)]).map(|_| ())
+}
+
+// Last step of done and drop: closing the Space ends the task's Claude, which may be the one running this.
+fn close_space(workspace: Option<String>) -> String {
+    match workspace.map(|workspace| herdr::close_workspace(&workspace)) {
+        Some(Err(error)) => format!(" Its Space could not be closed: {error}"),
+        _ => String::new(),
+    }
 }
 
 fn fast_forward_main(repo: &Path, upstream: &str) -> Result<String> {
@@ -402,17 +408,23 @@ fn fast_forward_main(repo: &Path, upstream: &str) -> Result<String> {
 pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
-    let task = task_of(&slot);
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
+    let workspace = herdr::workspace_for(&slot.path)?;
+    let finished = finish(&repo, &slot, &upstream)?;
+    Ok(finished + &close_space(workspace))
+}
+
+fn finish(repo: &Path, slot: &Slot, upstream: &str) -> Result<String> {
+    let task = task_of(slot);
     if !is_clean(&slot.path)? {
         return Err(format!("{task} has uncommitted changes; land or drop them first"));
     }
-    if ahead_behind(&slot.path, &upstream)?.0 > 0 {
+    if ahead_behind(&slot.path, upstream)?.0 > 0 {
         return Err(format!("{task} has commits that are not on {upstream} yet; push them first, or use drop"));
     }
-    free(&repo, &slot, &upstream, "-d")?;
-    Ok(format!("{task} is done; {} is free again. {}", name_of(&slot.path), fast_forward_main(&repo, &upstream)?))
+    release(repo, slot, upstream)?;
+    Ok(format!("{task} is done; {} is free again. {}", name_of(&slot.path), fast_forward_main(repo, upstream)?))
 }
 
 pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
@@ -427,12 +439,13 @@ pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
             "{task} has {changed} uncommitted change(s) and {ahead} commit(s) not on {upstream}; drop --force discards them"
         ));
     }
+    let workspace = herdr::workspace_for(&slot.path)?;
     if force {
         git(&slot.path, &["reset", "--quiet", "--hard"])?;
         git(&slot.path, &["clean", "-fdq"])?;
     }
-    free(&repo, &slot, &upstream, "-D")?;
-    Ok(format!("{task} dropped; {} is free again.", name_of(&slot.path)))
+    release(&repo, &slot, &upstream)?;
+    Ok(format!("{task} dropped; {} is free again.{}", name_of(&slot.path), close_space(workspace)))
 }
 
 fn stash_index(repo: &Path, message: &str) -> Result<Option<usize>> {
@@ -569,5 +582,50 @@ mod tests {
         assert_eq!(git(&dir, &["log", "-1", "--format=%an"]).unwrap(), "Ada");
         std::fs::remove_dir_all(dir).unwrap();
         std::fs::remove_dir_all(origin).unwrap();
+    }
+
+    fn task_with_a_commit(name: &str) -> (PathBuf, PathBuf, Slot, String) {
+        let dir = repo();
+        let origin = dir.with_extension("origin");
+        let _ = std::fs::remove_dir_all(&origin);
+        git(&dir, &["clone", "--quiet", "--bare", ".", &origin.to_string_lossy()]).unwrap();
+        git(&dir, &["remote", "add", "origin", &origin.to_string_lossy()]).unwrap();
+        git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+        let branch = git(&dir, &["branch", "--show-current"]).unwrap();
+        git(&dir, &["symbolic-ref", "refs/remotes/origin/HEAD", &format!("refs/remotes/origin/{branch}")]).unwrap();
+        let slot = create_slot(&dir, "HEAD").unwrap();
+        git(&slot.path, &["switch", "--quiet", "--create", name]).unwrap();
+        std::fs::write(slot.path.join("d"), "d").unwrap();
+        git(&slot.path, &["add", "d"]).unwrap();
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "fourth"]).unwrap();
+        let slot = find_task(&dir, Some(name), &dir).unwrap();
+        (dir, origin, slot, format!("origin/{branch}"))
+    }
+
+    fn cleanup(dir: PathBuf, origin: PathBuf, slot: &Slot) {
+        git(&dir, &["worktree", "remove", "--force", &slot.path.to_string_lossy()]).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(origin).unwrap();
+    }
+
+    #[test]
+    fn done_frees_a_pushed_task_whose_branch_has_no_upstream_while_the_local_branch_is_behind() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        assert_eq!(ahead_behind(&dir, &upstream).unwrap(), (0, 1));
+        finish(&dir, &slot, &upstream).unwrap();
+        assert!(!branch_exists(&dir, "billing"));
+        assert!(slots(&dir).unwrap().iter().any(|free| free.path == slot.path && free.free));
+        assert_eq!(ahead_behind(&dir, &upstream).unwrap(), (0, 0));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn done_refuses_a_task_with_commits_not_on_upstream_and_leaves_it_as_it_was() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("search");
+        assert!(finish(&dir, &slot, &upstream).is_err());
+        assert!(branch_exists(&dir, "search"));
+        assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "search");
+        cleanup(dir, origin, &slot);
     }
 }
