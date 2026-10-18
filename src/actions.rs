@@ -149,6 +149,15 @@ fn parse_override(text: &str, source: &str) -> Parsed {
     (actions, errors)
 }
 
+const ACTION_KEYS: [&str; 12] = ["id", "key", "title", "about", "ask", "task", "bump", "run", "commit", "tag", "push", "then"];
+
+fn known_keys(table: &Table, index: usize) -> Result<()> {
+    crate::config::unknown_keys(table, &format!("actions[{index}]."), &ACTION_KEYS)?;
+    let entries = table.get("bump").and_then(Value::as_array).into_iter().flatten().enumerate();
+    entries.filter_map(|(entry, item)| item.as_table().map(|item| (entry, item)))
+        .try_for_each(|(entry, item)| crate::config::unknown_keys(item, &format!("actions[{index}].bump[{entry}]."), &["file", "after"]))
+}
+
 fn parse_actions(text: &str, source: &str) -> Parsed {
     let table: Table = match text.parse() {
         Ok(table) => table,
@@ -157,6 +166,10 @@ fn parse_actions(text: &str, source: &str) -> Parsed {
     let Some(list) = table.get("actions").and_then(Value::as_array) else { return (Vec::new(), Vec::new()) };
     let (mut actions, mut errors) = (Vec::new(), Vec::new());
     for (index, item) in list.iter().enumerate() {
+        if let Some(Err(error)) = item.as_table().map(|table| known_keys(table, index)) {
+            errors.push(format!("{source}: {error}"));
+            continue;
+        }
         let parsed = item.as_table().ok_or("must be a table".to_string()).and_then(|table| action(table, source));
         match parsed {
             Ok(action) => actions.push(action),
@@ -452,6 +465,18 @@ task = "Bump {plugin}'s pin to {version}; commit."
         assert_eq!(errors, [".kelpie.toml, action 1: key g is the Areas page's own", ".kelpie.toml, action 3: needs task, or script steps (bump, run, commit, tag, push)"]);
         assert_eq!(parse("not toml [", "x").1.len(), 1);
         assert!(parse("[[actions]]\nkey = \"V\"\ntitle = \"v\"\nbump = [\"a\"]\n", "x").1[0].contains("ask = \"version\""));
+    }
+
+    #[test]
+    fn an_unknown_key_in_an_action_or_a_bump_entry_is_named_and_that_action_skipped() {
+        let text = "[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n\n[[actions]]\nkey = \"C\"\ntitle = \"Check\"\nrun = \"cargo check\"\ncolour = \"red\"\n\n[[actions]]\nkey = \"V\"\ntitle = \"Version\"\nask = \"version\"\nbump = [\"a\", { file = \"uv.lock\", afer = \"x\" }]\n";
+        let (actions, errors) = parse(text, ".kelpie.toml");
+        assert_eq!(actions.iter().map(|action| action.key).collect::<Vec<_>>(), ['B']);
+        assert_eq!(errors, [
+            ".kelpie.toml: actions[1].colour: unknown key; known keys here: id, key, title, about, ask, task, bump, run, commit, tag, push, then",
+            ".kelpie.toml: actions[2].bump[1].afer: unknown key; known keys here: file, after",
+        ]);
+        assert_eq!(parse_override(text, "app.toml").1.len(), 2);
     }
 
     #[test]
