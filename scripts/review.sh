@@ -333,7 +333,8 @@ hook() {
   file=$(echo "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')
   dir=$(dirname "${file:-.}")
   [ -d "$dir" ] || dir=$(echo "$input" | jq -r '.cwd // "."')
-  cd "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || return 0
+  top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || return 0
+  cd "$top" || return 0
   head=$(git rev-parse --verify HEAD 2>/dev/null) || return 0
   rm -rf "$d"
   mkdir -p "$d"
