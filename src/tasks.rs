@@ -94,6 +94,8 @@ fn settings(kelpie: &str) -> String {
         "env": { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" },
         "permissions": { "deny": ["Bash(git push:*)"], "allow": allow },
         "hooks": { "UserPromptSubmit": hook, "Stop": hook },
+        "attribution": { "commit": "", "pr": "" },
+        "includeCoAuthoredBy": false,
     }).to_string()
 }
 
@@ -254,7 +256,17 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
     }
     let commits = git(&slot.path, &["log", "--oneline", &range])?;
     if !problems.is_empty() {
-        return Err(format!("{task} is rebased but not ready: {}.\n{commits}", problems.join("; ")));
+        let found = problems.join("; ");
+        let Some(pane) = claude_of(&slot.path) else {
+            return Err(format!("{task} is rebased but not ready: {found}.\n{commits}"));
+        };
+        herdr::prompt_agent(&pane, &format!(
+            "kelpie tried to land this task and it is not ready: {found}. Rewrite this branch's history so it lands cleanly, keeping the \
+             final tree identical and without git rebase -i: rebase onto {upstream} to drop merge commits, and remove Co-Authored-By lines \
+             with git rebase {upstream} --exec 'git log -1 --format=%B | grep -vi \"^co-authored-by:\" | git commit --amend --quiet -F -'. \
+             Check that git diff against the old tip is empty. Do not push. Then report ready."
+        ))?;
+        return Err(format!("{task} is rebased but not ready: {found}. Its Claude is fixing the history; push and close again when it reports back.\n{commits}"));
     }
     let target = upstream.trim_start_matches("origin/");
     Ok(format!(
