@@ -161,7 +161,7 @@ mod tests {
         fs::create_dir_all(&main).unwrap();
         git(&main, &["init", "--quiet", "--initial-branch=main"]).unwrap();
         commit(&main, "a");
-        git(&base, &["init", "--quiet", "--bare", &origin.to_string_lossy()]).unwrap();
+        git(&base, &["init", "--quiet", "--bare", "--initial-branch=main", &origin.to_string_lossy()]).unwrap();
         git(&main, &["remote", "add", "origin", &origin.to_string_lossy()]).unwrap();
         git(&main, &["push", "--quiet", "origin", "main"]).unwrap();
         git(&main, &["worktree", "add", "--quiet", "-b", "billing", &slot.to_string_lossy()]).unwrap();
