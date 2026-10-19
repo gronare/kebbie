@@ -36,6 +36,8 @@ pub const DEFAULT_SETUP_SKILL: &str = "kelpie:set-up-worktree";
 pub const DEFAULT_RULES_SKILL: &str = "kelpie:work-rules";
 pub const REPO_FILE: &str = ".kelpie.toml";
 pub const DEFAULT_DEV_URL: &str = "http://localhost:{port}";
+pub const DEFAULT_SERVER_NAME: &str = "server";
+pub const DEFAULT_WORKER_NAME: &str = "worker";
 const PLACEHOLDERS: [&str; 4] = ["worktree", "repo", "number", "port"];
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -48,6 +50,8 @@ pub struct Worktree {
     pub rules_skill: Option<String>,
     pub review_model: Option<String>,
     pub notify_command: Option<String>,
+    pub server_name: Option<String>,
+    pub worker_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -90,6 +94,8 @@ pub struct Settings {
     pub rules_skill: Setting<String>,
     pub review_model: Setting<Option<String>>,
     pub notify_command: Setting<Option<String>>,
+    pub server_name: Setting<String>,
+    pub worker_name: Setting<String>,
 }
 
 pub struct Loaded {
@@ -231,7 +237,7 @@ fn board(table: &Table) -> Result<Option<Vec<Source>>> {
 
 fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
-    unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url"])?;
+    unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "server_name", "worker_name"])?;
     Ok(Worktree {
         setup_skill: text(worktree, "setup_skill", "worktree.setup_skill")?,
         setup_command: text(worktree, "setup_command", "worktree.setup_command")?,
@@ -241,6 +247,8 @@ fn worktree(table: &Table) -> Result<Worktree> {
         rules_skill: None,
         review_model: None,
         notify_command: None,
+        server_name: text(worktree, "server_name", "worktree.server_name")?,
+        worker_name: text(worktree, "worker_name", "worktree.worker_name")?,
     })
 }
 
@@ -292,7 +300,11 @@ pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
         return Err(fail(format!("notify: machine config only, since a cloned repo's file would run its command on every report; set [notify] command in {}", path().display())));
     }
     unknown_keys(&table, "", &["actions", "worktree", "task", "review"]).map_err(fail)?;
-    layers(&table).map_err(fail)
+    let worktree = layers(&table).map_err(fail)?;
+    if worktree.server_name.is_some() || worktree.worker_name.is_some() {
+        return Err(fail(format!("worktree.server_name and worker_name: machine config only, since the sidebar names every Space's server and worker alike; set them in {}", path().display())));
+    }
+    Ok(worktree)
 }
 
 fn pick<T: Clone>(repo: Option<&T>, machine: Option<&T>) -> Option<Setting<T>> {
@@ -320,6 +332,8 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
+        server_name: or_default(pick(None, machine.worktree.server_name.as_ref()), DEFAULT_SERVER_NAME.to_string()),
+        worker_name: or_default(pick(None, machine.worktree.worker_name.as_ref()), DEFAULT_WORKER_NAME.to_string()),
     }
 }
 
@@ -351,7 +365,7 @@ fn found(path: &Path) -> &'static str {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, server_name, worker_name } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => format!("{} ({})", path.display(), found(path)),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -379,6 +393,10 @@ pub fn describe(loaded: &Loaded) -> String {
         "A second command, such as a job runner, the board's b key runs in a worker tab of the task's Space, with the same PORT; without one there is no b.");
     key("worktree.dev_url", dev_url.value.as_ref().map_or("\"\" (no link)".to_string(), |url| format!("{url:?}")), dev_url.layer,
         "The running dev server's address, shown on the board as a link: {worktree} (the worktree's folder), {repo}, {number} (its pool number) and {port} (its port) are filled in; a worktree without what it names gets no link, and \"\" turns the link off.");
+    key("worktree.server_name", format!("{:?}", server_name.value), server_name.layer,
+        "The name of the tab the board's w starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; machine config only.");
+    key("worktree.worker_name", format!("{:?}", worker_name.value), worker_name.layer,
+        "The same for the worker tab b starts; machine config only.");
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
         "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the lead checks a finished task against it, tidy reshapes commits by it.");
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
@@ -386,6 +404,16 @@ pub fn describe(loaded: &Loaded) -> String {
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
         "The shell command kelpie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KELPIE_EVENT, KELPIE_TASK, KELPIE_REPO and KELPIE_TEXT describe it, and $1 is the text. None sends no notifications; machine config only.");
     lines.join("\n")
+}
+
+// For scripts such as the sidebar sync: one machine-wide setting's value, plain.
+pub fn get(key: &str) -> Result<String> {
+    let settings = resolve(None)?.settings;
+    match key {
+        "worktree.server_name" => Ok(settings.server_name.value),
+        "worktree.worker_name" => Ok(settings.worker_name.value),
+        other => Err(format!("kelpie config --get knows worktree.server_name and worktree.worker_name, not {other}")),
+    }
 }
 
 pub fn show(cwd: &Path, repo: Option<&str>) -> Result<String> {
@@ -500,13 +528,13 @@ mod tests {
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
         assert!(error("[board.backlog]\nsources = [\"vault\", \"vault\"]\n").contains("listed twice"));
         assert!(error("[repos.app]\nsetup = [\"x\"]\n").contains("repos: unknown key"));
-        assert!(error("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url"));
+        assert!(error("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, server_name, worker_name"));
         assert!(error("[worktree]\ndev_server = [\"bin/dev\"]\n").contains("worktree.dev_server: must be a string"));
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/src/app/.kelpie.toml").unwrap_err();
         assert_eq!(repo_error("[board.backlog]\nsources = []\n"), "/src/app/.kelpie.toml: board: unknown key; known keys here: actions, worktree, task, review");
-        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/src/app/.kelpie.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url");
+        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/src/app/.kelpie.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, server_name, worker_name");
     }
 
     #[test]
@@ -650,5 +678,14 @@ mod tests {
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both });
         assert!(shown.contains("worktree.dev_worker = \"bin/jobs\"  (.kelpie.toml)\n  A second command"), "{shown}");
         assert!(shown.contains("worktree.dev_url = \"http://localhost:{port}\"  (default)"), "{shown}");
+    }
+
+    #[test]
+    fn server_and_worker_names_come_from_the_machine_config_only() {
+        let machine = parse_machine("[worktree]\nserver_name = \"web\"\n", "machine").unwrap();
+        let resolved = settings(&Worktree::default(), &machine);
+        assert_eq!(resolved.server_name, Setting { value: "web".to_string(), layer: Layer::Machine });
+        assert_eq!(resolved.worker_name, Setting { value: DEFAULT_WORKER_NAME.to_string(), layer: Layer::Default });
+        assert!(parse_repo("[worktree]\nserver_name = \"web\"\n", "repo").unwrap_err().contains("machine config only"));
     }
 }

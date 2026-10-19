@@ -95,7 +95,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
                                   the backlog item it was started from back in the Backlog column
   kelpie config [--repo <path>]   the config layers found (.kelpie.toml, machine config, defaults) and every
-                                  setting in effect with the layer it comes from
+                                  setting in effect with the layer it comes from (--get <key> prints one machine-wide
+                                  value, for scripts)
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap
   kelpie update                   update the herdr and Claude Code plugins, rebuild, reload the plugins in
                                   every waiting Claude session, and restart an idle lead on its new role
@@ -114,7 +115,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -283,7 +284,10 @@ fn run(arguments: &Arguments) -> Result<String> {
             let name = name.ok_or("kelpie link needs a task name and the item")?;
             tasks::link(&cwd, name, &arguments.positionals[2..].join(" "))
         }
-        Some("config") => config::show(&cwd, arguments.value("--repo")),
+        Some("config") => match arguments.value("--get") {
+            Some(key) => config::get(key),
+            None => config::show(&cwd, arguments.value("--repo")),
+        },
         Some("update") => update::run(&doctor::Env::current().claude_dir),
         None | Some("help") => Ok(USAGE.to_string()),
         Some(other) => Err(format!("Unknown command \"{other}\"\n\n{USAGE}")),

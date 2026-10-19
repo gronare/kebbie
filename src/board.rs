@@ -437,10 +437,12 @@ enum Process {
 
 impl Process {
     // scripts/sync.sh reports a running process from a busy pane in a tab with this label.
-    fn tab(self) -> &'static str {
-        match self {
-            Process::Server => "server",
-            Process::Worker => "worker",
+    fn tab(self, settings: Option<&config::Settings>) -> String {
+        match (self, settings) {
+            (Process::Server, Some(settings)) => settings.server_name.value.clone(),
+            (Process::Worker, Some(settings)) => settings.worker_name.value.clone(),
+            (Process::Server, None) => config::DEFAULT_SERVER_NAME.to_string(),
+            (Process::Worker, None) => config::DEFAULT_WORKER_NAME.to_string(),
         }
     }
 
@@ -892,7 +894,8 @@ impl App {
             self.mode = Mode::Message(format!("{} has no {}; kelpie config shows where to set one.", item.place, process.key()));
             return;
         };
-        let tab = process.tab();
+        let tab = process.tab(settings.as_ref());
+        let tab = tab.as_str();
         let result = match busy_tab_pane(workspace, tab) {
             Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping {} in {}.", process.noun(), item.name)),
             None => {
