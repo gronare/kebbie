@@ -163,7 +163,33 @@ fn recorded_session(task: &str, repo: &Path) -> (Option<String>, Option<String>)
 
 fn forget_session(task: &str, repo: &Path) {
     if let Ok(file) = session_file(task, repo) {
+        let _ = std::fs::remove_file(prompt_file(&file));
         let _ = std::fs::remove_file(file);
+    }
+}
+
+fn prompt_file(session: &Path) -> PathBuf {
+    let mut name = session.file_name().unwrap_or_default().to_os_string();
+    name.push(".prompt");
+    session.with_file_name(name)
+}
+
+fn store_prompt(file: &Path, prompt: Option<&str>) -> Result<()> {
+    match prompt {
+        Some(prompt) => std::fs::create_dir_all(file.parent().ok_or("prompt file has no folder")?).and_then(|_| std::fs::write(file, prompt)).map_err(|error| error.to_string()),
+        None => std::fs::remove_file(file).or_else(|error| if error.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(error.to_string()) }),
+    }
+}
+
+fn stored_prompt(file: &Path) -> Option<String> {
+    std::fs::read_to_string(file).ok().filter(|prompt| !prompt.trim().is_empty())
+}
+
+// A resumed conversation already holds the task's first prompt; only a new one needs it again.
+fn prompt_again(session: &Session, stored: Option<String>) -> Option<String> {
+    match session {
+        Session::New(_) => stored,
+        Session::Resume(_) => None,
     }
 }
 
@@ -299,20 +325,110 @@ fn refusal(error: &str) -> Refusal {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum Launched {
+    Ready,
+    ShellBack(String),
+}
+
+// herdr types Claude's command into the pane's shell, so it is typed only once that shell is idle at its prompt.
 pub fn start_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<()> {
+    start_twice(pane, || {
+        wait_for_prompt(pane)?;
+        type_claude(name, pane, args, trusted)
+    })
+}
+
+// A line read away by the shell's own startup, as oh-my-zsh's update question takes its first key, leaves the shell at its prompt: one more try then lands.
+fn start_twice(pane: &str, mut attempt: impl FnMut() -> Result<Launched>) -> Result<()> {
+    let mut shown = String::new();
+    for _ in 0..2 {
+        match attempt()? {
+            Launched::Ready => return Ok(()),
+            Launched::ShellBack(line) => shown = line,
+        }
+    }
+    Err(format!("Claude did not start in pane {pane}: its shell is back at the prompt, showing \"{shown}\"; see what the shell printed there"))
+}
+
+fn type_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<Launched> {
     let mut last = String::new();
     for _ in 0..30 {
         match herdr::start_agent(name, "claude", pane, args) {
-            Ok(()) => return Ok(()),
+            Ok(()) => return Ok(Launched::Ready),
             Err(error) => match refusal(&error) {
                 Refusal::NotYet => last = error,
                 Refusal::Starting => return wait_until_ready(name, pane, trusted),
-                Refusal::Final => return Err(format!("herdr would not start Claude in {pane}: {error}")),
+                Refusal::Final => return Err(format!("herdr would not start Claude in pane {pane}: {error}")),
             },
         }
         std::thread::sleep(Duration::from_secs(1));
     }
-    Err(format!("The shell in {pane} never became ready for Claude; herdr said: {last}"))
+    Err(format!("The shell in pane {pane} never became ready for Claude; herdr said: {last}"))
+}
+
+fn last_line(screen: &str) -> &str {
+    screen.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or_default()
+}
+
+fn asks(line: &str) -> bool {
+    let line = line.to_lowercase();
+    ["[y/n]", "(y/n)", "[yes/no]", "(yes/no)"].iter().any(|question| line.contains(question))
+}
+
+#[derive(Debug, PartialEq)]
+enum Prompt {
+    Waiting,
+    Asking(String),
+    Ready,
+}
+
+#[derive(Default)]
+struct Settle {
+    previous: Option<String>,
+    quiet: usize,
+}
+
+const QUIET_LOOKS: usize = 4;
+
+impl Settle {
+    fn look(&mut self, at_shell: bool, screen: &str) -> Prompt {
+        let line = last_line(screen);
+        let unchanged = self.previous.as_deref() == Some(screen);
+        self.previous = Some(screen.to_string());
+        if !at_shell || line.is_empty() {
+            self.quiet = 0;
+            return Prompt::Waiting;
+        }
+        if asks(line) {
+            self.quiet = 0;
+            return Prompt::Asking(line.to_string());
+        }
+        self.quiet = if unchanged { self.quiet + 1 } else { 0 };
+        if self.quiet >= QUIET_LOOKS { Prompt::Ready } else { Prompt::Waiting }
+    }
+}
+
+fn wait_for_prompt(pane: &str) -> Result<()> {
+    let look = || Ok((herdr::foreground(pane)?.is_none(), herdr::read_pane(pane)?));
+    prompt_with(look, || std::thread::sleep(Duration::from_millis(250)), 120)?
+        .map_err(|question| format!("The shell in pane {pane} asks \"{question}\" as it starts; answer it there, then start again"))
+}
+
+// A prompt that keeps redrawing never settles, so the wait ends without an error and the check after the start decides.
+fn prompt_with(mut look: impl FnMut() -> Result<(bool, String)>, mut pause: impl FnMut(), tries: usize) -> Result<std::result::Result<(), String>> {
+    let mut settle = Settle::default();
+    let mut asking = None;
+    for _ in 0..tries {
+        let (at_shell, screen) = look()?;
+        match settle.look(at_shell, &screen) {
+            Prompt::Ready => return Ok(Ok(())),
+            Prompt::Asking(question) => asking = Some(question),
+            Prompt::Waiting => asking = None,
+        }
+        pause();
+    }
+    Ok(asking.map_or(Ok(()), Err))
 }
 
 // Escape clears what is typed or interrupts; Claude Code exits on its second ctrl-c, and a ctrl-c more would reach the shell.
@@ -335,20 +451,25 @@ fn end_with(mut send: impl FnMut(&str) -> Result<()>, mut at_shell: impl FnMut()
 }
 
 // Claude asks about a folder it has not seen with "No, exit" selected; a prompt sent before it is ready is lost.
-fn wait_until_ready(name: &str, pane: &str, trusted: bool) -> Result<()> {
+fn wait_until_ready(name: &str, pane: &str, trusted: bool) -> Result<Launched> {
+    let mut at_shell = 0;
     for _ in 0..120 {
         let screen = herdr::read_pane(pane)?;
+        at_shell = if herdr::foreground(pane)?.is_none() { at_shell + 1 } else { 0 };
+        if at_shell >= QUIET_LOOKS {
+            return Ok(Launched::ShellBack(last_line(&screen).to_string()));
+        }
         if screen.contains("trust this folder") {
             if !trusted {
-                return Err(format!("Claude in {pane} asks whether you trust its folder; you have not trusted the repo in Claude Code, so that answer is yours"));
+                return Err(format!("Claude in pane {pane} asks whether you trust its folder; you have not trusted the repo in Claude Code, so that answer is yours"));
             }
             herdr::send_keys(pane, &[if screen.contains("❯ Yes, I trust this folder") { "enter" } else { "down" }])?;
-        } else if herdr::agent_ready(name)? {
-            return Ok(());
+        } else if herdr::agent_ready(name).unwrap_or(false) {
+            return Ok(Launched::Ready);
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    Err(format!("Claude in {pane} never became ready; see what it waits for there"))
+    Err(format!("Claude in pane {pane} never became ready; see what it waits for there"))
 }
 
 // Claude Code's own record of the folders the user trusted, counting a folder under a trusted one.
@@ -382,6 +503,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
         git(&slot.path, &["switch", "--quiet", "-c", &task, base])?;
     }
 
+    store_prompt(&prompt_file(&session_file(&task, &repo)?), prompt)?;
     let space = open_space(&repo, &slot, &task, false)?;
     let claude_pane = match space.root_pane_id {
         Some(pane) => pane,
@@ -440,7 +562,7 @@ fn claude_in(workspace: &str) -> Result<bool> {
     Ok(herdr::agents()?.iter().any(|agent| agent["agent"] == "claude" && agent["workspace_id"].as_str() == Some(workspace)))
 }
 
-// A task whose Space or Claude is gone gets them back, its last conversation resumed and its first prompt not sent again.
+// A task whose Space or Claude is gone gets them back: its last conversation resumed, or a new one given the task's first prompt again.
 fn restart(place: &Launch, slot: &Slot, focus: bool) -> Result<String> {
     let task = place.task;
     let open = herdr::workspace_for(&slot.path)?;
@@ -460,17 +582,27 @@ fn restart(place: &Launch, slot: &Slot, focus: bool) -> Result<String> {
     let (recorded, mode) = recorded_session(task, place.repo);
     let previous = claude_home().and_then(|home| previous_session(place.repo, slot, task, &home, recorded));
     let place = Launch { mode: place.mode.or(mode.as_deref()), worktree: place.worktree.clone(), ..*place };
-    let resumed = previous.is_some();
     let session = match previous {
         Some(id) => Session::Resume(id),
         None => Session::New(new_session_id()?),
     };
-    let (_, started) = launch(&place, &pane, session)?;
+    let resumed = matches!(session, Session::Resume(_));
+    let prompt = prompt_again(&session, session_file(task, place.repo).ok().and_then(|file| stored_prompt(&prompt_file(&file))));
+    let (agent_name, started) = launch(&place, &pane, session)?;
+    let prompted = match (&started, &prompt) {
+        (Ok(()), Some(prompt)) => herdr::prompt_agent(&agent_name, prompt).map_err(|error| format!("Restarted {task} in {} with a new conversation, but sending its prompt again failed: {error}", slot.path.display())),
+        _ => Ok(()),
+    };
     if focus {
         herdr::focus_workspace(&space.workspace_id)?;
     }
     started?;
-    let how = if resumed { "resuming its last conversation" } else { "with a new conversation, as none of its own was found" };
+    prompted?;
+    let how = match (resumed, prompt.is_some()) {
+        (true, _) => "resuming its last conversation",
+        (false, true) => "with a new conversation, as none of its own was found, and sent it the task's prompt again",
+        (false, false) => "with a new conversation, as none of its own was found; it had no prompt to send again",
+    };
     Ok(format!("Restarted {task} in {}, {how}.", slot.path.display()))
 }
 
@@ -1254,6 +1386,70 @@ mod tests {
         assert!(matches!(refusal("herdr agent start refused: input contains a 1100-byte line but the terminal is in canonical mode with a 1024-byte limit; wait for the shell prompt and retry (agent_start_input_failed)"), Refusal::NotYet));
         assert!(matches!(refusal("herdr agent start refused: not ready (agent_not_ready)"), Refusal::Starting));
         assert!(matches!(refusal("herdr agent start refused: agent target pane p_1 not found (agent_pane_not_found)"), Refusal::Final));
+    }
+
+    fn waited(looks: &[(bool, &str)], tries: usize) -> (std::result::Result<(), String>, usize) {
+        let mut seen = looks.iter().map(|(at_shell, screen)| (*at_shell, screen.to_string()));
+        let mut taken = 0;
+        let result = prompt_with(|| { taken += 1; Ok(seen.next().unwrap_or((true, String::new()))) }, || {}, tries).unwrap();
+        (result, taken)
+    }
+
+    #[test]
+    fn claude_is_typed_only_once_the_shell_has_shown_the_same_prompt_for_a_while() {
+        let prompt = "~/app/.worktrees/1 main\n❯";
+        let settled = [(true, prompt); QUIET_LOOKS + 1];
+        assert_eq!(waited(&settled, 20), (Ok(()), QUIET_LOOKS + 1));
+        let busy_then_prompt = [(false, ""), (true, ""), (false, "Updating"), (true, prompt), (true, prompt), (true, prompt), (true, prompt), (true, prompt)];
+        assert_eq!(waited(&busy_then_prompt, 20), (Ok(()), busy_then_prompt.len()), "startup work and an empty screen keep the wait going");
+        let redrawn = [(true, "❯"), (true, "❯ 1"), (true, "❯"), (true, "❯ 1")];
+        assert_eq!(waited(&redrawn, 4), (Ok(()), 4), "a prompt that never settles ends the wait without an error");
+    }
+
+    #[test]
+    fn a_shell_asking_a_question_as_it_starts_gets_no_keys_and_the_question_is_named() {
+        let omz = "[oh-my-zsh] Would you like to update? [Y/n]";
+        let (result, taken) = waited(&[(true, omz); 12], 12);
+        assert_eq!((result, taken), (Err(omz.to_string()), 12), "a question that holds still is not a settled prompt");
+        let answered = [(true, omz), (true, omz), (false, "git pull"), (true, "❯"), (true, "❯"), (true, "❯"), (true, "❯"), (true, "❯")];
+        assert_eq!(waited(&answered, 20), (Ok(()), answered.len()), "once answered in the pane the wait goes on to the prompt");
+        assert!(asks("Proceed? (y/N)") && asks("Continue [yes/no]") && !asks("~/app ❯") && !asks("% "));
+    }
+
+    #[test]
+    fn a_start_whose_line_the_shell_read_away_is_tried_once_more_and_then_named_by_its_pane() {
+        let run = |outcomes: Vec<Launched>| {
+            let mut outcomes = outcomes.into_iter();
+            let mut tries = 0;
+            let result = start_twice("w1-2", || { tries += 1; Ok(outcomes.next().unwrap()) });
+            (result, tries)
+        };
+        assert_eq!(run(vec![Launched::Ready]), (Ok(()), 1));
+        assert_eq!(run(vec![Launched::ShellBack("zsh: command not found: laude".to_string()), Launched::Ready]), (Ok(()), 2));
+        let (result, tries) = run(vec![Launched::ShellBack("❯".to_string()), Launched::ShellBack("❯".to_string())]);
+        assert_eq!(tries, 2);
+        assert!(result.unwrap_err().starts_with("Claude did not start in pane w1-2: its shell is back at the prompt, showing \"❯\""));
+    }
+
+    #[test]
+    fn a_restart_sends_the_tasks_stored_prompt_only_to_a_new_conversation() {
+        let dir = std::env::temp_dir().join(format!("kelpie-task-prompt-{}", std::process::id()));
+        let file = prompt_file(&dir.join("sessions").join("billing@my.app"));
+        assert_eq!(file, dir.join("sessions").join("billing@my.app.prompt"));
+        assert_eq!(stored_prompt(&file), None);
+        store_prompt(&file, Some("Fix the invoice rounding")).unwrap();
+        assert_eq!(stored_prompt(&file).as_deref(), Some("Fix the invoice rounding"));
+        assert_eq!(prompt_again(&Session::New("1f0c".to_string()), stored_prompt(&file)).as_deref(), Some("Fix the invoice rounding"));
+        assert_eq!(prompt_again(&Session::Resume("1f0c".to_string()), stored_prompt(&file)), None, "a resumed conversation already has it");
+        store_prompt(&file, None).unwrap();
+        assert_eq!(prompt_again(&Session::New("1f0c".to_string()), stored_prompt(&file)), None);
+        store_prompt(&file, None).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        let source = include_str!("tasks.rs");
+        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        assert!(body("start").find("store_prompt(").unwrap() < body("start").find("launch(").unwrap(), "the prompt is kept even when the first start fails");
+        assert!(body("restart").contains("prompt_again(&session") && body("restart").contains("herdr::prompt_agent(&agent_name, prompt)"));
+        assert!(body("forget_session").contains("prompt_file("));
     }
 
     #[test]
