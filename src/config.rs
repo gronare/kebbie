@@ -323,6 +323,14 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
     }
 }
 
+// A command naming a path applies only in a repo that has that file, so one machine-wide value leaves other repos on the default setup.
+pub fn setup_command_in(command: Option<String>, repo: &Path) -> Option<String> {
+    command.filter(|command| {
+        let program = command.split_whitespace().next().unwrap_or(command);
+        !program.contains('/') || repo.join(program).exists()
+    })
+}
+
 pub fn resolve(repo: Option<&Path>) -> Result<Loaded> {
     let machine = path();
     let repo = repo.and_then(repo_file);
@@ -364,7 +372,7 @@ pub fn describe(loaded: &Loaded) -> String {
     key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer,
         "The skill a task's Claude runs first to make its worktree runnable.");
     key("worktree.setup_command", setup_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), setup_command.layer,
-        "The repo's own command that prepares an existing worktree, run from inside it; the setup skill runs it. None means bin/setup-worktree when the repo has one.");
+        "The repo's own command that prepares an existing worktree, run from inside it; the setup skill runs it. A path applies only in a repo that has the file; elsewhere, and when none, bin/setup-worktree when the repo has one.");
     key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer,
         "The shell command the board's w key runs in a server tab of the task's Space, with PORT set to the worktree's port; without one there is no w.");
     key("worktree.dev_worker", dev_worker.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_worker.layer,
@@ -606,6 +614,19 @@ mod tests {
     }
 
     #[test]
+    fn a_path_setup_command_applies_only_in_a_repo_that_has_the_file() {
+        let dir = std::env::temp_dir().join(format!("kelpie-setup-in-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("script")).unwrap();
+        std::fs::write(dir.join("script/prepare_worktree"), "").unwrap();
+        let command = |value: &str| setup_command_in(Some(value.to_string()), &dir);
+        assert_eq!(command("script/prepare_worktree --quiet").as_deref(), Some("script/prepare_worktree --quiet"));
+        assert_eq!(command("script/elsewhere"), None, "a repo without the file keeps the default setup");
+        assert_eq!(command("make prepare").as_deref(), Some("make prepare"), "a bare program comes from PATH");
+        assert_eq!(setup_command_in(None, &dir), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn setup_command_layers_like_setup_skill() {
         let from_machine = machine("[worktree]\nsetup_command = \"bin/prepare\"\n");
         assert_eq!(settings(&Worktree::default(), &from_machine).setup_command, Setting { value: Some("bin/prepare".to_string()), layer: Layer::Machine });
@@ -618,7 +639,7 @@ mod tests {
         assert!(shown.contains("worktree.setup_command = \"script/prepare_worktree\"  (.kelpie.toml)\n  The repo's own command that prepares an existing worktree"), "{shown}");
         let default = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
         assert!(default.contains("worktree.setup_command = none  (default)\n  "), "{default}");
-        assert!(default.contains("None means bin/setup-worktree when the repo has one."));
+        assert!(default.contains("A path applies only in a repo that has the file; elsewhere, and when none, bin/setup-worktree when the repo has one."));
     }
 
     #[test]

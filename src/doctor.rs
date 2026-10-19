@@ -267,6 +267,7 @@ pub fn setup_command(command: &Setting<Option<String>>, repo: &Path) -> Option<C
     let path = repo.join(program);
     let fix = format!("add {program} to the main checkout, or set worktree.setup_command to the repo's prepare command");
     Some(match std::fs::metadata(&path) {
+        Err(_) if command.layer == config::Layer::Machine => ok(name, format!("{shown}: this repo has no {program}, so kelpie's default setup runs here")),
         Err(_) => warn(name, format!("{shown}: {} not found, so the setup skill cannot run it", path.display()), one(fix)),
         Ok(meta) if !meta.is_file() || meta.mode() & 0o111 == 0 => warn(name, format!("{shown}: {} is not an executable file", path.display()), vec![format!("chmod +x {program}"), fix]),
         Ok(_) => ok(name, format!("{shown}: {}", path.display())),
@@ -694,6 +695,9 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(setup_command(&command(Some("script/prepare_worktree")), &dir).unwrap().level, Level::Ok);
         assert_eq!(setup_command(&command(Some("make prepare")), &dir).unwrap().level, Level::Ok);
+        let machine_wide = Setting { value: Some("script/elsewhere".to_string()), layer: config::Layer::Machine };
+        let elsewhere = setup_command(&machine_wide, &dir).unwrap();
+        assert!(elsewhere.level == Level::Ok && elsewhere.fact.contains("default setup runs here"), "{elsewhere:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
