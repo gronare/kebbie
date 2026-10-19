@@ -255,6 +255,24 @@ pub fn setup_skill(skill: &Setting<String>, installed: Option<&Value>, settings:
     ok(name, format!("{shown}: {id}"))
 }
 
+// Looks for the command's program in the main checkout and never runs it.
+pub fn setup_command(command: &Setting<Option<String>>, repo: &Path) -> Option<Check> {
+    let value = command.value.as_deref()?;
+    let name = "setup command";
+    let shown = format!("{value:?} ({})", command.layer.label());
+    let program = value.split_whitespace().next().unwrap_or(value);
+    if !program.contains('/') {
+        return Some(ok(name, format!("{shown}: {program} is found on PATH when it runs, not checked")));
+    }
+    let path = repo.join(program);
+    let fix = format!("add {program} to the main checkout, or set worktree.setup_command to the repo's prepare command");
+    Some(match std::fs::metadata(&path) {
+        Err(_) => warn(name, format!("{shown}: {} not found, so the setup skill cannot run it", path.display()), one(fix)),
+        Ok(meta) if !meta.is_file() || meta.mode() & 0o111 == 0 => warn(name, format!("{shown}: {} is not an executable file", path.display()), vec![format!("chmod +x {program}"), fix]),
+        Ok(_) => ok(name, format!("{shown}: {}", path.display())),
+    })
+}
+
 // Reports whether the key is set and never runs the command, so doctor sends nothing.
 pub fn notify(command: &Setting<Option<String>>) -> Check {
     match &command.value {
@@ -410,6 +428,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     };
     let settings = config::settings(&own, &machine);
     checks.push(setup_skill(&settings.setup_skill, installed.as_ref(), &claude_settings));
+    checks.extend(env.repo.as_deref().and_then(|repo| setup_command(&settings.setup_command, repo)));
     checks.push(notify(&settings.notify_command));
     checks.extend(backlog(&settings.sources.value, crate::vault::index_path, &env.config.with_file_name("backlog.md")));
     let claude = read_json(&env.claude_dir.join(".claude.json")).or_else(|| read_json(&env.home.join(".claude.json")));
@@ -656,6 +675,25 @@ mod tests {
         assert_eq!(setup_skill(&skill("kelpie:set-up-worktree"), Some(&installed), &Value::Null).level, Level::Ok);
         let stale = setup_skill(&skill("kelpie:make-worktree-safe"), Some(&installed), &Value::Null);
         assert_eq!((stale.level, stale.fact.as_str(), stale.fix[0].as_str()), (Level::Warn, "kelpie:make-worktree-safe (default): kelpie@kelpie 0.12.0 has no skill make-worktree-safe", "claude plugin update kelpie@kelpie"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_set_setup_command_must_be_an_executable_in_the_main_checkout() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("setup-command");
+        let command = |value: Option<&str>| Setting { value: value.map(str::to_string), layer: config::Layer::Repo };
+        assert_eq!(setup_command(&command(None), &dir), None, "unset means bin/setup-worktree when it exists");
+        let missing = setup_command(&command(Some("script/prepare_worktree --quiet")), &dir).unwrap();
+        assert!(missing.level == Level::Warn && missing.fact.contains("script/prepare_worktree not found"), "{missing:?}");
+        std::fs::create_dir_all(dir.join("script")).unwrap();
+        let script = dir.join("script/prepare_worktree");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        let plain = setup_command(&command(Some("script/prepare_worktree")), &dir).unwrap();
+        assert!(plain.level == Level::Warn && plain.fact.contains("not an executable file") && plain.fix[0] == "chmod +x script/prepare_worktree", "{plain:?}");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(setup_command(&command(Some("script/prepare_worktree")), &dir).unwrap().level, Level::Ok);
+        assert_eq!(setup_command(&command(Some("make prepare")), &dir).unwrap().level, Level::Ok);
         let _ = std::fs::remove_dir_all(dir);
     }
 

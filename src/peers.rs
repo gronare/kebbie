@@ -130,6 +130,7 @@ pub struct Place<'a> {
     pub repo: &'a Path,
     pub worktree: &'a Path,
     pub setup_skill: &'a str,
+    pub setup_command: Option<&'a str>,
     pub rules_skill: &'a str,
 }
 
@@ -144,8 +145,13 @@ pub fn worktree_values(place: &Place) -> Result<Vec<(&'static str, String)>> {
         ("main", place.repo.display().to_string()),
         ("note", setup_note(place.worktree)?.display().to_string()),
         ("setup_skill", place.setup_skill.to_string()),
+        ("setup", setup_line(place.setup_command)),
         ("rules", rules_line(place.rules_skill)),
     ])
+}
+
+fn setup_line(command: Option<&str>) -> String {
+    command.map_or(String::new(), |command| format!(" It prepares the worktree with the repo's own command `{command}` (worktree.setup_command)."))
 }
 
 fn rules_line(rules_skill: &str) -> String {
@@ -224,6 +230,19 @@ mod tests {
             assert!(role.contains("You are in `/src/wt2.app`, worktree wt2.app of `/src/app`"));
             assert!(role.contains("a note in `/src/app/.git/worktrees/wt2.app/kelpie-setup.md`"));
         }
+    }
+
+    #[test]
+    fn the_setup_command_reaches_the_role_only_when_set() {
+        use crate::config::{Machine, Worktree, parse_repo, settings};
+        let template = include_str!("../roles/task.md");
+        let own = parse_repo("[worktree]\nsetup_command = \"script/prepare_worktree\"\n", ".kelpie.toml").unwrap();
+        let role = |own: &Worktree| fill(template, &[("setup_skill", "kelpie:set-up-worktree"), ("setup", &setup_line(settings(own, &Machine::default()).setup_command.value.as_deref()))]);
+        let set = role(&own);
+        assert!(set.contains("on what it did. It prepares the worktree with the repo's own command `script/prepare_worktree` (worktree.setup_command). The main checkout"), "{set}");
+        let unset = role(&Worktree::default());
+        assert!(unset.contains("on what it did. The main checkout is read-only to you."), "{unset}");
+        assert!(!unset.contains("{setup}") && !unset.contains("setup_command"));
     }
 
     #[test]

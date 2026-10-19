@@ -41,6 +41,7 @@ const PLACEHOLDERS: [&str; 4] = ["worktree", "repo", "number", "port"];
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Worktree {
     pub setup_skill: Option<String>,
+    pub setup_command: Option<String>,
     pub dev_server: Option<String>,
     pub dev_worker: Option<String>,
     pub dev_url: Option<String>,
@@ -82,6 +83,7 @@ pub struct Setting<T> {
 pub struct Settings {
     pub sources: Setting<Vec<Source>>,
     pub setup_skill: Setting<String>,
+    pub setup_command: Setting<Option<String>>,
     pub dev_server: Setting<Option<String>>,
     pub dev_worker: Setting<Option<String>>,
     pub dev_url: Setting<Option<String>>,
@@ -229,9 +231,10 @@ fn board(table: &Table) -> Result<Option<Vec<Source>>> {
 
 fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
-    unknown_keys(worktree, "worktree.", &["setup_skill", "dev_server", "dev_worker", "dev_url"])?;
+    unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url"])?;
     Ok(Worktree {
         setup_skill: text(worktree, "setup_skill", "worktree.setup_skill")?,
+        setup_command: text(worktree, "setup_command", "worktree.setup_command")?,
         dev_server: text(worktree, "dev_server", "worktree.dev_server")?,
         dev_worker: text(worktree, "dev_worker", "worktree.dev_worker")?,
         dev_url: template(worktree, "dev_url", "worktree.dev_url")?,
@@ -309,6 +312,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
     Settings {
         sources: or_default(pick(None, machine.sources.as_ref()), vec![Source::Local]),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),
+        setup_command: optional(pick(repo.setup_command.as_ref(), machine.worktree.setup_command.as_ref())),
         dev_server: optional(pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref())),
         dev_worker: optional(pick(repo.dev_worker.as_ref(), machine.worktree.dev_worker.as_ref())),
         dev_url: or_default(pick(repo.dev_url.as_ref(), machine.worktree.dev_url.as_ref())
@@ -339,7 +343,7 @@ fn found(path: &Path) -> &'static str {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => format!("{} ({})", path.display(), found(path)),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -359,6 +363,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "Where the board's Backlog tab finds work: \"local\" (backlog.md next to the machine config), \"vault\" and \"linear\", in any combination; machine config only.");
     key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer,
         "The skill a task's Claude runs first to make its worktree runnable.");
+    key("worktree.setup_command", setup_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), setup_command.layer,
+        "The repo's own command that prepares an existing worktree, run from inside it; the setup skill runs it. None means bin/setup-worktree when the repo has one.");
     key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer,
         "The shell command the board's w key runs in a server tab of the task's Space, with PORT set to the worktree's port; without one there is no w.");
     key("worktree.dev_worker", dev_worker.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_worker.layer,
@@ -411,6 +417,7 @@ mod tests {
         let defaults = settings(&Worktree::default(), &Machine::default());
         assert_eq!(defaults.sources, Setting { value: vec![Source::Local], layer: Layer::Default }, "a fresh install has a working Backlog column");
         assert_eq!(defaults.setup_skill, Setting { value: DEFAULT_SETUP_SKILL.to_string(), layer: Layer::Default });
+        assert_eq!(defaults.setup_command, Setting { value: None, layer: Layer::Default }, "none means bin/setup-worktree when it exists");
         assert_eq!(defaults.dev_server, Setting { value: None, layer: Layer::Default });
         assert_eq!(defaults.dev_worker, Setting { value: None, layer: Layer::Default });
         assert_eq!(defaults.dev_url, Setting { value: Some(DEFAULT_DEV_URL.to_string()), layer: Layer::Default });
@@ -485,13 +492,13 @@ mod tests {
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
         assert!(error("[board.backlog]\nsources = [\"vault\", \"vault\"]\n").contains("listed twice"));
         assert!(error("[repos.app]\nsetup = [\"x\"]\n").contains("repos: unknown key"));
-        assert!(error("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, dev_server, dev_worker, dev_url"));
+        assert!(error("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url"));
         assert!(error("[worktree]\ndev_server = [\"bin/dev\"]\n").contains("worktree.dev_server: must be a string"));
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/src/app/.kelpie.toml").unwrap_err();
         assert_eq!(repo_error("[board.backlog]\nsources = []\n"), "/src/app/.kelpie.toml: board: unknown key; known keys here: actions, worktree, task, review");
-        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/src/app/.kelpie.toml: worktree.port: unknown key; known keys here: setup_skill, dev_server, dev_worker, dev_url");
+        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/src/app/.kelpie.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url");
     }
 
     #[test]
@@ -596,6 +603,22 @@ mod tests {
         assert_eq!(refused, "/src/app/.kelpie.toml: worktree.dev_url: {branch} is not a placeholder; use {worktree}, {repo}, {number} or {port}");
         assert!(parse_machine("[worktree]\ndev_url = \"http://localhost:{port\"\n", "config.toml").unwrap_err().contains("worktree.dev_url: \"http://localhost:{port\" opens a { it never closes"));
         assert!(parse_machine("[worktree]\ndev_url = 3000\n", "config.toml").unwrap_err().contains("worktree.dev_url: must be a string"));
+    }
+
+    #[test]
+    fn setup_command_layers_like_setup_skill() {
+        let from_machine = machine("[worktree]\nsetup_command = \"bin/prepare\"\n");
+        assert_eq!(settings(&Worktree::default(), &from_machine).setup_command, Setting { value: Some("bin/prepare".to_string()), layer: Layer::Machine });
+        let both = settings(&repo("[worktree]\nsetup_command = \"script/prepare_worktree\"\n"), &from_machine);
+        assert_eq!(both.setup_command, Setting { value: Some("script/prepare_worktree".to_string()), layer: Layer::Repo });
+        assert_eq!(settings(&repo("[worktree]\ndev_server = \"bin/dev\"\n"), &from_machine).setup_command.layer, Layer::Machine);
+        assert!(parse_repo("[worktree]\nsetup_command = \" \"\n", ".kelpie.toml").unwrap_err().contains("worktree.setup_command: must not be empty"));
+        assert!(parse_machine("[worktree]\nsetup_command = [\"x\"]\n", "config.toml").unwrap_err().contains("worktree.setup_command: must be a string"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both });
+        assert!(shown.contains("worktree.setup_command = \"script/prepare_worktree\"  (.kelpie.toml)\n  The repo's own command that prepares an existing worktree"), "{shown}");
+        let default = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
+        assert!(default.contains("worktree.setup_command = none  (default)\n  "), "{default}");
+        assert!(default.contains("None means bin/setup-worktree when the repo has one."));
     }
 
     #[test]

@@ -4,7 +4,7 @@ You are the Claude for the task **{task}** in the repo **{repo}**; other session
 
 ## Your worktree
 
-You are in `{path}`, worktree {slot} of `{main}`, a pooled worktree an earlier task may have used. Before anything else, run the skill `{setup_skill}` and follow it: it makes this worktree runnable without touching the main checkout, and leaves a note in `{note}` on what it did. The main checkout is read-only to you.{rules}
+You are in `{path}`, worktree {slot} of `{main}`, a pooled worktree an earlier task may have used. Before anything else, run the skill `{setup_skill}` and follow it: it makes this worktree runnable without touching the main checkout, and leaves a note in `{note}` on what it did.{setup} The main checkout is read-only to you.{rules}
 
 ## Probes
 

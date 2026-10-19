@@ -366,9 +366,9 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let Start { prompt, focus, from, mode, backlog } = *options;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
-    let config::Settings { setup_skill, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
-    let (setup_skill, rules_skill) = (setup_skill.value, rules_skill.value);
-    let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, rules_skill: &rules_skill, worktree: slot.path.clone() };
+    let config::Settings { setup_skill, setup_command, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
+    let (setup_skill, setup_command, rules_skill) = (setup_skill.value, setup_command.value, rules_skill.value);
+    let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone() };
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
         return restart(&place(&existing), &existing, focus);
     }
@@ -412,19 +412,20 @@ struct Launch<'a> {
     task: &'a str,
     mode: Option<&'a str>,
     setup_skill: &'a str,
+    setup_command: Option<&'a str>,
     rules_skill: &'a str,
     worktree: PathBuf,
 }
 
 // Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
 fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<()>)> {
-    let Launch { repo, task, mode, setup_skill, rules_skill, ref worktree } = *place;
+    let Launch { repo, task, mode, setup_skill, setup_command, rules_skill, ref worktree } = *place;
     crate::push_block::warn_if_off(crate::push_block::install(worktree, &state_dir()?)?);
     // herdr's agent names are global, so a task's half in another repo is named with its repo.
     let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
     let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &peers::address(task, &name_of(repo)), &settings(&peers::kelpie_command()?))?;
-    let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, rules_skill })?;
+    let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill })?;
     let agent_args = claude_args(mode, &settings, &role, &session);
     let started = start_claude(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(repo));
     if let (Ok(()), Session::New(id)) = (&started, &session) {
@@ -1026,7 +1027,8 @@ fn claim_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, focus: bool) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
-    let setup_skill = config::resolve(Some(&repo))?.settings.setup_skill.value;
+    let config::Settings { setup_skill, setup_command, .. } = config::resolve(Some(&repo))?.settings;
+    let prepare = setup_command.value.map_or(String::new(), |command| format!(", which prepares it with {command}"));
     if slots(&repo)?.iter().any(|slot| slot.task.as_deref() == Some(task.as_str())) {
         return Err(format!("{task} already has a worktree; use kelpie start {task} to go there"));
     }
@@ -1070,7 +1072,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
         herdr::move_pane_to_new_tab(pane, &space.workspace_id, "claude", focus)?;
     }
     let main = fast_forward_main(&repo, &upstream)?;
-    Ok(format!("Moved {task} to {}. {main}\nSet it up: run the skill {setup_skill} in {}.", slot.path.display(), slot.path.display()))
+    Ok(format!("Moved {task} to {}. {main}\nSet it up: run the skill {} in {}{prepare}.", slot.path.display(), setup_skill.value, slot.path.display()))
 }
 
 #[cfg(test)]
