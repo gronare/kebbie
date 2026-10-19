@@ -80,7 +80,7 @@ fn missing_notes(entries: &[Entry], notes: &[[String; 6]], today: i64) -> Vec<En
         source: "vault".to_string(),
         title: title.clone(),
         priority: if PRIORITIES.contains(&priority.as_str()) { priority.clone() } else { "none".to_string() },
-        area: area.trim_start_matches("[[").trim_end_matches("]]").to_string(),
+        area: crate::vault::area_name(area),
         reference: key.clone(),
         summary: summary.clone(),
         age: days_since(date, today).map_or(String::new(), |days| format!("{days} d")),
@@ -226,9 +226,9 @@ pub fn refresh_prompt(configured: &[Source]) -> Result<String> {
 
 pub fn task_prompt(entry: &Entry, sources: &[Source]) -> String {
     match entry.source.as_str() {
-        "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan <file>, and write no code until I approve it.", entry.reference, entry.title),
-        "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {} (\"{}\"). Read it with the vault tools first and set its status to active, then ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan <file>, and write no code until I approve it.", entry.reference, entry.title),
-        _ => format!("Work on: {}. {} Ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan <file>, and write no code until I approve it.", entry.title, entry.summary),
+        "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan, written where your role says, and write no code until I approve it.", entry.reference, entry.title),
+        "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {reference} (\"{}\"). Read it with the vault tools first and set its status to active, then ask me what you need decided with kelpie ask, one question at a time, before you plan; then write the plan into that note and put it to me with kelpie ask --plan vault:{reference}, and write no code until I approve it.", entry.title, reference = entry.reference),
+        _ => format!("Work on: {}. {} Ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan, written where your role says, and write no code until I approve it.", entry.title, entry.summary),
     }
 }
 
@@ -500,9 +500,10 @@ mod tests {
         assert!(task_prompt(&entry("linear"), &[Source::Vault]).starts_with("Work on: Fix it. It broke."));
         assert!(task_prompt(&entry("vault"), &[Source::Vault]).starts_with("Work on the vault note ABC-1"));
         assert!(task_prompt(&entry("vault"), &[Source::Vault]).contains("set its status to active"));
+        assert!(task_prompt(&entry("vault"), &[Source::Vault]).contains("write the plan into that note and put it to me with kelpie ask --plan vault:ABC-1"));
         for source in ["linear", "vault", "other"] {
             let prompt = task_prompt(&entry(source), &[Source::Vault, Source::Linear]);
-            assert!(prompt.contains("with kelpie ask, one question at a time") && prompt.contains("kelpie ask --plan <file>"), "{prompt}");
+            assert!(prompt.contains("with kelpie ask, one question at a time") && prompt.contains("kelpie ask --plan"), "{prompt}");
         }
     }
 }

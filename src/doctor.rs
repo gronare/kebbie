@@ -282,6 +282,19 @@ pub fn notify(command: &Setting<Option<String>>) -> Check {
     }
 }
 
+const STATUS_LINE: &str = r#""statusLine": { "type": "command", "command": "~/.local/share/kelpie/current/target/release/kelpie statusline" }"#;
+
+// Claude Code passes the plan's usage only to the statusLine command, so the board's usage bar needs kelpie there.
+pub fn status_line(settings: &Value) -> Check {
+    let command = settings["statusLine"]["command"].as_str().unwrap_or_default();
+    if command.contains("kelpie") && command.contains("statusline") {
+        return ok("status line", format!("{command:?} keeps the plan's usage for the board"));
+    }
+    let fact = if command.is_empty() { "no statusLine command in Claude Code's settings, so the board shows no plan usage".to_string() } else { format!("statusLine runs {command:?}, so the board shows no plan usage") };
+    let fix = if command.is_empty() { format!("add to ~/.claude/settings.json: {STATUS_LINE}") } else { "have your statusLine command pipe its stdin to `kelpie statusline` as well, or use kelpie's line: ".to_string() + STATUS_LINE };
+    warn("status line", fact, one(fix))
+}
+
 pub fn push_block(repo: &Path) -> Check {
     match crate::push_block::unsupported(repo) {
         Ok(None) => ok("push block", format!("task worktrees of {} block git push", repo.display())),
@@ -408,6 +421,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let installed = read_json(&env.claude_dir.join("plugins/installed_plugins.json"));
     let claude_settings = read_json(&env.claude_dir.join("settings.json")).unwrap_or_default();
     checks.push(claude_plugin(installed.as_ref(), &claude_settings));
+    checks.push(status_line(&claude_settings));
     checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
     checks.push(kelpie_on_path(&env.home, &env.path));
     let data_home = env.data_home.clone().unwrap_or_else(|| env.home.join(".local/share"));
@@ -635,6 +649,17 @@ mod tests {
         let (check, worktree) = repo_file(&own);
         assert!(check.level == Level::Fail && worktree.is_none() && check.fact.contains("worktree.port: unknown key"), "{check:?}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_status_line_check_advises_kelpies_line_and_never_fails() {
+        let set = status_line(&serde_json::json!({ "statusLine": { "type": "command", "command": "~/.local/share/kelpie/current/target/release/kelpie statusline" } }));
+        assert_eq!(set.level, Level::Ok);
+        let unset = status_line(&serde_json::json!({}));
+        assert_eq!(unset.level, Level::Warn);
+        assert!(unset.fix[0].contains("kelpie statusline") && unset.fix[0].contains("~/.claude/settings.json"), "{:?}", unset.fix);
+        let other = status_line(&serde_json::json!({ "statusLine": { "command": "~/bin/line" } }));
+        assert!(other.level == Level::Warn && other.fact.contains("~/bin/line"), "{}", other.fact);
     }
 
     #[test]

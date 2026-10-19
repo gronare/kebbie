@@ -163,7 +163,7 @@ mod tests {
     use super::*;
 
     fn note(key: &str) -> Note {
-        Note { key: key.to_string(), stem: String::new(), title: String::new(), summary: String::new(), status: "active".to_string(), kind: "task".to_string(), priority: String::new(), paths: Vec::new(), updated: String::new() }
+        Note { key: key.to_string(), stem: String::new(), title: String::new(), summary: String::new(), status: "active".to_string(), kind: "task".to_string(), priority: String::new(), paths: Vec::new(), updated: String::new(), area: String::new() }
     }
 
     fn area() -> Area {

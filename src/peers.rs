@@ -158,6 +158,18 @@ fn rules_line(rules_skill: &str) -> String {
     format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, the lead checks your commits against it.")
 }
 
+// The plan step of roles/task.md: with the vault as a backlog source the plan is the task's note there, else a file in kelpie's state; never a file in the worktree, where it would land in the repo.
+pub fn plan_step(sources: &[crate::config::Source], kelpie: &str, task: &str, plans: &Path) -> String {
+    if sources.contains(&crate::config::Source::Vault) {
+        return format!(
+            "Write your plan into this task's note in the vault with the vault tools: the note you were started from, or else a new task note under `Projects/` with status `active`, tied to this task with `{kelpie} link {task} Projects/<note>.md`. \
+             Put it to the user with `{kelpie} ask --plan vault:Projects/<note>.md \"<one line on what the plan does>\"`; the board shows them the note.",
+        );
+    }
+    let plans = plans.display();
+    format!("Write your plan as markdown to `{plans}`, kelpie's place for it outside your worktree, and put it to the user with `{kelpie} ask --plan {plans} \"<one line on what the plan does>\"`; the board shows them the file.")
+}
+
 // roles/task.md filled in for this task, written to the state dir for --append-system-prompt-file.
 pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     let template = fs::read_to_string(install_root()?.join("roles/task.md")).map_err(|error| format!("roles/task.md: {error}"))?;
@@ -166,7 +178,10 @@ pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     let sessions = sessions()?;
     let listed = list(Some(&me), &sessions);
     let peers = listed.split_once('\n').map(|(_, rest)| rest).unwrap_or_default().to_string();
-    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("kelpie", kelpie_command()?), ("peers", peers)];
+    let kelpie = kelpie_command()?;
+    let plans = crate::lead::state_dir()?.join("plans").join(format!("{me}.md"));
+    let plan = plan_step(&crate::config::sources().unwrap_or_default(), &kelpie, task, &plans);
+    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("kelpie", kelpie), ("peers", peers), ("plan", plan)];
     values.extend(worktree_values(place)?);
     let pairs: Vec<(&str, &str)> = values.iter().map(|(name, value)| (*name, value.as_str())).collect();
     let file = crate::lead::roles_dir()?.join(format!("{me}.md"));
@@ -273,9 +288,22 @@ mod tests {
     #[test]
     fn the_role_asks_the_user_through_kelpie_one_question_at_a_time() {
         let role = fill(include_str!("../roles/task.md"), &[("kelpie", "/bin/kelpie")]);
-        for needed in ["/bin/kelpie ask --option", "--recommend <n>", "/bin/kelpie ask --plan <file>", "one question per", "the lead's reply to your question"] {
+        for needed in ["/bin/kelpie ask --option", "--recommend <n>", "one question per", "on the kelpie board", "`[from you] <answer>`", "`[from you]` is the user's answer"] {
             assert!(role.contains(needed), "{needed}");
         }
+    }
+
+    #[test]
+    fn the_plan_goes_in_the_vault_note_with_the_vault_and_in_kelpies_state_without_it() {
+        use crate::config::Source;
+        let plans = Path::new("/state/plans/billing@web.md");
+        let vault = plan_step(&[Source::Linear, Source::Vault], "/bin/kelpie", "billing", plans);
+        assert!(vault.contains("into this task's note in the vault") && vault.contains("/bin/kelpie link billing Projects/<note>.md") && vault.contains("/bin/kelpie ask --plan vault:Projects/<note>.md"), "{vault}");
+        let file = plan_step(&[Source::Local], "/bin/kelpie", "billing", plans);
+        assert!(file.contains("to `/state/plans/billing@web.md`, kelpie's place for it outside your worktree") && file.contains("/bin/kelpie ask --plan /state/plans/billing@web.md"), "{file}");
+        assert!(!file.contains("vault"), "{file}");
+        let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
+        assert!(role.contains(&format!("2. {file} The user approves it")) && !role.contains("{plan}"), "{role}");
     }
 
     #[test]

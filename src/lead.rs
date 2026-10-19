@@ -121,7 +121,7 @@ fn lead_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-// The panes by where create put them: the chat on the right, the board above the messages on the left.
+// The panes by where they sit: the chat on the right, the board on the left, and whatever pane is under the board.
 struct Places {
     board: Option<String>,
     messages: Option<String>,
@@ -253,12 +253,13 @@ pub fn restart() -> Result<String> {
     if agent.is_some() {
         tasks::end_claude(&pane)?;
     }
+    close_messages(places(&lead)?.messages.as_deref())?;
     start_chat(&pane, session)?;
     let how = if resumed { "resuming its conversation" } else { "with a new conversation, as none of its own was found" };
     Ok(format!("Restarted the lead with its current role and settings, {how}."))
 }
 
-// Whatever was quit or closed since the lead Space was made comes back when the user goes there: the board, the messages, or the lead's Claude.
+// Whatever was quit or closed since the lead Space was made comes back when the user goes there: the board, or the lead's Claude.
 fn repair(lead: &str) -> Result<()> {
     let executable = executable()?.display().to_string();
     let places = places(lead)?;
@@ -266,12 +267,7 @@ fn repair(lead: &str) -> Result<()> {
     if !runs_kelpie(&board, "board") && herdr::foreground(&board)?.is_none() {
         herdr::run_in_pane(&board, &format!("'{executable}' board"))?;
     }
-    match places.messages {
-        Some(pane) if runs_kelpie(&pane, "messages") => {}
-        Some(pane) if herdr::foreground(&pane)?.is_none() => herdr::run_in_pane(&pane, &format!("'{executable}' messages"))?,
-        Some(_) => {}
-        None => herdr::run_in_pane(&herdr::split_down(&board, &lead_dir()?, "0.65")?, &format!("'{executable}' messages"))?,
-    }
+    close_messages(places.messages.as_deref())?;
     match places.chat {
         Some(pane) if herdr::foreground(&pane)?.is_none() => new_chat(&pane)?,
         Some(_) => {}
@@ -280,18 +276,61 @@ fn repair(lead: &str) -> Result<()> {
     Ok(())
 }
 
+// The board shows the messages, so a messages pane under it in a lead Space goes; a pane of the user's own there stays.
+fn close_messages(pane: Option<&str>) -> Result<()> {
+    match pane {
+        Some(pane) if runs_kelpie(pane, "messages") => herdr::close_pane(pane),
+        _ => Ok(()),
+    }
+}
+
 fn create() -> Result<String> {
     let dir = lead_dir()?;
     let space = herdr::create_workspace(&dir, LEAD_LABEL)?;
     let board = space.root_pane_id.ok_or("herdr created the lead Space without a pane")?;
     herdr::run_in_pane(&board, &format!("'{}' board", executable()?.display()))?;
     let chat = herdr::split_right(&board, &dir, "0.68")?;
-    let messages = herdr::split_down(&board, &dir, "0.65")?;
-    herdr::run_in_pane(&messages, &format!("'{}' messages", executable()?.display()))?;
     let started = new_chat(&chat);
     herdr::focus_workspace(&space.workspace_id)?;
     started?;
-    Ok("Lead Space created: the board on the left over the sessions' messages, the lead on the right.".to_string())
+    Ok("Lead Space created: the board on the left, the lead on the right.".to_string())
+}
+
+#[derive(Debug, PartialEq)]
+enum Hop {
+    ToChat,
+    ToBoard,
+}
+
+// In the lead Space focus moves between the board and the chat; from anywhere else it lands on the chat.
+fn hop(in_lead: bool, on_chat: bool) -> Option<Hop> {
+    match (in_lead, on_chat) {
+        (true, true) => Some(Hop::ToBoard),
+        (_, false) => Some(Hop::ToChat),
+        (false, true) => None,
+    }
+}
+
+pub fn focus_toggle() -> Result<()> {
+    let workspaces = herdr::workspaces()?;
+    let lead = lead_workspace(&workspaces).ok_or("No lead Space yet; kelpie lead creates it")?;
+    let places = places(&lead)?;
+    let board = places.board.ok_or("The lead Space has lost its board pane; kelpie lead brings it back")?;
+    let chat = places.chat.ok_or("The lead Space has no chat pane; kelpie lead brings it back")?;
+    let focused = workspaces.iter().find(|workspace| workspace["focused"] == true).and_then(workspace_id);
+    let in_lead = focused.as_deref() == Some(lead.as_str());
+    if !in_lead {
+        if let Some(focused) = focused {
+            fs::write(state_dir()?.join("lead-previous"), focused).map_err(|error| error.to_string())?;
+        }
+        herdr::focus_workspace(&lead)?;
+    }
+    let on_chat = herdr::focused_pane().ok().flatten().as_deref() == Some(chat.as_str());
+    match hop(in_lead, on_chat) {
+        Some(Hop::ToBoard) => herdr::focus_beside(&chat, "left"),
+        Some(Hop::ToChat) => herdr::focus_beside(&board, "right"),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -317,11 +356,20 @@ mod tests {
     }
 
     #[test]
-    fn the_lead_relays_a_tasks_question_to_the_user_and_its_answer_back() {
+    fn the_lead_gets_copies_of_the_questions_the_user_answers_on_the_board() {
         let role = include_str!("../roles/lead.md");
-        for needed in ["AskUserQuestion", "(recommended)", "kelpie tell <task> \"<answer>\"", "kelpie answered <task>", "The plan to read", "a task or a subagent"] {
+        for needed in ["answers them on the board", "copy", "kelpie answered <task>", "kelpie decide <task>", "a task or a subagent"] {
             assert!(role.contains(needed), "{needed}");
         }
+        assert!(!role.contains("AskUserQuestion tool (while") && !role.contains("The plan to read"), "the lead never relays a question");
+    }
+
+    #[test]
+    fn focus_moves_between_the_board_and_the_chat_in_the_lead_and_to_the_chat_from_elsewhere() {
+        assert_eq!(hop(true, false), Some(Hop::ToChat));
+        assert_eq!(hop(true, true), Some(Hop::ToBoard));
+        assert_eq!(hop(false, false), Some(Hop::ToChat));
+        assert_eq!(hop(false, true), None);
     }
 
     #[test]

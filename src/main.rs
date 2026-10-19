@@ -22,6 +22,7 @@ mod sh;
 mod status;
 mod tasks;
 mod update;
+mod usage;
 mod vault;
 
 use std::path::Path;
@@ -47,6 +48,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   (--first only moves the lead Space to the top of herdr's Spaces; --restart
                                   restarts an idle lead's Claude on its current role and settings, resuming
                                   its conversation)
+  kelpie focus                    in the lead Space, move focus between the board and the lead's chat; from
+                                  anywhere else, go to the lead's chat
   kelpie peers                    who you are and the other task sessions, with what each is doing
   kelpie tell <to> <text>         message another session: a task (every half of it), task@repo, or lead; held
                                   while it waits for an answer, and logged
@@ -56,20 +59,22 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   with ready, --card <file> is the sign-off card the push dialog shows above the commits
   kelpie ask --option \"<label>: <meaning>\" … --recommend <n> <question>
                                   run by a task's Claude to put a question to the user: two to four options, one
-                                  recommended (--plan <file> asks to approve a plan instead); it waits in kelpie's
-                                  queue and reaches the lead one question at a time, and the answer comes back as a message
-  kelpie answered <task>          the lead's word that a task's question is settled without a kelpie tell, so the
-                                  next question goes to the lead
+                                  recommended (--plan vault:<note> or --plan <file> asks to approve a plan instead); it
+                                  waits on the board, where you answer it, the lead gets a copy, and the answer reaches
+                                  the task as a message from you
+  kelpie answered <task>          a task's question is settled elsewhere (in its Space, or dropped): it leaves the board
   kelpie notify <text>            run notify.command with this text (KELPIE_EVENT=summary): the lead's word to the user
                                   when they are away; tasks that need you or are ready, and questions, notify by themselves
-  kelpie decide <task> <answer>   the lead's own answer to the task's question it holds, only while the user is away and
-                                  only on how, not what; recorded for the user's return
-  kelpie defer <task>             the lead keeps the task's question for the user while they are away; the next one comes
+  kelpie decide <task> <answer>   the lead's own answer to a task's question, only while the user is away and only on
+                                  how, not what; it closes the question on the board and is recorded for the user's return
+  kelpie defer <task>             the lead keeps a task's question for the user while they are away
   kelpie away [on|off]            away mode, the user's switch (also A on the board): the lead settles how-questions,
                                   keeps what-questions, and writes a summary when you are back
   kelpie hook                     the hooks kelpie gives a task's Claude (reads the hook's JSON on stdin)
-  kelpie messages [--print]       the sessions' messages, live (the lead Space shows them); --print the last 30,
+  kelpie messages [--print]       the sessions' messages, live (the board shows them too); --print the last 30,
                                   --unread those the lead has not seen (its prompt hook)
+  kelpie statusline               Claude Code's statusLine command: reads its JSON on stdin, keeps the plan's session and
+                                  week usage for the board, and prints the model and both percentages
   kelpie backlog [save]           show the backlog the board shows; save reads the lead's JSON array on stdin
   kelpie backlog add [--priority <p>] \"<Title> — <summary> (<area>)\"
                                   add an item to the local backlog (backlog.md next to the machine config)
@@ -187,7 +192,7 @@ fn status_text() -> Result<String> {
             lines.push(format!("    you: {next}"));
         }
         if let Some(question) = &item.question {
-            lines.push(format!("    {}", board::question_text(question).replace('\n', "\n    ")));
+            lines.push(format!("    {}", questions::text(question).replace('\n', "\n    ")));
         }
     }
     Ok(lines.join("\n").trim_start().to_string())
@@ -238,6 +243,12 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("lead") if arguments.flag("--first") => lead::keep_first(),
         Some("lead") if arguments.flag("--restart") => lead::restart(),
         Some("lead") => lead::toggle(),
+        Some("focus") => lead::focus_toggle().map(|_| String::new()),
+        Some("statusline") => {
+            let mut input = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
+            Ok(usage::statusline(&input))
+        }
         Some("peers") => peers::peers(&cwd),
         Some("tell") => {
             let to = name.ok_or("kelpie tell needs a recipient: a task, task@repo or lead")?;
@@ -262,10 +273,17 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("hook") => {
             let mut input = String::new();
             let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
-            Ok(if arguments.flag("--review") { review::guard(&input) } else { report::hook(&input) })
+            if arguments.flag("--review") {
+                return Ok(review::guard(&input));
+            }
+            let _ = messages::flush();
+            Ok(report::hook(&input))
         }
         Some("messages") if arguments.flag("--print") => Ok(messages::print(30)),
-        Some("messages") if arguments.flag("--unread") => messages::unread_for_lead(),
+        Some("messages") if arguments.flag("--unread") => {
+            let _ = messages::flush();
+            messages::unread_for_lead()
+        }
         Some("messages") => messages::run(),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
         Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), &arguments.positionals[2..].join(" ")),

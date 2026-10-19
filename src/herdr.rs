@@ -119,12 +119,6 @@ pub fn split_right(pane_id: &str, cwd: &Path, ratio: &str) -> Result<String> {
     text(&result["pane"]["pane_id"]).ok_or_else(|| "herdr pane split returned no pane".to_string())
 }
 
-pub fn split_down(pane_id: &str, cwd: &Path, ratio: &str) -> Result<String> {
-    let cwd = cwd.to_string_lossy();
-    let result = call(&["pane", "split", pane_id, "--direction", "down", "--ratio", ratio, "--cwd", &cwd, "--no-focus"])?;
-    text(&result["pane"]["pane_id"]).ok_or_else(|| "herdr pane split returned no pane".to_string())
-}
-
 // Only what is on screen: reading further back makes herdr scroll an idle agent's pane and restore it.
 pub fn read_agent(pane_id: &str) -> Result<String> {
     run(&herdr(), &["agent", "read", pane_id, "--source", "visible"], None)
@@ -170,6 +164,19 @@ pub fn tabs_in(workspace_id: &str) -> Result<Vec<Value>> {
 
 pub fn layout(pane_id: &str) -> Result<Value> {
     Ok(call(&["pane", "layout", "--pane", pane_id])?["layout"].clone())
+}
+
+pub fn focused_pane() -> Result<Option<String>> {
+    Ok(text(&call(&["pane", "current"])?["pane"]["pane_id"]))
+}
+
+// herdr focuses a pane by its neighbour: the pane next to `pane_id` on that side ("left", "right", "up", "down").
+pub fn focus_beside(pane_id: &str, direction: &str) -> Result<()> {
+    call(&["pane", "focus", "--pane", pane_id, "--direction", direction]).map(|_| ())
+}
+
+pub fn close_pane(pane_id: &str) -> Result<()> {
+    call(&["pane", "close", pane_id]).map(|_| ())
 }
 
 fn socket() -> Result<PathBuf> {

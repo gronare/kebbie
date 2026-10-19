@@ -852,7 +852,7 @@ impl Page {
             Mode::Help => {
                 let keys = [
                     ("⏎", "actions for the selected area (in the detail: run the selected action)"), ("← →", "list · detail"), ("↑ ↓ j k", "move"),
-                    ("tab", "work · areas"), ("g", "open the area's Space"), ("s", "start a task in its repo, with its notes"), ("b", "ask the lead to refresh its backlog"),
+                    ("1 2", "the work and areas pages"), ("tab", "move focus to the lead's chat"), ("g", "open the area's Space"), ("s", "start a task in its repo, with its notes"), ("b", "ask the lead to refresh its backlog"),
                     ("l", "its vault log"), ("a", "let the lead push the repo's reviewed tasks, or take that back"), ("u", "push main when it is ahead (asks first)"), ("A–Z", "the repo's own actions, from .kelpie.toml"),
                 ];
                 let lines = keys.into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect();
@@ -919,10 +919,11 @@ impl Page {
         self.hits = modal_hits;
     }
 
-    pub fn hint_line() -> Line<'static> {
-        Line::from([("⏎", "actions"), ("← →", "list · detail"), ("↑ ↓", "move"), ("tab", "work · areas"), ("?", "all keys")]
-            .into_iter().flat_map(|(key, label)| [Span::styled(key.to_string(), style(MAUVE)), Span::styled(format!(" {label}    "), style(MUTED))])
-            .collect::<Vec<_>>())
+    pub fn hint_lines() -> (Line<'static>, Line<'static>) {
+        (
+            board::hints(&[("⏎", "actions"), ("← →", "list · detail"), ("↑ ↓", "move"), ("tab", "lead"), ("1 2", "work · areas"), ("?", "all keys")]),
+            board::hints(&[("⏎", "actions"), ("1 2", "pages"), ("?", "keys")]),
+        )
     }
 }
 

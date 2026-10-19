@@ -202,7 +202,7 @@ impl Item {
             "question": self.question.as_ref().and_then(|message| {
                 let question = message.question.as_ref()?;
                 let options: Vec<Value> = question.options.iter().map(|(label, meaning)| json!({ "label": label, "meaning": meaning })).collect();
-                Some(json!({ "text": message.text, "options": options, "recommend": question.recommend, "plan": question.plan, "with_lead": question.given, "age": messages::age(message.at) }))
+                Some(json!({ "text": message.text, "options": options, "recommend": question.recommend, "plan": question.plan, "kept_for_user": question.waits, "age": messages::age(message.at) }))
             }),
             "server": self.server,
             "url": self.url,

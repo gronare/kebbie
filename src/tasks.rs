@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use std::path::{Path, PathBuf};
 
@@ -255,9 +255,15 @@ fn started_file(task: &str, repo: &Path) -> Result<PathBuf> {
 }
 
 pub fn started_items() -> HashSet<String> {
-    let Ok(dir) = crate::lead::state_dir().map(|dir| dir.join("started")) else { return HashSet::new() };
+    started_links().into_values().collect()
+}
+
+// Each running task's address (task@repo) and the item it was started from or linked to: a vault note's key (Projects/x.md), a Linear id, or local:<Title>.
+pub fn started_links() -> HashMap<String, String> {
+    let Ok(dir) = crate::lead::state_dir().map(|dir| dir.join("started")) else { return HashMap::new() };
     std::fs::read_dir(dir).into_iter().flatten().flatten()
-        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok()).map(|item| item.trim().to_string()).collect()
+        .filter_map(|entry| Some((entry.file_name().to_str()?.to_string(), std::fs::read_to_string(entry.path()).ok()?.trim().to_string())))
+        .filter(|(_, item)| !item.is_empty()).collect()
 }
 
 pub fn link(cwd: &Path, name: &str, item: &str) -> Result<String> {

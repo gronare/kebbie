@@ -21,6 +21,7 @@ pub struct Note {
     pub priority: String,
     pub paths: Vec<String>,
     pub updated: String,
+    pub area: String,
 }
 
 fn home() -> PathBuf {
@@ -65,11 +66,16 @@ pub fn index_path() -> Result<PathBuf> {
     if path.exists() { Ok(path) } else { Err(format!("No vault index at {}; a Claude session with the vault plugin builds it", path.display())) }
 }
 
+// The frontmatter's area link, [[stem]], as the stem the backlog names an area by.
+pub fn area_name(link: &str) -> String {
+    link.trim().trim_start_matches("[[").trim_end_matches("]]").to_string()
+}
+
 fn text(row: &rusqlite::Row, index: usize) -> String {
     row.get::<_, Option<String>>(index).ok().flatten().unwrap_or_default()
 }
 
-const NOTE_COLUMNS: &str = "key, stem, title, summary, status, kind, priority, paths, updated";
+const NOTE_COLUMNS: &str = "key, stem, title, summary, status, kind, priority, paths, updated, area";
 
 fn note(row: &rusqlite::Row) -> rusqlite::Result<Note> {
     Ok(Note {
@@ -82,6 +88,7 @@ fn note(row: &rusqlite::Row) -> rusqlite::Result<Note> {
         priority: text(row, 6),
         paths: serde_json::from_str(&text(row, 7)).unwrap_or_default(),
         updated: text(row, 8),
+        area: area_name(&text(row, 9)),
     })
 }
 
@@ -110,6 +117,17 @@ impl Index {
         let mut statement = self.db.prepare(sql).map_err(|error| error.to_string())?;
         let rows = statement.query_map([], |row| Ok([0, 1, 2, 3, 4, 5].map(|column| text(row, column)))).map_err(|error| error.to_string())?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|error| error.to_string())
+    }
+
+    pub fn ongoing(&self) -> Result<Vec<Note>> {
+        let sql = format!("SELECT {NOTE_COLUMNS} FROM notes WHERE folder = 'Projects' AND status = 'active' AND valid = 1 ORDER BY mtime DESC, key");
+        let mut statement = self.db.prepare(&sql).map_err(|error| error.to_string())?;
+        let rows = statement.query_map([], note).map_err(|error| error.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|error| error.to_string())
+    }
+
+    pub fn body(&self, key: &str) -> Option<String> {
+        self.db.query_row("SELECT body FROM notes_fts WHERE key = ?1", [key], |row| row.get::<_, Option<String>>(0)).ok().flatten()
     }
 
     pub fn changed_at(&self, key: &str) -> Option<f64> {
@@ -230,6 +248,13 @@ mod tests {
             INSERT INTO repos VALUES ('kelpie', '/src/kelpie', '2026-10-16');
             INSERT INTO meta VALUES ('last_sync', '1792172065.5');
             INSERT INTO notes_fts (key, body) VALUES ('Log/kelpie-log.md', '- [2026-10-16] done');
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-old.md', 'Projects', 'kelpie-old', 'Old', 'active', 'task', '[[other-area]]', 100, 1);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-new.md', 'Projects', 'kelpie-new', 'New', 'active', 'task', '[[other-area]]', 200, 1);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-broken.md', 'Projects', 'kelpie-broken', 'Broken', 'active', 'task', '[[other-area]]', 300, 0);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-done.md', 'Projects', 'kelpie-done', 'Done', 'complete', 'task', '[[other-area]]', 400, 1);
+            INSERT INTO notes (key, folder, stem, title, status, kind, mtime, valid) VALUES ('Resources/other.md', 'Resources', 'other', 'Other', 'active', 'howto', 500, 1);
+            INSERT INTO notes_fts (key, body) VALUES ('Projects/kelpie-new.md', '## Problem
+The payload says amount.');
         ").unwrap();
         drop(db);
         let index = Index::at(&path).unwrap();
@@ -242,6 +267,12 @@ mod tests {
         assert_eq!(index.known_root("kelpie"), Some(PathBuf::from("/src/kelpie")));
         assert_eq!(index.last_sync(), Some(1792172065));
         assert_eq!(index.logs().unwrap(), [("Log/kelpie-log.md".to_string(), "- [2026-10-16] done".to_string())]);
+        let ongoing: Vec<String> = index.ongoing().unwrap().into_iter().map(|note| note.key).collect();
+        assert_eq!(ongoing, ["Projects/kelpie-new.md", "Projects/kelpie-old.md"], "active projects only, newest first");
+        assert_eq!(index.ongoing().unwrap()[0].area, "other-area");
+        assert_eq!(notes[0].area, "kelpie", "the [[link]] reads as the area's stem");
+        assert_eq!(index.body("Projects/kelpie-new.md").as_deref(), Some("## Problem\nThe payload says amount."));
+        assert_eq!(index.body("Projects/missing.md"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

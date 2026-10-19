@@ -56,6 +56,12 @@ command = "kelpie.lead"
 description = "kelpie: go to the lead, or back"
 
 [[keys.command]]
+key = "prefix+tab"
+type = "plugin_action"
+command = "kelpie.focus"
+description = "kelpie: between the board and the lead's chat"
+
+[[keys.command]]
 key = "prefix+t"
 type = "plugin_action"
 command = "kelpie.board"

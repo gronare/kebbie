@@ -147,7 +147,11 @@ pub fn away(word: Option<&str>) -> Result<String> {
         return Ok(format!("Away mode is already {}.", if on { "on" } else { "off" }));
     };
     if on {
-        tell_lead("The user is away from now on. Work by the away rules in your role: answer how-questions yourself with kelpie decide, keep what-questions for the user with kelpie defer, push only what their permissions allow, and keep what you decide for the summary they get back.");
+        let log = messages::load();
+        let open: Vec<String> = crate::questions::open_now(&log).into_iter().filter(|question| question.question.as_ref().is_some_and(|question| !question.waits))
+            .map(|question| format!("\n- {}", crate::questions::question_copy(question, true))).collect();
+        let open = if open.is_empty() { String::new() } else { format!("\nQuestions waiting on the board now:{}", open.concat()) };
+        tell_lead(&format!("The user is away from now on. Work by the away rules in your role: answer how-questions yourself with kelpie decide, keep what-questions for the user with kelpie defer, push only what their permissions allow, and keep what you decide for the summary they get back.{open}"));
         return Ok("Away mode is on: the lead decides how-questions itself, keeps what-questions for you, and pushes only what you permitted.".to_string());
     }
     let log = messages::load();
