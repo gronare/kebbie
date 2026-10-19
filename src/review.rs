@@ -198,7 +198,7 @@ pub fn withdraw_in(state: &Path, address: &str) -> bool {
     let running = running_pid(state, address);
     let in_review = verdict_file(state, address).exists() || running.is_some();
     if let Some(pid) = running {
-        let _ = Command::new("kill").args(["-TERM", &format!("-{pid}")]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let _ = Command::new("kill").args(["-s", "TERM", "--", &format!("-{pid}")]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
     forget_in(state, address);
     in_review

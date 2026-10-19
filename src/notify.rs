@@ -186,7 +186,7 @@ pub fn run_with_timeout(program: &str, args: &[String], timeout: Duration) -> st
                 return Err(if detail.is_empty() { format!("exited with {code}") } else { format!("exited with {code}: {detail}") });
             }
             None if started.elapsed() >= timeout => {
-                let _ = Command::new("kill").args(["-KILL", &format!("-{}", child.id())]).stderr(Stdio::null()).status();
+                let _ = Command::new("kill").args(["-s", "KILL", "--", &format!("-{}", child.id())]).stderr(Stdio::null()).status();
                 let _ = child.wait();
                 return Err(format!("did not finish within {} seconds and was stopped", timeout.as_secs()));
             }
