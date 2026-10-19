@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use toml::{Table, Value};
 
-use crate::repo::main_checkout;
+use crate::repo::{main_checkout, name_of, slot_number, worktree_port};
 use crate::sh::Result;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,11 +35,15 @@ impl Source {
 pub const DEFAULT_SETUP_SKILL: &str = "kelpie:set-up-worktree";
 pub const DEFAULT_RULES_SKILL: &str = "kelpie:work-rules";
 pub const REPO_FILE: &str = ".kelpie.toml";
+pub const DEFAULT_DEV_URL: &str = "http://localhost:{port}";
+const PLACEHOLDERS: [&str; 4] = ["worktree", "repo", "number", "port"];
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Worktree {
     pub setup_skill: Option<String>,
     pub dev_server: Option<String>,
+    pub dev_worker: Option<String>,
+    pub dev_url: Option<String>,
     pub rules_skill: Option<String>,
     pub review_model: Option<String>,
     pub notify_command: Option<String>,
@@ -79,6 +83,8 @@ pub struct Settings {
     pub sources: Setting<Vec<Source>>,
     pub setup_skill: Setting<String>,
     pub dev_server: Setting<Option<String>>,
+    pub dev_worker: Setting<Option<String>>,
+    pub dev_url: Setting<Option<String>>,
     pub rules_skill: Setting<String>,
     pub review_model: Setting<Option<String>>,
     pub notify_command: Setting<Option<String>>,
@@ -145,6 +151,60 @@ fn text(table: &Table, field: &str, key: &str) -> Result<Option<String>> {
     }
 }
 
+enum Piece<'a> {
+    Text(&'a str),
+    Field(&'a str),
+}
+
+fn pieces(template: &str) -> Result<Vec<Piece<'_>>> {
+    let mut pieces = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        pieces.push(Piece::Text(&rest[..open]));
+        let close = rest[open..].find('}').ok_or(format!("{template:?} opens a {{ it never closes"))? + open;
+        let name = &rest[open + 1..close];
+        if !PLACEHOLDERS.contains(&name) {
+            return Err(format!("{{{name}}} is not a placeholder; use {{worktree}}, {{repo}}, {{number}} or {{port}}"));
+        }
+        pieces.push(Piece::Field(name));
+        rest = &rest[close + 1..];
+    }
+    pieces.push(Piece::Text(rest));
+    Ok(pieces)
+}
+
+// An empty template is kept, since it is how dev_url turns the link off.
+fn template(table: &Table, field: &str, key: &str) -> Result<Option<String>> {
+    let Some(value) = table.get(field) else { return Ok(None) };
+    let text = value.as_str().ok_or(format!("{key}: must be a string"))?.trim();
+    pieces(text).map_err(|error| format!("{key}: {error}"))?;
+    Ok(Some(text.to_string()))
+}
+
+pub struct Place {
+    pub worktree: String,
+    pub repo: String,
+    pub number: Option<usize>,
+    pub port: Option<u16>,
+}
+
+pub fn expand(template: &str, place: &Place) -> Option<String> {
+    let parts: Option<Vec<String>> = pieces(template).ok()?.into_iter().map(|piece| match piece {
+        Piece::Text(text) => Some(text.to_string()),
+        Piece::Field("worktree") => Some(place.worktree.clone()),
+        Piece::Field("repo") => Some(place.repo.clone()),
+        Piece::Field("number") => place.number.map(|number| number.to_string()),
+        Piece::Field(_) => place.port.map(|port| port.to_string()),
+    }).collect();
+    Some(parts?.concat()).filter(|url| !url.is_empty())
+}
+
+pub fn dev_url(template: Option<&str>, repo: &Path, worktree: &Path) -> Option<String> {
+    let template = template?;
+    let port = if template.contains("{port}") { worktree_port(worktree) } else { None };
+    expand(template, &Place { worktree: name_of(worktree), repo: name_of(repo), number: slot_number(repo, worktree), port })
+}
+
 fn backlog_sources(backlog: &Table) -> Result<Option<Vec<Source>>> {
     let Some(value) = backlog.get("sources") else { return Ok(None) };
     let mut found = Vec::new();
@@ -169,10 +229,12 @@ fn board(table: &Table) -> Result<Option<Vec<Source>>> {
 
 fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
-    unknown_keys(worktree, "worktree.", &["setup_skill", "dev_server"])?;
+    unknown_keys(worktree, "worktree.", &["setup_skill", "dev_server", "dev_worker", "dev_url"])?;
     Ok(Worktree {
         setup_skill: text(worktree, "setup_skill", "worktree.setup_skill")?,
         dev_server: text(worktree, "dev_server", "worktree.dev_server")?,
+        dev_worker: text(worktree, "dev_worker", "worktree.dev_worker")?,
+        dev_url: template(worktree, "dev_url", "worktree.dev_url")?,
         rules_skill: None,
         review_model: None,
         notify_command: None,
@@ -248,6 +310,9 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         sources: or_default(pick(None, machine.sources.as_ref()), vec![Source::Local]),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),
         dev_server: optional(pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref())),
+        dev_worker: optional(pick(repo.dev_worker.as_ref(), machine.worktree.dev_worker.as_ref())),
+        dev_url: or_default(pick(repo.dev_url.as_ref(), machine.worktree.dev_url.as_ref())
+            .map(|setting| Setting { value: Some(setting.value).filter(|url| !url.is_empty()), layer: setting.layer }), Some(DEFAULT_DEV_URL.to_string())),
         rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
@@ -274,7 +339,7 @@ fn found(path: &Path) -> &'static str {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, dev_server, rules_skill, review_model, notify_command } = &loaded.settings;
+    let Settings { sources, setup_skill, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => format!("{} ({})", path.display(), found(path)),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -295,7 +360,11 @@ pub fn describe(loaded: &Loaded) -> String {
     key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer,
         "The skill a task's Claude runs first to make its worktree runnable.");
     key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer,
-        "The shell command the board's w key runs in a tab of the task's Space; without one there is no w.");
+        "The shell command the board's w key runs in a server tab of the task's Space, with PORT set to the worktree's port; without one there is no w.");
+    key("worktree.dev_worker", dev_worker.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_worker.layer,
+        "A second command, such as a job runner, the board's b key runs in a worker tab of the task's Space, with the same PORT; without one there is no b.");
+    key("worktree.dev_url", dev_url.value.as_ref().map_or("\"\" (no link)".to_string(), |url| format!("{url:?}")), dev_url.layer,
+        "The running dev server's address, shown on the board as a link: {worktree} (the worktree's folder), {repo}, {number} (its pool number) and {port} (its port) are filled in; a worktree without what it names gets no link, and \"\" turns the link off.");
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
         "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the lead checks a finished task against it, tidy reshapes commits by it.");
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
@@ -343,6 +412,8 @@ mod tests {
         assert_eq!(defaults.sources, Setting { value: vec![Source::Local], layer: Layer::Default }, "a fresh install has a working Backlog column");
         assert_eq!(defaults.setup_skill, Setting { value: DEFAULT_SETUP_SKILL.to_string(), layer: Layer::Default });
         assert_eq!(defaults.dev_server, Setting { value: None, layer: Layer::Default });
+        assert_eq!(defaults.dev_worker, Setting { value: None, layer: Layer::Default });
+        assert_eq!(defaults.dev_url, Setting { value: Some(DEFAULT_DEV_URL.to_string()), layer: Layer::Default });
         assert_eq!(defaults.rules_skill, Setting { value: DEFAULT_RULES_SKILL.to_string(), layer: Layer::Default });
         assert_eq!(defaults.review_model, Setting { value: None, layer: Layer::Default });
         assert_eq!(defaults.notify_command, Setting { value: None, layer: Layer::Default }, "no command, no notifications");
@@ -414,13 +485,13 @@ mod tests {
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
         assert!(error("[board.backlog]\nsources = [\"vault\", \"vault\"]\n").contains("listed twice"));
         assert!(error("[repos.app]\nsetup = [\"x\"]\n").contains("repos: unknown key"));
-        assert!(error("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, dev_server"));
+        assert!(error("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, dev_server, dev_worker, dev_url"));
         assert!(error("[worktree]\ndev_server = [\"bin/dev\"]\n").contains("worktree.dev_server: must be a string"));
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/src/app/.kelpie.toml").unwrap_err();
         assert_eq!(repo_error("[board.backlog]\nsources = []\n"), "/src/app/.kelpie.toml: board: unknown key; known keys here: actions, worktree, task, review");
-        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/src/app/.kelpie.toml: worktree.port: unknown key; known keys here: setup_skill, dev_server");
+        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/src/app/.kelpie.toml: worktree.port: unknown key; known keys here: setup_skill, dev_server, dev_worker, dev_url");
     }
 
     #[test]
@@ -472,5 +543,68 @@ mod tests {
         assert!(shown.contains("worktree.dev_server = \"npm run dev\"  (.kelpie.toml)"));
         let outside = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&outside).contains("none: not in a git repo"));
+    }
+
+    fn place(number: Option<usize>, port: Option<u16>) -> Place {
+        Place { worktree: "wt1.app".to_string(), repo: "app".to_string(), number, port }
+    }
+
+    #[test]
+    fn dev_url_fills_in_each_placeholder() {
+        let here = place(Some(1), Some(3001));
+        assert_eq!(expand(DEFAULT_DEV_URL, &here).as_deref(), Some("http://localhost:3001"));
+        assert_eq!(expand("https://{worktree}.dev", &here).as_deref(), Some("https://wt1.app.dev"));
+        assert_eq!(expand("https://{repo}-{number}.test:{port}/", &here).as_deref(), Some("https://app-1.test:3001/"));
+        assert_eq!(expand("https://example.test", &here).as_deref(), Some("https://example.test"));
+    }
+
+    #[test]
+    fn dev_url_reads_the_worktrees_own_port_and_pool_number() {
+        let dir = std::env::temp_dir().join(format!("kelpie-dev-url-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("wt1.app")).unwrap();
+        std::fs::write(dir.join("wt1.app/.env"), "PORT=3001\n").unwrap();
+        let url = |template: &str| dev_url(Some(template), &dir.join("app"), &dir.join("wt1.app"));
+        assert_eq!(url(DEFAULT_DEV_URL).as_deref(), Some("http://localhost:3001"));
+        assert_eq!(url("https://{repo}{number}.test").as_deref(), Some("https://app1.test"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn dev_url_gives_no_link_when_the_worktree_lacks_what_it_names() {
+        assert_eq!(expand(DEFAULT_DEV_URL, &place(Some(1), None)), None, "no recorded port, no localhost link");
+        assert_eq!(expand("https://{worktree}.dev", &place(Some(1), None)).as_deref(), Some("https://wt1.app.dev"), "a template without {{port}} needs none");
+        assert_eq!(expand("http://wt{number}.local", &place(None, Some(3000))), None);
+        assert_eq!(expand("", &place(Some(1), Some(3001))), None);
+    }
+
+    #[test]
+    fn an_empty_dev_url_turns_the_link_off_in_either_file() {
+        let off = settings(&repo("[worktree]\ndev_url = \"\"\n"), &machine("[worktree]\ndev_url = \"https://{worktree}.dev\"\n"));
+        assert_eq!(off.dev_url, Setting { value: None, layer: Layer::Repo });
+        let from_machine = settings(&Worktree::default(), &machine("[worktree]\ndev_url = \"https://{worktree}.dev\"\n"));
+        assert_eq!(from_machine.dev_url, Setting { value: Some("https://{worktree}.dev".to_string()), layer: Layer::Machine });
+        assert_eq!(dev_url(off.dev_url.value.as_deref(), Path::new("/src/app"), Path::new("/src/wt1.app")), None);
+        assert_eq!(dev_url(from_machine.dev_url.value.as_deref(), Path::new("/src/app"), Path::new("/src/wt1.app")).as_deref(), Some("https://wt1.app.dev"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
+        assert!(shown.contains("worktree.dev_url = \"\" (no link)  (.kelpie.toml)"), "{shown}");
+    }
+
+    #[test]
+    fn an_unknown_placeholder_is_refused_when_loading_with_the_key_named() {
+        let refused = parse_repo("[worktree]\ndev_url = \"https://{branch}.dev\"\n", "/src/app/.kelpie.toml").unwrap_err();
+        assert_eq!(refused, "/src/app/.kelpie.toml: worktree.dev_url: {branch} is not a placeholder; use {worktree}, {repo}, {number} or {port}");
+        assert!(parse_machine("[worktree]\ndev_url = \"http://localhost:{port\"\n", "config.toml").unwrap_err().contains("worktree.dev_url: \"http://localhost:{port\" opens a { it never closes"));
+        assert!(parse_machine("[worktree]\ndev_url = 3000\n", "config.toml").unwrap_err().contains("worktree.dev_url: must be a string"));
+    }
+
+    #[test]
+    fn dev_worker_layers_like_dev_server() {
+        let both = settings(&repo("[worktree]\ndev_worker = \"bin/jobs\"\n"), &machine("[worktree]\ndev_worker = \"npm run worker\"\n"));
+        assert_eq!(both.dev_worker, Setting { value: Some("bin/jobs".to_string()), layer: Layer::Repo });
+        assert!(parse_repo("[worktree]\ndev_worker = \"\"\n", ".kelpie.toml").unwrap_err().contains("worktree.dev_worker: must not be empty"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both });
+        assert!(shown.contains("worktree.dev_worker = \"bin/jobs\"  (.kelpie.toml)\n  A second command"), "{shown}");
+        assert!(shown.contains("worktree.dev_url = \"http://localhost:{port}\"  (default)"), "{shown}");
     }
 }

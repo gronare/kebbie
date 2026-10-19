@@ -69,7 +69,7 @@ pub fn choice(key: char, label: &str, about: &str) -> Choice {
     Choice { key, label: label.to_string(), about: about.to_string() }
 }
 
-fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
+fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_worker: Option<&str>) -> Vec<Choice> {
     let go = if item.is_some_and(|item| item.agent.is_none()) {
         choice('g', "Restart it", "reopen its Space and its Claude, resuming its last conversation")
     } else {
@@ -85,6 +85,13 @@ fn task_choices(item: Option<&Item>, dev_server: Option<&str>) -> Vec<Choice> {
             choice('w', "Stop the dev server", "ctrl-c to its server tab")
         } else {
             choice('w', "Start the dev server", &format!("{command} in a tab of its Space"))
+        });
+    }
+    if let Some(command) = dev_worker {
+        choices.push(if item.is_some_and(|item| item.worker) {
+            choice('b', "Stop the worker", "ctrl-c to its worker tab")
+        } else {
+            choice('b', "Start the worker", &format!("{command} in a tab of its Space"))
         });
     }
     if !item.is_some_and(busy) {
@@ -235,6 +242,7 @@ struct App {
     quit: bool,
     wanted_task: Option<String>,
     hits: Vec<(Rect, Hit)>,
+    links: Vec<Link>,
     page: Page,
     areas: area_page::Page,
     sources: Vec<Source>,
@@ -421,11 +429,45 @@ fn idle_tab_pane(workspace: &str, label: &str) -> Option<String> {
         .find(|pane| matches!(herdr::foreground(pane), Ok(None)))
 }
 
-// scripts/sync.sh reports a running dev server from a busy pane in a tab with this label.
-const SERVER_TAB: &str = "server";
+#[derive(Clone, Copy, PartialEq)]
+enum Process {
+    Server,
+    Worker,
+}
 
-fn dev_server(item: &Item) -> Option<String> {
-    config::resolve(Some(item.repo.as_deref()?)).ok()?.settings.dev_server.value
+impl Process {
+    // scripts/sync.sh reports a running process from a busy pane in a tab with this label.
+    fn tab(self) -> &'static str {
+        match self {
+            Process::Server => "server",
+            Process::Worker => "worker",
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Process::Server => "the dev server",
+            Process::Worker => "the worker",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Process::Server => "worktree.dev_server",
+            Process::Worker => "worktree.dev_worker",
+        }
+    }
+
+    fn command(self, settings: &config::Settings) -> Option<String> {
+        match self {
+            Process::Server => settings.dev_server.value.clone(),
+            Process::Worker => settings.dev_worker.value.clone(),
+        }
+    }
+}
+
+fn settings_of(item: &Item) -> Option<config::Settings> {
+    Some(config::resolve(Some(item.repo.as_deref()?)).ok()?.settings)
 }
 
 // export rather than a PORT= prefix, so the port reaches every part of a compound command; bash, zsh and fish all take it.
@@ -433,9 +475,9 @@ fn server_command(command: &str, port: Option<u16>) -> String {
     port.map_or_else(|| command.to_string(), |port| format!("export PORT={port}; {command}"))
 }
 
-fn busy_server_pane(workspace: &str) -> Option<String> {
+fn busy_tab_pane(workspace: &str, label: &str) -> Option<String> {
     let tabs: Vec<String> = herdr::tabs_in(workspace).ok()?.into_iter()
-        .filter(|tab| tab["label"] == SERVER_TAB).filter_map(|tab| tab["tab_id"].as_str().map(str::to_string)).collect();
+        .filter(|tab| tab["label"] == label).filter_map(|tab| tab["tab_id"].as_str().map(str::to_string)).collect();
     herdr::panes_in(workspace).ok()?.into_iter()
         .filter(|pane| pane["tab_id"].as_str().is_some_and(|tab| tabs.iter().any(|candidate| candidate == tab)))
         .filter_map(|pane| pane["pane_id"].as_str().map(str::to_string))
@@ -460,7 +502,9 @@ impl App {
         match self.column {
             Column::Work => {
                 let item = self.tasks.get(self.work_selected);
-                task_choices(item, item.and_then(dev_server).as_deref())
+                let settings = item.and_then(settings_of);
+                let command = |process: Process| settings.as_ref().and_then(|settings| process.command(settings));
+                task_choices(item, command(Process::Server).as_deref(), command(Process::Worker).as_deref())
             }
             Column::Backlog => backlog_choices(&self.sources),
         }
@@ -801,7 +845,8 @@ impl App {
                             self.mode = Mode::Input { purpose: Purpose::Tidy(path), label, buffer: String::new() };
                         }
                     }
-                    'w' => self.toggle_server(&item),
+                    'w' => self.toggle(&item, Process::Server),
+                    'b' => self.toggle(&item, Process::Worker),
                     'a' if item.is_task() => self.show(permit::toggle_task(&peers::address(&item.name, &item.place))),
                     'v' => {
                         if let Some(path) = &item.path {
@@ -836,24 +881,30 @@ impl App {
         }
     }
 
-    // The dev server runs in the Space's server tab; stopping it is ctrl-c to that tab.
-    fn toggle_server(&mut self, item: &Item) {
+    // Each process runs in a tab of the Space named after it; stopping it is ctrl-c to that tab.
+    fn toggle(&mut self, item: &Item, process: Process) {
         let (Some(workspace), Some(path)) = (&item.workspace, &item.path) else {
             self.mode = Mode::Message(format!("{} has no Space open.", item.name));
             return;
         };
-        let Some(command) = dev_server(item) else {
-            self.mode = Mode::Message(format!("{} has no worktree.dev_server; kelpie config shows where to set one.", item.place));
+        let settings = settings_of(item);
+        let Some(command) = settings.as_ref().and_then(|settings| process.command(settings)) else {
+            self.mode = Mode::Message(format!("{} has no {}; kelpie config shows where to set one.", item.place, process.key()));
             return;
         };
-        let result = match busy_server_pane(workspace) {
-            Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping the dev server in {}.", item.name)),
+        let tab = process.tab();
+        let result = match busy_tab_pane(workspace, tab) {
+            Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping {} in {}.", process.noun(), item.name)),
             None => {
                 let port = repo::worktree_port(path);
                 let on = port.map(|port| format!(" on port {port}")).unwrap_or_default();
-                idle_tab_pane(workspace, SERVER_TAB).map(Ok).unwrap_or_else(|| herdr::create_tab(workspace, path, SERVER_TAB))
+                let url = (process == Process::Server).then(|| item.repo.as_deref().and_then(|repo| {
+                    config::dev_url(settings.as_ref()?.dev_url.value.as_deref(), repo, path)
+                })).flatten();
+                let at = url.map(|url| format!(" at {url}")).unwrap_or_default();
+                idle_tab_pane(workspace, tab).map(Ok).unwrap_or_else(|| herdr::create_tab(workspace, path, tab))
                     .and_then(|pane| herdr::run_in_pane(&pane, &server_command(&command, port)))
-                    .map(|_| format!("Started {command}{on} in the server tab of {}'s Space.", item.name))
+                    .map(|_| format!("Started {command}{on} in the {tab} tab of {}'s Space{at}.", item.name))
             }
         };
         self.show(result);
@@ -1109,6 +1160,50 @@ fn ago(at: u64) -> String {
     }
 }
 
+// The running dev server's address under the task's row; the shown text is what link_cells finds again on screen.
+fn web_line(item: &Item, highlighted: bool, width: usize) -> Option<(Line<'static>, Link)> {
+    let url = item.url.as_ref().filter(|_| item.server)?;
+    let room = width.saturating_sub(8).max(2);
+    let shown: String = if url.chars().count() > room { url.chars().take(room - 1).chain(['…']).collect() } else { url.clone() };
+    let line = Line::from(vec![Span::raw("   "), Span::styled("web ", style(GREEN)), Span::styled(shown.clone(), style(TEAL))]);
+    Some((if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }, Link { shown, url: url.clone() }))
+}
+
+pub struct Link {
+    shown: String,
+    url: String,
+}
+
+// Spans drop control characters, so the OSC 8 escape goes into the drawn cells instead, each forced to one column; a URL with anything but printable ASCII stays plain text.
+fn link_cells(buffer: &mut ratatui::buffer::Buffer, link: &Link) {
+    let printable = |text: &str| text.chars().all(|character| character.is_ascii_graphic());
+    if !printable(&link.url) || !printable(link.shown.trim_end_matches('…')) {
+        return;
+    }
+    let shown: Vec<String> = link.shown.chars().map(String::from).collect();
+    let area = buffer.area;
+    let width = area.width as usize;
+    if shown.is_empty() || shown.len() > width {
+        return;
+    }
+    for row in 0..area.height as usize {
+        let start = row * width;
+        let mut x = 0;
+        while x + shown.len() <= width {
+            let cells = &buffer.content[start + x..start + x + shown.len()];
+            if cells.iter().zip(&shown).all(|(cell, symbol)| cell.symbol() == symbol) {
+                for cell in &mut buffer.content[start + x..start + x + shown.len()] {
+                    let symbol = format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", link.url, cell.symbol());
+                    cell.set_symbol(&symbol).set_diff_option(ratatui::buffer::CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN));
+                }
+                x += shown.len();
+            } else {
+                x += 1;
+            }
+        }
+    }
+}
+
 // What the task's last report asks of the user, under its row.
 fn you_line(next: &str, highlighted: bool, width: usize) -> Line<'static> {
     let text = wrap(next, width.saturating_sub(8), 1).into_iter().next().unwrap_or_default();
@@ -1186,6 +1281,10 @@ fn work_lines(app: &mut App, width: usize) -> (Vec<Line<'static>>, usize, Rows) 
         if let Some(next) = item.next_for_you() {
             lines.push(you_line(next, selected && focused, width));
         }
+        if let Some((line, link)) = web_line(item, selected && focused, width) {
+            lines.push(line);
+            app.links.push(link);
+        }
         if selected && focused {
             lines.extend(task_card(app, item, width));
         }
@@ -1253,8 +1352,11 @@ fn task_card(app: &mut App, item: &Item, width: usize) -> Vec<Line<'static>> {
         facts.push(chip);
     }
     facts.extend(permit_chip(item.permit));
-    if item.server {
+    if item.server && item.url.is_none() {
         facts.push(("dev server running".to_string(), GREEN));
+    }
+    if item.worker {
+        facts.push(("worker running".to_string(), GREEN));
     }
     if !facts.is_empty() {
         lines.push(chips(facts));
@@ -1393,13 +1495,14 @@ fn help_lines() -> Vec<Line<'static>> {
     [
         ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("tab", "switch between the work and areas pages"), ("↑ ↓ j k", "move"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
-        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server)"), ("v", "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it"), ("a", "let the lead push the task itself, or take that back"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
+        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server); its address shows under the task (worktree.dev_url)"), ("b", "start or stop the task's worker (worktree.dev_worker)"), ("v", "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it"), ("a", "let the lead push the task itself, or take that back"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
         ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("a", "in the Backlog column: add an item to the local backlog"), ("A", "away mode on or off: the lead settles how-questions and keeps what-questions for you"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
 
 fn draw(frame: &mut Frame, app: &mut App) {
     app.hits.clear();
+    app.links.clear();
     let area = frame.area().inner(Margin { horizontal: 2, vertical: 1 });
     let [top, _, body, bottom] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)]).areas(area);
     let (line, tabs) = header(app, top.width);
@@ -1520,6 +1623,9 @@ fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         app.hits = modal_hits;
     }
+    for link in &app.links {
+        link_cells(frame.buffer_mut(), link);
+    }
 }
 
 const CARD_LINES: usize = 16;
@@ -1635,7 +1741,7 @@ pub fn run(overlay: bool) -> Result<String> {
     let (snapshots, refresh) = spawn_refresher();
     let mut app = App {
         column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog: backlog::load(), work_selected: 0, backlog_selected: 0,
-        mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(),
+        mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
         page: Page::Work, areas: area_page::Page::new(sources.clone()), sources, fetch_failures: Vec::new(),
         away: permit::away_since().is_some(),
     };
@@ -1751,7 +1857,7 @@ mod tests {
 
     #[test]
     fn a_working_task_offers_no_tidy_push_or_done() {
-        let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
+        let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
         assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprazx");
         assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprvtldazx");
         assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gprtldazx", "no commits, nothing to review");
@@ -1759,16 +1865,16 @@ mod tests {
 
     #[test]
     fn a_task_in_review_offers_no_push_until_its_reviewer_passes_it() {
-        let keys = |item: &Item| task_choices(Some(item), None).iter().map(|choice| choice.key).collect::<String>();
+        let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         assert_eq!(keys(&item), "gprvtdazx");
         assert_eq!(row_facts(&item), "1 commit · review: 2 findings");
-        let withdraw = task_choices(Some(&item), None).into_iter().find(|choice| choice.key == 'v').unwrap();
+        let withdraw = task_choices(Some(&item), None, None).into_iter().find(|choice| choice.key == 'v').unwrap();
         assert_eq!(withdraw.label, "Withdraw from review", "the push stays the user's: a task in review can always be taken out");
         item.verdict = None;
         assert_eq!(keys(&item), "gprvtldazx", "withdrawn, it offers push again");
-        assert_eq!(task_choices(Some(&item), None).into_iter().find(|choice| choice.key == 'v').unwrap().label, "Send to review");
+        assert_eq!(task_choices(Some(&item), None, None).into_iter().find(|choice| choice.key == 'v').unwrap().label, "Send to review");
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         item.verdict = Some(crate::status::tests::in_review(true, 0, false, false));
         assert_eq!(keys(&item), "gprvtldazx");
@@ -1800,7 +1906,7 @@ mod tests {
         let mut unchecked = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         unchecked.git.as_mut().unwrap().approved = false;
         assert!(unchecked.group() == crate::status::Group::NeedsYou);
-        assert!(task_choices(Some(&unchecked), None).iter().any(|choice| choice.key == 'l'));
+        assert!(task_choices(Some(&unchecked), None, None).iter().any(|choice| choice.key == 'l'));
         assert_eq!(row_facts(&unchecked), "1 commit · rules not checked by the lead");
     }
 
@@ -1808,19 +1914,19 @@ mod tests {
     fn a_task_without_its_claude_shows_why_and_g_restarts_it() {
         let gone = crate::status::tests::task(None, None, 1);
         assert_eq!(row_facts(&gone), "no Space · 1 commit");
-        assert_eq!(task_choices(Some(&gone), None)[0].label, "Restart it");
+        assert_eq!(task_choices(Some(&gone), None, None)[0].label, "Restart it");
         let mut shell_only = crate::status::tests::task(None, None, 0);
         shell_only.workspace = Some("w1".to_string());
         assert_eq!(row_facts(&shell_only), "no Claude · nothing yet");
         let running = crate::status::tests::task(Some("idle"), None, 0);
         assert_eq!(row_facts(&running), "nothing yet");
-        assert_eq!(task_choices(Some(&running), None)[0].label, "Go to its Space");
+        assert_eq!(task_choices(Some(&running), None, None)[0].label, "Go to its Space");
     }
 
     #[test]
     fn the_user_gives_and_takes_back_the_leads_push_permission_per_task_and_the_card_shows_it() {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
-        let permission = |item: &Item| task_choices(Some(item), None).into_iter().find(|choice| choice.key == 'a').map(|choice| choice.label);
+        let permission = |item: &Item| task_choices(Some(item), None, None).into_iter().find(|choice| choice.key == 'a').map(|choice| choice.label);
         assert_eq!(permission(&item).as_deref(), Some("Let the lead push it"));
         assert!(!row_facts(&item).contains("lead may push"));
         item.permit = Some(Permit::Task);
@@ -1838,11 +1944,69 @@ mod tests {
 
     #[test]
     fn w_is_offered_only_with_a_dev_server() {
-        let keys = |dev_server: Option<&str>| task_choices(None, dev_server).iter().map(|choice| choice.key).collect::<String>();
+        let keys = |dev_server: Option<&str>| task_choices(None, dev_server, None).iter().map(|choice| choice.key).collect::<String>();
         assert_eq!(keys(None), "gprtldzx");
         assert_eq!(keys(Some("bin/dev")), "gprwtldzx");
-        let start = task_choices(None, Some("npm run dev"));
+        let start = task_choices(None, Some("npm run dev"), None);
         assert_eq!((start[3].label.as_str(), start[3].about.as_str()), ("Start the dev server", "npm run dev in a tab of its Space"));
+    }
+
+    #[test]
+    fn b_is_offered_only_with_a_dev_worker() {
+        let keys = |dev_worker: Option<&str>| task_choices(None, Some("bin/dev"), dev_worker).iter().map(|choice| choice.key).collect::<String>();
+        assert_eq!(keys(None), "gprwtldzx");
+        assert_eq!(keys(Some("bin/jobs")), "gprwbtldzx");
+        assert_eq!(task_choices(None, None, Some("bin/jobs")).iter().map(|choice| choice.key).collect::<String>(), "gprbtldzx", "a worker needs no dev server");
+        let mut item = crate::status::tests::task(Some("idle"), None, 0);
+        let labels = |item: &Item| task_choices(Some(item), Some("bin/dev"), Some("bin/jobs")).into_iter().filter(|choice| "wb".contains(choice.key)).map(|choice| choice.label).collect::<Vec<_>>();
+        assert_eq!(labels(&item), ["Start the dev server", "Start the worker"]);
+        item.server = true;
+        item.worker = true;
+        assert_eq!(labels(&item), ["Stop the dev server", "Stop the worker"]);
+    }
+
+    #[test]
+    fn the_web_line_shows_only_while_the_dev_server_runs() {
+        let mut item = crate::status::tests::task(Some("idle"), None, 0);
+        item.url = Some("https://wt1.app.dev".to_string());
+        assert!(web_line(&item, false, 60).is_none(), "an address from config is not a running server");
+        item.server = true;
+        let (line, link) = web_line(&item, false, 60).unwrap();
+        assert_eq!(line.to_string(), "   web https://wt1.app.dev");
+        assert_eq!((link.shown.as_str(), link.url.as_str()), ("https://wt1.app.dev", "https://wt1.app.dev"));
+        assert!(web_line(&item, true, 60).unwrap().0.style.bg == Some(SURFACE), "the selected row's line is highlighted with its card");
+        item.url = None;
+        assert!(web_line(&item, false, 60).is_none(), "dev_url off, or no port for {{port}}");
+        item.url = Some("https://a-very-long-worktree-name.example.dev/path".to_string());
+        let (line, link) = web_line(&item, false, 24).unwrap();
+        assert!(line.width() <= 24, "{}", line.width());
+        assert!(link.shown.ends_with('…') && link.url.ends_with("/path"));
+    }
+
+    #[test]
+    fn the_web_line_is_a_terminal_hyperlink_one_column_per_character() {
+        let mut item = crate::status::tests::task(Some("idle"), None, 0);
+        item.server = true;
+        item.url = Some("http://localhost:3001".to_string());
+        let (line, link) = web_line(&item, false, 40).unwrap();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 3)).unwrap();
+        terminal.draw(|frame| {
+            frame.render_widget(Paragraph::new(vec![Line::from("http://localhost:3001 is elsewhere too"), line]), frame.area());
+            link_cells(frame.buffer_mut(), &link);
+        }).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(7, 1)].symbol(), "\x1b]8;;http://localhost:3001\x1b\\h\x1b]8;;\x1b\\");
+        assert_eq!(buffer[(27, 1)].symbol(), "\x1b]8;;http://localhost:3001\x1b\\1\x1b]8;;\x1b\\");
+        assert_eq!((buffer[(6, 1)].symbol(), buffer[(28, 1)].symbol()), (" ", " "), "the link covers the address and nothing else");
+        assert!((7..28).all(|x| buffer[(x, 1)].diff_option == ratatui::buffer::CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN)));
+        let mut plain = Link { shown: "https://bücher.example".to_string(), url: "https://bücher.example".to_string() };
+        let mut buffer = ratatui::buffer::Buffer::with_lines(["https://bücher.example"]);
+        link_cells(&mut buffer, &plain);
+        assert_eq!(buffer[(0, 0)].symbol(), "h", "a URL beyond printable ASCII stays plain text");
+        plain.url = "https://x.example\x1b]8;;evil".to_string();
+        plain.shown = "https://x.example".to_string();
+        link_cells(&mut buffer, &plain);
+        assert!(!buffer.content.iter().any(|cell| cell.symbol().contains('\x1b')));
     }
 
     #[test]

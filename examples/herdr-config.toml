@@ -20,12 +20,12 @@ tab_bar_right = [
   { type = "datetime", format = "%H:%M" },
 ]
 
-# $server is reported by sync.sh while the dev server the board's w key started runs in the Space.
+# $server and $worker are reported by sync.sh while the dev server the board's w key started, or the worker its b key started, runs in the Space.
 # The default branch is the norm, so it fades; any other branch stands out.
 [ui.sidebar.spaces]
 row_gap = 1
 rows = [
-  ["state_icon", "workspace", { token = "$server", fg = "#a6e3a1" }],
+  ["state_icon", "workspace", { token = "$server", fg = "#a6e3a1" }, { token = "$worker", fg = "#a6e3a1" }],
   [{ token = "branch", fg = "#fab387", bold = true, rules = [
     { equals = "master", fg = "#6c7086", bold = false },
     { equals = "main", fg = "#6c7086", bold = false },

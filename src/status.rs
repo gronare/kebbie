@@ -58,6 +58,8 @@ pub struct Item {
     pub verdict: Option<crate::review::Shown>,
     pub permit: Option<crate::permit::Permit>,
     pub server: bool,
+    pub worker: bool,
+    pub url: Option<String>,
     pub name: String,
     pub place: String,
     pub repo: Option<PathBuf>,
@@ -203,6 +205,8 @@ impl Item {
                 Some(json!({ "text": message.text, "options": options, "recommend": question.recommend, "plan": question.plan, "with_lead": question.given, "age": messages::age(message.at) }))
             }),
             "server": self.server,
+            "url": self.url,
+            "worker": self.worker,
             "git": self.git.as_ref().map(|git| json!({
                 "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed, "approved": git.approved,
             })),
@@ -278,6 +282,11 @@ pub fn checkouts() -> Result<Vec<Checkout>> {
 }
 
 // Every task in a pooled worktree of a repo kelpie knows, then every other Claude session, sorted by what they need.
+pub fn running_url(repo: &Path, worktree: &Path) -> Option<String> {
+    let settings = crate::config::resolve(Some(repo)).ok()?.settings;
+    crate::config::dev_url(settings.dev_url.value.as_deref(), repo, worktree)
+}
+
 pub fn gather() -> Result<Vec<Item>> {
     let workspaces = herdr::workspaces()?;
     let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| agent["agent"] == "claude").collect();
@@ -313,11 +322,14 @@ pub fn gather() -> Result<Vec<Item>> {
             let address = peers::address(&task, &name_of(repo));
             let approved = ahead > 0 && behind == 0 && changed == 0 && tasks::approved(&slot.path, &upstream, &address);
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
+            let server = tokens["server"].is_string();
             items.push(Item {
                 review: review_progress(&slot.path, &upstream),
                 verdict: crate::review::shown(&address, &slot.path, &upstream),
                 permit: crate::permit::of(&address, &name_of(repo)),
-                server: tokens["server"].is_string(),
+                server,
+                worker: tokens["worker"].is_string(),
+                url: if server { running_url(repo, &slot.path) } else { None },
                 place: name_of(repo),
                 repo: Some(repo.clone()),
                 path: Some(slot.path.clone()),
@@ -342,6 +354,8 @@ pub fn gather() -> Result<Vec<Item>> {
             verdict: None,
             permit: None,
             server: false,
+            worker: false,
+            url: None,
             name: agent.title.clone(),
             place: label,
             repo: None,
@@ -365,7 +379,7 @@ pub(crate) mod tests {
 
     pub(crate) fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         Item {
-            review: None, verdict: None, permit: None, server: false, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
+            review: None, verdict: None, permit: None, server: false, worker: false, url: None, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, approved: true }),
             report: report.map(|state| Message {
@@ -489,6 +503,17 @@ pub(crate) mod tests {
         assert!(task(Some("done"), None, 0).group() == Group::NeedsYou);
         assert!(task(Some("idle"), None, 1).group() == Group::ReadyToPush);
         assert!(task(Some("idle"), None, 0).group() == Group::Idle);
+    }
+
+    #[test]
+    fn the_json_carries_the_url_only_while_the_dev_server_runs() {
+        let mut item = task(Some("idle"), None, 0);
+        assert_eq!((item.to_json()["server"].clone(), item.to_json()["url"].clone(), item.to_json()["worker"].clone()), (json!(false), Value::Null, json!(false)));
+        item.server = true;
+        item.url = Some("https://wt1.app.dev".to_string());
+        item.worker = true;
+        let shown = item.to_json();
+        assert_eq!((shown["server"].clone(), shown["url"].clone(), shown["worker"].clone()), (json!(true), json!("https://wt1.app.dev"), json!(true)));
     }
 
     #[test]

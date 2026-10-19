@@ -20,14 +20,16 @@ programs=$(echo "$panes" | jq -r '.result.panes[] | select(.agent != "claude") |
       | [$pane, .[0], .[1]] | @tsv'
   done | jq -Rn '[inputs | split("\t") | { (.[0]): { name: .[1], idle: (.[2] == "idle") } }] | add // {}')
 
-# The board's w key runs worktree.dev_server in a tab labelled server.
+# The board's w key runs worktree.dev_server in a tab labelled server, and b runs worktree.dev_worker in one labelled worker.
 jq -rn --argjson panes "$panes" --argjson tabs "$tabs" --argjson programs "$programs" '
-  [$tabs.result.tabs[] | select(.label == "server") | .tab_id] as $server
-  | $panes.result.panes | group_by(.workspace_id)[]
-  | [.[0].workspace_id, any(.[]; .tab_id as $tab | any($server[]; . == $tab) and ($programs[.pane_id] | . != null and (.idle | not)))] | @tsv' |
-while IFS="$(printf '\t')" read -r ws server; do
+  def busy($label): [$tabs.result.tabs[] | select(.label == $label) | .tab_id] as $ids
+    | any(.[]; .tab_id as $tab | any($ids[]; . == $tab) and ($programs[.pane_id] | . != null and (.idle | not)));
+  $panes.result.panes | group_by(.workspace_id)[]
+  | [.[0].workspace_id, busy("server"), busy("worker")] | @tsv' |
+while IFS="$(printf '\t')" read -r ws server worker; do
   set -- --source sync --ttl-ms 15000
   if [ "$server" = true ]; then set -- "$@" --token server=server; else set -- "$@" --clear-token server; fi
+  if [ "$worker" = true ]; then set -- "$@" --token worker=worker; else set -- "$@" --clear-token worker; fi
   "$herdr" workspace report-metadata "$ws" "$@" >/dev/null 2>&1
 done
 
