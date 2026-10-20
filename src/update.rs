@@ -120,7 +120,13 @@ fn claude_plugin(claude_dir: &Path, claude: &str, root: Option<&Path>, follows_g
         return "Claude Code plugin: not installed; kelpie doctor shows how".to_string();
     };
     match marketplace(claude_dir, &id) {
-        Marketplace::InPlace(path) if root.is_some_and(|root| same_folder(&path, root)) => format!("Claude Code plugin: loaded in place from {}, the same checkout", path.display()),
+        Marketplace::InPlace(path) if root.is_some_and(|root| same_folder(&path, root)) => {
+            let marketplace = id.split_once('@').map_or("kelpie", |(_, market)| market);
+            match sh::run(claude, &["plugin", "marketplace", "update", marketplace], None).and_then(|_| sh::run(claude, &["plugin", "update", &id], None)) {
+                Ok(output) => format!("Claude Code plugin: {}", output.lines().last().unwrap_or("up to date").trim_start_matches(['✔', ' '])),
+                Err(error) => format!("Claude Code plugin: {error}"),
+            }
+        }
         Marketplace::InPlace(path) => format!("Claude Code plugin: loaded in place from {}, which is not the install root; {IN_PLACE_FIX}", path.display()),
         Marketplace::Git if follows_github => match sh::run(claude, &["plugin", "update", &id], None) {
             Ok(output) => format!("Claude Code plugin: {}", output.lines().last().unwrap_or("up to date").trim_start_matches(['✔', ' '])),
@@ -195,18 +201,17 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_marketplace_at_the_install_root_is_the_plugin_and_needs_no_command() {
+    fn a_folder_marketplace_at_the_install_root_is_refreshed_and_its_cached_copy_updated() {
         let dir = scratch("in-place");
         let (claude, log) = fake_claude(&dir);
         let root = dir.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let home = claude_home(&dir, json!({ "source": "directory", "path": root }));
         assert_eq!(marketplace(&home, "kelpie@kelpie"), Marketplace::InPlace(root.clone()));
-        for follows in [true, false] {
-            assert_eq!(claude_plugin(&home, &claude, Some(&root), follows), format!("Claude Code plugin: loaded in place from {}, the same checkout", root.display()));
-        }
         assert!(claude_plugin(&home, &claude, Some(&dir), false).contains("which is not the install root"));
-        assert!(!log.exists(), "claude was not run");
+        assert!(!log.exists(), "claude was not run for a folder that is not the install root");
+        claude_plugin(&home, &claude, Some(&root), false);
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "plugin marketplace update kelpie\nplugin update kelpie@kelpie\n", "Claude Code runs a cached copy, so the folder marketplace is refreshed and the plugin updated");
     }
 
     #[test]

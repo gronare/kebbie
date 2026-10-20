@@ -1,7 +1,7 @@
 {
   "name": "kelpie",
   "displayName": "Kelpie",
-  "version": "0.22.1",
+  "version": "0.22.2",
   "description": "Herding coding agents in herdr: review a task's changes in a split next to Claude, with unified diffs in nvim, line comments typed into Claude's input box, read marks, scoped and live reviews, and worktree-aware bases.",
   "author": {
     "name": "Carl Green"

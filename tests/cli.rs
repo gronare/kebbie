@@ -566,3 +566,26 @@ fn with_auto_off_update_restarts_nothing_and_kelpie_restart_still_does() {
     assert!(said.contains("  billing: restarted") && said.contains("  Notes (p_notes): you are in it: run kelpie restart from another pane") && said.contains("  api: busy: run kelpie restart when it waits"), "{said}");
     assert!(lab.touched("p_billing") && !lab.touched("p_notes") && !lab.touched("p_api") && !lab.touched("p_worker"));
 }
+
+#[test]
+fn a_claude_started_in_a_worktree_from_another_folder_resumes_in_the_worktree() {
+    let lab = Lab::new("restart-worktree");
+    let sessions = sessions(&lab);
+    let work = lab.root.join("work");
+    let worktree = lab.root.join("wt1.work");
+    fs::create_dir_all(&worktree).unwrap();
+    let slug = |dir: &Path| -> String { dir.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect() };
+    let transcripts = lab.home.join(".claude/projects").join(slug(&worktree));
+    fs::create_dir_all(&transcripts).unwrap();
+    fs::copy(lab.home.join(".claude/projects").join(slug(&work)).join("s-billing.jsonl"), transcripts.join("s-billing.jsonl")).unwrap();
+    let answers = lab.root.join("answers");
+    let process = fs::read_to_string(answers.join("process.json")).unwrap().replace(&format!("\"cwd\":\"{}\"", work.display()), &format!("\"cwd\":\"{}\"", worktree.display()));
+    fs::write(answers.join("process.json"), process).unwrap();
+    fs::write(&lab.config, "[update]\nchannel = \"main\"\n").unwrap();
+    let output = lab.with_sessions(&sessions, &["restart", "--all"]);
+    assert!(stdout(&output).contains("billing: restarted"), "{}\n{}", stdout(&output), stderr(&output));
+    let calls = lab.herdr_calls();
+    let cd = calls.iter().position(|call| call[..2] == ["pane", "run"] && call.iter().any(|arg| arg == &format!("cd {}", worktree.display()) || arg == &format!("cd '{}'", worktree.display()))).expect("the pane moves into the worktree first");
+    let start = calls.iter().position(|call| call[..2] == ["agent", "start"] && call.iter().any(|arg| arg == "p_billing")).expect("billing restarts");
+    assert!(cd < start, "cd before claude --resume");
+}

@@ -41,7 +41,7 @@ mkdir -p ~/.local/bin
 ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie
 ```
 
-**5. The Claude Code plugin.** It brings the skills (`kelpie:set-up-worktree`, `kelpie:work-rules`, `kelpie:review`, `/kelpie:review-split` and the rest) and the review hook. Add it from the install root, so it is always the same code as the `kelpie` binary (Claude Code loads a folder marketplace's plugin in place at every session start):
+**5. The Claude Code plugin.** It brings the skills (`kelpie:set-up-worktree`, `kelpie:work-rules`, `kelpie:review`, `/kelpie:review-split` and the rest) and the review hook. Add it from the install root, so it is the same code as the `kelpie` binary; Claude Code runs a cached copy of it, which `kelpie update` refreshes and `kelpie doctor` compares with the checkout:
 
 ```bash
 claude plugin marketplace add ~/.local/share/kelpie/current

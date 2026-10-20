@@ -143,7 +143,7 @@ pub fn plugin_binary(root: &Path) -> Check {
     }
 }
 
-pub fn claude_plugin(installed: Option<&Value>, settings: &Value) -> Check {
+pub fn claude_plugin(installed: Option<&Value>, settings: &Value, checkout: Option<&str>) -> Check {
     let install = one("claude plugin marketplace add ~/.local/share/kelpie/current && claude plugin install kelpie@kelpie");
     let Some(installed) = installed else { return warn("claude plugin", "no installed_plugins.json; the review skills and hook are missing", install) };
     let Some((id, installs)) = installed["plugins"].as_object().into_iter().flatten().find(|(id, _)| id.starts_with("kelpie@")) else {
@@ -152,6 +152,9 @@ pub fn claude_plugin(installed: Option<&Value>, settings: &Value) -> Check {
     let version = installs[0]["version"].as_str().unwrap_or("?");
     if settings["enabledPlugins"][id] == false {
         return warn("claude plugin", format!("{id} {version} is installed but disabled"), one(format!("claude plugin enable {id}")));
+    }
+    if let Some(checkout) = checkout.filter(|checkout| *checkout != version) {
+        return warn("claude plugin", format!("{id} {version} runs in Claude Code, but kelpie's checkout is {checkout}; Claude Code runs a cached copy"), one("kelpie update"));
     }
     ok("claude plugin", format!("{id} {version}"))
 }
@@ -485,7 +488,8 @@ pub fn checks(env: &Env) -> Vec<Check> {
     }
     let installed = read_json(&env.claude_dir.join("plugins/installed_plugins.json"));
     let claude_settings = read_json(&env.claude_dir.join("settings.json")).unwrap_or_default();
-    checks.push(claude_plugin(installed.as_ref(), &claude_settings));
+    let checkout = plugin.as_ref().and_then(|plugin| read_json(&plugin.root.join(".claude-plugin/plugin.json"))).and_then(|manifest| manifest["version"].as_str().map(str::to_string));
+    checks.push(claude_plugin(installed.as_ref(), &claude_settings, checkout.as_deref()));
     let channel = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.channel).unwrap_or_default();
     let kelpie_id = installed.as_ref().and_then(|installed| installed["plugins"].as_object()?.keys().find(|id| id.starts_with("kelpie@")).cloned());
     if let Some(id) = kelpie_id {
@@ -627,12 +631,15 @@ mod tests {
     #[test]
     fn the_claude_plugin_is_read_from_installed_plugins() {
         let installed: Value = serde_json::from_str(r#"{"version":2,"plugins":{"kelpie@kelpie":[{"version":"0.11.0"}]}}"#).unwrap();
-        assert_eq!(claude_plugin(Some(&installed), &Value::Null).fact, "kelpie@kelpie 0.11.0");
+        assert_eq!(claude_plugin(Some(&installed), &Value::Null, None).fact, "kelpie@kelpie 0.11.0");
         let disabled: Value = serde_json::from_str(r#"{"enabledPlugins":{"kelpie@kelpie":false}}"#).unwrap();
-        assert_eq!(claude_plugin(Some(&installed), &disabled).fix, ["claude plugin enable kelpie@kelpie"]);
+        assert_eq!(claude_plugin(Some(&installed), &disabled, None).fix, ["claude plugin enable kelpie@kelpie"]);
         let other: Value = serde_json::from_str(r#"{"plugins":{"vault@x":[{}]}}"#).unwrap();
-        assert_eq!(claude_plugin(Some(&other), &Value::Null).level, Level::Warn);
-        assert_eq!(claude_plugin(None, &Value::Null).level, Level::Warn);
+        assert_eq!(claude_plugin(Some(&other), &Value::Null, None).level, Level::Warn);
+        assert_eq!(claude_plugin(None, &Value::Null, None).level, Level::Warn);
+        let behind = claude_plugin(Some(&installed), &Value::Null, Some("0.12.0"));
+        assert_eq!((behind.level, behind.fix), (Level::Warn, vec!["kelpie update".to_string()]), "a cached copy older than the checkout is a warning");
+        assert_eq!(claude_plugin(Some(&installed), &Value::Null, Some("0.11.0")).level, Level::Ok);
     }
 
     #[test]

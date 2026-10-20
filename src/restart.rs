@@ -595,11 +595,16 @@ fn wait_for_claude(pane: &str) -> Result<()> {
     Err(format!("Claude did not come back in pane {pane}; see what the pane shows"))
 }
 
-fn perform(pane: &Pane, args: &[String], lead: bool) -> Result<()> {
+fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Result<()> {
     if lead {
         return sh::run(&crate::peers::kelpie_command()?, &["lead", "--restart"], None).map(|_| ());
     }
     tasks::end_claude(&pane.pane)?;
+    // A Claude started in a worktree from a pane in the main checkout resumes only from the worktree, where its conversation is kept.
+    if let Some(own) = own.filter(|own| pane.cwd.as_deref().is_none_or(|shell| !same_folder(own, shell))) {
+        tasks::wait_for_prompt(&pane.pane)?;
+        herdr::run_in_pane(&pane.pane, &format!("cd {}", sh::quote(&own.to_string_lossy())))?;
+    }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     match &pane.name {
         Some(name) => tasks::start_claude(name, &pane.pane, &refs, pane.cwd.as_deref().is_some_and(tasks::trusted_by_user)),
@@ -687,10 +692,6 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             None => Err("its command line cannot be read".to_string()),
             Some(args) => args,
         };
-        let args = match (args, &process.cwd, &pane.cwd) {
-            (Ok(_), Some(own), Some(shell)) if !same_folder(own, shell) => Err(format!("its Claude runs in {} but its pane is in {}", own.display(), shell.display())),
-            (args, _, _) => args,
-        };
         let transcript = home.as_deref().and_then(|home| transcript(home, cwd.as_deref(), &session));
         let entry = asked_for(&asked, &session, process.pid);
         let facts = Facts {
@@ -723,7 +724,7 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             continue;
         }
         let lead = lead_space.is_some() && pane.workspace == lead_space;
-        let done = SessionLock::take(&state, &session).and_then(|_lock| perform(&pane, args.as_deref().unwrap_or_default(), lead));
+        let done = SessionLock::take(&state, &session).and_then(|_lock| perform(&pane, process.cwd.as_deref(), args.as_deref().unwrap_or_default(), lead));
         match done {
             Ok(()) => {
                 memory.active.insert(session.clone(), at);
