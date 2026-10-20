@@ -125,7 +125,7 @@ A release happens only when you tag it; CI runs the tests on every push and rele
 1. Bump the version in `Cargo.toml`, `herdr-plugin.toml` and `.claude-plugin/plugin.json` (a test fails when the three differ), then `cargo build` so `Cargo.lock` follows.
 2. Commit and push to main: `git commit -am "kelpie 0.21.0" && git push`. Machines on `main` can try it from here.
 3. Tag that commit and push the tag: `git tag v0.21.0 && git push origin v0.21.0`. Machines on `release` show `↑ kelpie v0.21.0` within 6 hours, and `kelpie update` installs it.
-4. The tag runs `.github/workflows/release.yml`: it fails when the tag and the three manifests disagree, runs the tests, then publishes a GitHub Release with notes generated from the commits since the previous tag.
+4. The tag runs `.github/workflows/release.yml`: it fails when the tag and the three manifests disagree, runs the tests, then drafts a GitHub Release with notes generated from the commits since the previous tag; publishing the draft is yours.
 
 ## First task
 
