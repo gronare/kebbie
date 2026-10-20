@@ -18,7 +18,7 @@ Run one task that changes two repos at once, such as an event one service sends 
 
    To reach one half, address it as `payload-v2@web`.
 
-3. On the board, the halves sit next to each other. Push each half on its own with `l`, in the order the change needs: usually the side that accepts the new field first.
+3. On the board, the halves sit next to each other. Push each half on its own with `p`, in the order the change needs: usually the side that accepts the new field first.
 
 ## Where kelpie finds the repos
 

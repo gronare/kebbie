@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -16,9 +16,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
-use ratatui_image::picker::Picker;
+use ratatui::layout::Size;
+use ratatui_image::picker::{Capability, Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
-use ratatui_image::{Image, Resize};
+use ratatui_image::{FilterType, FontSize, Image, Resize};
 use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::area_page::{self, Effect};
@@ -26,6 +27,7 @@ use crate::backlog::{self, Backlog, Entry};
 use crate::config::{self, Source};
 use crate::fetch::{self, Fetcher};
 use crate::herdr;
+use crate::keys::{self, Act, Ctx};
 use crate::messages::{self, Message};
 use crate::permit::{self, Permit};
 use crate::peers;
@@ -66,62 +68,63 @@ enum Column {
 
 pub struct Choice {
     pub key: char,
+    pub act: Option<Act>,
     pub label: String,
     pub about: String,
 }
 
-pub fn choice(key: char, label: &str, about: &str) -> Choice {
-    Choice { key, label: label.to_string(), about: about.to_string() }
+pub fn choice(act: Act, label: &str, about: &str) -> Choice {
+    Choice { key: keys::key(act), act: Some(act), label: label.to_string(), about: about.to_string() }
 }
 
 fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_worker: Option<&str>) -> Vec<Choice> {
     let go = if item.is_some_and(|item| item.agent.is_none()) {
-        choice('g', "Restart it", "reopen its Space and its Claude, resuming its last conversation")
+        choice(Act::Go, "Restart it", "reopen its Space and its Claude, resuming its last conversation")
     } else {
-        choice('g', "Go to its Space", "jump to the task's Space")
+        choice(Act::Go, "Go to its Space", "jump to the task's Space")
     };
     let mut choices = vec![
         go,
-        choice('p', "Message its Claude", "send it a line without leaving"),
-        choice('r', "Open the review", "the review split next to its Claude"),
+        choice(Act::Chat, "Message its Claude", "send it a line without leaving"),
+        choice(Act::Review, "Open the review", "the review split next to its Claude"),
     ];
     if let Some(command) = dev_server {
         choices.push(if item.is_some_and(|item| item.server) {
-            choice('w', "Stop the dev server", "ctrl-c to its server tab")
+            choice(Act::Server, "Stop the dev server", "ctrl-c to its server tab")
         } else {
-            choice('w', "Start the dev server", &format!("{command} in a tab of its Space"))
+            choice(Act::Server, "Start the dev server", &format!("{command} in a tab of its Space"))
         });
     }
     if let Some(command) = dev_worker {
         choices.push(if item.is_some_and(|item| item.worker) {
-            choice('b', "Stop the worker", "ctrl-c to its worker tab")
+            choice(Act::Worker, "Stop the worker", "ctrl-c to its worker tab")
         } else {
-            choice('b', "Start the worker", &format!("{command} in a tab of its Space"))
+            choice(Act::Worker, "Start the worker", &format!("{command} in a tab of its Space"))
         });
     }
     if !item.is_some_and(busy) {
         if item.and_then(|item| item.git.as_ref()).is_some_and(|git| git.ahead > 0) {
             choices.push(if item.is_some_and(Item::awaiting_review) {
-                choice('v', "Withdraw from review", "stop its reviewer and forget its verdict: push is offered again, and the lead is told")
+                choice(Act::SendReview, "Withdraw from review", "stop its reviewer and forget its verdict: push is offered again, and the lead is told")
             } else {
-                choice('v', "Send to review", "a separate, read-only Claude reviews its commits; the task waits under To review until it passes them")
+                choice(Act::SendReview, "Send to review", "a separate, read-only Claude reviews its commits; the task waits under To review until it passes them")
             });
         }
-        choices.push(choice('t', "Tidy commits", "its Claude reshapes them by the rules skill"));
+        choices.push(choice(Act::Tidy, "Tidy commits", "its Claude reshapes them by the rules skill"));
         if !item.is_some_and(Item::awaiting_review) {
-            choices.push(choice('l', "Push", "rebase, then its card and commits: push them all and close, or the first few and keep it open"));
+            choices.push(choice(Act::Push, "Push", "rebase, then its card and commits: push them all and close, or the first few and keep it open"));
         }
-        choices.push(choice('d', "Done", "already pushed elsewhere: close it and free the worktree"));
+        choices.push(choice(Act::Done, "Done", "already pushed elsewhere: close it and free the worktree"));
     }
     if item.is_some_and(Item::is_task) {
         choices.push(if item.is_some_and(|item| item.permit == Some(Permit::Task)) {
-            choice('a', "Take back push permission", "the lead no longer pushes it; it waits for you under Ready to push")
+            choice(Act::Permit, "Take back push permission", "the lead no longer pushes it; it waits for you under Ready to push")
         } else {
-            choice('a', "Let the lead push it", "the lead may push this task itself once it is landed and approved; done, drop and reset take it back")
+            choice(Act::Permit, "Let the lead push it", "the lead may push this task itself once it is landed and approved; done, drop and reset take it back")
         });
     }
-    choices.push(choice('z', "Reset", "stop it for good: its work goes, its backlog item comes back (asks first)"));
-    choices.push(choice('x', "Drop", "throw the task away (asks first)"));
+    choices.push(choice(Act::Reset, "Reset", "stop it for good: its work goes, its backlog item comes back (asks first)"));
+    choices.push(choice(Act::Drop, "Drop", "throw the task away (asks first)"));
     choices
 }
 
@@ -132,8 +135,8 @@ fn busy(item: &Item) -> bool {
 
 fn ongoing_choices(note: &Ongoing) -> Vec<Choice> {
     vec![match note.task {
-        Some(_) => choice('g', "Go to its task", "select the task that works on this note"),
-        None => choice('g', "Resume as task", "a worktree, a Space and Claude with the note as its prompt"),
+        Some(_) => choice(Act::Go, "Go to its task", "select the task that works on this note"),
+        None => choice(Act::Go, "Resume as task", "a worktree, a Space and Claude with the note as its prompt"),
     }]
 }
 
@@ -146,11 +149,11 @@ fn ongoing_entry(note: &Ongoing) -> Entry {
 
 fn backlog_choices(sources: &[Source]) -> Vec<Choice> {
     let mut choices = vec![
-        choice('g', "Start as task", "a worktree, a Space and Claude with this as its prompt"),
-        choice('R', "Refresh the backlog", &backlog::refresh_label(sources)),
+        choice(Act::Go, "Start as task", "a worktree, a Space and Claude with this as its prompt"),
+        choice(Act::Refresh, "Refresh the backlog", &backlog::refresh_label(sources)),
     ];
     if sources.contains(&Source::Local) {
-        choices.push(choice('a', "Add an item", "a title and a priority, appended to the local backlog file"));
+        choices.push(choice(Act::New, "Add an item", "a title and a priority, appended to the local backlog file"));
     }
     choices
 }
@@ -170,8 +173,12 @@ enum Mode {
     Options(usize),
     Input { purpose: Purpose, label: String, buffer: String },
     Message(String),
-    ConfirmDrop { path: PathBuf, name: String, force: bool },
-    ConfirmReset { path: PathBuf, name: String },
+    ConfirmDrop { path: PathBuf, name: String, force: bool, nudged: bool },
+    ConfirmReset { path: PathBuf, name: String, nudged: bool },
+    ConfirmDone { path: PathBuf, name: String, nudged: bool },
+    Filter { buffer: String },
+    Card { path: PathBuf, name: String, scroll: u16 },
+    Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)> },
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
@@ -303,6 +310,7 @@ struct Detail {
 
 enum Graphics {
     Ready(Picker),
+    Pending { wanted: bool },
     Off,
 }
 
@@ -310,6 +318,91 @@ struct ImageAt {
     line: usize,
     path: PathBuf,
     rows: u16,
+    area: Size,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Shown {
+    Sharp,
+    Preview,
+    Path,
+}
+
+fn image_shown(protocol: Option<ProtocolType>, decoded: bool) -> Shown {
+    match protocol {
+        Some(_) if !decoded => Shown::Path,
+        Some(ProtocolType::Halfblocks) => Shown::Preview,
+        Some(_) => Shown::Sharp,
+        None => Shown::Path,
+    }
+}
+
+// herdr answers the Kitty query but not the cell size while no client is attached, and draws Kitty placeholders once one is.
+fn choose_protocol(forced: Option<&str>, tty: bool, herdr: bool, answered: Option<ProtocolType>) -> Option<ProtocolType> {
+    match forced {
+        Some("off") => None,
+        Some("halfblocks") => Some(ProtocolType::Halfblocks),
+        Some("kitty") => Some(ProtocolType::Kitty),
+        Some("sixel") => Some(ProtocolType::Sixel),
+        Some("iterm2") => Some(ProtocolType::Iterm2),
+        _ if !tty => None,
+        _ if herdr && matches!(answered, None | Some(ProtocolType::Halfblocks)) => Some(ProtocolType::Kitty),
+        _ => Some(answered.unwrap_or(ProtocolType::Halfblocks)),
+    }
+}
+
+const GUESSED_CELL: (u16, u16) = (10, 20);
+
+fn cell_size(answered: Option<(u16, u16)>, window: Option<(u16, u16, u16, u16)>) -> Option<(u16, u16)> {
+    let known = |(width, height): (u16, u16)| width > 0 && height > 0;
+    answered.filter(|cell| known(*cell)).or_else(|| {
+        let (columns, rows, width, height) = window?;
+        (columns > 0 && rows > 0).then(|| (width / columns, height / rows)).filter(|cell| known(*cell))
+    })
+}
+
+fn window_pixels() -> Option<(u16, u16, u16, u16)> {
+    let size = ratatui::crossterm::terminal::window_size().ok()?;
+    Some((size.columns, size.rows, size.width, size.height))
+}
+
+fn picker_for(protocol: ProtocolType, (width, height): (u16, u16)) -> Picker {
+    #[allow(deprecated)]
+    let mut picker = Picker::from_fontsize(FontSize::new(width, height));
+    picker.set_protocol_type(protocol);
+    picker
+}
+
+// Over SSH a viewer would open on the other machine, so o is offered only where the board sits.
+fn image_viewer(os: &str, set: &dyn Fn(&str) -> bool) -> Option<&'static str> {
+    if set("SSH_CONNECTION") || set("SSH_TTY") {
+        return None;
+    }
+    match os {
+        "macos" => Some("open"),
+        "linux" if set("DISPLAY") || set("WAYLAND_DISPLAY") => Some("xdg-open"),
+        _ => None,
+    }
+}
+
+fn openable(file: &Path) -> bool {
+    use image::ImageFormat::{Gif, Jpeg, Png, WebP};
+    file.is_file() && matches!(image::ImageFormat::from_path(file), Ok(Png | Jpeg | Gif | WebP))
+}
+
+fn file_url(file: &Path) -> String {
+    let mut url = String::from("file://");
+    for byte in file.to_string_lossy().bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'.' | b'_' | b'~' => url.push(byte as char),
+            _ => url.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    url
+}
+
+fn preview_note(viewer: bool) -> String {
+    if viewer { format!("preview · {} larger · {} opens the image", keys::map().label(Act::Fullscreen), keys::map().label(Act::OpenImage)) } else { format!("preview · {} larger", keys::map().label(Act::Fullscreen)) }
 }
 
 enum Rewrite {
@@ -410,7 +503,10 @@ struct App {
     detail_results: Option<Receiver<(PathBuf, Detail)>>,
     asked_details: HashMap<PathBuf, Instant>,
     graphics: Graphics,
-    images: HashMap<(PathBuf, u16), Option<Protocol>>,
+    images: HashMap<(PathBuf, u16, u16), Option<Protocol>>,
+    cell_guessed: bool,
+    viewer: Option<&'static str>,
+    card_image_lines: Vec<usize>,
     decoded: HashMap<PathBuf, Option<image::DynamicImage>>,
     image_requests: Option<Sender<PathBuf>>,
     image_results: Option<Receiver<Decoded>>,
@@ -421,6 +517,9 @@ struct App {
     update_shown: bool,
     recheck: Option<Sender<()>>,
     stale: Vec<String>,
+    filter: Option<(Column, String)>,
+    ctrl_c: Option<Instant>,
+    notice: Option<(String, Instant)>,
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
@@ -605,6 +704,7 @@ fn spawn_refresher() -> (Receiver<std::result::Result<Snapshot, String>>, Sender
     thread::spawn(move || {
         loop {
             let _ = messages::flush();
+            crate::typing::check();
             let snapshot = status::gather().and_then(|items| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().collect();
                 Ok(Snapshot { checkouts: status::checkouts()?, items, messages: messages::recent(200), questions, usage: usage::load(), ongoing: load_ongoing() })
@@ -699,10 +799,24 @@ fn spawn_decoder() -> Option<(Sender<PathBuf>, Receiver<Decoded>)> {
     Some((request_tx, image_rx))
 }
 
+// git status --porcelain -z: "XY path" entries split by NUL, a rename or copy followed by its old path as an entry of its own.
+fn changed_files(porcelain: &str) -> Vec<String> {
+    let mut entries = porcelain.split('\0').filter(|entry| !entry.is_empty());
+    let mut files = Vec::new();
+    while let Some(entry) = entries.next() {
+        if let Some(path) = entry.get(3..) {
+            files.push(path.to_string());
+        }
+        if entry.starts_with(['R', 'C']) {
+            entries.next();
+        }
+    }
+    files
+}
+
 fn gather_detail(path: &Path, repo: Option<&Path>) -> Detail {
     let settings = repo.and_then(|repo| config::resolve(Some(repo)).ok()).map(|resolved| resolved.settings);
-    let changed = repo::git(path, &["status", "--porcelain"]).unwrap_or_default().lines()
-        .filter_map(|line| line.get(3..)).map(|name| name.rsplit(" -> ").next().unwrap_or(name).to_string()).collect();
+    let changed = changed_files(&crate::sh::run_untrimmed("git", &["status", "--porcelain", "-z"], Some(path)).unwrap_or_default());
     Detail {
         branch: repo::git(path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default(),
         commits: tasks::commits(path).unwrap_or_default(),
@@ -786,18 +900,96 @@ fn busy_tab_pane(workspace: &str, label: &str) -> Option<String> {
         .find(|pane| matches!(herdr::foreground(pane), Ok(Some(_))))
 }
 
+// The review split runs scripts/review.sh list, and nvim or fzf under it while a file is open.
+fn runs_review(info: &serde_json::Value) -> bool {
+    info["foreground_processes"].as_array().into_iter().flatten().any(|process| {
+        let argv: Vec<&str> = process["argv"].as_array().into_iter().flatten().filter_map(|arg| arg.as_str()).collect();
+        argv.iter().any(|arg| arg.ends_with("review.sh")) && argv.contains(&"list")
+    })
+}
+
+fn review_pane_in(panes: &[(String, serde_json::Value)]) -> Option<String> {
+    panes.iter().find(|(_, info)| runs_review(info)).map(|(pane, _)| pane.clone())
+}
+
+fn open_review_pane(workspace: &str) -> Option<String> {
+    let panes: Vec<(String, serde_json::Value)> = herdr::panes_in(workspace).ok()?.into_iter()
+        .filter_map(|pane| pane["pane_id"].as_str().map(str::to_string))
+        .filter_map(|pane| herdr::process_info(&pane).ok().map(|info| (pane, info)))
+        .collect();
+    review_pane_in(&panes)
+}
+
+// herdr focuses a pane only by its neighbour, so the pane is reached from whichever side has one.
+fn focus_pane(pane: &str) -> Result<()> {
+    if herdr::focused_pane()?.as_deref() == Some(pane) {
+        return Ok(());
+    }
+    if let Some(tab) = herdr::tab_of(pane)? {
+        herdr::focus_tab(&tab)?;
+    }
+    for (side, back) in [("left", "right"), ("right", "left"), ("up", "down"), ("down", "up")] {
+        if let Some(neighbour) = herdr::neighbour(pane, side)? {
+            herdr::focus_beside(&neighbour, back)?;
+            if herdr::focused_pane()?.as_deref() == Some(pane) {
+                return Ok(());
+            }
+        }
+    }
+    if herdr::focused_pane()?.as_deref() == Some(pane) { Ok(()) } else { Err(format!("herdr did not move the focus to {pane}")) }
+}
+
 fn review_script() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-    Some(exe.ancestors().nth(3)?.join("scripts/review.sh"))
+    Some(lead::install_root().ok()?.join("scripts/review.sh"))
 }
 
 impl App {
     fn selected_task(&self) -> Option<Item> {
-        self.tasks.get(self.work_selected).cloned()
+        self.tasks.get(self.work_selected).filter(|_| self.shown(Column::Work, self.work_selected)).cloned()
     }
 
     fn selected_entry(&self) -> Option<Entry> {
-        self.backlog.entries.get(self.backlog_selected.checked_sub(self.ongoing.len())?).cloned()
+        self.backlog.entries.get(self.backlog_selected.checked_sub(self.ongoing.len())?).filter(|_| self.shown(Column::Backlog, self.backlog_selected)).cloned()
+    }
+
+    fn filter_of(&self, column: Column) -> Option<&str> {
+        self.filter.as_ref().filter(|(on, text)| *on == column && !text.is_empty()).map(|(_, text)| text.as_str())
+    }
+
+    fn shown(&self, column: Column, index: usize) -> bool {
+        let Some(filter) = self.filter_of(column) else { return true };
+        let wanted = filter.to_lowercase();
+        let has = |text: &str| text.to_lowercase().contains(&wanted);
+        match column {
+            Column::Work => self.tasks.get(index).is_some_and(|item| has(&item.name) || has(&item.place)),
+            Column::Backlog => match index.checked_sub(self.ongoing.len()) {
+                None => self.ongoing.get(index).is_some_and(|note| has(&note.title) || has(&note.area)),
+                Some(entry) => self.backlog.entries.get(entry).is_some_and(|entry| has(&entry.title) || has(&entry.area)),
+            },
+        }
+    }
+
+    fn ctx(&self) -> Ctx {
+        match self.column {
+            Column::Work => Ctx::Work,
+            Column::Backlog => Ctx::Backlog,
+        }
+    }
+
+    fn say(&mut self, text: String) {
+        self.notice = Some((text, Instant::now()));
+    }
+
+    fn set_filter(&mut self, text: String) {
+        let column = self.column;
+        self.filter = Some((column, text));
+        let length = match column { Column::Work => self.tasks.len(), Column::Backlog => self.backlog_len() };
+        if let Some(first) = (0..length).find(|index| self.shown(column, *index)) {
+            match column {
+                Column::Work => self.work_selected = first,
+                Column::Backlog => self.backlog_selected = first,
+            }
+        }
     }
 
     fn choices(&self) -> Vec<Choice> {
@@ -808,13 +1000,25 @@ impl App {
                 let command = |process: Process| settings.as_ref().and_then(|settings| process.command(settings));
                 let mut choices = task_choices(item, command(Process::Server).as_deref(), command(Process::Worker).as_deref());
                 if item.is_some_and(|item| self.question_of(item).is_some()) {
-                    choices.insert(0, choice('q', "Answer its question", "the question window, at this task's question"));
+                    choices.insert(0, choice(Act::Inbox, "Answer its question", "the inbox, at this task's question"));
+                }
+                if item.is_some_and(|item| self.card_of(item).is_some()) {
+                    let after = choices.iter().position(|choice| choice.act == Some(Act::Review)).map_or(choices.len(), |at| at + 1);
+                    choices.insert(after, choice(Act::Card, "Show the card", "its sign-off card with its images; p goes on to push"));
                 }
                 choices
             }
             Column::Backlog if self.backlog_selected < self.ongoing.len() => ongoing_choices(&self.ongoing[self.backlog_selected]),
             Column::Backlog => backlog_choices(&self.sources),
         }
+    }
+
+    fn card_of(&self, item: &Item) -> Option<std::rc::Rc<Detail>> {
+        self.details.get(item.path.as_ref()?).filter(|detail| detail.card.is_some()).cloned()
+    }
+
+    fn selected_has_card(&self) -> bool {
+        self.column == Column::Work && self.selected_task().is_some_and(|item| self.card_of(&item).is_some())
     }
 
     fn question_of(&self, item: &Item) -> Option<usize> {
@@ -854,12 +1058,16 @@ impl App {
     }
 
     // None means the caller draws the path instead.
-    fn image_rows(&mut self, path: &Path, width: u16) -> Option<u16> {
+    fn image_size(&mut self, path: &Path, area: Size) -> Option<Size> {
         if !path.is_file() {
             return None;
         }
+        self.settle_cell();
+        if let Graphics::Pending { wanted } = &mut self.graphics {
+            *wanted = true;
+        }
         let Graphics::Ready(picker) = &self.graphics else { return None };
-        let key = (path.to_path_buf(), width);
+        let key = (path.to_path_buf(), area.width, area.height);
         if !self.images.contains_key(&key) {
             let Some(decoded) = self.decoded.get(path) else {
                 if let Some(requests) = &self.image_requests {
@@ -868,16 +1076,54 @@ impl App {
                 self.decoded.insert(path.to_path_buf(), None);
                 return None;
             };
-            let protocol = decoded.clone().and_then(|decoded| picker.new_protocol(decoded, ratatui::layout::Size::new(width, 14), Resize::Fit(None)).ok());
+            let protocol = decoded.clone().and_then(|decoded| picker.new_protocol(decoded, area, Resize::Scale(Some(FilterType::Lanczos3))).ok());
             self.images.insert(key.clone(), protocol);
         }
-        self.images.get(&key)?.as_ref().map(|protocol| protocol.size().height)
+        self.images.get(&key)?.as_ref().map(|protocol| protocol.size())
+    }
+
+    // A board started while herdr had no client attached learns its cell size once the window reports pixels.
+    fn settle_cell(&mut self) {
+        if !self.cell_guessed {
+            return;
+        }
+        let Graphics::Ready(picker) = &self.graphics else { return };
+        if let Some(cell) = cell_size(None, window_pixels()) {
+            self.graphics = Graphics::Ready(picker_for(picker.protocol_type(), cell));
+            self.images.clear();
+            self.cell_guessed = false;
+        }
+    }
+
+    fn protocol(&self) -> Option<ProtocolType> {
+        match &self.graphics {
+            Graphics::Ready(picker) => Some(picker.protocol_type()),
+            Graphics::Pending { .. } | Graphics::Off => None,
+        }
+    }
+
+    fn card_images(&self, path: &Path) -> Vec<PathBuf> {
+        let Some((card, _)) = self.details.get(path).and_then(|detail| detail.card.as_ref()) else { return Vec::new() };
+        card.text.lines().filter_map(card_image_in).map(|(_, image)| path.join(image)).collect()
+    }
+
+    fn open_image(&mut self, file: &Path) {
+        let Some(viewer) = self.viewer else { return };
+        if !openable(file) {
+            return self.say(format!("{} is not an image file kelpie opens", file.display()));
+        }
+        match Command::new(viewer).arg(file).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            Ok(mut child) => {
+                thread::spawn(move || child.wait());
+            }
+            Err(error) => self.say(format!("{viewer}: {error}")),
+        }
     }
 
     fn take_images(&mut self) {
         let Some(results) = &self.image_results else { return };
         while let Ok((path, decoded)) = results.try_recv() {
-            self.images.retain(|(drawn, _), _| *drawn != path);
+            self.images.retain(|(drawn, _, _), _| *drawn != path);
             self.decoded.insert(path, decoded);
         }
     }
@@ -972,14 +1218,14 @@ impl App {
     }
 
     fn handle_messages(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => self.message_back = (self.message_back + 1).min(self.messages.len().saturating_sub(1)),
-            KeyCode::Down | KeyCode::Char('j') => self.message_back = self.message_back.saturating_sub(1),
-            KeyCode::Esc => self.in_messages = false,
-            KeyCode::Char('m') => self.press_m(),
-            KeyCode::Char('?') => self.mode = Mode::Help,
-            KeyCode::Char('q') => self.open_questions(None),
-            KeyCode::Enter => {
+        match keys::map().act(self.ctx(), &key) {
+            Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.message_back = (self.message_back + 1).min(self.messages.len().saturating_sub(1)),
+            Some(Act::Move) => self.message_back = self.message_back.saturating_sub(1),
+            Some(Act::Back | Act::Close) => self.in_messages = false,
+            Some(Act::Messages) => self.press_m(),
+            Some(Act::Help) => self.mode = Mode::Help,
+            Some(Act::Inbox) => self.open_questions(None),
+            Some(Act::Options) => {
                 if let Some(message) = self.selected_message() {
                     self.mode = Mode::Message(format!("{} {} → {}\n\n{}", clock(message.at), message.from, message.to, message.text));
                 }
@@ -989,11 +1235,23 @@ impl App {
     }
 
     fn move_selection(&mut self, step: isize) {
-        let (selected, length) = match self.column {
-            Column::Work => (&mut self.work_selected, self.tasks.len()),
-            Column::Backlog => (&mut self.backlog_selected, self.ongoing.len() + self.backlog.entries.len()),
+        let column = self.column;
+        let (selected, length) = match column {
+            Column::Work => (self.work_selected, self.tasks.len()),
+            Column::Backlog => (self.backlog_selected, self.ongoing.len() + self.backlog.entries.len()),
         };
-        *selected = selected.saturating_add_signed(step).min(length.saturating_sub(1));
+        let mut at = selected;
+        let next = loop {
+            let Some(moved) = at.checked_add_signed(step).filter(|moved| *moved < length) else { break selected };
+            if self.shown(column, moved) {
+                break moved;
+            }
+            at = moved;
+        };
+        match column {
+            Column::Work => self.work_selected = next,
+            Column::Backlog => self.backlog_selected = next,
+        }
     }
 
     fn hit_at(&self, column: u16, row: u16) -> Option<Hit> {
@@ -1065,13 +1323,13 @@ impl App {
                         }
                     }
                     (Some(Hit::Key(code)), Mode::Normal) => {
-                        self.in_messages &= code == KeyCode::Char('m');
+                        self.in_messages &= code == keys::map().code(Act::Messages);
                         return Some(KeyEvent::from(code));
                     }
                     (Some(Hit::Choice(index)), Mode::Options(_)) => {
-                        if let Some(key) = self.choices().get(index).map(|choice| choice.key) {
+                        if let Some(act) = self.choices().get(index).and_then(|choice| choice.act) {
                             self.mode = Mode::Normal;
-                            self.act(key);
+                            self.act(act);
                         }
                     }
                     (Some(Hit::Commit(index)), Mode::ConfirmPush { selected, .. }) => *selected = index,
@@ -1090,68 +1348,152 @@ impl App {
     }
 
     fn handle(&mut self, key: KeyEvent, terminal: &mut DefaultTerminal) {
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.quit = true;
+        self.handle_key(key, Some(terminal));
+    }
+
+    // Without a terminal (in tests) the steps that leave the board for an editor or a long start are skipped.
+    fn handle_key(&mut self, key: KeyEvent, terminal: Option<&mut DefaultTerminal>) {
+        let map = keys::map();
+        if keys::ctrl_c(&key) {
+            if self.ctrl_c.is_some_and(|at| at.elapsed() < Duration::from_secs(2)) {
+                self.quit = true;
+            } else {
+                self.ctrl_c = Some(Instant::now());
+                self.say(format!("{} again to quit", map.label(Act::Quit)));
+            }
             return;
         }
+        self.notice = None;
         if self.at_rest() {
-            match key.code {
-                KeyCode::Tab | KeyCode::BackTab => {
+            let ctx = if self.page == Page::Areas { Ctx::Areas } else { self.ctx() };
+            match map.act(ctx, &key) {
+                Some(Act::Lead) => {
                     if let Err(error) = lead::focus_toggle() {
                         self.mode = Mode::Message(error);
                     }
                     return;
                 }
-                KeyCode::Char('1') => return self.page = Page::Work,
-                KeyCode::Char('2') => return self.page = Page::Areas,
+                Some(Act::WorkPage) => return self.page = Page::Work,
+                Some(Act::AreasPage) => return self.page = Page::Areas,
+                Some(Act::Inbox) => {
+                    self.page = Page::Work;
+                    return self.open_questions(None);
+                }
                 _ => {}
             }
         }
         if self.page == Page::Areas {
-            let leaving = matches!(key.code, KeyCode::Esc | KeyCode::Char('q'));
+            let top = self.areas.is_normal();
+            let Some(terminal) = terminal else { return };
             match self.areas.handle(key, terminal) {
                 Effect::Left => self.quit = self.overlay,
-                Effect::Unhandled if leaving => self.quit = self.overlay,
+                Effect::Unhandled if top => self.at_top(map.act(Ctx::Areas, &key)),
                 _ => {}
             }
             return;
         }
+        let act = map.act(self.ctx(), &key);
+        let cancels = matches!(act, Some(Act::Back | Act::Close)) || key.code == KeyCode::Char('n');
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.handle_normal(key),
             Mode::Options(index) => {
-                let count = self.choices().len();
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::Options(index.saturating_sub(1)),
-                    KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::Options((index + 1).min(count - 1)),
-                    KeyCode::Enter => {
-                        if let Some(choice) = self.choices().get(index) {
-                            let key = choice.key;
-                            self.act(key);
+                let choices = self.choices();
+                let count = choices.len();
+                let typed = match key.code {
+                    KeyCode::Char(character) => choices.iter().find(|choice| choice.key == character).and_then(|choice| choice.act),
+                    _ => None,
+                };
+                match (typed, act) {
+                    (Some(chosen), _) => self.act(chosen),
+                    (None, Some(Act::Move)) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.mode = Mode::Options(index.saturating_sub(1)),
+                    (None, Some(Act::Move)) => self.mode = Mode::Options((index + 1).min(count.saturating_sub(1))),
+                    (None, Some(Act::Options)) => {
+                        if let Some(chosen) = choices.get(index).and_then(|choice| choice.act) {
+                            self.act(chosen);
                         }
                     }
-                    KeyCode::Char(character) if self.choices().iter().any(|choice| choice.key == character) => self.act(character),
-                    KeyCode::Esc => {}
+                    (None, Some(Act::Back | Act::Close)) => {}
                     _ => self.mode = Mode::Options(index),
                 }
             }
             Mode::Help | Mode::Message(_) => {}
             working @ Mode::Working { .. } => self.mode = working,
             Mode::Questions(window) => self.handle_questions(window, key),
-            Mode::ConfirmReset { path, .. } => {
-                if key.code == KeyCode::Char('y') {
-                    self.in_background("Resetting the task…".to_string(), move || tasks::reset(&path, None));
-                }
-            }
-            Mode::ConfirmDrop { path, name, force } => {
-                if key.code == KeyCode::Char('y') {
-                    match tasks::drop(&path, None, force) {
-                        Err(error) if !force && error.contains("--force") => {
-                            self.mode = Mode::ConfirmDrop { path, name: format!("{name}: {error}"), force: true };
+            Mode::ConfirmReset { path, name, .. } => match key.code {
+                KeyCode::Char('y') => self.in_background("Resetting the task…".to_string(), move || tasks::reset(&path, None)),
+                _ if cancels => {}
+                _ => self.mode = Mode::ConfirmReset { path, name, nudged: true },
+            },
+            Mode::ConfirmDone { path, name, .. } => match key.code {
+                KeyCode::Char('y') => self.in_background(format!("Closing {name}…"), move || tasks::done(&path, None)),
+                _ if cancels => {}
+                _ => self.mode = Mode::ConfirmDone { path, name, nudged: true },
+            },
+            Mode::ConfirmDrop { path, name, force, .. } => match key.code {
+                KeyCode::Char('y') => match tasks::drop(&path, None, force) {
+                    Err(error) if !force && error.contains("--force") => {
+                        self.mode = Mode::ConfirmDrop { path, name: format!("{name}: {error}"), force: true, nudged: false };
+                    }
+                    result => self.show(result),
+                },
+                _ if cancels => {}
+                _ => self.mode = Mode::ConfirmDrop { path, name, force, nudged: true },
+            },
+            Mode::Card { path, name, scroll } => match map.act(Ctx::Card, &key) {
+                Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.mode = Mode::Card { path, name, scroll: scroll.saturating_sub(1) },
+                Some(Act::Move) => self.mode = Mode::Card { path, name, scroll: scroll.saturating_add(1) },
+                Some(Act::Push) => self.act(Act::Push),
+                Some(Act::Back | Act::Close) => {}
+                Some(act @ (Act::Fullscreen | Act::OpenImage)) => {
+                    let files = self.card_images(&path);
+                    let index = self.card_image_lines.iter().position(|line| *line >= scroll as usize).unwrap_or(0).min(files.len().saturating_sub(1));
+                    match files.get(index) {
+                        Some(_) if act == Act::Fullscreen && self.protocol().is_some() => self.mode = Mode::Fullscreen { path, name, scroll, index },
+                        Some(file) if act == Act::OpenImage => {
+                            let file = file.clone();
+                            self.mode = Mode::Card { path, name, scroll };
+                            self.open_image(&file);
                         }
-                        result => self.show(result),
+                        _ => self.mode = Mode::Card { path, name, scroll },
                     }
                 }
+                _ => match key.code {
+                    KeyCode::PageUp => self.mode = Mode::Card { path, name, scroll: scroll.saturating_sub(10) },
+                    KeyCode::PageDown | KeyCode::Char(' ') => self.mode = Mode::Card { path, name, scroll: scroll.saturating_add(10) },
+                    _ => self.mode = Mode::Card { path, name, scroll },
+                },
+            },
+            Mode::Fullscreen { path, name, scroll, index } => {
+                let count = self.card_images(&path).len().max(1);
+                match map.act(Ctx::Card, &key) {
+                    Some(Act::Back | Act::Close | Act::Fullscreen) => self.mode = Mode::Card { path, name, scroll },
+                    Some(Act::Switch) if key.code == KeyCode::Left => self.mode = Mode::Fullscreen { path, name, scroll, index: (index + count - 1) % count },
+                    Some(Act::Switch) => self.mode = Mode::Fullscreen { path, name, scroll, index: (index + 1) % count },
+                    Some(Act::OpenImage) => {
+                        let file = self.card_images(&path).get(index).cloned();
+                        self.mode = Mode::Fullscreen { path, name, scroll, index };
+                        if let Some(file) = file {
+                            self.open_image(&file);
+                        }
+                    }
+                    _ => self.mode = Mode::Fullscreen { path, name, scroll, index },
+                }
             }
+            Mode::Filter { mut buffer } => match key.code {
+                KeyCode::Esc => self.filter = None,
+                KeyCode::Enter => {}
+                KeyCode::Backspace => {
+                    buffer.pop();
+                    self.set_filter(buffer.clone());
+                    self.mode = Mode::Filter { buffer };
+                }
+                KeyCode::Char(character) => {
+                    buffer.push(character);
+                    self.set_filter(buffer.clone());
+                    self.mode = Mode::Filter { buffer };
+                }
+                _ => self.mode = Mode::Filter { buffer },
+            },
             Mode::ConfirmPush { path, commits, selected, card } => match key.code {
                 KeyCode::Char(key @ ('y' | 'p')) => {
                     let keep_open = key == 'p';
@@ -1215,7 +1557,7 @@ impl App {
                         }
                     }
                     KeyCode::Char('o') if control => {
-                        if let Ok(Some(message)) = edit_in_editor(terminal, &editor.message()) {
+                        if let Some(Ok(Some(message))) = terminal.map(|terminal| edit_in_editor(terminal, &editor.message())) {
                             editor.set_text(&message);
                         }
                         self.mode = Mode::EditMessage(editor);
@@ -1242,36 +1584,52 @@ impl App {
         }
     }
 
+    // esc and q at the top: an overlay board closes; the full board stays, as it is quit with ctrl+c twice.
+    fn at_top(&mut self, act: Option<Act>) {
+        match act {
+            Some(Act::Back) if self.filter.is_some() && self.page == Page::Work => self.filter = None,
+            Some(Act::Back | Act::Close) if self.overlay => self.quit = true,
+            Some(Act::Close) => {
+                let quit = keys::map().label(Act::Quit);
+                self.say(format!("{quit} twice to quit"));
+            }
+            _ => {}
+        }
+    }
+
     fn handle_normal(&mut self, key: KeyEvent) {
         if self.in_messages {
             return self.handle_messages(key);
         }
-        match key.code {
-            KeyCode::Char('m') => self.press_m(),
-            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
-            KeyCode::Left | KeyCode::Right => {
-                self.column = if self.column == Column::Work { Column::Backlog } else { Column::Work };
-            }
-            KeyCode::Esc if self.overlay => self.quit = true,
-            KeyCode::Char('?') => self.mode = Mode::Help,
-            KeyCode::Char('q') => self.open_questions(None),
-            KeyCode::Enter => {
+        let ctx = self.ctx();
+        let Some(act) = keys::map().act(ctx, &key) else { return };
+        match act {
+            Act::Messages => self.press_m(),
+            Act::Move => self.move_selection(if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) { -1 } else { 1 }),
+            Act::Switch => self.column = if self.column == Column::Work { Column::Backlog } else { Column::Work },
+            Act::Back | Act::Close => self.at_top(Some(act)),
+            Act::Help => self.mode = Mode::Help,
+            Act::Inbox => self.open_questions(None),
+            Act::Options => {
                 let has_selection = match self.column {
-                    Column::Work => !self.tasks.is_empty(),
-                    Column::Backlog => self.backlog_len() > 0,
+                    Column::Work => self.selected_task().is_some(),
+                    Column::Backlog => self.backlog_len() > 0 && self.shown(Column::Backlog, self.backlog_selected),
                 };
                 if has_selection {
                     self.mode = Mode::Options(0);
                 }
             }
-            KeyCode::Char('R') => self.refresh_backlog(),
-            KeyCode::Char('A') => self.show(permit::away(Some(if permit::away_since().is_some() { "off" } else { "on" }))),
-            KeyCode::Char('U') => self.start_update(),
-            KeyCode::Char('s') => {
-                self.mode = Mode::Input { purpose: Purpose::TaskName, label: "New task: name".to_string(), buffer: String::new() };
+            Act::Refresh => self.refresh_backlog(),
+            Act::Away => self.show(permit::away(Some(if permit::away_since().is_some() { "off" } else { "on" }))),
+            Act::Update => self.start_update(),
+            Act::Filter => {
+                let buffer = self.filter_of(self.column).unwrap_or_default().to_string();
+                self.mode = Mode::Filter { buffer };
             }
-            KeyCode::Char(character) if self.choices().iter().any(|choice| choice.key == character) => self.act(character),
+            Act::New if ctx == Ctx::Backlog && self.sources.contains(&Source::Local) => self.act(Act::New),
+            Act::Card if ctx == Ctx::Work => self.act(Act::Card),
+            Act::New => self.mode = Mode::Input { purpose: Purpose::TaskName, label: "New task: name".to_string(), buffer: String::new() },
+            other if self.choices().iter().any(|choice| choice.act == Some(other)) => self.act(other),
             _ => {}
         }
     }
@@ -1282,6 +1640,7 @@ impl App {
         let typing = window.part == Part::Comment;
         match key.code {
             KeyCode::Esc => return,
+            KeyCode::Char(character) if !typing && character == keys::key(Act::Close) => return,
             KeyCode::Tab | KeyCode::BackTab => window.part = window.part.next(key.code == KeyCode::BackTab),
             KeyCode::PageUp => window.scroll = window.scroll.saturating_sub(10),
             KeyCode::PageDown => window.scroll = window.scroll.saturating_add(10),
@@ -1368,14 +1727,17 @@ impl App {
 
     fn refresh_backlog(&mut self) {
         let result = backlog::refresh_prompt(&self.sources).and_then(|prompt| match self.lead_pane() {
-            Some(pane) => herdr::prompt_agent(&pane, &prompt).map(|_| "Asked the lead to refresh the backlog; it updates here when it is saved.".to_string()),
+            Some(pane) => crate::typing::prompt(&pane, &prompt, "the lead").map(|_| "Asked the lead to refresh the backlog; it updates here when it is saved.".to_string()).map_err(|refused| format!("Nothing was typed: the lead {}; ask again once it is clear.", refused.reason())),
             None => Err("No lead is running; prefix+space starts it.".to_string()),
         });
         self.show(result);
     }
 
-    fn act(&mut self, key: char) {
-        if self.column == Column::Backlog && let Some(note) = self.ongoing.get(self.backlog_selected).cloned() {
+    fn act(&mut self, act: Act) {
+        if !self.shown(self.column, if self.column == Column::Work { self.work_selected } else { self.backlog_selected }) {
+            return;
+        }
+        if self.column == Column::Backlog && let Some(note) = self.ongoing.get(self.backlog_selected).cloned().filter(|_| act == Act::Go) {
             match &note.task {
                 Some(task) => {
                     if let Some(index) = self.tasks.iter().position(|item| &peers::address(&item.name, &item.place) == task) {
@@ -1392,15 +1754,15 @@ impl App {
             return;
         }
         match self.column {
-            Column::Backlog => match key {
-                'g' => {
+            Column::Backlog => match act {
+                Act::Go => {
                     if let Some(entry) = self.selected_entry() {
                         let buffer = suggested_name(&entry.title);
                         self.mode = Mode::Input { purpose: Purpose::BacklogName(entry), label: "Start as task: name".to_string(), buffer };
                     }
                 }
-                'R' => self.refresh_backlog(),
-                'a' => {
+                Act::Refresh => self.refresh_backlog(),
+                Act::New => {
                     let label = "Add to the backlog: title (— summary and (area) optional)".to_string();
                     self.mode = Mode::Input { purpose: Purpose::BacklogItem, label, buffer: String::new() };
                 }
@@ -1408,8 +1770,8 @@ impl App {
             },
             Column::Work => {
                 let Some(item) = self.selected_task() else { return };
-                match key {
-                    'g' if item.agent.is_none() => {
+                match act {
+                    Act::Go if item.agent.is_none() => {
                         let Some(path) = item.path.clone() else { return };
                         let (sender, result) = mpsc::channel();
                         let name = item.name.clone();
@@ -1419,7 +1781,7 @@ impl App {
                         });
                         self.mode = Mode::Working { label: format!("Restarting {}…", item.name), result };
                     }
-                    'g' => {
+                    Act::Go => {
                         if let Some(workspace) = &item.workspace {
                             let _ = herdr::focus_workspace(workspace);
                             if self.overlay {
@@ -1427,42 +1789,46 @@ impl App {
                             }
                         }
                     }
-                    'p' => {
+                    Act::Chat => {
                         if let Some(agent) = item.agent {
                             let label = format!("Message to {}", item.name);
                             self.mode = Mode::Input { purpose: Purpose::Message(agent.pane, item.name), label, buffer: String::new() };
                         }
                     }
-                    'r' => self.open_review(&item),
-                    'q' => {
+                    Act::Review => self.open_review(&item),
+                    Act::Card => match (item.path.clone(), self.card_of(&item)) {
+                        (Some(path), Some(_)) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0 },
+                        _ => self.show(Ok(format!("{} has no sign-off card yet; it writes one when it reports ready.", item.name))),
+                    },
+                    Act::Inbox => {
                         let at = self.question_of(&item);
                         self.open_questions(at);
                     }
-                    't' | 'l' | 'd' | 'v' if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
-                    'l' if item.awaiting_review() => self.show(Err(format!("{} is in review; push opens once its reviewer passes its commits.", item.name))),
-                    't' => {
+                    Act::Tidy | Act::Push | Act::Done | Act::SendReview if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
+                    Act::Push if item.awaiting_review() => self.show(Err(format!("{} is in review; push opens once its reviewer passes its commits.", item.name))),
+                    Act::Tidy => {
                         if let Some(path) = item.path.clone() {
                             let label = "How should the commits look? (optional, enter to let Claude decide)".to_string();
                             self.mode = Mode::Input { purpose: Purpose::Tidy(path), label, buffer: String::new() };
                         }
                     }
-                    'w' => self.toggle(&item, Process::Server),
-                    'b' => self.toggle(&item, Process::Worker),
-                    'a' if item.is_task() => self.show(permit::toggle_task(&peers::address(&item.name, &item.place))),
-                    'v' => {
+                    Act::Server => self.toggle(&item, Process::Server),
+                    Act::Worker => self.toggle(&item, Process::Worker),
+                    Act::Permit if item.is_task() => self.show(permit::toggle_task(&peers::address(&item.name, &item.place))),
+                    Act::SendReview => {
                         if let Some(path) = &item.path {
                             self.show(if item.awaiting_review() { crate::review::withdraw(path, None) } else { crate::review::request(path, None) });
                         }
                     }
-                    'z' => {
+                    Act::Reset => {
                         if let Some(path) = item.path.clone() {
-                            self.mode = Mode::ConfirmReset { path, name: item.name };
+                            self.mode = Mode::ConfirmReset { path, name: item.name, nudged: false };
                         }
                     }
-                    'l' | 'd' | 'x' => {
+                    Act::Push | Act::Done | Act::Drop => {
                         let Some(path) = item.path.clone() else { return };
-                        match key {
-                            'l' => match tasks::land(&path, None) {
+                        match act {
+                            Act::Push => match tasks::land(&path, None) {
                                 Ok(_) => match tasks::commits(&path) {
                                     Ok(commits) => {
                                         let card = report::card_for(&path);
@@ -1472,8 +1838,8 @@ impl App {
                                 },
                                 error => self.show(error),
                             },
-                            'd' => self.in_background(format!("Closing {}…", item.name), move || tasks::done(&path, None)),
-                            _ => self.mode = Mode::ConfirmDrop { path, name: item.name, force: false },
+                            Act::Done => self.mode = Mode::ConfirmDone { path, name: item.name, nudged: false },
+                            _ => self.mode = Mode::ConfirmDrop { path, name: item.name, force: false, nudged: false },
                         }
                     }
                     _ => {}
@@ -1513,12 +1879,25 @@ impl App {
         self.show(result);
     }
 
-    // The review opens next to the task's own Claude, so comments reach that agent.
+    // The review opens next to the task's own Claude, so comments reach that agent; one already open in the Space gets the focus instead of a second split.
     fn open_review(&mut self, item: &Item) {
         let (Some(path), Some(agent), Some(script)) = (&item.path, &item.agent, review_script()) else {
             self.mode = Mode::Message("A review needs a task with its Claude running.".to_string());
             return;
         };
+        if let Some(workspace) = &item.workspace
+            && let Some(pane) = open_review_pane(workspace)
+        {
+            let _ = herdr::focus_workspace(workspace);
+            if let Err(error) = focus_pane(&pane) {
+                self.mode = Mode::Message(format!("The review is open in {}'s Space, but it could not get the focus: {error}", item.name));
+                return;
+            }
+            if self.overlay {
+                self.quit = true;
+            }
+            return;
+        }
         let output = std::process::Command::new("sh").arg(&script).arg("split").current_dir(path)
             .env("HERDR_PANE_ID", &agent.pane).output();
         match output {
@@ -1535,7 +1914,7 @@ impl App {
         }
     }
 
-    fn submit(&mut self, purpose: Purpose, text: String, terminal: &mut DefaultTerminal) {
+    fn submit(&mut self, purpose: Purpose, text: String, terminal: Option<&mut DefaultTerminal>) {
         match purpose {
             Purpose::TaskName | Purpose::BacklogName(_) | Purpose::BacklogItem if text.is_empty() => {}
             Purpose::BacklogItem => {
@@ -1564,7 +1943,11 @@ impl App {
             Purpose::BacklogName(entry) => {
                 let prompt = backlog::task_prompt(&entry, &self.sources, crate::vault_cli::known_on());
                 let known = self.repo_named(&entry.area);
-                match known.map_or_else(|| outside(terminal, || repo::locate(&entry.area)), Ok) {
+                let located = || match terminal {
+                    Some(terminal) => outside(terminal, || repo::locate(&entry.area)),
+                    None => repo::locate(&entry.area),
+                };
+                match known.map_or_else(located, Ok) {
                     Ok(repo) => self.show(start_in_background(&repo, &text, Some(&prompt), Some(&entry.reference))),
                     Err(error) => self.show(Err(error)),
                 }
@@ -1575,7 +1958,7 @@ impl App {
             }
             Purpose::Message(_, _) if text.is_empty() => {}
             Purpose::Message(pane, name) => {
-                let result = herdr::prompt_agent(&pane, &text).map(|_| format!("Sent to {name}."));
+                let result = crate::typing::prompt(&pane, &text, &name).map(|_| format!("Sent to {name}.")).map_err(|refused| format!("Nothing was sent: {name}'s Claude {}; your message was:\n{text}", refused.reason()));
                 self.show(result);
             }
         }
@@ -1589,7 +1972,7 @@ fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: O
     let log = dir.join(format!("{}.log", name.replace('/', "-")));
     let output = crate::state::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
     let errors = output.try_clone().map_err(|error| error.to_string())?;
-    let mut command = Command::new(std::env::current_exe().map_err(|error| error.to_string())?);
+    let mut command = Command::new(peers::kelpie_command()?);
     command.arg("-C").arg(repo).args(["start", name, "--no-focus"]);
     if let Some(item) = backlog.filter(|item| !item.is_empty()) {
         command.args(["--backlog", item]);
@@ -1599,7 +1982,7 @@ fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: O
     }
     // Its own process group, so closing the board's popup does not take the start down with it.
     command.stdin(std::process::Stdio::null()).stdout(output).stderr(errors).process_group(0);
-    command.spawn().map_err(|error| format!("kelpie start: {error}"))?;
+    crate::sh::reap(command.spawn().map_err(|error| format!("kelpie start: {error}"))?);
     Ok(format!("Starting {name} in the background; it shows under Work in a moment (output in {}).", log.display()))
 }
 
@@ -1840,9 +2223,38 @@ fn cut(text: &str, width: usize) -> String {
 fn question_summary(message: &messages::Message, width: usize) -> String {
     let count = message.question.as_ref().map_or(0, |question| question.options.len());
     let plan = message.question.as_ref().is_some_and(|question| question.plan.is_some());
-    let suffix = if plan { " · plan to approve · q".to_string() } else { format!(" · {} · q", plural(count, "option")) };
+    let inbox = keys::key(Act::Inbox);
+    let suffix = if plan { format!(" · plan to approve · {inbox}") } else { format!(" · {} · {inbox}", plural(count, "option")) };
     let one_line = message.text.split_whitespace().collect::<Vec<_>>().join(" ");
     format!("{}{suffix}", cut(&one_line, width.saturating_sub(suffix.chars().count()).max(8)))
+}
+
+fn card_field(card: &report::Card, current: bool, width: usize) -> Vec<Line<'static>> {
+    let (mark, color) = if current { ("✓ ", GREEN) } else { ("○ ", YELLOW) };
+    let text: Vec<&str> = card.text.lines().map(str::trim).filter(|line| !line.is_empty() && card_image_in(line).is_none()).take(2).collect();
+    let room = width.saturating_sub(LABEL + 2);
+    let mut lines = Vec::new();
+    for (index, line) in text.iter().enumerate() {
+        let mut spans = if index == 0 { vec![Span::styled(mark, style(color))] } else { vec![Span::raw("  ")] };
+        spans.push(Span::styled(cut(line, room), style(TEXT)));
+        lines.push(field(if index == 0 { "card" } else { "" }, spans));
+    }
+    if text.is_empty() {
+        lines.push(field("card", vec![Span::styled(mark, style(color))]));
+    }
+    let images = card.text.lines().filter(|line| card_image_in(line).is_some()).count();
+    if images > 0 {
+        lines.push(field("", vec![Span::styled(format!("▣ {} · {} shows the card", plural(images, "image"), keys::key(Act::Card)), style(MUTED))]));
+    }
+    lines
+}
+
+fn card_image_in(line: &str) -> Option<(&str, &str)> {
+    line.trim().strip_prefix("![").and_then(|rest| rest.split_once("](")).map(|(alt, rest)| (alt, rest.trim_end_matches(')')))
+}
+
+fn card_hint() -> Line<'static> {
+    Line::from(vec![Span::raw("   "), Span::styled("⏎", style(MAUVE)), Span::styled(" options · ", style(MUTED)), Span::styled(keys::key(Act::Card).to_string(), style(MAUVE)), Span::styled(" card", style(MUTED))]).style(Style::new().bg(SURFACE))
 }
 
 pub fn options_hint() -> Line<'static> {
@@ -1858,17 +2270,24 @@ fn running_dot(item: &Item) -> bool {
 fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line<'static>>, usize, Rows) {
     let open = app.column == Column::Work;
     let focused = open && !app.in_messages;
-    let mut lines = column_title("WORK", format!("{}{}", plural(app.tasks.len(), "task"), free_worktrees(&app.checkouts)), focused, width);
+    let right = match app.filter_of(Column::Work) {
+        Some(filter) => format!("{} / {filter}", plural((0..app.tasks.len()).filter(|index| app.shown(Column::Work, *index)).count(), "task")),
+        None => format!("{}{}", plural(app.tasks.len(), "task"), free_worktrees(&app.checkouts)),
+    };
+    let mut lines = column_title("WORK", right, focused, width);
     let mut selected_line = 0;
     let mut current: Option<Group> = None;
     let tasks = app.tasks.clone();
     let mut rows = Vec::new();
     for (index, item) in tasks.iter().enumerate() {
+        if !app.shown(Column::Work, index) {
+            continue;
+        }
         if current != Some(item.group()) {
             if current.is_some() {
                 lines.push(Line::default());
             }
-            let count = tasks.iter().filter(|other| other.group() == item.group()).count();
+            let count = tasks.iter().enumerate().filter(|(other_index, other)| other.group() == item.group() && app.shown(Column::Work, *other_index)).count();
             lines.push(group_line(item.group().title(), count, group_color(item.group())));
             current = Some(item.group());
         }
@@ -1895,12 +2314,12 @@ fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line<'static>>,
                 Line::from(spans).style(Style::new().bg(SURFACE))
             }));
             app.links.extend(links);
-            lines.push(options_hint());
+            lines.push(if app.card_of(item).is_some() { card_hint() } else { options_hint() });
         }
         rows.push((start, lines.len(), Hit::Task(index)));
     }
     if tasks.is_empty() {
-        lines.push(Line::from(Span::styled("No tasks. s starts one, or pick one from the backlog.", style(MUTED))));
+        lines.push(Line::from(Span::styled(format!("No tasks. {} starts one, or pick one from the backlog.", keys::key(Act::New)), style(MUTED))));
     }
     let leftovers: Vec<String> = app.checkouts.iter().filter(|checkout| checkout.changed > 0)
         .map(|checkout| format!("{}: {} changed outside tasks", checkout.name, plural(checkout.changed, "file"))).collect();
@@ -1949,7 +2368,7 @@ fn wrapped_field(label: &str, text: &str, color: Color, width: usize, max_lines:
 // The running dev server's address; the shown text is what link_cells finds again on screen.
 fn server_line(item: &Item, configured: bool, name: &str, width: usize) -> Option<(Line<'static>, Option<Link>)> {
     if !item.server {
-        return configured.then(|| (field(name, vec![Span::styled("○ off · w starts it", style(MUTED))]), None));
+        return configured.then(|| (field(name, vec![Span::styled(format!("○ off · {} starts it", keys::key(Act::Server)), style(MUTED))]), None));
     }
     let Some(url) = &item.url else { return Some((field(name, vec![Span::styled("● running", style(GREEN))]), None)) };
     let room = width.saturating_sub(LABEL + 12).max(2);
@@ -1962,7 +2381,7 @@ fn worker_line(item: &Item, configured: bool, name: &str) -> Option<Line<'static
     if item.worker {
         Some(field(name, vec![Span::styled("● running", style(GREEN))]))
     } else {
-        configured.then(|| field(name, vec![Span::styled("○ off · b starts it", style(MUTED))]))
+        configured.then(|| field(name, vec![Span::styled(format!("○ off · {} starts it", keys::key(Act::Worker)), style(MUTED))]))
     }
 }
 
@@ -2067,7 +2486,7 @@ fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool) -> (Vec<L
     } else if let Some((label, text, color)) = report_text(app, item, width) {
         lines.extend(wrapped_field(&label, &text, color, width, if panel { 6 } else { 3 }));
     } else if item.agent.is_none() {
-        lines.push(field("claude", vec![Span::styled("not running in its Space · g restarts it", style(MUTED))]));
+        lines.push(field("claude", vec![Span::styled(format!("not running in its Space · {} restarts it", keys::key(Act::Go)), style(MUTED))]));
     }
     if let Some((line, link)) = server_line(item, detail.dev_server, &detail.server_name, width) {
         lines.push(line);
@@ -2087,6 +2506,9 @@ fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool) -> (Vec<L
         lines.push(field("note", vec![Span::styled(format!("vault: {note}"), style(TEAL))]));
     }
     if !panel {
+        if let Some((card, current)) = &detail.card {
+            lines.extend(card_field(card, *current, width));
+        }
         return (lines, links, images);
     }
     if !detail.commits.is_empty() {
@@ -2108,10 +2530,14 @@ fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool) -> (Vec<L
         let base = item.path.clone().unwrap_or_default();
         for line in card_lines(card, *current, width) {
             let path = card_image(&line).map(|path| base.join(path));
-            match path.as_ref().and_then(|path| app.image_rows(path, width as u16).map(|rows| (path.clone(), rows))) {
+            let area = Size::new(width as u16, 14);
+            if let (Some(file), Some(shown)) = (&path, card_image(&line)) {
+                links.extend(file_link(&shown, file));
+            }
+            match path.as_ref().and_then(|path| app.image_size(path, area).map(|size| (path.clone(), size.height))) {
                 Some((path, rows)) => {
                     lines.push(line);
-                    images.push(ImageAt { line: lines.len(), path, rows });
+                    images.push(ImageAt { line: lines.len(), path, rows, area });
                     lines.extend((0..rows).map(|_| Line::default()));
                 }
                 None => lines.push(line),
@@ -2119,8 +2545,16 @@ fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool) -> (Vec<L
         }
     }
     lines.push(Line::default());
-    lines.push(Line::from(vec![Span::styled("⏎", style(MAUVE)), Span::styled(" options", style(MUTED))]));
+    let mut foot = vec![Span::styled("⏎", style(MAUVE)), Span::styled(" options", style(MUTED))];
+    if detail.card.is_some() {
+        foot.extend([Span::styled(" · ", style(MUTED)), Span::styled(keys::key(Act::Card).to_string(), style(MAUVE)), Span::styled(" card", style(MUTED))]);
+    }
+    lines.push(Line::from(foot));
     (lines, links, images)
+}
+
+fn file_link(shown: &str, file: &Path) -> Option<Link> {
+    file.is_absolute().then(|| Link { shown: shown.to_string(), url: file_url(file) })
 }
 
 // An image line of the card, as card_lines draws it: the marker, the path, then its alt text.
@@ -2151,7 +2585,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         if image.line as u16 + image.rows > inner.height {
             continue;
         }
-        if let Some(Some(protocol)) = app.images.get(&(image.path, inner.width)) {
+        if let Some(Some(protocol)) = app.images.get(&(image.path, image.area.width, image.area.height)) {
             let size = protocol.size();
             frame.render_widget(Image::new(protocol), Rect::new(inner.x, top, size.width.min(inner.width), size.height));
         }
@@ -2165,6 +2599,9 @@ fn ongoing_rows(app: &App, focused: bool, width: usize, lines: &mut Vec<Line<'st
     let mut selected_line = None;
     lines.push(Line::from(vec![Span::styled("ONGOING", bold(TEAL)), Span::styled(format!("  {}", app.ongoing.len()), style(FAINT)), Span::styled("  vault notes in progress", style(MUTED))]));
     for (index, note) in app.ongoing.iter().enumerate() {
+        if !app.shown(Column::Backlog, index) {
+            continue;
+        }
         let selected = index == app.backlog_selected;
         if selected {
             selected_line = Some(lines.len());
@@ -2182,12 +2619,19 @@ fn ongoing_rows(app: &App, focused: bool, width: usize, lines: &mut Vec<Line<'st
 
 fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
     let focused = app.column == Column::Backlog && !app.in_messages;
-    let mut lines = column_title("BACKLOG", format!("{} items", app.backlog.entries.len()), focused, width);
+    let right = match app.filter_of(Column::Backlog) {
+        Some(filter) => format!("{} / {filter}", plural((0..app.backlog_len()).filter(|index| app.shown(Column::Backlog, *index)).count(), "item")),
+        None => format!("{} items", app.backlog.entries.len()),
+    };
+    let mut lines = column_title("BACKLOG", right, focused, width);
     let mut rows = Vec::new();
     let mut selected_line = ongoing_rows(app, focused, width, &mut lines, &mut rows).unwrap_or(0);
     let offset = app.ongoing.len();
     let mut current: Option<&str> = None;
     for (index, entry) in app.backlog.entries.iter().enumerate() {
+        if !app.shown(Column::Backlog, index + offset) {
+            continue;
+        }
         if current != Some(entry.priority.as_str()) {
             if current.is_some() {
                 lines.push(Line::default());
@@ -2243,23 +2687,33 @@ pub fn hints(keys: &[(&str, &str)]) -> Line<'static> {
     Line::from(keys.iter().flat_map(|(key, label)| [Span::styled(key.to_string(), style(MAUVE)), Span::styled(format!(" {label}    "), style(MUTED))]).collect::<Vec<_>>())
 }
 
-const FULL_HINTS: [(&str, &str, KeyCode); 5] =
-    [("⏎", "options", KeyCode::Enter), ("q", "questions", KeyCode::Char('q')), ("m", "messages", KeyCode::Char('m')), ("prefix+tab", "lead", KeyCode::Tab), ("?", "keys", KeyCode::Char('?'))];
-const SHORT_HINTS: [(&str, &str, KeyCode); 3] = [("⏎", "options", KeyCode::Enter), ("q", "questions", KeyCode::Char('q')), ("?", "keys", KeyCode::Char('?'))];
+use crate::keys::Hints;
 
-fn status_hints(keys: &[(&str, &str, KeyCode)]) -> Line<'static> {
+fn status_hints(keys: &Hints) -> Line<'static> {
     Line::from(Span::styled(keys.iter().map(|(key, label, _)| format!("{key} {label}")).collect::<Vec<_>>().join(" · "), style(MUTED)))
 }
 
-fn hint_lines() -> (Line<'static>, Line<'static>) {
-    (status_hints(&FULL_HINTS), status_hints(&SHORT_HINTS))
+fn work_hints(card: bool) -> (Hints, Hints) {
+    let (mut full, mut short) = keys::map().hints(Ctx::Work);
+    if card {
+        let entry = (keys::key(Act::Card).to_string(), "card", keys::map().code(Act::Card));
+        full.insert(1, entry.clone());
+        short.insert(1, entry);
+    }
+    (full, short)
 }
 
-fn hint_hits(line: &Line, area: Rect) -> Vec<(Rect, Hit)> {
+fn hint_lines(card: bool) -> (Line<'static>, Line<'static>) {
+    let (full, short) = work_hints(card);
+    (status_hints(&full), status_hints(&short))
+}
+
+fn hint_hits(line: &Line, area: Rect, card: bool) -> Vec<(Rect, Hit)> {
     let text = line.to_string();
     let mut hits = Vec::new();
-    let update_hints = [(UPDATE_HINT, KeyCode::Char('U')), (SHORT_UPDATE_HINT, KeyCode::Char('U'))].map(|(hint, code)| (hint.to_string(), code));
-    for (hint, code) in FULL_HINTS.iter().map(|(key, label, code)| (format!("{key} {label}"), *code)).chain(update_hints) {
+    let update = keys::map().code(Act::Update);
+    let update_hints = [(update_hint(), update), (short_update_hint(), update)];
+    for (hint, code) in work_hints(card).0.into_iter().map(|(key, label, code)| (format!("{key} {label}"), code)).chain(update_hints) {
         let Some(byte) = text.find(&hint) else { continue };
         let x = Span::raw(&text[..byte]).width() as u16;
         let width = Span::raw(hint.as_str()).width() as u16;
@@ -2323,15 +2777,20 @@ fn usage_spans(usage: &Usage, wide: bool, now: u64) -> Vec<Span<'static>> {
 fn update_notice(updates: &[(String, String)], long: bool) -> Vec<Span<'static>> {
     let text = if long {
         let names: Vec<String> = updates.iter().map(|(name, version)| format!("{name} {version}")).collect();
-        format!("↑ {} · {UPDATE_HINT}", names.join(" · "))
+        format!("↑ {} · {}", names.join(" · "), update_hint())
     } else {
-        SHORT_UPDATE_HINT.to_string()
+        short_update_hint()
     };
     vec![Span::raw("   "), Span::styled(text, style(MUTED))]
 }
 
-const UPDATE_HINT: &str = "U updates";
-const SHORT_UPDATE_HINT: &str = "↑ update · U";
+fn update_hint() -> String {
+    format!("{} updates", keys::key(Act::Update))
+}
+
+fn short_update_hint() -> String {
+    format!("↑ update · {}", keys::key(Act::Update))
+}
 
 fn status_line(full: Line<'static>, short: Line<'static>, updates: &[(String, String)], usage: Option<&Usage>, width: usize, now: u64) -> Line<'static> {
     let right = |wide: bool| usage.map(|usage| usage_spans(usage, wide, now)).unwrap_or_default();
@@ -2403,11 +2862,12 @@ fn messages_lines(app: &App, fold: Fold, rows: usize, width: usize) -> (Vec<Line
             if let Some(last) = app.messages.last() {
                 spans.push(Span::styled(format!(" · last: {} → {} {}", last.from.clone(), last.to.clone(), messages::age(last.at)), style(MUTED)));
             }
-            spans.push(Span::styled(" · m opens", style(MUTED)));
+            spans.push(Span::styled(format!(" · {} opens", keys::key(Act::Messages)), style(MUTED)));
             (vec![fit(spans, width)], 0)
         }
         Fold::Open => {
-            let keys = if app.in_messages { "  ↑ ↓ scroll · ⏎ read · esc back · m folds" } else { "  m selects" };
+            let messages_key = keys::key(Act::Messages);
+            let keys = if app.in_messages { format!("  ↑ ↓ scroll · ⏎ read · esc back · {messages_key} folds") } else { format!("  {messages_key} selects") };
             let mut lines = vec![Line::from(vec![Span::styled("▾ messages", if app.in_messages { bold(MAUVE) } else { style(MAUVE) }), Span::styled(keys, style(MUTED))])];
             let room = rows.saturating_sub(1);
             if app.messages.is_empty() {
@@ -2494,34 +2954,45 @@ pub fn options_lines(choices: Vec<Choice>, index: usize, width: usize) -> Vec<Li
     lines
 }
 
-fn menu_group(key: char) -> &'static str {
-    match key {
-        'q' | 'g' | 'p' | 'r' => "SESSION",
-        'w' | 'b' => "DEV",
-        'z' | 'x' => "END IT",
+fn confirm_lines(name: &str, about: Option<&str>, question: &str, nudged: bool) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(name.to_string(), style(TEXT)))];
+    lines.extend(about.map(|about| Line::from(Span::styled(about.to_string(), style(MUTED)))));
+    lines.push(Line::default());
+    lines.push(Line::from(vec![Span::styled(question.to_string(), style(YELLOW)), Span::styled("  y / n", style(MUTED))]));
+    if nudged {
+        lines.push(Line::from(Span::styled("press y or n", style(PEACH))));
+    }
+    lines
+}
+
+fn menu_group(act: Option<Act>) -> &'static str {
+    match act {
+        Some(Act::Inbox | Act::Go | Act::Chat | Act::Review | Act::Card) => "SESSION",
+        Some(Act::Server | Act::Worker) => "DEV",
+        Some(Act::Reset | Act::Drop) => "END IT",
         _ => "BRANCH",
     }
 }
 
 // The second value is each choice's line, which the mouse hits are placed on.
-fn menu_lines(choices: &[Choice], index: usize, width: usize, running: impl Fn(char) -> bool) -> (Vec<Line<'static>>, Vec<usize>) {
+fn menu_lines(choices: &[Choice], index: usize, width: usize, running: impl Fn(Option<Act>) -> bool) -> (Vec<Line<'static>>, Vec<usize>) {
     let mut lines = Vec::new();
     let mut at = Vec::new();
     let mut group = "";
     for (position, choice) in choices.iter().enumerate() {
-        if menu_group(choice.key) != group {
-            group = menu_group(choice.key);
+        if menu_group(choice.act) != group {
+            group = menu_group(choice.act);
             lines.push(Line::from(Span::styled(group, style(MUTED))));
         }
         let active = position == index;
-        let ending = matches!(choice.key, 'z' | 'x');
+        let ending = matches!(choice.act, Some(Act::Reset | Act::Drop));
         let label_style = match (active, ending) {
             (true, true) => bold(RED),
             (true, false) => bold(MAUVE),
             (false, true) => style(RED),
             (false, false) => style(TEXT),
         };
-        let dot = if running(choice.key) { Span::styled("● ", style(GREEN)) } else { Span::raw("  ") };
+        let dot = if running(choice.act) { Span::styled("● ", style(GREEN)) } else { Span::raw("  ") };
         let gap = width.saturating_sub(choice.label.chars().count() + 5).max(1);
         at.push(lines.len());
         lines.push(Line::from(vec![
@@ -2537,13 +3008,7 @@ fn menu_lines(choices: &[Choice], index: usize, width: usize, running: impl Fn(c
 }
 
 fn help_lines() -> Vec<Line<'static>> {
-    [
-        ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("1 2", "the work and areas pages"), ("tab", "move focus to the lead's chat"), ("↑ ↓ j k", "move"),
-        ("q", "the questions waiting on you: read the plan, answer with a comment"), ("m", "messages at the bottom: one line, then open with ↑ ↓ moving through them and ⏎ reading one (esc back to the tasks), then hidden"),
-        ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
-        ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server); its address shows in the task's details (worktree.dev_url)"), ("b", "start or stop the task's worker (worktree.dev_worker)"), ("v", "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it"), ("a", "let the lead push the task itself, or take that back"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
-        ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("a", "in the Backlog column: add an item to the local backlog"), ("A", "away mode on or off: the lead settles how-questions and keeps what-questions for you"), ("U", "update everything to the latest (kelpie update); ↑ at the bottom shows when there is a newer version"), ("esc", "close this, or the board when it is an overlay"),
-    ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
+    keys::map().help(&[Ctx::Work, Ctx::Backlog, Ctx::Card]).into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
 
 #[derive(Clone)]
@@ -2708,6 +3173,122 @@ fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
     hits
 }
 
+fn draw_card(frame: &mut Frame, app: &mut App) {
+    let Mode::Card { path, name, scroll } = &app.mode else { return };
+    let (path, name, scroll) = (path.clone(), name.clone(), *scroll);
+    let Some(detail) = app.details.get(&path).cloned() else { return };
+    let Some((card, current)) = &detail.card else { return };
+    let full = frame.area();
+    let area = centered(full, (full.width * 92 / 100).max(40), (full.height * 84 / 100).max(12));
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
+        .title(Span::styled(format!(" {name} · card "), bold(MAUVE))).style(Style::new().bg(MANTLE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [body, foot] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let sha: String = card.sha.chars().take(7).collect();
+    let head = if *current { Span::styled(format!("✓ current at {sha}"), style(GREEN)) } else { Span::styled(format!("○ written at {sha}, code changed since"), style(YELLOW)) };
+    let mut lines = vec![Line::from(head), Line::default()];
+    let mut images = Vec::new();
+    let mut links = Vec::new();
+    let mut image_lines = Vec::new();
+    let viewer = app.viewer.is_some();
+    let area = Size::new(body.width, body.height.saturating_sub(2).max(1));
+    for text in card.text.lines() {
+        match card_image_in(text) {
+            Some((alt, image)) => {
+                image_lines.push(lines.len());
+                lines.push(Line::from(vec![Span::styled("▣ ", style(TEAL)), Span::styled(image.to_string(), style(TEXT)), Span::styled(format!("  {alt}"), style(MUTED))]));
+                let file = path.join(image);
+                links.extend(file_link(image, &file));
+                // An image taller than the rows left under the text is never drawn, so it is sized to fit below what precedes it.
+                let left = body.height.saturating_sub(lines.len() as u16 + 1).max(6);
+                let area = Size::new(area.width, area.height.min(left));
+                let rows = app.image_size(&file, area).map(|size| size.height);
+                if let Some(rows) = rows {
+                    images.push(ImageAt { line: lines.len(), path: file, rows, area });
+                    lines.extend((0..rows).map(|_| Line::default()));
+                }
+                if image_shown(app.protocol(), rows.is_some()) == Shown::Preview {
+                    lines.push(Line::from(Span::styled(preview_note(viewer), style(MUTED))));
+                }
+            }
+            None if text.trim().is_empty() => lines.push(Line::default()),
+            None => lines.extend(wrap(text, body.width as usize, usize::MAX).into_iter().map(|part| Line::from(Span::styled(part, style(TEXT))))),
+        }
+    }
+    let scroll = scroll.min(lines.len().saturating_sub(body.height as usize) as u16);
+    if let Mode::Card { scroll: kept, .. } = &mut app.mode {
+        *kept = scroll;
+    }
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
+    for image in images {
+        let Some(top) = (image.line as u16).checked_sub(scroll) else { continue };
+        if top + image.rows > body.height {
+            continue;
+        }
+        if let Some(Some(protocol)) = app.images.get(&(image.path, image.area.width, image.area.height)) {
+            let size = protocol.size();
+            frame.render_widget(Image::new(protocol), Rect::new(body.x, body.y + top, size.width.min(body.width), size.height));
+        }
+    }
+    let keys = card_keys(!image_lines.is_empty() && app.protocol().is_some(), !image_lines.is_empty() && viewer);
+    app.card_image_lines = image_lines;
+    app.links.extend(links);
+    frame.render_widget(Paragraph::new(Span::styled(keys, style(MUTED))), foot);
+}
+
+fn card_keys(fullscreen: bool, open: bool) -> String {
+    let map = keys::map();
+    let mut keys = vec!["↑ ↓ scroll".to_string()];
+    if fullscreen {
+        keys.push(format!("{} fullscreen", map.label(Act::Fullscreen)));
+    }
+    if open {
+        keys.push(format!("{} open", map.label(Act::OpenImage)));
+    }
+    keys.push(format!("{} push", map.label(Act::Push)));
+    keys.push(format!("{} close", map.label(Act::Back)));
+    keys.join(" · ")
+}
+
+fn draw_fullscreen(frame: &mut Frame, app: &mut App) {
+    let Mode::Fullscreen { path, index, .. } = &app.mode else { return };
+    let files = app.card_images(path);
+    let index = *index;
+    let Some(file) = files.get(index).cloned() else { return };
+    let full = frame.area();
+    frame.render_widget(Clear, full);
+    frame.render_widget(Block::new().style(Style::new().bg(MANTLE)), full);
+    let [body, foot] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(full);
+    let shown = file.display().to_string();
+    match app.image_size(&file, body.as_size()) {
+        Some(size) => {
+            if let Some(Some(protocol)) = app.images.get(&(file.clone(), body.width, body.height)) {
+                let x = body.x + body.width.saturating_sub(size.width) / 2;
+                let y = body.y + body.height.saturating_sub(size.height) / 2;
+                frame.render_widget(Image::new(protocol), Rect::new(x, y, size.width.min(body.width), size.height.min(body.height)));
+            }
+        }
+        None => frame.render_widget(Paragraph::new(Line::from(vec![Span::styled("▣ ", style(TEAL)), Span::styled(shown.clone(), style(TEXT))])), body),
+    }
+    let map = keys::map();
+    let mut keys = Vec::new();
+    if image_shown(app.protocol(), app.images.get(&(file.clone(), body.width, body.height)).is_some_and(Option::is_some)) == Shown::Preview {
+        keys.push("preview".to_string());
+    }
+    keys.push(format!("{}/{} {shown}", index + 1, files.len()));
+    if files.len() > 1 {
+        keys.push(format!("{} images", map.label(Act::Switch)));
+    }
+    if app.viewer.is_some() {
+        keys.push(format!("{} open", map.label(Act::OpenImage)));
+    }
+    keys.push(format!("{} back", map.label(Act::Back)));
+    frame.render_widget(Paragraph::new(fit(vec![Span::styled(keys.join(" · "), style(MUTED))], foot.width as usize)), foot);
+    app.links.extend(file_link(&shown, &file));
+}
+
 fn draw(frame: &mut Frame, app: &mut App) {
     app.hits.clear();
     app.links.clear();
@@ -2721,11 +3302,14 @@ fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(line), top);
     let tab_hits: Vec<(Rect, Hit)> = tabs.into_iter().map(|(x, width, page)| (Rect::new(top.x + x, top.y, width, 1), Hit::Tab(page))).collect();
     let (full_hints, short_hints) = match app.page {
-        Page::Work => hint_lines(),
+        Page::Work => hint_lines(app.selected_has_card()),
         Page::Areas => area_page::Page::hint_lines(),
     };
     let updates: &[(String, String)] = if app.page == Page::Work { &app.updates } else { &[] };
-    let status = status_line(full_hints, short_hints, updates, app.usage.as_ref(), bottom.width as usize, messages::now());
+    let status = match app.notice.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(3)) {
+        Some((text, _)) => Line::from(Span::styled(text.clone(), style(PEACH))),
+        None => status_line(full_hints, short_hints, updates, app.usage.as_ref(), bottom.width as usize, messages::now()),
+    };
     if app.page == Page::Areas {
         frame.render_widget(Paragraph::new(status), bottom);
         app.areas.draw(frame, body);
@@ -2733,7 +3317,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let mut tab_hits = tab_hits;
-    tab_hits.extend(hint_hits(&status, bottom));
+    tab_hits.extend(hint_hits(&status, bottom, app.selected_has_card()));
     frame.render_widget(Paragraph::new(status), bottom);
     let (message_lines, first_message) = messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize);
     let shown_messages = message_lines.len();
@@ -2789,7 +3373,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Options(index) if app.column == Column::Work => {
             let item = app.selected_task();
             let title: String = item.as_ref().map(|item| item.name.clone()).unwrap_or_default().chars().take(44).collect();
-            let running = |key: char| item.as_ref().is_some_and(|item| (key == 'w' && item.server) || (key == 'b' && item.worker));
+            let running = |act: Option<Act>| item.as_ref().is_some_and(|item| (act == Some(Act::Server) && item.server) || (act == Some(Act::Worker) && item.worker));
             let (lines, at) = menu_lines(&app.choices(), *index, 48, running);
             let area = modal(frame, title, lines, 52);
             for (choice, line) in at.into_iter().enumerate() {
@@ -2815,6 +3399,8 @@ fn draw(frame: &mut Frame, app: &mut App) {
             }
         }
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),
+        Mode::Card { .. } => draw_card(frame, app),
+        Mode::Fullscreen { .. } => draw_fullscreen(frame, app),
         Mode::Help => {
             modal(frame, "keys".to_string(), help_lines(), 72);
         }
@@ -2823,20 +3409,21 @@ fn draw(frame: &mut Frame, app: &mut App) {
             lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
             modal(frame, "kelpie".to_string(), lines, 96);
         }
-        Mode::ConfirmReset { name, .. } => {
-            modal(frame, "reset".to_string(), vec![
-                Line::from(Span::styled(name.clone(), style(TEXT))),
-                Line::from(Span::styled("Its changes and commits go, its Claude stops, its worktree is freed and its Space closes. The backlog item it came from returns.", style(MUTED))),
-                Line::default(),
-                Line::from(vec![Span::styled("Reset this task?", style(YELLOW)), Span::styled("  y / n", style(MUTED))]),
-            ], 72);
+        Mode::ConfirmReset { name, nudged, .. } => {
+            modal(frame, "reset".to_string(), confirm_lines(name, Some("Its changes and commits go, its Claude stops, its worktree is freed and its Space closes. The backlog item it came from returns."), "Reset this task?", *nudged), 72);
         }
-        Mode::ConfirmDrop { name, force, .. } => {
+        Mode::ConfirmDone { name, nudged, .. } => {
+            modal(frame, "done".to_string(), confirm_lines(name, Some("Its commits are on the default branch already: its worktree is freed and its Space closes."), "Close this task as done?", *nudged), 72);
+        }
+        Mode::ConfirmDrop { name, force, nudged, .. } => {
             let question = if *force { "Discard its changes and commits?" } else { "Drop this task?" };
-            modal(frame, "drop".to_string(), vec![
-                Line::from(Span::styled(name.clone(), style(TEXT))),
-                Line::default(),
-                Line::from(vec![Span::styled(question, style(YELLOW)), Span::styled("  y / n", style(MUTED))]),
+            modal(frame, "drop".to_string(), confirm_lines(name, None, question, *nudged), 72);
+        }
+        Mode::Filter { buffer } => {
+            let column = if app.column == Column::Work { "work" } else { "backlog" };
+            modal(frame, format!("filter {column}"), vec![
+                Line::from(vec![Span::styled(buffer.clone(), style(TEXT)), Span::styled("▏", style(MAUVE))]),
+                Line::from(Span::styled("⏎ keep the filter · esc clear it", style(MUTED))),
             ], 72);
         }
         Mode::ConfirmPush { commits, selected, card, .. } => {
@@ -2948,6 +3535,41 @@ fn push_lines(card: Option<&(report::Card, bool)>, commits: &[tasks::Commit], se
     (lines, first_commit)
 }
 
+const RESIZE_SETTLE: Duration = Duration::from_secs(1);
+
+// A new terminal size must hold for a second before the board lays out for it, so dragging a pane's edge redraws once, at the end.
+#[derive(Default)]
+struct Settle {
+    drawn: Option<(u16, u16)>,
+    pending: Option<((u16, u16), Instant)>,
+}
+
+impl Settle {
+    fn draw_now(&mut self, size: (u16, u16), now: Instant) -> bool {
+        match (self.drawn, self.pending) {
+            (None, _) => {
+                self.drawn = Some(size);
+                true
+            }
+            (Some(drawn), _) if drawn == size => {
+                self.pending = None;
+                true
+            }
+            (Some(_), Some((pending, since))) if pending == size => {
+                let settled = now.duration_since(since) >= RESIZE_SETTLE;
+                if settled {
+                    (self.drawn, self.pending) = (Some(size), None);
+                }
+                settled
+            }
+            (Some(_), _) => {
+                self.pending = Some((size, now));
+                false
+            }
+        }
+    }
+}
+
 const RESTART_STATE: &str = "KELPIE_BOARD_STATE";
 
 fn built(path: &Path) -> Option<SystemTime> {
@@ -2964,7 +3586,7 @@ struct Rebuild {
 
 impl Rebuild {
     fn new() -> Self {
-        let path = std::env::current_exe().ok();
+        let path = peers::own_exe().ok();
         let started = path.as_deref().and_then(built);
         Self { path, started, last: started, checked: Instant::now() }
     }
@@ -3003,19 +3625,50 @@ impl App {
             page: Page::Work, areas: area_page::Page::new(sources.clone()), sources, fetch_failures: Vec::new(), away: false,
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
-            graphics: Graphics::Off, images: HashMap::new(), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
+            graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, card_image_lines: Vec::new(), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
+            filter: None, ctrl_c: None, notice: None,
         }
     }
 }
 
-fn detect_graphics() -> Graphics {
-    match std::env::var("KELPIE_IMAGES").as_deref() {
-        Ok("off") => Graphics::Off,
-        Ok("halfblocks") => Graphics::Ready(Picker::halfblocks()),
-        _ if !std::io::IsTerminal::is_terminal(&std::io::stdin()) => Graphics::Ready(Picker::halfblocks()),
-        _ => Graphics::Ready(Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())),
+// The query waits up to 2 s for an answer, so it never runs inside herdr and elsewhere only once an image is first wanted.
+fn asks_terminal(forced: Option<&str>, tty: bool, herdr: bool) -> bool {
+    tty && !herdr && !matches!(forced, Some("off" | "halfblocks"))
+}
+
+struct GraphicsEnv {
+    forced: Option<String>,
+    tty: bool,
+    herdr: bool,
+}
+
+impl GraphicsEnv {
+    fn current() -> Self {
+        GraphicsEnv {
+            forced: std::env::var("KELPIE_IMAGES").ok(),
+            tty: std::io::IsTerminal::is_terminal(&std::io::stdin()),
+            herdr: std::env::var("TERM_PROGRAM").is_ok_and(|program| program == "herdr"),
+        }
     }
+
+    fn startup(&self) -> (Graphics, bool) {
+        if asks_terminal(self.forced.as_deref(), self.tty, self.herdr) { (Graphics::Pending { wanted: false }, false) } else { self.resolve(None) }
+    }
+
+    fn resolve(&self, asked: Option<Picker>) -> (Graphics, bool) {
+        resolve_graphics(self.forced.as_deref(), self.tty, self.herdr, asked)
+    }
+}
+
+fn resolve_graphics(forced: Option<&str>, tty: bool, herdr: bool, asked: Option<Picker>) -> (Graphics, bool) {
+    let Some(protocol) = choose_protocol(forced, tty, herdr, asked.as_ref().map(Picker::protocol_type)) else { return (Graphics::Off, false) };
+    let answered = asked.as_ref().and_then(|picker| {
+        let reported = picker.capabilities().iter().find_map(|capability| match capability { Capability::CellSize(Some(cell)) => Some(*cell), _ => None });
+        reported.or_else(|| (picker.protocol_type() != ProtocolType::Halfblocks).then(|| (picker.font_size().width, picker.font_size().height)))
+    });
+    let cell = cell_size(answered, window_pixels());
+    (Graphics::Ready(picker_for(protocol, cell.unwrap_or(GUESSED_CELL))), cell.is_none() && protocol != ProtocolType::Halfblocks)
 }
 
 pub fn run(overlay: bool) -> Result<String> {
@@ -3045,9 +3698,11 @@ pub fn run(overlay: bool) -> Result<String> {
     }
     let mut rebuild = Rebuild::new();
     let mut fetcher = Fetcher::new();
+    let mut resize = Settle::default();
     let mut terminal = init_terminal();
-    // The query reads stdin, so it runs once here, before the first event is read.
-    app.graphics = detect_graphics();
+    let graphics = GraphicsEnv::current();
+    (app.graphics, app.cell_guessed) = graphics.startup();
+    app.viewer = image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
     let _ = terminal.clear();
     let result = (|| -> Result<()> {
         while !app.quit {
@@ -3127,7 +3782,14 @@ pub fn run(overlay: bool) -> Result<String> {
                 terminal = init_terminal();
                 app.mode = Mode::Message(error);
             }
-            terminal.draw(|frame| draw(frame, &mut app)).map_err(|error| error.to_string())?;
+            if matches!(app.graphics, Graphics::Pending { wanted: true }) {
+                (app.graphics, app.cell_guessed) = graphics.resolve(Picker::from_query_stdio().ok());
+                app.images.clear();
+            }
+            let size = ratatui::crossterm::terminal::size().unwrap_or_default();
+            if resize.draw_now(size, Instant::now()) {
+                terminal.draw(|frame| draw(frame, &mut app)).map_err(|error| error.to_string())?;
+            }
             if event::poll(Duration::from_millis(250)).map_err(|error| error.to_string())? {
                 match event::read().map_err(|error| error.to_string())? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => app.handle(key, &mut terminal),
@@ -3146,10 +3808,255 @@ pub fn run(overlay: bool) -> Result<String> {
 mod tests {
     use super::*;
 
+    fn press(app: &mut App, event: KeyEvent) {
+        app.handle_key(event, None);
+    }
+
+    #[test]
+    fn every_key_in_the_help_the_hints_and_the_menus_is_one_the_table_acts_on_and_every_row_shows_in_help() {
+        let map = keys::map();
+        let help: Vec<String> = help_lines().iter().map(|line| line.spans[0].content.trim().to_string()).collect();
+        for row in keys::TABLE.iter().filter(|row| row.on.contains(&Ctx::Work) || row.on.contains(&Ctx::Backlog)) {
+            assert!(help.contains(&map.label(row.act)), "{} is in the table but not in ? help: {help:?}", row.act.id());
+        }
+        for label in &help {
+            assert!(keys::TABLE.iter().any(|row| map.label(row.act) == *label), "{label} is in ? help but not in the table");
+        }
+        let (full, short) = map.hints(Ctx::Work);
+        for (key, _, code) in full.iter().chain(&short) {
+            assert!(map.act(Ctx::Work, &KeyEvent::from(*code)).is_some(), "the hint {key} is not a key the board acts on");
+        }
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
+        item.server = true;
+        let menus = [task_choices(Some(&item), Some("bin/dev"), Some("bin/jobs")), backlog_choices(&[Source::Local]), ongoing_choices(&Ongoing { key: String::new(), title: String::new(), area: String::new(), task: None })];
+        for choice in menus.iter().flatten() {
+            let act = choice.act.expect("a built-in choice names its action");
+            assert_eq!(choice.key, map.char(act), "{}'s letter is the table's", choice.label);
+            assert!(keys::TABLE.iter().any(|row| row.act == act), "{} is offered but not in the table", choice.label);
+        }
+    }
+
+    #[test]
+    fn esc_and_q_step_back_and_close_only_an_overlay_at_the_top() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.mode = Mode::Help;
+        app.handle_normal(key(KeyCode::Esc));
+        app.handle_normal(key(KeyCode::Esc));
+        assert!(!app.quit, "esc on the full board at the top does nothing");
+        app.handle_normal(key(KeyCode::Char('q')));
+        assert!(!app.quit && app.notice.as_ref().is_some_and(|(text, _)| text == "ctrl+c twice to quit"), "{:?}", app.notice);
+        app.overlay = true;
+        app.handle_normal(key(KeyCode::Char('q')));
+        assert!(app.quit, "q at the top closes an overlay");
+        app.quit = false;
+        app.filter = Some((Column::Work, "zzz".to_string()));
+        app.handle_normal(key(KeyCode::Esc));
+        assert!(app.filter.is_none() && !app.quit, "esc clears the filter first");
+        app.handle_normal(key(KeyCode::Esc));
+        assert!(app.quit, "then closes the overlay");
+    }
+
+    #[test]
+    fn ctrl_c_quits_only_when_pressed_twice_within_two_seconds() {
+        let mut app = test_app(Vec::new());
+        let control_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        press(&mut app, control_c);
+        assert!(!app.quit && app.notice.as_ref().is_some_and(|(text, _)| text == "ctrl+c again to quit"));
+        app.ctrl_c = Some(Instant::now() - Duration::from_secs(3));
+        press(&mut app, control_c);
+        assert!(!app.quit, "a press three seconds later starts again");
+        press(&mut app, control_c);
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn done_asks_first_and_a_confirmation_takes_only_y_n_or_esc() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
+        item.path = Some(PathBuf::from("/nowhere/wt1.app"));
+        let mut app = test_app(vec![item]);
+        app.handle_normal(key(KeyCode::Char('d')));
+        assert!(matches!(app.mode, Mode::ConfirmDone { nudged: false, .. }), "d asks before it closes the task");
+        press(&mut app, key(KeyCode::Char('k')));
+        assert!(matches!(app.mode, Mode::ConfirmDone { nudged: true, .. }), "another key keeps the question");
+        let (rows, _) = render(&mut app, 100, 30);
+        assert!(rows.join("\n").contains("press y or n"));
+        press(&mut app, key(KeyCode::Char('n')));
+        assert!(matches!(app.mode, Mode::Normal));
+        app.handle_normal(key(KeyCode::Char('x')));
+        press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal), "esc cancels a drop");
+        app.handle_normal(key(KeyCode::Char('z')));
+        press(&mut app, key(KeyCode::Char('q')));
+        assert!(matches!(app.mode, Mode::Normal), "q closes a question like esc");
+    }
+
+    #[test]
+    fn slash_filters_the_selected_column_by_a_plain_substring_and_esc_clears_it() {
+        let named = |name: &str| { let mut item = crate::status::tests::task(Some("idle"), None, 0); item.name = name.to_string(); item };
+        let mut app = test_app(vec![named("billing"), named("search-filters"), named("refunds")]);
+        app.handle_normal(key(KeyCode::Char('/')));
+        for character in "FIL".chars() {
+            press(&mut app, key(KeyCode::Char(character)));
+        }
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.selected_task().map(|item| item.name).as_deref(), Some("search-filters"));
+        let (rows, _) = render(&mut app, 112, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("search-filters") && !screen.contains("billing") && !screen.contains("refunds") && screen.contains("1 task / FIL"), "{screen}");
+        app.handle_normal(key(KeyCode::Down));
+        assert_eq!(app.selected_task().map(|item| item.name).as_deref(), Some("search-filters"), "moving stays on the rows shown");
+        app.handle_normal(key(KeyCode::Esc));
+        assert!(app.filter.is_none());
+        let (rows, _) = render(&mut app, 112, 40);
+        assert!(rows.join("\n").contains("billing"));
+    }
+
+    #[test]
+    fn the_task_menu_and_the_letters_use_the_new_map() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
+        item.path = Some(PathBuf::from("/nowhere/wt1.app"));
+        let mut app = test_app(vec![item]);
+        app.handle_normal(key(KeyCode::Char('c')));
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::Message(..), .. }), "c messages the task's Claude");
+        app.mode = Mode::Normal;
+        app.handle_normal(key(KeyCode::Char('n')));
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::TaskName, .. }), "n starts a new task");
+        app.mode = Mode::Normal;
+        app.handle_normal(key(KeyCode::Char('s')));
+        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("no sign-off card")), "s is the card, not a new task");
+        app.mode = Mode::Normal;
+        app.column = Column::Backlog;
+        app.handle_normal(key(KeyCode::Char('n')));
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogItem, .. }), "n in the Backlog column adds an item");
+        app.mode = Mode::Normal;
+        app.handle_normal(key(KeyCode::Char('i')));
+        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("No questions")), "i is the inbox");
+    }
+
+    #[test]
+    fn opening_review_focuses_the_split_already_open_in_the_space() {
+        let pane = |argv: &[&str]| serde_json::json!({ "foreground_processes": [{ "pid": 7, "argv": argv }] });
+        let panes = vec![
+            ("p_claude".to_string(), pane(&["claude", "--resume", "x"])),
+            ("p_server".to_string(), pane(&["sh", "-c", "bin/dev"])),
+            ("p_review".to_string(), pane(&["sh", "/k/scripts/review.sh", "list", "/state/reviews/p_claude"])),
+        ];
+        assert_eq!(review_pane_in(&panes).as_deref(), Some("p_review"));
+        assert_eq!(review_pane_in(&panes[..2]), None, "without a review split one is made");
+        assert!(!runs_review(&pane(&["sh", "/k/scripts/review.sh", "split"])), "the split command itself is not the review");
+        let source = include_str!("board.rs");
+        let open = &source[source.find("    fn open_review(").unwrap()..];
+        let open = &open[..open.find("\n    }\n").unwrap()];
+        assert!(open.find("open_review_pane(workspace)").unwrap() < open.find("arg(\"split\")").unwrap(), "an open review is looked for before a split is made");
+    }
+
+    fn carded(current: bool) -> App {
+        let mut app = test_app(vec![served("search-filters")]);
+        with_detail(&mut app);
+        let text = "Filters show on the search page.\nPrice and size, both kept in the URL.\nA third line stays in the window.\n![the filters](shots/filters.png)\n![empty](shots/empty.png)".to_string();
+        let card = report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md") };
+        std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card = Some((card, current));
+        app
+    }
+
+    #[test]
+    fn a_narrow_row_shows_the_cards_first_lines_and_counts_its_images() {
+        let mut app = carded(true);
+        let (rows, _) = render(&mut app, 84, 50);
+        let screen = rows.join("\n");
+        assert!(screen.contains("card    ✓ Filters show on the search page.") && screen.contains("Price and size, both kept in the URL."), "{screen}");
+        assert!(!screen.contains("A third line"), "two lines of text under the row: {screen}");
+        assert!(screen.contains("▣ 2 images · s shows the card") && screen.contains("⏎ options · s card"), "{screen}");
+        assert!(rows[48].contains("s card"), "the hint line names s while the task has a card: {}", rows[48]);
+        let mut bare = test_app(vec![served("search-filters")]);
+        with_detail(&mut bare);
+        let (rows, _) = render(&mut bare, 84, 50);
+        assert!(!rows.join("\n").contains("card "), "no card, no card line");
+        bare.handle_normal(key(KeyCode::Char('s')));
+        assert!(matches!(&bare.mode, Mode::Message(text) if text.contains("has no sign-off card yet")));
+    }
+
+    #[test]
+    fn s_opens_the_card_window_with_its_text_images_and_whether_it_is_current() {
+        let mut app = carded(false);
+        assert!(app.choices().iter().any(|choice| choice.act == Some(Act::Card) && choice.label == "Show the card"));
+        app.handle_normal(key(KeyCode::Char('s')));
+        assert!(matches!(app.mode, Mode::Card { .. }));
+        let (rows, _) = render(&mut app, 170, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("search-filters · card") && screen.contains("○ written at abcdef0, code changed since"), "{screen}");
+        assert!(screen.contains("A third line stays in the window.") && screen.contains("▣ shots/filters.png  the filters"), "with graphics off an image is its line: {screen}");
+        assert!(screen.contains("↑ ↓ scroll · p push · esc close"), "{screen}");
+        press(&mut app, key(KeyCode::Down));
+        assert!(matches!(app.mode, Mode::Card { scroll: 1, .. }));
+        press(&mut app, key(KeyCode::Char('q')));
+        assert!(matches!(app.mode, Mode::Normal), "q closes the window");
+        let mut fresh = carded(true);
+        fresh.handle_normal(key(KeyCode::Char('s')));
+        let (rows, _) = render(&mut fresh, 84, 40);
+        assert!(rows.join("\n").contains("✓ current at abcdef0"), "the window shows in a narrow board too");
+        press(&mut fresh, key(KeyCode::Char('p')));
+        assert!(!matches!(fresh.mode, Mode::Card { .. }), "p goes on to push");
+    }
+
+    #[test]
+    fn a_tall_image_under_the_cards_text_still_draws_in_a_short_window() {
+        let dir = crate::sh::test_dir("tall-card");
+        let png = dir.join("tall.png");
+        image::RgbImage::from_pixel(40, 120, image::Rgb([200, 30, 30])).save(&png).unwrap();
+        let mut app = carded(true);
+        let text = format!("One.\nTwo.\nThree.\nFour.\n![tall]({})", png.display());
+        std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card.as_mut().unwrap().0.text = text;
+        app.graphics = Graphics::Ready(Picker::halfblocks());
+        (app.image_requests, app.image_results) = spawn_decoder().map(|(requests, results)| (Some(requests), Some(results))).unwrap();
+        app.handle_normal(key(KeyCode::Char('s')));
+        render(&mut app, 120, 30);
+        let waited = Instant::now();
+        while app.decoded.get(&png).is_none_or(Option::is_none) && waited.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(10));
+            app.take_images();
+        }
+        let (rows, buffer) = render(&mut app, 120, 30);
+        let red = Color::Rgb(200, 30, 30);
+        assert!((0..30u16).any(|y| (0..120u16).any(|x| buffer[(x, y)].bg == red || buffer[(x, y)].fg == red)), "the image is drawn without scrolling: {}", rows.join("\n"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_changed_list_keeps_a_modified_unstaged_first_file_whole() {
+        assert_eq!(changed_files(" M src/search/filters.txt\0M  b.rs\0R  new.rs\0old.rs\0?? notes/a b.md\0"), ["src/search/filters.txt", "b.rs", "new.rs", "notes/a b.md"]);
+        let dir = crate::sh::test_dir("changed");
+        repo::git(&dir, &["init", "--quiet"]).unwrap();
+        std::fs::create_dir_all(dir.join("src/search")).unwrap();
+        std::fs::write(dir.join("src/search/filters.txt"), "one").unwrap();
+        repo::git(&dir, &["add", "."]).unwrap();
+        repo::git(&dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "one"]).unwrap();
+        std::fs::write(dir.join("src/search/filters.txt"), "two").unwrap();
+        assert_eq!(gather_detail(&dir, None).changed, ["src/search/filters.txt"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_new_terminal_size_is_drawn_only_once_it_held_for_a_second() {
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        let mut resize = Settle::default();
+        assert!(resize.draw_now((100, 40), at(0)), "the first frame draws at once");
+        assert!(resize.draw_now((100, 40), at(100)));
+        assert!(!resize.draw_now((90, 40), at(200)), "a new size waits");
+        assert!(!resize.draw_now((80, 40), at(700)), "a size still moving starts the wait again");
+        assert!(!resize.draw_now((80, 40), at(1600)));
+        assert!(resize.draw_now((80, 40), at(1700)), "a second at the same size draws it");
+        assert!(resize.draw_now((80, 40), at(1800)));
+        assert!(!resize.draw_now((120, 50), at(1900)));
+        assert!(resize.draw_now((80, 40), at(2000)), "back to the drawn size before it settled draws at once, nothing moved");
+        assert!(!resize.draw_now((120, 50), at(2100)), "and the next change waits its own second");
+    }
+
     #[test]
     fn the_backlog_column_adds_an_item_only_with_the_local_source() {
         let keys = |sources: &[Source]| backlog_choices(sources).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!(keys(&[Source::Local]), "gRa");
+        assert_eq!(keys(&[Source::Local]), "gRn");
         assert_eq!(keys(&[Source::Vault, Source::Linear]), "gR");
     }
 
@@ -3178,9 +4085,9 @@ mod tests {
     #[test]
     fn a_working_task_offers_no_tidy_push_or_done() {
         let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gprazx");
-        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gprvtldazx");
-        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gprtldazx", "no commits, nothing to review");
+        assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gcrazx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gcrvtpdazx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gcrtpdazx", "no commits, nothing to review");
     }
 
     #[test]
@@ -3188,16 +4095,16 @@ mod tests {
         let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
-        assert_eq!(keys(&item), "gprvtdazx");
+        assert_eq!(keys(&item), "gcrvtdazx");
         assert_eq!(row_facts(&item), "1 commit · review: 2 findings");
         let withdraw = task_choices(Some(&item), None, None).into_iter().find(|choice| choice.key == 'v').unwrap();
         assert_eq!(withdraw.label, "Withdraw from review", "the push stays the user's: a task in review can always be taken out");
         item.verdict = None;
-        assert_eq!(keys(&item), "gprvtldazx", "withdrawn, it offers push again");
+        assert_eq!(keys(&item), "gcrvtpdazx", "withdrawn, it offers push again");
         assert_eq!(task_choices(Some(&item), None, None).into_iter().find(|choice| choice.key == 'v').unwrap().label, "Send to review");
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         item.verdict = Some(crate::status::tests::in_review(true, 0, false, false));
-        assert_eq!(keys(&item), "gprvtldazx");
+        assert_eq!(keys(&item), "gcrvtpdazx");
         assert_eq!(row_facts(&item), "1 commit · reviewed");
     }
 
@@ -3226,7 +4133,7 @@ mod tests {
         let mut unchecked = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         unchecked.git.as_mut().unwrap().approved = false;
         assert!(unchecked.group() == crate::status::Group::NeedsYou);
-        assert!(task_choices(Some(&unchecked), None, None).iter().any(|choice| choice.key == 'l'));
+        assert!(task_choices(Some(&unchecked), None, None).iter().any(|choice| choice.key == 'p'));
         assert_eq!(row_facts(&unchecked), "1 commit · rules not checked by the lead");
     }
 
@@ -3265,8 +4172,8 @@ mod tests {
     #[test]
     fn w_is_offered_only_with_a_dev_server() {
         let keys = |dev_server: Option<&str>| task_choices(None, dev_server, None).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!(keys(None), "gprtldzx");
-        assert_eq!(keys(Some("bin/dev")), "gprwtldzx");
+        assert_eq!(keys(None), "gcrtpdzx");
+        assert_eq!(keys(Some("bin/dev")), "gcrwtpdzx");
         let start = task_choices(None, Some("npm run dev"), None);
         assert_eq!((start[3].label.as_str(), start[3].about.as_str()), ("Start the dev server", "npm run dev in a tab of its Space"));
     }
@@ -3274,9 +4181,9 @@ mod tests {
     #[test]
     fn b_is_offered_only_with_a_dev_worker() {
         let keys = |dev_worker: Option<&str>| task_choices(None, Some("bin/dev"), dev_worker).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!(keys(None), "gprwtldzx");
-        assert_eq!(keys(Some("bin/jobs")), "gprwbtldzx");
-        assert_eq!(task_choices(None, None, Some("bin/jobs")).iter().map(|choice| choice.key).collect::<String>(), "gprbtldzx", "a worker needs no dev server");
+        assert_eq!(keys(None), "gcrwtpdzx");
+        assert_eq!(keys(Some("bin/jobs")), "gcrwbtpdzx");
+        assert_eq!(task_choices(None, None, Some("bin/jobs")).iter().map(|choice| choice.key).collect::<String>(), "gcrbtpdzx", "a worker needs no dev server");
         let mut item = crate::status::tests::task(Some("idle"), None, 0);
         let labels = |item: &Item| task_choices(Some(item), Some("bin/dev"), Some("bin/jobs")).into_iter().filter(|choice| "wb".contains(choice.key)).map(|choice| choice.label).collect::<Vec<_>>();
         assert_eq!(labels(&item), ["Start the dev server", "Start the worker"]);
@@ -3368,8 +4275,8 @@ mod tests {
         assert_eq!(asked_question(&item).map(|message| message.id.as_str()), Some("q1"));
         item.agent.as_mut().unwrap().status = "blocked".to_string();
         assert!(asked_question(&item).is_none());
-        assert_eq!(question_summary(&asked, 60), "Which queue for refund mails? · 3 options · q");
-        assert_eq!(question_summary(&asked, 30), "Which queue f… · 3 options · q");
+        assert_eq!(question_summary(&asked, 60), "Which queue for refund mails? · 3 options · i");
+        assert_eq!(question_summary(&asked, 30), "Which queue f… · 3 options · i");
     }
 
     #[test]
@@ -3471,7 +4378,7 @@ mod tests {
         let mut app = test_app(vec![item]);
         let (rows, _) = render(&mut app, 170, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("asks    Which queue for refund mails? · 3 options · q"), "{screen}");
+        assert!(screen.contains("asks    Which queue for refund mails? · 3 options · i"), "{screen}");
         assert!(!screen.contains("reuse the jobs") && !screen.contains("one less service"), "{screen}");
     }
 
@@ -3505,11 +4412,11 @@ mod tests {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
         item.server = true;
         let choices = task_choices(Some(&item), Some("bin/dev"), Some("bin/jobs"));
-        let (lines, at) = menu_lines(&choices, 7, 48, |key| key == 'w' && item.server);
+        let (lines, at) = menu_lines(&choices, 7, 48, |act| act == Some(Act::Server) && item.server);
         let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
         assert_eq!(text.iter().filter(|line| ["SESSION", "DEV", "BRANCH", "END IT"].contains(&line.as_str())).count(), 4, "{text:#?}");
         assert!(text[at[3]].starts_with("  Stop the dev server") && text[at[3]].ends_with("● w"), "{}", text[at[3]]);
-        assert!(text[at[7]].starts_with("▸ Push") && text[at[7]].ends_with("  l"), "{}", text[at[7]]);
+        assert!(text[at[7]].starts_with("▸ Push") && text[at[7]].ends_with("  p"), "{}", text[at[7]]);
         assert!(at.iter().all(|line| text[*line].chars().count() == 48));
         assert!(text.contains(&choices[7].about) && !text.contains(&choices[6].about), "only the highlighted choice's description");
         let mut app = test_app(vec![item]);
@@ -3534,7 +4441,7 @@ mod tests {
         });
         let (rows, buffer) = render(&mut app, 170, 30);
         let bar = &rows[28];
-        assert!(bar.trim_start().starts_with("⏎ options · q questions · m messages · prefix+tab lead · ? keys"), "{bar}");
+        assert!(bar.trim_start().starts_with("⏎ options · prefix+tab lead · i inbox · m messages · ? keys"), "{bar}");
         assert!(bar.contains(&format!("session ━━━━━━━━ 23% resets {}   week ━━━━━━━━ 71% resets ", clock(now + 600))), "{bar}");
         let (x, _) = find(&rows[28..29], "session ━")[0];
         let fills: Vec<Color> = (0..8).map(|cell| buffer[(x as u16 + 8 + cell, 28)].fg).collect();
@@ -3546,7 +4453,7 @@ mod tests {
         let (x, _) = find(&rows[28..29], "71%")[0];
         assert_eq!(buffer[(x as u16, 28)].fg, YELLOW);
         let (rows, _) = render(&mut app, 112, 30);
-        assert!(rows[28].trim_start().starts_with("⏎ options · q questions · ? keys") && rows[28].contains("session ━━━━━━━━ 23% resets"), "the herdr popup keeps the bars: {}", rows[28]);
+        assert!(rows[28].trim_start().starts_with("⏎ options · i inbox · ? keys") && rows[28].contains("session ━━━━━━━━ 23% resets"), "the herdr popup keeps the bars: {}", rows[28]);
         let (rows, _) = render(&mut app, 80, 30);
         assert!(rows[28].trim_end().ends_with("5h 23% · 7d 71%"), "{}", rows[28]);
         app.usage = None;
@@ -3567,10 +4474,10 @@ mod tests {
         assert!(!rows[28].contains('↑'), "nothing newer, no notice: {}", rows[28]);
         app.updates = vec![("kelpie".to_string(), "0.18.2".to_string())];
         let (rows, _) = render(&mut app, 170, 30);
-        assert!(rows[28].contains("prefix+tab lead · ? keys   ↑ kelpie 0.18.2 · U updates") && rows[28].contains("session ━━━━━━━━ 23% resets"), "{}", rows[28]);
+        assert!(rows[28].contains("m messages · ? keys   ↑ kelpie 0.18.2 · U updates") && rows[28].contains("session ━━━━━━━━ 23% resets"), "{}", rows[28]);
         app.updates.push(("vault".to_string(), "0.2.17".to_string()));
         let (rows, _) = render(&mut app, 170, 30);
-        assert!(rows[28].contains("prefix+tab lead · ? keys   ↑ update · U") && rows[28].contains("session ━━━━━━━━ 23% resets"), "the notice shortens before the hints do: {}", rows[28]);
+        assert!(rows[28].contains("m messages · ? keys   ↑ update · U") && rows[28].contains("session ━━━━━━━━ 23% resets"), "the notice shortens before the hints do: {}", rows[28]);
         let (rows, buffer) = render(&mut app, 200, 30);
         assert!(rows[28].contains("↑ kelpie 0.18.2 · vault 0.2.17 · U updates") && rows[28].contains("session ━━━━━━━━ 23% resets"), "{}", rows[28]);
         let (x, _) = find(&rows[28..29], "↑ kelpie")[0];
@@ -3578,11 +4485,11 @@ mod tests {
         let (ux, _) = find(&rows[28..29], "U updates")[0];
         assert_eq!(app.hit_at(ux as u16, 28), Some(Hit::Key(KeyCode::Char('U'))));
         let (rows, _) = render(&mut app, 112, 30);
-        assert!(rows[28].trim_start().starts_with("⏎ options · q questions   ↑ update · U") && rows[28].contains("session ━━━━━━━━ 23% resets") && rows[28].contains("week ━━━━━━━━ 71% resets"), "the herdr popup keeps the bars, ? keys makes room: {}", rows[28]);
+        assert!(rows[28].trim_start().starts_with("⏎ options · i inbox   ↑ update · U") && rows[28].contains("session ━━━━━━━━ 23% resets") && rows[28].contains("week ━━━━━━━━ 71% resets"), "the herdr popup keeps the bars, ? keys makes room: {}", rows[28]);
         let (x, _) = find(&rows[28..29], "↑ update · U")[0];
         assert_eq!(app.hit_at(x as u16, 28), Some(Hit::Key(KeyCode::Char('U'))));
         let (rows, _) = render(&mut app, 40, 30);
-        assert!(rows[28].trim_start().starts_with("⏎ options · q questions · ? keys"), "too narrow for it, the hints stay: {}", rows[28]);
+        assert!(rows[28].trim_start().starts_with("⏎ options · i inbox · ? keys"), "too narrow for it, the hints stay: {}", rows[28]);
         app.page = Page::Areas;
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows[28].contains("updates") && !rows[28].contains("↑ update"), "the Work page only: {}", rows[28]);
@@ -3676,7 +4583,7 @@ mod tests {
         app.fold = Fold::Line;
         let (rows, _) = render(&mut app, 112, 40);
         let (x, y) = find(&rows, "▸ messages")[0];
-        for (hint, code) in [("⏎ options", KeyCode::Enter), ("q questions", KeyCode::Char('q')), ("? keys", KeyCode::Char('?'))] {
+        for (hint, code) in [("⏎ options", KeyCode::Enter), ("i inbox", KeyCode::Char('i')), ("? keys", KeyCode::Char('?'))] {
             let (hx, hy) = find(&rows, hint).into_iter().last().unwrap();
             assert_eq!(app.hit_at(hx as u16, hy as u16), Some(Hit::Key(code)), "{hint}");
             assert_eq!(app.hit_at((hx + hint.chars().count() - 1) as u16, hy as u16), Some(Hit::Key(code)), "the end of {hint}");
@@ -3758,6 +4665,167 @@ mod tests {
     }
 
     #[test]
+    fn the_protocol_follows_the_forced_choice_then_the_tty_then_herdr_then_the_answer() {
+        use ProtocolType::{Halfblocks, Iterm2, Kitty, Sixel};
+        assert_eq!(choose_protocol(Some("off"), true, true, Some(Kitty)), None);
+        assert_eq!(choose_protocol(Some("halfblocks"), true, false, Some(Kitty)), Some(Halfblocks));
+        assert_eq!(choose_protocol(Some("kitty"), false, false, None), Some(Kitty), "a forced protocol needs no tty");
+        assert_eq!(choose_protocol(Some("sixel"), true, false, None), Some(Sixel));
+        assert_eq!(choose_protocol(Some("iterm2"), true, false, None), Some(Iterm2));
+        assert_eq!(choose_protocol(None, false, true, None), None, "no tty, no picture");
+        assert_eq!(choose_protocol(None, true, true, Some(Halfblocks)), Some(Kitty), "herdr draws Kitty placeholders though its query says halfblocks");
+        assert_eq!(choose_protocol(None, true, true, None), Some(Kitty), "herdr with no answer at all");
+        assert_eq!(choose_protocol(Some("bogus"), true, true, None), Some(Kitty), "an unknown value is detection");
+        assert_eq!(choose_protocol(None, true, false, Some(Sixel)), Some(Sixel), "outside herdr the answer decides");
+        assert_eq!(choose_protocol(None, true, false, Some(Halfblocks)), Some(Halfblocks));
+        assert_eq!(choose_protocol(None, true, false, None), Some(Halfblocks));
+    }
+
+    #[test]
+    fn the_board_never_asks_the_terminal_inside_herdr_and_elsewhere_only_once_an_image_is_wanted() {
+        assert!(!asks_terminal(None, true, true), "herdr: the protocol comes from the environment");
+        assert!(!asks_terminal(Some("kitty"), true, true));
+        assert!(asks_terminal(None, true, false) && asks_terminal(Some("kitty"), true, false), "elsewhere the answer gives the cell size");
+        assert!(!asks_terminal(Some("off"), true, false) && !asks_terminal(Some("halfblocks"), true, false) && !asks_terminal(None, false, false));
+        let herdr = GraphicsEnv { forced: None, tty: true, herdr: true }.startup().0;
+        assert!(matches!(&herdr, Graphics::Ready(picker) if picker.protocol_type() == ProtocolType::Kitty), "Kitty at startup with no query inside herdr");
+        assert!(matches!(GraphicsEnv { forced: None, tty: true, herdr: false }.startup().0, Graphics::Pending { wanted: false }), "the first frame draws before any query");
+        let dir = PathBuf::from(format!("/tmp/kq{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("a.png");
+        image::RgbImage::from_pixel(4, 4, image::Rgb([1, 2, 3])).save(&png).unwrap();
+        let mut app = test_app(vec![]);
+        app.graphics = Graphics::Pending { wanted: false };
+        assert_eq!(app.image_size(&dir.join("missing.png"), Size::new(10, 10)), None);
+        assert!(matches!(app.graphics, Graphics::Pending { wanted: false }), "a missing file wants no query");
+        assert_eq!(app.image_size(&png, Size::new(10, 10)), None, "the path shows until the query between frames has answered");
+        assert!(matches!(app.graphics, Graphics::Pending { wanted: true }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_cell_size_is_the_answer_else_the_window_pixels_else_unknown() {
+        assert_eq!(cell_size(Some((16, 34)), Some((93, 39, 1488, 1326))), Some((16, 34)));
+        assert_eq!(cell_size(None, Some((93, 39, 1488, 1326))), Some((16, 34)), "herdr with a client sets the pane's pixels");
+        assert_eq!(cell_size(Some((0, 0)), Some((119, 40, 0, 0))), None, "herdr with no client attached knows no pixels");
+        assert_eq!(cell_size(None, None), None);
+    }
+
+    #[test]
+    fn an_image_is_sharp_with_a_protocol_a_preview_with_halfblocks_and_a_path_otherwise() {
+        assert_eq!(image_shown(Some(ProtocolType::Kitty), true), Shown::Sharp);
+        assert_eq!(image_shown(Some(ProtocolType::Sixel), true), Shown::Sharp);
+        assert_eq!(image_shown(Some(ProtocolType::Iterm2), true), Shown::Sharp);
+        assert_eq!(image_shown(Some(ProtocolType::Halfblocks), true), Shown::Preview);
+        assert_eq!(image_shown(Some(ProtocolType::Kitty), false), Shown::Path, "an image that fails to decode");
+        assert_eq!(image_shown(None, true), Shown::Path, "KELPIE_IMAGES=off or no tty");
+    }
+
+    #[test]
+    fn o_opens_with_the_system_viewer_where_the_board_sits_and_not_over_ssh() {
+        let env = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
+        assert_eq!(image_viewer("macos", &env(&[])), Some("open"));
+        assert_eq!(image_viewer("linux", &env(&[])), None, "no display on Linux");
+        assert_eq!(image_viewer("linux", &env(&["DISPLAY"])), Some("xdg-open"));
+        assert_eq!(image_viewer("linux", &env(&["WAYLAND_DISPLAY"])), Some("xdg-open"));
+        assert_eq!(image_viewer("macos", &env(&["SSH_CONNECTION"])), None);
+        assert_eq!(image_viewer("linux", &env(&["DISPLAY", "SSH_TTY"])), None);
+        assert_eq!(image_viewer("windows", &env(&[])), None);
+        assert!(!openable(Path::new("/nowhere/x.png")) && !openable(Path::new("/bin/sh")));
+        assert_eq!(file_url(Path::new("/tmp/a b/ö.png")), "file:///tmp/a%20b/%C3%B6.png");
+    }
+
+    fn imaged(dir: &Path) -> (App, PathBuf, PathBuf) {
+        std::fs::create_dir_all(dir).unwrap();
+        let (wide, tall) = (dir.join("wide.png"), dir.join("tall.png"));
+        image::RgbImage::from_pixel(40, 20, image::Rgb([200, 30, 30])).save(&wide).unwrap();
+        image::RgbImage::from_pixel(20, 40, image::Rgb([30, 30, 200])).save(&tall).unwrap();
+        let mut app = test_app(vec![served("search-filters")]);
+        with_detail(&mut app);
+        let text = format!("Refunds show.\n![wide]({})\n![tall]({})", wide.display(), tall.display());
+        let card = report::Card { sha: "abcdef0123".to_string(), text, file: PathBuf::from("/state/cards/x.md") };
+        std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card = Some((card, true));
+        app.graphics = Graphics::Ready(Picker::halfblocks());
+        (app.image_requests, app.image_results) = spawn_decoder().map(|(requests, results)| (Some(requests), Some(results))).unwrap();
+        for file in [&wide, &tall] {
+            app.image_size(file, Size::new(10, 10));
+        }
+        let waited = Instant::now();
+        while [&wide, &tall].iter().any(|file| app.decoded.get(*file).is_none_or(Option::is_none)) && waited.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(10));
+            app.take_images();
+        }
+        app.handle_normal(key(KeyCode::Char('s')));
+        (app, wide, tall)
+    }
+
+    fn coloured(cell: &ratatui::buffer::Cell, (r, g, b): (u8, u8, u8)) -> bool {
+        let near = |color: Color| matches!(color, Color::Rgb(red, green, blue) if red.abs_diff(r) < 8 && green.abs_diff(g) < 8 && blue.abs_diff(b) < 8);
+        near(cell.fg) || near(cell.bg)
+    }
+
+    #[test]
+    fn a_card_window_image_takes_the_windows_width_and_a_halfblock_one_says_it_is_a_preview() {
+        let dir = PathBuf::from(format!("/tmp/kw{}", std::process::id()));
+        let (mut app, wide, _) = imaged(&dir);
+        let (rows, buffer) = render(&mut app, 120, 60);
+        let screen = rows.join("\n");
+        let (x, y) = find(&rows, &format!("▣ {}  wide", wide.display()))[0];
+        let red = (200, 30, 30);
+        let drawn: Vec<u16> = (0..120).filter(|column| coloured(&buffer[(*column, y as u16 + 1)], red)).collect();
+        let body = 120 * 92 / 100 - 4;
+        assert_eq!((drawn.first().copied(), drawn.len() as u16), (Some(x as u16), body), "a 40×20 image fills the window's {body} columns: {screen}");
+        assert!(screen.contains("preview · f larger"), "{screen}");
+        assert!(!screen.contains("o opens the image") && !screen.contains("o open"), "no viewer, no o: {screen}");
+        assert!(screen.contains("↑ ↓ scroll · f fullscreen · p push · esc close"), "{screen}");
+        assert!(buffer[(x as u16 + 2, y as u16)].symbol().starts_with(&format!("\x1b]8;;file://{}", wide.display())), "the path is a file link");
+        app.viewer = Some("true");
+        let (rows, _) = render(&mut app, 120, 60);
+        let screen = rows.join("\n");
+        assert!(screen.contains("preview · f larger · o opens the image") && screen.contains("↑ ↓ scroll · f fullscreen · o open · p push · esc close"), "{screen}");
+        press(&mut app, key(KeyCode::Char('o')));
+        assert!(matches!(app.mode, Mode::Card { .. }) && app.notice.is_none(), "o hands the image to the viewer and stays in the window");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn f_shows_the_image_alone_over_the_board_and_arrows_go_between_images() {
+        let dir = PathBuf::from(format!("/tmp/kf{}", std::process::id()));
+        let (mut app, wide, tall) = imaged(&dir);
+        render(&mut app, 120, 60);
+        press(&mut app, key(KeyCode::Char('f')));
+        assert!(matches!(app.mode, Mode::Fullscreen { index: 0, .. }));
+        let (rows, buffer) = render(&mut app, 120, 60);
+        let screen = rows.join("\n");
+        let red: Vec<(u16, u16)> = (0..60).flat_map(|y| (0..120).map(move |x| (x, y))).filter(|at| coloured(&buffer[*at], (200, 30, 30))).collect();
+        let columns = red.iter().map(|(x, _)| *x).max().unwrap() - red.iter().map(|(x, _)| *x).min().unwrap() + 1;
+        assert_eq!(columns, 120, "the wide image spans the whole board: {screen}");
+        assert!(screen.contains(&format!("preview · 1/2 {} · ← → images · esc back", wide.display())), "{screen}");
+        assert!(!screen.contains("Refunds show."), "the image is alone: {screen}");
+        press(&mut app, key(KeyCode::Right));
+        let (rows, buffer) = render(&mut app, 120, 60);
+        assert!(rows.join("\n").contains(&format!("2/2 {}", tall.display())));
+        let blue: Vec<u16> = (0..60).filter(|y| (0..120).any(|x| coloured(&buffer[(x, *y)], (30, 30, 200)))).collect();
+        assert_eq!(blue.len(), 59, "the tall image takes the height above the key line");
+        press(&mut app, key(KeyCode::Right));
+        assert!(matches!(app.mode, Mode::Fullscreen { index: 0, .. }), "→ wraps around");
+        press(&mut app, key(KeyCode::Left));
+        assert!(matches!(app.mode, Mode::Fullscreen { index: 1, .. }));
+        for back in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Char('f')] {
+            press(&mut app, key(back));
+            assert!(matches!(app.mode, Mode::Card { .. }), "{back:?} goes back to the card");
+            press(&mut app, key(KeyCode::Char('f')));
+        }
+        app.graphics = Graphics::Off;
+        app.mode = Mode::Card { path: PathBuf::from("/work/wt2.web"), name: "search-filters".to_string(), scroll: 0 };
+        let (rows, _) = render(&mut app, 120, 60);
+        assert!(rows.join("\n").contains("↑ ↓ scroll · p push · esc close"), "without graphics there is nothing to show larger");
+        press(&mut app, key(KeyCode::Char('f')));
+        assert!(matches!(app.mode, Mode::Card { .. }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn an_image_too_large_or_not_an_image_is_not_decoded() {
         let dir = std::env::temp_dir().join(format!("kelpie-decode-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -3787,11 +4855,11 @@ mod tests {
         app.column = Column::Backlog;
         app.backlog_selected = 1;
         assert_eq!(app.choices()[0].label, "Resume as task");
-        app.act('g');
+        app.act(Act::Go);
         assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogName(entry), .. } if entry.reference == "Projects/docs-refresh.md" && entry.source == "vault"));
         app.mode = Mode::Normal;
         app.backlog_selected = 0;
-        app.act('g');
+        app.act(Act::Go);
         assert!(app.column == Column::Work && app.work_selected == 0, "a note with a task goes to it");
     }
 
@@ -3991,14 +5059,14 @@ mod tests {
 
     #[test]
     fn the_task_menu_puts_each_key_in_its_group() {
-        assert_eq!(menu_group('q'), "SESSION");
-        assert_eq!(menu_group('w'), "DEV");
-        assert_eq!(menu_group('x'), "END IT");
-        assert_eq!(menu_group('l'), "BRANCH");
-        assert_eq!(menu_group('a'), "BRANCH");
+        assert_eq!(menu_group(Some(Act::Inbox)), "SESSION");
+        assert_eq!(menu_group(Some(Act::Server)), "DEV");
+        assert_eq!(menu_group(Some(Act::Drop)), "END IT");
+        assert_eq!(menu_group(Some(Act::Push)), "BRANCH");
+        assert_eq!(menu_group(Some(Act::Permit)), "BRANCH");
         let help = help_lines();
         let labels: Vec<&str> = help.iter().map(|line| line.spans[0].content.trim()).collect();
-        for key in ['s', 'g', 'p', 'r', 'w', 'b', 'v', 'a', 'l', 'd', 'z', 'x', 'R', 'A', 'U', 'q', 'm'] {
+        for key in ['n', 'g', 'c', 'r', 'w', 'b', 'v', 'a', 'p', 'd', 'z', 'x', 'R', 'A', 'U', 'i', 'm', 'q', '/'] {
             assert!(labels.iter().any(|label| label.split_whitespace().any(|word| word == key.to_string())), "{key} is not in the keys help: {labels:?}");
         }
     }

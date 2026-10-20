@@ -147,7 +147,7 @@ The lead checks the task's commits against the rules skill. Once it approves the
 
 ## 9. Push it
 
-With `greet` selected, press `l`.
+With `greet` selected, press `p`.
 
 kelpie rebases the task onto `origin/main`, then opens the push window. At the top is the task's sign-off card: what changed, where to look, and anything to confirm. Below it are the commits that will land. Use `↑` `↓` to read each commit's full message.
 

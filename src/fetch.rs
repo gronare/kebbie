@@ -34,6 +34,72 @@ fn fetched_at(repo: &Path) -> Option<SystemTime> {
     std::fs::metadata(repo.join(".git/FETCH_HEAD")).and_then(|meta| meta.modified()).ok()
 }
 
+// Every worktree of a repo writes the same refs/remotes/origin/<branch>, so two fetches at once fail on its lock.
+pub fn ref_lock_error(error: &str) -> bool {
+    error.contains("cannot lock ref") || error.contains("reference already exists") || (error.contains("Unable to create") && error.contains(".lock"))
+}
+
+pub const RETRIES: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(4)];
+
+pub fn retrying(mut attempt: impl FnMut() -> Result<(), String>, mut pause: impl FnMut(Duration)) -> Result<(), String> {
+    for wait in RETRIES {
+        match attempt() {
+            Err(error) if ref_lock_error(&error) => pause(wait),
+            other => return other,
+        }
+    }
+    attempt()
+}
+
+const LOCK_STALE: Duration = Duration::from_secs(300);
+
+fn lock_file(state: &Path, repo: &Path) -> PathBuf {
+    let name: String = repo.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '_' }).collect();
+    state.join("fetch").join(format!("{name}.lock"))
+}
+
+struct FetchLock(PathBuf);
+
+impl FetchLock {
+    fn take(path: PathBuf, wait: Duration) -> Option<FetchLock> {
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        let started = SystemTime::now();
+        loop {
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(_) => return Some(FetchLock(path)),
+                Err(_) if std::fs::metadata(&path).and_then(|meta| meta.modified()).is_ok_and(|at| at.elapsed().unwrap_or_default() > LOCK_STALE) => {
+                    let _ = std::fs::remove_file(&path);
+                }
+                Err(_) if started.elapsed().unwrap_or_default() > wait => return None,
+                Err(_) => thread::sleep(Duration::from_millis(100)),
+            }
+        }
+    }
+}
+
+impl Drop for FetchLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+// One fetch per repo at a time across kelpie's processes; one that landed while this one waited for the lock is shared, and a ref lock taken by a git outside kelpie is waited out.
+pub fn shared_in(state: &Path, repo: &Path, attempt: impl FnMut() -> Result<(), String>, pause: impl FnMut(Duration)) -> Result<(), String> {
+    let asked = SystemTime::now();
+    let _lock = FetchLock::take(lock_file(state, repo), Duration::from_secs(120));
+    if fetched_at(repo).is_some_and(|at| at > asked) {
+        return Ok(());
+    }
+    retrying(attempt, pause)
+}
+
+pub fn shared(repo: &Path, attempt: impl FnMut() -> Result<(), String>) -> Result<(), String> {
+    match crate::lead::state_dir() {
+        Ok(state) => shared_in(&state, repo, attempt, thread::sleep),
+        Err(_) => retrying(attempt, thread::sleep),
+    }
+}
+
 fn fetch(repo: &Path) -> Result<(), String> {
     let mut command = Command::new("git");
     command.args(["fetch", "--quiet", "--no-tags"]).current_dir(repo).stdin(Stdio::null()).stdout(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
@@ -74,7 +140,7 @@ impl Fetcher {
             self.running.insert(repo.clone());
             let sender = self.sender.clone();
             thread::spawn(move || {
-                let result = fetch(&repo);
+                let result = shared(&repo, || fetch(&repo));
                 let _ = sender.send((repo, result));
             });
         }
@@ -100,6 +166,59 @@ mod tests {
         assert!(due(ago(300), ago(300), false, now));
         assert!(!due(ago(600), ago(60), false, now), "a failed fetch leaves FETCH_HEAD old; the attempt still waits out the interval");
         assert!(!due(ago(600), ago(600), true, now));
+    }
+
+    #[test]
+    fn a_fetch_that_meets_a_ref_lock_tries_again_after_two_and_four_seconds_and_nothing_else_is_retried() {
+        let locked = "error: cannot lock ref 'refs/remotes/origin/main': is at 1a2b but expected 3c4d";
+        assert!(ref_lock_error(locked) && ref_lock_error("error: cannot lock ref 'refs/remotes/origin/main': reference already exists"));
+        assert!(ref_lock_error("fatal: Unable to create '/r/.git/refs/remotes/origin/main.lock': File exists."));
+        assert!(!ref_lock_error("fatal: Could not read from remote repository."));
+        let mut tries = 0;
+        let mut waits = Vec::new();
+        let result = retrying(|| { tries += 1; if tries < 3 { Err(locked.to_string()) } else { Ok(()) } }, |wait| waits.push(wait));
+        assert_eq!((result, tries, waits.clone()), (Ok(()), 3, RETRIES.to_vec()));
+        let mut tries = 0;
+        assert!(retrying(|| { tries += 1; Err(locked.to_string()) }, |_| {}).is_err());
+        assert_eq!(tries, 3, "the third failure is the answer");
+        let mut tries = 0;
+        assert!(retrying(|| { tries += 1; Err("fatal: Could not read from remote repository.".to_string()) }, |_| {}).is_err());
+        assert_eq!(tries, 1);
+    }
+
+    #[test]
+    fn fetches_of_one_repo_from_two_threads_never_overlap_and_a_fresh_one_is_shared() {
+        let state = crate::sh::test_dir("fetch-lock");
+        let repo = state.join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let running = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let most = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let threads: Vec<_> = (0..4).map(|_| {
+            let (state, repo, running, most) = (state.clone(), repo.clone(), running.clone(), most.clone());
+            thread::spawn(move || shared_in(&state, &repo, || {
+                let now = running.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                most.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(50));
+                running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }, |_| {}))
+        }).collect();
+        for thread in threads {
+            thread.join().unwrap().unwrap();
+        }
+        assert_eq!(most.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!lock_file(&state, &repo).exists(), "the lock goes with its fetch");
+        std::fs::write(repo.join(".git/FETCH_HEAD"), "").unwrap();
+        let mut called = false;
+        shared_in(&state, &repo, || { called = true; Ok(()) }, |_| {}).unwrap();
+        assert!(called, "a fetch from before this one was asked for is not new enough to share");
+        let held = FetchLock::take(lock_file(&state, &repo), Duration::from_secs(1)).unwrap();
+        let waiting = { let (state, repo) = (state.clone(), repo.clone()); thread::spawn(move || { let mut called = false; shared_in(&state, &repo, || { called = true; Ok(()) }, |_| {}).unwrap(); called }) };
+        thread::sleep(Duration::from_millis(300));
+        std::fs::write(repo.join(".git/FETCH_HEAD"), "").unwrap();
+        drop(held);
+        assert!(!waiting.join().unwrap(), "a fetch that landed while it waited for the lock is shared, not repeated");
+        let _ = std::fs::remove_dir_all(state);
     }
 
     #[test]

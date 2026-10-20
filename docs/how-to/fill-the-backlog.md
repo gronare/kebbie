@@ -15,7 +15,7 @@ The first source is where the lead files new ideas. `"vault"` needs the [vault p
 
 ## Add items to the local backlog
 
-On the board, move to the Backlog column and press `a`: a title, then a priority. Or:
+On the board, move to the Backlog column and press `n`: a title, then a priority. Or:
 
 ```bash
 kelpie backlog add --priority high "Fix login — the session drops on reload (app)"

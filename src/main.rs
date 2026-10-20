@@ -8,7 +8,9 @@ mod config;
 mod doctor;
 mod fetch;
 mod herdr;
+mod keys;
 mod lead;
+mod login_env;
 mod messages;
 mod notify;
 mod peers;
@@ -27,6 +29,7 @@ mod shell_write;
 mod status;
 mod task_note;
 mod tasks;
+mod typing;
 mod update;
 mod update_check;
 mod usage;
@@ -373,6 +376,9 @@ fn main() -> ExitCode {
         let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
         usage::record(&input);
         return ExitCode::SUCCESS;
+    }
+    if matches!(arguments.positional(0), Some("board" | "start" | "land" | "push" | "done" | "move" | "update")) {
+        login_env::import();
     }
     match run(&arguments) {
         Ok(output) => {

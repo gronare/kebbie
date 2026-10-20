@@ -72,6 +72,7 @@ pub struct Worktree {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Machine {
+    pub keys: Vec<(String, String)>,
     pub sources: Option<Vec<Source>>,
     pub channel: Option<Channel>,
     pub restart: Restart,
@@ -314,6 +315,12 @@ fn update(table: &Table) -> Result<Option<Channel>> {
     }
 }
 
+// The board's keys are checked against each other in keys.rs, where a bad entry is left out rather than failing the file.
+fn keys(table: &Table) -> Result<Vec<(String, String)>> {
+    let Some(keys) = subtable(table, "keys", "keys")? else { return Ok(Vec::new()) };
+    Ok(keys.iter().map(|(name, value)| (name.clone(), value.as_str().map_or_else(|| format!("{} {}", value.type_str(), "value"), str::to_string))).collect())
+}
+
 fn restart(table: &Table) -> Result<Restart> {
     let Some(restart) = subtable(table, "restart", "restart")? else { return Ok(Restart::default()) };
     unknown_keys(restart, "restart.", &["idle_minutes", "auto"])?;
@@ -386,9 +393,9 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart"]).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keys"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
-    Ok(Machine { sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, worktree })
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, worktree })
 }
 
 const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
@@ -397,7 +404,7 @@ const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto")] {
+    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keys", "[keys]")] {
         if table.contains_key(key) {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
@@ -491,6 +498,9 @@ pub fn describe(loaded: &Loaded) -> String {
     lines.push(format!("Each key below may be set in config.toml or, for one repo, in {}/<repo>.toml (named after the main checkout's folder), which wins; a key marked config.toml only applies to every repo.", repos_dir().display()));
     lines.push(String::new());
     let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
+    let entries = load_machine(&loaded.machine).map(|machine| machine.keys).unwrap_or_default();
+    let (board_keys, key_errors) = crate::keys::Keys::with(&entries);
+    let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
     let mut key = |name: &str, value: String, layer: Layer, about: &str| {
         lines.push(format!("{name} = {value}  ({})", layer.label()));
         lines.push(format!("  {about}"));
@@ -502,15 +512,15 @@ pub fn describe(loaded: &Loaded) -> String {
     key("worktree.setup_command", setup_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), setup_command.layer,
         "The repo's own command that prepares an existing worktree, run from inside it; the setup skill runs it. A path applies only in a repo that has the file; elsewhere, and when none, bin/setup-worktree when the repo has one.");
     key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer,
-        "The shell command the board's w key runs in a server tab of the task's Space, with PORT set to the worktree's port; without one there is no w.");
+        &format!("The shell command the board's {server_key} key runs in a server tab of the task's Space, with PORT set to the worktree's port; without one there is no {server_key}."));
     key("worktree.dev_worker", dev_worker.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_worker.layer,
-        "A second command, such as a job runner, the board's b key runs in a worker tab of the task's Space, with the same PORT; without one there is no b.");
+        &format!("A second command, such as a job runner, the board's {worker_key} key runs in a worker tab of the task's Space, with the same PORT; without one there is no {worker_key}."));
     key("worktree.dev_url", dev_url.value.as_ref().map_or("\"\" (no link)".to_string(), |url| format!("{url:?}")), dev_url.layer,
         "The running dev server's address, shown on the board as a link: {worktree} (the worktree's folder), {repo}, {number} (its pool number) and {port} (its port) are filled in; a worktree without what it names gets no link, and \"\" turns the link off.");
     key("worktree.server_name", format!("{:?}", server_name.value), server_name.layer,
-        "The name of the tab the board's w starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; config.toml only.");
+        &format!("The name of the tab the board's {server_key} starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; config.toml only."));
     key("worktree.worker_name", format!("{:?}", worker_name.value), worker_name.layer,
-        "The same for the worker tab b starts; config.toml only.");
+        &format!("The same for the worker tab {worker_key} starts; config.toml only."));
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
         "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the lead checks a finished task against it, tidy reshapes commits by it.");
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
@@ -525,6 +535,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "Whether the board restarts Claude sessions that run an older Claude Code, plugin, MCP config or kelpie than is installed, each with claude --resume in its own pane, keeping its flags; kelpie update restarts the idle ones at once. false restarts nothing on its own: the board still marks stale sessions, and kelpie restart restarts them when you want; config.toml only.");
     key("restart.idle_minutes", idle_minutes.value.to_string(), idle_minutes.layer,
         "How long a stale session waits idle and unfocused before the board restarts it; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
+    lines.push("[keys]  (config.toml only)\n  The board's keys, as name = \"key\" by action: a plain character for an action whose key is one (esc, ctrl+c, ⏎, the arrows and tab stay), and one not taken by another action where both act; moving two at once in the table works. An entry that breaks a rule is ignored, and named below. Help, hints and messages show the key in effect.".to_string());
+    lines.extend(board_keys.describe(&key_errors).into_iter().map(|line| format!("  {line}")));
     lines.push(format!("[[actions]]  (repo config only)\n  The Areas page's own actions for the repo, one table each, with the keys {}; docs/reference/configuration.md shows each.", crate::actions::ACTION_KEYS.join(", ")));
     lines.join("\n")
 }
@@ -554,6 +566,22 @@ pub fn show(cwd: &Path, repo: Option<&str>) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_live_in_config_toml_only_and_kelpie_config_shows_each_with_why_an_entry_was_ignored() {
+        let config = machine("[keys]\ninbox = \"I\"\nchat = \"p\"\nback = \"x\"\nnew = 3\n");
+        assert_eq!(config.keys, [("back".to_string(), "x".to_string()), ("chat".to_string(), "p".to_string()), ("inbox".to_string(), "I".to_string()), ("new".to_string(), "integer value".to_string())]);
+        let refused = parse_repo("[keys]\ninbox = \"I\"\n", "app.toml").unwrap_err();
+        assert!(refused.contains("keys: applies to every repo, so it lives in config.toml; set [keys] in"), "{refused}");
+        let dir = crate::sh::test_dir("config-keys");
+        let file = dir.join("config.toml");
+        std::fs::write(&file, "[keys]\ninbox = \"I\"\nchat = \"p\"\nserver = \"W\"\n").unwrap();
+        let shown = describe(&Loaded { machine: file, repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
+        assert!(shown.contains("keys.inbox = \"I\"  (machine config)") && shown.contains("keys.new = \"n\"  (default)"), "{shown}");
+        assert!(shown.contains("ignored: keys.chat: p is taken by push"), "{shown}");
+        assert!(shown.contains("the board's W key runs in a server tab"), "the descriptions name the key in effect: {shown}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     const MACHINE: &str = "[board.backlog]\nsources = [\"vault\", \"linear\"]\n\n[worktree]\nsetup_skill = \"my-tools:set-up-worktree\"\ndev_server = \"bin/dev\"\n";
     const REPO: &str = "[worktree]\nsetup_skill = \"app-tools:set-up-worktree\"\ndev_server = \"npm run dev\"\n\n[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n";
@@ -698,8 +726,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keys");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keys");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));

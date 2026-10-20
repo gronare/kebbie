@@ -11,7 +11,7 @@ use crate::lead::state_dir;
 use crate::messages;
 use crate::peers;
 use crate::repo::{
-    ahead_behind, branch_exists, changed_count, default_branch, git, is_clean, main_checkout, name_of,
+    ahead_behind, branch_exists, changed_count, default_branch, git, git_writing, is_clean, main_checkout, name_of,
     setup_line, slot_number, slot_path, worktrees,
 };
 use crate::sh::Result;
@@ -94,7 +94,7 @@ pub fn task_of(slot: &Slot) -> &str {
 }
 
 fn fetch(repo: &Path) -> Result<()> {
-    git(repo, &["fetch", "--quiet", "origin"]).map(|_| ())
+    crate::fetch::shared(repo, || git(repo, &["fetch", "--quiet", "origin"]).map(|_| ()))
 }
 
 fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
@@ -110,18 +110,37 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 
 // The deny rules and the env rewrite name the rule; the worktree's own push block (push_block) is what holds when they are slipped.
 // gate is the task's address when kelpie keeps its note: its edits then wait for the note's Problem.
-fn settings(kelpie: &str, gate: Option<&str>) -> String {
+fn settings(kelpie: &str, gate: Option<&str>, tmp: Option<&Path>) -> String {
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kelpie)) }] }]);
     let allow = ["peers", "tell", "report", "ask"].map(|command| format!("Bash({kelpie} {command}:*)"));
     let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook });
     if let Some(address) = gate {
         hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kelpie), crate::sh::quote(address)), "timeout": 40 }] }]);
     }
+    let mut env = json!({ "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" });
+    if let Some(tmp) = tmp {
+        for name in TMP_VARS {
+            env[name] = json!(tmp.to_string_lossy());
+        }
+    }
     json!({
-        "env": { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" },
+        "env": env,
         "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)")], "allow": allow },
         "hooks": hooks,
     }).to_string()
+}
+
+const TMP_VARS: [&str; 4] = ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"];
+
+// A task's temporary files live in its worktree's own git dir, so they go with the task and never land in the repo.
+fn task_tmp(worktree: &Path) -> Result<PathBuf> {
+    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kelpie-tmp"))
+}
+
+fn clear_tmp(worktree: &Path) {
+    if let Ok(dir) = task_tmp(worktree) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 pub(crate) enum Session {
@@ -190,10 +209,14 @@ fn stored_prompt(file: &Path) -> Option<String> {
     std::fs::read_to_string(file).ok().filter(|prompt| !prompt.trim().is_empty())
 }
 
-// A resumed conversation already holds the task's first prompt; only a new one needs it again.
-fn prompt_again(session: &Session, stored: Option<String>) -> Option<String> {
+// A prompt given with the start always goes in; the stored first prompt goes to a new conversation, and to a resumed one that never heard a user turn, as when the first start's shell asked a question before Claude ran.
+fn prompt_for(session: &Session, given: Option<&str>, stored: Option<String>, unheard: bool) -> Option<String> {
+    if let Some(given) = given {
+        return Some(given.to_string());
+    }
     match session {
         Session::New(_) => stored,
+        Session::Resume(_) if unheard => stored,
         Session::Resume(_) => None,
     }
 }
@@ -562,16 +585,16 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let vault = crate::vault_cli::detect();
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
-        return restart(&place(&existing), &existing, focus);
+        return restart(&place(&existing), &existing, focus, prompt);
     }
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
     let base = from.unwrap_or(&upstream);
     let slot = claim_slot(&repo, &upstream)?;
     if branch_exists(&repo, &task) {
-        git(&slot.path, &["switch", "--quiet", &task])?;
+        git_writing(&slot.path, &["switch", "--quiet", &task])?;
     } else {
-        git(&slot.path, &["switch", "--quiet", "-c", &task, base])?;
+        git_writing(&slot.path, &["switch", "--quiet", "-c", &task, base])?;
     }
 
     let address = peers::address(&task, &name_of(&repo));
@@ -597,7 +620,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let (agent_name, started) = launch(&Launch { note: note.as_deref(), ..place(&slot) }, &claude_pane, Session::New(new_session_id()?))?;
     // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
     let prompted = match (&started, prompt) {
-        (Ok(()), Some(prompt)) => herdr::prompt_agent(&agent_name, prompt).map_err(|error| format!("Started {task} in {}, but sending the prompt failed: {error}", slot.path.display())),
+        (Ok(()), Some(prompt)) => crate::typing::prompt_confirmed(&agent_name, prompt, &address).map_err(|error| format!("Started {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
         _ => Ok(()),
     };
     if focus {
@@ -635,7 +658,9 @@ fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Resul
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
     let address = peers::address(task, &name_of(repo));
     let note = note.filter(|_| vault);
-    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &settings(&peers::kelpie_command()?, note.map(|_| address.as_str())))?;
+    let tmp = task_tmp(worktree)?;
+    std::fs::create_dir_all(&tmp).map_err(|error| format!("{}: {error}", tmp.display()))?;
+    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &settings(&peers::kelpie_command()?, note.map(|_| address.as_str()), Some(&tmp)))?;
     let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill, note })?;
     let agent_args = claude_args(mode, &settings, &role, &session);
     let started = start_claude(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(repo));
@@ -652,7 +677,7 @@ fn claude_in(workspace: &str) -> Result<bool> {
 }
 
 // A task whose Space or Claude is gone gets them back: its last conversation resumed, or a new one given the task's first prompt again.
-fn restart(place: &Launch, slot: &Slot, focus: bool) -> Result<String> {
+fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Result<String> {
     let task = place.task;
     let open = herdr::workspace_for(&slot.path)?;
     if let Some(workspace) = &open
@@ -677,10 +702,19 @@ fn restart(place: &Launch, slot: &Slot, focus: bool) -> Result<String> {
         None => Session::New(new_session_id()?),
     };
     let resumed = matches!(session, Session::Resume(_));
-    let prompt = prompt_again(&session, session_file(task, place.repo).ok().and_then(|file| stored_prompt(&prompt_file(&file))));
+    let prompt_path = session_file(task, place.repo).ok().map(|file| prompt_file(&file));
+    let stored = prompt_path.as_deref().and_then(stored_prompt);
+    if let (Some(given), None, Some(path)) = (given, &stored, &prompt_path) {
+        store_prompt(path, Some(given))?;
+    }
+    let unheard = match &session {
+        Session::Resume(id) => claude_home().and_then(|home| std::fs::read_to_string(transcripts_dir(&home, &slot.path).join(format!("{id}.jsonl"))).ok()).is_none_or(|text| crate::review::user_messages(&text).is_empty()),
+        Session::New(_) => true,
+    };
+    let prompt = prompt_for(&session, given, stored, unheard);
     let (agent_name, started) = launch(&place, &pane, session)?;
     let prompted = match (&started, &prompt) {
-        (Ok(()), Some(prompt)) => herdr::prompt_agent(&agent_name, prompt).map_err(|error| format!("Restarted {task} in {} with a new conversation, but sending its prompt again failed: {error}", slot.path.display())),
+        (Ok(()), Some(prompt)) => crate::typing::prompt_confirmed(&agent_name, prompt, &peers::address(task, &name_of(place.repo))).map_err(|error| format!("Restarted {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
         _ => Ok(()),
     };
     if focus {
@@ -689,7 +723,8 @@ fn restart(place: &Launch, slot: &Slot, focus: bool) -> Result<String> {
     started?;
     prompted?;
     let how = match (resumed, prompt.is_some()) {
-        (true, _) => "resuming its last conversation",
+        (true, true) => "resuming its last conversation, and sent it the prompt",
+        (true, false) => "resuming its last conversation",
         (false, true) => "with a new conversation, as none of its own was found, and sent it the task's prompt again",
         (false, false) => "with a new conversation, as none of its own was found; it had no prompt to send again",
     };
@@ -735,20 +770,21 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
 
 // Ok(false) when the rebase conflicted and the task's Claude took it over.
 fn rebase_or_hand_over(slot: &Slot, upstream: &str, why: &str) -> Result<bool> {
-    if git(&slot.path, &["rebase", "--quiet", upstream]).is_ok() {
+    if git_writing(&slot.path, &["rebase", "--quiet", upstream]).is_ok() {
         return Ok(true);
     }
-    git(&slot.path, &["rebase", "--abort"])?;
+    git_writing(&slot.path, &["rebase", "--abort"])?;
     let task = task_of(slot);
     let Some(pane) = claude_of(&slot.path) else {
         return Err(format!("{task} conflicts with {upstream} and has no Claude to resolve it; rebase it in {}", slot.path.display()));
     };
-    herdr::prompt_agent(&pane, &format!(
+    let text = format!(
         "{why} and rebasing onto {upstream} conflicts (already fetched). Rebase this branch onto {upstream} \
          with git rebase {upstream} (no -i), resolve each conflict keeping the intent of both sides (read the upstream \
          commits that touched the file), run the tests for the files involved, and continue until the rebase is finished. Do not \
          push. Then tell me in a few lines what conflicted and how you resolved it."
-    ))?;
+    );
+    crate::typing::prompt(&pane, &text, task).map_err(|refused| format!("{task} conflicts with {upstream}, and its Claude {}, so kelpie typed nothing; rebase it in {} or clear its box and land again", refused.reason(), slot.path.display()))?;
     Ok(false)
 }
 
@@ -775,7 +811,7 @@ pub fn tidy(cwd: &Path, name: Option<&str>, note: &str) -> Result<String> {
     if !note.trim().is_empty() {
         prompt.push_str(&format!(" From the user: {}", note.trim()));
     }
-    herdr::prompt_agent(&pane, &prompt)?;
+    crate::typing::prompt(&pane, &prompt, task).map_err(|refused| format!("{task}'s Claude {}, so kelpie typed nothing; tidy again once its box is clear", refused.reason()))?;
     Ok(format!("Asked {task}'s Claude to tidy its commits."))
 }
 
@@ -1100,7 +1136,7 @@ fn commit_like(path: &Path, tree: &str, parent: &str, like: &str, message: &str)
 // Same tree, parent and author with a new message, then the later commits replayed on top; their trees are unchanged, so nothing can conflict.
 pub fn reword(path: &Path, sha: &str, message: &str) -> Result<()> {
     let new = commit_like(path, &format!("{sha}^{{tree}}"), &format!("{sha}^"), sha, message)?;
-    git(path, &["rebase", "--quiet", "--onto", &new, sha]).map(|_| ())
+    git_writing(path, &["rebase", "--quiet", "--onto", &new, sha]).map(|_| ())
 }
 
 // One commit with the branch's final tree on the default branch, written by the first commit's author.
@@ -1110,7 +1146,7 @@ pub fn squash(path: &Path, message: &str) -> Result<()> {
     let first = git(path, &["rev-list", "--reverse", &format!("{base}..HEAD")])?.lines().next().map(str::to_string)
         .ok_or("Nothing to squash")?;
     let new = commit_like(path, "HEAD^{tree}", &base, &first, message)?;
-    git(path, &["reset", "--quiet", "--soft", &new]).map(|_| ())
+    git_writing(path, &["reset", "--quiet", "--soft", &new]).map(|_| ())
 }
 
 // A one-off Claude with no tools, settings, hooks or MCP, run outside the repo, so it only writes text.
@@ -1142,7 +1178,8 @@ pub fn draft_squash_message(path: &Path) -> Result<String> {
 
 // -D because callers have already checked the commits are on upstream; git's -d checks the main checkout's local branch, which is still behind right after a push.
 fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<()> {
-    git(&slot.path, &["switch", "--quiet", "--detach", upstream])?;
+    git_writing(&slot.path, &["switch", "--quiet", "--detach", upstream])?;
+    clear_tmp(&slot.path);
     git(repo, &["branch", "-D", task_of(slot)]).map(|_| ())
 }
 
@@ -1160,7 +1197,7 @@ fn fast_forward_main(repo: &Path, upstream: &str) -> Result<String> {
     if git(repo, &["branch", "--show-current"])? != local {
         return Ok(format!("{name} left as is (not on {local})."));
     }
-    Ok(match git(repo, &["merge", "--quiet", "--ff-only", upstream]) {
+    Ok(match git_writing(repo, &["merge", "--quiet", "--ff-only", upstream]) {
         Ok(_) => format!("{name} fast-forwarded to {upstream}."),
         Err(_) => format!("{name} could not fast-forward to {upstream}."),
     })
@@ -1277,8 +1314,8 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     }
     let workspace = herdr::workspace_for(&slot.path)?;
     if force {
-        git(&slot.path, &["reset", "--quiet", "--hard"])?;
-        git(&slot.path, &["clean", "-fdq"])?;
+        git_writing(&slot.path, &["reset", "--quiet", "--hard"])?;
+        git_writing(&slot.path, &["clean", "-fdq"])?;
     }
     release(&repo, &slot, &upstream)?;
     let notes: Vec<String> = forget_start(task, &repo).map(|text| crate::task_note::items(&text)).unwrap_or_default().into_iter().filter(|item| crate::vault_cli::is_note(item)).collect();
@@ -1345,26 +1382,26 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     if !files.is_empty() {
         let mut args = vec!["stash", "push", "--include-untracked", "--message", message.as_str(), "--"];
         args.extend(files.iter().map(String::as_str));
-        git(&repo, &args)?;
+        git_writing(&repo, &args)?;
     }
     let stashed = |error: String| -> String {
         if files.is_empty() { error } else { format!("{error}\nThe moved files are kept in the stash \"{message}\" (git stash list).") }
     };
 
     if existing && current == task {
-        git(&repo, &["switch", "--quiet", local]).map_err(stashed)?;
+        git_writing(&repo, &["switch", "--quiet", local]).map_err(stashed)?;
     } else if !existing {
         git(&repo, &["branch", &task]).map_err(stashed)?;
         if ahead_behind(&repo, &upstream)?.0 > 0 {
-            git(&repo, &["reset", "--quiet", "--keep", &upstream]).map_err(stashed)?;
+            git_writing(&repo, &["reset", "--quiet", "--keep", &upstream]).map_err(stashed)?;
         }
     }
 
     let slot = claim_slot(&repo, &upstream).map_err(stashed)?;
     crate::push_block::warn_if_off(crate::push_block::install(&slot.path, &state_dir()?).map_err(stashed)?);
-    git(&slot.path, &["switch", "--quiet", &task]).map_err(stashed)?;
+    git_writing(&slot.path, &["switch", "--quiet", &task]).map_err(stashed)?;
     if let Some(index) = stash_index(&repo, &message)? {
-        git(&slot.path, &["stash", "pop", "--quiet", &format!("stash@{{{index}}}")]).map_err(stashed)?;
+        git_writing(&slot.path, &["stash", "pop", "--quiet", &format!("stash@{{{index}}}")]).map_err(stashed)?;
     }
 
     let space = open_space(&repo, &slot, &task, focus)?;
@@ -1496,9 +1533,9 @@ mod tests {
 
     #[test]
     fn edits_are_gated_only_in_a_task_started_with_the_vault_on() {
-        let off: Value = serde_json::from_str(&settings("/bin/kelpie", None)).unwrap();
+        let off: Value = serde_json::from_str(&settings("/bin/kelpie", None, None)).unwrap();
         assert!(off["hooks"].get("PreToolUse").is_none(), "without the vault no edit hook runs");
-        let on: Value = serde_json::from_str(&settings("/bin/kelpie", Some("billing@app"))).unwrap();
+        let on: Value = serde_json::from_str(&settings("/bin/kelpie", Some("billing@app"), None)).unwrap();
         assert_eq!(on["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|MultiEdit|NotebookEdit|Bash", "a Bash command that writes a file waits for the Problem too");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kelpie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
         assert_eq!(on["hooks"]["Stop"], off["hooks"]["Stop"]);
@@ -1619,7 +1656,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kelpie-task-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let kelpie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kelpie", "nested/".repeat(20));
-        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kelpie, None)).unwrap();
+        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kelpie, None, None)).unwrap();
         assert_eq!(file, dir.join("billing@app.settings.json"));
         let args = claude_args(Some("acceptEdits"), &file, &dir.join("billing@app.md"), &Session::New("0b6a".to_string()));
         let line = args.join(" ");
@@ -1627,7 +1664,7 @@ mod tests {
         assert_eq!(args[..2], ["--permission-mode", "acceptEdits"]);
         assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie, None)).unwrap());
+        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie, None, None)).unwrap());
         assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)", format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)")]), "a task never pushes nor approves its own commits");
         assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} ask:*)"))), "a task asks the user without a permission prompt");
@@ -1701,23 +1738,27 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_sends_the_tasks_stored_prompt_only_to_a_new_conversation() {
-        let dir = std::env::temp_dir().join(format!("kelpie-task-prompt-{}", std::process::id()));
+    fn a_restart_sends_the_stored_prompt_to_a_new_or_unheard_conversation_and_a_given_prompt_always() {
+        let dir = crate::sh::test_dir("task-prompt");
         let file = prompt_file(&dir.join("sessions").join("billing@my.app"));
         assert_eq!(file, dir.join("sessions").join("billing@my.app.prompt"));
         assert_eq!(stored_prompt(&file), None);
         store_prompt(&file, Some("Fix the invoice rounding")).unwrap();
         assert_eq!(stored_prompt(&file).as_deref(), Some("Fix the invoice rounding"));
-        assert_eq!(prompt_again(&Session::New("1f0c".to_string()), stored_prompt(&file)).as_deref(), Some("Fix the invoice rounding"));
-        assert_eq!(prompt_again(&Session::Resume("1f0c".to_string()), stored_prompt(&file)), None, "a resumed conversation already has it");
+        let (new, resume) = (Session::New("1f0c".to_string()), Session::Resume("1f0c".to_string()));
+        assert_eq!(prompt_for(&new, None, stored_prompt(&file), true).as_deref(), Some("Fix the invoice rounding"));
+        assert_eq!(prompt_for(&resume, None, stored_prompt(&file), false), None, "a resumed conversation that heard its prompt already has it");
+        assert_eq!(prompt_for(&resume, None, stored_prompt(&file), true).as_deref(), Some("Fix the invoice rounding"), "a first start whose shell asked a question left a conversation with no user turn");
+        assert_eq!(prompt_for(&resume, Some("Use the new card"), stored_prompt(&file), false).as_deref(), Some("Use the new card"), "a prompt given on a resume is never dropped");
         store_prompt(&file, None).unwrap();
-        assert_eq!(prompt_again(&Session::New("1f0c".to_string()), stored_prompt(&file)), None);
-        store_prompt(&file, None).unwrap();
+        assert_eq!(prompt_for(&new, None, stored_prompt(&file), true), None);
         std::fs::remove_dir_all(dir).unwrap();
         let source = include_str!("tasks.rs");
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
         assert!(body("start").find("store_prompt(").unwrap() < body("start").find("launch(").unwrap(), "the prompt is kept even when the first start fails");
-        assert!(body("restart").contains("prompt_again(&session") && body("restart").contains("herdr::prompt_agent(&agent_name, prompt)"));
+        assert!(body("start").contains("restart(&place(&existing), &existing, focus, prompt)"), "start's prompt reaches the resume path");
+        assert!(body("restart").contains("prompt_for(&session, given, stored, unheard)") && body("restart").contains("typing::prompt_confirmed(&agent_name, prompt"));
+        assert!(body("restart").contains("user_messages(&text).is_empty()"));
         assert!(body("forget_session").contains("prompt_file("));
     }
 
@@ -1835,6 +1876,32 @@ mod tests {
         assert!(!branch_exists(&dir, "billing"));
         assert!(slots(&dir).unwrap().iter().any(|free| free.path == slot.path && free.free));
         assert_eq!(ahead_behind(&dir, &upstream).unwrap(), (0, 0));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_tasks_temp_dir_is_its_own_outside_the_worktree_and_goes_when_the_task_is_done() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("scratch");
+        let tmp = task_tmp(&slot.path).unwrap();
+        assert!(tmp.starts_with(dir.join(".git/worktrees").canonicalize().unwrap()), "{}", tmp.display());
+        std::fs::create_dir_all(tmp.join("deep")).unwrap();
+        std::fs::write(tmp.join("deep/file"), "x").unwrap();
+        assert!(is_clean(&slot.path).unwrap(), "temp files never show as changes in the worktree");
+        let written: Value = serde_json::from_str(&settings("/bin/kelpie", None, Some(&tmp))).unwrap();
+        for name in TMP_VARS {
+            assert_eq!(written["env"][name], json!(tmp.to_string_lossy()), "{name}");
+        }
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "scratch"]).unwrap();
+        finish(&dir, &slot, &upstream, &state_of(&dir), None).unwrap();
+        assert!(!tmp.exists(), "done takes the temp dir and what is in it");
+        std::fs::create_dir_all(&tmp).unwrap();
+        git(&slot.path, &["switch", "--quiet", "--create", "again"]).unwrap();
+        let again = find_task(&dir, Some("again"), &dir).unwrap();
+        release(&dir, &again, &upstream).unwrap();
+        assert!(!tmp.exists(), "drop and reset free the worktree through the same release");
+        let source = include_str!("tasks.rs");
+        let discard = &source[source.find("\nfn discard(").unwrap()..];
+        assert!(discard[..discard.find("\n}\n").unwrap()].contains("release(&repo, &slot, &upstream)"));
         cleanup(dir, origin, &slot);
     }
 
@@ -2128,7 +2195,7 @@ mod tests {
 
     #[test]
     fn a_tasks_settings_deny_push_and_approve_in_every_spelling_claude_code_matches() {
-        let on: Value = serde_json::from_str(&settings("/bin/kelpie", Some("billing@app"))).unwrap();
+        let on: Value = serde_json::from_str(&settings("/bin/kelpie", Some("billing@app"), None)).unwrap();
         let deny: Vec<&str> = on["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert_eq!(deny, ["Bash(git push:*)", "Bash(/bin/kelpie approve:*)", "Bash(/bin/kelpie push:*)"]);
         let allow: Vec<&str> = on["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
@@ -2147,7 +2214,7 @@ mod tests {
         let kelpie = dir.join("kelpie");
         std::fs::write(&kelpie, "#!/bin/sh\necho ran \"$@\"\n").unwrap();
         std::fs::set_permissions(&kelpie, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let written: Value = serde_json::from_str(&settings(&kelpie.to_string_lossy(), Some("billing@it's"))).unwrap();
+        let written: Value = serde_json::from_str(&settings(&kelpie.to_string_lossy(), Some("billing@it's"), None)).unwrap();
         for command in [&written["hooks"]["Stop"][0]["hooks"][0]["command"], &written["hooks"]["PreToolUse"][0]["hooks"][0]["command"]] {
             let output = std::process::Command::new("sh").args(["-c", command.as_str().unwrap()]).output().unwrap();
             assert!(output.status.success(), "{command}: {}", String::from_utf8_lossy(&output.stderr));

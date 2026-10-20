@@ -6,7 +6,6 @@ use crate::repo::{default_branch, git, is_clean, name_of};
 use crate::sh::Result;
 
 // Keys the Areas page keeps for its built-in actions and moving around.
-pub const RESERVED: [char; 10] = ['g', 's', 'b', 'l', 'u', 'a', 'j', 'k', 'q', '?'];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bump {
@@ -88,7 +87,7 @@ fn action(table: &Table, source: &str) -> Result<Action> {
     let key = string(table, "key")?.ok_or("needs a key")?;
     let mut characters = key.chars();
     let (Some(key), None) = (characters.next(), characters.next()) else { return Err(format!("key \"{key}\" must be one character")) };
-    if RESERVED.contains(&key) {
+    if crate::keys::map().reserved().contains(&key) {
         return Err(format!("key {key} is the Areas page's own"));
     }
     let asks = strings(table, "ask")?;
@@ -352,8 +351,8 @@ pub fn run_local(repo: &Path, steps: &[Step]) -> Result<Vec<String>> {
                 shell(repo, command)?;
             }
             Step::Commit(message) => {
-                git(repo, &["add", "--update"])?;
-                git(repo, &["commit", "--quiet", "-m", message])?;
+                crate::repo::git_writing(repo, &["add", "--update"])?;
+                crate::repo::git_writing(repo, &["commit", "--quiet", "-m", message])?;
             }
             Step::Tag(tag) => {
                 git(repo, &["tag", tag])?;
@@ -582,7 +581,7 @@ task = "Bump {plugin}'s pin to {version}; commit."
 
     #[test]
     fn the_areas_pages_own_keys_cannot_be_taken_by_an_action() {
-        for key in RESERVED {
+        for key in crate::keys::map().reserved() {
             let (actions, errors) = parse(&format!("[[actions]]\nkey = \"{key}\"\ntitle = \"T\"\nrun = \"x\"\n"), "x");
             assert!(actions.is_empty() && errors[0].contains("Areas page's own"), "{key}");
         }

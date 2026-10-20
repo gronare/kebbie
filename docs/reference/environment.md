@@ -12,7 +12,7 @@
 | `KELPIE_BIN` | `~/.local/share/kelpie/current/target/release/kelpie` | The binary the lead's role, the task role, kelpie's skills and the sidebar sync run. |
 | `KELPIE_CLAUDE_BIN` | `claude` | The Claude Code binary `kelpie setup vault` runs. |
 | `KELPIE_VAULT_BIN` | none | A vault command that stands in for the vault plugin, for tests. |
-| `KELPIE_IMAGES` | detected | How the board draws images such as a sign-off card's screenshots: `off` shows their paths instead, `halfblocks` draws them in text cells without querying the terminal. |
+| `KELPIE_IMAGES` | detected | How the board draws images such as a sign-off card's screenshots: `kitty`, `sixel` or `iterm2` use that graphics protocol, `halfblocks` draws a preview in text cells without querying the terminal, `off` shows their paths instead. Detected, it asks the terminal when the first image is about to show; inside herdr (`TERM_PROGRAM=herdr`) it asks nothing and uses Kitty, and the board not on a terminal shows paths. |
 | `HERDR_BIN_PATH` | `herdr` | The herdr binary. `false` makes kelpie reach no herdr at all. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Where kelpie reads Claude Code's installed plugins and their settings. |
 | `XDG_CONFIG_HOME` | `~/.config` | Base for the config files. |

@@ -159,12 +159,12 @@ pub fn send(cwd: &Path, notice: &Notice) -> Sent {
 
 // A detached kelpie waits on the command, so the report returns at once and the timeout still holds.
 fn spawn(invocation: &Invocation) -> Result<()> {
-    let kelpie = std::env::current_exe().map_err(|error| format!("kelpie's own path: {error}"))?;
+    let kelpie = crate::peers::own_exe().map_err(|error| format!("kelpie's own path: {error}"))?;
     Command::new(kelpie).arg("notify").arg(DELIVER).arg(&invocation.program).args(&invocation.args)
         .envs(invocation.env.iter().map(|(name, value)| (name, value)))
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
         .process_group(0)
-        .spawn().map(|_| ()).map_err(|error| error.to_string())
+        .spawn().map(|child| { crate::sh::reap(child); }).map_err(|error| error.to_string())
 }
 
 pub fn run_with_timeout(program: &str, args: &[String], timeout: Duration) -> std::result::Result<(), String> {

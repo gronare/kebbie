@@ -579,7 +579,7 @@ fn ask(label: &str, session: &str, cwd: &Path) -> Result<String> {
     Ok(id)
 }
 
-fn tell_board(text: &str) {
+pub fn tell_board(text: &str) {
     let _ = messages::append(&json!({ "id": messages::new_id("restart"), "at": messages::now(), "from": FROM, "to": USER_LABEL, "text": text, "state": "logged" }));
 }
 

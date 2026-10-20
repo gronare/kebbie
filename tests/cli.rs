@@ -42,12 +42,19 @@ impl Lab {
             fs::write(answers.join(format!("{ok}.json")), r#"{"result":{}}"#).unwrap();
         }
         fs::write(answers.join("workspace-get.json"), r#"{"result":{"workspace":{"tokens":{}}}}"#).unwrap();
+        self.screen("❯ ");
         let script = format!(
             "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\nkey=\"$1-$2\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
             self.root.display()
         );
         fs::write(&self.herdr, script).unwrap();
         fs::set_permissions(&self.herdr, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // What the fake herdr shows as every pane's visible screen: Claude's input box holding this line.
+    fn screen(&self, input: &str) {
+        let rule = "─".repeat(60);
+        fs::write(self.root.join("answers/pane-read.json"), format!("⏺ Done.\n\n{rule}\n{input}\n{rule}\n  ? for shortcuts\n")).unwrap();
     }
 
     fn herdr_calls(&self) -> Vec<Vec<String>> {
@@ -329,7 +336,7 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     let prompts: Vec<Vec<String>> = lab.herdr_calls().into_iter().filter(|call| call[..2] == ["agent", "prompt"]).collect();
     assert!(prompts.iter().any(|call| call[2] == "p_lead" && call[3].contains("billing@app is ready at") && call[3].contains("kelpie -C") && call[3].contains("approve billing")), "the lead is asked to check the rules: {prompts:?}");
     assert!(prompts.iter().any(|call| call[2] == "p_lead" && call[3] == "[from billing@app] payload renamed to amount"), "{prompts:?}");
-    assert!(lab.herdr_calls().iter().all(|call| ["workspace list", "agent list", "agent prompt", "workspace get"].contains(&call[..2].join(" ").as_str())), "nothing but reads and prompts reach herdr: {:?}", lab.herdr_calls());
+    assert!(lab.herdr_calls().iter().all(|call| ["workspace list", "agent list", "agent prompt", "workspace get", "pane read"].contains(&call[..2].join(" ").as_str())), "nothing but reads and prompts reach herdr: {:?}", lab.herdr_calls());
 
     let printed = stdout(&lab.run(&["messages", "--print"]));
     assert!(printed.contains("billing@app → lead") && printed.contains("payload renamed to amount"), "{printed}");
@@ -371,6 +378,23 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     let withdrawn = lab.run(&["-C", app_str, "review", "--withdraw", "billing"]);
     let said = format!("{}{}", stdout(&withdrawn), stderr(&withdrawn));
     assert!(said.contains("Withdrew billing@app from review") || said.contains("is the user's call"), "{said}");
+}
+
+#[test]
+fn a_message_is_held_while_the_user_has_a_draft_in_the_box_and_typed_once_it_is_empty() {
+    let lab = Lab::new("draft");
+    let (_, slot) = lab.task_fixture();
+    lab.screen("❯ half a thought of my own");
+    let told = lab.run(&["-C", slot.to_str().unwrap(), "tell", "lead", "payload renamed"]);
+    assert!(told.status.success(), "{}", stderr(&told));
+    assert!(stdout(&told).contains("lead has a draft in its input box; held"), "{}", stdout(&told));
+    let typed = |lab: &Lab| lab.herdr_calls().into_iter().filter(|call| call[..2] == ["agent", "prompt"]).count();
+    assert_eq!(typed(&lab), 0, "nothing is typed over the user's draft");
+    lab.screen("❯ ");
+    let again = lab.run(&["messages", "--unread"]);
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert_eq!(typed(&lab), 1, "the held message goes in once the box is empty");
+    assert!(fs::read_dir(lab.state.join("typed")).unwrap().count() >= 1, "and the board checks that Claude took it");
 }
 
 #[test]

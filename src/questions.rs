@@ -57,12 +57,17 @@ pub fn parse(options: &[&str], recommend: Option<&str>, plan: bool, text: &str) 
     Ok(Asked { text, options, recommend })
 }
 
+// A note's mtime in whole milliseconds: an f64 read back from JSON can differ in its last digit, which would show as a change.
+pub fn millis(seconds: f64) -> i64 {
+    (seconds * 1000.0).round() as i64
+}
+
 // The question's own log line; the task's report beside it puts the task under Needs you.
-pub fn record(id: &str, at: u64, from: &str, asked: &Asked, plan: Option<&str>, plan_at: Option<f64>) -> Value {
+pub fn record(id: &str, at: u64, from: &str, asked: &Asked, plan: Option<&str>, plan_at: Option<i64>) -> Value {
     let options: Vec<Value> = asked.options.iter().map(|(label, meaning)| json!({ "label": label, "meaning": meaning })).collect();
     json!({
         "id": id, "at": at, "from": from, "to": USER_LABEL, "text": asked.text, "state": "asked",
-        "question": { "options": options, "recommend": asked.recommend, "plan": plan, "plan_at": plan_at },
+        "question": { "options": options, "recommend": asked.recommend, "plan": plan, "plan_at_ms": plan_at },
     })
 }
 
@@ -103,7 +108,7 @@ pub fn plan_changed(question: &Question) -> bool {
 
 fn plan_changed_in(question: &Question, changed_at: impl Fn(&str) -> Option<f64>) -> bool {
     let Some(key) = question.plan.as_deref().and_then(|plan| plan.strip_prefix(VAULT_PLAN)) else { return false };
-    matches!((question.plan_at, changed_at(key)), (Some(asked), Some(now)) if now != asked)
+    matches!((question.plan_at, changed_at(key).map(millis)), (Some(asked), Some(now)) if now != asked)
 }
 
 // The plan's markdown: a vault note's body from the vault index, or the copy of the file it was asked with.
@@ -237,7 +242,7 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
     messages::log_report(&me, &report, &format!("asked the user: {}", asked.text))?;
     report::show_in_sidebar(&report);
     let id = messages::new_id("question");
-    let plan_at = plan.as_deref().and_then(|plan| plan.strip_prefix(VAULT_PLAN)).and_then(|key| crate::vault::Index::open().ok()?.changed_at(key));
+    let plan_at = plan.as_deref().and_then(|plan| plan.strip_prefix(VAULT_PLAN)).and_then(|key| crate::vault::Index::open().ok()?.changed_at(key)).map(millis);
     let record = record(&id, at, &me, &asked, plan.as_deref(), plan_at);
     messages::append(&record)?;
     let message = messages::fold(&record.to_string()).remove(0);
@@ -396,7 +401,7 @@ mod tests {
 
     #[test]
     fn the_leads_copy_of_a_question_says_how_to_settle_it_only_while_the_user_is_away() {
-        let messages = log(&[record("q1", 10, "billing@web", &asked(), Some("vault:Projects/billing.md"), Some(5.0))]);
+        let messages = log(&[record("q1", 10, "billing@web", &asked(), Some("vault:Projects/billing.md"), Some(5000))]);
         let here = question_copy(&messages[0], false);
         assert!(here.starts_with("billing@web asks the user: Which queue should retries use? Options: Sidekiq: reuse the jobs we have; Solid Queue (recommended): one less service."), "{here}");
         assert!(here.contains("The plan: vault:Projects/billing.md.") && here.ends_with("The user answers it on the board."), "{here}");
@@ -487,14 +492,27 @@ mod tests {
 
     #[test]
     fn a_vault_plan_reads_as_changed_once_its_note_changed_after_it_was_asked() {
-        let question = |plan: &str, plan_at: Option<f64>| Question { options: Vec::new(), recommend: 1, plan: Some(plan.to_string()), plan_at, answered: false, waits: false };
+        let question = |plan: &str, plan_at: Option<i64>| Question { options: Vec::new(), recommend: 1, plan: Some(plan.to_string()), plan_at, answered: false, waits: false };
         let note = |at: f64| move |key: &str| (key == "Projects/billing.md").then_some(at);
-        assert!(!plan_changed_in(&question("vault:Projects/billing.md", Some(5.0)), note(5.0)));
-        assert!(plan_changed_in(&question("vault:Projects/billing.md", Some(5.0)), note(9.0)));
+        assert!(!plan_changed_in(&question("vault:Projects/billing.md", Some(5000)), note(5.0)));
+        assert!(plan_changed_in(&question("vault:Projects/billing.md", Some(5000)), note(9.0)));
         assert!(!plan_changed_in(&question("vault:Projects/billing.md", None), note(9.0)), "unknown when asked is not a change");
-        assert!(!plan_changed_in(&question("/state/plans/billing@web-10.md", Some(5.0)), note(9.0)), "a kept file never changes");
-        let asked = log(&[record("q1", 10, "billing@web", &asked(), Some("vault:Projects/billing.md"), Some(5.0))]);
-        assert_eq!(asked[0].question.as_ref().unwrap().plan_at, Some(5.0));
+        assert!(!plan_changed_in(&question("/state/plans/billing@web-10.md", Some(5000)), note(9.0)), "a kept file never changes");
+        let asked = log(&[record("q1", 10, "billing@web", &asked(), Some("vault:Projects/billing.md"), Some(5000))]);
+        assert_eq!(asked[0].question.as_ref().unwrap().plan_at, Some(5000));
+    }
+
+    #[test]
+    fn a_plans_mtime_survives_the_log_round_trip_and_an_old_seconds_value_still_reads() {
+        let mtime = 1_760_000_000.123_456_7_f64;
+        let line = record("q1", 10, "billing@web", &asked(), Some("vault:Projects/billing.md"), Some(millis(mtime))).to_string();
+        let back = log(&[serde_json::from_str(&line).unwrap()]).remove(0).question.unwrap();
+        assert!(!plan_changed_in(&back, |_| Some(mtime)), "the same mtime read back is no change");
+        let old = line.replace(&format!("\"plan_at_ms\":{}", millis(mtime)), &format!("\"plan_at\":{mtime}"));
+        assert!(old.contains("\"plan_at\":"), "{old}");
+        let back = log(&[serde_json::from_str(&old).unwrap()]).remove(0).question.unwrap();
+        assert_eq!(back.plan_at, Some(millis(mtime)));
+        assert!(!plan_changed_in(&back, |_| Some(mtime)));
     }
 
     #[test]

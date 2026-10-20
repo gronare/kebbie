@@ -31,7 +31,7 @@ Between turns, the task's last report decides its group.
 
 ## Keys
 
-`⏎` opens the options for the selected row. Each option's letter also works directly.
+`⏎` opens the options for the selected row. Each option's letter also works directly. Every key that is a plain character can be moved in config.toml's `[keys]`; help, hints and messages then show the key you chose. See [Keys](#keys-in-configtoml).
 
 ### Everywhere on the Work page
 
@@ -42,33 +42,40 @@ Between turns, the task's last report decides its group.
 | `←` `→` | Switch between Work and Backlog. |
 | `1`, `2` | The Work page, the Areas page. |
 | `tab` | Move focus to the lead's chat. |
-| `q` | The question window. |
+| `i` | The inbox: the questions waiting on you. Works on the Areas page too. |
 | `m` | Messages: once shows them on one line, again opens them, again hides them. |
-| `s` | Start a new task: a name, then an optional prompt. Starts in the background. |
+| `n` | New task: a name, then an optional prompt. Starts in the background. In the Backlog column, a new item. |
+| `/` | Filter the selected column: type part of a name, `⏎` keeps the filter, `esc` clears it. |
 | `R` | Ask the lead to refresh the backlog. |
 | `A` | Away mode on or off. |
 | `U` | Run `kelpie update`. |
 | `?` | Every key. |
-| `esc` | Close a window, or the board when it is a popup. |
-| `ctrl-c` | Quit the board. |
+| `esc` | One step back: close a window, a menu or the filter. At the top, close the board when it is a popup; on the full board it does nothing. |
+| `q` | Close the current view, like `esc`. At the top, close the popup; on the full board it says that `ctrl+c` twice quits. |
+| `ctrl+c` | Twice within 2 seconds quits the board. The first press says so. |
+
+A question that asks first, as reset, drop and done do, takes `y` to go ahead and `n` or `esc` to cancel. Any other key keeps the question and says "press y or n".
 
 ### On a task
 
 | Key | Action | Offered when |
 | --- | --- | --- |
-| `q` | Answer its question. | It has an open question. |
+| `i` | Answer its question. | It has an open question. |
 | `g` | Go to its Space. On a task whose Space or Claude is gone, restart it and resume its conversation. | Always. |
-| `p` | Message its Claude. | Always. |
-| `r` | Open the review split next to its Claude. | Always. |
+| `c` | Chat: message its Claude. | Always. |
+| `r` | Open the review split next to its Claude, or go to the one already open in its Space. | Always. |
+| `s` | Show the sign-off card. | It has a card. |
 | `w` | Start or stop the dev server. | `worktree.dev_server` is set. |
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
 | `v` | Send to review; on a task in review, withdraw it. | It has commits and Claude is not mid-turn. |
 | `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn. |
-| `l` | Push: rebase, then open the push window. | Claude is not mid-turn and it is not waiting for the reviewer. |
-| `d` | Done: close a task you already pushed elsewhere and free its worktree. | Claude is not mid-turn. |
+| `p` | Push: rebase, then open the push window. | Claude is not mid-turn and it is not waiting for the reviewer. |
+| `d` | Done: close a task you already pushed elsewhere and free its worktree. Asks first. | Claude is not mid-turn. |
 | `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task. |
 | `z` | Reset: its work goes, its backlog item returns. Asks first. | Always. |
 | `x` | Drop. Asks first; on uncommitted work or unpushed commits, asks again to force. | Always. |
+
+kelpie types into a Claude's input box only when the box is empty. While you have a draft there, a message to that Claude waits and goes in once the box is clear. After typing, kelpie checks the conversation for it; when Claude has not taken it, kelpie presses Enter again after 5, 10 and 20 seconds, and after 40 seconds the board says it was not delivered.
 
 ### In the Backlog column
 
@@ -77,11 +84,33 @@ Between turns, the task's last report decides its group.
 | `g` | Start the item as a task, with the item as its prompt. Asks for a name, suggested from the title. | On an item. |
 | `g` | Go to the task working on this note, or resume the note as a new task. | On an ONGOING note. |
 | `R` | Ask the lead to refresh the backlog. | On an item. |
-| `a` | Add an item to the local backlog: a title, then a priority. | `"local"` is a source. |
+| `n` | Add an item to the local backlog: a title, then a priority. | `"local"` is a source. |
+
+### The card window
+
+Opened by `s`, in a narrow board and a wide one alike. The title names the task; the first line says whether the card is current at its commit, or written at an earlier one with the code changed since. The card's text follows. Each image line shows `▣ <path>  <alt text>`, the path a link to the file, and the image is drawn under it across the window's full width, its height following from its aspect ratio (at most the window's height).
+
+How an image shows depends on the terminal:
+
+- With a graphics protocol (Kitty, Sixel or iTerm2) the image is sharp. Inside herdr kelpie uses the Kitty protocol, which herdr passes on to a Kitty-capable outer terminal such as Ghostty or Kitty.
+- With only halfblocks the image is a coarse preview in text cells, with `preview · f larger · o opens the image` under it.
+- With images off (`KELPIE_IMAGES=off`, or the board not on a terminal), or a file that does not decode as an image, only the image line shows.
+
+`KELPIE_IMAGES` picks the protocol by hand; see [environment](environment.md).
+
+| Key | Action | Shown when |
+| --- | --- | --- |
+| `↑` `↓`, `j` `k` | Scroll. `PageUp`, `PageDown` scroll by ten lines. | Always. |
+| `f` | Fullscreen: the first image in view, alone over the whole board, as large as it fits. `←` `→` go between the card's images; `esc`, `q` or `f` go back to the card. | The card has an image and images are on. |
+| `o` | Open the image in the system viewer: `open` on macOS, `xdg-open` on Linux. In fullscreen it opens the image shown. | The card has an image, the board does not run over SSH (`SSH_CONNECTION` or `SSH_TTY`), and on Linux `DISPLAY` or `WAYLAND_DISPLAY` is set. |
+| `p` | Go on to the push window. | Always. |
+| `esc`, `q` | Close. | Always. |
+
+In a narrow board the selected task also shows the card under its row: whether it is current, its first two lines of text, and how many images it has.
 
 ### The push window
 
-Opened by `l`. The task's sign-off card sits above the commits, marked when the code changed after it was written.
+Opened by `p`. The task's sign-off card sits above the commits, marked when the code changed after it was written.
 
 | Key | Action |
 | --- | --- |
@@ -90,15 +119,15 @@ Opened by `l`. The task's sign-off card sits above the commits, marked when the 
 | `s` | Squash all commits into one. Claude drafts the message in the background, ready to edit. Needs two or more commits. |
 | `y` | Push every commit shown and close the task. |
 | `p` | Push the commits up to the selected one and keep the task open. |
-| `esc` | Close without pushing. |
+| `esc`, `q` | Close without pushing. |
 
 In the message editor: `ctrl-s` saves, `ctrl-o` opens your `$EDITOR`, `esc` goes back.
 
 Only messages and squashes change here; the code stays identical. A commit that arrives after the window opened stops the push.
 
-### The question window
+### The inbox
 
-Opened by `q`. Questions list on the left; the selected one's plan or detail is in the middle.
+Opened by `i`. Questions list on the left; the selected one's plan or detail is in the middle.
 
 | Key | Action |
 | --- | --- |
@@ -108,7 +137,7 @@ Opened by `q`. Questions list on the left; the selected one's plan or detail is 
 | any character | Type into the comment field. |
 | `⏎` | Answer with the selected option and the comment. With "In my own words" selected, the comment is the answer. |
 | `g` | Go to the asking task's Space. |
-| `esc` | Close. |
+| `esc`, or `q` outside the comment field | Close. |
 
 A plan question offers approve, approve with a comment, ask for changes, and reject with a comment.
 
@@ -118,7 +147,7 @@ A plan question offers approve, approve with a comment, ask for changes, and rej
 | --- | --- |
 | `↑` `↓`, `j` `k` | Move through messages. |
 | `⏎` | Read one message whole. |
-| `esc` | Back to the tasks. |
+| `esc`, `q` | Back to the tasks. |
 | `m` | Hide the panel. |
 
 ## Areas page
@@ -134,12 +163,31 @@ An area's repo is the system note's `path`, else where the vault's hooks saw it,
 | Key | Action | Offered when |
 | --- | --- | --- |
 | `g` | Open the main checkout's Space. | The repo is on this machine. |
-| `s` | Start a task in this repo, told the area's notes. | The repo is on this machine. |
+| `n` | New task in this repo, told the area's notes. | The repo is on this machine. |
 | `a` | Let the lead push every task here whose reviewer passed its current code, or take that back. | The repo is on this machine. |
 | `b` | Ask the lead to refresh this area's backlog. | Always. |
 | `l` | Show the area's vault log, newest first. | Always. |
-| `u` | Push main as you, after showing the commits, on `y`. | Main is ahead of origin. |
-| your keys | The repo's own `[[actions]]`. | Set in its repo config. See [Configuration](configuration.md#actions). |
+| `p` | Push main as you, after showing the commits, on `y`. | Main is ahead of origin. |
+| your keys | The repo's own `[[actions]]`, on any key the page does not use. | Set in its repo config. See [Configuration](configuration.md#actions). |
+
+`esc` and `q` close the page's windows; at the top they act as on the Work page.
+
+## Keys in config.toml
+
+`[keys]` in config.toml moves a key, as `action = "key"`. It lives in config.toml only; a repo config refuses it.
+
+```toml
+[keys]
+inbox = "I"
+new = "N"
+```
+
+The actions are `work_page`, `areas_page`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `done`, `reset`, `drop`, `refresh`, `away`, `update`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page) and `close` (`q`).
+
+- The key is one plain character.
+- `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.
+- A key another action already uses where both act is refused, naming that action. Moving two actions onto each other's keys in the same table works.
+- An entry that breaks a rule is ignored; `kelpie config` lists every action with its key and says why an entry was ignored.
 
 ## Mouse
 

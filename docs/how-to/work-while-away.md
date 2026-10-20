@@ -20,7 +20,7 @@ Let the lead keep tasks moving while you are gone, and get a summary when you ar
    kelpie away off
    ```
 
-   The lead writes you a summary: what landed, what it decided and why, and what waits for you, the kept questions first. Answer those with `q` on the board.
+   The lead writes you a summary: what landed, what it decided and why, and what waits for you, the kept questions first. Answer those with `i` on the board.
 
 Start tasks that should run unattended with a permission mode that does not stop for prompts, for example `kelpie start <name> "<prompt>" --mode auto`.
 

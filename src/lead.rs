@@ -282,6 +282,20 @@ fn repair(lead: &str) -> Result<()> {
     Ok(())
 }
 
+// A build still writing the binary changes its mtime between looks; only the same mtime on two looks is a finished one.
+fn settled(mut modified: impl FnMut() -> Option<std::time::SystemTime>, mut pause: impl FnMut(), tries: usize) -> Option<std::time::SystemTime> {
+    let mut last = modified();
+    for _ in 0..tries {
+        pause();
+        let now = modified();
+        if now.is_some() && now == last {
+            return now;
+        }
+        last = now;
+    }
+    None
+}
+
 pub fn renew_board() -> Result<String> {
     let Some(lead) = lead_workspace(&herdr::workspaces()?) else { return Ok("board: no lead Space".to_string()) };
     let Some(board) = places(&lead)?.board else { return Ok("board: the lead Space has no board pane".to_string()) };
@@ -291,7 +305,11 @@ pub fn renew_board() -> Result<String> {
     if !(argv.iter().any(|arg| arg.ends_with("kelpie")) && argv.contains(&"board")) || argv.contains(&"--overlay") {
         return Ok("board: not running; it starts with the new kelpie when you open the lead".to_string());
     }
-    let built = fs::metadata(executable()?).and_then(|meta| meta.modified()).map_err(|error| error.to_string())?;
+    let exe = executable()?;
+    let modified = || fs::metadata(&exe).and_then(|meta| meta.modified()).ok();
+    let Some(built) = settled(modified, || std::thread::sleep(std::time::Duration::from_secs(1)), 30) else {
+        return Ok("board: the new kelpie is still being written; renew again once the build is done".to_string());
+    };
     let built = built.duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0);
     let pid = process["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()).ok_or("board: herdr names no process for it")?;
     let started = crate::restart::started(pid, crate::restart::now()).ok_or("board: cannot read when it started")?;
@@ -369,6 +387,18 @@ pub fn focus_toggle() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_board_renews_only_on_a_binary_whose_mtime_held_between_two_looks() {
+        let at = |seconds: u64| Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds));
+        let mut looks = vec![at(1), at(2), at(3), at(3)].into_iter();
+        let mut pauses = 0;
+        assert_eq!(settled(|| looks.next().flatten(), || pauses += 1, 10), at(3));
+        assert_eq!(pauses, 3, "a binary still being written is looked at again a second later");
+        let mut growing = (0..).map(at);
+        assert_eq!(settled(|| growing.next().flatten(), || {}, 5), None, "a build that never settles is not renewed onto");
+        assert_eq!(settled(|| None, || {}, 3), None, "a missing binary is never settled");
+    }
 
     #[test]
     fn the_lead_role_mentions_linear_only_when_it_is_a_source() {

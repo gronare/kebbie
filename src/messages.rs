@@ -15,7 +15,6 @@ use ratatui::Frame;
 use serde_json::{Value, json};
 
 use crate::board::{FAINT, MAUVE, MUTED, PEACH, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, style};
-use crate::herdr;
 use crate::lead::state_dir;
 use crate::peers::{self, Session};
 use crate::questions;
@@ -43,7 +42,7 @@ pub struct Question {
     pub options: Vec<(String, String)>,
     pub recommend: usize,
     pub plan: Option<String>,
-    pub plan_at: Option<f64>,
+    pub plan_at: Option<i64>,
     pub answered: bool,
     pub waits: bool,
 }
@@ -89,7 +88,7 @@ fn question_from(record: &Value) -> Option<Question> {
     let options = question["options"].as_array()?.iter()
         .map(|option| (option["label"].as_str().unwrap_or_default().to_string(), option["meaning"].as_str().unwrap_or_default().to_string()))
         .collect();
-    Some(Question { options, recommend: question["recommend"].as_u64().unwrap_or(1) as usize, plan: question["plan"].as_str().map(str::to_string), plan_at: question["plan_at"].as_f64(), answered: false, waits: false })
+    Some(Question { options, recommend: question["recommend"].as_u64().unwrap_or(1) as usize, plan: question["plan"].as_str().map(str::to_string), plan_at: question["plan_at_ms"].as_i64().or_else(|| question["plan_at"].as_f64().map(questions::millis)), answered: false, waits: false })
 }
 
 // The log is append-only: a message line, and later lines with only its id and its new state (delivered, answered, kept for the user).
@@ -237,10 +236,12 @@ fn deliver(session: &Session, from: &str, text: &str) -> std::result::Result<(),
         return Err(reason);
     }
     let pane = session.pane.as_deref().unwrap_or_default();
-    match herdr::prompt_agent(pane, &delivered(from, text)) {
+    match crate::typing::prompt(pane, &delivered(from, text), &session.address) {
         Ok(()) => Ok(()),
-        Err(error) if error.contains("agent_blocked") => Err("is waiting for an answer"),
-        Err(_) => Err("could not be reached"),
+        Err(crate::typing::Refused::Draft) => Err("has a draft in its input box"),
+        Err(crate::typing::Refused::Unreadable) => Err("shows no input box to type into"),
+        Err(crate::typing::Refused::Failed(error)) if error.contains("agent_blocked") => Err("is waiting for an answer"),
+        Err(crate::typing::Refused::Failed(_)) => Err("could not be reached"),
     }
 }
 
@@ -633,6 +634,7 @@ pub fn run() -> Result<String> {
         loop {
             if flushed.elapsed().unwrap_or_default() > Duration::from_secs(2) {
                 let _ = flush();
+                crate::typing::check();
                 flushed = SystemTime::now();
             }
             let messages = shown_in_log(load());

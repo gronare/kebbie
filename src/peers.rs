@@ -120,11 +120,15 @@ pub fn peers(cwd: &Path) -> Result<String> {
 
 // The stable link when it leads to this binary, so a task's settings survive reinstalls.
 pub fn kelpie_command() -> Result<String> {
-    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-    let exe = replaced_binary(&exe).canonicalize().map_err(|error| format!("{}: {error}", exe.display()))?;
+    let exe = own_exe()?;
+    let exe = exe.canonicalize().map_err(|error| format!("{}: {error}", exe.display()))?;
     let home = std::env::var("HOME").unwrap_or_default();
     let stable = PathBuf::from(home).join(".local/share/kelpie/current/target/release/kelpie");
     Ok(if stable.canonicalize().ok() == Some(exe.clone()) { stable } else { exe }.to_string_lossy().to_string())
+}
+
+pub fn own_exe() -> Result<PathBuf> {
+    std::env::current_exe().map(|exe| replaced_binary(&exe)).map_err(|error| error.to_string())
 }
 
 // Linux names a running binary that a rebuild replaced "<path> (deleted)"; the path itself holds the new one.
@@ -215,6 +219,14 @@ pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_use_of_kelpies_own_path_goes_through_own_exe() {
+        for (name, source) in [("board.rs", include_str!("board.rs")), ("review.rs", include_str!("review.rs")), ("notify.rs", include_str!("notify.rs")), ("lead.rs", include_str!("lead.rs")), ("tasks.rs", include_str!("tasks.rs")), ("restart.rs", include_str!("restart.rs")), ("main.rs", include_str!("main.rs"))] {
+            assert!(!source.contains(&["current", "_exe()"].concat()), "{name} reads its path raw, which Linux names \"(deleted)\" after a rebuild");
+        }
+        assert_eq!(include_str!("peers.rs").matches(&["current", "_exe()"].concat()).count(), 1);
+    }
 
     #[test]
     fn a_binary_replaced_while_running_is_found_at_its_own_path() {

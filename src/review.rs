@@ -217,7 +217,7 @@ pub fn request(cwd: &Path, name: Option<&str>) -> Result<String> {
     let state = state_dir()?;
     fs::create_dir_all(dir(&state)).map_err(|error| error.to_string())?;
     let sha = git(&slot.path, &["rev-parse", "--short", "HEAD"])?;
-    let log = start_reviewer(&state, &address, &std::env::current_exe().map_err(|error| error.to_string())?, &slot.path)?;
+    let log = start_reviewer(&state, &address, &peers::own_exe()?, &slot.path)?;
     Ok(format!(
         "Reviewing {address} at {sha} in the background; the verdict goes to {} and the lead is told (output in {}).",
         verdict_file(&state, &address).display(), log.display()
@@ -235,7 +235,8 @@ fn start_reviewer(state: &Path, address: &str, kelpie: &Path, worktree: &Path) -
     let child = Command::new(kelpie).arg("-C").arg(worktree).args(["review", "--run"])
         .stdin(Stdio::null()).stdout(output).stderr(errors).process_group(0)
         .spawn().map_err(|error| format!("kelpie review: {error}"))?;
-    crate::state::write(&running_file(state, address), child.id().to_string())?;
+    let pid = crate::sh::reap(child);
+    crate::state::write(&running_file(state, address), pid.to_string())?;
     Ok(log)
 }
 

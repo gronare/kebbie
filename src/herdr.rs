@@ -179,6 +179,18 @@ pub fn focus_beside(pane_id: &str, direction: &str) -> Result<()> {
     call(&["pane", "focus", "--pane", pane_id, "--direction", direction]).map(|_| ())
 }
 
+pub fn neighbour(pane_id: &str, direction: &str) -> Result<Option<String>> {
+    Ok(text(&call(&["pane", "neighbor", "--pane", pane_id, "--direction", direction])?["neighbor"]["neighbor_pane_id"]))
+}
+
+pub fn tab_of(pane_id: &str) -> Result<Option<String>> {
+    Ok(text(&call(&["pane", "get", pane_id])?["pane"]["tab_id"]))
+}
+
+pub fn focus_tab(tab_id: &str) -> Result<()> {
+    call(&["tab", "focus", tab_id]).map(|_| ())
+}
+
 pub fn close_pane(pane_id: &str) -> Result<()> {
     call(&["pane", "close", pane_id]).map(|_| ())
 }

@@ -19,6 +19,7 @@ use crate::board::{
 };
 use crate::config::Source;
 use crate::herdr;
+use crate::keys::{self, Act, Ctx};
 use crate::permit;
 use crate::repo::{self, git, push_as_user};
 use crate::sh::Result;
@@ -106,7 +107,7 @@ enum Mode {
     Normal,
     Options(usize),
     Input { purpose: Purpose, label: String, buffer: String },
-    Confirm { title: String, lines: Vec<Line<'static>>, question: String, go: Go },
+    Confirm { title: String, lines: Vec<Line<'static>>, question: String, go: Go, nudged: bool },
     Push(PushWindow),
     Working { label: String, result: Receiver<After> },
     Message { text: String, next: Option<Next> },
@@ -320,22 +321,22 @@ impl Page {
     fn choices(&self, area: &Area) -> Vec<Choice> {
         let mut choices = Vec::new();
         if area.repo.is_some() {
-            choices.push(choice('g', "Open its Space", "the main checkout's Space, opened if needed"));
-            choices.push(choice('s', "Start a task here", "a worktree, a Space and Claude, told the area's notes"));
+            choices.push(choice(Act::Go, "Open its Space", "the main checkout's Space, opened if needed"));
+            choices.push(choice(Act::New, "Start a task here", "a worktree, a Space and Claude, told the area's notes"));
             choices.push(if area.repo_name().is_some_and(|repo| permit::repo_permitted(&repo)) {
-                choice('a', "Take back the lead's push permission", "the lead pushes only tasks you gave their own permission")
+                choice(Act::Permit, "Take back the lead's push permission", "the lead pushes only tasks you gave their own permission")
             } else {
-                choice('a', "Let the lead push reviewed tasks", "the lead may push any task here once its reviewer passed its current code")
+                choice(Act::Permit, "Let the lead push reviewed tasks", "the lead may push any task here once its reviewer passed its current code")
             });
         }
         let refresh = backlog::refresh_label(&self.sources);
-        choices.push(choice('b', "Refresh its backlog", &refresh));
-        choices.push(choice('l', "Show its log", "the vault log, newest first"));
+        choices.push(choice(Act::AreaRefresh, "Refresh its backlog", &refresh));
+        choices.push(choice(Act::Log, "Show its log", "the vault log, newest first"));
         if let Some(git) = area.git.as_ref().filter(|git| git.ahead > 0) {
-            choices.push(Choice { key: 'u', label: format!("Push {}", git.branch), about: format!("{} on {} to push: shows them, asks first", plural(git.ahead, "commit"), git.branch) });
+            choices.push(Choice { key: keys::key(Act::Push), act: Some(Act::Push), label: format!("Push {}", git.branch), about: format!("{} on {} to push: shows them, asks first", plural(git.ahead, "commit"), git.branch) });
         }
         for action in &area.actions {
-            choices.push(Choice { key: action.key, label: action.title.clone(), about: action.about.clone() });
+            choices.push(Choice { key: action.key, act: None, label: action.title.clone(), about: action.about.clone() });
         }
         choices
     }
@@ -350,12 +351,16 @@ impl Page {
     }
 
     pub fn handle(&mut self, key: KeyEvent, terminal: &mut DefaultTerminal) -> Effect {
+        let map = keys::map();
+        let act = map.act(Ctx::Areas, &key);
+        let leaves = matches!(act, Some(Act::Back | Act::Close));
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => return self.handle_normal(key),
             Mode::Options(index) => {
                 let Some(area) = self.current() else { return Effect::Handled };
                 let choices = self.choices(&area);
                 match key.code {
+                    KeyCode::Char(character) if choices.iter().any(|choice| choice.key == character) => return self.act(character),
                     KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::Options(index.saturating_sub(1)),
                     KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::Options((index + 1).min(choices.len().saturating_sub(1))),
                     KeyCode::Enter => {
@@ -363,8 +368,7 @@ impl Page {
                             return self.act(choice.key);
                         }
                     }
-                    KeyCode::Char(character) if choices.iter().any(|choice| choice.key == character) => return self.act(character),
-                    KeyCode::Esc => {}
+                    _ if leaves => {}
                     _ => self.mode = Mode::Options(index),
                 }
             }
@@ -384,7 +388,7 @@ impl Page {
                 KeyCode::PageDown | KeyCode::Char(' ') => self.mode = Mode::Log { stem, scroll: scroll + 10 },
                 _ => {}
             },
-            Mode::Confirm { title, lines, question, go } => match key.code {
+            Mode::Confirm { title, lines, question, go, .. } => match key.code {
                 KeyCode::Char('y') => match go {
                     Go::Script { repo, steps, next } => {
                         let (sender, result) = mpsc::channel();
@@ -399,8 +403,9 @@ impl Page {
                         self.show(result);
                     }
                 },
-                KeyCode::Char('n') | KeyCode::Esc => {}
-                _ => self.mode = Mode::Confirm { title, lines, question, go },
+                KeyCode::Char('n') => {}
+                _ if leaves => {}
+                _ => self.mode = Mode::Confirm { title, lines, question, go, nudged: true },
             },
             Mode::Push(window) => match key.code {
                 KeyCode::Char('y') => {
@@ -411,7 +416,7 @@ impl Page {
                     });
                     self.mode = Mode::Working { label, result };
                 }
-                KeyCode::Char('n') | KeyCode::Esc => {
+                KeyCode::Char('n') | KeyCode::Esc | KeyCode::Char('q') => {
                     if !window.done.is_empty() {
                         let text = format!("Done here, not pushed:\n{}", window.done.join("\n"));
                         self.mode = Mode::Message { text, next: None };
@@ -451,7 +456,7 @@ impl Page {
                 }
             }
             KeyCode::Enter => self.mode = Mode::Options(0),
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char(character) if character == keys::key(Act::Help) => self.mode = Mode::Help,
             KeyCode::Char(character) if choices.iter().any(|choice| choice.key == character) => return self.act(character),
             _ => return Effect::Unhandled,
         }
@@ -460,21 +465,22 @@ impl Page {
 
     fn act(&mut self, key: char) -> Effect {
         let Some(area) = self.current() else { return Effect::Handled };
-        if Self::is_repo_action(&area, key) {
+        let act = self.choices(&area).into_iter().find(|choice| choice.key == key).and_then(|choice| choice.act);
+        if act.is_none() && Self::is_repo_action(&area, key) {
             let action = area.actions.iter().find(|action| action.key == key).cloned().unwrap();
             self.begin(&area, action, Vec::new());
             return Effect::Handled;
         }
         let Some(repo) = area.repo.clone() else {
-            match key {
-                'b' => self.refresh_backlog(&area),
-                'l' => self.mode = Mode::Log { stem: area.stem, scroll: 0 },
+            match act {
+                Some(Act::AreaRefresh) => self.refresh_backlog(&area),
+                Some(Act::Log) => self.mode = Mode::Log { stem: area.stem, scroll: 0 },
                 _ => self.mode = Mode::Message { text: format!("{} has no repo on this machine.", area.stem), next: None },
             }
             return Effect::Handled;
         };
-        match key {
-            'g' => {
+        match act {
+            Some(Act::Go) => {
                 let result = match herdr::workspace_for(&repo) {
                     Ok(Some(workspace)) => herdr::focus_workspace(&workspace),
                     Ok(None) => herdr::create_workspace(&repo, &area.stem).map(|_| ()),
@@ -488,11 +494,11 @@ impl Page {
                     }
                 };
             }
-            's' => self.mode = Mode::Input { purpose: Purpose::TaskName(area.stem), label: "New task here: name".to_string(), buffer: String::new() },
-            'b' => self.refresh_backlog(&area),
-            'l' => self.mode = Mode::Log { stem: area.stem, scroll: 0 },
-            'a' => self.show(permit::toggle_repo(&repo::name_of(&repo))),
-            'u' => match &area.git {
+            Some(Act::New) => self.mode = Mode::Input { purpose: Purpose::TaskName(area.stem), label: "New task here: name".to_string(), buffer: String::new() },
+            Some(Act::AreaRefresh) => self.refresh_backlog(&area),
+            Some(Act::Log) => self.mode = Mode::Log { stem: area.stem, scroll: 0 },
+            Some(Act::Permit) => self.show(permit::toggle_repo(&repo::name_of(&repo))),
+            Some(Act::Push) => match &area.git {
                 Some(git) if git.ahead > 0 => {
                     let commits = commits_between(&repo, &format!("{}..refs/heads/{}", git.upstream, git.branch));
                     self.mode = Mode::Push(PushWindow { repo, branch: git.branch.clone(), tag: None, commits, done: Vec::new(), next: None });
@@ -508,9 +514,9 @@ impl Page {
     fn refresh_backlog(&mut self, area: &Area) {
         let vault = self.sources.contains(&Source::Vault);
         let result = backlog::refresh_prompt(&self.sources).and_then(|prompt| match lead_pane() {
-            Some(pane) if vault => herdr::prompt_agent(&pane, &format!("{prompt} Then check that the vault backlog for [[{}]] is current: close what is done, park what is stale.", area.stem))
-                .map(|_| format!("Asked the lead to refresh the backlog and [[{}]]'s notes; this page catches up once the vault index does.", area.stem)),
-            Some(pane) => herdr::prompt_agent(&pane, &prompt).map(|_| "Asked the lead to refresh the backlog; the board's Backlog tab updates when it is saved.".to_string()),
+            Some(pane) if vault => crate::typing::prompt(&pane, &format!("{prompt} Then check that the vault backlog for [[{}]] is current: close what is done, park what is stale.", area.stem), "the lead")
+                .map(|_| format!("Asked the lead to refresh the backlog and [[{}]]'s notes; this page catches up once the vault index does.", area.stem)).map_err(|refused| format!("Nothing was typed: the lead {}; ask again once it is clear.", refused.reason())),
+            Some(pane) => crate::typing::prompt(&pane, &prompt, "the lead").map(|_| "Asked the lead to refresh the backlog; the board's Backlog tab updates when it is saved.".to_string()).map_err(|refused| format!("Nothing was typed: the lead {}; ask again once it is clear.", refused.reason())),
             None => Err("No lead is running; prefix+space starts it.".to_string()),
         });
         self.show(result);
@@ -591,7 +597,7 @@ impl Page {
             lines.push(Line::from(vec![Span::styled("next  ", style(MUTED)), Span::styled(format!("{} (offered after, never run on its own)", next.target), style(TEAL))]));
         }
         let title = format!("{} · {}", action.title, area.stem);
-        self.mode = Mode::Confirm { title, lines, question: format!("{}?", action.title), go: Go::Script { repo, steps, next } };
+        self.mode = Mode::Confirm { title, lines, question: format!("{}?", action.title), go: Go::Script { repo, steps, next }, nudged: false };
     }
 
     // A `then` target is repo:action; its area is found by repo name, its action by id.
@@ -622,7 +628,7 @@ impl Page {
                     prompt = format!("{prompt}\n\n{text}");
                 }
                 let lines = text_lines(&prompt, 88);
-                self.mode = Mode::Confirm { title: format!("new task in {stem}"), lines, question: format!("Start {name}?"), go: Go::Task { repo, name, prompt } };
+                self.mode = Mode::Confirm { title: format!("new task in {stem}"), lines, question: format!("Start {name}?"), go: Go::Task { repo, name, prompt }, nudged: false };
             }
             Purpose::Answer { stem, action, mut answers, carried } => {
                 if text.is_empty() {
@@ -638,7 +644,7 @@ impl Page {
                 lines.extend(text_lines(&prompt, 88));
                 lines.push(Line::default());
                 lines.push(Line::from(Span::styled("you review it and push it like any task", style(MUTED))));
-                self.mode = Mode::Confirm { title: format!("start a task · {stem}"), lines, question: "Start the task?".to_string(), go: Go::Task { repo, name: text, prompt } };
+                self.mode = Mode::Confirm { title: format!("start a task · {stem}"), lines, question: "Start the task?".to_string(), go: Go::Task { repo, name: text, prompt }, nudged: false };
             }
         }
     }
@@ -850,11 +856,8 @@ impl Page {
                 }
             }
             Mode::Help => {
-                let keys = [
-                    ("⏎", "actions for the selected area (in the detail: run the selected action)"), ("← →", "list · detail"), ("↑ ↓ j k", "move"),
-                    ("1 2", "the work and areas pages"), ("tab", "move focus to the lead's chat"), ("g", "open the area's Space"), ("s", "start a task in its repo, with its notes"), ("b", "ask the lead to refresh its backlog"),
-                    ("l", "its vault log"), ("a", "let the lead push the repo's reviewed tasks, or take that back"), ("u", "push main when it is ahead (asks first)"), ("A–Z", "the repo's own actions, from its repo config (kelpie config shows where)"),
-                ];
+                let mut keys = keys::map().help(&[Ctx::Areas]);
+                keys.push(("A–Z".to_string(), "the repo's own actions, from its repo config (kelpie config shows where)"));
                 let lines = keys.into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect();
                 modal(frame, "keys".to_string(), lines, 76);
             }
@@ -876,10 +879,13 @@ impl Page {
                     Line::from(Span::styled("enter to continue · esc to cancel", style(MUTED))),
                 ], 72);
             }
-            Mode::Confirm { title, lines, question, .. } => {
+            Mode::Confirm { title, lines, question, nudged, .. } => {
                 let mut lines = lines.clone();
                 lines.push(Line::default());
                 lines.push(Line::from(vec![Span::styled(format!("{question}  "), style(YELLOW)), Span::styled("y / n", style(MUTED))]));
+                if *nudged {
+                    lines.push(Line::from(Span::styled("press y or n", style(PEACH))));
+                }
                 modal(frame, title.clone(), lines, 96);
             }
             Mode::Push(window) => {
@@ -920,10 +926,10 @@ impl Page {
     }
 
     pub fn hint_lines() -> (Line<'static>, Line<'static>) {
-        (
-            board::hints(&[("⏎", "actions"), ("← →", "list · detail"), ("↑ ↓", "move"), ("tab", "lead"), ("1 2", "work · areas"), ("?", "all keys")]),
-            board::hints(&[("⏎", "actions"), ("1 2", "pages"), ("?", "keys")]),
-        )
+        let (full, short) = keys::map().hints(Ctx::Areas);
+        let words = |hints: Vec<(String, &'static str, KeyCode)>| hints.into_iter().map(|(key, word, _)| (key, if word == "options" { "actions" } else { word })).collect::<Vec<_>>();
+        let line = |hints: Vec<(String, &'static str)>| board::hints(&hints.iter().map(|(key, word)| (key.as_str(), *word)).collect::<Vec<_>>());
+        (line(words(full)), line(words(short)))
     }
 }
 
@@ -1016,9 +1022,9 @@ mod tests {
         let page = Page::new(vec![Source::Local]);
         let choices = page.choices(&app);
         let keys: String = choices.iter().map(|choice| choice.key).collect();
-        assert_eq!(keys, "gsabluB");
-        assert!(Page::is_repo_action(&app, 'B') && !Page::is_repo_action(&app, 'u'));
-        assert_eq!(choices.iter().find(|choice| choice.key == 'u').unwrap().label, "Push main");
+        assert_eq!(keys, "gnablpB");
+        assert!(Page::is_repo_action(&app, 'B') && !Page::is_repo_action(&app, 'p'));
+        assert_eq!(choices.iter().find(|choice| choice.key == 'p').unwrap().label, "Push main");
         let keys: String = page.choices(&area("Areas/notes.md", "notes")).iter().map(|choice| choice.key).collect();
         assert_eq!(keys, "bl", "without a repo there is nothing to open, start or push");
     }

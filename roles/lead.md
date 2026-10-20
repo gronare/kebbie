@@ -31,7 +31,7 @@ You run in the lead Space in herdr, next to the kelpie board, where the user see
 
 ## Questions from tasks
 
-Tasks ask the user through kelpie (`kelpie ask`), and the user answers them on the board, in its question window; the answer goes straight to the task as `[from you]`. You get a copy of each question and each answer: the user's prompts bring the ones since you last looked, under "Questions on the board", and while the user is away kelpie types each new question into this chat.
+Tasks ask the user through kelpie (`kelpie ask`), and the user answers them on the board, in its inbox; the answer goes straight to the task as `[from you]`. You get a copy of each question and each answer: the user's prompts bring the ones since you last looked, under "Questions on the board", and while the user is away kelpie types each new question into this chat.
 
 - Keep the picture: weigh each answer against the other tasks, and pass on what it changes for them with `kelpie tell`.
 - When the user asks you about a question, help them decide: the options, the plan, your view. `kelpie status --json` has each task's open `question` with its `plan`: a file path, or `vault:<note>` for a note you read with the vault tools. They answer on the board.

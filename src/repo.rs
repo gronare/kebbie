@@ -11,6 +11,24 @@ pub fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     run("git", args, Some(cwd))
 }
 
+const INDEX_RETRIES: [std::time::Duration; 3] = [std::time::Duration::from_millis(250), std::time::Duration::from_millis(500), std::time::Duration::from_secs(1)];
+
+// A git that takes index.lock fails at once while another git holds it; it is tried a few times, then the lock file is named.
+pub fn git_writing(cwd: &Path, args: &[&str]) -> Result<String> {
+    let lock = || git(cwd, &["rev-parse", "--path-format=absolute", "--git-path", "index.lock"]).unwrap_or_else(|_| "index.lock".to_string());
+    index_retrying(|| git(cwd, args), std::thread::sleep, lock)
+}
+
+fn index_retrying(mut attempt: impl FnMut() -> Result<String>, mut pause: impl FnMut(std::time::Duration), lock: impl Fn() -> String) -> Result<String> {
+    for wait in INDEX_RETRIES {
+        match attempt() {
+            Err(error) if error.contains("index.lock") => pause(wait),
+            other => return other,
+        }
+    }
+    attempt().map_err(|error| if error.contains("index.lock") { format!("{error}\n{} stays: another git still runs in this checkout, or one that crashed left it; remove it once no git runs there", lock()) } else { error })
+}
+
 pub fn main_checkout(cwd: &Path) -> Result<PathBuf> {
     let common_dir = git(cwd, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
     Ok(Path::new(&common_dir).parent().ok_or("git common dir has no parent")?.to_path_buf())
@@ -219,6 +237,26 @@ pub fn locate(name: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_git_that_meets_index_lock_is_tried_again_and_a_lock_that_stays_is_named() {
+        let held = "fatal: Unable to create '/r/.git/index.lock': File exists.".to_string();
+        let mut tries = 0;
+        let mut waits = 0;
+        assert_eq!(index_retrying(|| { tries += 1; if tries < 3 { Err(held.clone()) } else { Ok("done".to_string()) } }, |_| waits += 1, || "/r/.git/index.lock".to_string()), Ok("done".to_string()));
+        assert_eq!((tries, waits), (3, 2));
+        let stays = index_retrying(|| Err(held.clone()), |_| {}, || "/r/.git/index.lock".to_string()).unwrap_err();
+        assert!(stays.starts_with(&held) && stays.contains("/r/.git/index.lock stays"), "{stays}");
+        let mut tries = 0;
+        assert_eq!(index_retrying(|| { tries += 1; Err("CONFLICT".to_string()) }, |_| {}, String::new).unwrap_err(), "CONFLICT");
+        assert_eq!(tries, 1, "only the lock is retried");
+        let dir = crate::sh::test_dir("index-lock");
+        git(&dir, &["init", "--quiet"]).unwrap();
+        std::fs::write(dir.join(".git/index.lock"), "").unwrap();
+        let named = git_writing(&dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "--allow-empty", "-m", "one"]).unwrap_err();
+        assert!(named.contains(&format!("{} stays", dir.canonicalize().unwrap().join(".git/index.lock").display())), "{named}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn a_repo_is_named_by_one_folder_name_and_never_a_path() {
