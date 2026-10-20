@@ -256,7 +256,8 @@ mod tests {
 
     #[test]
     fn every_use_of_kelpies_own_path_goes_through_own_exe() {
-        for (name, source) in [("board.rs", include_str!("board.rs")), ("review.rs", include_str!("review.rs")), ("notify.rs", include_str!("notify.rs")), ("lead.rs", include_str!("lead.rs")), ("tasks.rs", include_str!("tasks.rs")), ("restart.rs", include_str!("restart.rs")), ("main.rs", include_str!("main.rs"))] {
+        let board = std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/board")).unwrap().map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap()).collect::<String>();
+        for (name, source) in [("board/", board.as_str()), ("review.rs", include_str!("review.rs")), ("notify.rs", include_str!("notify.rs")), ("lead.rs", include_str!("lead.rs")), ("tasks.rs", include_str!("tasks.rs")), ("restart.rs", include_str!("restart.rs")), ("main.rs", include_str!("main.rs"))] {
             assert!(!source.contains(&["current", "_exe()"].concat()), "{name} reads its path raw, which Linux names \"(deleted)\" after a rebuild");
         }
         assert_eq!(include_str!("peers.rs").matches(&["current", "_exe()"].concat()).count(), 1);

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::board::plural;
+use crate::board::widgets::plural;
 use crate::config;
 use crate::herdr;
 use crate::lead::state_dir;
@@ -1651,7 +1651,7 @@ mod tests {
 
     #[test]
     fn the_board_never_waits_on_the_vault_on_its_own_thread() {
-        let board = include_str!("board.rs");
+        let board: String = std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/board")).unwrap().map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap()).collect();
         for call in ["tasks::done(", "tasks::reset(", "tasks::push(", "tasks::start("] {
             for (at, _) in board.match_indices(call) {
                 let line = board[..at].rsplit('\n').next().unwrap_or_default();

@@ -14,7 +14,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use serde_json::{Value, json};
 
-use crate::board::{FAINT, MAUVE, MUTED, PEACH, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, style};
+use crate::board::widgets::{FAINT, MAUVE, MUTED, PEACH, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, style};
 use crate::lead::state_dir;
 use crate::peers::{self, Session};
 use crate::questions;

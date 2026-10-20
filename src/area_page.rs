@@ -13,7 +13,8 @@ use ratatui::text::{Line, Span};
 use crate::actions::{self, Action, Answers, Step, Work};
 use crate::areas::{self, Area, Areas};
 use crate::backlog;
-use crate::board::{
+use crate::board::terminal;
+use crate::board::widgets::{
     self, BLUE, Choice, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, choice, column_title,
     group_line, modal, options_lines, plural, render_column, row, style, wrap,
 };
@@ -399,7 +400,7 @@ impl Page {
                     }
                     Go::Task { repo, name, prompt } => {
                         let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, backlog: None };
-                        let result = board::outside(terminal, || tasks::start(&repo, &name, &options));
+                        let result = terminal::outside(terminal, || tasks::start(&repo, &name, &options));
                         self.show(result);
                     }
                 },
@@ -928,7 +929,7 @@ impl Page {
     pub fn hint_lines() -> (Line<'static>, Line<'static>) {
         let (full, short) = keys::map().hints(Ctx::Areas, false);
         let words = |hints: Vec<(String, &'static str, KeyCode)>| hints.into_iter().map(|(key, word, _)| (key, if word == "options" { "actions" } else { word })).collect::<Vec<_>>();
-        let line = |hints: Vec<(String, &'static str)>| board::hints(&hints.iter().map(|(key, word)| (key.as_str(), *word)).collect::<Vec<_>>());
+        let line = |hints: Vec<(String, &'static str)>| widgets::hints(&hints.iter().map(|(key, word)| (key.as_str(), *word)).collect::<Vec<_>>());
         (line(words(full)), line(words(short)))
     }
 }

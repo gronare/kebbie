@@ -420,7 +420,7 @@ pub fn print(cwd: &Path, name: Option<&str>, as_json: bool) -> Result<String> {
     }
     let mut lines = vec![format!("Test runs of {}, newest first:", task.address)];
     for run in runs.iter().rev() {
-        let mut facts = vec![crate::board::ago(run.at)];
+        let mut facts = vec![crate::board::widgets::ago(run.at)];
         facts.extend(run.duration_ms.map(duration));
         facts.extend(run.exit.map(|exit| format!("exit {exit}")));
         if run.dirty {
