@@ -9,6 +9,7 @@ mod config;
 mod doctor;
 mod fetch;
 mod herdr;
+mod keeper;
 mod keys;
 mod lead;
 mod login_env;
@@ -129,13 +130,18 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   session that runs older code than is installed (Claude Code, a plugin, MCP servers,
                                   kelpie) and is idle, not the pane you are in and without background work (that one
                                   is asked about on the board); --all every idle one; works with [restart] auto = false
+  kelpie keeper                   the keeper: one background kelpie per machine that runs the routines (stale-session
+                                  restarts, the update check, held messages, delivery checks of typed prompts) with no
+                                  board open; herdr's startup, the board and kelpie update start it ([keeper] enabled =
+                                  false hands them to the board) (--start starts it detached unless one runs, --status
+                                  shows its pid, binary, uptime and each routine's last run, --stop stops it)
   kelpie update                   update everything to this machine's channel ([update] channel: release, the
                                   highest vX.Y.Z tag, or main, origin's default branch): the herdr plugin (rebuilt),
                                   the Claude Code plugin, the vault plugin when installed; list each version before →
                                   after, and restart each Claude session that is idle and not the pane you are in
                                   with claude --resume (the rest follow when idle; [restart] auto = false restarts none)
                                   (--check changes nothing: fetches and shows installed against the channel's latest;
-                                  the board checks every 6 hours and shows ↑ when there is a newer one, U updates;
+                                  the keeper checks every 6 hours and the board shows ↑ when there is a newer one, U updates;
                                   --from <branch or path> installs that branch on origin or that checkout's commits
                                   until --stable returns to the channel)
 
@@ -349,6 +355,10 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("setup") if name == Some("vault") => setup::vault(),
         Some("setup") => Err("kelpie setup knows vault: kelpie setup vault".to_string()),
         Some("restart") => restart::now_cli(arguments.flag("--all")),
+        Some("keeper") if arguments.flag("--status") => keeper::status_cli(),
+        Some("keeper") if arguments.flag("--stop") => keeper::stop(),
+        Some("keeper") if arguments.flag("--start") => keeper::start(),
+        Some("keeper") => keeper::run(),
         Some("update") if arguments.flag("--check") => Ok(update::check(&doctor::Env::current().claude_dir)),
         Some("update") if arguments.flag("--finish") => update::finish(&doctor::Env::current().claude_dir).map(|lines| lines.join("\n")),
         Some("update") => {

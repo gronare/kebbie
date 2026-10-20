@@ -9,7 +9,7 @@ Keep Claude sessions running on the code they started with until you restart the
    auto = false
    ```
 
-   The board still marks stale sessions with `↻ N stale`, but restarts none, and `kelpie update` restarts none.
+   The board still marks stale sessions with `↻ N stale`, but nothing restarts them on its own, and `kelpie update` restarts none.
 
 2. Restart them when it suits you:
 

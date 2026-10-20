@@ -2,11 +2,13 @@
 
 kelpie lets you run many Claude Code sessions at once without losing track of them. herdr already holds the terminals and the agents. kelpie adds what herdr does not know about: that a session is working on a task, in a branch, in a repo, and that the task ends with commits on the default branch.
 
-## Four parts
+## Five parts
 
 **The `kelpie` binary.** One Rust program does all the work: it starts tasks, keeps the worktree pool, draws the board, carries messages and questions, decides who may push, runs the reviewer and updates itself. Everything else calls it by name.
 
-**The herdr plugin.** herdr installs kelpie from its repo and builds the binary with `cargo`. The plugin gives herdr its actions (`kelpie.lead`, `kelpie.focus`, `kelpie.board`, `kelpie.update`), the board and update popups, and a startup script that links `~/.local/share/kelpie/current` to wherever herdr put the code. That link gives configs, hooks and your `PATH` one stable address across updates. The plugin also keeps the lead Space at the top whenever Spaces are created or moved.
+**The keeper.** One `kelpie keeper` process per machine runs kelpie's routines in the background, so they go on while no board is open. See [The keeper](#the-keeper).
+
+**The herdr plugin.** herdr installs kelpie from its repo and builds the binary with `cargo`. The plugin gives herdr its actions (`kelpie.lead`, `kelpie.focus`, `kelpie.board`, `kelpie.update`), the board and update popups, and a startup script that links `~/.local/share/kelpie/current` to wherever herdr put the code and starts the keeper. That link gives configs, hooks and your `PATH` one stable address across updates. The plugin also keeps the lead Space at the top whenever Spaces are created or moved.
 
 **The Claude Code plugin.** It carries kelpie's skills (worktree setup, commit rules, the reviewer's instructions, the review split) and the hook that opens the review split. You add its marketplace from the same `current` folder, so the skills Claude loads are always the same code as the binary that runs them.
 
@@ -35,6 +37,23 @@ Tasks talk through kelpie, never directly into each other's terminals:
 - `kelpie tell` messages another session. Each message is logged and shown on the board, and the lead gets a copy.
 
 This keeps the traffic visible. You can see every message on the board, and the lead sees it without the messages crowding its chat.
+
+## The keeper
+
+Some of kelpie's work runs on a clock rather than on a command:
+
+- held messages are delivered once their receiver is free, every 3 seconds,
+- prompts kelpie typed are checked for delivery, every 3 seconds, and the board is told when one was not taken,
+- stale Claude sessions are restarted once idle, every minute,
+- the update check reads its cache every 10 minutes and fetches when the last fetch is 6 hours old.
+
+The keeper runs all of them, each on its own interval, and sleeps in between. It has no terminal and logs to `keeper.log` in the state directory. A lock file in the state directory keeps it to one per machine; the kernel releases the lock when the keeper exits, so a crashed one never blocks the next. A routine that fails is retried later each time, up to every 15 minutes, and its error is logged once.
+
+The keeper alone runs the routines while `[keeper] enabled` is on. The board then only reads what the keeper wrote: the stale count from `keeper.json`, the update notice from the update check's cache, and messages and questions from the message log. Each board starts a keeper when none runs, and checks again every minute. With `[keeper] enabled = false` no keeper runs, and an open board runs the routines itself.
+
+The keeper calls the same functions the board did, with the same rules: it never types into a session whose input box holds a draft, never restarts the pane you are in or a session mid-turn, and asks about a session with background work once, as a question on the board. Your answer reaches it through the same file. It imports the login shell's SSH agent and `PATH`, as the board does, when herdr was started without them.
+
+herdr's startup hook starts the keeper in its own session, so it outlives the hook and any pane. See [Updates and stale sessions](updates-and-restarts.md#the-keeper) for how it follows an update.
 
 ## Where configuration lives
 

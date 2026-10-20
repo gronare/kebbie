@@ -41,16 +41,30 @@ fn finish_on_new_binary(claude_dir: &Path, root: Option<&Path>) -> Vec<String> {
     }
 }
 
+// The old keeper stops before the update restarts sessions, so the two never restart one together, and a keeper on this binary starts after.
 pub fn finish(claude_dir: &Path) -> Result<Vec<String>> {
+    let state = lead::state_dir()?;
+    let keeper_ran = crate::keeper::stop_for_update(&state);
+    let steps = finish_in(claude_dir, &state);
+    let keeper = crate::keeper::start_after_update(&state, keeper_ran);
+    match steps {
+        Ok(mut lines) => {
+            lines.push(keeper);
+            Ok(lines)
+        }
+        Err(error) => Err(format!("{error}\n{keeper}")),
+    }
+}
+
+fn finish_in(claude_dir: &Path, state: &Path) -> Result<Vec<String>> {
     let plugin = kelpie_plugin()?;
     let root = plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).map(PathBuf::from);
     let channel = config::channel()?;
-    let state = lead::state_dir()?;
-    let running = release::read_override(&state);
+    let running = release::read_override(state);
     let mut lines = vec![claude_plugin(claude_dir, &setup::claude_bin(), root.as_deref(), channel == Channel::Main && running.is_none())];
     lines.extend(vault_plugin(claude_dir, &setup::claude_bin()));
-    update_check::forget(&state);
-    crate::restart::mark_updated(&state, crate::restart::now())?;
+    update_check::forget(state);
+    crate::restart::mark_updated(state, crate::restart::now())?;
     lines.extend(crate::restart::report(&crate::restart::run(crate::restart::Mode::Update, &mut crate::restart::Memory::default(), None)?));
     lines.push(lead::renew_board().unwrap_or_else(|error| error));
     Ok(lines)

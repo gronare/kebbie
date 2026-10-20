@@ -17,7 +17,7 @@ Each machine follows one channel:
 
 Because the release channel checks out tags in the install root, it refuses to touch an install root with uncommitted changes or one that sits on a branch. Develop in another checkout and try its commits with `kelpie update --from <path>`.
 
-The board checks for updates when it starts and every 6 hours after, and shows `↑ kelpie <version> · U updates` when the channel has something newer. On a release machine the notice names the new tag, never what main carries.
+The keeper checks for updates every 6 hours, and the board shows `↑ kelpie <version> · U updates` when the channel has something newer. On a release machine the notice names the new tag, never what main carries.
 
 ## Overrides
 
@@ -42,7 +42,7 @@ A restart is `claude --resume <session id>` in the same pane, with the process's
 
 ## When restarts happen
 
-With `restart.auto` on, the default, `kelpie update` restarts idle sessions at once, and the board restarts each other stale session once it has been idle and out of focus for `restart.idle_minutes`. The status line shows `↻ N stale` while sessions wait.
+With `restart.auto` on, the default, `kelpie update` restarts idle sessions at once, and the keeper restarts each other stale session once it has been idle and out of focus for `restart.idle_minutes`. With `[keeper] enabled = false`, an open board does this instead. The status line shows `↻ N stale` while sessions wait.
 
 A restart never interrupts work:
 
@@ -51,6 +51,20 @@ A restart never interrupts work:
 - A session kelpie cannot restart safely is skipped with the reason: one whose session id herdr does not know, whose command line cannot be read or has an option kelpie does not know, whose Claude runs in another folder than its pane, or whose conversation file is missing.
 
 `kelpie update` ends with one line per session: `restarted`, `restarts when idle`, `you are in it: restarts when you leave it`, `waiting for your answer: background work running`, or `skipped: <reason>`.
+
+## The keeper
+
+The keeper is the background `kelpie keeper` process that runs the restarts, the update check and the delivery of held messages and typed prompts while no board is open. See [How kelpie fits together](architecture.md#the-keeper).
+
+It starts in three places, and each starts it only when none runs:
+
+- herdr's startup hook, when the herdr server starts,
+- each board, when it opens and every minute after,
+- `kelpie update`, at its end.
+
+`kelpie update` stops the keeper before it restarts sessions, so the two never restart one together, and starts a keeper on the new binary once it is done. A keeper also watches its own binary: once the file it runs from is replaced and holds still for two checks, as after a rebuild or when the `current` link moves to a new install, it exits and starts the new binary in its place.
+
+`kelpie keeper --status` shows whether one runs, its pid, binary and uptime, and each routine's last run; `kelpie keeper --stop` stops it after the routine under way.
 
 ## Related
 

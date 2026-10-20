@@ -134,6 +134,19 @@ pub fn updates(state: &Path, channel: crate::config::Channel, installed: &[crate
     if latest { check } else { check.with(one(fix)) }
 }
 
+pub fn keeper(enabled: bool, running: Option<&crate::keeper::Holder>, now: u64) -> Check {
+    match (enabled, running) {
+        (false, None) => ok("keeper", "off ([keeper] enabled = false): an open board runs the routines"),
+        (false, Some(_)) => warn("keeper", "off in config.toml, but one still runs", one("kelpie keeper --stop")),
+        (true, Some(running)) => {
+            let pid = running.pid.map_or("?".to_string(), |pid| pid.to_string());
+            let up = running.started.map_or(String::new(), |started| format!(", up {}", crate::keeper::span(now.saturating_sub(started))));
+            ok("keeper", format!("running, pid {pid}{up}; kelpie keeper --status shows its routines"))
+        }
+        (true, None) => warn("keeper", "not running, so stale sessions, held messages and typed prompts wait for an open board", one("kelpie keeper --start (herdr's startup and the board start it too)")),
+    }
+}
+
 pub fn plugin_binary(root: &Path) -> Check {
     let binary = root.join("target/release/kelpie");
     if binary.is_file() {
@@ -500,6 +513,8 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(kelpie_on_path(&env.home, &env.path));
     let places = crate::update_check::Places { root: plugin.as_ref().map(|plugin| plugin.root.clone()), claude_dir: env.claude_dir.clone(), channel };
     checks.push(updates(&env.kelpie_state, channel, &crate::update_check::installed(&places)));
+    let keeper_on = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.keeper).unwrap_or(true);
+    checks.push(keeper(keeper_on, crate::keeper::holder(&env.kelpie_state).as_ref(), crate::messages::now()));
     let data_home = env.data_home.clone().unwrap_or_else(|| env.home.join(".local/share"));
     for (dir, about) in state_dirs(&env.kelpie_state, env.own_state, &env.state_home, &data_home) {
         checks.push(writable(&dir, about, env.uid));
@@ -903,6 +918,17 @@ mod tests {
         assert_eq!(stood_in.level, Level::Ok, "KELPIE_VAULT_BIN stands in for a missing plugin, as detect() lets it: {stood_in:?}");
         assert!(stood_in.fact.contains("KELPIE_VAULT_BIN=/tmp/fake-vault") && stood_in.fact.contains("each task gets a note"), "{stood_in:?}");
         assert!(vault(&Plugin::Missing, Some("/tmp/fake-vault"), Some(Err("no such file".to_string()))).fact.contains("the vault command failed"));
+    }
+
+    #[test]
+    fn doctor_says_whether_the_keeper_runs() {
+        let running = crate::keeper::Holder { pid: Some(4242), exe: None, started: Some(100) };
+        let check = keeper(true, Some(&running), 100 + 3 * 3600);
+        assert_eq!((check.level, check.fact.as_str()), (Level::Ok, "running, pid 4242, up 3h; kelpie keeper --status shows its routines"));
+        let check = keeper(true, None, 0);
+        assert_eq!((check.level, check.fix.as_slice()), (Level::Warn, ["kelpie keeper --start (herdr's startup and the board start it too)".to_string()].as_slice()));
+        assert_eq!(keeper(false, None, 0).level, Level::Ok);
+        assert_eq!(keeper(false, Some(&running), 0).fix, ["kelpie keeper --stop"]);
     }
 
     #[test]

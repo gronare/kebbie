@@ -123,6 +123,7 @@ impl Lab {
 
 impl Drop for Lab {
     fn drop(&mut self) {
+        let _ = self.run(&["keeper", "--stop"]);
         let _ = fs::remove_dir_all(&self.root);
     }
 }
@@ -153,7 +154,7 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
     let lab = Lab::new("help");
     let help = lab.run(&["--help"]);
     assert!(help.status.success());
-    for command in ["kelpie start", "kelpie push", "kelpie review", "kelpie approve", "kelpie away", "kelpie hook", "kelpie update"] {
+    for command in ["kelpie start", "kelpie push", "kelpie review", "kelpie approve", "kelpie away", "kelpie hook", "kelpie update", "kelpie keeper"] {
         assert!(stdout(&help).contains(command), "{command}");
     }
     assert_eq!(stdout(&lab.run(&[])), stdout(&help), "no command is the usage too");
@@ -541,7 +542,7 @@ impl Lab {
 fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_for_the_others() {
     let lab = Lab::new("update-restart");
     let sessions = sessions(&lab);
-    fs::write(&lab.config, "[update]\nchannel = \"main\"\n").unwrap();
+    fs::write(&lab.config, "[update]\nchannel = \"main\"\n\n[keeper]\nenabled = false\n").unwrap();
     let output = lab.with_sessions(&sessions, &["update"]);
     let said = stdout(&output);
     assert!(output.status.success(), "{said}\n{}", stderr(&output));
@@ -554,6 +555,7 @@ fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_f
         "  worker: waiting for your answer: background work running",
         "  ghost: skipped: its session id is unknown",
         "board: no lead Space",
+        "keeper: off ([keeper] enabled = false); an open board runs the routines",
     ], "{said}");
     let start = lab.herdr_calls().into_iter().find(|call| call[..2] == ["agent", "start"]).unwrap();
     assert_eq!(start[2..], ["billing", "--kind", "claude", "--pane", "p_billing", "--", "--model", "opus", "--resume", "s-billing"].map(str::to_string), "the same flags, the old conversation and prompt dropped");
@@ -575,7 +577,7 @@ fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_f
 fn with_auto_off_update_restarts_nothing_and_kelpie_restart_still_does() {
     let lab = Lab::new("auto-off");
     let sessions = sessions(&lab);
-    fs::write(&lab.config, "[update]\nchannel = \"main\"\n\n[restart]\nauto = false\n").unwrap();
+    fs::write(&lab.config, "[update]\nchannel = \"main\"\n\n[restart]\nauto = false\n\n[keeper]\nenabled = false\n").unwrap();
     let output = lab.with_sessions(&sessions, &["update"]);
     let said = stdout(&output);
     assert!(output.status.success(), "{said}\n{}", stderr(&output));
@@ -778,4 +780,91 @@ fn with_ci_watch_off_the_push_closes_the_task_as_before_and_never_asks_gh() {
     assert!(stdout(&pushed).contains("billing is done") && !stdout(&pushed).contains("CI"), "{}", stdout(&pushed));
     assert!(gh_calls(&lab).is_empty());
     assert_eq!(stdout(&lab.run(&["ci"])), "No CI watches.");
+}
+
+fn alive(pid: &str) -> bool {
+    Command::new("kill").args(["-0", pid]).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
+}
+
+fn pid_in(line: &str) -> String {
+    line.rsplit("pid ").next().unwrap_or_default().trim_end_matches(')').to_string()
+}
+
+fn eventually(mut done: impl FnMut() -> bool) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_secs(15) {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+#[test]
+fn one_keeper_starts_detached_shows_its_routines_and_stops() {
+    let lab = Lab::new("keeper");
+    assert!(stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: not running; kelpie keeper --start starts it"));
+    let started = stdout(&lab.run(&["keeper", "--start"]));
+    assert!(started.starts_with("keeper: started (pid "), "{started}");
+    let pid = pid_in(&started);
+    assert!(alive(&pid), "the keeper outlives the kelpie that started it");
+    assert_eq!(stdout(&lab.run(&["keeper", "--start"])), format!("keeper: already running (pid {pid})"));
+    assert_eq!(stdout(&lab.run(&["keeper"])), format!("keeper: already running (pid {pid})"), "a second keeper never runs beside the first");
+    assert!(eventually(|| stdout(&lab.run(&["keeper", "--status"])).contains("  restart   every 1m   last ")), "{}", stdout(&lab.run(&["keeper", "--status"])));
+    let status = stdout(&lab.run(&["keeper", "--status"]));
+    assert!(status.starts_with(&format!("keeper: running, pid {pid}, up ")), "{status}");
+    assert!(status.contains(&format!("binary: {}", Path::new(KELPIE).canonicalize().unwrap().display())) && status.contains("  messages  every 3s   last "), "{status}");
+    let doctor = stdout(&lab.run(&["doctor"]));
+    assert!(doctor.lines().any(|line| line.starts_with("ok") && line.split_whitespace().nth(1) == Some("keeper") && line.contains(&format!("running, pid {pid}, up "))), "{doctor}");
+    let calls = lab.herdr_calls();
+    assert!(calls.iter().any(|call| call.starts_with(&["agent".to_string(), "list".to_string()])), "it looked at the sessions through herdr");
+    assert!(!calls.iter().any(|call| call.get(1).is_some_and(|verb| ["prompt", "send-keys", "run", "start"].contains(&verb.as_str()))), "with no sessions it typed and restarted nothing");
+    assert_eq!(stdout(&lab.run(&["keeper", "--stop"])), format!("keeper: stopped (pid {pid})"));
+    assert!(eventually(|| !alive(&pid)), "stopped means gone");
+    assert!(stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: not running"));
+    let log = fs::read_to_string(lab.state.join("keeper.log")).unwrap();
+    assert!(log.contains(&format!("started: pid {pid}, kelpie ")) && log.contains("exits: stopped"), "{log}");
+}
+
+#[test]
+fn an_update_restarts_the_keeper_on_the_new_binary_and_off_starts_none() {
+    let lab = Lab::new("keeper-update");
+    let first = stderr(&lab.run(&["update", "--finish"]));
+    let started = first.lines().last().unwrap_or_default().to_string();
+    assert!(started.starts_with("keeper: started (pid "), "{first}");
+    let old = pid_in(&started);
+    let second = stderr(&lab.run(&["update", "--finish"]));
+    let restarted = second.lines().last().unwrap_or_default().to_string();
+    assert!(restarted.starts_with("keeper: restarted on the new kelpie (pid "), "{second}");
+    let new = pid_in(&restarted);
+    assert!(new != old && !alive(&old) && alive(&new), "{old} → {new}");
+    fs::write(&lab.config, "[keeper]\nenabled = false\n").unwrap();
+    assert!(eventually(|| !alive(&new)), "a keeper turned off in config.toml stops by itself");
+    assert_eq!(stdout(&lab.run(&["keeper", "--start"])), "keeper: off ([keeper] enabled = false); an open board runs the routines");
+    let refused = lab.run(&["keeper"]);
+    assert!(!refused.status.success() && stderr(&refused).starts_with("keeper: off"), "{}", stderr(&refused));
+    assert!(stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: off"));
+}
+
+#[test]
+fn a_keeper_whose_binary_is_replaced_hands_over_to_the_new_one() {
+    let lab = Lab::new("keeper-binary");
+    let binary = lab.root.join("install/target/release/kelpie");
+    fs::create_dir_all(binary.parent().unwrap()).unwrap();
+    fs::copy(KELPIE, &binary).unwrap();
+    let mut start = Command::new(&binary);
+    start.env_clear().envs(lab.command().get_envs().filter_map(|(key, value)| Some((key, value?)))).args(["keeper", "--start"]).stdin(Stdio::null());
+    let own = stdout(&start.output().unwrap());
+    assert!(own.starts_with("keeper: started (pid "), "{own}");
+    let old = pid_in(&own);
+    let fresh = binary.with_file_name("kelpie.new");
+    fs::copy(KELPIE, &fresh).unwrap();
+    fs::rename(&fresh, &binary).unwrap();
+    assert!(eventually(|| !alive(&old)), "the old keeper exits once the new binary holds still");
+    assert!(eventually(|| stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: running")), "and a keeper on the new one runs");
+    let status = stdout(&lab.run(&["keeper", "--status"]));
+    assert!(!status.contains(&format!("pid {old},")) && status.contains(&format!("binary: {}", binary.canonicalize().unwrap().display())), "{status}");
+    let log = fs::read_to_string(lab.state.join("keeper.log")).unwrap();
+    assert!(log.contains("exits: a new kelpie binary is in place") && log.contains("handed over to pid "), "{log}");
 }

@@ -241,6 +241,11 @@ fn with_installed(mut components: Vec<Component>, now: &[Component]) -> Vec<Comp
     components
 }
 
+// What the last check found, without checking: a board reads this while the keeper does the checking.
+pub fn cached(state: &Path, channel: Channel, installed: &[Component]) -> Vec<Component> {
+    read_cache(state).filter(|cache| cache.channel.as_deref() == Some(channel.key())).map(|cache| with_installed(cache.components, installed)).unwrap_or_default()
+}
+
 // The claim is written before the fetch, so other boards starting meanwhile do not fetch too.
 // A check made for the other channel compared against the wrong latest, so it counts as none.
 pub fn current(state: &Path, now: u64, channel: Channel, installed: Vec<Component>, fetch: impl FnOnce() -> Vec<Component>) -> Vec<Component> {
@@ -264,7 +269,7 @@ pub fn doctor_line(state: &Path, channel: Channel, installed: &[Component]) -> (
     if let Some(running) = crate::release::read_override(state) {
         return (false, format!("kelpie is {}; kelpie update --stable returns to it", running.describe(channel)));
     }
-    let Some(cache) = read_cache(state).filter(|cache| cache.channel.as_deref() == Some(channel.key())) else { return (true, format!("not checked yet on the {} channel; kelpie update --check, or the board checks every 6 hours", channel.key())) };
+    let Some(cache) = read_cache(state).filter(|cache| cache.channel.as_deref() == Some(channel.key())) else { return (true, format!("not checked yet on the {} channel; kelpie update --check, or kelpie checks every 6 hours", channel.key())) };
     let components = with_installed(cache.components, installed);
     let age = match crate::messages::age(cache.checked_at).as_str() {
         "now" => "just now".to_string(),
@@ -416,6 +421,8 @@ mod tests {
         assert_eq!(fetched.get(), 3, "kelpie update forgets the cache");
         current(&state, start + EVERY + 2, Channel::Release, installed(), fetch);
         assert_eq!(fetched.get(), 4, "a check made for the other channel is no check");
+        assert!(cached(&state, Channel::Release, &installed())[0].newer() && fetched.get() == 4, "the board reads what the keeper found and fetches nothing");
+        assert!(cached(&state, Channel::Main, &installed()).is_empty(), "nor a check for the other channel");
     }
 
     #[test]

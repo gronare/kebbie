@@ -726,8 +726,10 @@ fn spawn_refresher() -> (Receiver<std::result::Result<Snapshot, String>>, Sender
     let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
     thread::spawn(move || {
         loop {
-            let _ = messages::flush();
-            crate::typing::check();
+            if crate::keeper::current_owner() == crate::keeper::Owner::Board {
+                let _ = messages::flush();
+                crate::typing::check();
+            }
             let snapshot = status::gather().and_then(|items| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().collect();
                 Ok(Snapshot { checkouts: status::checkouts()?, items, messages: messages::recent(200), questions, usage: usage::load(), ongoing: load_ongoing() })
@@ -747,29 +749,52 @@ fn spawn_update_checker() -> (Receiver<Vec<(String, String)>>, Sender<()>) {
     thread::spawn(move || {
         loop {
             let places = update_check::Places::current();
+            let keeper = crate::keeper::current_owner() == crate::keeper::Owner::Keeper;
             let notice = crate::lead::state_dir().map(|state| {
-                update_check::notice(&update_check::current(&state, messages::now(), places.channel, update_check::installed(&places), || update_check::check(&places)), crate::release::read_override(&state).as_ref())
+                let components = if keeper {
+                    update_check::cached(&state, places.channel, &update_check::installed(&places))
+                } else {
+                    update_check::current(&state, messages::now(), places.channel, update_check::installed(&places), || update_check::check(&places))
+                };
+                update_check::notice(&components, crate::release::read_override(&state).as_ref())
             }).unwrap_or_default();
             if notice_tx.send(notice).is_err() {
                 return;
             }
-            let _ = recheck_rx.recv_timeout(Duration::from_secs(600));
+            let _ = recheck_rx.recv_timeout(Duration::from_secs(if keeper { 60 } else { 600 }));
         }
     });
     (notice_rx, recheck_tx)
 }
 
-fn spawn_restarter() -> Receiver<Vec<String>> {
+// With the keeper on, the board only keeps one running and shows what it saw; with it off, the full board restarts sessions itself.
+fn spawn_restarter(overlay: bool) -> Receiver<Vec<String>> {
     let (stale_tx, stale_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut memory = crate::restart::Memory::default();
+        let mut ensured: Option<Instant> = None;
+        let mut ran: Option<Instant> = None;
         loop {
-            if let Ok(lines) = crate::restart::run(crate::restart::Mode::Routine { min_idle: 0 }, &mut memory, None)
-                && stale_tx.send(lines.into_iter().filter(|line| line.stale).map(|line| format!("{}: {}", line.label, line.said)).collect()).is_err()
+            let stale = match crate::keeper::current_owner() {
+                crate::keeper::Owner::Keeper => {
+                    if ensured.is_none_or(|at| at.elapsed() >= Duration::from_secs(60)) {
+                        crate::keeper::ensure();
+                        ensured = Some(Instant::now());
+                    }
+                    Some(crate::keeper::stale())
+                }
+                crate::keeper::Owner::Board if !overlay && ran.is_none_or(|at| at.elapsed() >= Duration::from_secs(60)) => {
+                    ran = Some(Instant::now());
+                    crate::restart::run(crate::restart::Mode::Routine { min_idle: 0 }, &mut memory, None).ok().map(|lines| crate::keeper::stale_lines(&lines))
+                }
+                crate::keeper::Owner::Board => None,
+            };
+            if let Some(stale) = stale
+                && stale_tx.send(stale).is_err()
             {
                 return;
             }
-            thread::sleep(Duration::from_secs(60));
+            thread::sleep(Duration::from_secs(5));
         }
     });
     stale_rx
@@ -3764,7 +3789,7 @@ pub fn run(overlay: bool) -> Result<String> {
     app.away = permit::away_since().is_some();
     let (update_notices, recheck) = spawn_update_checker();
     app.recheck = Some(recheck);
-    let restarter = (!overlay).then(spawn_restarter);
+    let restarter = spawn_restarter(overlay);
     let (requests, results) = spawn_detailer();
     app.detail_requests = Some(requests);
     app.detail_results = Some(results);
@@ -3803,7 +3828,7 @@ pub fn run(overlay: bool) -> Result<String> {
             while let Ok(updates) = update_notices.try_recv() {
                 app.updates = updates;
             }
-            while let Some(stale) = restarter.as_ref().and_then(|restarter| restarter.try_recv().ok()) {
+            while let Ok(stale) = restarter.try_recv() {
                 app.stale = stale;
             }
             while let Ok(update) = snapshots.try_recv() {

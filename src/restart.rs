@@ -779,8 +779,18 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
     } else if let Some(only) = only && !live.contains_key(only) && let Some(id) = asked.remove(only).and_then(|entry| entry["question"].as_str().map(str::to_string)) {
         close_question(&id);
     }
+    keep_answers(&mut asked, &load_asked(&state));
     save_asked(&state, &asked)?;
     Ok(lines)
+}
+
+// The board answers in its own process while a run here goes through the sessions, so an answer saved meanwhile must survive this run's save.
+pub fn keep_answers(asked: &mut Map<String, Value>, on_disk: &Map<String, Value>) {
+    for (session, entry) in asked.iter_mut() {
+        if let Some(saved) = on_disk.get(session).filter(|saved| entry["answer"].is_null() && !saved["answer"].is_null() && saved["pid"] == entry["pid"] && saved["question"] == entry["question"]) {
+            entry["answer"] = saved["answer"].clone();
+        }
+    }
 }
 
 pub fn report(lines: &[Line]) -> Vec<String> {
@@ -1035,6 +1045,16 @@ mod tests {
         anonymous["agent_session"] = Value::Null;
         assert_eq!(Pane::from_agent(&anonymous).unwrap().session, None);
         assert!(Pane::from_agent(&json!({ "agent": "codex", "pane_id": "p" })).is_none());
+    }
+
+    #[test]
+    fn an_answer_saved_by_the_board_during_a_run_is_kept() {
+        let mut asked: Map<String, Value> = json!({ "726d": { "pid": 1, "question": "q1", "answer": null }, "9913": { "pid": 2, "question": "q2", "answer": null }, "new": { "pid": 3, "question": "q3", "answer": null } }).as_object().unwrap().clone();
+        let on_disk: Map<String, Value> = json!({ "726d": { "pid": 1, "question": "q1", "answer": "yes" }, "9913": { "pid": 9, "question": "q2", "answer": "no" } }).as_object().unwrap().clone();
+        keep_answers(&mut asked, &on_disk);
+        assert_eq!(asked["726d"]["answer"], "yes");
+        assert!(asked["9913"]["answer"].is_null(), "an answer for an earlier process is not this one's");
+        assert!(asked["new"]["answer"].is_null());
     }
 
     #[test]

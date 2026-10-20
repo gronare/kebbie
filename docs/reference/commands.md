@@ -148,6 +148,9 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 | `kelpie update --stable` | Return to the channel. |
 | `kelpie restart` | Restart each stale Claude session that is idle, not the pane you are in, and has no background work. Works with `restart.auto = false`. |
 | `kelpie restart --all` | Restart every idle session, stale or not. |
+| `kelpie keeper --status` | Whether the keeper runs, with its pid, binary, uptime, log and each routine's interval, last run and last error. |
+| `kelpie keeper --start` | Start the keeper in the background unless one runs. Says `off` while `keeper.enabled = false`. |
+| `kelpie keeper --stop` | Stop the keeper. It finishes the routine under way first. The board or herdr's next startup starts it again; `keeper.enabled = false` keeps it off. |
 
 `--from` and `--stable` cannot be combined.
 
@@ -162,7 +165,8 @@ These run from hooks, the herdr plugin and kelpie's own processes. You do not ru
 | `kelpie backlog save` | The lead, after refreshing the backlog. Reads a JSON array on stdin. |
 | `kelpie messages --unread` | The lead's prompt hook. |
 | `kelpie review --run` | The reviewer process `kelpie review` starts. |
-| `kelpie update --finish` | The newly built binary, at the end of `kelpie update`. |
+| `kelpie update --finish` | The newly built binary, at the end of `kelpie update`. It stops the keeper first and starts it again on the new binary last. |
+| `kelpie keeper` | The keeper itself, as `kelpie keeper --start` starts it: a loop with no terminal that runs the routines and logs to `keeper.log`. |
 | `kelpie lead --renew-board` | `kelpie update`, to restart the board on the new binary. |
 
 ## Finding repos

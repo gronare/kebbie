@@ -35,6 +35,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `current link` | `~/.local/share/kelpie/current` points at the plugin. |
 | `kelpie on PATH` | `kelpie` on `PATH` is the `current` link's binary. |
 | `updates` | The last update check, without fetching. |
+| `keeper` | Whether the keeper runs, with its pid and uptime, or that `[keeper] enabled = false` turns it off. |
 | `state dir` | The state directories. |
 | `config`, `repo config` | config.toml and every file in the repos folder parse, with no unknown or misplaced keys and no broken links. |
 | `push block` | Inside a repo: whether its task worktrees get the push block. |

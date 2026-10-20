@@ -40,8 +40,9 @@ Rules:
 | `vault.command` | string | none | config.toml only | The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments. Unset runs the vault plugin's pinned command from its hooks. Used only while the vault plugin is installed and enabled. |
 | `ci.watch` | boolean | `true` | either | Whether kelpie watches CI after a push and closes the task only once every workflow run for the pushed commit is green. Needs origin on GitHub and `gh` logged in. `false` closes the task right after the push, as for a repo without useful CI. See [Watch CI after a push](../explanation/trunk-based.md#ci-after-the-push). |
 | `update.channel` | `"release"` or `"main"` | `"release"` | config.toml only | What `kelpie update` installs: the highest `vX.Y.Z` tag on origin, or origin's default branch. |
-| `restart.auto` | boolean | `true` | config.toml only | Whether the board restarts stale idle Claude sessions on its own and `kelpie update` restarts idle ones at once. `false` restarts nothing on its own; the board still marks stale sessions. |
-| `restart.idle_minutes` | integer, 1 to 1440 | `10` | config.toml only | How long a stale session must be idle and out of focus before the board restarts it. |
+| `restart.auto` | boolean | `true` | config.toml only | Whether kelpie restarts stale idle Claude sessions on its own and `kelpie update` restarts idle ones at once. `false` restarts nothing on its own; the board still marks stale sessions. |
+| `restart.idle_minutes` | integer, 1 to 1440 | `10` | config.toml only | How long a stale session must be idle and out of focus before it is restarted. |
+| `keeper.enabled` | boolean | `true` | config.toml only | Whether the keeper, one background kelpie per machine, runs the routines: stale-session restarts, the update check, held messages and delivery checks of typed prompts. They then go on with the board closed. `false` runs them in an open board instead. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). |
 | `[keys]` | table of strings | the board's own | config.toml only | The board's keys by action, as `inbox = "I"`. See [Board](board.md#keys-in-configtoml) for the actions and the rules; `kelpie config` shows each key in effect and why an entry was ignored. |
 
 ## Backlog sources
@@ -156,6 +157,9 @@ channel = "release"
 [restart]
 auto = true
 idle_minutes = 10
+
+[keeper]
+enabled = true
 ```
 
 ```toml
