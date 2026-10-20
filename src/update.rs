@@ -179,7 +179,7 @@ fn reload() -> Result<Vec<String>> {
                 Ok(()) => format!("  {name}: reloaded"),
                 Err(error) => format!("  {name}: {error}"),
             },
-            Reload::Focused => format!("  {name}: you are in it, so type /reload-plugins there"),
+            Reload::Focused => format!("  the Claude session you are in ({name}): type /reload-plugins to load the new plugin"),
             Reload::Busy => format!("  {name}: busy, type /reload-plugins there when it waits"),
         });
     }
