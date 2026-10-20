@@ -52,7 +52,22 @@ impl Cli {
     }
 
     fn output(&self, args: &[&str]) -> Result<std::result::Result<String, String>> {
-        let (program, rest) = self.command.split_first().ok_or("the vault command is empty")?;
+        let answer = self.run(&self.command, args)?;
+        match (&answer, self.refreshed()) {
+            (Err(error), Some(refreshed)) if error.contains("unsatisfiable") => self.run(&refreshed, args),
+            _ => Ok(answer),
+        }
+    }
+
+    // uv keeps PyPI's index for a while, so right after a vault release uvx calls the plugin's new pin unsatisfiable until it refreshes.
+    fn refreshed(&self) -> Option<Vec<String>> {
+        let (program, rest) = self.command.split_first()?;
+        (Path::new(program).file_name()? == "uvx").then(|| [program.clone(), "--refresh".to_string()].into_iter().chain(rest.iter().cloned()).collect())
+    }
+
+    fn run(&self, command: &[String], args: &[&str]) -> Result<std::result::Result<String, String>> {
+        let shown = command.join(" ");
+        let (program, rest) = command.split_first().ok_or("the vault command is empty")?;
         let mut command = Command::new(program);
         command.args(rest).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command.spawn().map_err(|error| format!("{program}: {error}"))?;
@@ -68,7 +83,7 @@ impl Cli {
             if started.elapsed() > TIMEOUT {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("{} {} gave no answer in {} s", self.shown(), args.join(" "), TIMEOUT.as_secs()));
+                return Err(format!("{shown} {} gave no answer in {} s", args.join(" "), TIMEOUT.as_secs()));
             }
             std::thread::sleep(Duration::from_millis(20));
         };
@@ -333,6 +348,22 @@ mod tests {
         assert_eq!(hook_prefix(hooks), Some(vec!["uvx".to_string(), "notes-vault-mcp==0.5.1".to_string()]));
         assert_eq!(hook_prefix(r#"{"hooks":{"Stop":[{"hooks":[{"command":"sh other.sh hook"}]}]}}"#), None);
         assert_eq!(hook_prefix("not json"), None);
+    }
+
+    #[test]
+    fn a_new_pin_uv_has_not_seen_is_retried_once_with_refresh() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("kelpie-vault-refresh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let uvx = dir.join("uvx");
+        std::fs::write(&uvx, "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/argv.log\"\nif [ \"$1\" = --refresh ]; then echo '{\"missing\":[]}'; else echo 'requirements are unsatisfiable.' >&2; exit 1; fi\n").unwrap();
+        std::fs::set_permissions(&uvx, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cli = Cli::new(vec![uvx.to_string_lossy().to_string(), "notes-vault-mcp==9.9.9".to_string()]);
+        assert_eq!(cli.missing("Projects/x.md", &["problem"]), Ok(vec![]));
+        let calls = std::fs::read_to_string(dir.join("argv.log")).unwrap();
+        assert_eq!(calls.lines().collect::<Vec<_>>(), ["notes-vault-mcp==9.9.9 task check Projects/x.md --need problem", "--refresh notes-vault-mcp==9.9.9 task check Projects/x.md --need problem"]);
+        assert_eq!(Cli::new(vec!["/bin/false".to_string()]).refreshed(), None, "only uvx refreshes");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
