@@ -521,4 +521,44 @@ pub(crate) mod tests {
         let urgency = |status, report| task(Some(status), report, 0).urgency();
         assert_eq!([urgency("blocked", None), urgency("idle", Some("needs-you")), urgency("idle", Some("ready")), urgency("done", None)], [0, 1, 2, 3]);
     }
+
+    #[test]
+    fn an_agent_is_read_from_herdrs_record_with_defaults_for_what_is_missing() {
+        let full = agent_from(&json!({ "pane_id": "p_1", "agent_status": "working", "display_agent": "✻ refunds", "terminal_title_stripped": "claude", "tokens": { "ctx": "41k" } }));
+        assert_eq!((full.pane.as_str(), full.status.as_str(), full.title.as_str(), full.context.as_deref()), ("p_1", "working", "✻ refunds", Some("41k")));
+        let bare = agent_from(&json!({}));
+        assert_eq!((bare.pane.as_str(), bare.status.as_str(), bare.title.as_str(), bare.context), ("", "unknown", "Claude", None));
+        let titled = agent_from(&json!({ "terminal_title_stripped": "wt1.app" }));
+        assert_eq!(titled.title, "wt1.app");
+    }
+
+    #[test]
+    fn a_session_outside_a_task_is_listed_after_the_tasks_with_no_git_facts() {
+        let mut session = task(Some("working"), None, 0);
+        session.git = None;
+        assert!(!session.is_task());
+        assert_eq!(session.summary(), "Claude session outside a task worktree");
+        assert!(session.group() == Group::Working);
+        assert_eq!(session.to_json()["kind"], "session");
+        assert!(session.to_json()["git"].is_null() && session.to_json()["push_permission"].is_null());
+        let checkout = Checkout { name: "app".to_string(), changed: 2, free_slots: 1, busy_slots: 3 };
+        assert_eq!(checkout.to_json(), json!({ "repo": "app", "changed": 2, "free_worktrees": 1, "busy_worktrees": 3 }));
+    }
+
+    #[test]
+    fn the_json_names_the_permission_and_the_question_the_user_has_to_settle() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.permit = Some(crate::permit::Permit::Repo);
+        assert_eq!(item.to_json()["push_permission"], "repo, once reviewed");
+        item.permit = Some(crate::permit::Permit::Task);
+        assert_eq!(item.to_json()["push_permission"], "task");
+        item.question = Some(Message {
+            id: "q".to_string(), at: 0, from: "billing@web".to_string(), to: "you".to_string(), text: "Which?".to_string(), held: false, report: None, ended: false,
+            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, answered: false, waits: true }), about: None, kind: None,
+        });
+        let shown = item.to_json();
+        assert_eq!(shown["question"]["kept_for_user"], true);
+        assert_eq!(shown["question"]["options"][0]["label"], "A");
+        assert_eq!(shown["report"]["summary"], "plan written");
+    }
 }

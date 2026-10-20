@@ -221,4 +221,17 @@ mod tests {
         assert_eq!(refused(&args, "boom"), "herdr agent start failed: boom");
         assert_eq!(refused(&["workspace", "list"], ""), "herdr workspace list failed");
     }
+
+    #[test]
+    fn every_herdr_call_goes_through_argv_and_a_missing_herdr_is_one_error() {
+        let source = include_str!("herdr.rs");
+        assert!(!source.contains("\"sh\"") && !source.contains("-c\""), "no shell between kelpie and herdr");
+        let text = text(&serde_json::json!("x"));
+        assert_eq!(text.as_deref(), Some("x"));
+        assert_eq!(super::text(&serde_json::json!(5)), None);
+        assert!(std::env::var("HERDR_BIN_PATH").is_ok_and(|bin| bin == "false"), "tests run with HERDR_BIN_PATH=false, so nothing here reaches a real herdr");
+        let failed = call(&["workspace", "list"]).unwrap_err();
+        assert_eq!(failed, "herdr workspace list failed");
+        assert_eq!(bin(), "false");
+    }
 }

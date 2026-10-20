@@ -144,4 +144,20 @@ mod tests {
         assert_eq!(titles, ["Ship it", "Then this"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn a_title_splits_at_the_first_dash_and_an_area_is_the_last_parenthesis_without_spaces() {
+        let item = parse("- One — two — three (web)").unwrap();
+        assert_eq!((item.title.as_str(), item.summary.as_str(), item.area.as_str()), ("One", "two — three", "web"));
+        let nested = parse("- Fix (login) flow (app)").unwrap();
+        assert_eq!((nested.title.as_str(), nested.area.as_str()), ("Fix (login) flow", "app"));
+        let unicode = parse("- [low] Åtgärda — något (grönare)").unwrap();
+        assert_eq!((unicode.title.as_str(), unicode.area.as_str()), ("Åtgärda", "grönare"));
+        assert_eq!(parse("- ()").map(|item| item.title), Some("()".to_string()), "an empty parenthesis is text");
+        assert_eq!(parse("-  spaced  title  ").map(|item| item.title), Some("spaced  title".to_string()));
+        assert_eq!(parse("- [ High ] Title").map(|item| item.priority), Some("high".to_string()));
+        assert!(parse("- [high]").is_none());
+        let missing = read(Path::new("/no/such/kelpie-backlog.md"));
+        assert!(missing.is_empty());
+    }
 }

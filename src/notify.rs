@@ -303,4 +303,35 @@ mod tests {
         assert!(log.lines().next().unwrap().ends_with("ready: notify.command exited with 7: no route"));
         fs::remove_dir_all(state).unwrap();
     }
+
+    #[test]
+    fn the_text_is_never_part_of_the_command_line_the_shell_parses() {
+        let hostile = "x\"; touch /tmp/kelpie-pwned; echo \"";
+        let built = invocation("printf '%s' \"$1\"", &notice(Event::Ready, "a@b", hostile));
+        assert_eq!(built.args[1], "printf '%s' \"$1\"", "the user's command is byte for byte theirs");
+        assert_eq!(built.args[3], hostile);
+        let dir = temp("hostile");
+        let out = dir.join("out");
+        let script = format!("printf '%s' \"$1\" > {}", out.display());
+        let built = invocation(&script, &notice(Event::Ready, "a@b", hostile));
+        assert!(Command::new(&built.program).args(&built.args).envs(built.env.iter().map(|(name, value)| (name, value))).status().unwrap().success());
+        assert_eq!(fs::read_to_string(&out).unwrap(), hostile);
+        assert!(!Path::new("/tmp/kelpie-pwned").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_sent_record_keeps_only_claims_still_within_the_minute() {
+        let state = temp("prune");
+        assert!(claim(&state, &notice(Event::Ready, "a@x", ""), 1000));
+        assert!(claim(&state, &notice(Event::Ready, "b@x", ""), 1030));
+        let record: serde_json::Value = serde_json::from_str(&fs::read_to_string(sent_file(&state)).unwrap()).unwrap();
+        assert_eq!(record.as_object().unwrap().len(), 2);
+        assert!(claim(&state, &notice(Event::Ready, "c@x", ""), 1070));
+        let record: serde_json::Value = serde_json::from_str(&fs::read_to_string(sent_file(&state)).unwrap()).unwrap();
+        assert_eq!(record.as_object().unwrap().keys().collect::<Vec<_>>(), ["ready:b@x", "ready:c@x"], "the minute-old claim is gone");
+        assert!(claim(&state, &notice(Event::Summary, "lead", ""), 1070));
+        assert!(!claim(&state, &notice(Event::Summary, "kelpie", ""), 1071), "summaries share one key, whoever sends them");
+        fs::remove_dir_all(state).unwrap();
+    }
 }

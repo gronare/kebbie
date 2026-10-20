@@ -36,3 +36,28 @@ pub fn run_visibly(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<(
     let status = command(program, args, cwd).stdin(Stdio::inherit()).status().map_err(|error| format!("{program}: {error}"))?;
     if status.success() { Ok(()) } else { Err(format!("{program} {} failed", args.join(" "))) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_program_that_will_not_start_is_the_outer_error_and_a_failing_one_the_inner() {
+        let missing = attempt("/no/such/program-kelpie", &[], None);
+        assert!(missing.is_err() && missing.unwrap_err().starts_with("/no/such/program-kelpie: "));
+        assert_eq!(attempt("sh", &["-c", "echo out; echo err >&2; exit 3"], None), Ok(Err("err".to_string())));
+        assert_eq!(attempt("sh", &["-c", "printf '  out  \\n'"], None), Ok(Ok("out".to_string())), "stdout is trimmed");
+        assert_eq!(run("sh", &["-c", "exit 1"], None).unwrap_err(), "sh -c exit 1 failed");
+        assert_eq!(run("sh", &["-c", "echo why >&2; exit 1"], None).unwrap_err(), "sh -c echo why >&2; exit 1 failed: why");
+        assert!(succeeds("true", &[], None) && !succeeds("false", &[], None) && !succeeds("/no/such/program-kelpie", &[], None));
+    }
+
+    #[test]
+    fn arguments_reach_the_program_as_they_are_with_no_shell_in_between() {
+        let output = run("printf", &["%s|", "a b", "$(id)", "`id`", "; ls", "'q'", "\"q\""], None).unwrap();
+        assert_eq!(output, "a b|$(id)|`id`|; ls|'q'|\"q\"|");
+        let dir = std::env::temp_dir();
+        assert_eq!(run("pwd", &[], Some(&dir)).unwrap(), dir.canonicalize().unwrap().display().to_string());
+        assert!(run("cat", &[], None).unwrap().is_empty(), "stdin is closed, so a program reading it never hangs");
+    }
+}

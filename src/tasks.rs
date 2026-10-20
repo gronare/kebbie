@@ -2032,4 +2032,159 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
         cleanup(dir, origin, &slot);
     }
+
+    #[test]
+    fn a_slug_is_lower_case_ascii_letters_digits_and_dashes_that_start_with_a_letter() {
+        assert_eq!(slug("Fix Login").unwrap(), "fix-login");
+        assert_eq!(slug("  --fix--login--  ").unwrap(), "fix-login");
+        assert_eq!(slug("Föräldraledighet över jul").unwrap(), "foraldraledighet-over-jul");
+        assert_eq!(slug("Straße/Ærø/çañon").unwrap(), "strasse-aero-canon");
+        assert_eq!(slug("../../etc/passwd").unwrap(), "etc-passwd", "a path is a name: it never leaves the pool");
+        assert_eq!(slug("a; rm -rf / #").unwrap(), "a-rm-rf");
+        assert_eq!(slug("x$(id)`id`").unwrap(), "x-id-id");
+        assert_eq!(slug(&format!("a{}", "b".repeat(100))).unwrap().len(), 40, "forty characters at most");
+        assert_eq!(slug(&format!("{}-c", "a".repeat(39))).unwrap(), "a".repeat(39), "a cut never ends in a dash");
+        assert_eq!(slug("-x").unwrap(), "x", "leading punctuation is dropped, not kept as a dash");
+        assert_eq!(slug("@app").unwrap(), "app", "so an address-like name is its task part");
+        for bad in ["", "123", "1-x", "!", "日本語", "  "] {
+            assert!(slug(bad).unwrap_err().contains("needs to start with a letter"), "{bad:?}");
+        }
+        assert_eq!(ascii_fold("ÅÄÖ åäö ÉÈ ü ñ ß Æ"), "AAO aao EE u n ss AE");
+        assert_eq!(ascii_fold("日本語"), "日本語", "other scripts are left for the slug to drop");
+    }
+
+    #[test]
+    fn a_task_address_and_its_files_follow_the_slug_not_the_name_given() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        assert_eq!(find_task(&dir, Some("Billing"), &dir).unwrap().path, slot.path);
+        assert_eq!(find_task(&dir, Some("BILLING!"), &dir).unwrap().task.as_deref(), Some("billing"));
+        assert!(find_task(&dir, Some("../billing"), &dir).is_ok(), "the slug of a path is the task");
+        assert!(find_task(&dir, Some("search"), &dir).err().unwrap().contains("No task \"search\""));
+        assert!(find_task(&dir, None, &dir).err().unwrap().contains("name the task"));
+        assert_eq!(find_task(&dir, None, &slot.path.join("src")).unwrap().task.as_deref(), Some("billing"), "a folder under the worktree is that task");
+        let state = state_of(&dir);
+        let file = started_file_in(&state, "billing", &dir).unwrap();
+        assert_eq!(file, state.join("started").join(format!("billing@{}", name_of(&dir))));
+        assert!(file.parent().unwrap().starts_with(&state));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_transcripts_folder_is_the_worktree_path_with_every_other_character_as_a_dash() {
+        assert_eq!(transcripts_dir(Path::new("/home/ada/.claude"), Path::new("/src/wt1.app")), PathBuf::from("/home/ada/.claude/projects/-src-wt1-app"));
+        assert_eq!(transcripts_dir(Path::new("/c"), Path::new("/Users/Ada Ö/x_y")).file_name().unwrap(), "-Users-Ada---x-y");
+        assert!(!transcripts_dir(Path::new("/c"), Path::new("/a/../b")).file_name().unwrap().to_string_lossy().contains('.'));
+    }
+
+    #[test]
+    fn capitalized_takes_the_first_character_up_and_leaves_the_rest() {
+        assert_eq!(capitalized("the lead"), "The lead");
+        assert_eq!(capitalized(""), "");
+        assert_eq!(capitalized("ärlig"), "Ärlig");
+        assert_eq!(capitalized("ßx"), "SSx");
+    }
+
+    #[test]
+    fn the_settle_counts_quiet_looks_only_at_a_shell_prompt_that_asks_nothing() {
+        let mut settle = Settle::default();
+        assert_eq!(settle.look(false, "❯"), Prompt::Waiting);
+        assert_eq!(settle.look(true, ""), Prompt::Waiting, "an empty screen is not a prompt");
+        assert_eq!(settle.look(true, "Proceed? [y/N]"), Prompt::Asking("Proceed? [y/N]".to_string()));
+        for _ in 0..QUIET_LOOKS {
+            assert_eq!(settle.look(true, "❯"), Prompt::Waiting, "the first look at a new screen starts the count, the quiet ones add to it");
+        }
+        assert_eq!(settle.look(true, "❯"), Prompt::Ready);
+        assert_eq!(settle.look(true, "❯ x"), Prompt::Waiting, "a change starts the count again");
+        assert_eq!(last_line("a\n\n  b  \n\n"), "b");
+        assert_eq!(last_line(""), "");
+    }
+
+    #[test]
+    fn a_start_entry_and_its_items_round_trip_through_the_started_file() {
+        let file = std::env::temp_dir().join(format!("kelpie-started-entry-{}", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        let entry = start_entry(Some("Projects/x.md"), Some("local:Fix login")).unwrap();
+        std::fs::write(&file, &entry).unwrap();
+        assert_eq!(crate::task_note::items(&std::fs::read_to_string(&file).unwrap()), ["Projects/x.md", "local:Fix login"]);
+        assert_eq!(crate::task_note::note_in(&entry).as_deref(), Some("Projects/x.md"));
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn the_fingerprint_is_fnv1a_so_an_approval_survives_a_rust_upgrade() {
+        let mut hasher = Fnv::default();
+        hasher.write(b"");
+        assert_eq!(format!("{:016x}", hasher.0), "cbf29ce484222325");
+        let mut hasher = Fnv::default();
+        hasher.write(b"a");
+        assert_eq!(format!("{:016x}", hasher.0), "af63dc4c8601ec8c");
+        let mut split = Fnv::default();
+        split.write(b"ab");
+        split.write(b"c");
+        let mut whole = Fnv::default();
+        whole.write(b"abc");
+        assert_eq!(split.0, whole.0);
+    }
+
+    #[test]
+    fn a_tasks_settings_deny_push_and_approve_in_every_spelling_claude_code_matches() {
+        let on: Value = serde_json::from_str(&settings("/bin/kelpie", Some("billing@app"))).unwrap();
+        let deny: Vec<&str> = on["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(deny, ["Bash(git push:*)", "Bash(/bin/kelpie approve:*)", "Bash(/bin/kelpie push:*)"]);
+        let allow: Vec<&str> = on["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(!allow.iter().any(|rule| rule.contains("push") || rule.contains("approve") || rule.contains("decide") || rule.contains("away")), "{allow:?}");
+        assert_eq!(on["env"]["GIT_CONFIG_KEY_0"], "url.kelpie-blocks-push:.pushInsteadOf");
+        assert_eq!(on["env"]["GIT_CONFIG_VALUE_0"], "");
+        assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 40);
+    }
+
+    #[test]
+    #[ignore = "bug: the hook commands single-quote kelpie's path and the task's address, so an apostrophe in either breaks the quoting and the hooks never run"]
+    fn the_hook_commands_run_from_a_path_with_an_apostrophe() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("kelpie-hook-quote-{}", std::process::id())).join("o'brien");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+        std::fs::create_dir_all(&dir).unwrap();
+        let kelpie = dir.join("kelpie");
+        std::fs::write(&kelpie, "#!/bin/sh\necho ran \"$@\"\n").unwrap();
+        std::fs::set_permissions(&kelpie, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let written: Value = serde_json::from_str(&settings(&kelpie.to_string_lossy(), Some("billing@it's"))).unwrap();
+        for command in [&written["hooks"]["Stop"][0]["hooks"][0]["command"], &written["hooks"]["PreToolUse"][0]["hooks"][0]["command"]] {
+            let output = std::process::Command::new("sh").args(["-c", command.as_str().unwrap()]).output().unwrap();
+            assert!(output.status.success(), "{command}: {}", String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).starts_with("ran hook"), "{command}");
+        }
+        std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_slot_is_free_only_on_its_placeholder_branch_or_detached_and_clean() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let slots_now = slots(&dir).unwrap();
+        assert_eq!(slots_now.len(), 1);
+        assert!(!slots_now[0].free && slots_now[0].task.as_deref() == Some("billing"));
+        git(&slot.path, &["switch", "--quiet", "--detach"]).unwrap();
+        assert!(slots(&dir).unwrap()[0].free, "a detached clean slot is free");
+        std::fs::write(slot.path.join("scratch"), "x").unwrap();
+        assert!(!slots(&dir).unwrap()[0].free, "an untracked file makes it busy, so a start never takes it");
+        assert_eq!(slots(&dir).unwrap()[0].task, None, "but it is no task either");
+        std::fs::remove_file(slot.path.join("scratch")).unwrap();
+        git(&slot.path, &["switch", "--quiet", "-c", "wt1"]).unwrap();
+        assert!(slots(&dir).unwrap()[0].free, "the wt<N> placeholder branch is free");
+        git(&slot.path, &["switch", "--quiet", "billing"]).unwrap();
+        git(&dir, &["branch", "-D", "wt1"]).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn missing_from_names_only_the_commits_whose_change_upstream_lacks() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fourth = git(&slot.path, &["rev-parse", "--short", "HEAD"]).unwrap();
+        let missing = missing_from(&slot.path, &upstream).unwrap();
+        assert_eq!(missing.len(), 1);
+        assert!(missing[0].starts_with(&fourth) && missing[0].ends_with("fourth"), "{missing:?}");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        assert!(missing_from(&slot.path, &upstream).unwrap().is_empty());
+        cleanup(dir, origin, &slot);
+    }
 }

@@ -274,4 +274,98 @@ mod tests {
         assert_eq!(git(slot, &["config", "--worktree", "--get-all", "core.hooksPath"]).unwrap().lines().count(), 1, "installing again replaces the block");
         fs::remove_dir_all(&fixture.base).unwrap();
     }
+
+    #[test]
+    fn the_hook_script_quotes_every_path_so_a_space_or_an_apostrophe_in_one_breaks_nothing() {
+        assert_eq!(quoted("plain"), "'plain'");
+        assert_eq!(quoted("it's here"), "'it'\\''s here'");
+        assert_eq!(quoted("$(rm -rf /) `x` \"y\""), "'$(rm -rf /) `x` \"y\"'");
+        let base = std::env::temp_dir().join(format!("kelpie-hook-quoting-{}", std::process::id())).join("it's a dir");
+        let _ = fs::remove_dir_all(base.parent().unwrap());
+        let (original, state, main) = (base.join("hooks"), base.join("state"), base.join("app"));
+        fs::create_dir_all(&original).unwrap();
+        fs::create_dir_all(&main).unwrap();
+        let script = hook_script(&original, &state, &main);
+        let file = base.join("pre-push");
+        fs::write(&file, &script).unwrap();
+        let syntax = std::process::Command::new("sh").arg("-n").arg(&file).output().unwrap();
+        assert!(syntax.status.success(), "{}", String::from_utf8_lossy(&syntax.stderr));
+        let refused = std::process::Command::new("sh").arg(&file).current_dir(&main).env_remove(TOKEN_VAR).output().unwrap();
+        assert!(!refused.status.success());
+        let said = String::from_utf8_lossy(&refused.stderr);
+        assert!(said.contains(REFUSAL) && said.contains(&format!("git -C {} push origin", main.display())), "{said}");
+        fs::write(original.join("post-commit"), "#!/bin/sh\necho ran \"$@\"\n").unwrap();
+        fs::set_permissions(original.join("post-commit"), fs::Permissions::from_mode(0o755)).unwrap();
+        let other = base.join("post-commit");
+        fs::write(&other, &script).unwrap();
+        let chained = std::process::Command::new("sh").arg(&other).arg("one").arg("two words").output().unwrap();
+        assert!(chained.status.success());
+        assert_eq!(String::from_utf8_lossy(&chained.stdout).trim(), "ran one two words", "the repo's own hook gets its arguments whole");
+        let none = std::process::Command::new("sh").arg(base.join("pre-rebase")).output();
+        fs::write(base.join("pre-rebase"), &script).unwrap();
+        drop(none);
+        assert!(std::process::Command::new("sh").arg(base.join("pre-rebase")).output().unwrap().status.success(), "no hook of that name in the repo is a pass");
+        fs::remove_dir_all(base.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_pre_push_hook_takes_only_a_32_hex_token_that_kelpie_issued() {
+        let base = std::env::temp_dir().join(format!("kelpie-hook-token-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (original, state, main) = (base.join("hooks"), base.join("state"), base.join("app"));
+        fs::create_dir_all(&main).unwrap();
+        let file = base.join("pre-push");
+        fs::write(&file, hook_script(&original, &state, &main)).unwrap();
+        let push = |token: &str| std::process::Command::new("sh").arg(&file).current_dir(&main).env(TOKEN_VAR, token).output().unwrap().status.success();
+        let token = Token::new(&state).unwrap();
+        assert_eq!(token.value.len(), 32);
+        assert!(token.value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
+        assert!(push(&token.value));
+        assert!(!push(&token.value[..31]));
+        assert!(!push(&format!("{}/", &token.value[..31])), "a slash never reaches the tokens folder");
+        assert!(!push("../away"));
+        assert!(!push(""));
+        assert!(!push("0000000000000000000000000000000000000000000000000000000000000000"));
+        let other = Token::new(&state).unwrap();
+        assert_ne!(other.value, token.value);
+        drop(token);
+        assert!(!push(&other.value[..0]) && push(&other.value));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_repo_with_an_apostrophe_and_a_space_in_its_path_is_blocked_like_any_other() {
+        let fixture = fixture("it's spaced");
+        let Fixture { origin, slot, state, .. } = &fixture;
+        assert_eq!(install(slot, state).unwrap(), Block::On);
+        commit(slot, "b");
+        let before = git(origin, &["rev-parse", "main"]).unwrap();
+        let url = git(slot, &["config", "remote.origin.url"]).unwrap();
+        let refused = run(slot, &["-c", &format!("url.{url}.pushInsteadOf={url}"), "push", "origin", "HEAD:main"], &[]);
+        assert!(!refused.status.success() && String::from_utf8_lossy(&refused.stderr).contains("kelpie push"), "{}", String::from_utf8_lossy(&refused.stderr));
+        assert_eq!(git(origin, &["rev-parse", "main"]).unwrap(), before);
+        let token = Token::new(state).unwrap();
+        let mut args = unblock_args(slot).unwrap();
+        args.extend(["push", "--quiet", "origin", "HEAD:main"].map(str::to_string));
+        let kelpies = run(slot, &args.iter().map(String::as_str).collect::<Vec<_>>(), &[(TOKEN_VAR, &token.value)]);
+        assert!(kelpies.status.success(), "{}", String::from_utf8_lossy(&kelpies.stderr));
+        fs::remove_dir_all(&fixture.base).unwrap();
+    }
+
+    #[test]
+    fn the_pushurl_rewrite_catches_every_url_a_task_could_push_to() {
+        let fixture = fixture("rewrite");
+        let Fixture { slot, state, .. } = &fixture;
+        install(slot, state).unwrap();
+        commit(slot, "b");
+        for remote in ["https://github.com/gronare/kelpie.git", "git@github.com:gronare/kelpie.git", "ssh://git@github.com/gronare/kelpie.git", fixture.origin.to_str().unwrap()] {
+            let output = run(slot, &["push", "--no-verify", remote, "HEAD:refs/heads/elsewhere"], &[]);
+            assert!(!output.status.success(), "a push to {remote} by url got through");
+            let said = String::from_utf8_lossy(&output.stderr);
+            assert!(said.contains("kelpie-blocks-push") || said.contains("kelpie"), "{said}");
+        }
+        assert!(!run(slot, &["push", "--no-verify", "--force", "origin", "HEAD:main"], &[]).status.success());
+        assert!(!run(slot, &["push", "--no-verify", "--mirror", "origin"], &[]).status.success());
+        fs::remove_dir_all(&fixture.base).unwrap();
+    }
 }

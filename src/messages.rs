@@ -944,5 +944,108 @@ mod tests {
     #[test]
     fn wrap_breaks_on_words_and_keeps_paragraphs() {
         assert_eq!(wrap("one two three four\nfive", 9), ["one two", "three", "four", "five"]);
+        assert_eq!(wrap("abcdefghijklmnop", 5), ["abcdefghijklmnop"], "a word longer than the width is kept whole, never cut");
+        assert!(wrap("", 5).is_empty());
+        assert_eq!(wrap("a\n\nb", 5), ["a", "", "b"], "an empty paragraph stays as a gap");
+    }
+
+    #[test]
+    fn the_fold_survives_records_out_of_order_or_without_an_id() {
+        let early_state = r#"{"id":"1","at":5,"state":"delivered"}"#;
+        let message = r#"{"id":"1","at":10,"from":"a@x","to":"b@x","text":"hi","state":"held"}"#;
+        let folded = fold(&format!("{early_state}\n{message}"));
+        assert_eq!(folded.len(), 1);
+        assert!(folded[0].held, "a state line before its message is nobody's");
+        let nameless = fold(r#"{"at":10,"from":"a@x","to":"b@x","text":"hi","state":"held"}"#);
+        assert_eq!((nameless[0].id.as_str(), nameless[0].from.as_str()), ("", "a@x"));
+        let dropped = fold(&format!("{message}\n{{\"id\":\"1\",\"at\":11,\"state\":\"dropped\"}}"));
+        assert!(!dropped[0].held, "a dropped message is not held any more");
+        let empty = fold("\n\n   \n");
+        assert!(empty.is_empty());
+        let numbers = fold(r#"{"id":1,"at":"ten","from":5,"to":null,"text":"x","state":"held"}"#);
+        assert_eq!((numbers[0].id.as_str(), numbers[0].at, numbers[0].from.as_str(), numbers[0].to.as_str()), ("", 0, "", ""), "wrong types read as empty, never a panic");
+    }
+
+    #[test]
+    fn a_question_record_without_options_or_recommend_still_folds_as_a_question() {
+        let bare = fold(r#"{"id":"q","at":1,"from":"a@x","to":"you","text":"Which?","state":"asked","question":{"options":[]}}"#);
+        assert_eq!(bare[0].question.as_ref().map(|question| (question.options.len(), question.recommend)), Some((0, 1)));
+        let no_list = fold(r#"{"id":"q","at":1,"from":"a@x","to":"you","text":"Which?","state":"asked","question":{"recommend":2}}"#);
+        assert_eq!(no_list[0].question, None, "a question needs its options list");
+        let partial = fold(r#"{"id":"q","at":1,"from":"a@x","to":"you","text":"Which?","state":"asked","question":{"options":[{"label":"A"},{"meaning":"b"},7]}}"#);
+        assert_eq!(partial[0].question.as_ref().unwrap().options, [("A".to_string(), String::new()), (String::new(), "b".to_string()), (String::new(), String::new())]);
+    }
+
+    #[test]
+    fn ages_turn_over_at_a_minute_an_hour_and_a_day() {
+        let at = |seconds_ago: u64| age(now() - seconds_ago);
+        assert_eq!(at(0), "now");
+        assert_eq!(at(59), "now");
+        assert_eq!(at(60), "1m");
+        assert_eq!(at(3599), "59m");
+        assert_eq!(at(3600), "1h");
+        assert_eq!(at(86_399), "23h");
+        assert_eq!(at(86_400), "1d");
+        assert_eq!(age(now() + 1000), "now", "a clock ahead of ours is not negative");
+    }
+
+    #[test]
+    fn the_addressee_names_the_user_for_a_question_or_a_report_and_the_session_otherwise() {
+        let plain = fold(r#"{"id":"1","at":1,"from":"a@x","to":"b@x","text":"x","state":"delivered"}"#);
+        assert_eq!(addressee(&plain[0]), "b@x");
+        let report = fold(r#"{"id":"1","at":1,"from":"a@x","to":"lead","text":"x","state":"logged","report":{"state":"needs-you","next":"look"}}"#);
+        assert_eq!(addressee(&report[0]), "you · needs you");
+        assert_eq!(report[0].next_for_you(), Some("look"));
+        let nothing = fold(r#"{"id":"1","at":1,"from":"a@x","to":"lead","text":"x","state":"logged","report":{"state":"working","next":" NOTHING "}}"#);
+        assert_eq!(nothing[0].next_for_you(), None, "nothing in any case is nothing");
+    }
+
+    #[test]
+    fn a_stale_lock_is_taken_over_and_a_fresh_one_is_waited_for() {
+        let dir = state("stale-lock");
+        let path = lock_in(&dir);
+        fs::write(&path, "").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(120);
+        File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+        let taken = Lock::take_in(&dir, false).unwrap();
+        assert!(taken.is_some(), "a lock older than a minute is a crash's leftover");
+        assert_eq!(Lock::take_in(&dir, false).unwrap().map(|_| ()), None, "a fresh lock is somebody's");
+        drop(taken);
+        assert!(!path.exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn print_shows_the_newest_messages_with_held_and_next_marks() {
+        let dir = state("print");
+        write_log(&dir, &[told("a", 1, "x@r", "y@r", "delivered"), told("b", 2, "x@r", "y@r", "held"), report("c", 3, "x@r", "done")]);
+        let messages = load_in(&dir);
+        assert_eq!(messages.len(), 3);
+        let text = messages.iter().map(|message| {
+            let held = if message.held { "  (held)" } else { "" };
+            format!("{} → {}{held}", message.from, addressee(message))
+        }).collect::<Vec<_>>();
+        assert_eq!(text, ["x@r → y@r", "x@r → y@r  (held)", "x@r → you · needs you"]);
+        assert_eq!(recent(2).len().min(2), recent(2).len());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rotation_keeps_a_held_answer_and_the_lead_mark_points_at_a_kept_message() {
+        let dir = state("rotate-mark");
+        write_log(&dir, &[
+            told("old", 1, "a@r", "b@r", "delivered"),
+            question("q1", 2, "billing@web"),
+            json!({ "id": "a1", "at": 3, "from": USER_LABEL, "to": "billing@web", "text": "Sidekiq", "state": "held", "about": "q1", "kind": "answer" }),
+            mark("q1", 4, "answered"),
+            told("seen", 5, "a@r", "b@r", "delivered"),
+        ]);
+        fs::write(dir.join(LEAD_MARK), "seen").unwrap();
+        rotate_in(&dir, None).unwrap();
+        let after = load_in(&dir);
+        assert_eq!(ids(&after), ["a1"], "the user's held answer survives the rotation: {:?}", ids(&after));
+        assert_eq!(fs::read_to_string(dir.join(LEAD_MARK)).unwrap(), "a1", "the mark moves to the last kept message before the one it named");
+        assert_eq!(unread_in(&dir).unwrap(), "", "and the lead sees nothing again");
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -971,4 +971,55 @@ mod tests {
             assert_eq!(page.position(), step);
         }
     }
+
+    fn with_git(mut area: Area, ahead: usize, changed: usize) -> Area {
+        area.repo = Some(PathBuf::from("/src/app"));
+        area.git = Some(crate::areas::RepoState { branch: "main".to_string(), upstream: "origin/main".to_string(), ahead, behind: 0, changed, release: None });
+        area
+    }
+
+    #[test]
+    fn an_area_needs_you_with_commits_to_push_is_active_with_tasks_or_changes_and_quiet_otherwise() {
+        let quiet = area("Areas/app.md", "app");
+        assert!(standing(&quiet, &[]) == Standing::Quiet);
+        assert!(standing(&with_git(quiet.clone(), 0, 2), &[]) == Standing::Active);
+        assert!(standing(&with_git(quiet.clone(), 1, 0), &[]) == Standing::NeedsYou);
+        let mut mine = crate::status::tests::task(Some("working"), None, 1);
+        mine.repo = Some(PathBuf::from("/src/app"));
+        assert!(standing(&with_git(quiet.clone(), 0, 0), std::slice::from_ref(&mine)) == Standing::Active);
+        mine.agent.as_mut().unwrap().status = "blocked".to_string();
+        assert!(standing(&with_git(quiet.clone(), 0, 0), std::slice::from_ref(&mine)) == Standing::NeedsYou, "a task that needs you makes its area need you");
+        let mut elsewhere = mine.clone();
+        elsewhere.repo = Some(PathBuf::from("/src/other"));
+        assert!(standing(&with_git(quiet.clone(), 0, 0), &[elsewhere]) == Standing::Quiet, "a task in another repo is not this area's");
+        assert_eq!(row_facts(&with_git(quiet.clone(), 2, 1), &[mine.clone()]), "2 to push · 1 file changed · 1 task", "three facts at most");
+        assert_eq!(row_facts(&quiet, &[]), "no repo");
+    }
+
+    #[test]
+    fn paths_under_home_are_shown_with_a_tilde_and_paragraphs_wrap_apart() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(home_relative(&PathBuf::from(&home).join("src/app")), "~/src/app");
+        assert_eq!(home_relative(&PathBuf::from("/opt/app")), "/opt/app");
+        let lines = text_lines("one two\n\nthree", 20);
+        assert_eq!(lines.iter().map(|line| line.to_string()).collect::<Vec<_>>(), ["one two", "", "three"]);
+        let action = Action { id: "release".to_string(), key: 'R', title: "Release".to_string(), about: String::new(), asks: vec!["version".to_string()], work: Work::Script(crate::actions::Script { bump: Vec::new(), run: Vec::new(), commit: None, tag: None, push: true }), then: vec!["plugins:bump-pin".to_string()], source: String::new() };
+        let next = first_next(&action, &vec![("version".to_string(), "0.5.1".to_string())]).unwrap();
+        assert_eq!((next.target.as_str(), next.answers.len()), ("plugins:bump-pin", 1));
+        assert!(first_next(&Action { then: Vec::new(), ..action }, &Vec::new()).is_none());
+    }
+
+    #[test]
+    fn a_repos_own_actions_are_marked_as_such_in_the_choices() {
+        let mut app = with_git(area("Areas/app.md", "app"), 1, 0);
+        app.actions = crate::actions::parse("[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n", ".kelpie.toml").0;
+        let page = Page::new(vec![Source::Local]);
+        let choices = page.choices(&app);
+        let keys: String = choices.iter().map(|choice| choice.key).collect();
+        assert_eq!(keys, "gsabluB");
+        assert!(Page::is_repo_action(&app, 'B') && !Page::is_repo_action(&app, 'u'));
+        assert_eq!(choices.iter().find(|choice| choice.key == 'u').unwrap().label, "Push main");
+        let keys: String = page.choices(&area("Areas/notes.md", "notes")).iter().map(|choice| choice.key).collect();
+        assert_eq!(keys, "bl", "without a repo there is nothing to open, start or push");
+    }
 }

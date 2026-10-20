@@ -294,4 +294,46 @@ The payload says amount.');
         assert_eq!(index.body("Projects/missing.md"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn a_tilde_path_expands_under_home_and_an_area_link_loses_its_brackets() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(expand("~/personal/kelpie"), PathBuf::from(&home).join("personal/kelpie"));
+        assert_eq!(expand("~personal"), PathBuf::from("~personal"), "only ~/ is the home");
+        assert_eq!(expand("/abs"), PathBuf::from("/abs"));
+        assert_eq!(area_name(" [[kelpie]] "), "kelpie");
+        assert_eq!(area_name("kelpie"), "kelpie");
+        assert_eq!(area_name("[[a]] [[b]]"), "a]] [[b");
+    }
+
+    #[test]
+    fn an_areas_log_lines_are_unique_and_sorted_by_date_whatever_note_they_come_from() {
+        let logs = vec![
+            ("Log/a-log.md".to_string(), "- [2026-10-01] same | [[x]]\n- [2026-10-03] late\nnot a line\n".to_string()),
+            ("Log/b-log.md".to_string(), "- [2026-10-01] same | commits: abc | [[x]]\n- [2026-10-02] linked | [[x]]\n- [2026-10-09] other area | [[y]]\n".to_string()),
+        ];
+        let lines = log_for(&logs, "x", &["Log/a-log.md".to_string()]);
+        let shown: Vec<(&str, &str)> = lines.iter().map(|line| (line.date.as_str(), line.text.as_str())).collect();
+        assert_eq!(shown, [("2026-10-03", "late"), ("2026-10-02", "linked"), ("2026-10-01", "same")]);
+        assert_eq!(log_line("- [2026-10-01]x"), None, "the date needs its closing space");
+        assert_eq!(log_line("  - [2026-10-01] indented | [[x]]  "), Some(LogLine { date: "2026-10-01".to_string(), text: "indented".to_string() }));
+    }
+
+    #[test]
+    fn the_index_is_opened_read_only_so_kelpie_never_writes_the_servers_database() {
+        let dir = std::env::temp_dir().join(format!("kelpie-vault-ro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("index.sqlite");
+        let _ = std::fs::remove_file(&path);
+        assert!(Index::at(&path).is_err(), "a missing index is an error, not a new database");
+        assert!(!path.exists());
+        Connection::open(&path).unwrap().execute_batch("CREATE TABLE notes (key TEXT PRIMARY KEY, mtime REAL, status TEXT); INSERT INTO notes VALUES ('Projects/x.md', 5.5, 'active');").unwrap();
+        let index = Index::at(&path).unwrap();
+        assert_eq!(index.changed_at("Projects/x.md"), Some(5.5));
+        assert_eq!(index.status_of("Projects/x.md").as_deref(), Some("active"));
+        assert_eq!(index.status_of("Projects/x.md'; DROP TABLE notes; --"), None, "keys are bound, never spliced");
+        assert!(index.db.execute("INSERT INTO notes VALUES ('y', 1, 'x')", []).is_err(), "read-only");
+        assert!(index.areas().is_err(), "a schema without the columns is an error, not a panic");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

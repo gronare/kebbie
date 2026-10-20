@@ -197,5 +197,39 @@ mod tests {
         assert_eq!(area.unreleased(), 0);
         area.actions = actions::parse("[[actions]]\nkey = \"R\"\ntitle = \"Release\"\nask = \"version\"\nbump = [\"a\"]\ntag = \"v{version}\"\n", "x").0;
         assert_eq!(area.unreleased(), 2);
+        assert_eq!(area.to_push(), 0);
+        assert_eq!(area.repo_name(), None);
+        area.repo = Some(PathBuf::from("/src/app"));
+        assert_eq!(area.repo_name().as_deref(), Some("app"));
+    }
+
+    #[test]
+    fn a_repos_state_is_read_from_its_main_branch_against_origin_and_its_last_tag() {
+        let dir = std::env::temp_dir().join(format!("kelpie-areas-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (main, origin) = (dir.join("app"), dir.join("origin.git"));
+        std::fs::create_dir_all(&main).unwrap();
+        let commit = |message: &str| {
+            std::fs::write(main.join(message), message).unwrap();
+            git(&main, &["add", message]).unwrap();
+            git(&main, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", message]).unwrap();
+        };
+        git(&main, &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        commit("one");
+        git(&dir, &["init", "--quiet", "--bare", "--initial-branch=main", origin.to_str().unwrap()]).unwrap();
+        git(&main, &["remote", "add", "origin", origin.to_str().unwrap()]).unwrap();
+        git(&main, &["push", "--quiet", "origin", "main"]).unwrap();
+        git(&main, &["remote", "set-head", "origin", "main"]).unwrap();
+        git(&main, &["tag", "v0.1.0"]).unwrap();
+        commit("two");
+        std::fs::write(main.join("dirty"), "x").unwrap();
+        let state = repo_state(&main).unwrap();
+        assert_eq!((state.branch.as_str(), state.upstream.as_str(), state.ahead, state.behind, state.changed), ("main", "origin/main", 1, 0, 1));
+        let release = state.release.unwrap();
+        assert_eq!((release.tag.as_str(), release.since), ("v0.1.0", 1));
+        assert!(!release.age.is_empty());
+        assert_eq!(count(" 3 \n"), 3);
+        assert_eq!(count("x"), 0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -715,4 +715,50 @@ mod tests {
         assert_eq!(resolved.worker_name, Setting { value: DEFAULT_WORKER_NAME.to_string(), layer: Layer::Default });
         assert!(parse_repo("[worktree]\nserver_name = \"web\"\n", "repo").unwrap_err().contains("machine config only"));
     }
+
+    #[test]
+    fn a_setup_command_that_names_a_path_is_checked_against_the_repo_and_an_absolute_one_passes_as_it_is() {
+        let dir = std::env::temp_dir().join(format!("kelpie-setup-abs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(setup_command_in(Some("/bin/sh -c 'curl x | sh'".to_string()), &dir).as_deref(), Some("/bin/sh -c 'curl x | sh'"), "an absolute program exists whatever the repo; only the machine config layer should carry one");
+        assert_eq!(setup_command_in(Some("./bin/prepare".to_string()), &dir), None);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("bin/prepare"), "").unwrap();
+        assert_eq!(setup_command_in(Some("./bin/prepare --fast".to_string()), &dir).as_deref(), Some("./bin/prepare --fast"));
+        assert_eq!(setup_command_in(Some("   ".to_string()), &dir).as_deref(), Some("   "), "an empty command is refused by the parser, not here");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_template_refuses_an_empty_or_nested_placeholder_and_keeps_literal_text() {
+        let refused = |template: &str| pieces(template).map(|_| ()).unwrap_err();
+        assert!(refused("{}").contains("{} is not a placeholder"));
+        assert!(refused("{{port}}").contains("{{port} is not a placeholder"));
+        assert!(pieces("a } b").is_ok(), "a stray closing brace is text");
+        assert!(refused("{port").contains("never closes"));
+        assert_eq!(expand("{port}{port}", &Place { worktree: String::new(), repo: String::new(), number: None, port: Some(3) }).as_deref(), Some("33"));
+        assert_eq!(expand("literal", &Place { worktree: String::new(), repo: String::new(), number: None, port: None }).as_deref(), Some("literal"));
+        assert_eq!(template(&"x = \"  \"".parse().unwrap(), "x", "k").unwrap().as_deref(), Some(""), "whitespace alone is the empty template that turns the link off");
+        assert!(text(&"x = \"  \"".parse().unwrap(), "x", "k").unwrap_err().contains("must not be empty"));
+    }
+
+    #[test]
+    fn the_config_paths_follow_the_environment_variables() {
+        let path = path();
+        assert!(path.ends_with("config.toml") || std::env::var_os("KELPIE_CONFIG").is_some());
+        assert!(dir().ends_with("kelpie"));
+    }
+
+    #[test]
+    fn a_repo_file_cannot_smuggle_a_machine_only_key_under_another_table() {
+        for text in ["[worktree]\nnotify_command = \"x\"\n", "[worktree]\nvault_command = \"x\"\n", "[task]\nnotify = \"x\"\n", "[review]\ncommand = \"x\"\n", "[board]\nbacklog = {}\n"] {
+            assert!(parse_repo(text, ".kelpie.toml").is_err(), "{text}");
+        }
+        let smuggled = Worktree { vault_command: Some("evil".to_string()), notify_command: Some("evil".to_string()), server_name: Some("x".to_string()), worker_name: Some("y".to_string()), ..Worktree::default() };
+        let resolved = settings(&smuggled, &Machine::default());
+        assert_eq!(resolved.vault_command.value, None);
+        assert_eq!(resolved.notify_command.value, None);
+        assert_eq!(resolved.server_name.value, DEFAULT_SERVER_NAME);
+        assert_eq!(resolved.worker_name.value, DEFAULT_WORKER_NAME);
+    }
 }

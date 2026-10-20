@@ -365,4 +365,82 @@ mod tests {
         assert_eq!(caller_in(&table(task), 70), Caller::Task("billing@app".to_string()));
         assert_eq!(caller_in(&table(format!("claude --settings {}", serde_json::json!({ "model": "opus" }))), 70), Caller::Agent, "other inline settings are no role");
     }
+
+    #[test]
+    fn a_claude_run_through_node_or_with_half_an_argument_list_still_reads_as_its_role() {
+        let task = "/state/roles/billing@app.settings.json";
+        assert_eq!(role_of(&format!("node /opt/node_modules/@anthropic-ai/claude-code/cli.js --settings {task}")), Some(Caller::Task("billing@app".to_string())), "the npm install runs as node");
+        assert_eq!(role_of("claude --settings"), Some(Caller::Agent), "a dangling --settings names no file");
+        assert_eq!(role_of("claude --settings /state/roles/other.settings.json"), Some(Caller::Agent), "a settings file without @ is no task");
+        assert_eq!(role_of("claude --settings /state/roles/billing@app.review.settings.json"), Some(Caller::Agent), "the reviewer is an agent, never the task it reads");
+        assert_eq!(role_of("vim --settings /state/roles/lead.settings.json"), None, "only a Claude carries a role");
+        assert_eq!(role_of(""), None);
+        assert_eq!(role_of("   "), None);
+    }
+
+    #[test]
+    fn the_process_table_keeps_arguments_with_spaces_and_skips_lines_it_cannot_read() {
+        let table = processes("  1     0 /sbin/launchd\n 50     1 claude --settings /state/roles/a@b.settings.json --append-system-prompt-file x\nbad line here\n 60 50\n");
+        assert_eq!(table.len(), 3, "{table:?}");
+        assert_eq!(table[1], (50, 1, "claude --settings /state/roles/a@b.settings.json --append-system-prompt-file x".to_string()));
+        assert_eq!(table[2], (60, 50, String::new()), "a process whose command is gone still links the chain");
+    }
+
+    #[test]
+    fn the_strictest_role_in_the_chain_wins_however_the_claudes_nest() {
+        let lead = "claude --settings /state/roles/lead.settings.json";
+        let agent = "claude --settings /state/roles/x.settings.json";
+        let task = "claude --settings /state/roles/billing@app.settings.json";
+        let chain = |middle: &str, top: &str| processes(&format!("  1 0 launchd\n 10 1 {top}\n 20 10 {middle}\n 30 20 kelpie push billing\n"));
+        assert_eq!(caller_in(&chain(lead, agent), 30), Caller::Agent, "a lead started by an agent is an agent");
+        assert_eq!(caller_in(&chain(agent, lead), 30), Caller::Agent, "an agent started by the lead is an agent");
+        assert_eq!(caller_in(&chain(lead, task), 30), Caller::Task("billing@app".to_string()));
+        assert_eq!(caller_in(&chain(agent, task), 30), Caller::Task("billing@app".to_string()));
+        assert_eq!(caller_in(&chain("/bin/zsh", lead), 30), Caller::Lead);
+        assert_eq!(caller_in(&chain(task, lead), 30), Caller::Task("billing@app".to_string()), "a task under the lead's shell is still the task");
+        assert_eq!(caller_in(&processes(" 30 29 kelpie push\n"), 30), Caller::User, "a kelpie whose own entry is the only one reads as the user");
+        assert_eq!(caller_in(&processes(" 30 30 kelpie push\n"), 30), Caller::User);
+    }
+
+    #[test]
+    #[ignore = "bug: a kelpie a task detaches (nohup, setsid, &) is reparented to launchd and reads as the user, so a task can approve, push and switch away mode"]
+    fn a_kelpie_detached_from_the_claude_that_started_it_is_not_the_user() {
+        let task = "claude --settings /state/roles/billing@app.settings.json";
+        let orphaned = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 70 1 /bin/kelpie approve billing\n"));
+        assert_ne!(caller_in(&orphaned, 70), Caller::User, "with a task's Claude alive on the machine, a parentless kelpie must not pass as the user");
+    }
+
+    #[test]
+    fn the_user_alone_passes_a_user_only_gate_and_the_refusal_names_who_tried() {
+        assert_eq!(user_only_as(&Caller::User, "switching away mode"), Ok(()));
+        let lead = user_only_as(&Caller::Lead, "switching away mode").unwrap_err();
+        assert_eq!(lead, "switching away mode is the user's call, from the board or their own terminal; the lead cannot");
+        assert!(user_only_as(&Caller::Task("billing@app".to_string()), "x").unwrap_err().contains("the task billing@app cannot"));
+        assert!(user_only_as(&Caller::Agent, "x").unwrap_err().contains("a Claude session cannot"));
+        assert_eq!(describe(&Caller::User), "the user");
+    }
+
+    #[test]
+    fn the_permit_files_never_leave_their_folder_for_an_address_kelpie_made() {
+        let state = std::env::temp_dir().join(format!("kelpie-permit-paths-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&state);
+        set_task_in(&state, "billing@app", true).unwrap();
+        set_repo_in(&state, "app", true).unwrap();
+        assert!(state.join("push-permits/billing@app").is_file());
+        assert!(state.join("push-permits/repos/app").is_file());
+        assert_eq!(in_state(&state, "app", "repos"), None, "a task named like the repos folder is not the repo file");
+        assert_eq!(in_state(&state, "search@app", "app"), Some(Permit::Repo));
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    #[ignore = "bug: an unreadable away file reads as away since the epoch, so the return brief lists every push and call ever logged"]
+    fn an_away_file_that_holds_no_time_is_not_away_mode() {
+        let state = std::env::temp_dir().join(format!("kelpie-away-garbage-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&state);
+        fs::create_dir_all(&state).unwrap();
+        fs::write(away_file(&state), "garbage").unwrap();
+        assert_eq!(away_since_in(&state), None);
+        fs::remove_dir_all(state).unwrap();
+    }
 }

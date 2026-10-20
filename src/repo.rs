@@ -262,4 +262,45 @@ mod tests {
         assert_eq!(pooled_under(std::slice::from_ref(&root)), [root.join("gronare/api"), root.join("shop")]);
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn a_slot_is_named_wt_number_dot_repo_and_read_back_only_in_that_shape() {
+        let repo = Path::new("/src/app");
+        assert_eq!(slot_path(repo, 3), PathBuf::from("/src/wt3.app"));
+        assert_eq!(slot_number(repo, &slot_path(repo, 12)), Some(12));
+        assert_eq!(slot_number(repo, Path::new("/src/wt01.app")), Some(1), "a zero-padded number reads as its number");
+        for not_a_slot in ["/src/wt.app", "/src/wtx.app", "/src/wt1.app.bak", "/src/wt1.other", "/src/app", "/src/wt1", "/src/wt-1.app", "/src/wt1.App"] {
+            assert_eq!(slot_number(repo, Path::new(not_a_slot)), None, "{not_a_slot}");
+        }
+        assert_eq!(slot_number(Path::new("/src/my.app"), Path::new("/src/wt2.my.app")), Some(2), "a dot in the repo's name is fine");
+        assert_eq!(name_of(Path::new("/src/app/")), "app");
+        assert_eq!(name_of(Path::new("/")), "");
+    }
+
+    #[test]
+    fn the_worktree_list_is_read_from_gits_porcelain_output_with_branches_and_detached_heads() {
+        let dir = std::env::temp_dir().join(format!("kelpie-worktrees-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let main = dir.join("app");
+        std::fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        git(&main, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "--allow-empty", "-m", "one"]).unwrap();
+        let detached = dir.join("wt1.app");
+        let on_branch = dir.join("wt2.app");
+        git(&main, &["worktree", "add", "--quiet", "--detach", detached.to_str().unwrap()]).unwrap();
+        git(&main, &["worktree", "add", "--quiet", "-b", "billing", on_branch.to_str().unwrap()]).unwrap();
+        let list = worktrees(&main).unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].branch.as_deref(), Some("main"));
+        let find = |path: &Path| list.iter().find(|worktree| worktree.path.canonicalize().ok() == path.canonicalize().ok()).unwrap();
+        assert_eq!(find(&detached).branch, None);
+        assert_eq!(find(&on_branch).branch.as_deref(), Some("billing"));
+        assert_eq!(main_checkout(&on_branch).unwrap().canonicalize().unwrap(), main.canonicalize().unwrap());
+        assert_eq!(main_checkout(&main).unwrap().canonicalize().unwrap(), main.canonicalize().unwrap());
+        assert!(main_checkout(&dir).is_err(), "outside a repo there is no main checkout");
+        assert!(branch_exists(&main, "billing") && !branch_exists(&main, "search"));
+        assert_eq!(ahead_behind(&on_branch, "main").unwrap(), (0, 0));
+        assert!(default_branch(&main).is_err(), "no origin, no default branch, and the error says how to set one");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

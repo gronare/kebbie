@@ -467,4 +467,48 @@ mod tests {
         assert!(reference("plan.md").is_err(), "a file must exist to be kept");
         let _ = fs::remove_dir_all(state);
     }
+
+    #[test]
+    fn the_question_text_lists_the_options_numbered_with_the_recommendation_and_the_plan() {
+        let messages = log(&[record("q1", 10, "billing@web", &asked(), Some("vault:Projects/billing.md"), None)]);
+        assert_eq!(text(&messages[0]), "Which queue should retries use?\n1. Sidekiq: reuse the jobs we have\n2. Solid Queue (recommended): one less service\nplan: vault:Projects/billing.md");
+        let plain = log(&[json!({ "id": "m", "at": 1, "from": "a@x", "to": "lead", "text": "hello", "state": "delivered" })]);
+        assert_eq!(text(&plain[0]), "hello");
+        assert!(answer_text(&plain[0], Some(0), "").unwrap_err().contains("not a question"));
+    }
+
+    #[test]
+    fn a_question_belongs_to_its_task_by_address_or_bare_name() {
+        let messages = log(&[record("q1", 10, "billing@web", &asked(), None, None)]);
+        assert!(of_task(&messages[0], "billing@web") && of_task(&messages[0], "billing"));
+        assert!(!of_task(&messages[0], "billing@api") && !of_task(&messages[0], "bill") && !of_task(&messages[0], "web"));
+    }
+
+    #[test]
+    fn the_options_are_one_line_each_and_odd_spacing_in_them_is_collapsed() {
+        let asked = parse(&["  A  :  one\nline ", "B: two"], Some(" 1 "), false, "Q\n\n?").unwrap();
+        assert_eq!(asked.options[0], ("A".to_string(), "one line".to_string()));
+        assert_eq!(asked.text, "Q ?");
+        let colon_in_meaning = parse(&["A: at 10:30", "B: two"], Some("1"), false, "Q?").unwrap();
+        assert_eq!(colon_in_meaning.options[0], ("A".to_string(), "at 10:30".to_string()), "the first colon splits");
+        assert!(parse(&["A: one", "B: two"], Some("1x"), false, "Q?").unwrap_err().contains("--recommend is the number"));
+    }
+
+    #[test]
+    fn a_plan_file_is_kept_by_its_path_relative_to_where_ask_ran_and_a_vault_plan_is_only_named() {
+        let base = std::env::temp_dir().join(format!("kelpie-plan-ref-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (cwd, state) = (base.join("wt1.app"), base.join("state"));
+        fs::create_dir_all(cwd.join("docs")).unwrap();
+        fs::write(cwd.join("docs/plan.md"), "# plan").unwrap();
+        let kept = plan_reference("docs/plan.md", &cwd, &state, "billing@app", 7).unwrap();
+        assert_eq!(kept, state.join("plans/billing@app-7.md").display().to_string());
+        assert_eq!(fs::read_to_string(&kept).unwrap(), "# plan");
+        assert!(cwd.join("docs/plan.md").exists(), "a file of the task's own is copied, not moved");
+        let outside = base.join("elsewhere.md");
+        fs::write(&outside, "outside").unwrap();
+        assert!(plan_reference("../elsewhere.md", &cwd, &state, "billing@app", 8).is_ok(), "any file the task can read may be its plan; the board shows the user what it is");
+        assert_eq!(plan_reference("vault:/Projects/x", &cwd, &state, "billing@app", 9).unwrap(), "vault:Projects/x.md");
+        fs::remove_dir_all(base).unwrap();
+    }
 }

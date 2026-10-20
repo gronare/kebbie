@@ -843,4 +843,36 @@ mod tests {
         assert_eq!(unset.level, Level::Ok);
         assert!(unset.fact.contains("not set"), "{}", unset.fact);
     }
+
+    #[test]
+    fn the_doctor_runs_against_an_empty_environment_without_touching_the_users_home() {
+        let dir = scratch("env");
+        let env = Env {
+            path: vec![dir.join("bin")], home: dir.join("home"), state_home: dir.join("state"), kelpie_state: dir.join("state/kelpie"), own_state: true, data_home: None,
+            claude_dir: dir.join("claude"), config: dir.join("config.toml"), repo_config: None, repo: None, uid: 0,
+        };
+        let checks = checks(&env);
+        assert!(failed(&checks), "no tools on PATH is a failure");
+        let names: Vec<&str> = checks.iter().map(|check| check.name.as_str()).collect();
+        for needed in ["git", "herdr", "claude", "jq", "herdr plugin", "claude plugin", "status line", "current link", "kelpie on PATH", "updates", "state dir", "config", "setup skill", "notify", "vault", "backlog local"] {
+            assert!(names.contains(&needed), "{needed} is not checked: {names:?}");
+        }
+        assert!(!dir.join("home").exists() && !dir.join("claude").exists(), "doctor reads, it never creates");
+        let rendered = render(&checks);
+        assert!(rendered.lines().last().unwrap().ends_with(" ok"), "{rendered}");
+        assert!(rendered.contains("fail  git"), "{rendered}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn version_parsing_takes_the_first_dotted_number_and_stops_at_a_non_digit() {
+        assert_eq!(version("git version 2.44.0 (Apple Git-154)"), Some(vec![2, 44, 0]));
+        assert_eq!(version("fzf 0.71.0 (brew)"), Some(vec![0, 71, 0]));
+        assert_eq!(version("tig version 2.5.8"), Some(vec![2, 5, 8]));
+        assert_eq!(version("1.2.3-rc1"), Some(vec![1, 2, 3]));
+        assert_eq!(version("v1.2"), Some(vec![1, 2]));
+        assert_eq!(version("build 2024 of 1.0"), Some(vec![1, 0]), "a bare number without a dot is skipped");
+        assert_eq!(version(""), None);
+        assert!(!at_least(&[], &[0, 9, 0]) && at_least(&[1], &[0, 9, 9]));
+    }
 }

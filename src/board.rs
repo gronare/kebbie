@@ -3765,4 +3765,148 @@ mod tests {
         render(&mut app, 170, 40);
         assert!(app.plans.is_empty(), "nothing is cached for a plan that is not there");
     }
+
+    const ESCAPES: &str = "\x1b]8;;https://evil.example\x1b\\click\x1b]8;;\x1b\\ \x1b[31mred\x1b[0m \x07 \u{9b}2J";
+
+    fn no_escape_reaches_the_terminal(buffer: &ratatui::buffer::Buffer, what: &str) {
+        let leaked: Vec<String> = buffer.content.iter().map(|cell| cell.symbol().to_string())
+            .filter(|symbol| symbol.chars().any(|character| character.is_control() || character == '\u{9b}')).collect();
+        assert!(leaked.is_empty(), "{what}: {leaked:?}");
+    }
+
+    #[test]
+    fn untrusted_text_on_the_board_never_carries_a_terminal_escape_into_a_cell() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("needs-you"), 1);
+        item.name = format!("task {ESCAPES}");
+        item.place = format!("repo{ESCAPES}");
+        item.report.as_mut().unwrap().text = format!("report {ESCAPES}");
+        item.report.as_mut().unwrap().report.as_mut().unwrap().next = format!("next {ESCAPES}");
+        let mut question = messages::fold(QUESTION).remove(0);
+        question.text = format!("question {ESCAPES}");
+        question.question.as_mut().unwrap().options[0].0 = format!("label {ESCAPES}");
+        item.question = Some(question.clone());
+        let mut app = test_app(vec![item]);
+        app.fold = Fold::Open;
+        let mut message = messages::fold(QUESTION).remove(0);
+        message.text = format!("message {ESCAPES}");
+        message.from = format!("from{ESCAPES}");
+        app.messages = vec![message];
+        app.questions = vec![question];
+        let (rows, buffer) = render(&mut app, 170, 40);
+        no_escape_reaches_the_terminal(&buffer, "the work and messages panels");
+        assert!(rows.join("\n").contains("task ]8;;https://evil.example\\click]8;"), "the text shows, stripped of its control characters: {}", rows.join("\n"));
+        app.open_questions(Some(0));
+        let (_, buffer) = render(&mut app, 170, 40);
+        no_escape_reaches_the_terminal(&buffer, "the question window");
+        app.mode = Mode::Message(format!("result {ESCAPES}"));
+        let (_, buffer) = render(&mut app, 100, 30);
+        no_escape_reaches_the_terminal(&buffer, "a result window");
+        app.mode = Mode::Normal;
+        app.column = Column::Backlog;
+        app.backlog.entries.push(Entry { source: "local".to_string(), title: format!("entry {ESCAPES}"), priority: "high".to_string(), area: "app".to_string(), reference: "local:x".to_string(), summary: format!("about {ESCAPES}"), age: "3 d".to_string() });
+        let (_, buffer) = render(&mut app, 170, 40);
+        no_escape_reaches_the_terminal(&buffer, "the backlog column");
+    }
+
+    #[test]
+    fn a_plan_rendered_as_markdown_carries_no_escape_and_a_card_image_path_is_shown_as_text() {
+        let text = markdown(&format!("# Plan {ESCAPES}\n\n- step [link](javascript:alert(1)) {ESCAPES}\n\n```sh\n{ESCAPES}\n```\n"));
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|frame| frame.render_widget(Paragraph::new(text.clone()), frame.area())).unwrap();
+        no_escape_reaches_the_terminal(terminal.backend().buffer(), "a markdown plan");
+        let card = report::Card { sha: "abc".to_string(), text: format!("![alt {ESCAPES}](../../etc/passwd)\n{ESCAPES}"), file: PathBuf::from("/state/cards/x.md") };
+        let lines = card_lines(&card, true, 60);
+        let shown: String = lines.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(shown.contains("▣ ../../etc/passwd"), "an image is shown by its path, read by the user before anything opens it: {shown}");
+        terminal.draw(|frame| frame.render_widget(Paragraph::new(lines.clone()), frame.area())).unwrap();
+        no_escape_reaches_the_terminal(terminal.backend().buffer(), "a card");
+    }
+
+    #[test]
+    fn bidi_overrides_and_zero_width_characters_in_untrusted_text_never_reach_a_cell() {
+        let mut item = crate::status::tests::task(Some("idle"), None, 0);
+        item.name = "push\u{202e}tpircs\u{200b}\u{feff}\u{2066}x".to_string();
+        let mut app = test_app(vec![item]);
+        let (rows, buffer) = render(&mut app, 120, 30);
+        for hidden in ['\u{202e}', '\u{200b}', '\u{feff}', '\u{2066}'] {
+            assert!(!buffer.content.iter().any(|cell| cell.symbol().contains(hidden)), "{hidden:?} was drawn");
+        }
+        assert!(rows.join("\n").contains("pushtpircsx"), "{}", rows.join("\n"));
+    }
+
+    #[test]
+    fn the_messages_panel_fold_is_read_back_from_its_file_and_a_short_terminal_keeps_it_to_a_line() {
+        assert_eq!(fold_from("open\t120\n", 50), (Fold::Open, 120));
+        assert_eq!(fold_from("open\t120\n", 30), (Fold::Line, 120), "under 40 rows an open panel starts as a line");
+        assert_eq!(fold_from("hidden\t7", 30), (Fold::Hidden, 7));
+        assert_eq!(fold_from("line", 50), (Fold::Line, 0));
+        assert_eq!(fold_from("", 50), (Fold::Open, 0));
+        assert_eq!(fold_from("", 39), (Fold::Line, 0));
+        assert_eq!(fold_from("garbage\tnot a number", 50), (Fold::Open, 0));
+        assert_eq!(Fold::Hidden.next(), Fold::Line);
+        assert_eq!(Fold::Line.next(), Fold::Open);
+        assert_eq!(Fold::Open.next(), Fold::Hidden);
+        assert_eq!(messages_height(Fold::Open, 9), 4);
+        assert_eq!(messages_height(Fold::Open, 60), 20);
+        assert_eq!((messages_height(Fold::Line, 60), messages_height(Fold::Hidden, 60)), (1, 0));
+    }
+
+    #[test]
+    fn the_question_windows_parts_cycle_both_ways() {
+        let order = [Part::List, Part::Plan, Part::Options, Part::Comment];
+        for (index, part) in order.iter().enumerate() {
+            assert!(part.next(false) == order[(index + 1) % 4]);
+            assert!(part.next(true) == order[(index + 3) % 4]);
+        }
+    }
+
+    #[test]
+    fn text_is_cut_at_a_width_by_characters_and_fitted_span_by_span() {
+        assert_eq!(cut("abc", 3), "abc");
+        assert_eq!(cut("abcd", 3), "ab…");
+        assert_eq!(cut("åäöü", 3), "åä…");
+        assert_eq!(cut("abc", 0), "…", "a zero width still yields the ellipsis, never a panic");
+        let line = fit(vec![Span::raw("12345"), Span::raw("678"), Span::raw("90")], 7);
+        assert_eq!(line.to_string(), "123456…");
+        assert_eq!(line.spans.len(), 2, "the span that overflows is the last one");
+        assert_eq!(fit(vec![Span::raw("ab")], 10).to_string(), "ab");
+        assert_eq!(changed_text(&["a.rs".to_string(), "b.rs".to_string(), "c.rs".to_string()], 100), "a.rs, b.rs, c.rs");
+        assert_eq!(changed_text(&["a.rs".to_string(), "b.rs".to_string(), "c.rs".to_string()], 14), "a.rs, b.rs +1");
+        assert_eq!(changed_text(&["a.rs".to_string(), "b.rs".to_string(), "c.rs".to_string()], 12), "a.rs +2");
+        assert_eq!(changed_text(&["a-very-long-name.rs".to_string(), "b.rs".to_string()], 4), "a-very-long-name.rs +1", "the first name always shows");
+        assert_eq!(changed_text(&[], 10), "");
+    }
+
+    #[test]
+    fn wrap_truncates_at_the_line_limit_with_an_ellipsis_and_keeps_long_words() {
+        assert_eq!(wrap("one two three four five six", 9, 2), ["one two", "three fou…"], "the width floor is ten, and the last kept line ends in an ellipsis");
+        assert_eq!(wrap("one two three four five six", 12, 2), ["one two", "three four…"]);
+        assert_eq!(wrap("supercalifragilistic", 5, 3), ["supercalifragilistic"], "a word is never split");
+        assert_eq!(wrap("", 20, 3), Vec::<String>::new());
+        assert_eq!(wrap("a  b\n\n c", 20, 3), ["a b c"], "whitespace collapses");
+    }
+
+    #[test]
+    fn the_task_menu_puts_each_key_in_its_group() {
+        assert_eq!(menu_group('q'), "SESSION");
+        assert_eq!(menu_group('w'), "DEV");
+        assert_eq!(menu_group('x'), "END IT");
+        assert_eq!(menu_group('l'), "BRANCH");
+        assert_eq!(menu_group('a'), "BRANCH");
+        let help = help_lines();
+        let labels: Vec<&str> = help.iter().map(|line| line.spans[0].content.trim()).collect();
+        for key in ['s', 'g', 'p', 'r', 'w', 'b', 'v', 'a', 'l', 'd', 'z', 'x', 'R', 'A', 'U', 'q', 'm'] {
+            assert!(labels.iter().any(|label| label.split_whitespace().any(|word| word == key.to_string())), "{key} is not in the keys help: {labels:?}");
+        }
+    }
+
+    #[test]
+    fn a_task_started_from_the_board_runs_as_its_own_process_with_the_name_prompt_and_item_as_arguments() {
+        let source = include_str!("board.rs");
+        let start = &source[source.find("\nfn start_in_background(").unwrap()..];
+        let body = &start[..start.find("\n}\n").unwrap()];
+        assert!(body.contains(".arg(\"-C\").arg(repo)") && body.contains(".arg(prompt)") && body.contains("[\"--backlog\", item]"), "arguments go as argv, never through a shell: {body}");
+        assert!(!body.contains("sh") || !body.contains("\"-c\""), "{body}");
+        assert!(body.contains("process_group(0)"));
+    }
 }

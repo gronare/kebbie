@@ -343,4 +343,34 @@ mod tests {
         assert!(listed.contains("Other tasks:\n  search@api"));
         assert!(listed.lines().last().unwrap().starts_with("  lead"));
     }
+
+    #[test]
+    fn a_sessions_state_reads_from_its_pane_and_status() {
+        assert_eq!(session("a@x", None).state(), "no Claude");
+        assert_eq!(session("a@x", Some("blocked")).state(), "waiting for an answer");
+        assert_eq!(session("a@x", Some("working")).state(), "working");
+        let unknown = Session { address: "a@x".to_string(), task: None, pane: Some("p".to_string()), status: None };
+        assert_eq!(unknown.state(), "unknown");
+        let listed = list(None, &sessions());
+        assert!(listed.starts_with("You are not in a task's worktree or the lead."));
+        assert!(listed.contains("  none") || listed.contains("Other tasks:"), "{listed}");
+        assert!(!list(Some("lead"), &sessions()).lines().any(|line| line.starts_with("  lead")), "the lead is not listed to itself");
+    }
+
+    #[test]
+    fn the_template_fills_only_the_names_it_is_given_and_leaves_the_rest_visible() {
+        assert_eq!(fill("{a} and {b} and {a}", &[("a", "x")]), "x and {b} and x");
+        assert_eq!(fill("{{a}}", &[("a", "x")]), "{x}");
+        assert_eq!(fill("plain", &[]), "plain");
+        assert_eq!(fill("{a}", &[("a", "{b}"), ("b", "y")]), "y", "a value is itself filled by the names after it, so the order of pairs matters");
+    }
+
+    #[test]
+    fn the_address_is_task_at_repo_and_a_message_to_a_bare_name_spans_the_repos() {
+        assert_eq!(address("billing", "app"), "billing@app");
+        let all = sessions();
+        assert!(resolve("billing@web", "billing@web", &all).is_err(), "a session never resolves to itself");
+        assert_eq!(addresses(resolve("billing", "billing@web", &all)), ["billing@api"]);
+        assert_eq!(addresses(resolve("billing", "search@api", &all)), ["billing@api", "billing@web"]);
+    }
 }

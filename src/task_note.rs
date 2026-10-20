@@ -340,4 +340,40 @@ mod tests {
         assert!(closed.starts_with("Archive/") && vault.join(&closed).exists() && !file.exists());
         let _ = std::fs::remove_dir_all(&state);
     }
+
+    #[test]
+    fn the_log_line_is_the_subjects_joined_and_the_commits_are_read_from_gits_short_log() {
+        let parsed = commits("a1b2c3d Add refunds\ne4f5a6b Show refunds; twice\n\nnosubject\n");
+        assert_eq!(parsed, [("a1b2c3d".to_string(), "Add refunds".to_string()), ("e4f5a6b".to_string(), "Show refunds; twice".to_string())]);
+        assert_eq!(log_line("billing", &parsed), "billing: Add refunds; Show refunds; twice");
+        assert_eq!(log_line("billing", &[]), "billing: ");
+        assert_eq!(items("  \n Projects/x.md \n\n local:y \n"), ["Projects/x.md", "local:y"]);
+    }
+
+    #[test]
+    fn the_gate_answers_claude_code_in_its_hook_shapes() {
+        assert_eq!(answer(&Gate::Allow), "");
+        assert_eq!(answer(&Gate::Passed), "");
+        let deny: serde_json::Value = serde_json::from_str(&answer(&Gate::Deny("why".to_string()))).unwrap();
+        assert_eq!(deny["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+        assert_eq!(deny["hookSpecificOutput"]["permissionDecisionReason"], "why");
+        let warn: serde_json::Value = serde_json::from_str(&answer(&Gate::Warn("down".to_string()))).unwrap();
+        assert_eq!(warn["systemMessage"], "down");
+        assert!(warn.get("hookSpecificOutput").is_none(), "a warning never denies");
+    }
+
+    #[test]
+    fn a_pass_recorded_for_another_half_does_not_pass_this_one() {
+        let fake = Fake::new("gate-halves");
+        let state = fake.state();
+        link(&state, "billing@web", "Projects/billing.md");
+        link(&state, "billing@api", "Projects/billing.md");
+        std::fs::create_dir_all(state.join("vault-gate")).unwrap();
+        std::fs::write(passed_file(&state, "billing@web"), "Projects/billing.md").unwrap();
+        fake.answer("task-check", r#"{"missing":["problem"]}"#);
+        assert_eq!(decide(&state, "billing@web", || unreachable!()), Gate::Allow);
+        assert!(matches!(decide(&state, "billing@api", || Some(fake.cli.clone())), Gate::Deny(_)), "each half asks for itself");
+        forget(&state, "billing@web");
+        assert!(matches!(decide(&state, "billing@web", || Some(fake.cli.clone())), Gate::Deny(_)), "a forgotten pass is asked again");
+    }
 }

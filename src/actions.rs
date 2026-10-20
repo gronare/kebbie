@@ -561,4 +561,61 @@ task = "Bump {plugin}'s pin to {version}; commit."
         assert_eq!(git(&["status", "--porcelain"]), "?? built");
         let _ = std::fs::remove_dir_all(&repo);
     }
+
+    #[test]
+    #[ignore = "bug: a bump file with .. in its path is read and written outside the repo the action belongs to"]
+    fn a_bump_file_stays_inside_the_repo() {
+        let repo = scratch("escape");
+        std::fs::write(repo.parent().unwrap().join("kelpie-escape-outside.toml"), "version = \"0.5.0\"\n").unwrap();
+        let (actions, errors) = parse("[[actions]]\nkey = \"V\"\ntitle = \"V\"\nask = \"version\"\nbump = [\"../kelpie-escape-outside.toml\"]\n", ".kelpie.toml");
+        assert!(actions.is_empty() || !errors.is_empty(), "a path that leaves the repo is refused when the file is read: {actions:?}");
+        let _ = std::fs::remove_file(repo.parent().unwrap().join("kelpie-escape-outside.toml"));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_run_step_is_shown_before_it_runs_and_a_failing_one_stops_the_rest() {
+        let repo = scratch("stop");
+        let steps = vec![Step::Run("exit 7".to_string()), Step::Run("touch after".to_string())];
+        let error = run_local(&repo, &steps).unwrap_err();
+        assert!(error.starts_with("exit 7 failed"), "{error}");
+        assert!(!repo.join("after").exists(), "nothing after the failure runs");
+        assert_eq!(Step::Run("make x".to_string()).describe(), "run  make x");
+        assert_eq!(Step::Push { branch: "main".to_string(), tag: None }.describe(), "push  main to origin (asks again first)");
+        assert_eq!(Step::Edit { file: "a".to_string(), line: 2, old: " x ".to_string(), new: " y ".to_string() }.describe(), "a:3  x → y");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn an_edit_step_refuses_a_line_that_moved_since_the_plan() {
+        let repo = scratch("moved");
+        std::fs::write(repo.join("v.toml"), "version = \"0.5.0\"\n").unwrap();
+        let step = Step::Edit { file: "v.toml".to_string(), line: 0, old: "version = \"0.5.0\"".to_string(), new: "version = \"0.5.1\"".to_string() };
+        std::fs::write(repo.join("v.toml"), "# moved\nversion = \"0.5.0\"\n").unwrap();
+        assert!(run_local(&repo, std::slice::from_ref(&step)).unwrap_err().contains("changed since the plan"));
+        assert_eq!(std::fs::read_to_string(repo.join("v.toml")).unwrap(), "# moved\nversion = \"0.5.0\"\n", "nothing was written");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_pre_release_or_non_numeric_version_is_not_bumped() {
+        assert_eq!(quoted_version("version = \"1.2.3-rc1\""), None);
+        assert_eq!(quoted_version("version = \"1.2.\""), None);
+        assert_eq!(quoted_version("version = \"1\""), None, "a bare number is not a dotted version");
+        assert_eq!(quoted_version("version = \"0.5.0\" # was \"0.4.9\""), Some("0.5.0"), "the first quoted version on the line");
+        assert_eq!(next_patch("1"), "2");
+        assert_eq!(next_patch("1.x"), "1.x");
+    }
+
+    #[test]
+    fn the_areas_pages_own_keys_cannot_be_taken_by_an_action() {
+        for key in RESERVED {
+            let (actions, errors) = parse(&format!("[[actions]]\nkey = \"{key}\"\ntitle = \"T\"\nrun = \"x\"\n"), "x");
+            assert!(actions.is_empty() && errors[0].contains("Areas page's own"), "{key}");
+        }
+        assert!(parse("[[actions]]\nkey = \"ab\"\ntitle = \"T\"\nrun = \"x\"\n", "x").1[0].contains("one character"));
+        assert!(parse("[[actions]]\nkey = \"X\"\ntitle = \"T\"\ntask = \"p\"\nrun = \"x\"\n", "x").1[0].contains("no script steps"));
+        assert!(parse("[[actions]]\nkey = \"X\"\ntitle = \"T\"\nrun = \"x\"\nthen = [\"bump-pin\"]\n", "x").1[0].contains("must be repo:action"));
+        assert!(parse("[[actions]]\nkey = \"X\"\ntitle = \"T\"\npush = \"yes\"\n", "x").1[0].contains("true or false"));
+    }
 }

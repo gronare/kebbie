@@ -539,4 +539,28 @@ mod tests {
             assert!(prompt.contains("with kelpie ask, one question at a time") && prompt.contains("kelpie ask --plan"), "{prompt}");
         }
     }
+
+    #[test]
+    fn the_days_since_a_date_follow_the_civil_calendar() {
+        assert_eq!(epoch_day("1970-01-01"), Some(0));
+        assert_eq!(epoch_day("1970-01-02"), Some(1));
+        assert_eq!(epoch_day("2000-03-01"), Some(11_017));
+        assert_eq!(epoch_day("2026-10-20T12:00:00"), Some(20_746), "a timestamp reads by its date");
+        assert_eq!(epoch_day("2026-10"), None);
+        assert_eq!(epoch_day("yesterday"), None);
+        assert_eq!(days_since("2026-10-10", 20_746), Some(10));
+        assert_eq!(days_since("2026-10-30", 20_746), Some(0), "a date ahead of today is not negative");
+    }
+
+    #[test]
+    fn a_saved_entry_needs_a_title_and_an_unknown_priority_reads_as_none() {
+        assert!(super::entry(&json!({ "source": "vault", "priority": "high" })).is_none());
+        let loose = super::entry(&json!({ "title": "  X  ", "priority": " URGENT ", "ref": " Projects/x.md ", "age": 3 })).unwrap();
+        assert_eq!((loose.title.as_str(), loose.priority.as_str(), loose.reference.as_str(), loose.age.as_str()), ("X", "urgent", "Projects/x.md", ""));
+        assert_eq!(super::entry(&json!({ "title": "X", "priority": "soon" })).unwrap().priority, "none");
+        assert_eq!(age(None), "never");
+        assert_eq!(age(Some(now())), "just now");
+        assert_eq!(age(Some(now() - 120)), "2 min ago");
+        assert_eq!(age(Some(now() - 7200)), "2 h ago");
+    }
 }

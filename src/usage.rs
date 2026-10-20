@@ -115,4 +115,17 @@ mod tests {
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "nothing but usage.json is left behind");
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn a_window_needs_both_numbers_and_takes_a_fractional_reset_time() {
+        assert_eq!(window(&json!({ "used_percentage": 10, "resets_at": 20.9 })), Some(Window { used: 10.0, resets_at: 20 }));
+        assert_eq!(window(&json!({ "used_percentage": 10 })), None);
+        assert_eq!(window(&json!({ "resets_at": 20 })), None);
+        assert_eq!(window(&json!({ "used_percentage": "10", "resets_at": 20 })), None);
+        assert_eq!(window(&json!(null)), None);
+        let dir = state("broken");
+        fs::write(file_in(&dir), "not json").unwrap();
+        assert_eq!(load_in(&dir, 1), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

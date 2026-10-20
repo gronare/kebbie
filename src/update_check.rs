@@ -425,5 +425,35 @@ mod tests {
     fn the_pin_is_read_from_the_hook_commands() {
         assert_eq!(pin(r#"{"hooks":{"SessionStart":[{"hooks":[{"command":"uvx notes-vault-mcp==0.6.0 hook session-start"}]}]}}"#), Some("0.6.0".to_string()));
         assert_eq!(pin("uvx notes-vault-mcp hook"), None);
+        assert_eq!(pin("notes-vault-mcp==0.6.0rc1 hook"), Some("0.6.0rc1".to_string()));
+        assert_eq!(pin("notes-vault-mcp== hook"), None);
+    }
+
+    #[test]
+    fn kelpies_version_is_the_plugin_manifests_and_the_cargo_manifest_stands_in() {
+        let read = |files: &'static [(&'static str, &'static str)]| move |name: &str| files.iter().find(|(file, _)| *file == name).map(|(_, text)| text.to_string());
+        assert_eq!(kelpie_version(read(&[(".claude-plugin/plugin.json", r#"{"version":"0.19.0"}"#), ("Cargo.toml", "[package]\nversion = \"0.18.0\"\n")])), Some("0.19.0".to_string()));
+        assert_eq!(kelpie_version(read(&[("Cargo.toml", "[package]\nname = \"kelpie\"\nversion = \"0.18.0\"\n")])), Some("0.18.0".to_string()));
+        assert_eq!(kelpie_version(read(&[(".claude-plugin/plugin.json", "not json")])), None);
+        assert_eq!(kelpie_version(read(&[])), None);
+        let manifest: toml::Table = include_str!("../Cargo.toml").parse().unwrap();
+        let plugin: Value = serde_json::from_str(include_str!("../.claude-plugin/plugin.json")).unwrap();
+        let herdr: toml::Table = include_str!("../herdr-plugin.toml").parse().unwrap();
+        let cargo = manifest["package"]["version"].as_str().unwrap();
+        assert_eq!(plugin["version"].as_str().unwrap(), cargo, "the three manifests release together");
+        assert_eq!(herdr["version"].as_str().unwrap(), cargo);
+    }
+
+    #[test]
+    fn a_cache_that_cannot_be_read_is_no_cache() {
+        let state = scratch("broken");
+        std::fs::write(cache_file(&state), "not json").unwrap();
+        assert!(read_cache(&state).is_none());
+        std::fs::write(cache_file(&state), r#"{"components":[{"name":"kelpie"},{"installed":"x"}]}"#).unwrap();
+        assert!(read_cache(&state).is_none(), "no checked_at, no cache");
+        std::fs::write(cache_file(&state), r#"{"checked_at":5,"components":[{"name":"kelpie"},{"installed":"x"}]}"#).unwrap();
+        let cache = read_cache(&state).unwrap();
+        assert_eq!((cache.checked_at, cache.components.len()), (5, 1), "a component without a name is dropped");
+        let _ = std::fs::remove_dir_all(state);
     }
 }

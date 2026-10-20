@@ -495,4 +495,36 @@ mod tests {
             assert!(body(caller).contains("new_chat(") && !body(caller).contains("start_chat("), "{caller}");
         }
     }
+
+    #[test]
+    fn the_leads_settings_allow_only_kelpies_own_subcommands_by_full_path() {
+        let written: Value = serde_json::from_str(&settings("/opt/kelpie")).unwrap();
+        let allow: Vec<&str> = written["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(allow.iter().all(|rule| rule.starts_with("Bash(/opt/kelpie ") && rule.ends_with(":*)")), "{allow:?}");
+        for never in ["start", "drop", "reset", "done", "away", "tidy", "hook", "backlog"] {
+            assert!(!allow.iter().any(|rule| rule.contains(&format!(" {never}:"))), "{never} is asked for, not pre-approved: {allow:?}");
+        }
+        assert!(allow.iter().any(|rule| rule.contains(" decide:")) && allow.iter().any(|rule| rule.contains(" defer:")));
+    }
+
+    #[test]
+    fn a_settings_file_is_named_after_its_role_and_written_whole() {
+        let dir = std::env::temp_dir().join(format!("kelpie-settings-files-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = write_settings(&dir, "billing@app.review", "{}").unwrap();
+        assert_eq!(file.file_name().unwrap(), "billing@app.review.settings.json");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "{}");
+        write_settings(&dir, "billing@app.review", "{\"a\":1}").unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "{\"a\":1}", "a rewrite replaces, never appends");
+        assert!(write_settings(&dir.join("missing"), "x", "{}").unwrap_err().contains("missing"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_state_dir_is_created_on_first_use_under_the_test_override_only() {
+        let state = state_location().unwrap();
+        assert_eq!(state, PathBuf::from(std::env::var("KELPIE_STATE_DIR").unwrap()), "every test runs against its own state dir");
+        assert!(roles_dir().unwrap().starts_with(&state));
+    }
 }
