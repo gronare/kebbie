@@ -496,6 +496,8 @@ fn sessions(lab: &Lab) -> Sessions {
         lab.root.display()
     );
     executable(&lab.herdr, &script);
+    // ps gives start times in whole seconds, so the update has to come a full second after the fake Claude starts.
+    std::thread::sleep(std::time::Duration::from_millis(2100));
     Sessions { sleeper, claude, bin }
 }
 
