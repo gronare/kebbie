@@ -114,7 +114,7 @@ In herdr, press `prefix+space`.
 
 kelpie creates the lead Space and moves it to the top of herdr's Spaces. On the left is the board, with the Work column, the Backlog column and the status line. On the right is the lead, a Claude that keeps track of your tasks. The Work column is empty.
 
-Press `prefix+tab`. Focus moves to the lead's chat. Press it again and focus is back on the board.
+Press `tab` on the board. Focus moves to the lead's chat. From the chat, `prefix+tab` brings focus back to the board.
 
 ## 7. Start a task
 

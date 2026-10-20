@@ -309,7 +309,7 @@ impl Keys {
 
     pub fn hints(&self, page: Ctx) -> (Hints, Hints) {
         let entry = |row: &Binding| {
-            let key = if row.act == Act::Lead { format!("prefix+{}", self.label(row.act)) } else { self.label(row.act) };
+            let key = self.label(row.act);
             (key, hint_word(row.act), self.code(row.act))
         };
         let rows: Vec<&Binding> = TABLE.iter().filter(|row| row.on.contains(&page) && row.hint != Hint::No).collect();
@@ -466,7 +466,7 @@ mod tests {
         assert!(!help.iter().any(|(key, _)| key == "i"));
         let (full, short) = keys.hints(Work);
         let shown: Vec<String> = full.iter().map(|(key, word, _)| format!("{key} {word}")).collect();
-        assert_eq!(shown, ["⏎ options", "prefix+tab lead", "I inbox", "m messages", "? keys"]);
+        assert_eq!(shown, ["⏎ options", "tab lead", "I inbox", "m messages", "? keys"]);
         assert_eq!(short.iter().map(|(key, word, _)| format!("{key} {word}")).collect::<Vec<_>>(), ["⏎ options", "I inbox", "? keys"]);
         assert!(full.iter().all(|(_, _, code)| keys.act(Work, &KeyEvent::from(*code)).is_some()), "every hint is a key the board acts on");
     }

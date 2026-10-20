@@ -4441,7 +4441,7 @@ mod tests {
         });
         let (rows, buffer) = render(&mut app, 170, 30);
         let bar = &rows[28];
-        assert!(bar.trim_start().starts_with("⏎ options · prefix+tab lead · i inbox · m messages · ? keys"), "{bar}");
+        assert!(bar.trim_start().starts_with("⏎ options · tab lead · i inbox · m messages · ? keys"), "{bar}");
         assert!(bar.contains(&format!("session ━━━━━━━━ 23% resets {}   week ━━━━━━━━ 71% resets ", clock(now + 600))), "{bar}");
         let (x, _) = find(&rows[28..29], "session ━")[0];
         let fills: Vec<Color> = (0..8).map(|cell| buffer[(x as u16 + 8 + cell, 28)].fg).collect();
@@ -4476,7 +4476,7 @@ mod tests {
         let (rows, _) = render(&mut app, 170, 30);
         assert!(rows[28].contains("m messages · ? keys   ↑ kelpie 0.18.2 · U updates") && rows[28].contains("session ━━━━━━━━ 23% resets"), "{}", rows[28]);
         app.updates.push(("vault".to_string(), "0.2.17".to_string()));
-        let (rows, _) = render(&mut app, 170, 30);
+        let (rows, _) = render(&mut app, 163, 30);
         assert!(rows[28].contains("m messages · ? keys   ↑ update · U") && rows[28].contains("session ━━━━━━━━ 23% resets"), "the notice shortens before the hints do: {}", rows[28]);
         let (rows, buffer) = render(&mut app, 200, 30);
         assert!(rows[28].contains("↑ kelpie 0.18.2 · vault 0.2.17 · U updates") && rows[28].contains("session ━━━━━━━━ 23% resets"), "{}", rows[28]);
