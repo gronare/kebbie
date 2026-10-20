@@ -17,7 +17,17 @@ In a narrow pane the two columns stack.
 
 A task row shows its commits, changed files and how far it is behind the default branch. Under it, a `you:` line gives your next step from the task's last report. While its dev server runs, a `web` line shows the server's address as a link.
 
-The selected task opens in place with its review progress, its question and options, its report, and a warning about files changed in a main checkout outside any task.
+The selected task opens in place with its review progress, its question and options, its report, its latest test run, and a warning about files changed in a main checkout outside any task.
+
+The `tests` line shows the last test command the task's Claude ran, as kelpie recorded it (see [`kelpie evidence`](commands.md#kelpie-evidence-name---json)):
+
+| Line | Means |
+| --- | --- |
+| `✓ cargo test · 493 passed · at a1b2c3d`, green | It passed on the code the branch holds now, and the worktree has no uncommitted changes. |
+| `○ cargo test · 493 passed · at a1b2c3d, code changed since`, yellow | It passed, but a commit changed the code after it, or the worktree has changes it did not run on. |
+| `✗ cargo test failed · 2 failed · at a1b2c3d`, red | The latest run failed. |
+
+No line means no test run is recorded. The wide panel shows the same line.
 
 ## Groups
 
@@ -113,7 +123,7 @@ In a narrow board the selected task also shows the card under its row: whether i
 
 ### The push window
 
-Opened by `p`. The task's sign-off card sits above the commits, marked when the code changed after it was written.
+Opened by `p`. The task's sign-off card sits above the commits, marked when the code changed after it was written. Under it, the `tests` line shows the latest recorded test run, as on the task's row. A run before a clean rebase, a reworded message or a squash still counts as current.
 
 | Key | Action |
 | --- | --- |

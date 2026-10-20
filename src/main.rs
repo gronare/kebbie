@@ -7,6 +7,7 @@ mod board;
 mod ci;
 mod config;
 mod doctor;
+mod evidence;
 mod fetch;
 mod herdr;
 mod keeper;
@@ -101,6 +102,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   review, and push with it, until a verdict ok on its current code (--withdraw
                                   takes it out of review, yours only: the reviewer stops, its verdict goes, push is
                                   offered again)
+  kelpie evidence [name] [--json] the test runs kelpie recorded for the task, newest first: the command, its result, the
+                                  commit it ran on and whether the code changed since (task.test_commands adds commands)
   kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
                                   changes, the board shows it ready to push
   kelpie push [name]              after land: push the task to the default branch, then close it as done (once CI is
@@ -150,7 +153,7 @@ With the vault plugin installed, enabled and configured, the vault holds each ta
 the repo's log line from the commit subjects, done waits for the note's solution and decisions and then closes
 it, and reset puts it back in the backlog. Without the plugin none of this runs.
 
-Without a name, land, review, push, done, drop and reset act on the task whose worktree you are in.
+Without a name, land, review, evidence, push, done, drop and reset act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>.";
 
 struct Arguments {
@@ -316,6 +319,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             if arguments.flag("--review") {
                 return Ok(review::guard(&input));
             }
+            if name == Some("evidence") {
+                return Ok(arguments.positional(2).map(|address| evidence::hook(address, &input)).unwrap_or_default());
+            }
             if name == Some("gate") {
                 return Ok(arguments.positional(2).map(|address| task_note::hook(address, &input)).unwrap_or_default());
             }
@@ -337,6 +343,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("review") if arguments.flag("--run") => review::run(&cwd),
         Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),
         Some("review") => review::request(&cwd, name),
+        Some("evidence") => evidence::print(&cwd, name, arguments.flag("--json")),
         Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kelpie approve needs a task name")?)),
         Some("ci") if name == Some("tick") => ci::tick_cli(),
         Some("ci") if name.is_some() => Err("kelpie ci knows tick: kelpie ci [--json] or kelpie ci tick".to_string()),

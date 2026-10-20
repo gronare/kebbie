@@ -25,5 +25,6 @@ Each task's Claude starts with settings kelpie writes:
 | --- | --- | --- |
 | `UserPromptSubmit`, `Stop` | `kelpie hook` | Delivering held messages and collecting the task's report at the end of a turn. |
 | `PreToolUse` on `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash` | `kelpie hook gate <task>` | With the vault only: holding edits until the task's note has its Problem. |
+| `PostToolUse`, `PostToolUseFailure` on `Bash` | `kelpie hook evidence <task>` | Recording the task's test runs for [`kelpie evidence`](commands.md#kelpie-evidence-name---json). It prints nothing. |
 
 The same settings deny `git push`, `kelpie approve` and `kelpie push`.

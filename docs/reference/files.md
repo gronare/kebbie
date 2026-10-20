@@ -28,6 +28,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `reviews/` | Review split marks. |
 | `verdicts/<task>@<repo>.md` | The reviewer's latest verdict for a task. |
 | `cards/` | Sign-off cards. |
+| `evidence/<task>@<repo>.jsonl` | The task's last 20 recorded test runs, one JSON object per line. See [`kelpie evidence`](commands.md#kelpie-evidence-name---json). |
 | `plans/` | Plans put to you with `kelpie ask --plan <file>`. |
 | `push-permits/` | Push permissions you gave the lead, per task and per repo. |
 | `approved/` | The lead's rules approvals. |

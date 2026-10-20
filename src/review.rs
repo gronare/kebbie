@@ -270,7 +270,8 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     let kelpie = install_root()?;
     let rules = &settings.rules_skill.value;
     let rules_file = tasks::claude_home().and_then(|home| skill_file(rules, &slot.path, &home, &kelpie));
-    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said });
+    let tests = crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha);
+    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said, tests: &tests });
     let guard = write_settings(&roles_dir()?, &format!("{address}.review"), &guard_settings(&peers::kelpie_command()?))?;
     let skill = kelpie.join("skills/review/SKILL.md");
     let args = claude_args(&Reviewer { model: settings.review_model.value.as_deref(), settings: &guard, skill: &skill, rules: rules_file.as_deref().and_then(Path::parent) });
@@ -418,10 +419,11 @@ struct Brief<'a> {
     rules: &'a str,
     rules_file: Option<&'a Path>,
     said: &'a [String],
+    tests: &'a str,
 }
 
 fn brief(brief: &Brief) -> String {
-    let Brief { address, worktree, upstream, sha, commits, rules, rules_file, said } = *brief;
+    let Brief { address, worktree, upstream, sha, commits, rules, rules_file, said, tests } = *brief;
     let rules = match rules_file {
         Some(file) => format!("The rules skill in effect is `{rules}`, at {}: read it, and the files beside it that it points to, and check every commit against each of its rules.", file.display()),
         None => format!("The rules skill in effect is `{rules}`, but kelpie found no file for it: say so on the line after the verdict line, and review without it."),
@@ -430,6 +432,7 @@ fn brief(brief: &Brief) -> String {
         "Review the branch of the task {address} in {}, at {sha}, by the kelpie:review instructions in your system prompt.\n\n\
          Its commits, oldest first, are {upstream}..{sha}:\n{commits}\n\n\
          {rules}\n\n\
+         {tests}\n\n\
          {}\n\
          Your last message is the verdict, starting with its verdict line; kelpie saves it and tells the lead.",
         worktree.display(), conversation(said)
@@ -635,10 +638,11 @@ mod tests {
         let transcript = lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\nnot json\n";
         let said = user_messages(&transcript);
         assert_eq!(said, ["Add refunds to the billing page.", "Refunds only within 30 days."]);
-        let mut shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kelpie:work-rules", rules_file: Some(Path::new("/kelpie/skills/work-rules/SKILL.md")), said: &said };
+        let mut shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kelpie:work-rules", rules_file: Some(Path::new("/kelpie/skills/work-rules/SKILL.md")), said: &said, tests: "- ✓ cargo test · 3 passed · at abc123 · `cargo test`" };
         let text = brief(&shape);
         assert!(text.contains("origin/main..abc123:\nabc123 Add refunds"), "{text}");
         assert!(text.contains("`kelpie:work-rules`, at /kelpie/skills/work-rules/SKILL.md: read it"), "{text}");
+        assert!(text.contains("read it, and the files beside it that it points to, and check every commit against each of its rules.\n\n- ✓ cargo test · 3 passed · at abc123"), "the reviewer reads the recorded test runs: {text}");
         shape.rules_file = None;
         assert!(brief(&shape).contains("kelpie found no file for it"));
         assert!(text.contains("started with:\n\nAdd refunds to the billing page.") && text.contains("---\nRefunds only within 30 days."), "{text}");

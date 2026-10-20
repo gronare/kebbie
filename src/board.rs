@@ -32,6 +32,7 @@ use crate::messages::{self, Message};
 use crate::permit::{self, Permit};
 use crate::peers;
 use crate::repo::{self, name_of};
+use crate::evidence;
 use crate::report;
 use crate::sh::Result;
 use crate::status::{self, Checkout, Group, Item};
@@ -179,7 +180,7 @@ enum Mode {
     Filter { buffer: String },
     Card { path: PathBuf, name: String, scroll: u16 },
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
-    ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)> },
+    ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, tests: Option<evidence::Shown> },
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
@@ -302,6 +303,7 @@ struct Detail {
     commits: Vec<tasks::Commit>,
     changed: Vec<String>,
     card: Option<(report::Card, bool)>,
+    tests: Option<evidence::Shown>,
     dev_server: bool,
     dev_worker: bool,
     server_name: String,
@@ -437,14 +439,15 @@ struct MessageEditor {
     commits: Vec<tasks::Commit>,
     selected: usize,
     card: Option<(report::Card, bool)>,
+    tests: Option<evidence::Shown>,
     rewrite: Rewrite,
     text: TextArea<'static>,
     draft: Option<Receiver<Result<String>>>,
 }
 
 impl MessageEditor {
-    fn new(path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, rewrite: Rewrite, message: &str) -> Self {
-        let mut editor = Self { path, commits, selected, card, rewrite, text: TextArea::default(), draft: None };
+    fn new(path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, (card, tests): (Option<(report::Card, bool)>, Option<evidence::Shown>), rewrite: Rewrite, message: &str) -> Self {
+        let mut editor = Self { path, commits, selected, card, tests, rewrite, text: TextArea::default(), draft: None };
         editor.set_text(message);
         editor
     }
@@ -886,6 +889,7 @@ fn gather_detail(path: &Path, repo: Option<&Path>) -> Detail {
         commits: tasks::commits(path).unwrap_or_default(),
         changed,
         card: report::card_for(path),
+        tests: evidence::for_path(path),
         dev_server: settings.as_ref().is_some_and(|settings| settings.dev_server.value.is_some()),
         dev_worker: settings.as_ref().is_some_and(|settings| settings.dev_worker.value.is_some()),
         server_name: Process::Server.tab(settings.as_ref()),
@@ -1575,7 +1579,7 @@ impl App {
                 }
                 _ => self.mode = Mode::Filter { buffer },
             },
-            Mode::ConfirmPush { path, commits, selected, card } => match key.code {
+            Mode::ConfirmPush { path, commits, selected, card, tests } => match key.code {
                 KeyCode::Char(key @ ('y' | 'p')) => {
                     let keep_open = key == 'p';
                     let through = if keep_open { commits.get(selected) } else { commits.last() };
@@ -1588,10 +1592,10 @@ impl App {
                     let label = if keep_open { format!("Pushing {}; the task stays open…", plural(count, "commit")) } else { format!("Pushing {} and closing the task…", plural(count, "commit")) };
                     self.mode = Mode::Working { label, result };
                 }
-                KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1), card },
+                KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1), card, tests },
                 KeyCode::Down | KeyCode::Char('j') => {
                     let selected = (selected + 1).min(commits.len().saturating_sub(1));
-                    self.mode = Mode::ConfirmPush { path, commits, selected, card };
+                    self.mode = Mode::ConfirmPush { path, commits, selected, card, tests };
                 }
                 KeyCode::Char('s') if commits.len() > 1 => {
                     let (sender, receiver) = mpsc::channel();
@@ -1599,7 +1603,7 @@ impl App {
                     thread::spawn(move || {
                         let _ = sender.send(tasks::draft_squash_message(&draft_path));
                     });
-                    let mut editor = MessageEditor::new(path, commits, 0, card, Rewrite::Squash, "");
+                    let mut editor = MessageEditor::new(path, commits, 0, (card, tests), Rewrite::Squash, "");
                     editor.text.set_placeholder_text("Claude is drafting a message from the commits and the diff…");
                     editor.draft = Some(receiver);
                     self.mode = Mode::EditMessage(Box::new(editor));
@@ -1607,7 +1611,7 @@ impl App {
                 KeyCode::Char('e') => {
                     let Some(commit) = commits.get(selected) else { return };
                     let (sha, message) = (commit.sha.clone(), commit.message.clone());
-                    self.mode = Mode::EditMessage(Box::new(MessageEditor::new(path, commits, selected, card, Rewrite::Reword(sha), &message)));
+                    self.mode = Mode::EditMessage(Box::new(MessageEditor::new(path, commits, selected, (card, tests), Rewrite::Reword(sha), &message)));
                 }
                 _ => {}
             },
@@ -1615,8 +1619,8 @@ impl App {
                 let control = key.modifiers.contains(KeyModifiers::CONTROL);
                 match key.code {
                     KeyCode::Esc => {
-                        let MessageEditor { path, commits, selected, card, .. } = *editor;
-                        self.mode = Mode::ConfirmPush { path, commits, selected, card };
+                        let MessageEditor { path, commits, selected, card, tests, .. } = *editor;
+                        self.mode = Mode::ConfirmPush { path, commits, selected, card, tests };
                     }
                     KeyCode::Char('s') if control => {
                         let message = editor.message();
@@ -1624,7 +1628,7 @@ impl App {
                             self.mode = Mode::EditMessage(editor);
                             return;
                         }
-                        let MessageEditor { path, selected, rewrite, card, .. } = *editor;
+                        let MessageEditor { path, selected, rewrite, card, tests, .. } = *editor;
                         let result = match &rewrite {
                             Rewrite::Reword(sha) => tasks::reword(&path, sha, &message),
                             Rewrite::Squash => tasks::squash(&path, &message),
@@ -1632,7 +1636,7 @@ impl App {
                         match result {
                             Ok(fresh) => {
                                 let selected = if matches!(rewrite, Rewrite::Squash) { 0 } else { selected.min(fresh.len().saturating_sub(1)) };
-                                self.mode = Mode::ConfirmPush { path, commits: fresh, selected, card };
+                                self.mode = Mode::ConfirmPush { path, commits: fresh, selected, card, tests };
                             }
                             Err(error) => self.show(Err(error)),
                         }
@@ -1912,8 +1916,8 @@ impl App {
                             Act::Push => match tasks::land(&path, None) {
                                 Ok(_) => match tasks::commits(&path) {
                                     Ok(commits) => {
-                                        let card = report::card_for(&path);
-                                        self.mode = Mode::ConfirmPush { path, commits, selected: 0, card };
+                                        let (card, tests) = (report::card_for(&path), evidence::for_path(&path));
+                                        self.mode = Mode::ConfirmPush { path, commits, selected: 0, card, tests };
                                     }
                                     Err(error) => self.show(Err(error)),
                                 },
@@ -2236,7 +2240,7 @@ pub fn chips(chips: Vec<(String, Color)>) -> Line<'static> {
     Line::from(spans).style(Style::new().bg(SURFACE))
 }
 
-fn ago(at: u64) -> String {
+pub fn ago(at: u64) -> String {
     match messages::age(at).as_str() {
         "now" => "just now".to_string(),
         age => format!("{age} ago"),
@@ -2481,6 +2485,16 @@ fn ci_lines(item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
     (lines, links)
 }
 
+// The task's latest recorded test run: green on the code as it is, yellow on older code, red when it failed.
+fn tests_line(tests: &evidence::Shown, width: usize) -> Line<'static> {
+    let color = match tests.mark {
+        evidence::Mark::Covered => GREEN,
+        evidence::Mark::Stale => YELLOW,
+        evidence::Mark::Failed => RED,
+    };
+    field("tests", vec![Span::styled(format!("{} ", tests.symbol()), style(color)), Span::styled(cut(&tests.text, width.saturating_sub(LABEL + 2)), style(color))])
+}
+
 fn worker_line(item: &Item, configured: bool, name: &str) -> Option<Line<'static>> {
     if item.worker {
         Some(field(name, vec![Span::styled("● running", style(GREEN))]))
@@ -2603,6 +2617,9 @@ fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool) -> (Vec<L
     if item.git.as_ref().is_some_and(|git| git.ahead > 0) || item.verdict.is_some() || item.review.is_some() {
         let (text, color) = review_text(item);
         lines.push(field("review", vec![Span::styled(text, style(color))]));
+    }
+    if let Some(tests) = &detail.tests {
+        lines.push(tests_line(tests, width));
     }
     if !detail.changed.is_empty() {
         lines.push(field("changed", vec![Span::styled(changed_text(&detail.changed, width.saturating_sub(LABEL)), style(TEXT))]));
@@ -3533,8 +3550,8 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 Line::from(Span::styled("⏎ keep the filter · esc clear it", style(MUTED))),
             ], 72);
         }
-        Mode::ConfirmPush { commits, selected, card, .. } => {
-            let (lines, first_commit) = push_lines(card.as_ref(), commits, *selected);
+        Mode::ConfirmPush { commits, selected, card, tests, .. } => {
+            let (lines, first_commit) = push_lines(card.as_ref(), tests.as_ref(), commits, *selected);
             let area = modal(frame, "push".to_string(), lines, 96);
             for index in 0..commits.len() {
                 let y = area.y + 1 + (first_commit + index) as u16;
@@ -3608,10 +3625,14 @@ fn card_lines(card: &report::Card, current: bool, width: usize) -> Vec<Line<'sta
 }
 
 // The push dialog's lines, and the line its first commit is on.
-fn push_lines(card: Option<&(report::Card, bool)>, commits: &[tasks::Commit], selected: usize) -> (Vec<Line<'static>>, usize) {
+fn push_lines(card: Option<&(report::Card, bool)>, tests: Option<&evidence::Shown>, commits: &[tasks::Commit], selected: usize) -> (Vec<Line<'static>>, usize) {
     let mut lines: Vec<Line> = Vec::new();
     if let Some((card, current)) = card {
         lines.extend(card_lines(card, *current, 88));
+        lines.push(Line::default());
+    }
+    if let Some(tests) = tests {
+        lines.push(tests_line(tests, 88));
         lines.push(Line::default());
     }
     let first_commit = lines.len();
@@ -4241,19 +4262,44 @@ mod tests {
         let text = |lines: &[Line]| lines.iter().map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>()).collect::<Vec<_>>().join("\n");
         let commits = vec![tasks::Commit { sha: "1111111aaaa".to_string(), message: "Add refunds\n\nso a customer gets money back".to_string() }, tasks::Commit { sha: "2222222bbbb".to_string(), message: "Show refunds".to_string() }];
         let card = report::Card { sha: "abcdef0123".to_string(), text: "Refunds show on the billing page.\n\n![the refund row](/tmp/refund.png)\nConfirm: 30 days.".to_string(), file: PathBuf::from("/state/cards/billing@web.md") };
-        let (lines, first) = push_lines(Some(&(card, true)), &commits, 1);
+        let (lines, first) = push_lines(Some(&(card, true)), None, &commits, 1);
         let screen = text(&lines);
         assert!(screen.starts_with("card · written at abcdef0\nRefunds show on the billing page.\n\n▣ /tmp/refund.png  the refund row\nConfirm: 30 days.\n"), "{screen}");
         assert!(text(&lines[first..first + 1]).contains("1111111 Add refunds"), "the first commit is where the mouse hits are counted from");
         assert!(screen.contains("p push the first 2 and keep it open"), "{screen}");
         assert!(!screen.contains("the code changed since"));
         let stale = report::Card { sha: "abcdef0123".to_string(), text: (0..40).map(|index| format!("line {index}")).collect::<Vec<_>>().join("\n"), file: PathBuf::from("/state/cards/billing@web.md") };
-        let (lines, _) = push_lines(Some(&(stale, false)), &commits, 0);
+        let (lines, _) = push_lines(Some(&(stale, false)), None, &commits, 0);
         let screen = text(&lines);
         assert!(screen.contains("the code changed since") && screen.contains("… the rest in /state/cards/billing@web.md") && !screen.contains("line 20"), "{screen}");
-        let (lines, first) = push_lines(None, &commits[..1], 0);
+        let (lines, first) = push_lines(None, None, &commits[..1], 0);
         assert_eq!(first, 0);
         assert!(text(&lines).contains("y push and close · p push and keep it open"));
+    }
+
+    #[test]
+    fn the_task_row_the_panel_and_the_push_dialog_show_the_latest_test_run() {
+        let covered = evidence::Shown { mark: evidence::Mark::Covered, text: "cargo test · 493 passed · at a1b2c3d".to_string() };
+        let mut app = test_app(vec![served("search-filters")]);
+        with_detail(&mut app);
+        let (rows, _) = render(&mut app, 84, 50);
+        assert!(!rows.join("\n").contains("tests "), "no run recorded, no tests line");
+        std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().tests = Some(covered.clone());
+        for width in [84, 170] {
+            let (rows, buffer) = render(&mut app, width, 50);
+            let at = rows.iter().position(|row| row.contains("tests   ✓ cargo test · 493 passed · at a1b2c3d")).unwrap_or_else(|| panic!("{}", rows.join("\n")));
+            let column = rows[at].chars().position(|char| char == '✓').unwrap() as u16;
+            assert_eq!(buffer[(column, at as u16)].fg, GREEN, "a pass on the code as it is is green");
+        }
+        let commits = vec![tasks::Commit { sha: "1111111aaaa".to_string(), message: "Add refunds".to_string() }];
+        let stale = evidence::Shown { mark: evidence::Mark::Stale, text: "cargo test · 493 passed · at a1b2c3d, code changed since".to_string() };
+        let (lines, first) = push_lines(None, Some(&stale), &commits, 0);
+        assert_eq!(lines[0].spans.iter().map(|span| span.content.to_string()).collect::<String>(), "tests   ○ cargo test · 493 passed · at a1b2c3d, code changed since");
+        assert_eq!(lines[0].spans[1].style.fg, Some(YELLOW));
+        assert_eq!(first, 2, "the tests line sits above the commits");
+        let failed = evidence::Shown { mark: evidence::Mark::Failed, text: "cargo test failed · 2 failed · at a1b2c3d".to_string() };
+        let (lines, _) = push_lines(None, Some(&failed), &commits, 0);
+        assert_eq!(lines[0].spans[1].style.fg, Some(RED));
     }
 
     #[test]
@@ -4460,7 +4506,7 @@ mod tests {
     fn with_detail(app: &mut App) {
         let detail = Detail {
             branch: "search-filters".to_string(), changed: vec!["app/filters.rb".to_string()], dev_server: true, dev_worker: true, server_name: "server".to_string(), worker_name: "worker".to_string(),
-            commits: vec![tasks::Commit { sha: "a1f3c2e0000".to_string(), message: "Wire the price filter".to_string() }], card: None,
+            commits: vec![tasks::Commit { sha: "a1f3c2e0000".to_string(), message: "Wire the price filter".to_string() }], card: None, tests: None,
         };
         app.details.insert(PathBuf::from("/work/wt2.web"), std::rc::Rc::new(detail));
     }

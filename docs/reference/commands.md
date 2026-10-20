@@ -95,6 +95,12 @@ Send the task to the reviewer: a separate, read-only Claude reviews its commits 
 | --- | --- |
 | `--withdraw` | Take the task out of review: the reviewer stops, its verdict goes, push is offered again, the lead is told. Only you may run it. |
 
+### `kelpie evidence [name] [--json]`
+
+The test runs kelpie recorded for the task, newest first: each one's result, the command, when it ran, how long it took, its exit code, and the commit it ran on, marked `✓` when it passed on the code the branch holds now, `○` when the code changed since and `✗` when it failed. `--json` gives each run's fields with `shown` and `current`.
+
+kelpie records a run from the hooks it gives the task's Claude, after every Bash command that starts with a test command (after any `cd … &&` and `VAR=value`): the built-in ones (`cargo test`, `cargo nextest`, `bin/rails test`, `bundle exec rspec`, `rspec`, `pytest`, `uv run pytest`, `npm test`, `pnpm test`, `yarn test`, `go test`, `mix test` and a few spellings of them) and the repo's own in [`task.test_commands`](configuration.md#keys). It keeps the last 20 per task. A command that exits non-zero is a failed run; a result line that counts failures makes it failed too, since a pipe such as `| tail` hides the exit code. A run with uncommitted changes counts for the commit that later holds exactly those changes. Background runs and interrupted ones are not recorded.
+
 ### `kelpie approve <name>`
 
 The lead's word that a task's commits hold to the rules skill. Until a commit changes, the board shows the task ready to push. Tasks cannot run it.

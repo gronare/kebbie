@@ -110,10 +110,11 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 
 // The deny rules and the env rewrite name the rule; the worktree's own push block (push_block) is what holds when they are slipped.
 // gate is the task's address when kelpie keeps its note: its edits then wait for the note's Problem.
-fn settings(kelpie: &str, gate: Option<&str>, tmp: Option<&Path>) -> String {
+fn settings(kelpie: &str, address: &str, gate: Option<&str>, tmp: Option<&Path>) -> String {
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kelpie)) }] }]);
     let allow = ["peers", "tell", "report", "ask"].map(|command| format!("Bash({kelpie} {command}:*)"));
-    let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook });
+    let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kelpie), crate::sh::quote(address)) }] }]);
+    let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PostToolUse": evidence, "PostToolUseFailure": evidence });
     if let Some(address) = gate {
         hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kelpie), crate::sh::quote(address)), "timeout": 40 }] }]);
     }
@@ -660,7 +661,7 @@ fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Resul
     let note = note.filter(|_| vault);
     let tmp = task_tmp(worktree)?;
     std::fs::create_dir_all(&tmp).map_err(|error| format!("{}: {error}", tmp.display()))?;
-    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &settings(&peers::kelpie_command()?, note.map(|_| address.as_str()), Some(&tmp)))?;
+    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &settings(&peers::kelpie_command()?, &address, note.map(|_| address.as_str()), Some(&tmp)))?;
     let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill, note })?;
     let agent_args = claude_args(mode, &settings, &role, &session);
     let started = start_claude(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(repo));
@@ -1267,6 +1268,7 @@ fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::C
     crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
     crate::review::forget(task_of(&slot), &repo);
     crate::report::forget_card(task_of(&slot), &repo);
+    crate::evidence::forget(task_of(&slot), &repo);
     crate::ci::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
     end_life(task_of(&slot), &repo, "done");
     Ok(finished + &close_space(workspace))
@@ -1358,6 +1360,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     crate::permit::forget(&peers::address(task, &name_of(&repo)));
     crate::review::forget(task, &repo);
     crate::report::forget_card(task, &repo);
+    crate::evidence::forget(task, &repo);
     if let Ok(state) = state_dir() {
         crate::ci::forget(&state, &peers::address(task, &name_of(&repo)));
     }
@@ -1509,6 +1512,7 @@ mod tests {
         assert!(body("reset").contains("discard("));
         assert!(body("close_task").contains("review::forget(") && body("discard").contains("review::forget("), "a later task by the same name must not show this one's review");
         assert!(body("close_task").contains("report::forget_card(") && body("discard").contains("report::forget_card("), "a later task by the same name must not show this one's card");
+        assert!(body("close_task").contains("evidence::forget(") && body("discard").contains("evidence::forget("), "a later task by the same name must not show this one's test runs");
         assert!(body("close_task").contains("permit::forget(") && body("discard").contains("permit::forget("), "done, drop and reset take the push permission back");
         assert!(body("finish").contains("task_note::forget(") && body("discard").contains("task_note::forget("), "a later task by the same name must not inherit this one's Problem pass");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
@@ -1564,9 +1568,13 @@ mod tests {
 
     #[test]
     fn edits_are_gated_only_in_a_task_started_with_the_vault_on() {
-        let off: Value = serde_json::from_str(&settings("/bin/kelpie", None, None)).unwrap();
+        let off: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", None, None)).unwrap();
         assert!(off["hooks"].get("PreToolUse").is_none(), "without the vault no edit hook runs");
-        let on: Value = serde_json::from_str(&settings("/bin/kelpie", Some("billing@app"), None)).unwrap();
+        for event in ["PostToolUse", "PostToolUseFailure"] {
+            assert_eq!(off["hooks"][event][0]["matcher"], "Bash");
+            assert_eq!(off["hooks"][event][0]["hooks"][0]["command"], "'/bin/kelpie' hook evidence 'billing@app'", "every task records its test runs, passed and failed");
+        }
+        let on: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", Some("billing@app"), None)).unwrap();
         assert_eq!(on["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|MultiEdit|NotebookEdit|Bash", "a Bash command that writes a file waits for the Problem too");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kelpie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
         assert_eq!(on["hooks"]["Stop"], off["hooks"]["Stop"]);
@@ -1687,7 +1695,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kelpie-task-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let kelpie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kelpie", "nested/".repeat(20));
-        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kelpie, None, None)).unwrap();
+        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kelpie, "billing@app", None, None)).unwrap();
         assert_eq!(file, dir.join("billing@app.settings.json"));
         let args = claude_args(Some("acceptEdits"), &file, &dir.join("billing@app.md"), &Session::New("0b6a".to_string()));
         let line = args.join(" ");
@@ -1695,7 +1703,7 @@ mod tests {
         assert_eq!(args[..2], ["--permission-mode", "acceptEdits"]);
         assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie, None, None)).unwrap());
+        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie, "billing@app", None, None)).unwrap());
         assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)", format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)")]), "a task never pushes nor approves its own commits");
         assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} ask:*)"))), "a task asks the user without a permission prompt");
@@ -1918,7 +1926,7 @@ mod tests {
         std::fs::create_dir_all(tmp.join("deep")).unwrap();
         std::fs::write(tmp.join("deep/file"), "x").unwrap();
         assert!(is_clean(&slot.path).unwrap(), "temp files never show as changes in the worktree");
-        let written: Value = serde_json::from_str(&settings("/bin/kelpie", None, Some(&tmp))).unwrap();
+        let written: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", None, Some(&tmp))).unwrap();
         for name in TMP_VARS {
             assert_eq!(written["env"][name], json!(tmp.to_string_lossy()), "{name}");
         }
@@ -2226,7 +2234,7 @@ mod tests {
 
     #[test]
     fn a_tasks_settings_deny_push_and_approve_in_every_spelling_claude_code_matches() {
-        let on: Value = serde_json::from_str(&settings("/bin/kelpie", Some("billing@app"), None)).unwrap();
+        let on: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", Some("billing@app"), None)).unwrap();
         let deny: Vec<&str> = on["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert_eq!(deny, ["Bash(git push:*)", "Bash(/bin/kelpie approve:*)", "Bash(/bin/kelpie push:*)"]);
         let allow: Vec<&str> = on["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
@@ -2245,8 +2253,8 @@ mod tests {
         let kelpie = dir.join("kelpie");
         std::fs::write(&kelpie, "#!/bin/sh\necho ran \"$@\"\n").unwrap();
         std::fs::set_permissions(&kelpie, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let written: Value = serde_json::from_str(&settings(&kelpie.to_string_lossy(), Some("billing@it's"), None)).unwrap();
-        for command in [&written["hooks"]["Stop"][0]["hooks"][0]["command"], &written["hooks"]["PreToolUse"][0]["hooks"][0]["command"]] {
+        let written: Value = serde_json::from_str(&settings(&kelpie.to_string_lossy(), "billing@it's", Some("billing@it's"), None)).unwrap();
+        for command in [&written["hooks"]["Stop"][0]["hooks"][0]["command"], &written["hooks"]["PreToolUse"][0]["hooks"][0]["command"], &written["hooks"]["PostToolUse"][0]["hooks"][0]["command"]] {
             let output = std::process::Command::new("sh").args(["-c", command.as_str().unwrap()]).output().unwrap();
             assert!(output.status.success(), "{command}: {}", String::from_utf8_lossy(&output.stderr));
             assert!(String::from_utf8_lossy(&output.stdout).starts_with("ran hook"), "{command}");

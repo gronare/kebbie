@@ -28,6 +28,12 @@ A pass belongs to the code, not to the commits. A clean rebase, a reworded messa
 
 This is what lets you tidy history in the push window without paying for a second review.
 
+## Proof of the test run
+
+A task's Claude runs the tests related to its change before it reports ready; the full suite is CI's job after the push. kelpie records each of those runs from the task's hooks, with its command, its result and the commit it ran on, so nobody has to run them again to know they passed.
+
+The reviewer gets the latest runs in its brief, each marked as run on the code under review or on older code, and treats a failed run or no passing run on the reviewed code as a finding. The board's task row and the push window show the latest run: green when it passed on the code the branch holds now, yellow once a commit changed the code after it, red when it failed. Like a pass, a run belongs to the code, so a clean rebase or a squash keeps it current. See [`kelpie evidence`](../reference/commands.md#kelpie-evidence-name---json).
+
 ## When it is worth it
 
 Most tasks go straight to push after the lead's check. The reviewer costs a full Claude run and some waiting, so send the tasks where a second reading pays: money, data, migrations, security, concurrency and wide refactors.

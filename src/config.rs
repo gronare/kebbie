@@ -63,6 +63,7 @@ pub struct Worktree {
     pub dev_worker: Option<String>,
     pub dev_url: Option<String>,
     pub rules_skill: Option<String>,
+    pub test_commands: Option<Vec<String>>,
     pub review_model: Option<String>,
     pub notify_command: Option<String>,
     pub vault_command: Option<String>,
@@ -121,6 +122,7 @@ pub struct Settings {
     pub dev_worker: Setting<Option<String>>,
     pub dev_url: Setting<Option<String>>,
     pub rules_skill: Setting<String>,
+    pub test_commands: Setting<Vec<String>>,
     pub review_model: Setting<Option<String>>,
     pub notify_command: Setting<Option<String>>,
     pub vault_command: Setting<Option<String>>,
@@ -352,6 +354,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         dev_worker: text(worktree, "dev_worker", "worktree.dev_worker")?,
         dev_url: template(worktree, "dev_url", "worktree.dev_url")?,
         rules_skill: None,
+        test_commands: None,
         review_model: None,
         notify_command: None,
         vault_command: None,
@@ -363,10 +366,19 @@ fn worktree(table: &Table) -> Result<Worktree> {
 
 fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(task) = subtable(table, "task", "task")? {
-        unknown_keys(task, "task.", &["rules_skill"])?;
+        unknown_keys(task, "task.", &["rules_skill", "test_commands"])?;
         worktree.rules_skill = skill(task, "rules_skill", "task.rules_skill")?;
+        worktree.test_commands = task.get("test_commands").map(test_commands).transpose()?;
     }
     Ok(worktree)
+}
+
+fn test_commands(value: &Value) -> Result<Vec<String>> {
+    let commands = strings(value, "task.test_commands")?;
+    match commands.iter().find(|command| command.trim().is_empty()) {
+        Some(_) => Err("task.test_commands: a command must not be empty".to_string()),
+        None => Ok(commands.iter().map(|command| command.trim().to_string()).collect()),
+    }
 }
 
 fn with_review(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
@@ -459,6 +471,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         dev_url: or_default(pick(repo.dev_url.as_ref(), machine.worktree.dev_url.as_ref())
             .map(|setting| Setting { value: Some(setting.value).filter(|url| !url.is_empty()), layer: setting.layer }), Some(DEFAULT_DEV_URL.to_string())),
         rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
+        test_commands: or_default(pick(repo.test_commands.as_ref(), machine.worktree.test_commands.as_ref()), Vec::new()),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
@@ -509,7 +522,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, test_commands, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -548,6 +561,9 @@ pub fn describe(loaded: &Loaded) -> String {
         &format!("The same for the worker tab {worker_key} starts; config.toml only."));
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
         "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the lead checks a finished task against it, tidy reshapes commits by it.");
+    let own: Vec<&str> = test_commands.value.iter().map(String::as_str).collect();
+    key("task.test_commands", quoted(&own), test_commands.layer,
+        &format!("Test commands of this repo that kelpie records when a task's Claude runs them, on top of the built-in {}; matched on the command's start, after any cd … && and VAR=value. kelpie evidence, the board, the push dialog and the reviewer show the runs.", quoted(&crate::evidence::DEFAULT_COMMANDS)));
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
         "The model kelpie review's independent reviewer runs on; none leaves it to Claude's default.");
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
@@ -652,6 +668,18 @@ mod tests {
         assert!(parse_repo("[ci]\npoll = 10\n", "app.toml").unwrap_err().contains("ci.poll: unknown key; known keys here: watch"));
         let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: off });
         assert!(shown.contains("ci.watch = false  (repo config)"), "{shown}");
+    }
+
+    #[test]
+    fn a_repos_test_commands_win_over_the_machines_and_add_to_the_built_in_ones() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).test_commands, Setting { value: Vec::new(), layer: Layer::Default });
+        let own = settings(&repo("[task]\ntest_commands = [\"bin/test\", \" make check \"]\n"), &machine("[task]\ntest_commands = [\"just test\"]\n"));
+        assert_eq!(own.test_commands, Setting { value: vec!["bin/test".to_string(), "make check".to_string()], layer: Layer::Repo });
+        assert!(crate::evidence::commands(&own.test_commands.value).iter().any(|command| command == "cargo test"));
+        assert!(parse_repo("[task]\ntest_commands = \"bin/test\"\n", "app.toml").unwrap_err().contains("task.test_commands: must be a list of strings"));
+        assert!(parse_repo("[task]\ntest_commands = [\" \"]\n", "app.toml").unwrap_err().contains("must not be empty"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: own });
+        assert!(shown.contains("task.test_commands = [\"bin/test\", \"make check\"]  (repo config)") && shown.contains("\"cargo test\""), "{shown}");
     }
 
     #[test]

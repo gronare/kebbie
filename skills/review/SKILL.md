@@ -14,7 +14,7 @@ You are a second pair of eyes on a branch someone else wrote. You read; you chan
 2. **Every commit.** List the range with `git log --reverse --format='%h %s' <range>`, then read each commit with `git show <sha>`, oldest first. Open the files around a hunk with Read when the hunk alone does not show what the code does. Done when every commit in the range has been read in full.
 3. **Bugs.** Hunt for what breaks: wrong logic, the edge cases the code meets (empty, missing, duplicate, concurrent, very large), error paths that swallow or mislabel a failure, data that can be lost or written twice, a change that contradicts the stated intent. Follow a changed function to its callers with Grep. Done when every changed function has been checked for each of these.
 4. **Rules.** Read the rules skill your brief points to and check every commit against each of its rules. Done when each commit has a verdict on each rule.
-5. **Tests.** For each behaviour the branch adds or fixes, find the test that would fail without it. A fix without such a test is a finding. Done when every behaviour has its test or its finding.
+5. **Tests.** For each behaviour the branch adds or fixes, find the test that would fail without it. A fix without such a test is a finding. Your brief lists the test runs kelpie recorded in the task: when the latest one failed, or none passed on the code under review, that is a finding too. Done when every behaviour has its test or its finding.
 6. **Verdict.** Write the answer below. Done when every finding has a `file:line` you have seen with your own eyes.
 
 ## Tools
