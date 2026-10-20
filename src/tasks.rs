@@ -109,13 +109,18 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 }
 
 // The deny rules and the env rewrite name the rule; the worktree's own push block (push_block) is what holds when they are slipped.
-fn settings(kelpie: &str) -> String {
+// gate is the task's address when kelpie keeps its note: its edits then wait for the note's Problem.
+fn settings(kelpie: &str, gate: Option<&str>) -> String {
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook") }] }]);
     let allow = ["peers", "tell", "report", "ask"].map(|command| format!("Bash({kelpie} {command}:*)"));
+    let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook });
+    if let Some(address) = gate {
+        hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook gate '{address}'"), "timeout": 40 }] }]);
+    }
     json!({
         "env": { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" },
         "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)")], "allow": allow },
-        "hooks": { "UserPromptSubmit": hook, "Stop": hook },
+        "hooks": hooks,
     }).to_string()
 }
 
@@ -259,15 +264,15 @@ fn started_file_in(state: &Path, task: &str, repo: &Path) -> Result<PathBuf> {
 }
 
 pub fn started_items() -> HashSet<String> {
-    started_links().into_values().collect()
+    started_links().into_values().flatten().collect()
 }
 
-// Each running task's address (task@repo) and the item it was started from or linked to: a vault note's key (Projects/x.md), a Linear id, or local:<Title>.
-pub fn started_links() -> HashMap<String, String> {
+// Each running task's address (task@repo) and the items it was started from or linked to: a vault note's key (Projects/x.md), a Linear id, or local:<Title>.
+pub fn started_links() -> HashMap<String, Vec<String>> {
     let Ok(dir) = crate::lead::state_dir().map(|dir| dir.join("started")) else { return HashMap::new() };
     std::fs::read_dir(dir).into_iter().flatten().flatten()
-        .filter_map(|entry| Some((entry.file_name().to_str()?.to_string(), std::fs::read_to_string(entry.path()).ok()?.trim().to_string())))
-        .filter(|(_, item)| !item.is_empty()).collect()
+        .filter_map(|entry| Some((entry.file_name().to_str()?.to_string(), crate::task_note::items(&std::fs::read_to_string(entry.path()).ok()?))))
+        .filter(|(_, items)| !items.is_empty()).collect()
 }
 
 pub fn link(cwd: &Path, name: &str, item: &str) -> Result<String> {
@@ -278,8 +283,47 @@ pub fn link(cwd: &Path, name: &str, item: &str) -> Result<String> {
         return Err("kelpie link needs the item: a vault note's path, a Linear id, or local:<Title>".to_string());
     }
     let previous = record_start(&started_file(&task, &repo)?, item)?;
-    let was = previous.filter(|previous| previous != item).map_or(String::new(), |previous| format!(" (it was linked to {previous})"));
-    Ok(format!("Linked {task} to {item}{was}: when it is done the lead is told to log and close it, and a reset puts it back in the backlog."))
+    let kept = crate::vault_cli::is_note(item) && crate::vault_cli::detect().is_some();
+    Ok(link_text(&task, item, previous.as_deref(), kept))
+}
+
+fn link_text(task: &str, item: &str, previous: Option<&str>, kept: bool) -> String {
+    let was = previous.filter(|previous| *previous != item).map_or(String::new(), |previous| format!(" (it was linked to {})", previous.replace('\n', ", ")));
+    if kept {
+        return format!("Linked {task} to {item}{was}: kelpie closes the note when the task is done, and a reset or a drop puts it back in the backlog.");
+    }
+    format!("Linked {task} to {item}{was}: when it is done the lead is told to log and close it, and a reset puts it back in the backlog.")
+}
+
+enum NoteBack {
+    Shared,
+    Back(String),
+    Failed(String),
+}
+
+// A note another half still holds stays as it is; the last half puts it back in the backlog.
+fn note_to_backlog(cli: &crate::vault_cli::Cli, state: &Path, task: &str, address: &str, note: &str) -> NoteBack {
+    if crate::task_note::held_elsewhere(state, task, address, note) {
+        return NoteBack::Shared;
+    }
+    match crate::task_note::to_backlog(cli, note) {
+        Ok(path) => NoteBack::Back(path),
+        Err(error) => NoteBack::Failed(error),
+    }
+}
+
+fn read_start(task: &str, repo: &Path) -> Option<String> {
+    started_file(task, repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).map(|item| item.trim().to_string()).filter(|item| !item.is_empty())
+}
+
+// What start writes in started/: the note on its own line, the backlog item it came from under it when that is not the note.
+fn start_entry(note: Option<&str>, backlog: Option<&str>) -> Option<String> {
+    let backlog = backlog.filter(|item| Some(*item) != note);
+    match (note, backlog) {
+        (Some(note), Some(item)) => Some(format!("{note}\n{item}")),
+        (Some(only), None) | (None, Some(only)) => Some(only.to_string()),
+        (None, None) => None,
+    }
 }
 
 fn record_start(file: &Path, item: &str) -> Result<Option<String>> {
@@ -306,20 +350,32 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
     let task = task_of(&slot).to_string();
     let upstream = default_branch(&repo)?;
     let discarded = git(&slot.path, &["log", "--format=%h %s", &format!("{upstream}..HEAD")]).unwrap_or_default();
-    let item = forget_start(&task, &repo);
+    let items = forget_start(&task, &repo).map(|text| crate::task_note::items(&text)).unwrap_or_default();
+    let state = state_dir()?;
+    let address = peers::address(&task, &name_of(&repo));
+    let vault = items.iter().any(|item| crate::vault_cli::is_note(item)).then(crate::vault_cli::detect).flatten();
     let dropped = discard(&repo, Some(&task), true, "reset")?;
     let mut notice = format!("The user reset {task}: it is gone, and its work was discarded and will never be pushed.");
     if !discarded.is_empty() {
         notice.push_str(&format!(" Discarded: {}.", discarded.lines().collect::<Vec<_>>().join("; ")));
     }
-    if let Some(item) = &item {
-        notice.push_str(&crate::backlog::reset_notice(item));
+    let mut said = String::new();
+    for item in &items {
+        match vault.as_ref().filter(|_| crate::vault_cli::is_note(item)).map(|cli| note_to_backlog(cli, &state, &task, &address, item)) {
+            Some(NoteBack::Shared) => said.push_str(&format!(" Its note {item} stays open for the task's other halves.")),
+            Some(NoteBack::Back(path)) => notice.push_str(&format!(" kelpie put its note {path} back in the backlog.")),
+            Some(NoteBack::Failed(error)) => {
+                said.push_str(&format!(" Its note {item} could not be put back in the backlog ({error}); set its status to backlog in the vault."));
+                notice.push_str(&crate::backlog::reset_notice(item));
+            }
+            None => notice.push_str(&crate::backlog::reset_notice(item)),
+        }
     }
     notice.push_str(" Drop any review or recommendation about it.");
     if let Err(error) = messages::notify_lead(&notice) {
         eprintln!("Could not tell the lead: {error}");
     }
-    Ok(format!("{dropped}{}", if item.is_some() { " Its backlog item is back in the Backlog column." } else { "" }))
+    Ok(format!("{dropped}{}{said}", if items.is_empty() { "" } else { " Its backlog item is back in the Backlog column." }))
 }
 
 enum Refusal {
@@ -503,7 +559,8 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let task = slug(name)?;
     let config::Settings { setup_skill, setup_command, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
     let (setup_skill, setup_command, rules_skill) = (setup_skill.value, config::setup_command_in(setup_command.value, &repo), rules_skill.value);
-    let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone() };
+    let vault = crate::vault_cli::detect();
+    let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
         return restart(&place(&existing), &existing, focus);
     }
@@ -517,13 +574,27 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
         git(&slot.path, &["switch", "--quiet", "-c", &task, base])?;
     }
 
+    let address = peers::address(&task, &name_of(&repo));
+    let shared = vault.as_ref().map(|_| state_dir().map(|state| crate::task_note::shared(&state, &task, &address))).transpose()?.flatten();
+    let (note, vault_said) = match (&vault, shared) {
+        (_, Some(note)) => (Some(note.clone()), format!(" Its note is {note}, shared with its other halves.")),
+        (Some(cli), None) => match crate::task_note::open(cli, &task, &slot.path, backlog) {
+            Ok(note) => (Some(note.clone()), format!(" Its note is {note}.")),
+            Err(error) => (None, format!(" Its vault note was not opened ({error}); the task runs without one.")),
+        },
+        (None, None) => (None, String::new()),
+    };
+    if note.is_some() {
+        let entry = start_entry(note.as_deref(), backlog).unwrap_or_default();
+        started_file(&task, &repo).and_then(|file| std::fs::write(file, entry).map_err(|error| error.to_string()))?;
+    }
     store_prompt(&prompt_file(&session_file(&task, &repo)?), prompt)?;
     let space = open_space(&repo, &slot, &task, false)?;
     let claude_pane = match space.root_pane_id {
         Some(pane) => pane,
         None => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
     };
-    let (agent_name, started) = launch(&place(&slot), &claude_pane, Session::New(new_session_id()?))?;
+    let (agent_name, started) = launch(&Launch { note: note.as_deref(), ..place(&slot) }, &claude_pane, Session::New(new_session_id()?))?;
     // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
     let prompted = match (&started, prompt) {
         (Ok(()), Some(prompt)) => herdr::prompt_agent(&agent_name, prompt).map_err(|error| format!("Started {task} in {}, but sending the prompt failed: {error}", slot.path.display())),
@@ -534,13 +605,13 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     }
     started?;
     prompted?;
-    if let Some(item) = backlog {
+    if let Some(item) = backlog.filter(|_| note.is_none()) {
         started_file(&task, &repo).and_then(|file| std::fs::write(file, item).map_err(|error| error.to_string()))?;
     }
     if let Err(error) = messages::announce(&task, &name_of(&repo)) {
         eprintln!("Could not tell {task}'s other halves it started: {error}");
     }
-    Ok(format!("Started {task} in {}.", slot.path.display()))
+    Ok(format!("Started {task} in {}.{vault_said}", slot.path.display()))
 }
 
 struct Launch<'a> {
@@ -551,17 +622,21 @@ struct Launch<'a> {
     setup_command: Option<&'a str>,
     rules_skill: &'a str,
     worktree: PathBuf,
+    vault: bool,
+    note: Option<&'a str>,
 }
 
 // Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
 fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<()>)> {
-    let Launch { repo, task, mode, setup_skill, setup_command, rules_skill, ref worktree } = *place;
+    let Launch { repo, task, mode, setup_skill, setup_command, rules_skill, ref worktree, vault, note } = *place;
     crate::push_block::warn_if_off(crate::push_block::install(worktree, &state_dir()?)?);
     // herdr's agent names are global, so a task's half in another repo is named with its repo.
     let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
-    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &peers::address(task, &name_of(repo)), &settings(&peers::kelpie_command()?))?;
-    let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill })?;
+    let address = peers::address(task, &name_of(repo));
+    let note = note.filter(|_| vault);
+    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &settings(&peers::kelpie_command()?, note.map(|_| address.as_str())))?;
+    let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill, note })?;
     let agent_args = claude_args(mode, &settings, &role, &session);
     let started = start_claude(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(repo));
     if let (Ok(()), Session::New(id)) = (&started, &session) {
@@ -595,7 +670,8 @@ fn restart(place: &Launch, slot: &Slot, focus: bool) -> Result<String> {
     };
     let (recorded, mode) = recorded_session(task, place.repo);
     let previous = claude_home().and_then(|home| previous_session(place.repo, slot, task, &home, recorded));
-    let place = Launch { mode: place.mode.or(mode.as_deref()), worktree: place.worktree.clone(), ..*place };
+    let note = read_start(task, place.repo).and_then(|text| crate::task_note::note_in(&text));
+    let place = Launch { mode: place.mode.or(mode.as_deref()), worktree: place.worktree.clone(), note: note.as_deref(), ..*place };
     let session = match previous {
         Some(id) => Session::Resume(id),
         None => Session::New(new_session_id()?),
@@ -725,20 +801,28 @@ pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bo
     let pusher = check.allowed().map_err(|why| format!("{task} cannot be pushed by {}: {why}.", crate::permit::describe(&check.caller)))?;
     let state = state_dir()?;
     let pushed = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
-    let note = started_file(&task, &repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).map(|item| item.trim().to_string()).filter(|item| !item.is_empty());
+    let note = started_file(&task, &repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| crate::task_note::items(&text).into_iter().next());
     let count = push_prefix(&slot.path, &upstream, &sha, &state).map_err(|error| format!("Pushing {task} failed: {error}"))?;
+    let vault = crate::vault_cli::detect();
+    let log = vault.as_ref().map(|cli| crate::task_note::log_push(cli, &slot.path, &task, &pushed));
+    let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
     let target = upstream.trim_start_matches("origin/").to_string();
-    let landed = |closed: bool| Landed { pusher, address: &address, target: &target, commits: &pushed, closed, note: note.as_deref() };
+    let landed = |closed: bool, waits: bool| Landed { pusher, address: &address, target: &target, commits: &pushed, closed, note: note.as_deref(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), waits };
     if !keep_open {
-        let closed = done(cwd, name);
-        tell_lead_pushed(&landed(closed.is_ok()));
-        return closed.map(|closed| format!("Pushed {} to {upstream}. {closed}", plural(count, "commit")));
+        let ready = note_ready(vault.as_ref(), &state, &address, &task);
+        if let Err(waits) = &ready {
+            tell_lead_pushed(&landed(false, true));
+            return Ok(format!("Pushed {} to {upstream}.{logged} {waits}", plural(count, "commit")));
+        }
+        let closed = close_task(cwd, name, vault.as_ref(), ready.unwrap_or_default());
+        tell_lead_pushed(&landed(closed.is_ok(), false));
+        return closed.map(|closed| format!("Pushed {} to {upstream}.{logged} {closed}", plural(count, "commit")));
     }
-    tell_lead_pushed(&landed(false));
+    tell_lead_pushed(&landed(false, false));
     let short = &sha[..7.min(sha.len())];
     let (clean, rest) = match keep_going(&state, &repo, &slot, &upstream, &address, was_approved)? {
         Rest::Rebased { clean, rest } => (clean, rest),
-        Rest::NotFetched(error) => return Ok(format!("Pushed {} through {short} to {upstream}. Fetching afterwards failed ({error}), so the rest of {task} is not rebased onto it yet: run kelpie land {task}.", plural(count, "commit"))),
+        Rest::NotFetched(error) => return Ok(format!("Pushed {} through {short} to {upstream}.{logged} Fetching afterwards failed ({error}), so the rest of {task} is not rebased onto it yet: run kelpie land {task}.", plural(count, "commit"))),
     };
     let told = format!(
         "{} pushed {} of this task, through {short}, to {target}; they are on {target} for good. Your branch continues from there with {} on top: reshape only those.",
@@ -748,7 +832,7 @@ pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bo
         eprintln!("Could not tell {address} about the push: {error}");
     }
     let after = if clean { format!("{task} stays open with {} on top.", plural(rest, "commit")) } else { format!("{task} stays open; its Claude is resolving the rebase of the rest.") };
-    Ok(format!("Pushed {} through {short} to {upstream}. {after} {}", plural(count, "commit"), fast_forward_main(&repo, &upstream)?))
+    Ok(format!("Pushed {} through {short} to {upstream}.{logged} {after} {}", plural(count, "commit"), fast_forward_main(&repo, &upstream)?))
 }
 
 fn capitalized(text: &str) -> String {
@@ -788,14 +872,25 @@ struct Landed<'a> {
     commits: &'a str,
     closed: bool,
     note: Option<&'a str>,
+    logged: Option<bool>,
+    waits: bool,
 }
 
-// The lead's cue after every push: what landed, so it writes the vault's log line and settles the task's note.
+// logged is None without the vault, else whether kelpie wrote the repo's log line itself; with the vault kelpie settles the note.
 fn pushed_notice(landed: &Landed) -> String {
-    let Landed { pusher, address, target, commits, closed, note } = *landed;
+    let Landed { pusher, address, target, commits, closed, note, logged, waits } = *landed;
     let count = commits.lines().count();
     let mut text = format!("{} pushed {address}: {} to {target} ({}).", capitalized(pusher), plural(count, "commit"), commits.lines().collect::<Vec<_>>().join("; "));
-    text.push_str(if closed { " The task is done and closed." } else { " The task stays open with the rest of its branch." });
+    text.push_str(match (closed, waits) {
+        (true, _) => " The task is done and closed.",
+        (false, true) => " The task stays open until its note has its solution and decisions; kelpie asked it to write them.",
+        (false, false) => " The task stays open with the rest of its branch.",
+    });
+    match logged {
+        Some(true) => return text + " kelpie wrote the repo's log line in the vault from these commits; update the area note with what changed.",
+        Some(false) => return text + " kelpie could not write the repo's log line: write it in the vault with what landed and these shas, and update the area note with what changed.",
+        None => {}
+    }
     text.push_str(" Write the repo's log line in the vault with what landed and these shas");
     match (note, closed) {
         (Some(note), true) => text.push_str(&format!(", and close or update its note {note}.")),
@@ -1075,11 +1170,36 @@ fn fast_forward_main(repo: &Path, upstream: &str) -> Result<String> {
 
 pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     let repo = main_checkout(cwd)?;
+    let task = task_of(&find_task(&repo, name, cwd)?).to_string();
+    let state = state_dir()?;
+    let address = peers::address(&task, &name_of(&repo));
+    let vault = crate::task_note::linked(&state, &address).and_then(|_| crate::vault_cli::detect());
+    let said = note_ready(vault.as_ref(), &state, &address, &task)?;
+    close_task(cwd, name, vault.as_ref(), said)
+}
+
+// Done waits for the task's note to have its solution and decisions: Err is the refusal, the task told what to write; a vault that does not answer lets done go on, and Ok says so.
+fn note_ready(vault: Option<&crate::vault_cli::Cli>, state: &Path, address: &str, task: &str) -> Result<String> {
+    let (Some(cli), Some(note)) = (vault, crate::task_note::linked(state, address)) else { return Ok(String::new()) };
+    match crate::task_note::waits(cli, &note, task) {
+        Ok(None) => Ok(String::new()),
+        Ok(Some((user, told))) => {
+            if let Err(error) = messages::notify(address, &told) {
+                eprintln!("Could not tell {address} what its note lacks: {error}");
+            }
+            Err(user)
+        }
+        Err(error) => Ok(format!(" Its note {note} could not be checked ({error}), so done went on without it.")),
+    }
+}
+
+fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::Cli>, said: String) -> Result<String> {
+    let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
     let workspace = herdr::workspace_for(&slot.path)?;
-    let finished = finish(&repo, &slot, &upstream, &crate::lead::state_dir()?)?;
+    let finished = finish(&repo, &slot, &upstream, &crate::lead::state_dir()?, vault)? + &said;
     forget_session(task_of(&slot), &repo);
     forget_approval(task_of(&slot), &repo);
     crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
@@ -1089,7 +1209,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     Ok(finished + &close_space(workspace))
 }
 
-fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path) -> Result<String> {
+fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vault: Option<&crate::vault_cli::Cli>) -> Result<String> {
     let task = task_of(slot);
     if !is_clean(&slot.path)? {
         return Err(format!("{task} has uncommitted changes; land or drop them first"));
@@ -1099,12 +1219,32 @@ fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path) -> Result<Stri
         return Err(format!("{task} has changes that are not on {upstream} yet; push them first, or use drop:\n{}", missing.join("\n")));
     }
     release(repo, slot, upstream)?;
-    if let Some(item) = forget_start_in(state, task, repo)
-        && let Err(error) = messages::notify_lead(&crate::backlog::done_notice(task, &item))
-    {
-        eprintln!("Could not tell the lead: {error}");
+    let address = peers::address(task, &name_of(repo));
+    crate::task_note::forget(state, &address);
+    let mut said = String::new();
+    for item in forget_start_in(state, task, repo).map(|text| crate::task_note::items(&text)).unwrap_or_default() {
+        let notice = match vault.filter(|_| crate::vault_cli::is_note(&item)) {
+            Some(_) if crate::task_note::held_elsewhere(state, task, &address, &item) => {
+                said.push_str(&format!(" Its note {item} stays open for the task's other halves."));
+                continue;
+            }
+            Some(cli) => match crate::task_note::close(cli, &item) {
+                Ok(path) => {
+                    said.push_str(&format!(" Its note is closed ({path})."));
+                    format!("{task} is done and its commits are on the default branch; kelpie closed its note {item}. Update the area note when the task changed what it describes.")
+                }
+                Err(error) => {
+                    said.push_str(&format!(" Its note {item} could not be closed ({error})."));
+                    format!("{task} is done and its commits are on the default branch, but kelpie could not close its note {item} ({error}): close it with the vault tools.")
+                }
+            },
+            None => crate::backlog::done_notice(task, &item),
+        };
+        if let Err(error) = messages::notify_lead(&notice) {
+            eprintln!("Could not tell the lead: {error}");
+        }
     }
-    Ok(format!("{task} is done; {} is free again. {}", name_of(&slot.path), fast_forward_main(repo, upstream)?))
+    Ok(format!("{task} is done; {} is free again.{said} {}", name_of(&slot.path), fast_forward_main(repo, upstream)?))
 }
 
 // The branch's commits whose change upstream lacks, as "sha subject"; empty when every change landed, however it was cherry-picked or squashed.
@@ -1143,14 +1283,30 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
         git(&slot.path, &["clean", "-fdq"])?;
     }
     release(&repo, &slot, &upstream)?;
-    forget_start(task, &repo);
+    let notes: Vec<String> = forget_start(task, &repo).map(|text| crate::task_note::items(&text)).unwrap_or_default().into_iter().filter(|item| crate::vault_cli::is_note(item)).collect();
+    let mut said = String::new();
+    if let Ok(state) = state_dir() {
+        let address = peers::address(task, &name_of(&repo));
+        crate::task_note::forget(&state, &address);
+        said = dropped_notes(if notes.is_empty() { None } else { crate::vault_cli::detect() }.as_ref(), &state, task, &address, &notes);
+    }
     forget_session(task, &repo);
     forget_approval(task, &repo);
     crate::permit::forget(&peers::address(task, &name_of(&repo)));
     crate::review::forget(task, &repo);
     crate::report::forget_card(task, &repo);
     end_life(task, &repo, how);
-    Ok(format!("{task} dropped; {} is free again.{}", name_of(&slot.path), close_space(workspace)))
+    Ok(format!("{task} dropped; {} is free again.{said}{}", name_of(&slot.path), close_space(workspace)))
+}
+
+// A dropped task's note goes back to the backlog as a reset's does, so no active note is left without a task; without the vault nothing is asked.
+fn dropped_notes(vault: Option<&crate::vault_cli::Cli>, state: &Path, task: &str, address: &str, notes: &[String]) -> String {
+    let Some(cli) = vault else { return String::new() };
+    notes.iter().map(|note| match note_to_backlog(cli, state, task, address, note) {
+        NoteBack::Shared => format!(" Its note {note} stays open for the task's other halves."),
+        NoteBack::Back(path) => format!(" kelpie put its note {path} back in the backlog."),
+        NoteBack::Failed(error) => format!(" Its note {note} could not be put back in the backlog ({error}); set its status to backlog in the vault."),
+    }).collect()
 }
 
 fn end_life(task: &str, repo: &Path, how: &str) {
@@ -1282,12 +1438,13 @@ mod tests {
     fn done_drop_and_reset_forget_the_approval() {
         let source = include_str!("tasks.rs");
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
-        assert!(body("done").contains("forget_approval("));
+        assert!(body("done").contains("close_task(") && body("close_task").contains("forget_approval("));
         assert!(body("discard").contains("forget_approval("));
         assert!(body("reset").contains("discard("));
-        assert!(body("done").contains("review::forget(") && body("discard").contains("review::forget("), "a later task by the same name must not show this one's review");
-        assert!(body("done").contains("report::forget_card(") && body("discard").contains("report::forget_card("), "a later task by the same name must not show this one's card");
-        assert!(body("done").contains("permit::forget(") && body("discard").contains("permit::forget("), "done, drop and reset take the push permission back");
+        assert!(body("close_task").contains("review::forget(") && body("discard").contains("review::forget("), "a later task by the same name must not show this one's review");
+        assert!(body("close_task").contains("report::forget_card(") && body("discard").contains("report::forget_card("), "a later task by the same name must not show this one's card");
+        assert!(body("close_task").contains("permit::forget(") && body("discard").contains("permit::forget("), "done, drop and reset take the push permission back");
+        assert!(body("finish").contains("task_note::forget(") && body("discard").contains("task_note::forget("), "a later task by the same name must not inherit this one's Problem pass");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
     }
 
@@ -1321,11 +1478,111 @@ mod tests {
     #[test]
     fn after_a_push_the_lead_hears_what_landed_and_is_cued_to_log_it_and_settle_the_note() {
         let commits = "a1b2c3d Add refunds\ne4f5a6b Show refunds on the invoice";
-        let done = pushed_notice(&Landed { pusher: "the lead", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing-refunds.md") });
+        let done = pushed_notice(&Landed { pusher: "the lead", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing-refunds.md"), logged: None, waits: false });
         assert_eq!(done, "The lead pushed billing@app: 2 commits to main (a1b2c3d Add refunds; e4f5a6b Show refunds on the invoice). The task is done and closed. Write the repo's log line in the vault with what landed and these shas, and close or update its note Projects/billing-refunds.md.");
-        let open = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits: "a1b2c3d Add refunds", closed: false, note: None });
+        let open = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits: "a1b2c3d Add refunds", closed: false, note: None, logged: None, waits: false });
         assert!(open.starts_with("The user pushed billing@app: 1 commit to main (a1b2c3d Add refunds). The task stays open"), "{open}");
         assert!(open.ends_with("these shas."), "{open}");
+    }
+
+    #[test]
+    fn with_the_vault_on_the_lead_hears_kelpie_logged_the_push_and_is_not_asked_to_log_it() {
+        let commits = "a1b2c3d Add refunds";
+        let kept = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(true), waits: false });
+        assert!(kept.contains("kelpie wrote the repo's log line") && kept.contains("update the area note") && !kept.contains("Write the repo's log line"), "{kept}");
+        let waits = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: false, note: Some("Projects/billing.md"), logged: Some(true), waits: true });
+        assert!(waits.contains("stays open until its note has its solution and decisions"), "{waits}");
+        let failed = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(false), waits: false });
+        assert!(failed.contains("kelpie could not write the repo's log line: write it in the vault with what landed and these shas") && !failed.contains("kelpie wrote"), "a log append that failed leaves the line to the lead: {failed}");
+    }
+
+    #[test]
+    fn edits_are_gated_only_in_a_task_started_with_the_vault_on() {
+        let off: Value = serde_json::from_str(&settings("/bin/kelpie", None)).unwrap();
+        assert!(off["hooks"].get("PreToolUse").is_none(), "without the vault no edit hook runs");
+        let on: Value = serde_json::from_str(&settings("/bin/kelpie", Some("billing@app"))).unwrap();
+        assert_eq!(on["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|MultiEdit|NotebookEdit");
+        assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kelpie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
+        assert_eq!(on["hooks"]["Stop"], off["hooks"]["Stop"]);
+    }
+
+    #[test]
+    fn link_says_who_settles_the_note() {
+        let off = link_text("billing", "Projects/billing.md", Some("local:Fix login"), false);
+        assert_eq!(off, "Linked billing to Projects/billing.md (it was linked to local:Fix login): when it is done the lead is told to log and close it, and a reset puts it back in the backlog.", "without the vault the text is today's");
+        let on = link_text("billing", "Projects/billing.md", Some("Projects/old.md\nlocal:Fix login"), true);
+        assert!(on.contains("kelpie closes the note when the task is done") && on.contains("a reset or a drop puts it back in the backlog") && !on.contains("the lead is told"), "{on}");
+        assert!(on.contains("(it was linked to Projects/old.md, local:Fix login)"), "{on}");
+    }
+
+    #[test]
+    fn drop_puts_the_note_back_in_the_backlog_unless_another_half_holds_it() {
+        let fake = crate::vault_cli::fake::Fake::new("drop");
+        let state = fake.state();
+        fake.answer("task-backlog", r#"{"path":"Projects/billing.md"}"#);
+        let notes = ["Projects/billing.md".to_string()];
+        assert_eq!(dropped_notes(None, &state, "billing", "billing@app", &notes), "", "without the vault a drop asks nothing");
+        assert!(fake.calls().is_empty());
+        assert_eq!(dropped_notes(Some(&fake.cli), &state, "billing", "billing@app", &notes), " kelpie put its note Projects/billing.md back in the backlog.");
+        std::fs::create_dir_all(state.join("started")).unwrap();
+        std::fs::write(state.join("started").join("billing@api"), "Projects/billing.md").unwrap();
+        assert!(dropped_notes(Some(&fake.cli), &state, "billing", "billing@app", &notes).contains("stays open for the task's other halves"));
+        assert_eq!(fake.calls(), ["task backlog Projects/billing.md"]);
+        let source = include_str!("tasks.rs");
+        let discard = &source[source.find("\nfn discard(").unwrap()..];
+        assert!(discard[..discard.find("\n}\n").unwrap()].contains("dropped_notes("), "drop settles the note");
+    }
+
+    #[test]
+    fn done_closes_the_tasks_vault_note_and_without_the_vault_asks_nothing() {
+        let fake = crate::vault_cli::fake::Fake::new("finish");
+        fake.answer("task-close", r#"{"path":"Archive/billing.md"}"#);
+        for vault in [None, Some(&fake.cli)] {
+            let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+            git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+            let state = state_of(&dir);
+            record_start(&started_file_in(&state, "billing", &dir).unwrap(), "Projects/billing.md").unwrap();
+            let said = finish(&dir, &slot, &upstream, &state, vault).unwrap();
+            assert_eq!(said.contains("Its note is closed (Archive/billing.md)."), vault.is_some(), "{said}");
+            cleanup(dir, origin, &slot);
+        }
+        assert_eq!(fake.calls(), ["task close Projects/billing.md"], "the vault is asked only when it is on");
+    }
+
+    #[test]
+    fn a_start_entry_keeps_the_backlog_item_next_to_the_note() {
+        assert_eq!(start_entry(Some("Projects/web-billing.md"), Some("local:Fix login")).as_deref(), Some("Projects/web-billing.md\nlocal:Fix login"), "the local item stays out of the Backlog column and done still has the lead delete its line");
+        assert_eq!(start_entry(Some("Projects/web-billing.md"), Some("Projects/web-billing.md")).as_deref(), Some("Projects/web-billing.md"), "a claimed note is stored once");
+        assert_eq!(start_entry(None, Some("ABC-12")).as_deref(), Some("ABC-12"));
+        assert_eq!(start_entry(None, None), None);
+    }
+
+    #[test]
+    fn done_on_one_half_leaves_the_shared_note_to_the_other_and_settles_the_backlog_item() {
+        let fake = crate::vault_cli::fake::Fake::new("finish-halves");
+        fake.answer("task-close", r#"{"path":"Archive/billing.md"}"#);
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        let state = state_of(&dir);
+        record_start(&started_file_in(&state, "billing", &dir).unwrap(), "Projects/billing.md\nlocal:Fix login").unwrap();
+        std::fs::write(state.join("started").join("billing@elsewhere"), "Projects/billing.md").unwrap();
+        let said = finish(&dir, &slot, &upstream, &state, Some(&fake.cli)).unwrap();
+        assert!(said.contains("Its note Projects/billing.md stays open for the task's other halves."), "{said}");
+        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+        assert!(!started_file_in(&state, "billing", &dir).unwrap().exists());
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_board_never_waits_on_the_vault_on_its_own_thread() {
+        let board = include_str!("board.rs");
+        for call in ["tasks::done(", "tasks::reset(", "tasks::push(", "tasks::start("] {
+            for (at, _) in board.match_indices(call) {
+                let line = board[..at].rsplit('\n').next().unwrap_or_default();
+                assert!(line.contains("move ||") || line.contains("sender.send("), "{call} runs on the board's thread: {line}");
+            }
+        }
+        assert!(!board.contains("vault_cli::detect") && !board.contains("vault_cli::cli()"), "the board reads the kept verdict only");
     }
 
     #[test]
@@ -1364,7 +1621,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kelpie-task-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let kelpie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kelpie", "nested/".repeat(20));
-        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kelpie)).unwrap();
+        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kelpie, None)).unwrap();
         assert_eq!(file, dir.join("billing@app.settings.json"));
         let args = claude_args(Some("acceptEdits"), &file, &dir.join("billing@app.md"), &Session::New("0b6a".to_string()));
         let line = args.join(" ");
@@ -1372,7 +1629,7 @@ mod tests {
         assert_eq!(args[..2], ["--permission-mode", "acceptEdits"]);
         assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
+        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie, None)).unwrap());
         assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)", format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)")]), "a task never pushes nor approves its own commits");
         assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} ask:*)"))), "a task asks the user without a permission prompt");
@@ -1574,7 +1831,7 @@ mod tests {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
         assert_eq!(ahead_behind(&dir, &upstream).unwrap(), (0, 1));
-        finish(&dir, &slot, &upstream, &state_of(&dir)).unwrap();
+        finish(&dir, &slot, &upstream, &state_of(&dir), None).unwrap();
         assert!(!branch_exists(&dir, "billing"));
         assert!(slots(&dir).unwrap().iter().any(|free| free.path == slot.path && free.free));
         assert_eq!(ahead_behind(&dir, &upstream).unwrap(), (0, 0));
@@ -1584,7 +1841,7 @@ mod tests {
     #[test]
     fn done_refuses_a_task_with_commits_not_on_upstream_and_leaves_it_as_it_was() {
         let (dir, origin, slot, upstream) = task_with_a_commit("search");
-        assert!(finish(&dir, &slot, &upstream, &state_of(&dir)).is_err());
+        assert!(finish(&dir, &slot, &upstream, &state_of(&dir), None).is_err());
         assert!(branch_exists(&dir, "search"));
         assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "search");
         cleanup(dir, origin, &slot);
@@ -1615,7 +1872,7 @@ mod tests {
         let fourth = git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap();
         land_on_main(&dir, &upstream, |dir| { pick(dir, &fourth); pick(dir, &fifth); });
         assert!(ahead_behind(&slot.path, &upstream).unwrap().0 > 0);
-        finish(&dir, &slot, &upstream, &state_of(&dir)).unwrap();
+        finish(&dir, &slot, &upstream, &state_of(&dir), None).unwrap();
         assert!(!branch_exists(&dir, "billing"));
         cleanup(dir, origin, &slot);
     }
@@ -1629,7 +1886,7 @@ mod tests {
             git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "commit", "--quiet", "-m", "billing, squashed"]).unwrap();
         });
         assert!(git(&slot.path, &["cherry", &upstream, "HEAD"]).unwrap().contains('+'));
-        finish(&dir, &slot, &upstream, &state_of(&dir)).unwrap();
+        finish(&dir, &slot, &upstream, &state_of(&dir), None).unwrap();
         assert!(!branch_exists(&dir, "billing"));
         cleanup(dir, origin, &slot);
     }
@@ -1640,7 +1897,7 @@ mod tests {
         let fifth = commit(&slot.path, "e", "fifth");
         let fourth = git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap();
         land_on_main(&dir, &upstream, |dir| pick(dir, &fourth));
-        let error = finish(&dir, &slot, &upstream, &state_of(&dir)).err().unwrap();
+        let error = finish(&dir, &slot, &upstream, &state_of(&dir), None).err().unwrap();
         assert!(error.contains(&fifth[..7]) && error.contains("fifth"), "{error}");
         assert!(!error.contains("fourth") && !error.contains(&fourth[..7]), "{error}");
         assert!(branch_exists(&dir, "billing"));

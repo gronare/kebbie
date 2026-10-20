@@ -577,13 +577,13 @@ struct Ongoing {
 }
 
 fn load_ongoing() -> Vec<Ongoing> {
-    if !config::sources().is_ok_and(|sources| sources.contains(&Source::Vault)) {
+    if !config::sources().is_ok_and(|sources| sources.contains(&Source::Vault)) && !crate::vault_cli::plugin_enabled() {
         return Vec::new();
     }
     let Ok(notes) = vault::Index::open().and_then(|index| index.ongoing()) else { return Vec::new() };
     let links = tasks::started_links();
     notes.into_iter().map(|note| {
-        let task = links.iter().find(|(_, key)| **key == note.key).map(|(address, _)| address.clone());
+        let task = links.iter().find(|(_, items)| items.contains(&note.key)).map(|(address, _)| address.clone());
         Ongoing { key: note.key, title: note.title, area: note.area, task }
     }).collect()
 }
@@ -824,6 +824,14 @@ impl App {
         matches!(self.mode, Mode::Normal) && self.areas.is_normal()
     }
 
+    fn in_background(&mut self, label: String, step: impl FnOnce() -> Result<String> + Send + 'static) {
+        let (sender, result) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = sender.send(step());
+        });
+        self.mode = Mode::Working { label, result };
+    }
+
     fn show(&mut self, result: Result<String>) {
         self.mode = Mode::Message(result.unwrap_or_else(|error| error));
         let _ = self.refresh.send(());
@@ -1017,7 +1025,7 @@ impl App {
             Mode::Questions(window) => self.handle_questions(window, key),
             Mode::ConfirmReset { path, .. } => {
                 if key.code == KeyCode::Char('y') {
-                    self.show(tasks::reset(&path, None));
+                    self.in_background("Resetting the task…".to_string(), move || tasks::reset(&path, None));
                 }
             }
             Mode::ConfirmDrop { path, name, force } => {
@@ -1349,7 +1357,7 @@ impl App {
                                 },
                                 error => self.show(error),
                             },
-                            'd' => self.show(tasks::done(&path, None)),
+                            'd' => self.in_background(format!("Closing {}…", item.name), move || tasks::done(&path, None)),
                             _ => self.mode = Mode::ConfirmDrop { path, name: item.name, force: false },
                         }
                     }
@@ -1438,7 +1446,7 @@ impl App {
                 self.show(start_in_background(&repo, &name, prompt.as_deref(), None));
             }
             Purpose::BacklogName(entry) => {
-                let prompt = backlog::task_prompt(&entry, &self.sources);
+                let prompt = backlog::task_prompt(&entry, &self.sources, crate::vault_cli::known_on());
                 let known = self.repo_named(&entry.area);
                 let result = known.map_or_else(|| outside(terminal, || repo::locate(&entry.area)), Ok)
                     .and_then(|repo| start_in_background(&repo, &text, Some(&prompt), Some(&entry.reference)));

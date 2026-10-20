@@ -132,6 +132,7 @@ pub struct Place<'a> {
     pub setup_skill: &'a str,
     pub setup_command: Option<&'a str>,
     pub rules_skill: &'a str,
+    pub note: Option<&'a str>,
 }
 
 pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
@@ -158,8 +159,11 @@ fn rules_line(rules_skill: &str) -> String {
     format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, the lead checks your commits against it.")
 }
 
-// The plan step of roles/task.md: with the vault as a backlog source the plan is the task's note there, else a file in kelpie's state; never a file in the worktree, where it would land in the repo.
-pub fn plan_step(sources: &[crate::config::Source], kelpie: &str, task: &str, plans: &Path) -> String {
+// The plan step of roles/task.md: the task's note when kelpie keeps one, else with the vault as a backlog source a note there, else a file in kelpie's state; never a file in the worktree, where it would land in the repo.
+pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, kelpie: &str, task: &str, plans: &Path) -> String {
+    if let Some(note) = note {
+        return format!("Write your plan into your note `{note}` with the vault tools, and put it to the user with `{kelpie} ask --plan vault:{note} \"<one line on what the plan does>\"`; the board shows them the note.");
+    }
     if sources.contains(&crate::config::Source::Vault) {
         return format!(
             "Write your plan into this task's note in the vault with the vault tools: the note you were started from, or else a new task note under `Projects/` with status `active`, tied to this task with `{kelpie} link {task} Projects/<note>.md`. \
@@ -168,6 +172,18 @@ pub fn plan_step(sources: &[crate::config::Source], kelpie: &str, task: &str, pl
     }
     let plans = plans.display();
     format!("Write your plan as markdown to `{plans}`, kelpie's place for it outside your worktree, and put it to the user with `{kelpie} ask --plan {plans} \"<one line on what the plan does>\"`; the board shows them the file.")
+}
+
+pub fn vault_section(note: Option<&str>, kelpie: &str) -> String {
+    let Some(note) = note else { return String::new() };
+    format!(
+        "\n\n## Your note in the vault\n\n\
+         This task's note is `{note}` in the vault: kelpie opened it when the task started and keeps it tied to this task. Read and write it with the vault MCP tools.\n\n\
+         1. Before your first change to a file, write the note's Problem section: what is wrong or missing, for whom, and what done looks like, in your own clear words, from the user's prompt and what you read. Rewrite the prompt rather than pasting it: the user writes rough notes, the vault keeps clear ones. Edits wait until Problem is written.\n\
+         2. Keep its solution section (what changes, from the user's side) and its decisions section (each choice made, with its reason) current as the work goes, in the note's own headings.\n\
+         3. kelpie writes the repo's log line after each push from your commit subjects, so write subjects that read well on their own.\n\n\
+         `{kelpie} done` waits until the solution and decisions are written, then closes the note; a reset puts it back in the backlog."
+    )
 }
 
 // roles/task.md filled in for this task, written to the state dir for --append-system-prompt-file.
@@ -180,8 +196,9 @@ pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     let peers = listed.split_once('\n').map(|(_, rest)| rest).unwrap_or_default().to_string();
     let kelpie = kelpie_command()?;
     let plans = crate::lead::state_dir()?.join("plans").join(format!("{me}.md"));
-    let plan = plan_step(&crate::config::sources().unwrap_or_default(), &kelpie, task, &plans);
-    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("kelpie", kelpie), ("peers", peers), ("plan", plan)];
+    let plan = plan_step(&crate::config::sources().unwrap_or_default(), place.note, &kelpie, task, &plans);
+    let vault = vault_section(place.note, &kelpie);
+    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("kelpie", kelpie), ("peers", peers), ("plan", plan), ("vault", vault)];
     values.extend(worktree_values(place)?);
     let pairs: Vec<(&str, &str)> = values.iter().map(|(name, value)| (*name, value.as_str())).collect();
     let file = crate::lead::roles_dir()?.join(format!("{me}.md"));
@@ -297,13 +314,26 @@ mod tests {
     fn the_plan_goes_in_the_vault_note_with_the_vault_and_in_kelpies_state_without_it() {
         use crate::config::Source;
         let plans = Path::new("/state/plans/billing@web.md");
-        let vault = plan_step(&[Source::Linear, Source::Vault], "/bin/kelpie", "billing", plans);
+        let vault = plan_step(&[Source::Linear, Source::Vault], None, "/bin/kelpie", "billing", plans);
         assert!(vault.contains("into this task's note in the vault") && vault.contains("/bin/kelpie link billing Projects/<note>.md") && vault.contains("/bin/kelpie ask --plan vault:Projects/<note>.md"), "{vault}");
-        let file = plan_step(&[Source::Local], "/bin/kelpie", "billing", plans);
+        let file = plan_step(&[Source::Local], None, "/bin/kelpie", "billing", plans);
+        let note = plan_step(&[Source::Local], Some("Projects/kelpie-billing.md"), "/bin/kelpie", "billing", plans);
+        assert!(note.contains("into your note `Projects/kelpie-billing.md`") && note.contains("--plan vault:Projects/kelpie-billing.md"), "{note}");
         assert!(file.contains("to `/state/plans/billing@web.md`, kelpie's place for it outside your worktree") && file.contains("/bin/kelpie ask --plan /state/plans/billing@web.md"), "{file}");
         assert!(!file.contains("vault"), "{file}");
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
         assert!(role.contains(&format!("2. {file} The user approves it")) && !role.contains("{plan}"), "{role}");
+    }
+
+    #[test]
+    fn the_vault_section_shows_only_for_a_task_with_a_note() {
+        let off = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(None, "/bin/kelpie"))]);
+        assert!(!off.contains("vault") && !off.contains("{vault}"), "without the vault plugin no vault concept shows");
+        let on = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(Some("Projects/kelpie-billing.md"), "/bin/kelpie"))]);
+        for needed in ["## Your note in the vault", "`Projects/kelpie-billing.md`", "write the note's Problem section", "Rewrite the prompt rather than pasting it", "decisions section", "`/bin/kelpie done` waits until the solution and decisions are written"] {
+            assert!(on.contains(needed), "{needed}: {on}");
+        }
+        assert!(on.find("## Your note in the vault").unwrap() < on.find("## Probes").unwrap());
     }
 
     #[test]

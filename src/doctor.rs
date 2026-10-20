@@ -356,6 +356,27 @@ pub fn unused_sources(sources: &[Source], vault: Option<String>, linear: Option<
     checks
 }
 
+// Optional: without the plugin kelpie keeps its own backlog and state, so a missing plugin is no gap.
+// override_bin is KELPIE_VAULT_BIN, which stands in for the plugin as it does for detect().
+pub fn vault(plugin: &crate::vault_cli::Plugin, override_bin: Option<&str>, probe: Option<Result<crate::vault_cli::Probe, String>>) -> Check {
+    use crate::vault_cli::{NEEDS_UPDATE, Plugin};
+    let name = "vault";
+    let shown = match (override_bin, plugin) {
+        (Some(bin), _) => Plugin::Enabled { id: format!("KELPIE_VAULT_BIN={bin}"), version: "(in place of the plugin)".to_string(), root: PathBuf::new() },
+        (None, plugin) => plugin.clone(),
+    };
+    match (&shown, probe) {
+        (Plugin::Missing, _) => ok(name, "the vault plugin is not installed (optional): with it, kelpie keeps each task's note and the repos' logs in your Obsidian vault").with(one("kelpie setup vault")),
+        (Plugin::Disabled { id, version }, _) => ok(name, format!("{id} {version} is installed but disabled (optional), so kelpie keeps tasks without the vault")).with(one(format!("claude plugin enable {id}"))),
+        (Plugin::Enabled { id, version, .. }, None) => warn(name, format!("{id} {version} has no notes-vault-mcp command in its hooks, so kelpie cannot reach the vault"), vec![NEEDS_UPDATE.to_string(), "or set [vault] command in the machine config".to_string()]),
+        (Plugin::Enabled { id, version, .. }, Some(Err(error))) => warn(name, format!("{id} {version}: the vault command failed ({error}), so kelpie keeps tasks without the vault"), one("check that uvx runs, or set [vault] command in the machine config")),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.configured => warn(name, format!("{id} {version} is installed but no vault is configured"), vec![format!("claude plugin configure {id} shows its options: vault_path for a local folder, or the s3_ ones"), "kelpie setup vault walks through it".to_string()]),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.tasks => warn(name, format!("{id} {version} (notes-vault-mcp {}) is older than the task and log commands: the vault is read-only to kelpie, so tasks get no notes and pushes no log lines", probe.version), one(NEEDS_UPDATE)),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if probe.writable == Some(false) => warn(name, format!("{id} {version}: the {} vault is not writable, so kelpie keeps tasks without it", probe.backend), one("check the vault folder's permissions or the S3 key's write access")),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) => ok(name, format!("{id} {version} (notes-vault-mcp {}, {}): each task gets a note, edits wait for its Problem, pushes are logged, done closes it", probe.version, probe.backend)),
+    }
+}
+
 impl Check {
     fn with(mut self, fix: Vec<String>) -> Self {
         self.fix = fix;
@@ -445,6 +466,11 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(setup_skill(&settings.setup_skill, installed.as_ref(), &claude_settings));
     checks.extend(env.repo.as_deref().and_then(|repo| setup_command(&settings.setup_command, repo)));
     checks.push(notify(&settings.notify_command));
+    let plugin = crate::vault_cli::plugin(&env.claude_dir);
+    let override_bin = std::env::var(crate::vault_cli::BIN_VAR).ok().filter(|bin| !bin.is_empty());
+    let reachable = override_bin.is_some() || matches!(plugin, crate::vault_cli::Plugin::Enabled { .. });
+    let command = crate::vault_cli::command(override_bin.clone(), settings.vault_command.value.clone(), &plugin).filter(|_| reachable);
+    checks.push(vault(&plugin, override_bin.as_deref(), command.map(|command| crate::vault_cli::Cli::new(command).probe(true))));
     checks.extend(backlog(&settings.sources.value, crate::vault::index_path, &env.config.with_file_name("backlog.md")));
     let claude = read_json(&env.claude_dir.join(".claude.json")).or_else(|| read_json(&env.home.join(".claude.json")));
     let vault = vault_plugin(installed.as_ref(), |file| std::fs::read_to_string(file).ok());
@@ -764,6 +790,28 @@ mod tests {
         assert_eq!(found[1].fix, ["to use it, set sources = [\"local\", \"linear\"] under [board.backlog] in /home/u/.config/kelpie/config.toml"]);
         assert!(unused_sources(&[Source::Vault, Source::Linear], Some("vault@gronare".to_string()), Some("x".to_string()), config).is_empty(), "an enabled source is not suggested");
         assert!(unused_sources(&[Source::Local], None, None, config).is_empty());
+    }
+
+    #[test]
+    fn the_vault_plugin_is_optional_and_an_old_one_reads_as_read_only() {
+        use crate::vault_cli::{Plugin, Probe};
+        let missing = vault(&Plugin::Missing, None, None);
+        assert_eq!(missing.level, Level::Ok, "a user without the vault plugin sees no error");
+        assert!(missing.fact.contains("(optional)") && missing.fix == ["kelpie setup vault"], "{missing:?}");
+        let enabled = Plugin::Enabled { id: "vault@gronare".to_string(), version: "0.2.15".to_string(), root: "/x".into() };
+        let probe = |configured: bool, tasks: bool, writable: Option<bool>| Some(Ok(Probe { configured, writable, tasks, version: "0.5.1".to_string(), backend: "s3".to_string() }));
+        let old = vault(&enabled, None, probe(true, false, Some(true)));
+        assert_eq!(old.level, Level::Warn);
+        assert!(old.fact.contains("read-only") && old.fix == ["claude plugin update vault@gronare"], "{old:?}");
+        assert!(vault(&enabled, None, probe(false, true, None)).fact.contains("no vault is configured"));
+        assert!(vault(&enabled, None, probe(true, true, Some(false))).fact.contains("not writable"));
+        assert_eq!(vault(&enabled, None, probe(true, true, Some(true))).level, Level::Ok);
+        assert_eq!(vault(&Plugin::Disabled { id: "vault@gronare".to_string(), version: "0.2.15".to_string() }, None, None).level, Level::Ok);
+        assert_eq!(vault(&enabled, None, Some(Err("uvx: not found".to_string()))).level, Level::Warn);
+        let stood_in = vault(&Plugin::Missing, Some("/tmp/fake-vault"), probe(true, true, Some(true)));
+        assert_eq!(stood_in.level, Level::Ok, "KELPIE_VAULT_BIN stands in for a missing plugin, as detect() lets it: {stood_in:?}");
+        assert!(stood_in.fact.contains("KELPIE_VAULT_BIN=/tmp/fake-vault") && stood_in.fact.contains("each task gets a note"), "{stood_in:?}");
+        assert!(vault(&Plugin::Missing, Some("/tmp/fake-vault"), Some(Err("no such file".to_string()))).fact.contains("the vault command failed"));
     }
 
     #[test]

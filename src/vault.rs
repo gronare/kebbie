@@ -120,7 +120,7 @@ impl Index {
     }
 
     pub fn ongoing(&self) -> Result<Vec<Note>> {
-        let sql = format!("SELECT {NOTE_COLUMNS} FROM notes WHERE folder = 'Projects' AND status = 'active' AND valid = 1 ORDER BY mtime DESC, key");
+        let sql = format!("SELECT {NOTE_COLUMNS} FROM notes WHERE folder = 'Projects' AND status IN ('active', 'draft') AND valid = 1 ORDER BY mtime DESC, key");
         let mut statement = self.db.prepare(&sql).map_err(|error| error.to_string())?;
         let rows = statement.query_map([], note).map_err(|error| error.to_string())?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|error| error.to_string())
@@ -180,10 +180,16 @@ pub fn log_line(line: &str) -> Option<LogLine> {
     Some(LogLine { date: date.to_string(), text: text.to_string() })
 }
 
-// An area's log: lines that link it, and every line of its repo's own log note, newest first.
-pub fn log_for(logs: &[(String, String)], stem: &str, repo: Option<&str>) -> Vec<LogLine> {
+// A name's own log note when the vault command cannot say: Log/<name>-<word>.md, a word and not a month, so the compiled month pages stay out.
+pub fn own_log_guess(logs: &[(String, String)], name: &str) -> Option<String> {
+    let word_of = |key: &str| key.strip_prefix(&format!("Log/{name}-")).and_then(|rest| rest.strip_suffix(".md")).filter(|word| !word.is_empty() && word.chars().all(|character| character.is_ascii_alphabetic())).map(str::to_string);
+    let words: Vec<(String, String)> = logs.iter().filter_map(|(key, _)| Some((word_of(key)?, key.clone()))).collect();
+    words.iter().find(|(word, _)| word == "log").or_else(|| words.first()).map(|(_, key)| key.clone())
+}
+
+// An area's log: lines that link it, and every line of its repo's own log notes, newest first.
+pub fn log_for(logs: &[(String, String)], stem: &str, own: &[String]) -> Vec<LogLine> {
     let link = format!("[[{stem}]]");
-    let own: Vec<String> = [Some(stem), repo].into_iter().flatten().map(|name| format!("Log/{name}-log.md")).collect();
     let mut lines: Vec<LogLine> = Vec::new();
     for (key, body) in logs {
         let whole = own.contains(key);
@@ -225,8 +231,20 @@ mod tests {
             ("Log/kelpie-log.md".to_string(), "- [2026-10-15] first | [[kelpie]]\n- [2026-10-16] second\n".to_string()),
             ("Log/api-log.md".to_string(), "- [2026-10-14] api only | [[api]]\n- [2026-10-16] for kelpie too | [[kelpie]]\n".to_string()),
         ];
-        let texts: Vec<String> = log_for(&logs, "kelpie", Some("kelpie")).into_iter().map(|line| line.text).collect();
+        let texts: Vec<String> = log_for(&logs, "kelpie", &["Log/kelpie-log.md".to_string()]).into_iter().map(|line| line.text).collect();
         assert_eq!(texts, ["for kelpie too", "second", "first"]);
+    }
+
+    #[test]
+    fn a_repos_own_log_is_found_by_whatever_the_vault_calls_it() {
+        let logs: Vec<(String, String)> = ["Log/kelpie-2026-09.md", "Log/kelpie-logg.md", "Log/kelpie-plugin-log.md", "Log/api-log.md"].iter().map(|key| (key.to_string(), String::new())).collect();
+        assert_eq!(own_log_guess(&logs, "kelpie").as_deref(), Some("Log/kelpie-logg.md"), "the user's logs are -logg.md, and a month page is no own log");
+        assert_eq!(own_log_guess(&logs, "api").as_deref(), Some("Log/api-log.md"));
+        assert_eq!(own_log_guess(&logs, "web"), None);
+        let both: Vec<(String, String)> = ["Log/kelpie-changes.md", "Log/kelpie-log.md"].iter().map(|key| (key.to_string(), String::new())).collect();
+        assert_eq!(own_log_guess(&both, "kelpie").as_deref(), Some("Log/kelpie-log.md"), "without the vault command the -log.md note kelpie always read still wins");
+        let source = include_str!("vault.rs");
+        assert!(!source.contains(&["\"Log/{name}", "-log.md\""].concat()), "the log note's name is the vault's to say");
     }
 
     #[test]
@@ -252,6 +270,7 @@ mod tests {
             INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-new.md', 'Projects', 'kelpie-new', 'New', 'active', 'task', '[[other-area]]', 200, 1);
             INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-broken.md', 'Projects', 'kelpie-broken', 'Broken', 'active', 'task', '[[other-area]]', 300, 0);
             INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-done.md', 'Projects', 'kelpie-done', 'Done', 'complete', 'task', '[[other-area]]', 400, 1);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-draft.md', 'Projects', 'kelpie-draft', 'Draft', 'draft', 'task', '[[other-area]]', 150, 1);
             INSERT INTO notes (key, folder, stem, title, status, kind, mtime, valid) VALUES ('Resources/other.md', 'Resources', 'other', 'Other', 'active', 'howto', 500, 1);
             INSERT INTO notes_fts (key, body) VALUES ('Projects/kelpie-new.md', '## Problem
 The payload says amount.');
@@ -268,7 +287,7 @@ The payload says amount.');
         assert_eq!(index.last_sync(), Some(1792172065));
         assert_eq!(index.logs().unwrap(), [("Log/kelpie-log.md".to_string(), "- [2026-10-16] done".to_string())]);
         let ongoing: Vec<String> = index.ongoing().unwrap().into_iter().map(|note| note.key).collect();
-        assert_eq!(ongoing, ["Projects/kelpie-new.md", "Projects/kelpie-old.md"], "active projects only, newest first");
+        assert_eq!(ongoing, ["Projects/kelpie-new.md", "Projects/kelpie-draft.md", "Projects/kelpie-old.md"], "active and draft projects, as the vault's Open tasks base shows them, newest first");
         assert_eq!(index.ongoing().unwrap()[0].area, "other-area");
         assert_eq!(notes[0].area, "kelpie", "the [[link]] reads as the area's stem");
         assert_eq!(index.body("Projects/kelpie-new.md").as_deref(), Some("## Problem\nThe payload says amount."));

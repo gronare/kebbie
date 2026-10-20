@@ -91,9 +91,20 @@ fn repo_state(repo: &Path) -> Result<RepoState> {
     Ok(RepoState { branch, upstream, ahead, behind, changed: repo::changed_count(repo)?, release })
 }
 
+fn own_logs(cli: Option<&crate::vault_cli::Cli>, logs: &[(String, String)], stem: &str, repo: Option<&str>) -> Vec<String> {
+    let state = crate::lead::state_dir().ok();
+    let mut own: Vec<String> = Vec::new();
+    for name in [Some(stem), repo].into_iter().flatten() {
+        let named = cli.zip(state.as_deref()).and_then(|(cli, state)| crate::vault_cli::log_note(cli, state, name)).or_else(|| vault::own_log_guess(logs, name));
+        own.extend(named.filter(|key| !own.contains(key)));
+    }
+    own
+}
+
 pub fn gather() -> Result<Areas> {
     let index = Index::open()?;
     let logs = index.logs()?;
+    let cli = crate::vault_cli::detect();
     let mut list = Vec::new();
     for note in index.areas()? {
         let repo = repo_for(&note, &index);
@@ -103,7 +114,7 @@ pub fn gather() -> Result<Areas> {
             .partition(|other| other.status != "backlog");
         let (actions, errors) = repo.as_deref().map(actions::load).unwrap_or_default();
         list.push(Area {
-            log: vault::log_for(&logs, &note.stem, repo.as_deref().map(name_of).as_deref()),
+            log: vault::log_for(&logs, &note.stem, &own_logs(cli.as_ref(), &logs, &note.stem, repo.as_deref().map(name_of).as_deref())),
             git: repo.as_deref().and_then(|repo| repo_state(repo).ok()),
             key: note.key,
             stem: note.stem,

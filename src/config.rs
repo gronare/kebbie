@@ -50,6 +50,7 @@ pub struct Worktree {
     pub rules_skill: Option<String>,
     pub review_model: Option<String>,
     pub notify_command: Option<String>,
+    pub vault_command: Option<String>,
     pub server_name: Option<String>,
     pub worker_name: Option<String>,
 }
@@ -94,6 +95,7 @@ pub struct Settings {
     pub rules_skill: Setting<String>,
     pub review_model: Setting<Option<String>>,
     pub notify_command: Setting<Option<String>>,
+    pub vault_command: Setting<Option<String>>,
     pub server_name: Setting<String>,
     pub worker_name: Setting<String>,
 }
@@ -247,6 +249,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         rules_skill: None,
         review_model: None,
         notify_command: None,
+        vault_command: None,
         server_name: text(worktree, "server_name", "worktree.server_name")?,
         worker_name: text(worktree, "worker_name", "worktree.worker_name")?,
     })
@@ -276,8 +279,16 @@ fn with_notify(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     Ok(worktree)
 }
 
+fn with_vault(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
+    if let Some(vault) = subtable(table, "vault", "vault")? {
+        unknown_keys(vault, "vault.", &["command"])?;
+        worktree.vault_command = text(vault, "command", "vault.command")?;
+    }
+    Ok(worktree)
+}
+
 fn layers(table: &Table) -> Result<Worktree> {
-    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree))
+    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree)).and_then(|worktree| with_vault(table, worktree))
 }
 
 fn table(text: &str, source: &str) -> Result<Table> {
@@ -287,7 +298,7 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify"]).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     Ok(Machine { sources: board(&table).map_err(fail)?, worktree })
 }
@@ -298,6 +309,9 @@ pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let fail = |error: String| format!("{source}: {error}");
     if table.contains_key("notify") {
         return Err(fail(format!("notify: machine config only, since a cloned repo's file would run its command on every report; set [notify] command in {}", path().display())));
+    }
+    if table.contains_key("vault") {
+        return Err(fail(format!("vault: machine config only, since a cloned repo's file would choose the command kelpie writes your vault with; set [vault] command in {}", path().display())));
     }
     unknown_keys(&table, "", &["actions", "worktree", "task", "review"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
@@ -332,6 +346,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
+        vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
         server_name: or_default(pick(None, machine.worktree.server_name.as_ref()), DEFAULT_SERVER_NAME.to_string()),
         worker_name: or_default(pick(None, machine.worktree.worker_name.as_ref()), DEFAULT_WORKER_NAME.to_string()),
     }
@@ -365,7 +380,7 @@ fn found(path: &Path) -> &'static str {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, server_name, worker_name } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, vault_command, server_name, worker_name } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => format!("{} ({})", path.display(), found(path)),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -403,6 +418,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "The model kelpie review's independent reviewer runs on; none leaves it to Claude's default.");
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
         "The shell command kelpie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KELPIE_EVENT, KELPIE_TASK, KELPIE_REPO and KELPIE_TEXT describe it, and $1 is the text. None sends no notifications; machine config only.");
+    key("vault.command", vault_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), vault_command.layer,
+        "The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; machine config only.");
     lines.join("\n")
 }
 
@@ -521,8 +538,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -569,6 +586,16 @@ mod tests {
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&default).contains("notify.command = none  (default)\n  The shell command kelpie runs"));
         assert!(describe(&default).contains("machine config only."));
+    }
+
+    #[test]
+    fn the_vault_command_is_machine_config_only() {
+        let from_machine = machine("[vault]\ncommand = \"uv run --project ~/src/notes-vault-mcp notes-vault-mcp\"\n");
+        assert_eq!(settings(&Worktree::default(), &from_machine).vault_command, Setting { value: Some("uv run --project ~/src/notes-vault-mcp notes-vault-mcp".to_string()), layer: Layer::Machine });
+        assert!(parse_repo("[vault]\ncommand = \"evil\"\n", "/src/app/.kelpie.toml").unwrap_err().starts_with("/src/app/.kelpie.toml: vault: machine config only"));
+        assert!(parse_machine("[vault]\ncmd = \"x\"\n", "config.toml").unwrap_err().contains("vault.cmd: unknown key; known keys here: command"));
+        let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
+        assert!(describe(&default).contains("vault.command = none  (default)\n  The notes-vault-mcp command"), "{}", describe(&default));
     }
 
     #[test]

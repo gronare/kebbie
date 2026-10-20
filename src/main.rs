@@ -19,11 +19,14 @@ mod repo;
 mod report;
 mod review;
 mod sh;
+mod setup;
 mod status;
+mod task_note;
 mod tasks;
 mod update;
 mod usage;
 mod vault;
+mod vault_cli;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -103,8 +106,15 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   setting in effect with the layer it comes from (--get <key> prints one machine-wide
                                   value, for scripts)
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap
+  kelpie setup vault              install the optional vault plugin in Claude Code (marketplace, plugin, its options),
+                                  showing each claude command and running it only on your y
   kelpie update                   update the herdr and Claude Code plugins, rebuild, reload the plugins in
                                   every waiting Claude session, and restart an idle lead on its new role
+
+With the vault plugin installed, enabled and configured, the vault holds each task: start opens the task's note
+(or claims the vault backlog note it starts from), edits wait until the note's Problem is written, push writes
+the repo's log line from the commit subjects, done waits for the note's solution and decisions and then closes
+it, and reset puts it back in the backlog. Without the plugin none of this runs.
 
 Without a name, land, review, push, done, drop and reset act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>.";
@@ -271,6 +281,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             if arguments.flag("--review") {
                 return Ok(review::guard(&input));
             }
+            if name == Some("gate") {
+                return Ok(arguments.positional(2).map(task_note::hook).unwrap_or_default());
+            }
             let _ = messages::flush();
             Ok(report::hook(&input))
         }
@@ -301,6 +314,8 @@ fn run(arguments: &Arguments) -> Result<String> {
             Some(key) => config::get(key),
             None => config::show(&cwd, arguments.value("--repo")),
         },
+        Some("setup") if name == Some("vault") => setup::vault(),
+        Some("setup") => Err("kelpie setup knows vault: kelpie setup vault".to_string()),
         Some("update") => update::run(&doctor::Env::current().claude_dir),
         None | Some("help") => Ok(USAGE.to_string()),
         Some(other) => Err(format!("Unknown command \"{other}\"\n\n{USAGE}")),

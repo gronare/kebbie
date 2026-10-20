@@ -161,6 +161,17 @@ With `"local"` among the sources (the default), the Backlog column reads `backlo
 
 The priority is `urgent`, `high`, `medium` or `low` (none when left out); the summary after ` — ` and the area in parentheses at the end, the folder name of the repo the work happens in, are optional, but starting a task needs the area. The title is how kelpie knows the item, so keep titles unique. Other lines are yours: kelpie only appends, with `a` in the Backlog column (a title, then a priority) or `kelpie backlog add --priority high "Fix login — the session drops on reload (app)"`. While a task started from an item runs, the item leaves the column; a reset brings it back, and when the task is done the lead deletes its line.
 
+### With the vault
+
+The vault plugin ([notes-vault-mcp](https://github.com/gronare/notes-vault-mcp) in Claude Code) is optional. Without it kelpie keeps its backlog and state as above. With it installed, enabled and configured, kelpie finds it by itself and keeps each task in the vault:
+
+- **Start**: every `kelpie start` (from the lead, the board or the backlog) opens the task's note under `Projects/`, or claims the vault backlog note it was started from, and ties it to the task like `kelpie link`. A task across several repos has one note: each half after the first takes the same one, and done or reset settles it with the last half. The task's role names the note.
+- **Edits wait for the Problem**: until the note's Problem section is written, the task's Claude cannot edit files. It writes Problem itself, in its own words, from your prompt: your prompt never goes into the vault as you typed it. A vault that does not answer lets the edit through with a warning.
+- **Push**: after each push, the user's or the lead's, kelpie writes the repo's log line itself: the commit subjects with their shas.
+- **Done** waits until the note has its solution and decisions; kelpie tells the task what is missing, and once they are written it closes the note. **Reset** and **drop** put the note back in the backlog.
+
+kelpie runs the vault through the plugin's own pinned command (read from its hooks), or `[vault] command` in the machine config. A vault call that fails never stops a start, a push or a done: the output says what was not written. `kelpie setup vault` installs the plugin, showing each `claude plugin` command and running it only on your `y`; `kelpie doctor` says whether the vault is on, missing (optional) or too old for the task commands (`claude plugin update vault@gronare`).
+
 ### Areas
 
 `tab` switches the board between **Work** and **Areas** (or click the tabs top right). Areas lists the vault's system notes (`Areas/*.md`) with their repo, grouped into needs you (main ahead of origin, commits since the last release, or a task waiting on you), active and quiet: running tasks, open notes and backlog, main against origin, the last tag and commits since, and the last log line. Areas without a repo on this machine still list. The repo is the system note's `path`, else where the vault's hooks saw it, else a checkout named after the area. kelpie reads [notes-vault-mcp](https://github.com/gronare/notes-vault-mcp)'s local index (found through the vault plugin's options in Claude Code, or `VAULT_PATH` / `S3_*` and `VAULT_CACHE_DIR` as the server takes them), so a vault on S3 needs no credentials here; it is as fresh as the last session that used the vault. `kelpie areas` prints the same on the command line.
@@ -296,6 +307,7 @@ An unknown key in either file is an error that names the file and the key. `kelp
 | `[task] rules_skill` | both | `"kelpie:work-rules"` | The skill with your rules for how work is planned, built and committed (a mock before a new screen, commit style, what never to do). A task's Claude runs it after the setup skill and follows it for the rest of the task, the lead checks a ready task against it, `tidy` reshapes commits by it, and the reviewer reads it. Named like `setup_skill`. Example: `rules_skill = "my-rules"`. |
 | `[review] model` | both | none | The model `kelpie review`'s reviewer runs on (`--model`); none leaves it to Claude's default. Example: `model = "opus"`. |
 | `[notify] command` | machine config | none | The shell command kelpie runs when something needs you; see [Notifications](#notifications). None sends nothing. Machine config only: a repo's `.kelpie.toml` naming it is an error, since a cloned repo's file would run its command on every report. |
+| `[vault] command` | machine config | none | The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments; none runs the vault plugin's pinned command from its hooks. Used only while the plugin is installed and enabled; see [With the vault](#with-the-vault). Example: `command = "uv run --project ~/src/notes-vault-mcp notes-vault-mcp"`. |
 
 A machine config:
 
@@ -334,6 +346,8 @@ dev_worker = "bin/jobs"
 | `KELPIE_BIN` | `~/.local/share/kelpie/current/target/release/kelpie` | The binary the lead's role and kelpie's skills run. |
 | `XDG_DATA_HOME` | `~/.local/share` | Where herdr's startup writes the `current` link; kelpie reads it under `~/.local/share`, so `kelpie doctor` warns when this is set elsewhere. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's config, where kelpie and `kelpie doctor` read the installed plugins, their settings and the vault plugin's options. |
+| `KELPIE_VAULT_BIN` | none | A vault command to use in place of the plugin's, for a probe or a test: it stands in for the plugin, so kelpie asks it `status` and uses it when it answers configured. |
+| `KELPIE_CLAUDE_BIN` | `claude` | The Claude Code binary `kelpie setup vault` runs. |
 | `VAULT_PATH`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_PREFIX`, `VAULT_CACHE_DIR` | the vault plugin's options | Which notes-vault-mcp index the Areas page and the vault backlog read, as the server takes them; the index lives under `~/.cache/notes-vault-mcp` by default. |
 
 `KELPIE_BOARD_STATE` and `KELPIE_PUSH_TOKEN` are kelpie's own handoffs between its processes; never set them.

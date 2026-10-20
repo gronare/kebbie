@@ -224,8 +224,9 @@ pub fn refresh_prompt(configured: &[Source]) -> Result<String> {
     ))
 }
 
-pub fn task_prompt(entry: &Entry, sources: &[Source]) -> String {
+pub fn task_prompt(entry: &Entry, sources: &[Source], vault: bool) -> String {
     match entry.source.as_str() {
+        "vault" if vault => format!("Work on the vault note {reference} (\"{}\"); kelpie has made it this task's note. Read it with the vault tools first, then ask me what you need decided with kelpie ask, one question at a time, before you plan; then write the plan into that note and put it to me with kelpie ask --plan vault:{reference}, and write no code until I approve it.", entry.title, reference = entry.reference),
         "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan, written where your role says, and write no code until I approve it.", entry.reference, entry.title),
         "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {reference} (\"{}\"). Read it with the vault tools first and set its status to active, then ask me what you need decided with kelpie ask, one question at a time, before you plan; then write the plan into that note and put it to me with kelpie ask --plan vault:{reference}, and write no code until I approve it.", entry.title, reference = entry.reference),
         _ => format!("Work on: {}. {} Ask me what you need decided with kelpie ask, one question at a time, before you plan; then put the plan to me with kelpie ask --plan, written where your role says, and write no code until I approve it.", entry.title, entry.summary),
@@ -270,7 +271,15 @@ pub struct Role {
     pub finding: String,
     pub backlog: String,
     pub intake: String,
+    pub vault_work: String,
+    pub after_push: String,
 }
+
+const VAULT_WORK: &str = "- **The vault**: keep it current: started tasks and what each push landed in the repo log, the user's decisions in the task's note. New work goes in the backlog as under Taking in ideas.";
+const AFTER_PUSH: &str = "- `[from kelpie] <who> pushed <task>: <n> commits to <branch> (<sha> <subject>; …)` follows every push, the user's or yours. Write the repo's log line in the vault with `log_append`: what landed, with those shas. When the task is done, close its note (`close`, with `merged_into` when the area note took it in) or append to it what landed.";
+const KEPT_VAULT_WORK: &str = "- **The vault**: kelpie keeps each task's note: it opens one when the task starts (or claims the backlog note named with `--backlog`), the task writes its Problem before its first change and its solution and decisions as it goes, kelpie writes the repo's log line after each push and closes the note at done. Your part is the area notes and the user's decisions that reach beyond one task. New work goes in the backlog as under Taking in ideas.";
+const KEPT_AFTER_PUSH: &str = "- `[from kelpie] <who> pushed <task>: <n> commits to <branch> (<sha> <subject>; …)` follows every push, the user's or yours; kelpie has written the repo's log line from those commits. Update the area note with what the push changed in it.";
+const KEPT_TASKS: &str = "Every task kelpie starts has its own note in the vault: kelpie opens it at the start, or claims the backlog note named with `--backlog`, and the task writes it from your prompt. Done waits until the note has its solution and decisions, kelpie then closes it, and a reset puts it back in the backlog.";
 
 fn local_role() -> String {
     format!(
@@ -328,7 +337,7 @@ fn intake_for(source: Source) -> Intake {
     }
 }
 
-fn intake_role(sources: &[Source]) -> String {
+fn intake_role(sources: &[Source], vault: bool) -> String {
     let Some(first) = sources.first() else {
         return format!(
             "When the user brings an idea rather than a task to start, draft a task prompt for it, show it, and start it with `kelpie start` on yes. \
@@ -337,6 +346,17 @@ fn intake_role(sources: &[Source]) -> String {
         );
     };
     let Intake { draft, start, file, grown, reference } = intake_for(*first);
+    if vault {
+        let file = if *first == Source::Vault { "write a task note with the vault tools in Projects/, status `backlog`" } else { file };
+        let backlog = if *first == Source::Vault { String::new() } else { format!(", or `--backlog {reference}` once it is filed") };
+        return format!(
+            "When the user brings an idea rather than a task to start, take it in:\n\n\
+             1. Draft it as {draft}. Read what bears on it first (the area's notes, the code, the tasks that touch it), so the draft names the real problem and the repo.\n\
+             2. Show the user the draft, and ask with the AskUserQuestion tool: start it now as a task, file it in the backlog, or change it first.\n\
+             3. On start: start it with a prompt written as under Starting a task: `kelpie start <name> \"<prompt>\" --repo <repo>`{backlog}. On file: {file}. On change: redraft and ask again.\n\n\
+             The idea is taken in when the user has picked start or file and the task or the item exists.\n\n{KEPT_TASKS}",
+        );
+    }
     format!(
         "When the user brings an idea rather than a task to start, take it in:\n\n\
          1. Draft it as {draft}. Read what bears on it first (the area's notes, the code, the tasks that touch it), so the draft names the real problem and the repo.\n\
@@ -349,12 +369,14 @@ fn intake_role(sources: &[Source]) -> String {
     )
 }
 
-// Filled into roles/lead.md: {finding}, {backlog} and {intake}.
-pub fn role_texts(sources: &[Source]) -> Role {
-    let intake = intake_role(sources);
+// Filled into roles/lead.md: {finding}, {backlog}, {intake}, {vault_work} and {after_push}; vault is whether kelpie keeps the tasks' notes itself.
+pub fn role_texts(sources: &[Source], vault: bool) -> Role {
+    let intake = intake_role(sources, vault);
+    let (vault_work, after_push) = if vault { (KEPT_VAULT_WORK, KEPT_AFTER_PUSH) } else { (VAULT_WORK, AFTER_PUSH) };
+    let (vault_work, after_push) = (vault_work.to_string(), after_push.to_string());
     if sources.is_empty() {
         let backlog = format!("No backlog source is configured (`[board.backlog] sources` in {}), so the Backlog tab stays empty and there is nothing to refresh.", config::path().display());
-        return Role { finding: "ask the user what to work on".to_string(), backlog, intake };
+        return Role { finding: "ask the user what to work on".to_string(), backlog, intake, vault_work, after_push };
     }
     let local = sources.contains(&Source::Local);
     let fetched = fetched(sources);
@@ -365,7 +387,7 @@ pub fn role_texts(sources: &[Source]) -> Role {
     if !fetched.is_empty() {
         parts.push(fetched_role(&fetched, local));
     }
-    Role { finding: joined(sources, role_finding, " and "), backlog: parts.join("\n\n"), intake }
+    Role { finding: joined(sources, role_finding, " and "), backlog: parts.join("\n\n"), intake, vault_work, after_push }
 }
 
 pub fn show() -> Result<String> {
@@ -442,26 +464,37 @@ mod tests {
         assert_eq!(label(&[Source::Vault, Source::Linear]), "vault + Linear");
         assert_eq!(label(&[]), "no source");
         assert_eq!(from(&[Source::Vault]), "the vault");
-        let Role { finding, backlog, intake } = role_texts(&[Source::Vault]);
+        let Role { finding, backlog, intake, .. } = role_texts(&[Source::Vault], false);
         assert_eq!(finding, "the vault backlog by priority");
         assert!(!backlog.contains("Linear") && backlog.contains("`source` (`vault`)") && !backlog.contains("backlog.md"));
         assert!(intake.contains("task note for the vault's Projects/") && intake.contains("--backlog <the note's path>") && !intake.contains("Linear") && !intake.contains("local:"));
-        let Role { finding, backlog, intake } = role_texts(&[]);
+        let Role { finding, backlog, intake, .. } = role_texts(&[], false);
         assert!(!finding.contains("Linear") && !backlog.contains("Linear") && backlog.contains("No backlog source") && intake.contains("nowhere to file it"));
-        assert!(role_texts(&[Source::Linear, Source::Vault]).backlog.contains("Linear issues (assigned to them, not done; Linear's MCP) and the vault backlog"));
-        assert!(role_texts(&[Source::Linear, Source::Vault]).intake.contains("Draft it as a Linear issue"), "the first source listed takes the ideas in");
+        assert!(role_texts(&[Source::Linear, Source::Vault], false).backlog.contains("Linear issues (assigned to them, not done; Linear's MCP) and the vault backlog"));
+        assert!(role_texts(&[Source::Linear, Source::Vault], false).intake.contains("Draft it as a Linear issue"), "the first source listed takes the ideas in");
+    }
+
+    #[test]
+    fn with_the_vault_on_kelpie_keeps_the_notes_and_the_log_so_the_lead_does_not() {
+        let on = role_texts(&[Source::Vault], true);
+        assert!(!on.after_push.contains("log_append") && on.after_push.contains("kelpie has written the repo's log line") && on.after_push.contains("area note"), "{}", on.after_push);
+        assert!(on.vault_work.contains("kelpie keeps each task's note") && !on.vault_work.contains("repo log, the user's"), "{}", on.vault_work);
+        assert!(!on.intake.contains("plain task") && on.intake.contains("Every task kelpie starts has its own note in the vault") && !on.intake.contains("status `active`"), "{}", on.intake);
+        let off = role_texts(&[Source::Vault], false);
+        assert!(off.after_push.contains("log_append") && off.intake.contains("plain task"), "without the vault plugin the lead logs as before");
+        assert!(task_prompt(&entry("vault"), &[Source::Vault], true).contains("kelpie has made it this task's note") && !task_prompt(&entry("vault"), &[Source::Vault], true).contains("set its status"));
     }
 
     #[test]
     fn with_the_local_source_the_lead_keeps_the_file_itself() {
-        let Role { finding, backlog, intake } = role_texts(&[Source::Local]);
+        let Role { finding, backlog, intake, .. } = role_texts(&[Source::Local], false);
         assert!(finding.starts_with("the local backlog"));
         for needed in ["backlog.md", "kelpie backlog add --priority", "delete an item's line once its task is pushed", "`local:<Title>`", "leave them as they are"] {
             assert!(backlog.contains(needed), "{needed}: {backlog}");
         }
         assert!(!backlog.contains("kelpie backlog save") && !backlog.contains("vault") && !backlog.contains("Linear"), "{backlog}");
         assert!(intake.contains("--backlog \"local:<Title>\"") && intake.contains("kelpie -C <repo> link <task> \"local:<Title>\"") && !intake.contains("vault"), "{intake}");
-        let both = role_texts(&[Source::Local, Source::Vault]).backlog;
+        let both = role_texts(&[Source::Local, Source::Vault], false).backlog;
         assert!(both.contains("backlog.md") && both.contains("The board's Backlog tab also shows what you save") && both.contains("`source` (`vault`)") && !both.contains("`local`)"), "{both}");
     }
 
@@ -496,13 +529,13 @@ mod tests {
 
     #[test]
     fn a_task_prompt_reads_the_source_only_when_it_is_configured() {
-        assert!(task_prompt(&entry("linear"), &[Source::Linear]).starts_with("Work on Linear issue ABC-1: Fix it."));
-        assert!(task_prompt(&entry("linear"), &[Source::Vault]).starts_with("Work on: Fix it. It broke."));
-        assert!(task_prompt(&entry("vault"), &[Source::Vault]).starts_with("Work on the vault note ABC-1"));
-        assert!(task_prompt(&entry("vault"), &[Source::Vault]).contains("set its status to active"));
-        assert!(task_prompt(&entry("vault"), &[Source::Vault]).contains("write the plan into that note and put it to me with kelpie ask --plan vault:ABC-1"));
+        assert!(task_prompt(&entry("linear"), &[Source::Linear], false).starts_with("Work on Linear issue ABC-1: Fix it."));
+        assert!(task_prompt(&entry("linear"), &[Source::Vault], false).starts_with("Work on: Fix it. It broke."));
+        assert!(task_prompt(&entry("vault"), &[Source::Vault], false).starts_with("Work on the vault note ABC-1"));
+        assert!(task_prompt(&entry("vault"), &[Source::Vault], false).contains("set its status to active"));
+        assert!(task_prompt(&entry("vault"), &[Source::Vault], false).contains("write the plan into that note and put it to me with kelpie ask --plan vault:ABC-1"));
         for source in ["linear", "vault", "other"] {
-            let prompt = task_prompt(&entry(source), &[Source::Vault, Source::Linear]);
+            let prompt = task_prompt(&entry(source), &[Source::Vault, Source::Linear], false);
             assert!(prompt.contains("with kelpie ask, one question at a time") && prompt.contains("kelpie ask --plan"), "{prompt}");
         }
     }
