@@ -142,6 +142,14 @@ pub struct Held {
     id: (u64, u64),
 }
 
+impl Drop for Held {
+    // A child forked by another thread holds a copy of the descriptor until it execs; unlocking releases the lock for every copy at once.
+    fn drop(&mut self) {
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 impl Held {
     pub fn still_ours(&self) -> bool {
         fs::metadata(&self.path).is_ok_and(|metadata| (metadata.dev(), metadata.ino()) == self.id)

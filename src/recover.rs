@@ -526,10 +526,18 @@ struct Lock {
     _file: fs::File,
 }
 
+impl Drop for Lock {
+    // A child forked by another thread holds a copy of the descriptor until it execs; unlocking releases the lock for every copy at once.
+    fn drop(&mut self) {
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(self._file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 impl Lock {
     fn take(state: &Path) -> Option<Lock> {
         let file = crate::state::append_to(&dir(state).join(".lock")).ok()?;
-        // SAFETY: flock on a descriptor this File owns; the lock goes when the File closes.
+        // SAFETY: flock on a descriptor this File owns.
         (unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(Lock { _file: file })
     }
 }
