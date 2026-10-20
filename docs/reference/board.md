@@ -1,5 +1,7 @@
 # Board
 
+![The Areas page: areas with their repos, actions and vault log](../assets/clips/areas-page.gif)
+
 The board runs in the lead Space, as a popup over any Space with `prefix+t`, or in the current pane with `kelpie board`. `?` on the board lists every key.
 
 ## Layout

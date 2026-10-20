@@ -1,0 +1,26 @@
+#!/bin/bash
+# wishlist: started from the board with n; writes the button and reports ready.
+. "$KDEMO_DIR/react/lib.sh"
+text=$1
+case "$text" in
+  "[from"*) exit 0 ;;
+esac
+sleep 0.6
+mode working
+say "● Reading the product page in src/product/."
+sleep 2.5
+mkdir -p src/product
+cat > src/product/wishlist.ts <<'TS'
+export function saveForLater(shopperId: string, productId: string) {
+  return db.wishlist.upsert({ shopperId, productId, savedAt: new Date() });
+}
+TS
+say "● Write(src/product/wishlist.ts)"
+more "  ⎿  Wrote 3 lines"
+sleep 2.5
+git add -A && git commit -qm "Save products for later from the product page"
+say "● Bash(git commit -m \"Save products for later from the product page\")"
+sleep 1
+kelpie report --state ready --next "try Save for later on a product page" "A Save for later button on the product page; saved products are kept per shopper" >/dev/null
+say "● Ready: a Save for later button on the product page."
+mode idle

@@ -1,5 +1,7 @@
 # Updates and stale sessions
 
+![U on the board: kelpie updates and restarts the idle Claude sessions](../assets/clips/update-and-restarts.gif)
+
 kelpie updates itself, its Claude Code plugin and the vault plugin with one command, and then moves the running Claude sessions onto the new code without losing their conversations. This page explains how.
 
 ## One install root

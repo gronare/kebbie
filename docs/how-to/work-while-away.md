@@ -1,5 +1,7 @@
 # Work while you are away
 
+![Away mode: the lead settles a how-question, then writes the summary](../assets/clips/away-mode.gif)
+
 Let the lead keep tasks moving while you are gone, and get a summary when you are back.
 
 1. Before you leave, give push permission where you want work to land without you: `a` on a task, or `a` on a repo in the Areas page. See [Let the lead push](let-the-lead-push.md).

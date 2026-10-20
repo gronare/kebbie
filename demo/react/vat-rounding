@@ -1,0 +1,20 @@
+#!/bin/bash
+# vat-rounding: takes a review comment on the preview and shows the difference per invoice.
+. "$KDEMO_DIR/react/lib.sh"
+text=$1
+case "$text" in
+  *"difference"*)
+    sleep 0.6
+    mode working
+    kelpie report --state working --next "nothing yet" "Showing the difference per invoice in the preview" >/dev/null
+    say "● Your comment on app/invoices/preview.py asks for the difference next to old and new. Adding it."
+    sleep 2.5
+    perl -pi -e 's/yield invoice.number, old, new$/yield invoice.number, old, new, new - old/' app/invoices/preview.py
+    say "● Update(app/invoices/preview.py)" "  ⎿  -             yield invoice.number, old, new" "     +             yield invoice.number, old, new, new - old"
+    sleep 2
+    git add -A && git commit -qm "Show the difference per invoice in the VAT preview"
+    kelpie report --state needs-you --next "check the totals in the preview" "The preview shows old, new and the difference per invoice" >/dev/null
+    say "● Done: the preview shows the difference per invoice."
+    mode idle
+    ;;
+esac

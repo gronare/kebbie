@@ -1,5 +1,7 @@
 # Finish or throw away a task
 
+![The sign-off card with its screenshot, then the push window](../assets/clips/push-and-card.gif)
+
 Close a task you pushed, drop one you no longer want, or reset one to start over.
 
 | You want to | Run | Board |

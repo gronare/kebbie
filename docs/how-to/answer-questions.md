@@ -1,5 +1,7 @@
 # Answer a task's questions
 
+![Answering a task's question in the inbox, with a comment](../assets/clips/answer-questions.gif)
+
 Tasks ask you through the board, with options and a recommendation. Answer them all in one window.
 
 1. Press `i` on the board. The inbox opens with the waiting questions on the left and the selected question's detail or plan in the middle.

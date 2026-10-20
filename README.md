@@ -2,7 +2,7 @@
 
 Run many Claude Code tasks at once in [herdr](https://herdr.dev), each in its own git worktree, and land them on your default branch after a review you control.
 
-<!-- demo: docs/assets/demo.gif, recorded later -->
+![kelpie: from a sentence to the lead to a push on main](docs/assets/demo.gif)
 
 A kelpie is the working dog that keeps a herd moving while the drover directs. herdr holds the agents; kelpie keeps their work moving towards you.
 

@@ -1,0 +1,28 @@
+#!/bin/bash
+# search-filters: takes the answer to its price question and builds the ranges.
+. "$KDEMO_DIR/react/lib.sh"
+text=$1
+case "$text" in
+  "[from you]"*)
+    sleep 0.5
+    mode working
+    kelpie report --state working --next "nothing yet" "Building the fixed price ranges" >/dev/null
+    say "● Fixed ranges, then, with your comment taken in. Adding the four ranges."
+    sleep 2
+    cat > src/search/price.ts <<'TS'
+export const priceRanges = [
+  { label: "Under 25", max: 25 },
+  { label: "25 to 50", min: 25, max: 50 },
+  { label: "50 to 100", min: 50, max: 100 },
+  { label: "Over 100", min: 100 },
+];
+TS
+    say "● Write(src/search/price.ts)"
+    more "  ⎿  Wrote 6 lines"
+    sleep 2
+    git add -A && git commit -qm "Filter search results by fixed price ranges"
+    kelpie report --state ready --next "push it" "Price and size filters on the search page; prices in four fixed ranges" >/dev/null
+    say "● Ready: price and size filters, prices in four fixed ranges."
+    mode idle
+    ;;
+esac

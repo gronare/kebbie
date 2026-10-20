@@ -1,5 +1,7 @@
 # Review a task's changes
 
+![A comment on a line in the review split, sent to Claude](../assets/clips/review-in-nvim.gif)
+
 Read a task's diff next to its Claude and send it comments line by line.
 
 1. Select the task on the board and press `r`. Or, in the task's Claude, run `/kelpie:review-split`.
