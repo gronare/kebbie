@@ -170,8 +170,13 @@ pub fn layout(pane_id: &str) -> Result<Value> {
     Ok(call(&["pane", "layout", "--pane", pane_id])?["layout"].clone())
 }
 
+// `pane current` answers for the pane that calls it; the focused pane is the one `pane list` marks focused.
 pub fn focused_pane() -> Result<Option<String>> {
-    Ok(text(&call(&["pane", "current"])?["pane"]["pane_id"]))
+    Ok(focused_in(&call(&["pane", "list"])?["panes"]))
+}
+
+fn focused_in(panes: &Value) -> Option<String> {
+    panes.as_array()?.iter().find(|pane| pane["focused"] == true).and_then(|pane| pane["pane_id"].as_str().map(str::to_string))
 }
 
 // herdr focuses a pane by its neighbour: the pane next to `pane_id` on that side ("left", "right", "up", "down").
@@ -228,6 +233,13 @@ pub fn agent_ready(name: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_focused_pane_is_the_one_pane_list_marks_focused_not_the_caller() {
+        let panes = serde_json::json!([{ "pane_id": "w1:p1", "focused": false }, { "pane_id": "w3:p2", "focused": true }]);
+        assert_eq!(focused_in(&panes).as_deref(), Some("w3:p2"));
+        assert_eq!(focused_in(&serde_json::json!([{ "pane_id": "w1:p1", "focused": false }])), None);
+    }
 
     #[test]
     fn a_refusal_says_herdrs_message_and_code_without_the_arguments() {
