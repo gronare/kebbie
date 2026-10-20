@@ -127,6 +127,12 @@ pub fn herdr_plugin(list: Option<&str>) -> (Check, Option<Plugin>) {
     (check, Some(plugin))
 }
 
+pub fn updates(state: &Path, installed: &[crate::update_check::Component]) -> Check {
+    let (latest, fact) = crate::update_check::doctor_line(state, installed);
+    let check = ok("updates", fact);
+    if latest { check } else { check.with(one("kelpie update")) }
+}
+
 pub fn plugin_binary(root: &Path) -> Check {
     let binary = root.join("target/release/kelpie");
     if binary.is_file() {
@@ -445,6 +451,8 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(status_line(&claude_settings));
     checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
     checks.push(kelpie_on_path(&env.home, &env.path));
+    let places = crate::update_check::Places { root: plugin.as_ref().map(|plugin| plugin.root.clone()), claude_dir: env.claude_dir.clone() };
+    checks.push(updates(&env.kelpie_state, &crate::update_check::installed(&places)));
     let data_home = env.data_home.clone().unwrap_or_else(|| env.home.join(".local/share"));
     for (dir, about) in state_dirs(&env.kelpie_state, env.own_state, &env.state_home, &data_home) {
         checks.push(writable(&dir, about, env.uid));

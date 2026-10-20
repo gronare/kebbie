@@ -35,7 +35,7 @@ use crate::sh::Result;
 use crate::status::{self, Checkout, Group, Item};
 use crate::tasks;
 use crate::usage::Usage;
-use crate::{lead, questions, usage, vault};
+use crate::{lead, questions, update, update_check, usage, vault};
 
 pub const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
 pub const SUBTEXT: Color = Color::Rgb(0xa6, 0xad, 0xc8);
@@ -412,7 +412,14 @@ struct App {
     graphics: Graphics,
     images: HashMap<(PathBuf, u16), Option<Protocol>>,
     plans: HashMap<String, Text<'static>>,
+    updates: Vec<(String, String)>,
+    updater: Updater,
+    update_running: bool,
+    update_shown: bool,
+    recheck: Option<Sender<()>>,
 }
+
+type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
 
 pub fn style(color: Color) -> Style {
     Style::new().fg(color)
@@ -605,6 +612,24 @@ fn spawn_refresher() -> (Receiver<std::result::Result<Snapshot, String>>, Sender
         }
     });
     (snapshot_rx, refresh_tx)
+}
+
+fn spawn_update_checker() -> (Receiver<Vec<(String, String)>>, Sender<()>) {
+    let (notice_tx, notice_rx) = mpsc::channel();
+    let (recheck_tx, recheck_rx) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        loop {
+            let places = update_check::Places::current();
+            let notice = crate::lead::state_dir().map(|state| {
+                update_check::notice(&update_check::current(&state, messages::now(), update_check::installed(&places), || update_check::check(&places)))
+            }).unwrap_or_default();
+            if notice_tx.send(notice).is_err() {
+                return;
+            }
+            let _ = recheck_rx.recv_timeout(Duration::from_secs(600));
+        }
+    });
+    (notice_rx, recheck_tx)
 }
 
 type DetailRequest = (PathBuf, Option<PathBuf>);
@@ -830,6 +855,25 @@ impl App {
             let _ = sender.send(step());
         });
         self.mode = Mode::Working { label, result };
+    }
+
+    fn start_update(&mut self) {
+        let updater = self.updater.clone();
+        self.update_running = true;
+        self.in_background("Updating kelpie, its plugins and the vault plugin…".to_string(), move || updater());
+    }
+
+    fn take_working_result(&mut self) {
+        let Mode::Working { result, .. } = &self.mode else { return };
+        let Ok(result) = result.try_recv() else { return };
+        if std::mem::take(&mut self.update_running) {
+            self.update_shown = true;
+            self.updates.clear();
+            if let Some(recheck) = &self.recheck {
+                let _ = recheck.send(());
+            }
+        }
+        self.show(result);
     }
 
     fn show(&mut self, result: Result<String>) {
@@ -1153,6 +1197,7 @@ impl App {
             }
             KeyCode::Char('R') => self.refresh_backlog(),
             KeyCode::Char('A') => self.show(permit::away(Some(if permit::away_since().is_some() { "off" } else { "on" }))),
+            KeyCode::Char('U') => self.start_update(),
             KeyCode::Char('s') => {
                 self.mode = Mode::Input { purpose: Purpose::TaskName, label: "New task: name".to_string(), buffer: String::new() };
             }
@@ -2138,8 +2183,8 @@ fn hint_lines() -> (Line<'static>, Line<'static>) {
 fn hint_hits(line: &Line, area: Rect) -> Vec<(Rect, Hit)> {
     let text = line.to_string();
     let mut hits = Vec::new();
-    for (key, label, code) in FULL_HINTS {
-        let hint = format!("{key} {label}");
+    let update_hints = [(UPDATE_HINT, KeyCode::Char('U')), (SHORT_UPDATE_HINT, KeyCode::Char('U'))].map(|(hint, code)| (hint.to_string(), code));
+    for (hint, code) in FULL_HINTS.iter().map(|(key, label, code)| (format!("{key} {label}"), *code)).chain(update_hints) {
         let Some(byte) = text.find(&hint) else { continue };
         let x = Span::raw(&text[..byte]).width() as u16;
         let width = Span::raw(hint.as_str()).width() as u16;
@@ -2200,18 +2245,40 @@ fn usage_spans(usage: &Usage, wide: bool, now: u64) -> Vec<Span<'static>> {
     spans
 }
 
-fn status_line(full: Line<'static>, short: Line<'static>, usage: Option<&Usage>, width: usize, now: u64) -> Line<'static> {
+fn update_notice(updates: &[(String, String)], long: bool) -> Vec<Span<'static>> {
+    let text = if long {
+        let names: Vec<String> = updates.iter().map(|(name, version)| format!("{name} {version}")).collect();
+        format!("↑ {} · {UPDATE_HINT}", names.join(" · "))
+    } else {
+        SHORT_UPDATE_HINT.to_string()
+    };
+    vec![Span::raw("   "), Span::styled(text, style(MUTED))]
+}
+
+const UPDATE_HINT: &str = "U updates";
+const SHORT_UPDATE_HINT: &str = "↑ update · U";
+
+fn status_line(full: Line<'static>, short: Line<'static>, updates: &[(String, String)], usage: Option<&Usage>, width: usize, now: u64) -> Line<'static> {
     let right = |wide: bool| usage.map(|usage| usage_spans(usage, wide, now)).unwrap_or_default();
     let width_of = |spans: &[Span]| spans.iter().map(|span| span.width()).sum::<usize>();
     let left_width = |line: &Line| line.width() - line.spans.last().map_or(0, |span| span.content.len() - span.content.trim_end().len());
-    for (left, wide) in [(&full, true), (&short, true), (&full, false), (&short, false)] {
+    let notices: Vec<Vec<Span<'static>>> = if updates.is_empty() { Vec::new() } else { vec![update_notice(updates, true), update_notice(updates, false)] };
+    let short_text = short.to_string();
+    let shortest = Line::from(Span::styled(short_text.rsplit_once(" · ").map_or(short_text.as_str(), |(kept, _)| kept).to_string(), short.spans.first().map_or_else(Style::new, |span| span.style)));
+    let combos = [(&full, true), (&short, true), (&full, false), (&short, false)];
+    let with_notice: Vec<((&Line, bool), Vec<Span>)> = combos[..2].iter().flat_map(|combo| notices.iter().map(move |notice| (*combo, notice.clone())))
+        .chain(notices.last().map(|notice| ((&shortest, true), notice.clone())))
+        .chain(combos[2..].iter().flat_map(|combo| notices.iter().map(move |notice| (*combo, notice.clone())))).collect();
+    let tries = with_notice.into_iter().chain(combos.iter().map(|combo| (*combo, Vec::new())));
+    for ((left, wide), notice) in tries {
         let spans = right(wide);
-        let used = left_width(left) + width_of(&spans);
-        if used + 2 <= width || spans.is_empty() && left_width(left) <= width {
+        let used = left_width(left) + width_of(&notice) + width_of(&spans);
+        if used + 2 <= width || spans.is_empty() && used <= width {
             let mut line: Vec<Span> = left.spans.clone();
             if let Some(last) = line.last_mut() {
                 last.content = last.content.trim_end().to_string().into();
             }
+            line.extend(notice);
             line.push(Span::raw(" ".repeat(width.saturating_sub(used))));
             line.extend(spans);
             return Line::from(line);
@@ -2400,7 +2467,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("q", "the questions waiting on you: read the plan, answer with a comment"), ("m", "messages at the bottom: one line, then open with ↑ ↓ moving through them and ⏎ reading one (esc back to the tasks), then hidden"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
         ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server); its address shows in the task's details (worktree.dev_url)"), ("b", "start or stop the task's worker (worktree.dev_worker)"), ("v", "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it"), ("a", "let the lead push the task itself, or take that back"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
-        ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("a", "in the Backlog column: add an item to the local backlog"), ("A", "away mode on or off: the lead settles how-questions and keeps what-questions for you"), ("esc", "close this, or the board when it is an overlay"),
+        ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("a", "in the Backlog column: add an item to the local backlog"), ("A", "away mode on or off: the lead settles how-questions and keeps what-questions for you"), ("U", "update everything to the latest (kelpie update); ↑ at the bottom shows when there is a newer version"), ("esc", "close this, or the board when it is an overlay"),
     ].into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
 
@@ -2582,7 +2649,8 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Page::Work => hint_lines(),
         Page::Areas => area_page::Page::hint_lines(),
     };
-    let status = status_line(full_hints, short_hints, app.usage.as_ref(), bottom.width as usize, messages::now());
+    let updates: &[(String, String)] = if app.page == Page::Work { &app.updates } else { &[] };
+    let status = status_line(full_hints, short_hints, updates, app.usage.as_ref(), bottom.width as usize, messages::now());
     if app.page == Page::Areas {
         frame.render_widget(Paragraph::new(status), bottom);
         app.areas.draw(frame, body);
@@ -2861,6 +2929,7 @@ impl App {
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), plans: HashMap::new(),
+            updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false)), update_running: false, update_shown: false, recheck: None,
         }
     }
 }
@@ -2879,6 +2948,8 @@ pub fn run(overlay: bool) -> Result<String> {
     let (snapshots, refresh) = spawn_refresher();
     let mut app = App::new(sources, backlog::load(), overlay, refresh);
     app.away = permit::away_since().is_some();
+    let (update_notices, recheck) = spawn_update_checker();
+    app.recheck = Some(recheck);
     let (requests, results) = spawn_detailer();
     app.detail_requests = Some(requests);
     app.detail_results = Some(results);
@@ -2907,10 +2978,12 @@ pub fn run(overlay: bool) -> Result<String> {
                 editor.poll_draft();
             }
             app.poll_answer();
-            if let Mode::Working { result, .. } = &app.mode
-                && let Ok(result) = result.try_recv()
-            {
-                app.show(result);
+            app.take_working_result();
+            if !matches!(app.mode, Mode::Message(_)) {
+                app.update_shown = false;
+            }
+            while let Ok(updates) = update_notices.try_recv() {
+                app.updates = updates;
             }
             while let Ok(update) = snapshots.try_recv() {
                 match update {
@@ -2968,7 +3041,7 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             app.fetch_failures = fetcher.failures();
             app.away = permit::away_since().is_some();
-            if matches!(app.mode, Mode::Normal | Mode::Message(_) | Mode::Help) && app.areas.is_idle() && rebuild.ready() {
+            if (matches!(app.mode, Mode::Normal | Mode::Help) || matches!(app.mode, Mode::Message(_)) && !app.update_shown) && app.areas.is_idle() && rebuild.ready() {
                 let error = rebuild.restart(&app);
                 terminal = init_terminal();
                 app.mode = Mode::Message(error);
@@ -3400,6 +3473,70 @@ mod tests {
         assert!(!rows[28].contains('%'));
         assert_eq!(usage_color(49.0), GREEN);
         assert_eq!(usage_color(80.0), RED);
+    }
+
+    #[test]
+    fn a_newer_version_shows_muted_beside_the_hints_without_pushing_out_the_usage_bars() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        let now = messages::now();
+        app.usage = Some(Usage {
+            session: Some(usage::Window { used: 23.0, resets_at: now + 600 }), week: Some(usage::Window { used: 71.4, resets_at: now + 3 * 86_400 }), seen_at: now,
+        });
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(!rows[28].contains('↑'), "nothing newer, no notice: {}", rows[28]);
+        app.updates = vec![("kelpie".to_string(), "0.18.2".to_string())];
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(rows[28].contains("prefix+tab lead · ? keys   ↑ kelpie 0.18.2 · U updates") && rows[28].contains("session ━━━━━━━━ 23% resets"), "{}", rows[28]);
+        app.updates.push(("vault".to_string(), "0.2.17".to_string()));
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(rows[28].contains("prefix+tab lead · ? keys   ↑ update · U") && rows[28].contains("session ━━━━━━━━ 23% resets"), "the notice shortens before the hints do: {}", rows[28]);
+        let (rows, buffer) = render(&mut app, 200, 30);
+        assert!(rows[28].contains("↑ kelpie 0.18.2 · vault 0.2.17 · U updates") && rows[28].contains("session ━━━━━━━━ 23% resets"), "{}", rows[28]);
+        let (x, _) = find(&rows[28..29], "↑ kelpie")[0];
+        assert_eq!(buffer[(x as u16, 28)].fg, MUTED);
+        let (ux, _) = find(&rows[28..29], "U updates")[0];
+        assert_eq!(app.hit_at(ux as u16, 28), Some(Hit::Key(KeyCode::Char('U'))));
+        let (rows, _) = render(&mut app, 112, 30);
+        assert!(rows[28].trim_start().starts_with("⏎ options · q questions   ↑ update · U") && rows[28].contains("session ━━━━━━━━ 23% resets") && rows[28].contains("week ━━━━━━━━ 71% resets"), "the herdr popup keeps the bars, ? keys makes room: {}", rows[28]);
+        let (x, _) = find(&rows[28..29], "↑ update · U")[0];
+        assert_eq!(app.hit_at(x as u16, 28), Some(Hit::Key(KeyCode::Char('U'))));
+        let (rows, _) = render(&mut app, 40, 30);
+        assert!(rows[28].trim_start().starts_with("⏎ options · q questions · ? keys"), "too narrow for it, the hints stay: {}", rows[28]);
+        app.page = Page::Areas;
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(!rows[28].contains("updates") && !rows[28].contains("↑ update"), "the Work page only: {}", rows[28]);
+    }
+
+    #[test]
+    fn u_runs_the_update_in_the_background_and_shows_its_result() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        let (release, gate) = mpsc::channel::<()>();
+        let gate = std::sync::Mutex::new(gate);
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = ran.clone();
+        app.updater = std::sync::Arc::new(move || {
+            gate.lock().unwrap().recv().map_err(|error| error.to_string())?;
+            seen.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok("kelpie 0.18.1 → 0.18.2".to_string())
+        });
+        let (recheck, rechecked) = mpsc::channel();
+        app.recheck = Some(recheck);
+        app.updates = vec![("kelpie".to_string(), "0.18.2".to_string())];
+        app.handle_normal(key(KeyCode::Char('U')));
+        assert!(matches!(app.mode, Mode::Working { .. }), "the key returns while the update is still running");
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+        release.send(()).unwrap();
+        for _ in 0..200 {
+            app.take_working_result();
+            if matches!(app.mode, Mode::Message(_)) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let Mode::Message(text) = &app.mode else { panic!("the result is shown") };
+        assert_eq!(text, "kelpie 0.18.1 → 0.18.2");
+        assert!(app.update_shown && app.updates.is_empty() && rechecked.try_recv().is_ok(), "the notice goes and a fresh check is asked for");
+        assert!(help_lines().iter().any(|line| line.to_string().starts_with("U ")), "U is in the keys help");
     }
 
     fn some_messages(count: usize) -> Vec<Message> {

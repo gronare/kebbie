@@ -157,18 +157,21 @@ fn read_json(path: &Path) -> Option<Value> {
     std::fs::read_to_string(path).ok().and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
-fn hooks_of(root: &Path) -> String {
+pub fn hooks_of(root: &Path) -> String {
     std::fs::read_to_string(root.join("hooks/hooks.json")).unwrap_or_default()
 }
 
-pub fn plugin(claude_home: &Path) -> Plugin {
+pub fn installed(claude_home: &Path) -> Option<(String, String, PathBuf)> {
     let installed = read_json(&claude_home.join("plugins/installed_plugins.json")).unwrap_or_default();
-    let settings = read_json(&claude_home.join("settings.json")).unwrap_or_default();
-    let found = installed["plugins"].as_object().into_iter().flatten().filter(|(id, _)| id.starts_with("vault@")).find_map(|(id, installs)| {
+    installed["plugins"].as_object().into_iter().flatten().filter(|(id, _)| id.starts_with("vault@")).find_map(|(id, installs)| {
         let entry = installs.as_array()?.iter().find(|entry| entry["installPath"].as_str().is_some_and(|root| hooks_of(Path::new(root)).contains("notes-vault-mcp")))?;
         Some((id.clone(), field(entry, "version"), PathBuf::from(field(entry, "installPath"))))
-    });
-    match found {
+    })
+}
+
+pub fn plugin(claude_home: &Path) -> Plugin {
+    let settings = read_json(&claude_home.join("settings.json")).unwrap_or_default();
+    match installed(claude_home) {
         None => Plugin::Missing,
         Some((id, version, _)) if settings["enabledPlugins"][&id] == false => Plugin::Disabled { id, version },
         Some((id, version, root)) => Plugin::Enabled { id, version, root },

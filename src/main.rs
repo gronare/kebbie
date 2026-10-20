@@ -24,6 +24,7 @@ mod status;
 mod task_note;
 mod tasks;
 mod update;
+mod update_check;
 mod usage;
 mod vault;
 mod vault_cli;
@@ -108,8 +109,11 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap
   kelpie setup vault              install the optional vault plugin in Claude Code (marketplace, plugin, its options),
                                   showing each claude command and running it only on your y
-  kelpie update                   update the herdr and Claude Code plugins, rebuild, reload the plugins in
-                                  every waiting Claude session, and restart an idle lead on its new role
+  kelpie update                   update everything to the latest: the herdr and Claude Code plugins (rebuilt),
+                                  the vault plugin when installed; list each version before → after, reload the
+                                  plugins in every waiting Claude session, and restart an idle lead on its new role
+                                  (--check changes nothing: fetches and shows installed against latest available;
+                                  the board checks every 6 hours and shows ↑ when there is a newer one, U updates)
 
 With the vault plugin installed, enabled and configured, the vault holds each task: start opens the task's note
 (or claims the vault backlog note it starts from), edits wait until the note's Problem is written, push writes
@@ -316,7 +320,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         },
         Some("setup") if name == Some("vault") => setup::vault(),
         Some("setup") => Err("kelpie setup knows vault: kelpie setup vault".to_string()),
-        Some("update") => update::run(&doctor::Env::current().claude_dir),
+        Some("update") if arguments.flag("--check") => Ok(update::check(&doctor::Env::current().claude_dir)),
+        Some("update") => update::run(&doctor::Env::current().claude_dir, true),
         None | Some("help") => Ok(USAGE.to_string()),
         Some(other) => Err(format!("Unknown command \"{other}\"\n\n{USAGE}")),
     }
