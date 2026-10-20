@@ -65,7 +65,7 @@ use message_log::{Fold, fold_file, load_fold, save_fold};
 use options::{busy, ongoing_entry};
 use space::Process;
 use terminal::{init_terminal, restore_terminal};
-use threads::{DetailRequest, spawn_ci_watcher, spawn_detailer, spawn_refresher, spawn_restarter, spawn_update_checker};
+use threads::{DetailRequest, spawn_ci_watcher, spawn_detailer, spawn_refresher, spawn_restarter, spawn_routine_runner, spawn_update_checker};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Page {
@@ -473,7 +473,7 @@ impl App {
                         let (sender, result) = mpsc::channel();
                         let name = item.name.clone();
                         thread::spawn(move || {
-                            let options = tasks::Start { prompt: None, focus: true, from: None, mode: None, backlog: None };
+                            let options = tasks::Start { prompt: None, focus: true, from: None, mode: None, backlog: None, note: true };
                             let _ = sender.send(tasks::start(&path, &name, &options));
                         });
                         self.mode = Mode::Working { label: format!("Restarting {}…", item.name), result };
@@ -652,6 +652,7 @@ pub fn run(overlay: bool) -> Result<String> {
     let (update_notices, recheck) = spawn_update_checker();
     app.recheck = Some(recheck);
     let restarter = spawn_restarter(overlay);
+    spawn_routine_runner(overlay);
     let (requests, results) = spawn_detailer();
     app.detail_requests = Some(requests);
     app.detail_results = Some(results);

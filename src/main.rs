@@ -26,6 +26,7 @@ mod repo;
 mod report;
 mod restart;
 mod review;
+mod routines;
 mod sh;
 mod state;
 mod setup;
@@ -119,6 +120,14 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   closes as done; a failed run moves it to Needs you and its Claude gets the failing
                                   job's log ([ci] watch = false turns it off); the board checks every 30 seconds
   kelpie ci tick                  one round of checks for every running watch, as the board does
+  kelpie routines [--json]        the scheduled routines from config.toml and the repo configs ([[routines]]), each with
+                                  its schedule, repo, mode, next run and last outcome (ok, findings, failed, running);
+                                  the keeper starts each due one as a task (--no-focus), never while its last run's
+                                  task is still open
+  kelpie routines tick            one round of the routine scheduler, as the keeper runs every minute
+  kelpie routine run <id>         start a routine's run now, by the same rules
+  kelpie routine ok <summary>     run by a routine's task when all is well: records the run as ok and closes the task,
+                                  which must have no changes and no commits
   kelpie done [name]              after pushing: close the task and free its worktree
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
   kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
@@ -136,10 +145,11 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   kelpie) and is idle, not the pane you are in and without background work (that one
                                   is asked about on the board); --all every idle one; works with [restart] auto = false
   kelpie keeper                   the keeper: one background kelpie per machine that runs the routines (stale-session
-                                  restarts, the update check, held messages, delivery checks of typed prompts) with no
-                                  board open; herdr's startup, the board and kelpie update start it ([keeper] enabled =
-                                  false hands them to the board) (--start starts it detached unless one runs, --status
-                                  shows its pid, binary, uptime and each routine's last run, --stop stops it)
+                                  restarts, the update check, held messages, delivery checks of typed prompts, the
+                                  scheduled routines) with no board open; herdr's startup, the board and kelpie update
+                                  start it ([keeper] enabled = false hands them to the board) (--start starts it
+                                  detached unless one runs, --status shows its pid, binary, uptime and each routine's
+                                  last run, --stop stops it)
   kelpie update                   update everything to this machine's channel ([update] channel: release, the
                                   highest vX.Y.Z tag, or main, origin's default branch): the herdr plugin (rebuilt),
                                   the Claude Code plugin, the vault plugin when installed; list each version before →
@@ -265,7 +275,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             if repos.is_empty() {
                 repos.push(cwd);
             }
-            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), backlog: arguments.value("--backlog") };
+            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), backlog: arguments.value("--backlog"), note: true };
             // One task across repos: a half per repo, the first one focused.
             let started: Vec<Result<String>> = repos.iter().enumerate()
                 .map(|(index, repo)| tasks::start(repo, name, &tasks::Start { focus: options.focus && index == 0, ..options }))
@@ -351,6 +361,12 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("ci") if name == Some("tick") => ci::tick_cli(),
         Some("ci") if name.is_some() => Err("kelpie ci knows tick: kelpie ci [--json] or kelpie ci tick".to_string()),
         Some("ci") => Ok(ci::list(&lead::state_dir()?, arguments.flag("--json"))),
+        Some("routines") if name == Some("tick") => routines::tick_cli(),
+        Some("routines") if name.is_some() => Err("kelpie routines knows tick: kelpie routines [--json] or kelpie routines tick".to_string()),
+        Some("routines") => routines::list(arguments.flag("--json")),
+        Some("routine") if name == Some("run") => routines::run_now(arguments.positional(2).ok_or("kelpie routine run needs the routine's id; kelpie routines lists them")?),
+        Some("routine") if name == Some("ok") => routines::ok(&cwd, &arguments.positionals[2..].join(" ")),
+        Some("routine") => Err("kelpie routine knows run <id> and ok <summary>".to_string()),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
         Some("reset") => tasks::reset(&cwd, name),
@@ -407,7 +423,7 @@ fn main() -> ExitCode {
         usage::record(&input);
         return ExitCode::SUCCESS;
     }
-    if matches!(arguments.positional(0), Some("board" | "start" | "land" | "push" | "done" | "move" | "update" | "ci")) {
+    if matches!(arguments.positional(0), Some("board" | "start" | "land" | "push" | "done" | "move" | "update" | "ci" | "routine" | "routines")) {
         login_env::import();
     }
     match run(&arguments) {

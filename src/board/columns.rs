@@ -125,6 +125,8 @@ fn you_line(next: &str, highlighted: bool, width: usize) -> Line<'static> {
 
 type Rows = Vec<(usize, usize, Hit)>;
 
+const ROUTINE_MARKER: &str = " routine";
+
 fn running_dot(item: &Item) -> bool {
     item.server || item.worker
 }
@@ -160,7 +162,11 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         let place = (app.checkouts.len() > 1).then_some(item.place.as_str());
         let start = lines.len();
         let dot = running_dot(item);
-        let mut line = row(selected, focused, status_icon(item), &item.name, place, &row_facts(item), width.saturating_sub(if dot { 2 } else { 0 }));
+        let marker = if item.routine.is_some() { ROUTINE_MARKER } else { "" };
+        let mut line = row(selected, focused, status_icon(item), &item.name, place, &row_facts(item), width.saturating_sub(if dot { 2 } else { 0 } + marker.chars().count()));
+        if !marker.is_empty() {
+            line.spans.insert(4, Span::styled(marker, style(MUTED)));
+        }
         if dot {
             line.spans.extend([Span::raw(" "), Span::styled("●", style(GREEN))]);
         }

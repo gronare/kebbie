@@ -19,7 +19,7 @@ use super::started::{read_start, start_entry, started_file};
 // gate is the task's address when kelpie keeps its note: its edits then wait for the note's Problem.
 pub(super) fn settings(kelpie: &str, address: &str, gate: Option<&str>, tmp: Option<&Path>) -> String {
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kelpie)) }] }]);
-    let allow = ["peers", "tell", "report", "ask"].map(|command| format!("Bash({kelpie} {command}:*)"));
+    let allow = ["peers", "tell", "report", "ask", "routine ok"].map(|command| format!("Bash({kelpie} {command}:*)"));
     let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kelpie), crate::sh::quote(address)) }] }]);
     let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PostToolUse": evidence, "PostToolUseFailure": evidence });
     if let Some(address) = gate {
@@ -181,15 +181,16 @@ pub struct Start<'a> {
     pub from: Option<&'a str>,
     pub mode: Option<&'a str>,
     pub backlog: Option<&'a str>,
+    pub note: bool,
 }
 
 pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
-    let Start { prompt, focus, from, mode, backlog } = *options;
+    let Start { prompt, focus, from, mode, backlog, note: with_note } = *options;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     let config::Settings { setup_skill, setup_command, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
     let (setup_skill, setup_command, rules_skill) = (setup_skill.value, config::setup_command_in(setup_command.value, &repo), rules_skill.value);
-    let vault = crate::vault_cli::detect();
+    let vault = if with_note { crate::vault_cli::detect() } else { None };
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
         return restart(&place(&existing), &existing, focus, prompt);

@@ -24,6 +24,7 @@ The lead
 - [Work while you are away](how-to/work-while-away.md): away mode and the summary when you are back.
 - [Get notifications](how-to/get-notifications.md): ntfy, macOS or any shell command.
 - [Fill the backlog](how-to/fill-the-backlog.md): local file, vault and Linear.
+- [Add a routine](how-to/add-a-routine.md): a check kelpie runs on a schedule as a task.
 
 Repos and worktrees
 
@@ -71,6 +72,7 @@ Working on kelpie
 - [The review gate](explanation/review-gate.md): the lead's check, the read-only reviewer and what keeps a pass.
 - [The worktree pool](explanation/worktree-pool.md): why worktrees are kept and reused.
 - [The lead and away mode](explanation/lead-and-away-mode.md): what the lead holds and where it stops.
+- [Routines](explanation/routines.md): scheduled checks that report, plan or fix.
 - [The trust boundary](explanation/trust-boundary.md): what kelpie guards against, and what it does not.
 - [The vault](explanation/vault.md): what a task note adds.
 - [Updates and stale sessions](explanation/updates-and-restarts.md): channels, overrides and restarts.

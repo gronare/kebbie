@@ -118,6 +118,16 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 | `kelpie backlog` | The backlog the board shows. |
 | `kelpie backlog add [--priority <p>] "<Title> — <summary> (<area>)"` | Append an item to the local backlog file. See [Files](files.md#the-local-backlog-file). |
 
+## Routines
+
+See [Routines](../explanation/routines.md) for what a run does, and [`[[routines]]`](configuration.md#routines) for the keys.
+
+| Command | What it does |
+| --- | --- |
+| `kelpie routines [--json]` | Every routine from config.toml and the repo configs: its schedule, repo, mode, next run, and its last run's outcome (`ok`, `findings`, `failed` or `running`) with its summary. A routine that is not valid is listed as ignored, with the reason. `--json` gives `routines` and `errors`. |
+| `kelpie routines tick` | One round of the scheduler, as the keeper runs it every minute: a run whose task closed without a word is marked failed, and each due routine without an open run starts one. |
+| `kelpie routine run <id>` | Start a run now, by the same rules: never while the last run's task is open. Also starts a routine with `enabled = false`. |
+
 ## The lead and away mode
 
 | Command | What it does |
@@ -136,7 +146,8 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 
 | Command | What it does |
 | --- | --- |
-| `kelpie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. `<state>` is `needs-you`, `ready`, `working` or `blocked`. With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task. |
+| `kelpie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. `<state>` is `needs-you`, `ready`, `working` or `blocked`. With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task. A routine's task also lists its findings on a card with `needs-you`. |
+| `kelpie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. Refused outside a routine's task, from anyone but that task's Claude, and while the task has changes or commits. |
 | `kelpie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Put a question to you: two to four options, one recommended. `--plan <file>` or `--plan vault:<note>` asks you to approve a plan instead. |
 | `kelpie answered <task>` | The task's question was settled elsewhere; it leaves the board. |
 | `kelpie tell <to> <text>` | Message another session: a task (every half of it), `task@repo`, or `lead`. Held while the receiver waits for an answer, and logged. |
@@ -155,7 +166,7 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 | `kelpie update --stable` | Return to the channel. |
 | `kelpie restart` | Restart each stale Claude session that is idle, not the pane you are in, and has no background work. Works with `restart.auto = false`. |
 | `kelpie restart --all` | Restart every idle session, stale or not. |
-| `kelpie keeper --status` | Whether the keeper runs, with its pid, binary, uptime, log and each routine's interval, last run and last error. |
+| `kelpie keeper --status` | Whether the keeper runs, with its pid, binary, uptime, log and each of its routines' interval, last run and last error. |
 | `kelpie keeper --start` | Start the keeper in the background unless one runs. Says `off` while `keeper.enabled = false`. |
 | `kelpie keeper --stop` | Stop the keeper. It finishes the routine under way first. The board or herdr's next startup starts it again; `keeper.enabled = false` keeps it off. |
 

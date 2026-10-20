@@ -247,7 +247,8 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
     messages::append(&record)?;
     let message = messages::fold(&record.to_string()).remove(0);
     messages::copy_to_lead_locked(&question_copy(&message, crate::permit::away_since().is_some()), Some(&id), &sessions)?;
-    crate::notify::send(cwd, &crate::notify::Notice::from(crate::notify::Event::Question, &me, format!("{me} asks: {}", asked.text)));
+    let (event, said) = if crate::routines::found(&me, &asked.text) { (crate::notify::Event::RoutineFindings, "found and asks") } else { (crate::notify::Event::Question, "asks") };
+    crate::notify::send(cwd, &crate::notify::Notice::from(event, &me, format!("{me} {said}: {}", asked.text)));
     Ok(format!(
         "Asked the user; the question waits for them on the board:\n{}\n{}\nStop your turn now, with this question in one line as your last words; the answer arrives as a message from the user, [from {USER_LABEL}].",
         asked.text, options_text(&asked),

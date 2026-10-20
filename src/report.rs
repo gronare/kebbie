@@ -21,7 +21,7 @@ pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str)
     if !STATES.contains(&state) {
         return Err(format!("--state is one of {}, not \"{state}\"", STATES.join(", ")));
     }
-    if card && state != "ready" {
+    if card && !["ready", "needs-you"].contains(&state) {
         return Err(format!("--card goes with --state ready: the user reads the card when they push. {USAGE}"));
     }
     let next = next.map(str::trim).filter(|next| !next.is_empty()).ok_or(format!("kelpie report needs --next (\"nothing\" when there is nothing for the user): {USAGE}"))?;
@@ -35,6 +35,7 @@ pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str)
 pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, summary: &str) -> Result<String> {
     let (report, summary) = parse(state, next, card.is_some(), summary)?;
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kelpie report runs in a task's worktree")?;
+    card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
     let card = card.map(|file| cwd.join(file));
     let text = card.as_deref().map(read_card).transpose()?;
     messages::log_report(&me, &report, &summary)?;
@@ -43,12 +44,22 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
         _ => String::new(),
     };
     show_in_sidebar(&report);
-    if let Some(event) = crate::notify::Event::of_state(&report.state) {
+    if crate::notify::Event::of_state(&report.state).is_some() && crate::routines::found(&me, &summary) {
+        crate::notify::send(cwd, &crate::notify::Notice::from(crate::notify::Event::RoutineFindings, &me, format!("{me} found: {summary}")));
+    } else if let Some(event) = crate::notify::Event::of_state(&report.state) {
         let text = if event == crate::notify::Event::Ready { format!("{me} is ready: {summary}") } else { format!("{me} needs you: {}", report.next) };
         crate::notify::send(cwd, &crate::notify::Notice::from(event, &me, text));
     }
     let check = if report.state == "ready" { lead_check(cwd) + &review_again(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
+}
+
+// A routine's task lists its findings on a card while it waits on the user; any other task writes one only when it is ready.
+pub fn card_goes_with(state: &str, card: bool, routine: bool) -> Result<()> {
+    if card && state != "ready" && !(routine && state == "needs-you") {
+        return Err(format!("--card goes with --state ready (or needs-you in a routine's task): the user reads the card when they push. {USAGE}"));
+    }
+    Ok(())
 }
 
 fn review_again(cwd: &Path) -> String {
@@ -232,10 +243,15 @@ mod tests {
     }
 
     #[test]
-    fn a_card_goes_with_a_ready_report_only() {
+    fn a_card_goes_with_a_ready_report_and_a_routines_findings_only() {
         assert!(parse(Some("ready"), Some("push and close"), true, "refunds done").is_ok());
-        let error = parse(Some("needs-you"), Some("answer"), true, "x").err().unwrap();
+        let error = parse(Some("working"), Some("nothing"), true, "x").err().unwrap();
         assert!(error.contains("--card goes with --state ready"), "{error}");
+        assert_eq!(card_goes_with("ready", true, false), Ok(()));
+        assert!(card_goes_with("needs-you", true, false).unwrap_err().contains("--card goes with --state ready (or needs-you in a routine's task)"));
+        assert_eq!(card_goes_with("needs-you", true, true), Ok(()), "a routine's findings wait on the user with their card");
+        assert!(card_goes_with("blocked", true, true).is_err());
+        assert_eq!(card_goes_with("needs-you", false, false), Ok(()));
     }
 
     #[test]

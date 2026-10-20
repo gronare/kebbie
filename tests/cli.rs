@@ -933,3 +933,87 @@ fn kelpie_lead_leaves_a_hidden_chat_hidden_and_starts_no_second_one() {
     assert_eq!(stdout(&lead), "In the lead.");
     assert_eq!(changes(&lab), [["workspace", "focus", "w_lead"]], "no split, no new Claude, no zoom change");
 }
+
+fn routine_status(lab: &Lab) -> serde_json::Value {
+    let listed = lab.run(&["routines", "--json"]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    serde_json::from_str::<serde_json::Value>(&stdout(&listed)).unwrap()["routines"][0].clone()
+}
+
+#[test]
+fn a_due_routine_starts_as_a_task_in_the_keeper_round_reports_its_findings_and_closes_on_ok() {
+    let lab = Lab::new("routines");
+    let (app, slot) = lab.task_fixture();
+    let notified = lab.root.join("notified");
+    fs::write(&lab.config, format!(
+        "[notify]\ncommand = 'printf \"%s %s\\n\" \"$KELPIE_EVENT\" \"$1\" >> {}'\n\n[[routines]]\nid = \"cluster-health\"\ntitle = \"Cluster health\"\nrepo = \"{}\"\nevery = \"1h\"\nprompt = \"Check that every node is Ready.\"\nmode = \"fix\"\npush = true\n",
+        notified.display(), app.display(),
+    )).unwrap();
+    let answers = lab.root.join("answers");
+    fs::write(answers.join("worktree-open.json"), r#"{"result":{"workspace":{"workspace_id":"w_routine"},"root_pane":{"pane_id":"p_routine"}}}"#).unwrap();
+    fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[]}}}"#).unwrap();
+    fs::write(answers.join("agent-start.json"), r#"{"result":{}}"#).unwrap();
+
+    let listed = stdout(&lab.run(&["routines"]));
+    assert!(listed.starts_with("cluster-health  Cluster health\n  every 1h in ") && listed.contains("fix, pushes its fix; next run now") && listed.ends_with("last: not run yet"), "{listed}");
+    let ticked = lab.run(&["routines", "tick"]);
+    assert!(ticked.status.success(), "{}", stderr(&ticked));
+    assert!(stdout(&ticked).starts_with("routine cluster-health: Started cluster-health-"), "{}", stdout(&ticked));
+    let row = routine_status(&lab);
+    let address = row["last_task"].as_str().unwrap().to_string();
+    let task = address.strip_suffix("@app").expect("the run's task is in the routine's repo").to_string();
+    assert!(task.starts_with("cluster-health-") && task.len() == "cluster-health-20261019-0630".len(), "{task}");
+    assert_eq!((row["last_outcome"].as_str(), row["open"].as_bool()), (Some("running"), Some(true)));
+    let calls = lab.herdr_calls();
+    let opened = calls.iter().find(|call| call[..2] == ["worktree", "open"]).expect("the run opens a Space through the start path");
+    assert!(opened.contains(&task) && opened.contains(&"--no-focus".to_string()), "{opened:?}");
+    assert!(!calls.iter().any(|call| call[..2] == ["workspace", "focus"]), "a run never steals focus");
+    assert!(calls.iter().any(|call| call[..2] == ["agent", "prompt"] && call[3].contains("This is the routine \"Cluster health\" (cluster-health)") && call[3].contains("routine ok")), "{calls:?}");
+    assert!(lab.state.join("push-permits").join(&address).is_file(), "a fix routine with push = true carries the task's push permission");
+
+    let mut state: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.state.join("routines/cluster-health.json")).unwrap()).unwrap();
+    state["last_start"] = serde_json::json!(0);
+    fs::write(lab.state.join("routines/cluster-health.json"), state.to_string()).unwrap();
+    assert_eq!(stdout(&lab.run(&["routines", "tick"])), "routines: nothing was due", "due again, but its task is still open");
+    let again = lab.run(&["routine", "run", "cluster-health"]);
+    assert!(!again.status.success() && stderr(&again).contains("is still open"), "{}", stderr(&again));
+    assert_eq!(lab.herdr_calls().iter().filter(|call| call[..2] == ["worktree", "open"]).count(), 1, "no second Space");
+
+    let run_slot = lab.root.join("wt2.app");
+    let items: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["status", "--json"]))).unwrap();
+    let item = items["items"].as_array().unwrap().iter().find(|item| item["name"] == task.as_str()).expect("the run is a task on the board");
+    assert_eq!(item["routine"], "cluster-health");
+    assert!(items["items"].as_array().unwrap().iter().any(|item| item["name"] == "billing" && item["routine"].is_null()));
+    fs::write(run_slot.join("findings.md"), "- node-3 is NotReady: kubelet stopped\n").unwrap();
+    let reported = lab.run(&["-C", run_slot.to_str().unwrap(), "report", "--state", "needs-you", "--next", "restart kubelet on node-3", "--card", "findings.md", "node-3 NotReady"]);
+    assert!(reported.status.success(), "a routine's findings go on a card while it waits on the user: {}", stderr(&reported));
+    assert!(eventually(|| fs::read_to_string(&notified).unwrap_or_default().contains(&format!("routine-findings {address} found: node-3 NotReady"))), "{:?}", fs::read_to_string(&notified));
+    assert!(!fs::read_to_string(&notified).unwrap().contains("needs-you"), "heard once, as the routine's findings");
+    let row = routine_status(&lab);
+    assert_eq!((row["last_outcome"].as_str(), row["last_summary"].as_str()), (Some("findings"), Some("node-3 NotReady")));
+    let plain = lab.run(&["-C", slot.to_str().unwrap(), "report", "--state", "needs-you", "--next", "x", "--card", "findings.md", "x"]);
+    assert!(!plain.status.success() && stderr(&plain).contains("--card goes with --state ready"), "{}", stderr(&plain));
+
+    let stranger = lab.run_as("billing@app", &["-C", slot.to_str().unwrap(), "routine", "ok", "all fine"]);
+    assert!(!stranger.status.success() && stderr(&stranger).contains("billing@app is not a routine's task"), "{}", stderr(&stranger));
+    let user = lab.run(&["-C", run_slot.to_str().unwrap(), "routine", "ok", "all fine"]);
+    assert!(!user.status.success() && stderr(&user).contains("is the word of the routine's own task"), "{}", stderr(&user));
+    let closed = lab.run_as(&address, &["-C", run_slot.to_str().unwrap(), "routine", "ok", "kubelet back, every node Ready"]);
+    assert!(closed.status.success(), "{}", stderr(&closed));
+    assert!(stdout(&closed).starts_with("Recorded cluster-health as ok.") && stdout(&closed).contains("dropped; wt2.app is free again"), "{}", stdout(&closed));
+    let row = routine_status(&lab);
+    assert_eq!((row["last_outcome"].as_str(), row["last_summary"].as_str(), row["open"].as_bool()), (Some("ok"), Some("kubelet back, every node Ready"), Some(false)));
+    assert!(!lab.state.join("push-permits").join(&address).exists(), "the permission goes with the task");
+
+    state = serde_json::from_str(&fs::read_to_string(lab.state.join("routines/cluster-health.json")).unwrap()).unwrap();
+    state["last_outcome"] = serde_json::json!("running");
+    state["last_task"] = serde_json::json!("cluster-health-gone@app");
+    state["last_start"] = serde_json::json!(4_000_000_000u64);
+    fs::write(lab.state.join("routines/cluster-health.json"), state.to_string()).unwrap();
+    let swept = stdout(&lab.run(&["routines", "tick"]));
+    assert_eq!(swept, "routine cluster-health: cluster-health-gone@app closed before it reported");
+    assert_eq!(routine_status(&lab)["last_outcome"], "failed");
+    assert!(eventually(|| fs::read_to_string(&notified).unwrap_or_default().contains("routine-failed routine Cluster health failed")), "{:?}", fs::read_to_string(&notified));
+    let unknown = lab.run(&["routine", "run", "nope"]);
+    assert!(!unknown.status.success() && stderr(&unknown).contains("No routine \"nope\""));
+}

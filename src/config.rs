@@ -456,8 +456,9 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "keys", "ci"]).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "keys", "ci", "routines"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
+    crate::routines::parse_list(&table, None, source).map_err(fail)?;
     Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, worktree })
 }
 
@@ -472,8 +473,10 @@ pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
     }
-    unknown_keys(&table, "", &["actions", "worktree", "task", "review", "ci"]).map_err(fail)?;
+    unknown_keys(&table, "", &["actions", "worktree", "task", "review", "ci", "routines"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
+    let repo = Path::new(source).file_stem().map(|stem| stem.to_string_lossy().to_string());
+    crate::routines::parse_list(&table, repo.as_deref(), source).map_err(fail)?;
     if worktree.server_name.is_some() || worktree.worker_name.is_some() {
         return Err(fail(format!("worktree.server_name and worker_name: {MACHINE_WIDE}, since the sidebar names every Space's server and worker alike; set them in {}", path().display())));
     }
@@ -619,11 +622,16 @@ pub fn describe(loaded: &Loaded) -> String {
     key("restart.idle_minutes", idle_minutes.value.to_string(), idle_minutes.layer,
         "How long a stale session waits idle and unfocused before it is restarted; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
     key("keeper.enabled", keeper.value.to_string(), keeper.layer,
-        "Whether one background kelpie keeper per machine runs the routines (stale-session restarts, the update check, held messages, delivery checks of typed prompts), so they go on with the board closed; herdr's startup, the board and kelpie update start it. false runs them in an open board instead; config.toml only.");
+        "Whether one background kelpie keeper per machine runs the routines (stale-session restarts, the update check, held messages, delivery checks of typed prompts, scheduled [[routines]]), so they go on with the board closed; herdr's startup, the board and kelpie update start it. false runs them in an open board instead; config.toml only.");
     key("recover.enabled", recover.value.to_string(), recover.layer,
         "Whether kelpie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
     lines.push("[keys]  (config.toml only)\n  The board's keys, as name = \"key\" by action: a plain character for an action whose key is one (esc, ctrl+c, ⏎, the arrows and tab stay), and one not taken by another action where both act; moving two at once in the table works. An entry that breaks a rule is ignored, and named below. Help, hints and messages show the key in effect.".to_string());
     lines.extend(board_keys.describe(&key_errors).into_iter().map(|line| format!("  {line}")));
+    lines.push(format!("[[routines]]  (config.toml or a repo config)\n  Checks kelpie runs on a schedule, each as a task that reports, plans or fixes, one table each with the keys {}; a repo config's run in its repo, one in config.toml names its repo. Listed below are config.toml's and this repo's; kelpie routines lists every one with its next run, and docs/reference/configuration.md shows each key.", crate::routines::KEYS.join(", ")));
+    let repo_file = loaded.repo.clone().map(|file| { let stem = file.file_stem().map(|stem| stem.to_string_lossy().to_string()); (file, stem) });
+    let (routines, errors) = crate::routines::load_files([(loaded.machine.clone(), None)].into_iter().chain(repo_file).collect());
+    lines.extend(routines.iter().map(|routine| format!("  {}: {} in {}, {}{}", routine.id, routine.schedule.text(), routine.repo, routine.mode.key(), if routine.enabled { "" } else { ", off" })));
+    lines.extend(errors.iter().map(|error| format!("  ignored: {error}")));
     lines.push(format!("[[actions]]  (repo config only)\n  The Areas page's own actions for the repo, one table each, with the keys {}; docs/reference/configuration.md shows each.", crate::actions::ACTION_KEYS.join(", ")));
     lines.join("\n")
 }
@@ -667,6 +675,18 @@ mod tests {
         assert!(shown.contains("keys.inbox = \"I\"  (machine config)") && shown.contains("keys.new = \"n\"  (default)"), "{shown}");
         assert!(shown.contains("ignored: keys.chat: p is taken by push"), "{shown}");
         assert!(shown.contains("the board's W key runs in a server tab"), "the descriptions name the key in effect: {shown}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn kelpie_config_describes_the_routines_and_lists_config_tomls_and_the_repos() {
+        let dir = crate::sh::test_dir("config-routines");
+        let (file, repo) = (dir.join("config.toml"), dir.join("app.toml"));
+        std::fs::write(&file, "[[routines]]\nid = \"disk\"\ntitle = \"Disk\"\nrepo = \"~/code/infra\"\nat = \"07:00\"\nprompt = \"p\"\n").unwrap();
+        std::fs::write(&repo, "[[routines]]\nid = \"deps\"\ntitle = \"Updates\"\nat = \"mon 07:00\"\nprompt = \"p\"\nmode = \"plan\"\nenabled = false\n").unwrap();
+        let shown = describe(&Loaded { machine: file, repo: Some(repo), settings: settings(&Worktree::default(), &Machine::default()) });
+        assert!(shown.contains("[[routines]]  (config.toml or a repo config)\n  Checks kelpie runs on a schedule") && shown.contains("with the keys id, title, repo, every, at, prompt, mode, push, enabled"), "{shown}");
+        assert!(shown.contains("\n  disk: daily at 07:00 in ~/code/infra, report\n  deps: mon at 07:00 in app, plan, off\n"), "{shown}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -851,8 +871,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, keys, ci");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, keys, ci");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, keys, ci, routines");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, keys, ci, routines");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -864,7 +884,7 @@ mod tests {
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
         assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board.backlog] sources in "));
-        assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci");
+        assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, routines");
         assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, server_name, worker_name");
     }
 

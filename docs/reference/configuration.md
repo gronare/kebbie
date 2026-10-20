@@ -8,7 +8,7 @@ kelpie reads each key from the first layer that sets it:
 
 | Layer | File | Holds |
 | --- | --- | --- |
-| Repo config | `~/.config/kelpie/repos/<repo>.toml` | `[worktree]`, `[task]`, `[review]` and `[[actions]]` for one repo. `<repo>` is the main checkout's folder name, so every worktree of `~/code/app` reads `repos/app.toml`. |
+| Repo config | `~/.config/kelpie/repos/<repo>.toml` | `[worktree]`, `[task]`, `[review]`, `[[actions]]` and `[[routines]]` for one repo. `<repo>` is the main checkout's folder name, so every worktree of `~/code/app` reads `repos/app.toml`. |
 | Machine config | `~/.config/kelpie/config.toml` | Every key. |
 | Defaults | built in | Every key. |
 
@@ -44,8 +44,9 @@ Rules:
 | `update.channel` | `"release"` or `"main"` | `"release"` | config.toml only | What `kelpie update` installs: the highest `vX.Y.Z` tag on origin, or origin's default branch. |
 | `restart.auto` | boolean | `true` | config.toml only | Whether kelpie restarts stale idle Claude sessions on its own and `kelpie update` restarts idle ones at once. `false` restarts nothing on its own; the board still marks stale sessions. |
 | `restart.idle_minutes` | integer, 1 to 1440 | `10` | config.toml only | How long a stale session must be idle and out of focus before it is restarted. |
-| `keeper.enabled` | boolean | `true` | config.toml only | Whether the keeper, one background kelpie per machine, runs the routines: stale-session restarts, the update check, held messages and delivery checks of typed prompts. They then go on with the board closed. `false` runs them in an open board instead. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). |
+| `keeper.enabled` | boolean | `true` | config.toml only | Whether the keeper, one background kelpie per machine, runs the routines: stale-session restarts, the update check, held messages, delivery checks of typed prompts and the scheduled `[[routines]]`. They then go on with the board closed. `false` runs them in an open board instead. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). |
 | `recover.enabled` | boolean | `true` | config.toml only | Whether kelpie resumes a task whose Claude an API error stopped. After overload, a server error, a rate limit, a timeout or a dropped connection it tells the task to carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. Login, billing, invalid request and refusal errors go to you under Needs you at once. The schedule is fixed. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task). |
+| `[[routines]]` | tables | none | either | Checks kelpie runs on a schedule, each as a task that reports, plans or fixes. See [`[[routines]]`](#routines). |
 | `[keys]` | table of strings | the board's own | config.toml only | The board's keys by action, as `inbox = "I"`. See [Board](board.md#keys-in-configtoml) for the actions and the rules; `kelpie config` shows each key in effect and why an entry was ignored. |
 
 ## Backlog sources
@@ -75,7 +76,7 @@ The command gets:
 
 | Variable | Value |
 | --- | --- |
-| `KELPIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed`, `ci-green` or `api-error` |
+| `KELPIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed`, `ci-green`, `api-error`, `routine-findings` or `routine-failed` |
 | `KELPIE_TASK` | The task's name |
 | `KELPIE_REPO` | The task's repo |
 | `KELPIE_TEXT` | One line, such as `billing@app needs you: answer which queue` |
@@ -90,6 +91,8 @@ The command gets:
 | `ci-failed` | A workflow run for a pushed commit failed. The text names the workflow and the job. |
 | `ci-green` | Every workflow run for a pushed commit passed, or none ran. |
 | `api-error` | An API error stopped a task and kelpie will not resume it: a login, billing, invalid request or refusal error, or one that persisted through every retry. The text gives the reason and Claude Code's words. |
+| `routine-findings` | A routine's task found something: its first report or question, in place of that report's `needs-you`, `ready` or `question`. A run that ends with `kelpie routine ok` sends nothing. |
+| `routine-failed` | A routine's run could not start, or its task closed before it reported. |
 
 ## `[[actions]]`
 
@@ -134,6 +137,35 @@ key = "P"
 title = "Bump the client"
 ask = ["package", "version"]
 task = "Bump {package} to {version}; commit."
+```
+
+## `[[routines]]`
+
+Machine config or repo config. Each table is a check kelpie runs on a schedule as a task. See [Routines](../explanation/routines.md) and [Add a routine](../how-to/add-a-routine.md).
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `id` | string | required | The routine's name: lower-case letters, digits and single dashes, starting with a letter, at most 40. Unique across config.toml and every repo config. Its runs' tasks are named `<id>-<yyyymmdd-hhmm>`, the id cut to fit herdr's 32 characters. |
+| `title` | string | required | What `kelpie routines` and the run's prompt call it. |
+| `repo` | string | the repo config's repo | The repo the run's task starts in: a checkout's folder name, as `kelpie start --repo` takes it, or its path (`~/code/infra`). Required in config.toml. |
+| `every` | string | | An interval: `"30m"`, `"6h"`, `"1d"`. A run is due once it has passed since the last run started. |
+| `at` | string | | A local time: `"07:00"` every day, or `"mon 07:00"` once a week (`mon` to `sun`). A run is due once that time has come since the last run started. Give `every` or `at`, not both. |
+| `prompt` | string | required | What to check, in your words. |
+| `mode` | `"report"`, `"plan"` or `"fix"` | `"report"` | What the task does with what it finds: report it, propose a plan for your approval, or fix it in commits. |
+| `push` | boolean | `false` | Fix routines only: the run's task carries the push permission the board's `a` gives, so the lead pushes its fix once its commits hold to the rules. |
+| `enabled` | boolean | `true` | `false` keeps the routine off the schedule; `kelpie routine run <id>` still starts it. |
+
+A routine that is not valid is an error that names its file, its index and the key, as for every other key. `kelpie config` lists the routines it found.
+
+Example:
+
+```toml
+# ~/.config/kelpie/repos/infra.toml
+[[routines]]
+id = "cluster-health"
+title = "Cluster health"
+every = "6h"
+prompt = "Check that every node is Ready, no pod is crash-looping and every volume is healthy."
 ```
 
 ## Example files

@@ -73,6 +73,7 @@ pub struct Item {
     pub question: Option<Message>,
     pub ci: Option<crate::ci::Watch>,
     pub recover: Option<crate::recover::Record>,
+    pub routine: Option<String>,
 }
 
 impl Item {
@@ -245,6 +246,7 @@ impl Item {
             }),
             "ci": self.ci.as_ref().map(crate::ci::Watch::to_json),
             "recover": self.recover.as_ref().map(|record| { let mut shown = record.to_json(); shown["note"] = json!(record.note()); shown }),
+            "routine": self.routine,
             "server": self.server,
             "url": self.url,
             "worker": self.worker,
@@ -382,6 +384,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 question: questions.iter().find(|question| question.from == address).map(|question| (*question).clone()),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
                 recover: state.as_deref().and_then(|state| crate::recover::load(state, &address)),
+                routine: state.as_deref().and_then(|state| crate::routines::run_of(state, &address)).map(|(id, _)| id),
                 name: task,
             });
         }
@@ -411,6 +414,7 @@ pub fn gather() -> Result<Vec<Item>> {
             question: None,
             ci: None,
             recover: None,
+            routine: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -435,6 +439,7 @@ pub(crate) mod tests {
             question: None,
             ci: None,
             recover: None,
+            routine: None,
         }
     }
 

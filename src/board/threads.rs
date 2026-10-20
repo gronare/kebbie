@@ -124,6 +124,23 @@ pub(super) fn spawn_restarter(overlay: bool) -> Receiver<Vec<String>> {
     stale_rx
 }
 
+// With the keeper off, the full board starts due routines; the routines' own lock keeps a second board from starting them too.
+pub(super) fn spawn_routine_runner(overlay: bool) {
+    if overlay {
+        return;
+    }
+    thread::spawn(move || {
+        loop {
+            if crate::keeper::current_owner() == crate::keeper::Owner::Board
+                && let Ok(state) = crate::lead::state_dir()
+            {
+                crate::routines::tick(&state);
+            }
+            thread::sleep(Duration::from_secs(crate::routines::EVERY));
+        }
+    });
+}
+
 // Off the UI thread, and gh is asked only while a watch runs.
 pub(super) fn spawn_ci_watcher(refresh: Sender<()>) {
     thread::spawn(move || {

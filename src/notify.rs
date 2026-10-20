@@ -27,6 +27,8 @@ pub enum Event {
     CiFailed,
     CiGreen,
     ApiError,
+    RoutineFindings,
+    RoutineFailed,
 }
 
 impl Event {
@@ -39,6 +41,8 @@ impl Event {
             Event::CiFailed => "ci-failed",
             Event::CiGreen => "ci-green",
             Event::ApiError => "api-error",
+            Event::RoutineFindings => "routine-findings",
+            Event::RoutineFailed => "routine-failed",
         }
     }
 

@@ -399,7 +399,7 @@ impl Page {
                         self.mode = Mode::Working { label: format!("{title}…"), result };
                     }
                     Go::Task { repo, name, prompt } => {
-                        let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, backlog: None };
+                        let options = tasks::Start { prompt: Some(&prompt), focus: true, from: None, mode: None, backlog: None, note: true };
                         let result = terminal::outside(terminal, || tasks::start(&repo, &name, &options));
                         self.show(result);
                     }
