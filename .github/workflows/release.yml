@@ -1,0 +1,50 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches the version in every manifest
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          herdr=$(sed -n 's/^version = "\(.*\)"/\1/p' herdr-plugin.toml | head -1)
+          claude=$(jq -r .version .claude-plugin/plugin.json)
+          for found in "Cargo.toml $cargo" "herdr-plugin.toml $herdr" ".claude-plugin/plugin.json $claude"; do
+            set -- $found
+            if [ "$2" != "$tag" ]; then echo "::error::$1 says $2, the tag says $tag"; exit 1; fi
+          done
+
+  test:
+    needs: [version]
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      HERDR_BIN_PATH: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: |
+          mkdir -p "$RUNNER_TEMP/state"
+          KELPIE_STATE_DIR="$RUNNER_TEMP/state" cargo test --locked
+
+  release:
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: GitHub Release with notes from the commits since the last tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "kelpie ${GITHUB_REF_NAME#v}"
