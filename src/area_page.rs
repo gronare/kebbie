@@ -856,7 +856,7 @@ impl Page {
                 }
             }
             Mode::Help => {
-                let mut keys = keys::map().help(&[Ctx::Areas]);
+                let mut keys = keys::map().help(&[Ctx::Areas], false);
                 keys.push(("A–Z".to_string(), "the repo's own actions, from its repo config (kelpie config shows where)"));
                 let lines = keys.into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect();
                 modal(frame, "keys".to_string(), lines, 76);
@@ -926,7 +926,7 @@ impl Page {
     }
 
     pub fn hint_lines() -> (Line<'static>, Line<'static>) {
-        let (full, short) = keys::map().hints(Ctx::Areas);
+        let (full, short) = keys::map().hints(Ctx::Areas, false);
         let words = |hints: Vec<(String, &'static str, KeyCode)>| hints.into_iter().map(|(key, word, _)| (key, if word == "options" { "actions" } else { word })).collect::<Vec<_>>();
         let line = |hints: Vec<(String, &'static str)>| board::hints(&hints.iter().map(|(key, word)| (key.as_str(), *word)).collect::<Vec<_>>());
         (line(words(full)), line(words(short)))

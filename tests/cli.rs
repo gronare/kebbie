@@ -868,3 +868,68 @@ fn a_keeper_whose_binary_is_replaced_hands_over_to_the_new_one() {
     let log = fs::read_to_string(lab.state.join("keeper.log")).unwrap();
     assert!(log.contains("exits: a new kelpie binary is in place") && log.contains("handed over to pid "), "{log}");
 }
+
+// The lead Space as the fake herdr shows it: the board on the left (p1), the lead's chat on the right (p2), both running.
+fn lead_space(lab: &Lab, in_lead: bool, zoomed: bool, focused: &str) {
+    let answers = lab.root.join("answers");
+    let elsewhere = if in_lead { String::new() } else { r#",{"workspace_id":"w_task","label":"billing","focused":true}"#.to_string() };
+    fs::write(answers.join("workspace-list.json"), format!(r#"{{"result":{{"workspaces":[{{"workspace_id":"w_lead","label":"lead","focused":{in_lead}}}{elsewhere}]}}}}"#)).unwrap();
+    let pane = |id: &str| format!(r#"{{"pane_id":"{id}","focused":{}}}"#, in_lead && id == focused);
+    fs::write(answers.join("pane-list.json"), format!(r#"{{"result":{{"panes":[{},{}]}}}}"#, pane("w_lead:p1"), pane("w_lead:p2"))).unwrap();
+    fs::write(answers.join("pane-layout.json"), format!(r#"{{"result":{{"layout":{{"zoomed":{zoomed},"focused_pane_id":"{focused}","panes":[{{"pane_id":"w_lead:p1","rect":{{"x":0,"y":0}}}},{{"pane_id":"w_lead:p2","rect":{{"x":64,"y":0}}}}]}}}}}}"#)).unwrap();
+    fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"pid":2,"argv":["/opt/kelpie","board"]}]}}}"#).unwrap();
+    for ok in ["pane-zoom", "pane-focus"] {
+        fs::write(answers.join(format!("{ok}.json")), r#"{"result":{}}"#).unwrap();
+    }
+    let _ = fs::remove_file(&lab.herdr_log);
+}
+
+fn changes(lab: &Lab) -> Vec<Vec<String>> {
+    lab.herdr_calls().into_iter().filter(|call| !matches!((call[0].as_str(), call[1].as_str()), ("workspace", "list") | ("pane", "list" | "layout" | "process-info"))).collect()
+}
+
+#[test]
+fn the_leads_chat_hides_behind_herdrs_zoom_on_the_board_and_shows_again() {
+    let lab = Lab::new("hide-chat");
+    lead_space(&lab, true, false, "w_lead:p1");
+    let hidden = lab.run(&["lead", "--toggle-chat"]);
+    assert!(hidden.status.success(), "{}", stderr(&hidden));
+    assert!(stdout(&hidden).starts_with("The lead's chat is hidden and runs on"), "{}", stdout(&hidden));
+    assert_eq!(changes(&lab), [["pane", "zoom", "--pane", "w_lead:p1", "--on"]]);
+
+    lead_space(&lab, true, true, "w_lead:p1");
+    let shown = lab.run(&["lead", "--toggle-chat"]);
+    assert_eq!(stdout(&shown), "The lead's chat is shown again.", "{}", stderr(&shown));
+    assert_eq!(changes(&lab), [["pane", "zoom", "--pane", "w_lead:p1", "--off"]]);
+
+    lead_space(&lab, true, true, "w_lead:p2");
+    lab.run(&["lead", "--toggle-chat"]);
+    assert_eq!(changes(&lab), [["pane", "zoom", "--pane", "w_lead:p1", "--on"]], "a zoom on the chat hides the board, so the toggle zooms the board instead");
+}
+
+#[test]
+fn tab_with_the_chat_hidden_shows_it_and_focuses_it_and_back_keeps_it_shown() {
+    let lab = Lab::new("tab-hidden");
+    lead_space(&lab, true, true, "w_lead:p1");
+    let focus = lab.run(&["focus"]);
+    assert!(focus.status.success(), "{}", stderr(&focus));
+    assert_eq!(changes(&lab), [["pane", "zoom", "--pane", "w_lead:p2", "--off"]], "the zoom goes off with the focus on the chat, never a plain hop that would zoom the chat");
+
+    lead_space(&lab, true, false, "w_lead:p2");
+    lab.run(&["focus"]);
+    assert_eq!(changes(&lab), [["pane", "focus", "--pane", "w_lead:p2", "--direction", "left"]], "back on the board, the chat stays shown");
+
+    lead_space(&lab, false, true, "w_lead:p1");
+    lab.run(&["focus"]);
+    assert_eq!(changes(&lab), [vec!["workspace", "focus", "w_lead"], vec!["pane", "zoom", "--pane", "w_lead:p2", "--off"]], "from another Space too");
+}
+
+#[test]
+fn kelpie_lead_leaves_a_hidden_chat_hidden_and_starts_no_second_one() {
+    let lab = Lab::new("lead-hidden");
+    lead_space(&lab, false, true, "w_lead:p1");
+    let lead = lab.run(&["lead"]);
+    assert!(lead.status.success(), "{}", stderr(&lead));
+    assert_eq!(stdout(&lead), "In the lead.");
+    assert_eq!(changes(&lab), [["workspace", "focus", "w_lead"]], "no split, no new Claude, no zoom change");
+}

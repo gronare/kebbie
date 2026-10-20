@@ -62,7 +62,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie lead                     go to the lead Space (creating it), or back to where you were
                                   (--first only moves the lead Space to the top of herdr's Spaces; --restart
                                   restarts an idle lead's Claude on its current role and settings, resuming
-                                  its conversation)
+                                  its conversation; --toggle-chat hides the lead's chat so the board takes the
+                                  whole width, or shows it again)
   kelpie focus                    in the lead Space, move focus between the board and the lead's chat; from
                                   anywhere else, go to the lead's chat
   kelpie peers                    who you are and the other task sessions, with what each is doing
@@ -291,6 +292,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("lead") if arguments.flag("--first") => lead::keep_first(),
         Some("lead") if arguments.flag("--restart") => lead::restart(),
         Some("lead") if arguments.flag("--renew-board") => lead::renew_board(),
+        Some("lead") if arguments.flag("--toggle-chat") => lead::toggle_chat(),
         Some("lead") => lead::toggle(),
         Some("focus") => lead::focus_toggle().map(|_| String::new()),
         Some("peers") => peers::peers(&cwd),

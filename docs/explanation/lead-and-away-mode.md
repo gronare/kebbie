@@ -2,6 +2,10 @@
 
 The lead is the Claude you talk to most. It runs in the lead Space next to the board. Feature work happens in each task's own Space; the lead starts it, steers it and checks it.
 
+## Hiding the chat
+
+`h` on the board in the lead Space hides the lead's chat, and `h` again shows it. The board then takes the whole width, which at 150 columns or more gives it the wide layout with the detail panel. Hiding is herdr's own pane zoom on the board: the chat keeps running unseen, at its size, and comes back as it was. The state is herdr's, so it outlives a board restart, and the board's status line says `chat hidden` while it lasts. `tab`, or `prefix+tab` from anywhere, shows the chat again and puts the focus there; going back to the board leaves it shown. `kelpie lead --toggle-chat`, or herdr's `kelpie.chat` action on a key, does the same as `h` from any Space and takes you to the lead. Moving herdr's focus onto the chat by other means while it is hidden zooms the chat instead, as herdr's zoom follows the focus.
+
 ## Why a lead
 
 With one Claude, you are the one holding the picture. With five, you cannot: you would spend your time switching Spaces, reading scrollback and copying what one session said into another. The lead takes that job. It holds the tasks, repos, plans and decisions, so you can come back after an hour and ask "what needs me?"

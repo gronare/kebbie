@@ -19,6 +19,7 @@ pub enum Act {
     WorkPage,
     AreasPage,
     Lead,
+    HideChat,
     Messages,
     Help,
     Inbox,
@@ -76,8 +77,8 @@ const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas];
 
 impl Act {
-    pub const EVERY: [Act; 34] = [
-        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::Lead, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 35] = [
+        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::Lead, Act::HideChat, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Tidy, Act::Push, Act::Done, Act::Reset, Act::Drop, Act::Refresh, Act::Away,
         Act::Update, Act::Filter, Act::AreaRefresh, Act::Log, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
@@ -90,6 +91,7 @@ impl Act {
             Act::WorkPage => "work_page",
             Act::AreasPage => "areas_page",
             Act::Lead => "lead",
+            Act::HideChat => "hide_chat",
             Act::Messages => "messages",
             Act::Help => "help",
             Act::Inbox => "inbox",
@@ -133,6 +135,7 @@ impl Act {
             Act::Quit => Default::CtrlC,
             Act::WorkPage => Default::Char('1'),
             Act::AreasPage => Default::Char('2'),
+            Act::HideChat => Default::Char('h'),
             Act::Messages => Default::Char('m'),
             Act::Help => Default::Char('?'),
             Act::Inbox => Default::Char('i'),
@@ -175,7 +178,8 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Move, on: &[Card], help: "in the card window: scroll", hint: Hint::No },
     Binding { act: Act::WorkPage, on: ALL, help: "the work page", hint: Hint::No },
     Binding { act: Act::AreasPage, on: ALL, help: "the areas page", hint: Hint::No },
-    Binding { act: Act::Lead, on: ALL, help: "move focus to the lead's chat", hint: Hint::Full },
+    Binding { act: Act::Lead, on: ALL, help: "move focus to the lead's chat, showing it first when it is hidden", hint: Hint::Full },
+    Binding { act: Act::HideChat, on: BOARD, help: "hide or show the lead's chat: hidden, it runs on and the board takes the whole width (on the board in the lead Space)", hint: Hint::Full },
     Binding { act: Act::Inbox, on: ALL, help: "inbox: the questions waiting on you; read the plan, answer with a comment", hint: Hint::Both },
     Binding { act: Act::Messages, on: BOARD, help: "messages at the bottom: one line, then open with ↑ ↓ moving through them and ⏎ reading one (esc back to the tasks), then hidden", hint: Hint::Full },
     Binding { act: Act::Filter, on: BOARD, help: "filter the selected column: type part of a name, ⏎ keeps it, esc clears it", hint: Hint::No },
@@ -213,6 +217,8 @@ pub const TABLE: &[Binding] = &[
 ];
 
 pub type Hints = Vec<(String, &'static str, KeyCode)>;
+
+pub const LEAD_ONLY: &[Act] = &[Act::HideChat];
 
 pub struct Keys {
     chars: HashMap<Act, char>,
@@ -303,16 +309,16 @@ impl Keys {
     }
 
 
-    pub fn help(&self, page: &[Ctx]) -> Vec<(String, &'static str)> {
-        TABLE.iter().filter(|row| row.on.iter().any(|ctx| page.contains(ctx))).map(|row| (self.label(row.act), row.help)).collect()
+    pub fn help(&self, page: &[Ctx], lead: bool) -> Vec<(String, &'static str)> {
+        TABLE.iter().filter(|row| row.on.iter().any(|ctx| page.contains(ctx)) && (lead || !LEAD_ONLY.contains(&row.act))).map(|row| (self.label(row.act), row.help)).collect()
     }
 
-    pub fn hints(&self, page: Ctx) -> (Hints, Hints) {
+    pub fn hints(&self, page: Ctx, lead: bool) -> (Hints, Hints) {
         let entry = |row: &Binding| {
             let key = self.label(row.act);
             (key, hint_word(row.act), self.code(row.act))
         };
-        let rows: Vec<&Binding> = TABLE.iter().filter(|row| row.on.contains(&page) && row.hint != Hint::No).collect();
+        let rows: Vec<&Binding> = TABLE.iter().filter(|row| row.on.contains(&page) && row.hint != Hint::No && (lead || !LEAD_ONLY.contains(&row.act))).collect();
         (rows.iter().map(|row| entry(row)).collect(), rows.iter().filter(|row| row.hint == Hint::Both).map(|row| entry(row)).collect())
     }
 
@@ -341,6 +347,7 @@ pub fn hint_word(act: Act) -> &'static str {
         Act::Inbox => "inbox",
         Act::Messages => "messages",
         Act::Lead => "lead",
+        Act::HideChat => "chat",
         Act::Help => "keys",
         _ => act.id(),
     }
@@ -461,14 +468,33 @@ mod tests {
     #[test]
     fn help_and_hints_name_the_key_in_effect() {
         let (keys, _) = Keys::with(&entries(&[("inbox", "I")]));
-        let help = keys.help(&[Work, Backlog]);
+        let help = keys.help(&[Work, Backlog], false);
         assert!(help.iter().any(|(key, text)| key == "I" && text.starts_with("inbox")), "{help:?}");
         assert!(!help.iter().any(|(key, _)| key == "i"));
-        let (full, short) = keys.hints(Work);
+        let (full, short) = keys.hints(Work, false);
         let shown: Vec<String> = full.iter().map(|(key, word, _)| format!("{key} {word}")).collect();
         assert_eq!(shown, ["⏎ options", "tab lead", "I inbox", "m messages", "? keys"]);
         assert_eq!(short.iter().map(|(key, word, _)| format!("{key} {word}")).collect::<Vec<_>>(), ["⏎ options", "I inbox", "? keys"]);
         assert!(full.iter().all(|(_, _, code)| keys.act(Work, &KeyEvent::from(*code)).is_some()), "every hint is a key the board acts on");
+    }
+
+    #[test]
+    fn h_hides_the_leads_chat_on_the_work_and_backlog_columns_and_shows_only_on_the_lead_board() {
+        let keys = Keys::defaults();
+        let at = |ctx, code| keys.act(ctx, &KeyEvent::from(code));
+        assert_eq!((at(Work, KeyCode::Char('h')), at(Backlog, KeyCode::Char('h'))), (Some(Act::HideChat), Some(Act::HideChat)));
+        assert_eq!((at(Areas, KeyCode::Char('h')), at(Card, KeyCode::Char('h'))), (None, None), "the Areas page keeps h for a repo's own actions");
+        assert!(!keys.reserved().contains(&'h'));
+        let shown = |lead| keys.hints(Work, lead).0.iter().map(|(key, word, _)| format!("{key} {word}")).collect::<Vec<_>>();
+        assert_eq!(shown(true), ["⏎ options", "tab lead", "h chat", "i inbox", "m messages", "? keys"]);
+        assert!(!shown(false).contains(&"h chat".to_string()), "an overlay or a board outside the lead Space has no chat to hide");
+        assert!(!keys.hints(Work, true).1.iter().any(|(_, word, _)| *word == "chat"), "the short hint line leaves it out");
+        assert!(keys.help(&[Work, Backlog], true).iter().any(|(key, text)| key == "h" && text.starts_with("hide or show the lead's chat")));
+        assert!(!keys.help(&[Work, Backlog], false).iter().any(|(key, _)| key == "h"));
+        let (moved, errors) = Keys::with(&entries(&[("hide_chat", "H")]));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(moved.act(Work, &KeyEvent::from(KeyCode::Char('H'))), Some(Act::HideChat));
+        assert_eq!(Keys::with(&entries(&[("hide_chat", "g")])).1, ["keys.hide_chat: g is taken by go"]);
     }
 
     #[test]

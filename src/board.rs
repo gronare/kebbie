@@ -489,6 +489,7 @@ struct Snapshot {
     questions: Vec<Message>,
     usage: Option<Usage>,
     ongoing: Vec<Ongoing>,
+    lead_chat: Option<bool>,
 }
 
 struct App {
@@ -544,6 +545,7 @@ struct App {
     filter: Option<(Column, String)>,
     ctrl_c: Option<Instant>,
     notice: Option<(String, Instant)>,
+    lead_chat: Option<bool>,
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
@@ -725,7 +727,7 @@ fn load_ongoing() -> Vec<Ongoing> {
     }).collect()
 }
 
-fn spawn_refresher() -> (Receiver<std::result::Result<Snapshot, String>>, Sender<()>) {
+fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::result::Result<Snapshot, String>>, Sender<()>) {
     let (snapshot_tx, snapshot_rx) = mpsc::channel();
     let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
     thread::spawn(move || {
@@ -743,7 +745,7 @@ fn spawn_refresher() -> (Receiver<std::result::Result<Snapshot, String>>, Sender
             }
             let snapshot = status::gather().and_then(|items| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().collect();
-                Ok(Snapshot { checkouts: status::checkouts()?, items, messages: messages::recent(200), questions, usage: usage::load(), ongoing: load_ongoing() })
+                Ok(Snapshot { checkouts: status::checkouts()?, items, messages: messages::recent(200), questions, usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden) })
             });
             if snapshot_tx.send(snapshot).is_err() {
                 return;
@@ -1070,6 +1072,19 @@ impl App {
 
     fn say(&mut self, text: String) {
         self.notice = Some((text, Instant::now()));
+    }
+
+    fn toggle_chat(&mut self) {
+        let Some(hidden) = self.lead_chat else {
+            return self.say(format!("{} hides the lead's chat only on the board in the lead Space", keys::map().label(Act::HideChat)));
+        };
+        match lead::toggle_chat() {
+            Ok(_) => {
+                self.lead_chat = Some(!hidden);
+                let _ = self.refresh.send(());
+            }
+            Err(error) => self.mode = Mode::Message(error),
+        }
     }
 
     fn set_filter(&mut self, text: String) {
@@ -1463,9 +1478,12 @@ impl App {
                 Some(Act::Lead) => {
                     if let Err(error) = lead::focus_toggle() {
                         self.mode = Mode::Message(error);
+                    } else if self.lead_chat == Some(true) {
+                        self.lead_chat = Some(false);
                     }
                     return;
                 }
+                Some(Act::HideChat) => return self.toggle_chat(),
                 Some(Act::WorkPage) => return self.page = Page::Work,
                 Some(Act::AreasPage) => return self.page = Page::Areas,
                 Some(Act::Inbox) => {
@@ -2150,6 +2168,9 @@ fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     if app.away {
         spans.extend(pill("☾ away".to_string(), MAUVE, true));
     }
+    if app.lead_chat == Some(true) {
+        spans.extend(pill(format!("◧ chat hidden · {}", keys::map().label(Act::HideChat)), MAUVE, true));
+    }
     let sources = backlog::label(&app.sources);
     let fresh = match app.page {
         Page::Work => format!("backlog: {sources}, {}   ", backlog::freshness(&app.sources, app.backlog.updated)),
@@ -2825,8 +2846,8 @@ fn status_hints(keys: &Hints) -> Line<'static> {
     Line::from(Span::styled(keys.iter().map(|(key, label, _)| format!("{key} {label}")).collect::<Vec<_>>().join(" · "), style(MUTED)))
 }
 
-fn work_hints(card: bool) -> (Hints, Hints) {
-    let (mut full, mut short) = keys::map().hints(Ctx::Work);
+fn work_hints(card: bool, lead: bool) -> (Hints, Hints) {
+    let (mut full, mut short) = keys::map().hints(Ctx::Work, lead);
     if card {
         let entry = (keys::key(Act::Card).to_string(), "card", keys::map().code(Act::Card));
         full.insert(1, entry.clone());
@@ -2835,17 +2856,17 @@ fn work_hints(card: bool) -> (Hints, Hints) {
     (full, short)
 }
 
-fn hint_lines(card: bool) -> (Line<'static>, Line<'static>) {
-    let (full, short) = work_hints(card);
+fn hint_lines(card: bool, lead: bool) -> (Line<'static>, Line<'static>) {
+    let (full, short) = work_hints(card, lead);
     (status_hints(&full), status_hints(&short))
 }
 
-fn hint_hits(line: &Line, area: Rect, card: bool) -> Vec<(Rect, Hit)> {
+fn hint_hits(line: &Line, area: Rect, card: bool, lead: bool) -> Vec<(Rect, Hit)> {
     let text = line.to_string();
     let mut hits = Vec::new();
     let update = keys::map().code(Act::Update);
     let update_hints = [(update_hint(), update), (short_update_hint(), update)];
-    for (hint, code) in work_hints(card).0.into_iter().map(|(key, label, code)| (format!("{key} {label}"), code)).chain(update_hints) {
+    for (hint, code) in work_hints(card, lead).0.into_iter().map(|(key, label, code)| (format!("{key} {label}"), code)).chain(update_hints) {
         let Some(byte) = text.find(&hint) else { continue };
         let x = Span::raw(&text[..byte]).width() as u16;
         let width = Span::raw(hint.as_str()).width() as u16;
@@ -3139,8 +3160,8 @@ fn menu_lines(choices: &[Choice], index: usize, width: usize, running: impl Fn(O
     (lines, at)
 }
 
-fn help_lines() -> Vec<Line<'static>> {
-    keys::map().help(&[Ctx::Work, Ctx::Backlog, Ctx::Card]).into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
+fn help_lines(lead: bool) -> Vec<Line<'static>> {
+    keys::map().help(&[Ctx::Work, Ctx::Backlog, Ctx::Card], lead).into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
 
 #[derive(Clone)]
@@ -3434,7 +3455,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(line), top);
     let tab_hits: Vec<(Rect, Hit)> = tabs.into_iter().map(|(x, width, page)| (Rect::new(top.x + x, top.y, width, 1), Hit::Tab(page))).collect();
     let (full_hints, short_hints) = match app.page {
-        Page::Work => hint_lines(app.selected_has_card()),
+        Page::Work => hint_lines(app.selected_has_card(), app.lead_chat.is_some()),
         Page::Areas => area_page::Page::hint_lines(),
     };
     let updates: &[(String, String)] = if app.page == Page::Work { &app.updates } else { &[] };
@@ -3449,7 +3470,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let mut tab_hits = tab_hits;
-    tab_hits.extend(hint_hits(&status, bottom, app.selected_has_card()));
+    tab_hits.extend(hint_hits(&status, bottom, app.selected_has_card(), app.lead_chat.is_some()));
     frame.render_widget(Paragraph::new(status), bottom);
     let (message_lines, first_message) = messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize);
     let shown_messages = message_lines.len();
@@ -3534,7 +3555,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Card { .. } => draw_card(frame, app),
         Mode::Fullscreen { .. } => draw_fullscreen(frame, app),
         Mode::Help => {
-            modal(frame, "keys".to_string(), help_lines(), 72);
+            modal(frame, "keys".to_string(), help_lines(app.lead_chat.is_some()), 72);
         }
         Mode::Message(text) => {
             let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
@@ -3763,7 +3784,7 @@ impl App {
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, card_image_lines: Vec::new(), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
-            filter: None, ctrl_c: None, notice: None,
+            filter: None, ctrl_c: None, notice: None, lead_chat: None,
         }
     }
 }
@@ -3812,7 +3833,7 @@ fn resolve_graphics(forced: Option<&str>, tty: bool, herdr: bool, asked: Option<
 
 pub fn run(overlay: bool) -> Result<String> {
     let sources = config::sources()?;
-    let (snapshots, refresh) = spawn_refresher();
+    let (snapshots, refresh) = spawn_refresher(std::env::var("HERDR_PANE_ID").ok().filter(|_| !overlay));
     spawn_ci_watcher(refresh.clone());
     let mut app = App::new(sources, backlog::load(), overlay, refresh);
     app.away = permit::away_since().is_some();
@@ -3884,6 +3905,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.questions = snapshot.questions;
                         app.usage = snapshot.usage;
                         app.ongoing = snapshot.ongoing;
+                        app.lead_chat = snapshot.lead_chat;
                         app.backlog_selected = app.backlog_selected.min(app.backlog_len().saturating_sub(1));
                         let newest = app.messages.last().map_or(0, |message| message.at);
                         if app.fold == Fold::Open && newest > app.seen {
@@ -3970,16 +3992,30 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_board_alone_offers_h_and_says_chat_hidden_while_it_is() {
+        let mut app = test_app(Vec::new());
+        app.handle_key(KeyEvent::from(KeyCode::Char('h')), None);
+        assert_eq!(app.notice.as_ref().map(|(text, _)| text.as_str()), Some("h hides the lead's chat only on the board in the lead Space"));
+        assert!(!hint_lines(false, false).0.to_string().contains("h chat") && hint_lines(false, true).0.to_string().contains("h chat"));
+        assert!(!help_lines(false).iter().any(|line| line.to_string().starts_with("h ")) && help_lines(true).iter().any(|line| line.to_string().starts_with("h ")));
+        assert!(!header(&app, 200).0.to_string().contains("chat hidden"));
+        app.lead_chat = Some(true);
+        assert!(header(&app, 200).0.to_string().contains("◧ chat hidden · h"));
+        app.lead_chat = Some(false);
+        assert!(!header(&app, 200).0.to_string().contains("chat hidden"));
+    }
+
+    #[test]
     fn every_key_in_the_help_the_hints_and_the_menus_is_one_the_table_acts_on_and_every_row_shows_in_help() {
         let map = keys::map();
-        let help: Vec<String> = help_lines().iter().map(|line| line.spans[0].content.trim().to_string()).collect();
+        let help: Vec<String> = help_lines(true).iter().map(|line| line.spans[0].content.trim().to_string()).collect();
         for row in keys::TABLE.iter().filter(|row| row.on.contains(&Ctx::Work) || row.on.contains(&Ctx::Backlog)) {
             assert!(help.contains(&map.label(row.act)), "{} is in the table but not in ? help: {help:?}", row.act.id());
         }
         for label in &help {
             assert!(keys::TABLE.iter().any(|row| map.label(row.act) == *label), "{label} is in ? help but not in the table");
         }
-        let (full, short) = map.hints(Ctx::Work);
+        let (full, short) = map.hints(Ctx::Work, true);
         for (key, _, code) in full.iter().chain(&short) {
             assert!(map.act(Ctx::Work, &KeyEvent::from(*code)).is_some(), "the hint {key} is not a key the board acts on");
         }
@@ -4722,7 +4758,7 @@ mod tests {
         let Mode::Message(text) = &app.mode else { panic!("the result is shown") };
         assert_eq!(text, "kelpie 0.18.1 → 0.18.2");
         assert!(app.update_shown && app.updates.is_empty() && rechecked.try_recv().is_ok(), "the notice goes and a fresh check is asked for");
-        assert!(help_lines().iter().any(|line| line.to_string().starts_with("U ")), "U is in the keys help");
+        assert!(help_lines(false).iter().any(|line| line.to_string().starts_with("U ")), "U is in the keys help");
     }
 
     fn some_messages(count: usize) -> Vec<Message> {
@@ -5262,7 +5298,7 @@ mod tests {
         assert_eq!(menu_group(Some(Act::Drop)), "END IT");
         assert_eq!(menu_group(Some(Act::Push)), "BRANCH");
         assert_eq!(menu_group(Some(Act::Permit)), "BRANCH");
-        let help = help_lines();
+        let help = help_lines(false);
         let labels: Vec<&str> = help.iter().map(|line| line.spans[0].content.trim()).collect();
         for key in ['n', 'g', 'c', 'r', 'w', 'b', 'v', 'a', 'p', 'd', 'z', 'x', 'R', 'A', 'U', 'i', 'm', 'q', '/'] {
             assert!(labels.iter().any(|label| label.split_whitespace().any(|word| word == key.to_string())), "{key} is not in the keys help: {labels:?}");

@@ -132,11 +132,24 @@ struct Places {
     board: Option<String>,
     messages: Option<String>,
     chat: Option<String>,
+    zoomed: bool,
+    focused: Option<String>,
+}
+
+impl Places {
+    // herdr's zoom shows the focused pane alone, so the chat is hidden while the zoom is on the board.
+    fn chat_hidden(&self) -> bool {
+        self.zoomed && self.chat.is_some() && self.board.is_some() && self.focused == self.board
+    }
 }
 
 fn places(lead: &str) -> Result<Places> {
     let first = herdr::panes_in(lead)?.iter().find_map(|pane| pane["pane_id"].as_str().map(str::to_string)).ok_or("The lead Space has no panes")?;
-    let layout = herdr::layout(&first)?;
+    Ok(places_in(&herdr::layout(&first)?))
+}
+
+// herdr gives the split's rects whether or not the tab is zoomed, so a hidden chat still sits on the right.
+fn places_in(layout: &Value) -> Places {
     let mut panes: Vec<(u64, u64, String)> = layout["panes"].as_array().into_iter().flatten()
         .filter_map(|pane| Some((pane["rect"]["x"].as_u64()?, pane["rect"]["y"].as_u64()?, pane["pane_id"].as_str()?.to_string())))
         .collect();
@@ -145,7 +158,7 @@ fn places(lead: &str) -> Result<Places> {
     panes.retain(|(x, _, _)| *x < right || right == 0);
     panes.sort_by_key(|(_, y, _)| *y);
     let mut left = panes.into_iter().map(|(_, _, id)| id);
-    Ok(Places { board: left.next(), messages: left.next(), chat })
+    Places { board: left.next(), messages: left.next(), chat, zoomed: layout["zoomed"] == true, focused: layout["focused_pane_id"].as_str().map(str::to_string) }
 }
 
 fn runs_kelpie(pane: &str, command: &str) -> bool {
@@ -362,12 +375,19 @@ fn hop(in_lead: bool, on_chat: bool) -> Option<Hop> {
     }
 }
 
-pub fn focus_toggle() -> Result<()> {
+struct Lead {
+    in_lead: bool,
+    board: String,
+    chat: String,
+    places: Places,
+}
+
+fn lead_panes() -> Result<Lead> {
     let workspaces = herdr::workspaces()?;
     let lead = lead_workspace(&workspaces).ok_or("No lead Space yet; kelpie lead creates it")?;
     let places = places(&lead)?;
-    let board = places.board.ok_or("The lead Space has lost its board pane; kelpie lead brings it back")?;
-    let chat = places.chat.ok_or("The lead Space has no chat pane; kelpie lead brings it back")?;
+    let board = places.board.clone().ok_or("The lead Space has lost its board pane; kelpie lead brings it back")?;
+    let chat = places.chat.clone().ok_or("The lead Space has no chat pane; kelpie lead brings it back")?;
     let focused = workspaces.iter().find(|workspace| workspace["focused"] == true).and_then(workspace_id);
     let in_lead = focused.as_deref() == Some(lead.as_str());
     if !in_lead {
@@ -376,12 +396,37 @@ pub fn focus_toggle() -> Result<()> {
         }
         herdr::focus_workspace(&lead)?;
     }
+    Ok(Lead { in_lead, board, chat, places })
+}
+
+// A hop out of a zoom turns it off, so the chat shows again and stays shown on the way back.
+pub fn focus_toggle() -> Result<()> {
+    let Lead { in_lead, board, chat, places } = lead_panes()?;
     let on_chat = herdr::focused_pane().ok().flatten().as_deref() == Some(chat.as_str());
-    match hop(in_lead, on_chat) {
-        Some(Hop::ToBoard) => herdr::focus_beside(&chat, "left"),
-        Some(Hop::ToChat) => herdr::focus_beside(&board, "right"),
-        None => Ok(()),
+    match (hop(in_lead, on_chat), places.zoomed) {
+        (Some(Hop::ToBoard), true) => herdr::zoom(&board, false),
+        (Some(Hop::ToChat), true) => herdr::zoom(&chat, false),
+        (Some(Hop::ToBoard), false) => herdr::focus_beside(&chat, "left"),
+        (Some(Hop::ToChat), false) => herdr::focus_beside(&board, "right"),
+        (None, _) => Ok(()),
     }
+}
+
+pub fn toggle_chat() -> Result<String> {
+    let Lead { board, places, .. } = lead_panes()?;
+    if places.chat_hidden() {
+        herdr::zoom(&board, false)?;
+        return Ok("The lead's chat is shown again.".to_string());
+    }
+    herdr::zoom(&board, true)?;
+    Ok("The lead's chat is hidden and runs on; kelpie lead --toggle-chat, or h or tab on the board, shows it.".to_string())
+}
+
+// None unless this pane is the lead Space's board.
+pub fn chat_hidden(board_pane: &str) -> Option<bool> {
+    let lead = lead_workspace(&herdr::workspaces().ok()?)?;
+    let places = places(&lead).ok()?;
+    (places.board.as_deref() == Some(board_pane)).then(|| places.chat_hidden())
 }
 
 #[cfg(test)]
@@ -433,6 +478,21 @@ mod tests {
         assert_eq!(hop(true, true), Some(Hop::ToBoard));
         assert_eq!(hop(false, false), Some(Hop::ToChat));
         assert_eq!(hop(false, true), None);
+    }
+
+    #[test]
+    fn the_chat_is_hidden_while_the_zoom_is_on_the_board_and_still_sits_on_the_right() {
+        let layout = |zoomed: bool, focused: &str| json!({ "zoomed": zoomed, "focused_pane_id": focused, "panes": [
+            { "pane_id": "w_lead:p1", "rect": { "x": 0, "y": 0 } },
+            { "pane_id": "w_lead:p2", "rect": { "x": 64, "y": 0 } },
+        ] });
+        let hidden = places_in(&layout(true, "w_lead:p1"));
+        assert_eq!((hidden.board.as_deref(), hidden.chat.as_deref()), (Some("w_lead:p1"), Some("w_lead:p2")), "a hidden chat is still the lead's chat, so kelpie lead never splits a second one");
+        assert!(hidden.chat_hidden());
+        assert!(!places_in(&layout(false, "w_lead:p1")).chat_hidden());
+        assert!(!places_in(&layout(true, "w_lead:p2")).chat_hidden(), "a zoom on the chat hides the board, not the chat");
+        let alone = places_in(&json!({ "zoomed": true, "focused_pane_id": "w_lead:p1", "panes": [{ "pane_id": "w_lead:p1", "rect": { "x": 0, "y": 0 } }] }));
+        assert!(alone.chat.is_none() && !alone.chat_hidden(), "a board without a chat has nothing hidden");
     }
 
     #[test]

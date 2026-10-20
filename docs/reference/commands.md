@@ -125,7 +125,8 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 | `kelpie lead` | Go to the lead Space, creating it, or back to where you were. |
 | `kelpie lead --restart` | Restart an idle lead's Claude on its current role and settings, resuming its conversation. Refuses while the lead works or waits on a question. |
 | `kelpie lead --first` | Only move the lead Space to the top of herdr's Spaces. |
-| `kelpie focus` | In the lead Space, move focus between the board and the lead's chat. From any other Space, go to the lead's chat. |
+| `kelpie lead --toggle-chat` | Hide the lead's chat so the board takes the whole width, or show it again. The chat keeps running. Takes you to the lead Space. herdr's `kelpie.chat` action runs it. |
+| `kelpie focus` | In the lead Space, move focus between the board and the lead's chat. From any other Space, go to the lead's chat. A hidden chat is shown first. |
 | `kelpie away [on\|off]` | Away mode. Yours only. |
 | `kelpie decide <task> <answer>` | The lead's own answer to a question about how, only while you are away. Closes the question and records it. |
 | `kelpie defer <task>` | The lead keeps a task's question for you while you are away. |

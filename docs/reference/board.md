@@ -8,7 +8,7 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 
 | Part | Shows |
 | --- | --- |
-| Status line, top | Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `↑ kelpie <version> · U updates` when a newer version is out. |
+| Status line, top | Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `chat hidden` while the lead's chat is hidden; `↑ kelpie <version> · U updates` when a newer version is out. |
 | Work, left | Tasks from every repo with a worktree pool, grouped. A task's halves in other repos sit next to each other. |
 | Backlog, right | An ONGOING section of vault project notes in progress (status active or draft) when the vault is on, then the items from the configured sources, by priority. |
 | Messages, bottom | What sessions tell each other, newest last. |
@@ -54,7 +54,8 @@ Between turns, the task's last report decides its group. A CI watch, or kelpie r
 | `↑` `↓`, `j` `k` | Move. |
 | `←` `→` | Switch between Work and Backlog. |
 | `1`, `2` | The Work page, the Areas page. |
-| `tab` | Move focus to the lead's chat. |
+| `tab` | Move focus to the lead's chat, showing it first when it is hidden. |
+| `h` | Hide the lead's chat, or show it again: the board takes the whole width while the chat runs on. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
 | `i` | The inbox: the questions waiting on you. Works on the Areas page too. |
 | `m` | Messages: once shows them on one line, again opens them, again hides them. |
 | `n` | New task: a name, then an optional prompt. Starts in the background. In the Backlog column, a new item. |
@@ -195,7 +196,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `done`, `reset`, `drop`, `refresh`, `away`, `update`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page) and `close` (`q`).
+The actions are `work_page`, `areas_page`, `hide_chat`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `done`, `reset`, `drop`, `refresh`, `away`, `update`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page) and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

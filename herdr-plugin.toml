@@ -36,6 +36,12 @@ contexts = ["workspace"]
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kelpie\" focus"]
 
 [[actions]]
+id = "chat"
+title = "Hide or show the lead's chat"
+contexts = ["workspace"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kelpie\" lead --toggle-chat"]
+
+[[actions]]
 id = "board"
 title = "Board"
 contexts = ["workspace"]

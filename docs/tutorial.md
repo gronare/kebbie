@@ -116,6 +116,8 @@ kelpie creates the lead Space and moves it to the top of herdr's Spaces. On the 
 
 Press `tab` on the board. Focus moves to the lead's chat. From the chat, `prefix+tab` brings focus back to the board.
 
+Press `h` on the board to hide the chat and give the board the whole width; the lead keeps running. `h` again, or `tab`, brings the chat back.
+
 ## 7. Start a task
 
 Open a shell in herdr, then start a task from the practice repo:

@@ -196,6 +196,11 @@ pub fn focus_tab(tab_id: &str) -> Result<()> {
     call(&["tab", "focus", tab_id]).map(|_| ())
 }
 
+// herdr's zoom fills the tab with the pane it names and focuses it; the tab's other panes run on, unseen.
+pub fn zoom(pane_id: &str, on: bool) -> Result<()> {
+    call(&["pane", "zoom", "--pane", pane_id, if on { "--on" } else { "--off" }]).map(|_| ())
+}
+
 pub fn close_pane(pane_id: &str) -> Result<()> {
     call(&["pane", "close", pane_id]).map(|_| ())
 }
