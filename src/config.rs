@@ -68,6 +68,7 @@ pub struct Worktree {
     pub vault_command: Option<String>,
     pub server_name: Option<String>,
     pub worker_name: Option<String>,
+    pub ci_watch: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -127,6 +128,7 @@ pub struct Settings {
     pub channel: Setting<Channel>,
     pub idle_minutes: Setting<u64>,
     pub auto_restart: Setting<bool>,
+    pub ci_watch: Setting<bool>,
 }
 
 pub struct Loaded {
@@ -347,6 +349,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         vault_command: None,
         server_name: text(worktree, "server_name", "worktree.server_name")?,
         worker_name: text(worktree, "worker_name", "worktree.worker_name")?,
+        ci_watch: None,
     })
 }
 
@@ -382,8 +385,16 @@ fn with_vault(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     Ok(worktree)
 }
 
+fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
+    if let Some(ci) = subtable(table, "ci", "ci")? {
+        unknown_keys(ci, "ci.", &["watch"])?;
+        worktree.ci_watch = ci.get("watch").map(|value| value.as_bool().ok_or("ci.watch: must be true or false")).transpose()?;
+    }
+    Ok(worktree)
+}
+
 fn layers(table: &Table) -> Result<Worktree> {
-    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree)).and_then(|worktree| with_vault(table, worktree))
+    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree)).and_then(|worktree| with_vault(table, worktree)).and_then(|worktree| with_ci(table, worktree))
 }
 
 fn table(text: &str, source: &str) -> Result<Table> {
@@ -393,7 +404,7 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keys"]).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keys", "ci"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, worktree })
 }
@@ -409,7 +420,7 @@ pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
     }
-    unknown_keys(&table, "", &["actions", "worktree", "task", "review"]).map_err(fail)?;
+    unknown_keys(&table, "", &["actions", "worktree", "task", "review", "ci"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     if worktree.server_name.is_some() || worktree.worker_name.is_some() {
         return Err(fail(format!("worktree.server_name and worker_name: {MACHINE_WIDE}, since the sidebar names every Space's server and worker alike; set them in {}", path().display())));
@@ -448,6 +459,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         channel: or_default(pick(None, machine.channel.as_ref()), Channel::default()),
         idle_minutes: or_default(pick(None, machine.restart.idle_minutes.as_ref()), DEFAULT_IDLE_MINUTES),
         auto_restart: or_default(pick(None, machine.restart.auto.as_ref()), true),
+        ci_watch: or_default(pick(repo.ci_watch.as_ref(), machine.worktree.ci_watch.as_ref()), true),
     }
 }
 
@@ -484,7 +496,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -529,6 +541,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "The shell command kelpie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KELPIE_EVENT, KELPIE_TASK, KELPIE_REPO and KELPIE_TEXT describe it, and $1 is the text. None sends no notifications; config.toml only.");
     key("vault.command", vault_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), vault_command.layer,
         "The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; config.toml only.");
+    key("ci.watch", ci_watch.value.to_string(), ci_watch.layer,
+        "Whether kelpie watches GitHub Actions after a push and keeps the task open under CI running until every run for the pushed commit is green; a failed run moves the task to Needs you and its Claude gets the failing job's log. Needs origin on GitHub and gh logged in; false closes the task right after the push. A repo config can turn it off for one repo.");
     key("update.channel", format!("{:?}", channel.value.key()), channel.layer,
         "What kelpie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin; \"main\", origin's default branch as it is pushed. kelpie update --from <branch or path> runs other code until kelpie update --stable; config.toml only.");
     key("restart.auto", auto_restart.value.to_string(), auto_restart.layer,
@@ -611,6 +625,18 @@ mod tests {
         let refused = parse_repo("[task]\nrules_skill = \"kelpie:../../outside\"\n", "app.toml").unwrap_err();
         assert!(refused.contains("task.rules_skill") && refused.contains("not a skill name"), "{refused}");
         assert!(parse_repo("[worktree]\nsetup_skill = \"../x\"\n", "app.toml").is_err());
+    }
+
+    #[test]
+    fn ci_watch_is_on_by_default_and_a_repo_can_turn_it_off() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).ci_watch, Setting { value: true, layer: Layer::Default });
+        assert_eq!(settings(&Worktree::default(), &machine("[ci]\nwatch = false\n")).ci_watch, Setting { value: false, layer: Layer::Machine });
+        let off = settings(&repo("[ci]\nwatch = false\n"), &machine("[ci]\nwatch = true\n"));
+        assert_eq!(off.ci_watch, Setting { value: false, layer: Layer::Repo });
+        assert!(parse_machine("[ci]\nwatch = \"yes\"\n", "config.toml").unwrap_err().contains("ci.watch: must be true or false"));
+        assert!(parse_repo("[ci]\npoll = 10\n", "app.toml").unwrap_err().contains("ci.poll: unknown key; known keys here: watch"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: off });
+        assert!(shown.contains("ci.watch = false  (repo config)"), "{shown}");
     }
 
     #[test]
@@ -726,8 +752,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keys");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keys");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keys, ci");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keys, ci");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -739,7 +765,7 @@ mod tests {
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
         assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board.backlog] sources in "));
-        assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review");
+        assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci");
         assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, server_name, worker_name");
     }
 

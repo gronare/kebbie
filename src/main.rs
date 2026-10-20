@@ -4,6 +4,7 @@ mod areas;
 mod backlog;
 mod backlog_file;
 mod board;
+mod ci;
 mod config;
 mod doctor;
 mod fetch;
@@ -101,11 +102,17 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   offered again)
   kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
                                   changes, the board shows it ready to push
-  kelpie push [name]              after land: push the task to the default branch, then close it as done
+  kelpie push [name]              after land: push the task to the default branch, then close it as done (once CI is
+                                  green, when kelpie watches it; see kelpie ci)
                                   (--through <sha> pushes its commits up to that one and keeps the task open, the rest
                                   of its branch on top of what was pushed); the user's step, or the lead's for a task the
                                   user gave push permission on the board (a), or in a repo they did on the Areas page (a)
                                   once its reviewer passed its current code; the lead is told what landed
+  kelpie ci [--json]              the CI watches: after a full push to a GitHub origin, with gh logged in, the task stays
+                                  open under CI running until every workflow run for the pushed commit is green, then
+                                  closes as done; a failed run moves it to Needs you and its Claude gets the failing
+                                  job's log ([ci] watch = false turns it off); the board checks every 30 seconds
+  kelpie ci tick                  one round of checks for every running watch, as the board does
   kelpie done [name]              after pushing: close the task and free its worktree
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
   kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
@@ -325,6 +332,9 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),
         Some("review") => review::request(&cwd, name),
         Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kelpie approve needs a task name")?)),
+        Some("ci") if name == Some("tick") => ci::tick_cli(),
+        Some("ci") if name.is_some() => Err("kelpie ci knows tick: kelpie ci [--json] or kelpie ci tick".to_string()),
+        Some("ci") => Ok(ci::list(&lead::state_dir()?, arguments.flag("--json"))),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
         Some("reset") => tasks::reset(&cwd, name),
@@ -377,7 +387,7 @@ fn main() -> ExitCode {
         usage::record(&input);
         return ExitCode::SUCCESS;
     }
-    if matches!(arguments.positional(0), Some("board" | "start" | "land" | "push" | "done" | "move" | "update")) {
+    if matches!(arguments.positional(0), Some("board" | "start" | "land" | "push" | "done" | "move" | "update" | "ci")) {
         login_env::import();
     }
     match run(&arguments) {

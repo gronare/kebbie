@@ -38,6 +38,7 @@ Rules:
 | `review.model` | string | none | either | The model the reviewer runs on. Unset leaves it to Claude's default. |
 | `notify.command` | string | none | config.toml only | The shell command kelpie runs when something needs you. See [Notify command](#notify-command). Unset sends nothing. |
 | `vault.command` | string | none | config.toml only | The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments. Unset runs the vault plugin's pinned command from its hooks. Used only while the vault plugin is installed and enabled. |
+| `ci.watch` | boolean | `true` | either | Whether kelpie watches CI after a push and closes the task only once every workflow run for the pushed commit is green. Needs origin on GitHub and `gh` logged in. `false` closes the task right after the push, as for a repo without useful CI. See [Watch CI after a push](../explanation/trunk-based.md#ci-after-the-push). |
 | `update.channel` | `"release"` or `"main"` | `"release"` | config.toml only | What `kelpie update` installs: the highest `vX.Y.Z` tag on origin, or origin's default branch. |
 | `restart.auto` | boolean | `true` | config.toml only | Whether the board restarts stale idle Claude sessions on its own and `kelpie update` restarts idle ones at once. `false` restarts nothing on its own; the board still marks stale sessions. |
 | `restart.idle_minutes` | integer, 1 to 1440 | `10` | config.toml only | How long a stale session must be idle and out of focus before the board restarts it. |
@@ -70,7 +71,7 @@ The command gets:
 
 | Variable | Value |
 | --- | --- |
-| `KELPIE_EVENT` | `needs-you`, `ready`, `question` or `summary` |
+| `KELPIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed` or `ci-green` |
 | `KELPIE_TASK` | The task's name |
 | `KELPIE_REPO` | The task's repo |
 | `KELPIE_TEXT` | One line, such as `billing@app needs you: answer which queue` |
@@ -82,6 +83,8 @@ The command gets:
 | `ready` | A task reports ready. |
 | `question` | A task asks you a question. |
 | `summary` | You or the lead run `kelpie notify "<text>"`. Tasks cannot. |
+| `ci-failed` | A workflow run for a pushed commit failed. The text names the workflow and the job. |
+| `ci-green` | Every workflow run for a pushed commit passed, or none ran. |
 
 ## `[[actions]]`
 
@@ -161,6 +164,9 @@ idle_minutes = 10
 setup_command = "script/prepare_worktree"
 dev_server = "bin/dev"
 dev_worker = "bin/jobs"
+
+[ci]
+watch = false
 ```
 
 ## Claude Code plugin option

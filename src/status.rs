@@ -20,6 +20,7 @@ pub enum Group {
     Working,
     ToReview,
     ReadyToPush,
+    CiRunning,
     Idle,
 }
 
@@ -30,6 +31,7 @@ impl Group {
             Group::Working => "WORKING",
             Group::ToReview => "TO REVIEW",
             Group::ReadyToPush => "READY TO PUSH",
+            Group::CiRunning => "CI RUNNING",
             Group::Idle => "WAITING FOR WORK",
         }
     }
@@ -69,6 +71,7 @@ pub struct Item {
     pub git: Option<Git>,
     pub report: Option<Message>,
     pub question: Option<Message>,
+    pub ci: Option<crate::ci::Watch>,
 }
 
 impl Item {
@@ -110,17 +113,35 @@ impl Item {
         self.report.as_ref()?.report.as_ref().map(|report| report.state.as_str())
     }
 
+    // A report the task wrote after CI last changed outranks the watch.
+    pub fn ci_group(&self) -> Option<Group> {
+        let ci = self.ci.as_ref()?;
+        if self.report.as_ref().is_some_and(|report| report.at > ci.since()) {
+            return None;
+        }
+        match ci.state {
+            crate::ci::State::Failed { .. } => Some(Group::NeedsYou),
+            crate::ci::State::Running if ci.close => Some(Group::CiRunning),
+            crate::ci::State::Running => None,
+        }
+    }
+
+    pub fn ci_note(&self) -> Option<String> {
+        self.ci.as_ref().map(crate::ci::Watch::note)
+    }
+
     // Between turns the task's own report says what it needs; herdr's "done" only says nobody has looked yet.
     pub fn group(&self) -> Group {
         let status = self.agent.as_ref().map(|agent| agent.status.as_str());
-        match (status, self.report_state()) {
-            (Some("blocked"), _) => Group::NeedsYou,
-            (Some("working"), _) | (_, Some("working")) => Group::Working,
-            (_, Some("needs-you")) => Group::NeedsYou,
-            (_, Some("blocked")) => Group::Idle,
+        match (status, self.report_state(), self.ci_group()) {
+            (Some("blocked"), _, _) => Group::NeedsYou,
+            (Some("working"), _, _) | (_, Some("working"), _) => Group::Working,
+            (_, _, Some(group)) => group,
+            (_, Some("needs-you"), _) => Group::NeedsYou,
+            (_, Some("blocked"), _) => Group::Idle,
             _ if self.awaiting_review() => Group::ToReview,
-            (_, Some("ready")) => if self.pushable() { Group::ReadyToPush } else { Group::NeedsYou },
-            (Some("done"), _) => Group::NeedsYou,
+            (_, Some("ready"), _) => if self.pushable() { Group::ReadyToPush } else { Group::NeedsYou },
+            (Some("done"), _, _) => Group::NeedsYou,
             _ => if self.pushable() { Group::ReadyToPush } else { Group::Idle },
         }
     }
@@ -132,6 +153,7 @@ impl Item {
         }
         match (self.agent.as_ref().map(|agent| agent.status.as_str()), self.report_state()) {
             (Some("blocked"), _) => 0,
+            _ if self.ci_group().is_some() => 1,
             (_, Some("needs-you")) => 1,
             (_, Some("ready")) => 2,
             _ => 3,
@@ -140,7 +162,7 @@ impl Item {
 
     // A turn under way has most likely taken up what the last report asked.
     pub fn next_for_you(&self) -> Option<&str> {
-        if self.agent.as_ref().is_some_and(|agent| agent.status == "working") {
+        if self.agent.as_ref().is_some_and(|agent| agent.status == "working") || self.ci_group().is_some() {
             return None;
         }
         self.report.as_ref()?.next_for_you()
@@ -163,7 +185,7 @@ impl Item {
             let review = self.review_note().map(|note| format!(" · {note}")).unwrap_or_default();
             return format!("{} · rebased, ready to push{review}", plural(git.ahead, "commit"));
         }
-        let mut parts = Vec::new();
+        let mut parts: Vec<String> = self.ci_note().into_iter().collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -204,6 +226,7 @@ impl Item {
                 let options: Vec<Value> = question.options.iter().map(|(label, meaning)| json!({ "label": label, "meaning": meaning })).collect();
                 Some(json!({ "text": message.text, "options": options, "recommend": question.recommend, "plan": question.plan, "kept_for_user": question.waits, "age": messages::age(message.at) }))
             }),
+            "ci": self.ci.as_ref().map(crate::ci::Watch::to_json),
             "server": self.server,
             "url": self.url,
             "worker": self.worker,
@@ -301,6 +324,7 @@ pub fn gather() -> Result<Vec<Item>> {
     let repos = known_repos(&workspaces, pooled_checkouts());
 
     let log = messages::load();
+    let state = crate::lead::state_dir().ok();
     let reports = messages::latest_reports(&log);
     let questions = crate::questions::open_now(&log);
     let mut items = Vec::new();
@@ -338,6 +362,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, approved }),
                 report: reports.get(&address).cloned(),
                 question: questions.iter().find(|question| question.from == address).map(|question| (*question).clone()),
+                ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
                 name: task,
             });
         }
@@ -365,6 +390,7 @@ pub fn gather() -> Result<Vec<Item>> {
             git: None,
             report: None,
             question: None,
+            ci: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -387,6 +413,7 @@ pub(crate) mod tests {
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None, kind: None,
             }),
             question: None,
+            ci: None,
         }
     }
 
@@ -481,6 +508,34 @@ pub(crate) mod tests {
         let mut pushed = task(Some("idle"), Some("ready"), 0);
         pushed.verdict = Some(in_review(false, 1, true, false));
         assert!(!pushed.awaiting_review(), "nothing left to push, nothing left to review");
+    }
+
+    fn watched(state: crate::ci::State, close: bool) -> crate::ci::Watch {
+        crate::ci::Watch {
+            address: "billing@web".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
+            started_at: 10, checked_at: None, close, runs: Vec::new(), state, error: None, pushed: crate::ci::Pushed::default(),
+        }
+    }
+
+    #[test]
+    fn a_pushed_task_waits_under_ci_running_and_a_failed_run_puts_it_under_needs_you_until_it_reports_again() {
+        let mut item = task(Some("idle"), Some("ready"), 0);
+        item.ci = Some(watched(crate::ci::State::Running, true));
+        assert!(item.group() == Group::CiRunning);
+        assert_eq!(item.summary(), "CI running: waiting for runs of abcdef0");
+        assert_eq!(item.next_for_you(), None, "the push the old report asked for is done");
+        item.ci = Some(watched(crate::ci::State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, true));
+        assert!(item.group() == Group::NeedsYou && item.urgency() == 1);
+        assert_eq!(item.summary(), "CI failed: CI · test");
+        item.agent.as_mut().unwrap().status = "working".to_string();
+        assert!(item.group() == Group::Working, "its Claude is fixing it");
+        item.agent.as_mut().unwrap().status = "idle".to_string();
+        item.report.as_mut().unwrap().at = 30;
+        assert!(item.group() == Group::NeedsYou && item.ci_group().is_none(), "a report after the failure decides again");
+        let mut partial = task(Some("idle"), Some("working"), 1);
+        partial.ci = Some(watched(crate::ci::State::Running, false));
+        assert!(partial.group() == Group::Working, "a partial push leaves the task where it is");
+        assert!(partial.summary().starts_with("CI running"));
     }
 
     #[test]

@@ -42,9 +42,30 @@ Rebase the task onto the default branch and check it has no uncommitted changes.
 
 After `land`: push the task's commits to the default branch, then close it as `done`. Only you may run it, or the lead for a task you gave push permission. The lead is told what landed.
 
+When origin is on GitHub and `gh` is logged in, the task stays open under CI running instead, and closes as `done` once every workflow run for the pushed commit is green. See `kelpie ci`. Otherwise the push result ends with `CI not watched:` and the reason.
+
 | Option | Meaning |
 | --- | --- |
 | `--through <sha>` | Push the commits up to and including `<sha>` and keep the task open. The rest of the branch is rebased on top of what was pushed. |
+
+### `kelpie ci [--json]`
+
+The CI watches, one per pushed task: its sha, the GitHub repo, each workflow run with its status and address, and the last check's error. `--json` gives the watch records.
+
+A watch runs while a board is open: every 30 seconds the board asks `gh run list --commit <sha>` for each running watch, and asks nothing when none runs.
+
+| State | What happens |
+| --- | --- |
+| No runs yet | kelpie waits up to 3 minutes for runs to appear, then treats the commit as green. |
+| Running | The task waits under CI running. |
+| Every run passed, skipped or neutral | After at least a minute since the push, the task closes as `done`: its note is closed when the vault is on, and the lead hears what landed. |
+| A run failed | The task moves to Needs you with `CI failed: <workflow> · <job>`. Its Claude gets the job's name and the last 60 lines of its log, and the lead gets a line. The watch stops. |
+
+A task that fixes the failure pushes again as usual, and the new push is watched. `done` closes a task whatever CI says. A push with `--through` is watched too and leaves the task where it is.
+
+### `kelpie ci tick`
+
+One round of checks for every running watch, as the board runs it, and what came of it.
 
 ### `kelpie done [name]`
 

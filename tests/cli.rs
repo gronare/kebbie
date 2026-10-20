@@ -72,6 +72,7 @@ impl Lab {
             .env("KELPIE_STATE_DIR", &self.state)
             .env("KELPIE_CONFIG", &self.config)
             .env("HERDR_BIN_PATH", &self.herdr)
+            .env("KELPIE_GH_BIN", self.root.join("gh"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null());
@@ -612,4 +613,169 @@ fn a_claude_started_in_a_worktree_from_another_folder_resumes_in_the_worktree() 
     let cd = calls.iter().position(|call| call[..2] == ["pane", "run"] && call.iter().any(|arg| arg == &format!("cd {}", worktree.display()) || arg == &format!("cd '{}'", worktree.display()))).expect("the pane moves into the worktree first");
     let start = calls.iter().position(|call| call[..2] == ["agent", "start"] && call.iter().any(|arg| arg == "p_billing")).expect("billing restarts");
     assert!(cd < start, "cd before claude --resume");
+}
+
+// A fake gh that is logged in and answers run list and run view from files under gh-answers, logging each call in gh.log.
+fn fake_gh(lab: &Lab, runs: &str) {
+    let answers = lab.root.join("gh-answers");
+    fs::create_dir_all(&answers).unwrap();
+    fs::write(answers.join("run-list.json"), runs).unwrap();
+    executable(&lab.root.join("gh"), &format!(
+        "#!/bin/sh\nd='{}'\necho \"$*\" >> \"$d/gh.log\"\ncase \"$1 $2\" in\n  'auth status') exit 0 ;;\n  'run list') cat \"$d/gh-answers/run-list.json\" ;;\n  'run view') case \"$*\" in *--log-failed*) cat \"$d/gh-answers/log.txt\" ;; *) cat \"$d/gh-answers/jobs.json\" ;; esac ;;\n  *) exit 1 ;;\nesac\n",
+        lab.root.display()
+    ));
+}
+
+fn gh_calls(lab: &Lab) -> Vec<String> {
+    fs::read_to_string(lab.root.join("gh.log")).unwrap_or_default().lines().map(str::to_string).collect()
+}
+
+// origin's URL names GitHub, and git fetches and pushes it from the bare repo beside the checkout.
+fn on_github(lab: &Lab, app: &Path) {
+    let origin = lab.root.join("origin.git");
+    git(app, &["config", &format!("url.{}.insteadOf", origin.display()), "https://github.com/acme/app.git"]);
+    git(app, &["remote", "set-url", "origin", "https://github.com/acme/app.git"]);
+}
+
+// kelpie as the user runs it: from a shell of its own, cut loose from whatever runs the tests, a Claude session among them.
+fn run_as_user(lab: &Lab, args: &[&str]) -> Output {
+    use std::os::unix::process::ExitStatusExt;
+    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+    let (out, err, code) = (lab.root.join("user.out"), lab.root.join("user.err"), lab.root.join("user.code"));
+    let _ = fs::remove_file(&code);
+    let line = std::iter::once(KELPIE).chain(args.iter().copied()).map(quote).collect::<Vec<_>>().join(" ");
+    let script = lab.root.join("user.sh");
+    fs::write(&script, format!("sleep 1\n{line} > {} 2> {}\necho $? > {}.tmp && mv {}.tmp {}\n", quote(&out.to_string_lossy()), quote(&err.to_string_lossy()), code.display(), code.display(), code.display())).unwrap();
+    assert!(Command::new("sh").env_clear().envs(lab.command().get_envs().filter_map(|(key, value)| Some((key, value?)))).arg("-c").arg(format!("sh < {} > /dev/null 2>&1 &", quote(&script.to_string_lossy()))).status().unwrap().success());
+    let waited = std::time::Instant::now();
+    while !code.exists() && waited.elapsed() < std::time::Duration::from_secs(60) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let status: i32 = fs::read_to_string(&code).expect("kelpie finished").trim().parse().unwrap();
+    Output { status: std::process::ExitStatus::from_raw(status << 8), stdout: fs::read(&out).unwrap(), stderr: fs::read(&err).unwrap() }
+}
+
+fn landed_and_pushed(lab: &Lab, app: &Path) -> Output {
+    let app = app.to_str().unwrap();
+    let landed = lab.run(&["-C", app, "land", "billing"]);
+    assert!(landed.status.success(), "{}", stderr(&landed));
+    let pushed = run_as_user(lab, &["-C", app, "push", "billing"]);
+    assert!(pushed.status.success(), "{}", stderr(&pushed));
+    pushed
+}
+
+fn task_json(lab: &Lab) -> serde_json::Value {
+    let status: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["status", "--json"]))).unwrap();
+    status["items"].as_array().unwrap().iter().find(|item| item["name"] == "billing").cloned().expect("the task is listed")
+}
+
+fn prompts_to(lab: &Lab, pane: &str) -> Vec<String> {
+    lab.herdr_calls().into_iter().filter(|call| call[..2] == ["agent", "prompt"] && call[2] == pane).map(|call| call[3].clone()).collect()
+}
+
+fn run_json(status: &str, conclusion: &str) -> String {
+    format!(r#"[{{"databaseId":42,"name":"CI","status":"{status}","conclusion":"{conclusion}","workflowName":"CI","url":"https://github.com/acme/app/actions/runs/42"}}]"#)
+}
+
+// The watch started two minutes ago, so a green is past the wait for late runs.
+fn age_watch(lab: &Lab) {
+    let file = lab.state.join("ci/billing@app.json");
+    let mut watch: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    watch["started_at"] = serde_json::json!(watch["started_at"].as_u64().unwrap() - 120);
+    fs::write(&file, watch.to_string()).unwrap();
+}
+
+#[test]
+fn after_a_push_the_task_waits_under_ci_running_and_closes_as_done_once_ci_is_green() {
+    let lab = Lab::new("ci-green");
+    let (app, slot) = lab.task_fixture();
+    on_github(&lab, &app);
+    fake_gh(&lab, "[]");
+    let pushed = landed_and_pushed(&lab, &app);
+    assert!(stdout(&pushed).contains("billing stays open under CI running until CI for"), "{}", stdout(&pushed));
+    let sha = git(&lab.root.join("origin.git"), &["rev-parse", "main"]);
+    assert_eq!(sha, git(&slot, &["rev-parse", "HEAD"]), "the commits are on origin");
+    assert_eq!(git(&slot, &["branch", "--show-current"]), "billing", "the worktree stays the task's");
+    let watches: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["ci", "--json"]))).unwrap();
+    assert_eq!((watches[0]["address"].as_str(), watches[0]["sha"].as_str(), watches[0]["slug"].as_str(), watches[0]["state"].as_str()), (Some("billing@app"), Some(sha.as_str()), Some("acme/app"), Some("running")));
+    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("kelpie watches CI for")), "{:?}", prompts_to(&lab, "p_lead"));
+    assert_eq!(task_json(&lab)["group"], "CI RUNNING");
+
+    fs::write(lab.root.join("gh-answers/run-list.json"), run_json("in_progress", "")).unwrap();
+    let ticked = lab.run(&["ci", "tick"]);
+    assert!(ticked.status.success(), "{}", stderr(&ticked));
+    assert!(gh_calls(&lab).iter().any(|call| call == &format!("run list -R acme/app --commit {sha} --limit 50 --json databaseId,name,status,conclusion,workflowName,url")), "{:?}", gh_calls(&lab));
+    let task = task_json(&lab);
+    assert_eq!(task["group"], "CI RUNNING");
+    assert!(task["summary"].as_str().unwrap().contains("CI running: CI"), "{task}");
+    assert_eq!(task["ci"]["runs"][0]["url"], "https://github.com/acme/app/actions/runs/42");
+
+    fs::write(lab.root.join("gh-answers/run-list.json"), run_json("completed", "success")).unwrap();
+    assert!(stdout(&lab.run(&["ci", "tick"])).contains("CI running"), "a green right after the push waits for late runs");
+    assert_eq!(git(&slot, &["branch", "--show-current"]), "billing");
+    age_watch(&lab);
+    let green = lab.run(&["ci", "tick"]);
+    assert!(stdout(&green).contains("CI is green for") && stdout(&green).contains("billing is done"), "{}\n{}", stdout(&green), stderr(&green));
+    assert!(git(&app, &["branch", "--list", "billing"]).is_empty(), "the task closed as done");
+    assert_eq!(stdout(&lab.run(&["ci", "--json"])), "[]");
+    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("pushed billing@app") && text.contains("The task is done and closed")), "{:?}", prompts_to(&lab, "p_lead"));
+    assert!(lab.herdr_calls().iter().any(|call| call[..2] == ["workspace", "close"]), "its Space closes as done closes it");
+}
+
+#[test]
+fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_open_under_needs_you() {
+    let lab = Lab::new("ci-failed");
+    let (app, slot) = lab.task_fixture();
+    on_github(&lab, &app);
+    fake_gh(&lab, &run_json("completed", "failure"));
+    fs::write(lab.root.join("gh-answers/jobs.json"), r#"{"jobs":[{"name":"lint","status":"completed","conclusion":"success","databaseId":7},{"name":"test","status":"completed","conclusion":"failure","databaseId":8}]}"#).unwrap();
+    let log: String = (1..=100).map(|line| format!("test\tRun tests\tline {line}\n")).collect();
+    fs::write(lab.root.join("gh-answers/log.txt"), log).unwrap();
+    landed_and_pushed(&lab, &app);
+    let ticked = lab.run(&["ci", "tick"]);
+    assert!(stdout(&ticked).contains("CI failed for billing@app") && stdout(&ticked).contains("CI · test"), "{}\n{}", stdout(&ticked), stderr(&ticked));
+    assert!(gh_calls(&lab).iter().any(|call| call == "run view -R acme/app --job 8 --log-failed"), "{:?}", gh_calls(&lab));
+    let told = prompts_to(&lab, "p_task");
+    let failure = told.iter().find(|text| text.contains("CI failed for")).unwrap_or_else(|| panic!("the task hears it: {told:?}"));
+    assert!(failure.contains("CI · test") && failure.contains("line 41") && failure.contains("line 100") && !failure.contains("line 40"), "{failure}");
+    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("CI failed for billing@app")), "{:?}", prompts_to(&lab, "p_lead"));
+    let task = task_json(&lab);
+    assert_eq!(task["group"], "NEEDS YOU");
+    assert!(task["summary"].as_str().unwrap().contains("CI failed: CI · test"), "{task}");
+    assert_eq!(git(&slot, &["branch", "--show-current"]), "billing", "the task stays open to fix it");
+    let calls = gh_calls(&lab).len();
+    assert_eq!(stdout(&lab.run(&["ci", "tick"])), "No CI watch is running.");
+    assert_eq!(gh_calls(&lab).len(), calls, "a failed watch is not polled");
+    let done = lab.run(&["-C", app.to_str().unwrap(), "done", "billing"]);
+    assert!(done.status.success(), "the user can close it by hand: {}", stderr(&done));
+    assert_eq!(stdout(&lab.run(&["ci", "--json"])), "[]", "and the watch goes with it");
+}
+
+#[test]
+fn without_gh_or_github_the_push_closes_the_task_at_once_and_says_why_ci_was_not_watched() {
+    let lab = Lab::new("ci-no-gh");
+    let (app, _) = lab.task_fixture();
+    on_github(&lab, &app);
+    let pushed = landed_and_pushed(&lab, &app);
+    assert!(stdout(&pushed).contains("CI not watched: gh is not installed.") && stdout(&pushed).contains("billing is done"), "{}", stdout(&pushed));
+    assert!(git(&app, &["branch", "--list", "billing"]).is_empty());
+    let local = Lab::new("ci-local-origin");
+    let (app, _) = local.task_fixture();
+    fake_gh(&local, "[]");
+    let pushed = landed_and_pushed(&local, &app);
+    assert!(stdout(&pushed).contains("CI not watched: origin is not on GitHub.") && stdout(&pushed).contains("billing is done"), "{}", stdout(&pushed));
+    assert!(gh_calls(&local).is_empty());
+}
+
+#[test]
+fn with_ci_watch_off_the_push_closes_the_task_as_before_and_never_asks_gh() {
+    let lab = Lab::new("ci-off");
+    let (app, _) = lab.task_fixture();
+    on_github(&lab, &app);
+    fake_gh(&lab, "[]");
+    fs::write(&lab.config, "[ci]\nwatch = false\n").unwrap();
+    let pushed = landed_and_pushed(&lab, &app);
+    assert!(stdout(&pushed).contains("billing is done") && !stdout(&pushed).contains("CI"), "{}", stdout(&pushed));
+    assert!(gh_calls(&lab).is_empty());
+    assert_eq!(stdout(&lab.run(&["ci"])), "No CI watches.");
 }

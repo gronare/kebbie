@@ -559,6 +559,7 @@ fn group_color(group: Group) -> Color {
         Group::Working => BLUE,
         Group::ToReview => TEAL,
         Group::ReadyToPush => GREEN,
+        Group::CiRunning => YELLOW,
         Group::Idle => MUTED,
     }
 }
@@ -606,6 +607,7 @@ fn absence(item: &Item) -> Option<&'static str> {
 fn row_facts(item: &Item) -> String {
     let Some(git) = &item.git else { return String::new() };
     let mut parts: Vec<String> = absence(item).map(str::to_string).into_iter().collect();
+    parts.extend(item.ci_note());
     if git.ahead > 0 {
         parts.push(plural(git.ahead, "commit"));
     }
@@ -771,6 +773,22 @@ fn spawn_restarter() -> Receiver<Vec<String>> {
         }
     });
     stale_rx
+}
+
+// Off the UI thread, and gh is asked only while a watch runs.
+fn spawn_ci_watcher(refresh: Sender<()>) {
+    thread::spawn(move || {
+        loop {
+            if let Ok(state) = crate::lead::state_dir()
+                && crate::ci::active(&state)
+                && !crate::ci::tick(&state).is_empty()
+                && refresh.send(()).is_err()
+            {
+                return;
+            }
+            thread::sleep(crate::ci::POLL);
+        }
+    });
 }
 
 type DetailRequest = (PathBuf, Option<PathBuf>);
@@ -2083,6 +2101,10 @@ fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
         spans.extend(pill(format!("◇ {review} to review"), TEAL, true));
     }
     spans.extend(pill(format!("✓ {ready} ready to push"), GREEN, ready > 0));
+    let ci = count(Group::CiRunning);
+    if ci > 0 {
+        spans.extend(pill(format!("⧗ {ci} CI running"), YELLOW, true));
+    }
     let questions = app.questions.len();
     spans.extend(pill(format!("? {}", plural(questions, "question")), YELLOW, questions > 0));
     if !app.stale.is_empty() {
@@ -2415,6 +2437,25 @@ fn server_line(item: &Item, configured: bool, name: &str, width: usize) -> Optio
     Some((line, Some(Link { shown, url: url.clone() })))
 }
 
+fn ci_lines(item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
+    let Some(ci) = &item.ci else { return (Vec::new(), Vec::new()) };
+    let (mark, color) = if ci.running() { ("◐ ", YELLOW) } else { ("● ", PEACH) };
+    let mut lines = vec![field("ci", vec![Span::styled(mark, style(color)), Span::styled(ci.note(), style(TEXT))])];
+    let mut links = Vec::new();
+    let failed_url = match &ci.state { crate::ci::State::Failed { url, .. } => Some(url.clone()), crate::ci::State::Running => None };
+    let mut urls: Vec<(String, String)> = ci.runs.iter().map(|run| (run.title().to_string(), run.url.clone())).collect();
+    if urls.is_empty() && let Some(url) = failed_url {
+        urls.push(("run".to_string(), url));
+    }
+    for (title, url) in urls.into_iter().filter(|(_, url)| !url.is_empty()).take(4) {
+        let title = cut(&title, 16);
+        let shown = cut(&url, width.saturating_sub(LABEL + title.chars().count() + 2).max(2));
+        lines.push(field("", vec![Span::styled(title, style(MUTED)), Span::raw("  "), Span::styled(shown.clone(), style(TEAL))]));
+        links.push(Link { shown, url });
+    }
+    (lines, links)
+}
+
 fn worker_line(item: &Item, configured: bool, name: &str) -> Option<Line<'static>> {
     if item.worker {
         Some(field(name, vec![Span::styled("● running", style(GREEN))]))
@@ -2531,6 +2572,9 @@ fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool) -> (Vec<L
         links.extend(link);
     }
     lines.extend(worker_line(item, detail.dev_worker, &detail.worker_name));
+    let (ci, ci_links) = ci_lines(item, width);
+    lines.extend(ci);
+    links.extend(ci_links);
     if item.git.as_ref().is_some_and(|git| git.ahead > 0) || item.verdict.is_some() || item.review.is_some() {
         let (text, color) = review_text(item);
         lines.push(field("review", vec![Span::styled(text, style(color))]));
@@ -3715,6 +3759,7 @@ fn resolve_graphics(forced: Option<&str>, tty: bool, herdr: bool, asked: Option<
 pub fn run(overlay: bool) -> Result<String> {
     let sources = config::sources()?;
     let (snapshots, refresh) = spawn_refresher();
+    spawn_ci_watcher(refresh.clone());
     let mut app = App::new(sources, backlog::load(), overlay, refresh);
     app.away = permit::away_since().is_some();
     let (update_notices, recheck) = spawn_update_checker();
@@ -4248,6 +4293,22 @@ mod tests {
         item.server = true;
         item.worker = true;
         assert_eq!(labels(&item), ["Stop the dev server", "Stop the worker"]);
+    }
+
+    #[test]
+    fn a_watched_task_shows_its_ci_state_and_links_each_run() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 0);
+        assert!(ci_lines(&item, 60).0.is_empty());
+        let run = crate::ci::Run { id: 42, name: "CI".to_string(), workflow: "CI".to_string(), status: "in_progress".to_string(), conclusion: String::new(), url: "https://github.com/acme/web/actions/runs/42".to_string() };
+        item.ci = Some(crate::ci::Watch {
+            address: "billing@web".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
+            started_at: 0, checked_at: None, close: true, runs: vec![run], state: crate::ci::State::Running, error: None, pushed: crate::ci::Pushed::default(),
+        });
+        let (lines, links) = ci_lines(&item, 80);
+        assert_eq!(lines.iter().map(Line::to_string).collect::<Vec<_>>(), ["ci      ◐ CI running: CI", "        CI  https://github.com/acme/web/actions/runs/42"]);
+        assert_eq!((links[0].shown.as_str(), links[0].url.as_str()), ("https://github.com/acme/web/actions/runs/42", "https://github.com/acme/web/actions/runs/42"));
+        assert_eq!(row_facts(&item), "CI running: CI");
+        assert_eq!(group_color(item.group()), YELLOW);
     }
 
     #[test]

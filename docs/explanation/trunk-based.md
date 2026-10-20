@@ -24,6 +24,12 @@ The gate is the push itself, so nothing waits on a web page.
 
 Without a merge to group them, each commit on the default branch is read on its own. That is why kelpie leaves commit style to a skill (`task.rules_skill`) that the task follows, the lead checks, and `kelpie tidy` and the push window's edit and squash keys help you fix. The default, `kelpie:work-rules`, asks for one logical change per commit with a body that says why. Replace it with your own team's rules.
 
+## CI after the push
+
+Without a pull request, the default branch is where CI runs, so a task is finished when its commits are on the default branch and CI passes them, not before. When origin is on GitHub and `gh` is logged in, kelpie watches the workflow runs for the pushed commit and keeps the task open, with its worktree and its Claude, under CI running. Once every run is green it closes the task as done. When a run fails, the task moves to Needs you and its Claude gets the failing job's log, so the session that wrote the change fixes it while it still knows the change. The fix is a new commit and a normal push, and that push is watched in turn.
+
+The board does the watching while it is open, every 30 seconds, and the watch is kept in the state directory, so it picks up again after a restart. Set `[ci] watch = false` for a repo whose CI says nothing useful, and its tasks close right after the push. See [`kelpie ci`](../reference/commands.md#kelpie-ci---json).
+
 ## Pushing in parts
 
 A task does not have to land all at once. `kelpie push --through <sha>`, or `p` in the push window, pushes the commits up to one and keeps the task open, with the rest of its branch rebased on top. A long task can land its safe first steps while it keeps working. See [Push part of a task](../how-to/push-part-of-a-task.md).

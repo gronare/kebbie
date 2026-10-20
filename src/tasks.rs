@@ -844,18 +844,31 @@ pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bo
     let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
     let target = upstream.trim_start_matches("origin/").to_string();
     let landed = |closed: bool, waits: bool| Landed { pusher, address: &address, target: &target, commits: &pushed, closed, note: note.as_deref(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), waits };
+    let short = &sha[..7.min(sha.len())];
+    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))) };
+    let watch = crate::ci::begin(&state, &repo, &address, &sha, !keep_open, told_ci);
+    let ci = match &watch {
+        crate::ci::Begin::Watching => format!(" kelpie watches CI for {short}."),
+        crate::ci::Begin::NotWatched(reason) => format!(" CI not watched: {reason}."),
+        crate::ci::Begin::Off => String::new(),
+    };
     if !keep_open {
+        if matches!(watch, crate::ci::Begin::Watching) {
+            if let Err(error) = messages::notify_lead(&format!("{} pushed {address}: {} to {target}. kelpie watches CI for {short} and closes the task once every run is green; you hear what landed then.", capitalized(pusher), plural(count, "commit"))) {
+                eprintln!("Could not tell the lead about the push: {error}");
+            }
+            return Ok(format!("Pushed {} to {upstream}.{logged} {task} stays open under CI running until CI for {short} is green; kelpie closes it then. {}", plural(count, "commit"), fast_forward_main(&repo, &upstream)?));
+        }
         let ready = note_ready(vault.as_ref(), &state, &address, &task);
         if let Err(waits) = &ready {
             tell_lead_pushed(&landed(false, true));
-            return Ok(format!("Pushed {} to {upstream}.{logged} {waits}", plural(count, "commit")));
+            return Ok(format!("Pushed {} to {upstream}.{logged}{ci} {waits}", plural(count, "commit")));
         }
         let closed = close_task(cwd, name, vault.as_ref(), ready.unwrap_or_default());
         tell_lead_pushed(&landed(closed.is_ok(), false));
-        return closed.map(|closed| format!("Pushed {} to {upstream}.{logged} {closed}", plural(count, "commit")));
+        return closed.map(|closed| format!("Pushed {} to {upstream}.{logged}{ci} {closed}", plural(count, "commit")));
     }
     tell_lead_pushed(&landed(false, false));
-    let short = &sha[..7.min(sha.len())];
     let (clean, rest) = match keep_going(&state, &repo, &slot, &upstream, &address, was_approved)? {
         Rest::Rebased { clean, rest } => (clean, rest),
         Rest::NotFetched(error) => return Ok(format!("Pushed {} through {short} to {upstream}.{logged} Fetching afterwards failed ({error}), so the rest of {task} is not rebased onto it yet: run kelpie land {task}.", plural(count, "commit"))),
@@ -868,7 +881,21 @@ pub fn push(cwd: &Path, name: Option<&str>, through: Option<&str>, keep_open: bo
         eprintln!("Could not tell {address} about the push: {error}");
     }
     let after = if clean { format!("{task} stays open with {} on top.", plural(rest, "commit")) } else { format!("{task} stays open; its Claude is resolving the rebase of the rest.") };
-    Ok(format!("Pushed {} through {short} to {upstream}.{logged} {after} {}", plural(count, "commit"), fast_forward_main(&repo, &upstream)?))
+    Ok(format!("Pushed {} through {short} to {upstream}.{logged}{ci} {after} {}", plural(count, "commit"), fast_forward_main(&repo, &upstream)?))
+}
+
+pub fn after_ci(repo: &Path, task: &str, address: &str, told: &crate::ci::Pushed) -> Result<String> {
+    let state = state_dir()?;
+    let vault = crate::vault_cli::detect();
+    let landed = |closed: bool, waits: bool| Landed { pusher: &told.pusher, address, target: &told.target, commits: &told.commits, closed, note: told.note.as_deref(), logged: told.logged, waits };
+    let ready = note_ready(vault.as_ref(), &state, address, task);
+    if let Err(waits) = &ready {
+        tell_lead_pushed(&landed(false, true));
+        return Ok(waits.clone());
+    }
+    let closed = close_task(repo, Some(task), vault.as_ref(), ready.unwrap_or_default());
+    tell_lead_pushed(&landed(closed.is_ok(), false));
+    closed
 }
 
 fn capitalized(text: &str) -> String {
@@ -1240,6 +1267,7 @@ fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::C
     crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
     crate::review::forget(task_of(&slot), &repo);
     crate::report::forget_card(task_of(&slot), &repo);
+    crate::ci::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
     end_life(task_of(&slot), &repo, "done");
     Ok(finished + &close_space(workspace))
 }
@@ -1330,6 +1358,9 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     crate::permit::forget(&peers::address(task, &name_of(&repo)));
     crate::review::forget(task, &repo);
     crate::report::forget_card(task, &repo);
+    if let Ok(state) = state_dir() {
+        crate::ci::forget(&state, &peers::address(task, &name_of(&repo)));
+    }
     end_life(task, &repo, how);
     Ok(format!("{task} dropped; {} is free again.{said}{}", name_of(&slot.path), close_space(workspace)))
 }

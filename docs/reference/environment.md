@@ -11,6 +11,8 @@
 | `KELPIE_LEAD_DIR` | `lead` in the state directory | The lead Claude's working directory. |
 | `KELPIE_BIN` | `~/.local/share/kelpie/current/target/release/kelpie` | The binary the lead's role, the task role, kelpie's skills and the sidebar sync run. |
 | `KELPIE_CLAUDE_BIN` | `claude` | The Claude Code binary `kelpie setup vault` runs. |
+| `KELPIE_GH_BIN` | `gh` | The GitHub CLI kelpie watches CI with. |
+| `GH_HOST` | none | A GitHub Enterprise host whose remotes kelpie watches CI for, besides github.com. |
 | `KELPIE_VAULT_BIN` | none | A vault command that stands in for the vault plugin, for tests. |
 | `KELPIE_IMAGES` | detected | How the board draws images such as a sign-off card's screenshots: `kitty`, `sixel` or `iterm2` use that graphics protocol, `halfblocks` draws a preview in text cells without querying the terminal, `off` shows their paths instead. Detected, it asks the terminal when the first image is about to show; inside herdr (`TERM_PROGRAM=herdr`) it asks nothing and uses Kitty, and the board not on a terminal shows paths. |
 | `HERDR_BIN_PATH` | `herdr` | The herdr binary. `false` makes kelpie reach no herdr at all. |
@@ -27,7 +29,7 @@ For `notify.command`:
 
 | Variable | Value |
 | --- | --- |
-| `KELPIE_EVENT` | `needs-you`, `ready`, `question` or `summary` |
+| `KELPIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed` or `ci-green` |
 | `KELPIE_TASK` | The task's name |
 | `KELPIE_REPO` | The task's repo |
 | `KELPIE_TEXT` | The notification's one line |

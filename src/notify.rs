@@ -24,6 +24,8 @@ pub enum Event {
     Ready,
     Question,
     Summary,
+    CiFailed,
+    CiGreen,
 }
 
 impl Event {
@@ -33,6 +35,8 @@ impl Event {
             Event::Ready => "ready",
             Event::Question => "question",
             Event::Summary => "summary",
+            Event::CiFailed => "ci-failed",
+            Event::CiGreen => "ci-green",
         }
     }
 

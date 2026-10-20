@@ -8,7 +8,7 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 
 | Part | Shows |
 | --- | --- |
-| Status line, top | Counts of tasks that need you, are working, are to review and are ready to push; waiting questions; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `↑ kelpie <version> · U updates` when a newer version is out. |
+| Status line, top | Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `↑ kelpie <version> · U updates` when a newer version is out. |
 | Work, left | Tasks from every repo with a worktree pool, grouped. A task's halves in other repos sit next to each other. |
 | Backlog, right | An ONGOING section of vault project notes in progress (status active or draft) when the vault is on, then the items from the configured sources, by priority. |
 | Messages, bottom | What sessions tell each other, newest last. |
@@ -23,13 +23,14 @@ The selected task opens in place with its review progress, its question and opti
 
 | Group | Contains |
 | --- | --- |
-| Needs you | A question on screen; a task that asked for you; a task Claude finished that you have not looked at; a ready task whose commits the lead has not approved, marked "rules not checked by the lead". Open questions first. |
+| Needs you | A question on screen; a task that asked for you; a task whose CI failed after a push, marked `CI failed: <workflow> · <job>`; a task Claude finished that you have not looked at; a ready task whose commits the lead has not approved, marked "rules not checked by the lead". Open questions first. |
 | Working | Claude is mid-turn. |
 | To review | Sent to the reviewer, waiting for a pass on its current code. |
 | Ready to push | Approved by the lead, and passed by the reviewer when sent to review. |
+| CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. The row names the runs, and the open task links each run's page. See [`kelpie ci`](commands.md#kelpie-ci---json). |
 | Waiting for work | Idle, or blocked on something outside you. |
 
-Between turns, the task's last report decides its group.
+Between turns, the task's last report decides its group. A CI watch decides it until the task reports again.
 
 ## Keys
 
@@ -72,7 +73,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `v` | Send to review; on a task in review, withdraw it. | It has commits and Claude is not mid-turn. |
 | `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn. |
 | `p` | Push: rebase, then open the push window. | Claude is not mid-turn and it is not waiting for the reviewer. |
-| `d` | Done: close a task you already pushed elsewhere and free its worktree. Asks first. | Claude is not mid-turn. |
+| `d` | Done: close a task you already pushed elsewhere and free its worktree, also one under CI running or with failed CI you choose to leave. Asks first. | Claude is not mid-turn. |
 | `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task. |
 | `z` | Reset: its work goes, its backlog item returns. Asks first. | Always. |
 | `x` | Drop. Asks first; on uncommitted work or unpushed commits, asks again to force. | Always. |
