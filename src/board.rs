@@ -420,6 +420,7 @@ struct App {
     update_running: bool,
     update_shown: bool,
     recheck: Option<Sender<()>>,
+    stale: Vec<String>,
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
@@ -633,6 +634,22 @@ fn spawn_update_checker() -> (Receiver<Vec<(String, String)>>, Sender<()>) {
         }
     });
     (notice_rx, recheck_tx)
+}
+
+fn spawn_restarter() -> Receiver<Vec<String>> {
+    let (stale_tx, stale_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut memory = crate::restart::Memory::default();
+        loop {
+            if let Ok(lines) = crate::restart::run(crate::restart::Mode::Routine { min_idle: 0 }, &mut memory, None)
+                && stale_tx.send(lines.into_iter().filter(|line| line.stale).map(|line| format!("{}: {}", line.label, line.said)).collect()).is_err()
+            {
+                return;
+            }
+            thread::sleep(Duration::from_secs(60));
+        }
+    });
+    stale_rx
 }
 
 type DetailRequest = (PathBuf, Option<PathBuf>);
@@ -1647,6 +1664,9 @@ fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Page)>) {
     spans.extend(pill(format!("✓ {ready} ready to push"), GREEN, ready > 0));
     let questions = app.questions.len();
     spans.extend(pill(format!("? {}", plural(questions, "question")), YELLOW, questions > 0));
+    if !app.stale.is_empty() {
+        spans.extend(pill(format!("↻ {} stale", app.stale.len()), MAUVE, true));
+    }
     if app.away {
         spans.extend(pill("☾ away".to_string(), MAUVE, true));
     }
@@ -2984,7 +3004,7 @@ impl App {
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
-            updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None,
+            updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
         }
     }
 }
@@ -3005,6 +3025,7 @@ pub fn run(overlay: bool) -> Result<String> {
     app.away = permit::away_since().is_some();
     let (update_notices, recheck) = spawn_update_checker();
     app.recheck = Some(recheck);
+    let restarter = (!overlay).then(spawn_restarter);
     let (requests, results) = spawn_detailer();
     app.detail_requests = Some(requests);
     app.detail_results = Some(results);
@@ -3040,6 +3061,9 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             while let Ok(updates) = update_notices.try_recv() {
                 app.updates = updates;
+            }
+            while let Some(stale) = restarter.as_ref().and_then(|restarter| restarter.try_recv().ok()) {
+                app.stale = stale;
             }
             while let Ok(update) = snapshots.try_recv() {
                 match update {

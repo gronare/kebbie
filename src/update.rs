@@ -5,7 +5,6 @@ use serde_json::Value;
 use crate::config::{self, Channel};
 use crate::herdr;
 use crate::lead;
-use crate::peers;
 use crate::release::{self, Plan, Request};
 use crate::setup;
 use crate::sh::{self, Result};
@@ -29,7 +28,8 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<String
         None => format!("kelpie follows the {} channel", channel.key()),
     });
     update_check::forget(&state);
-    lines.extend(reload()?);
+    crate::restart::mark_updated(&state, crate::restart::now())?;
+    lines.extend(crate::restart::report(&crate::restart::run(crate::restart::Mode::Update, &mut crate::restart::Memory::default(), None)?));
     summary.push(String::new());
     summary.extend(lines);
     Ok(summary.join("\n"))
@@ -129,67 +129,6 @@ fn claude_plugin(claude_dir: &Path, claude: &str, root: Option<&Path>, follows_g
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum Reload {
-    Now,
-    Focused,
-    Busy,
-}
-
-fn reload_for(agent: &Value) -> Option<Reload> {
-    if agent["agent"] != "claude" {
-        return None;
-    }
-    // Typing into the pane you are in would land in the middle of what you are writing.
-    if agent["focused"] == true {
-        return Some(Reload::Focused);
-    }
-    let waiting = ["idle", "done"].contains(&agent["agent_status"].as_str().unwrap_or_default());
-    Some(if waiting && agent["interactive_ready"] == true { Reload::Now } else { Reload::Busy })
-}
-
-// The lead reads its role and settings only at start, so it is restarted instead, by the binary just built.
-fn lead_line(reload: &Reload, restart: impl FnOnce() -> Result<String>) -> String {
-    match reload {
-        Reload::Now => match restart() {
-            Ok(said) => format!("  lead: {said}"),
-            Err(error) => format!("  lead: {error}"),
-        },
-        Reload::Focused | Reload::Busy => "  lead: restart the lead when it waits: kelpie lead --restart".to_string(),
-    }
-}
-
-fn restart_lead() -> Result<String> {
-    sh::run(&peers::kelpie_command()?, &["lead", "--restart"], None)
-}
-
-fn reload() -> Result<Vec<String>> {
-    let mut lines = Vec::new();
-    let lead = lead::lead_workspace(&herdr::workspaces()?);
-    for agent in herdr::agents()? {
-        let Some(reload) = reload_for(&agent) else { continue };
-        if lead.is_some() && agent["workspace_id"].as_str() == lead.as_deref() {
-            lines.push(lead_line(&reload, restart_lead));
-            continue;
-        }
-        let pane = agent["pane_id"].as_str().unwrap_or_default();
-        let name = agent["name"].as_str().or(agent["display_agent"].as_str()).unwrap_or(pane);
-        lines.push(match reload {
-            Reload::Now => match herdr::prompt_agent(pane, "/reload-plugins") {
-                Ok(()) => format!("  {name}: reloaded"),
-                Err(error) => format!("  {name}: {error}"),
-            },
-            Reload::Focused => format!("  the Claude session you are in ({name}): type /reload-plugins to load the new plugin"),
-            Reload::Busy => format!("  {name}: busy, type /reload-plugins there when it waits"),
-        });
-    }
-    if lines.is_empty() {
-        lines.push("  no Claude sessions running".to_string());
-    }
-    lines.insert(0, "Claude sessions:".to_string());
-    Ok(lines)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,27 +218,5 @@ mod tests {
         assert_eq!(versions(&[], &[component("kelpie", None)]), ["kelpie: version unknown"]);
     }
 
-    #[test]
-    fn reloads_only_a_waiting_claude_you_are_not_typing_in() {
-        let agent = |status: &str, ready: bool, focused: bool| json!({ "agent": "claude", "agent_status": status, "interactive_ready": ready, "focused": focused });
-        assert_eq!(reload_for(&agent("idle", true, false)), Some(Reload::Now));
-        assert_eq!(reload_for(&agent("done", true, false)), Some(Reload::Now));
-        assert_eq!(reload_for(&agent("idle", true, true)), Some(Reload::Focused));
-        assert_eq!(reload_for(&agent("working", true, false)), Some(Reload::Busy));
-        assert_eq!(reload_for(&agent("blocked", true, false)), Some(Reload::Busy));
-        assert_eq!(reload_for(&agent("idle", false, false)), Some(Reload::Busy));
-        assert_eq!(reload_for(&json!({ "agent": "codex", "agent_status": "idle" })), None);
-    }
 
-    #[test]
-    fn update_restarts_a_waiting_lead_and_otherwise_says_how_to_restart_it() {
-        let restarted = std::cell::Cell::new(0);
-        let restart = || { restarted.set(restarted.get() + 1); Ok("Restarted the lead with its current role and settings, resuming its conversation.".to_string()) };
-        assert_eq!(lead_line(&Reload::Now, restart), "  lead: Restarted the lead with its current role and settings, resuming its conversation.");
-        assert_eq!(lead_line(&Reload::Now, || Err("The lead is working; run kelpie lead --restart when it is idle.".to_string())), "  lead: The lead is working; run kelpie lead --restart when it is idle.");
-        for reload in [Reload::Focused, Reload::Busy] {
-            assert_eq!(lead_line(&reload, restart), "  lead: restart the lead when it waits: kelpie lead --restart");
-        }
-        assert_eq!(restarted.get(), 1);
-    }
 }

@@ -74,8 +74,17 @@ pub struct Worktree {
 pub struct Machine {
     pub sources: Option<Vec<Source>>,
     pub channel: Option<Channel>,
+    pub restart: Restart,
     pub worktree: Worktree,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Restart {
+    pub idle_minutes: Option<u64>,
+    pub auto: Option<bool>,
+}
+
+pub const DEFAULT_IDLE_MINUTES: u64 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Layer {
@@ -115,6 +124,8 @@ pub struct Settings {
     pub server_name: Setting<String>,
     pub worker_name: Setting<String>,
     pub channel: Setting<Channel>,
+    pub idle_minutes: Setting<u64>,
+    pub auto_restart: Setting<bool>,
 }
 
 pub struct Loaded {
@@ -303,6 +314,17 @@ fn update(table: &Table) -> Result<Option<Channel>> {
     }
 }
 
+fn restart(table: &Table) -> Result<Restart> {
+    let Some(restart) = subtable(table, "restart", "restart")? else { return Ok(Restart::default()) };
+    unknown_keys(restart, "restart.", &["idle_minutes", "auto"])?;
+    let idle_minutes = match restart.get("idle_minutes") {
+        None => None,
+        Some(value) => Some(value.as_integer().filter(|minutes| (1..=1440).contains(minutes)).ok_or("restart.idle_minutes: must be a whole number of minutes, 1 to 1440")? as u64),
+    };
+    let auto = restart.get("auto").map(|value| value.as_bool().ok_or("restart.auto: must be true or false")).transpose()?;
+    Ok(Restart { idle_minutes, auto })
+}
+
 fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
     unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "server_name", "worker_name"])?;
@@ -364,9 +386,9 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update"]).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
-    Ok(Machine { sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, worktree })
+    Ok(Machine { sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, worktree })
 }
 
 const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
@@ -375,7 +397,7 @@ const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command")] {
+    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto")] {
         if table.contains_key(key) {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
@@ -417,6 +439,8 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         server_name: or_default(pick(None, machine.worktree.server_name.as_ref()), DEFAULT_SERVER_NAME.to_string()),
         worker_name: or_default(pick(None, machine.worktree.worker_name.as_ref()), DEFAULT_WORKER_NAME.to_string()),
         channel: or_default(pick(None, machine.channel.as_ref()), Channel::default()),
+        idle_minutes: or_default(pick(None, machine.restart.idle_minutes.as_ref()), DEFAULT_IDLE_MINUTES),
+        auto_restart: or_default(pick(None, machine.restart.auto.as_ref()), true),
     }
 }
 
@@ -439,6 +463,11 @@ pub fn sources() -> Result<Vec<Source>> {
     Ok(resolve(None)?.settings.sources.value)
 }
 
+pub fn restart_settings() -> Result<(bool, u64)> {
+    let settings = resolve(None)?.settings;
+    Ok((settings.auto_restart.value, settings.idle_minutes.value))
+}
+
 pub fn channel() -> Result<Channel> {
     Ok(load_machine(&path())?.channel.unwrap_or_default())
 }
@@ -448,7 +477,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, vault_command, server_name, worker_name, channel } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -492,6 +521,10 @@ pub fn describe(loaded: &Loaded) -> String {
         "The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; config.toml only.");
     key("update.channel", format!("{:?}", channel.value.key()), channel.layer,
         "What kelpie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin; \"main\", origin's default branch as it is pushed. kelpie update --from <branch or path> runs other code until kelpie update --stable; config.toml only.");
+    key("restart.auto", auto_restart.value.to_string(), auto_restart.layer,
+        "Whether the board restarts Claude sessions that run an older Claude Code, plugin, MCP config or kelpie than is installed, each with claude --resume in its own pane, keeping its flags; kelpie update restarts the idle ones at once. false restarts nothing on its own: the board still marks stale sessions, and kelpie restart restarts them when you want; config.toml only.");
+    key("restart.idle_minutes", idle_minutes.value.to_string(), idle_minutes.layer,
+        "How long a stale session waits idle and unfocused before the board restarts it; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
     lines.push(format!("[[actions]]  (repo config only)\n  The Areas page's own actions for the repo, one table each, with the keys {}; the README's Areas section shows each.", crate::actions::ACTION_KEYS.join(", ")));
     lines.join("\n")
 }
@@ -665,8 +698,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -714,6 +747,23 @@ mod tests {
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&default).contains("notify.command = none  (default)\n  The shell command kelpie runs"));
         assert!(describe(&default).contains("config.toml only."));
+    }
+
+    #[test]
+    fn restarts_are_automatic_after_ten_idle_minutes_unless_config_toml_says_otherwise() {
+        let default = settings(&Worktree::default(), &Machine::default());
+        assert_eq!((default.idle_minutes, default.auto_restart), (Setting { value: 10, layer: Layer::Default }, Setting { value: true, layer: Layer::Default }));
+        let set = settings(&Worktree::default(), &machine("[restart]\nidle_minutes = 25\nauto = false\n"));
+        assert_eq!((set.idle_minutes.value, set.auto_restart.value, set.auto_restart.layer), (25, false, Layer::Machine));
+        let error = |text: &str| parse_machine(text, "config.toml").unwrap_err();
+        for bad in ["0", "1441", "-3", "\"10\"", "2.5"] {
+            assert!(error(&format!("[restart]\nidle_minutes = {bad}\n")).contains("restart.idle_minutes: must be a whole number of minutes, 1 to 1440"), "{bad}");
+        }
+        assert!(error("[restart]\nauto = \"no\"\n").contains("restart.auto: must be true or false"));
+        assert!(error("[restart]\nidle = 5\n").contains("restart.idle: unknown key; known keys here: idle_minutes, auto"));
+        assert!(parse_repo("[restart]\nauto = false\n", "app.toml").unwrap_err().contains("restart: applies to every repo, so it lives in config.toml"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
+        assert!(shown.contains("restart.auto = false  (machine config)\n  Whether the board restarts") && shown.contains("restart.idle_minutes = 25  (machine config)\n  How long a stale session waits"), "{shown}");
     }
 
     #[test]

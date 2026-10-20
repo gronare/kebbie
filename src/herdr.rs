@@ -152,6 +152,10 @@ pub fn foreground(pane_id: &str) -> Result<Option<Vec<String>>> {
     Ok(Some(process["argv"].as_array().into_iter().flatten().filter_map(|arg| arg.as_str().map(str::to_string)).collect()))
 }
 
+pub fn process_info(pane_id: &str) -> Result<Value> {
+    Ok(call(&["pane", "process-info", "--pane", pane_id])?["process_info"].clone())
+}
+
 pub fn send_keys(pane_id: &str, keys: &[&str]) -> Result<()> {
     let mut args = vec!["pane", "send-keys", pane_id];
     args.extend_from_slice(keys);

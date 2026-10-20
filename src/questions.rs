@@ -122,7 +122,7 @@ pub fn open(messages: &[Message], turn_started: impl Fn(&str) -> Option<u64>) ->
         if message.ended {
             open.retain(|question| question.from != message.to);
         } else if let Some(question) = &message.question {
-            open.retain(|earlier| earlier.from != message.from);
+            open.retain(|earlier| earlier.from != message.from || earlier.about != message.about);
             if !question.answered {
                 open.push(message);
             }
@@ -199,6 +199,16 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
     let messages = messages::load();
     let open = open_now(&messages);
     let message = open.iter().copied().find(|question| question.id == id).ok_or("That question no longer waits for an answer")?;
+    if message.kind.as_deref() == Some(crate::restart::QUESTION_KIND) {
+        let session = message.about.clone().ok_or("That restart question names no session")?;
+        let yes = choice == Some(0);
+        if choice.is_none() {
+            return Err("Answer the restart question with yes or no".to_string());
+        }
+        messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
+        drop(_lock);
+        return crate::restart::answer(&session, yes);
+    }
     let text = answer_text(message, choice, comment)?;
     let told = match sessions.iter().find(|session| session.address == message.from) {
         Some(task) => messages::send_locked(USER_LABEL, &[task], &text, &sessions, Some(id), Some("answer"))?.join(" "),

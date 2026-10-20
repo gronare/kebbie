@@ -479,7 +479,7 @@ impl Settle {
     }
 }
 
-fn wait_for_prompt(pane: &str) -> Result<()> {
+pub(crate) fn wait_for_prompt(pane: &str) -> Result<()> {
     let look = || Ok((herdr::foreground(pane)?.is_none(), herdr::read_pane(pane)?));
     prompt_with(look, || std::thread::sleep(Duration::from_millis(250)), 120)?
         .map_err(|question| format!("The shell in pane {pane} asks \"{question}\" as it starts; answer it there, then start again"))

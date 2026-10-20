@@ -423,3 +423,143 @@ fn without_herdr_the_commands_that_need_it_say_so_and_the_state_dir_stays_privat
     assert!(written.iter().all(|name| !name.starts_with('.')), "{written:?}");
     assert!(!lab.home.join(".local").exists() && !lab.home.join(".claude").exists(), "nothing under HOME: {:?}", fs::read_dir(&lab.home).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>());
 }
+
+// Five Claude sessions in herdr, all started before kelpie update, as the fake herdr shows them: billing idle, Notes focused, api mid-turn, worker idle with a background Bash running, and one herdr names no session for.
+struct Sessions {
+    sleeper: std::process::Child,
+    claude: PathBuf,
+    bin: PathBuf,
+}
+
+impl Drop for Sessions {
+    fn drop(&mut self) {
+        let _ = self.sleeper.kill();
+        let _ = self.sleeper.wait();
+    }
+}
+
+fn executable(path: &Path, text: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn sessions(lab: &Lab) -> Sessions {
+    let bin = lab.root.join("bin");
+    let claude = bin.join("claude");
+    executable(&claude, "#!/bin/sh\nexit 0\n");
+    executable(&bin.join("cargo"), "#!/bin/sh\nexit 0\n");
+    let sleeper = Command::new("sleep").arg("120").spawn().unwrap();
+    let pid = sleeper.id();
+    let work = lab.root.join("work");
+    fs::create_dir_all(&work).unwrap();
+    let slug: String = work.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect();
+    let transcripts = lab.home.join(".claude/projects").join(slug);
+    fs::create_dir_all(&transcripts).unwrap();
+    for session in ["s-billing", "s-notes", "s-api"] {
+        fs::write(transcripts.join(format!("{session}.jsonl")), "{\"type\":\"user\",\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"message\":{\"content\":\"hi\"}}\n").unwrap();
+    }
+    fs::write(transcripts.join("s-worker.jsonl"), "{\"type\":\"user\",\"timestamp\":\"2099-01-01T00:00:00.000Z\",\"message\":{\"content\":[]},\"toolUseResult\":{\"stdout\":\"\",\"backgroundTaskId\":\"b1\"}}\n").unwrap();
+    let answers = lab.root.join("answers");
+    fs::create_dir_all(&answers).unwrap();
+    let work = work.display();
+    let agent = |name: Option<&str>, session: Option<&str>, pane: &str, status: &str, focused: bool| {
+        let name = name.map(|name| format!("\"name\":\"{name}\",")).unwrap_or_default();
+        let session = session.map(|session| format!("\"agent_session\":{{\"value\":\"{session}\"}},")).unwrap_or_default();
+        format!("{{{name}{session}\"agent\":\"claude\",\"display_agent\":\"Notes\",\"pane_id\":\"{pane}\",\"workspace_id\":\"w1\",\"agent_status\":\"{status}\",\"interactive_ready\":true,\"focused\":{focused},\"cwd\":\"{work}\"}}")
+    };
+    let agents = [
+        agent(Some("billing"), Some("s-billing"), "p_billing", "idle", false),
+        agent(None, Some("s-notes"), "p_notes", "idle", true),
+        agent(Some("api"), Some("s-api"), "p_api", "working", false),
+        agent(Some("worker"), Some("s-worker"), "p_worker", "done", false),
+        agent(Some("ghost"), None, "p_ghost", "idle", false),
+    ];
+    fs::write(answers.join("agent-list.json"), format!("{{\"result\":{{\"agents\":[{}]}}}}", agents.join(","))).unwrap();
+    fs::write(answers.join("workspace-list.json"), r#"{"result":{"workspaces":[]}}"#).unwrap();
+    fs::write(answers.join("process.json"), format!(r#"{{"result":{{"process_info":{{"foreground_process_group_id":{pid},"shell_pid":1,"foreground_processes":[{{"argv0":"claude","argv":["claude","--model","opus","--resume","old-id","an old prompt"],"cwd":"{work}","pid":{pid}}}]}}}}}}"#)).unwrap();
+    fs::write(answers.join("shell.json"), r#"{"result":{"process_info":{"foreground_process_group_id":1,"shell_pid":1,"foreground_processes":[]}}}"#).unwrap();
+    let root = lab.root.join("install");
+    fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "--quiet", "--initial-branch=main"]);
+    commit(&root, "a", "first");
+    fs::write(answers.join("plugin-list.json"), format!(r#"{{"result":{{"plugins":[{{"plugin_id":"kelpie","plugin_root":"{}","source":{{"kind":"local"}}}}]}}}}"#, root.display())).unwrap();
+    let script = format!(
+        "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\n\
+         case \"$1 $2\" in\n\
+         'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
+         'pane send-keys') touch \"$d/ended-$3\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
+         'pane read') echo 'you@host $'; exit 0;;\n\
+         'agent start'|'pane run') echo '{{\"result\":{{}}}}'; exit 0;;\n\
+         esac\n\
+         key=\"$1-$2\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
+        lab.root.display()
+    );
+    executable(&lab.herdr, &script);
+    Sessions { sleeper, claude, bin }
+}
+
+impl Lab {
+    fn with_sessions(&self, sessions: &Sessions, args: &[&str]) -> Output {
+        let path = format!("{}:{}", sessions.bin.display(), std::env::var("PATH").unwrap_or_default());
+        self.command().env("PATH", path).env("KELPIE_CLAUDE_BIN", &sessions.claude).args(args).output().unwrap()
+    }
+
+    fn touched(&self, pane: &str) -> bool {
+        self.herdr_calls().iter().any(|call| (call[..2] == ["pane", "send-keys"] || call[..2] == ["agent", "start"] || call[..2] == ["pane", "run"]) && call.iter().any(|arg| arg == pane))
+    }
+}
+
+#[test]
+fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_for_the_others() {
+    let lab = Lab::new("update-restart");
+    let sessions = sessions(&lab);
+    fs::write(&lab.config, "[update]\nchannel = \"main\"\n").unwrap();
+    let output = lab.with_sessions(&sessions, &["update"]);
+    let said = stdout(&output);
+    assert!(output.status.success(), "{said}\n{}", stderr(&output));
+    let tail: Vec<&str> = said.lines().skip_while(|line| *line != "Claude sessions:").collect();
+    assert_eq!(tail, [
+        "Claude sessions:",
+        "  billing: restarted",
+        "  Notes (p_notes): you are in it: restarts when you leave it",
+        "  api: restarts when idle",
+        "  worker: waiting for your answer: background work running",
+        "  ghost: skipped: its session id is unknown",
+    ], "{said}");
+    let start = lab.herdr_calls().into_iter().find(|call| call[..2] == ["agent", "start"]).unwrap();
+    assert_eq!(start[2..], ["billing", "--kind", "claude", "--pane", "p_billing", "--", "--model", "opus", "--resume", "s-billing"].map(str::to_string), "the same flags, the old conversation and prompt dropped");
+    for pane in ["p_notes", "p_api", "p_worker", "p_ghost"] {
+        assert!(!lab.touched(pane), "{pane} is focused, busy, working in the background or unknown, and must not be restarted");
+    }
+    let log = fs::read_to_string(lab.state.join("messages.jsonl")).unwrap();
+    let question: Vec<serde_json::Value> = log.lines().filter_map(|line| serde_json::from_str(line).ok()).filter(|record: &serde_json::Value| record["kind"] == "restart").collect();
+    assert_eq!(question.len(), 1, "{log}");
+    assert_eq!(question[0]["about"], "s-worker");
+    assert_eq!(question[0]["text"], "worker: restart anyway? background work is running and would be cut off");
+    let again = lab.with_sessions(&sessions, &["restart"]);
+    assert!(stdout(&again).contains("worker: waiting for your answer: background work running"), "{}", stdout(&again));
+    let log = fs::read_to_string(lab.state.join("messages.jsonl")).unwrap();
+    assert_eq!(log.lines().filter(|line| line.contains("\"kind\":\"restart\"")).count(), 1, "asked once per session, not every look");
+}
+
+#[test]
+fn with_auto_off_update_restarts_nothing_and_kelpie_restart_still_does() {
+    let lab = Lab::new("auto-off");
+    let sessions = sessions(&lab);
+    fs::write(&lab.config, "[update]\nchannel = \"main\"\n\n[restart]\nauto = false\n").unwrap();
+    let output = lab.with_sessions(&sessions, &["update"]);
+    let said = stdout(&output);
+    assert!(output.status.success(), "{said}\n{}", stderr(&output));
+    for name in ["billing", "Notes (p_notes)", "api", "worker"] {
+        assert!(said.contains(&format!("  {name}: stale: run kelpie restart when you want it")), "{said}");
+    }
+    for pane in ["p_billing", "p_notes", "p_api", "p_worker", "p_ghost"] {
+        assert!(!lab.touched(pane), "{pane}: auto = false restarts nothing on update");
+    }
+    assert!(!fs::read_to_string(lab.state.join("messages.jsonl")).unwrap_or_default().contains("\"kind\":\"restart\""), "and asks nothing");
+    let restart = lab.with_sessions(&sessions, &["restart"]);
+    let said = stdout(&restart);
+    assert!(said.contains("  billing: restarted") && said.contains("  Notes (p_notes): you are in it: run kelpie restart from another pane") && said.contains("  api: busy: run kelpie restart when it waits"), "{said}");
+    assert!(lab.touched("p_billing") && !lab.touched("p_notes") && !lab.touched("p_api") && !lab.touched("p_worker"));
+}

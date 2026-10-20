@@ -96,7 +96,7 @@ fn days_since(date: &str, today: i64) -> Option<i64> {
 }
 
 // Days from 1970-01-01 to a YYYY-MM-DD date, by the civil-calendar formula.
-fn epoch_day(date: &str) -> Option<i64> {
+pub(crate) fn epoch_day(date: &str) -> Option<i64> {
     let mut parts = date.get(..10)?.split('-').map(|part| part.parse::<i64>().ok());
     let (year, month, day) = (parts.next()??, parts.next()??, parts.next()??);
     let year = if month <= 2 { year - 1 } else { year };

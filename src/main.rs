@@ -18,6 +18,7 @@ mod questions;
 mod release;
 mod repo;
 mod report;
+mod restart;
 mod review;
 mod sh;
 mod state;
@@ -114,10 +115,15 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   config.toml and every repo config
   kelpie setup vault              install the optional vault plugin in Claude Code (marketplace, plugin, its options),
                                   showing each claude command and running it only on your y
+  kelpie restart [--all]          restart, with claude --resume in its own pane and with its own flags, each Claude
+                                  session that runs older code than is installed (Claude Code, a plugin, MCP servers,
+                                  kelpie) and is idle, not the pane you are in and without background work (that one
+                                  is asked about on the board); --all every idle one; works with [restart] auto = false
   kelpie update                   update everything to this machine's channel ([update] channel: release, the
                                   highest vX.Y.Z tag, or main, origin's default branch): the herdr plugin (rebuilt),
                                   the Claude Code plugin, the vault plugin when installed; list each version before →
-                                  after, reload the plugins in every waiting Claude session, and restart an idle lead
+                                  after, and restart each Claude session that is idle and not the pane you are in
+                                  with claude --resume (the rest follow when idle; [restart] auto = false restarts none)
                                   (--check changes nothing: fetches and shows installed against the channel's latest;
                                   the board checks every 6 hours and shows ↑ when there is a newer one, U updates;
                                   --from <branch or path> installs that branch on origin or that checkout's commits
@@ -328,6 +334,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         },
         Some("setup") if name == Some("vault") => setup::vault(),
         Some("setup") => Err("kelpie setup knows vault: kelpie setup vault".to_string()),
+        Some("restart") => restart::now_cli(arguments.flag("--all")),
         Some("update") if arguments.flag("--check") => Ok(update::check(&doctor::Env::current().claude_dir)),
         Some("update") => {
             let request = match (arguments.value("--from"), arguments.flag("--stable")) {
