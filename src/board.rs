@@ -939,6 +939,22 @@ fn focus_pane(pane: &str) -> Result<()> {
     if herdr::focused_pane()?.as_deref() == Some(pane) { Ok(()) } else { Err(format!("herdr did not move the focus to {pane}")) }
 }
 
+// herdr 0.9.5 gives a plugin popup's terminal no pixel size, so a Kitty placement without c/r spans one pixel per cell there; naming its grid in cells places it right in every pane.
+fn render_image(frame: &mut Frame, protocol: &Protocol, rect: Rect) {
+    frame.render_widget(Image::new(protocol), rect);
+    let size = protocol.size();
+    if let Some(cell) = frame.buffer_mut().cell_mut((rect.x, rect.y)) {
+        let symbol = cell.symbol().to_string();
+        if let Some(placed) = with_cell_grid(&symbol, size.width, size.height) {
+            cell.set_symbol(&placed);
+        }
+    }
+}
+
+fn with_cell_grid(symbol: &str, columns: u16, rows: u16) -> Option<String> {
+    (symbol.contains("a=T,U=1,") && !symbol.contains("a=T,U=1,c=")).then(|| symbol.replacen("a=T,U=1,", &format!("a=T,U=1,c={columns},r={rows},"), 1))
+}
+
 fn review_script() -> Option<PathBuf> {
     Some(lead::install_root().ok()?.join("scripts/review.sh"))
 }
@@ -2587,7 +2603,7 @@ fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         if let Some(Some(protocol)) = app.images.get(&(image.path, image.area.width, image.area.height)) {
             let size = protocol.size();
-            frame.render_widget(Image::new(protocol), Rect::new(inner.x, top, size.width.min(inner.width), size.height));
+            render_image(frame, protocol, Rect::new(inner.x, top, size.width.min(inner.width), size.height));
         }
     }
 }
@@ -3229,7 +3245,7 @@ fn draw_card(frame: &mut Frame, app: &mut App) {
         }
         if let Some(Some(protocol)) = app.images.get(&(image.path, image.area.width, image.area.height)) {
             let size = protocol.size();
-            frame.render_widget(Image::new(protocol), Rect::new(body.x, body.y + top, size.width.min(body.width), size.height));
+            render_image(frame, protocol, Rect::new(body.x, body.y + top, size.width.min(body.width), size.height));
         }
     }
     let keys = card_keys(!image_lines.is_empty() && app.protocol().is_some(), !image_lines.is_empty() && viewer);
@@ -3267,7 +3283,7 @@ fn draw_fullscreen(frame: &mut Frame, app: &mut App) {
             if let Some(Some(protocol)) = app.images.get(&(file.clone(), body.width, body.height)) {
                 let x = body.x + body.width.saturating_sub(size.width) / 2;
                 let y = body.y + body.height.saturating_sub(size.height) / 2;
-                frame.render_widget(Image::new(protocol), Rect::new(x, y, size.width.min(body.width), size.height.min(body.height)));
+                render_image(frame, protocol, Rect::new(x, y, size.width.min(body.width), size.height.min(body.height)));
             }
         }
         None => frame.render_widget(Paragraph::new(Line::from(vec![Span::styled("▣ ", style(TEAL)), Span::styled(shown.clone(), style(TEXT))])), body),
@@ -3807,6 +3823,15 @@ pub fn run(overlay: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_kitty_placement_names_its_grid_in_cells_once() {
+        let sent = "\x1b_Gq=2,a=T,U=1,f=32,t=d,s=200,v=120;AAAA\x1b\\";
+        let placed = with_cell_grid(sent, 20, 6).unwrap();
+        assert!(placed.contains("a=T,U=1,c=20,r=6,f=32"), "{placed}");
+        assert_eq!(with_cell_grid(&placed, 20, 6), None, "a placement that names its grid is left as it is");
+        assert_eq!(with_cell_grid("▀", 20, 6), None, "halfblocks carry no placement");
+    }
 
     fn press(app: &mut App, event: KeyEvent) {
         app.handle_key(event, None);
