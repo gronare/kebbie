@@ -157,17 +157,22 @@ mod tests {
     use crate::board::{Hit, Page};
     use crate::board::widgets::{FAINT, GREEN, MUTED, RED, SUBTEXT, YELLOW};
 
+    // Ten minutes ahead crosses midnight in the day's last ten minutes, and a reset on another day is drawn as a weekday.
+    fn later_today(now: u64) -> u64 {
+        if resets(now + 600, now).contains(':') { now + 600 } else { now + 1 }
+    }
+
     #[test]
     fn the_status_bar_shows_plan_usage_as_the_mockup_draws_it_wide_and_short() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         let now = messages::now();
         app.usage = Some(Usage {
-            session: Some(usage::Window { used: 23.0, resets_at: now + 600 }), week: Some(usage::Window { used: 71.4, resets_at: now + 3 * 86_400 }), seen_at: now,
+            session: Some(usage::Window { used: 23.0, resets_at: later_today(now) }), week: Some(usage::Window { used: 71.4, resets_at: now + 3 * 86_400 }), seen_at: now,
         });
         let (rows, buffer) = render(&mut app, 170, 30);
         let bar = &rows[28];
         assert!(bar.trim_start().starts_with("⏎ options · tab lead · i inbox · m messages · ? keys"), "{bar}");
-        assert!(bar.contains(&format!("session ━━━━━━━━ 23% resets {}   week ━━━━━━━━ 71% resets ", clock(now + 600))), "{bar}");
+        assert!(bar.contains(&format!("session ━━━━━━━━ 23% resets {}   week ━━━━━━━━ 71% resets ", clock(later_today(now)))), "{bar}");
         let (x, _) = find(&rows[28..29], "session ━")[0];
         let fills: Vec<Color> = (0..8).map(|cell| buffer[(x as u16 + 8 + cell, 28)].fg).collect();
         assert_eq!(fills, [GREEN, GREEN, FAINT, FAINT, FAINT, FAINT, FAINT, FAINT], "23% fills two of eight on a surface1 track");
@@ -193,7 +198,7 @@ mod tests {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         let now = messages::now();
         app.usage = Some(Usage {
-            session: Some(usage::Window { used: 23.0, resets_at: now + 600 }), week: Some(usage::Window { used: 71.4, resets_at: now + 3 * 86_400 }), seen_at: now,
+            session: Some(usage::Window { used: 23.0, resets_at: later_today(now) }), week: Some(usage::Window { used: 71.4, resets_at: now + 3 * 86_400 }), seen_at: now,
         });
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows[28].contains('↑'), "nothing newer, no notice: {}", rows[28]);
