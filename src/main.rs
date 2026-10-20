@@ -270,6 +270,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("areas") => areas::print(),
         Some("lead") if arguments.flag("--first") => lead::keep_first(),
         Some("lead") if arguments.flag("--restart") => lead::restart(),
+        Some("lead") if arguments.flag("--renew-board") => lead::renew_board(),
         Some("lead") => lead::toggle(),
         Some("focus") => lead::focus_toggle().map(|_| String::new()),
         Some("peers") => peers::peers(&cwd),

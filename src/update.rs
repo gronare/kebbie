@@ -30,6 +30,7 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<String
     update_check::forget(&state);
     crate::restart::mark_updated(&state, crate::restart::now())?;
     lines.extend(crate::restart::report(&crate::restart::run(crate::restart::Mode::Update, &mut crate::restart::Memory::default(), None)?));
+    lines.push(crate::peers::kelpie_command().and_then(|kelpie| crate::sh::run(&kelpie, &["lead", "--renew-board"], None)).unwrap_or_else(|error| error));
     summary.push(String::new());
     summary.extend(lines);
     Ok(summary.join("\n"))

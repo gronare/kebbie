@@ -528,6 +528,7 @@ fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_f
         "  api: restarts when idle",
         "  worker: waiting for your answer: background work running",
         "  ghost: skipped: its session id is unknown",
+        "board: no lead Space",
     ], "{said}");
     let start = lab.herdr_calls().into_iter().find(|call| call[..2] == ["agent", "start"]).unwrap();
     assert_eq!(start[2..], ["billing", "--kind", "claude", "--pane", "p_billing", "--", "--model", "opus", "--resume", "s-billing"].map(str::to_string), "the same flags, the old conversation and prompt dropped");

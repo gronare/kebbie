@@ -282,6 +282,33 @@ fn repair(lead: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn renew_board() -> Result<String> {
+    let Some(lead) = lead_workspace(&herdr::workspaces()?) else { return Ok("board: no lead Space".to_string()) };
+    let Some(board) = places(&lead)?.board else { return Ok("board: the lead Space has no board pane".to_string()) };
+    let info = herdr::process_info(&board)?;
+    let process = &info["foreground_processes"][0];
+    let argv: Vec<&str> = process["argv"].as_array().into_iter().flatten().filter_map(|arg| arg.as_str()).collect();
+    if !(argv.iter().any(|arg| arg.ends_with("kelpie")) && argv.contains(&"board")) || argv.contains(&"--overlay") {
+        return Ok("board: not running; it starts with the new kelpie when you open the lead".to_string());
+    }
+    let built = fs::metadata(executable()?).and_then(|meta| meta.modified()).map_err(|error| error.to_string())?;
+    let built = built.duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0);
+    let pid = process["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()).ok_or("board: herdr names no process for it")?;
+    let started = crate::restart::started(pid, crate::restart::now()).ok_or("board: cannot read when it started")?;
+    if started > built {
+        return Ok("board: up to date".to_string());
+    }
+    for _ in 0..10 {
+        if herdr::foreground(&board)?.is_none() {
+            herdr::run_in_pane(&board, &format!("{} board", crate::sh::quote(&executable()?.to_string_lossy())))?;
+            return Ok("board: restarted on the new kelpie".to_string());
+        }
+        herdr::send_keys(&board, &["ctrl+c"])?;
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    Err("board: did not quit on ctrl-c; quit it and open the lead again".to_string())
+}
+
 // The board shows the messages, so a messages pane under it in a lead Space goes; a pane of the user's own there stays.
 fn close_messages(pane: Option<&str>) -> Result<()> {
     match pane {

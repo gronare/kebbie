@@ -483,7 +483,7 @@ pub fn claude_process(info: &Value) -> Option<Process> {
     })
 }
 
-fn started(pid: u32, now: u64) -> Option<u64> {
+pub(crate) fn started(pid: u32, now: u64) -> Option<u64> {
     let elapsed = sh::run("ps", &["-o", "etime=", "-p", &pid.to_string()], None).ok()?;
     parse_etime(&elapsed).map(|elapsed| now.saturating_sub(elapsed))
 }
