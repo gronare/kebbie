@@ -500,6 +500,27 @@ fn load_asked(state: &Path) -> Map<String, Value> {
     asked_file(state).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| serde_json::from_str::<Value>(&text).ok()).and_then(|value| value.as_object().cloned()).unwrap_or_default()
 }
 
+const COOLDOWN: u64 = 30 * 60;
+
+fn restarted_file(state: &Path) -> Result<PathBuf> {
+    Ok(restart_dir(state)?.join("restarted.json"))
+}
+
+fn load_restarted(state: &Path) -> Map<String, Value> {
+    restarted_file(state).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| serde_json::from_str::<Value>(&text).ok()).and_then(|value| value.as_object().cloned()).unwrap_or_default()
+}
+
+// Why a stale session must not be restarted again: kelpie restarted it lately, or a restart brought back the same Claude Code for the same reasons, as when the pane's PATH pins an older one.
+pub fn held_back(last: Option<&Value>, exe: Option<&Path>, reasons: &[String], manual: bool, at: u64) -> Option<String> {
+    let last = last?;
+    let when = last["at"].as_u64()?;
+    let same = last["exe"].as_str() == exe.map(|exe| exe.to_string_lossy()).as_deref() && last["reasons"] == json!(reasons);
+    if same {
+        return Some(format!("a restart brought back the same Claude Code ({}), so the pane starts that one; restarting again cannot update it", exe.map_or("?".into(), |exe| exe.display().to_string())));
+    }
+    (!manual && at.saturating_sub(when) < COOLDOWN).then(|| format!("restarted {} min ago; the next restart waits {} min", at.saturating_sub(when) / 60, COOLDOWN / 60))
+}
+
 fn save_asked(state: &Path, asked: &Map<String, Value>) -> Result<()> {
     crate::state::write(&asked_file(state)?, Value::Object(asked.clone()).to_string())
 }
@@ -665,6 +686,7 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
     let lead_space = lead::lead_workspace(&herdr::workspaces()?);
     let home = tasks::claude_home();
     let mut asked = load_asked(&state);
+    let mut restarted = load_restarted(&state);
     let mut live: HashMap<String, u32> = HashMap::new();
     let mut lines = Vec::new();
     for pane in herdr::agents()?.iter().filter_map(Pane::from_agent) {
@@ -687,7 +709,12 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             continue;
         };
         let cwd = process.cwd.clone().or_else(|| pane.cwd.clone());
-        let reasons = changes.reasons(exe_of(process.pid).as_deref(), start, cwd.as_deref());
+        let exe = exe_of(process.pid);
+        let reasons = changes.reasons(exe.as_deref(), start, cwd.as_deref());
+        if !reasons.is_empty() && let Some(why) = held_back(restarted.get(&session), exe.as_deref(), &reasons, matches!(mode, Mode::Manual { .. }), at) {
+            lines.push(Line { label: pane.label.clone(), said: format!("stale, held: {why}"), stale: false });
+            continue;
+        }
         let args = match process.argv.as_deref().map(|argv| resume_args(argv, &session)) {
             None => Err("its command line cannot be read".to_string()),
             Some(args) => args,
@@ -725,6 +752,8 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
         }
         let lead = lead_space.is_some() && pane.workspace == lead_space;
         let done = SessionLock::take(&state, &session).and_then(|_lock| perform(&pane, process.cwd.as_deref(), args.as_deref().unwrap_or_default(), lead));
+        restarted.insert(session.clone(), json!({ "at": at, "exe": exe.as_deref().map(|exe| exe.to_string_lossy().to_string()), "reasons": reasons }));
+        crate::state::write(&restarted_file(&state)?, Value::Object(restarted.clone()).to_string())?;
         match done {
             Ok(()) => {
                 memory.active.insert(session.clone(), at);
@@ -770,6 +799,19 @@ pub fn now_cli(all: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_restarted_lately_or_into_the_same_claude_is_held_back() {
+        let reasons = vec!["a newer Claude Code".to_string()];
+        let old = Path::new("/opt/devbox/claude-2.1.296/bin/claude");
+        let last = json!({ "at": 1000, "exe": old.to_string_lossy(), "reasons": reasons });
+        assert!(held_back(Some(&last), Some(old), &reasons, true, 99_999).unwrap().contains("same Claude Code"), "a restart that brought back the same Claude is never repeated, not even by hand");
+        let newer = Path::new("/opt/devbox/claude-2.1.304/bin/claude");
+        assert!(held_back(Some(&last), Some(newer), &reasons, false, 1000 + 60).unwrap().contains("restarted 1 min ago"), "the routine waits out the cooldown");
+        assert_eq!(held_back(Some(&last), Some(newer), &reasons, false, 1000 + COOLDOWN), None);
+        assert_eq!(held_back(Some(&last), Some(newer), &reasons, true, 1000 + 60), None, "kelpie restart by hand skips the cooldown");
+        assert_eq!(held_back(None, Some(old), &reasons, false, 1000), None);
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
