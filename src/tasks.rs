@@ -1736,6 +1736,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         git(&dir, &["init", "--quiet"]).unwrap();
+        git(&dir, &["config", "user.name", "Ada"]).unwrap();
+        git(&dir, &["config", "user.email", "ada@example.com"]).unwrap();
         for (file, message) in [("a", "first"), ("b", "second"), ("c", "third")] {
             std::fs::write(dir.join(file), file).unwrap();
             git(&dir, &["add", file]).unwrap();
