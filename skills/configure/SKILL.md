@@ -14,7 +14,7 @@ kelpie reads its settings from two files on this machine:
 
 Every write in this skill lands in one of those two files, or in a team repo they link into. The work repo stays as it is.
 
-**The key list** is `kelpie config --repo <main checkout>`: every key with its value in effect, the layer it comes from, what it does, and which keys are config.toml only. It is the source for key names and meanings; the README's Configuration section adds examples.
+**The key list** is `kelpie config --repo <main checkout>`: every key with its value in effect, the layer it comes from, what it does, and which keys are config.toml only. It is the source for key names and meanings; docs/configuration.md adds examples.
 
 ## Change a setting
 
