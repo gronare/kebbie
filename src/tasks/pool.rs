@@ -1,0 +1,209 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
+
+use crate::config;
+use crate::herdr;
+use crate::lead::state_dir;
+use crate::repo::{ahead_behind, branch_exists, changed_count, default_branch, git, git_writing, is_clean, main_checkout, name_of, setup_line, slot_number, slot_path, worktrees};
+use crate::sh::Result;
+use super::launch::{clear_tmp, open_space};
+use super::{fast_forward_main, fetch, slug};
+
+// Git is the only state: a slot on a task branch is busy; a clean detached or wt<N> slot is free.
+pub struct Slot {
+    pub number: usize,
+    pub path: PathBuf,
+    pub task: Option<String>,
+    pub free: bool,
+}
+
+pub fn slots(repo: &Path) -> Result<Vec<Slot>> {
+    let mut list = Vec::new();
+    for worktree in worktrees(repo)? {
+        let Some(number) = slot_number(repo, &worktree.path) else { continue };
+        if !worktree.path.exists() {
+            continue;
+        }
+        let placeholder = worktree.branch.as_deref().is_none_or(|branch| branch == format!("wt{number}"));
+        let free = placeholder && is_clean(&worktree.path)?;
+        let task = if placeholder { None } else { worktree.branch };
+        list.push(Slot { number, path: worktree.path, task, free });
+    }
+    list.sort_by_key(|slot| slot.number);
+    Ok(list)
+}
+
+pub fn find_task(repo: &Path, name: Option<&str>, cwd: &Path) -> Result<Slot> {
+    let wanted = name.map(slug).transpose()?;
+    let found = slots(repo)?.into_iter().find(|slot| match &wanted {
+        Some(task) => slot.task.as_ref() == Some(task),
+        None => slot.task.is_some() && cwd.starts_with(&slot.path),
+    });
+    found.ok_or_else(|| match name {
+        Some(name) => format!("No task \"{name}\" in {}'s worktrees", name_of(repo)),
+        None => "Not inside a task's worktree; name the task".to_string(),
+    })
+}
+
+pub fn task_of(slot: &Slot) -> &str {
+    slot.task.as_deref().unwrap_or_default()
+}
+
+pub(super) fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
+    let taken: HashSet<usize> = worktrees(repo)?.iter().filter_map(|worktree| slot_number(repo, &worktree.path)).collect();
+    let mut number = 1;
+    while taken.contains(&number) || slot_path(repo, number).exists() {
+        number += 1;
+    }
+    let path = slot_path(repo, number);
+    git(repo, &["worktree", "add", "--detach", &path.to_string_lossy(), upstream])?;
+    Ok(Slot { number, path, task: None, free: true })
+}
+
+pub fn list(cwd: &Path) -> Result<Vec<Value>> {
+    let repo = main_checkout(cwd)?;
+    let upstream = default_branch(&repo)?;
+    slots(&repo)?.into_iter().map(|slot| {
+        let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
+        Ok(json!({
+            "slot": name_of(&slot.path),
+            "path": slot.path,
+            "task": slot.task,
+            "free": slot.free,
+            "changed": changed_count(&slot.path)?,
+            "setup": setup_line(&slot.path),
+            "ahead": ahead,
+            "behind": behind,
+        }))
+    }).collect()
+}
+
+// -D because callers have already checked the commits are on upstream; git's -d checks the main checkout's local branch, which is still behind right after a push.
+pub(super) fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<()> {
+    git_writing(&slot.path, &["switch", "--quiet", "--detach", upstream])?;
+    clear_tmp(&slot.path);
+    git(repo, &["branch", "-D", task_of(slot)]).map(|_| ())
+}
+
+fn stash_index(repo: &Path, message: &str) -> Result<Option<usize>> {
+    Ok(git(repo, &["stash", "list", "--format=%gs"])?.lines().position(|line| line.ends_with(message)))
+}
+
+pub(super) fn claim_slot(repo: &Path, upstream: &str) -> Result<Slot> {
+    match slots(repo)?.into_iter().find(|slot| slot.free) {
+        Some(slot) => Ok(slot),
+        None => create_slot(repo, upstream),
+    }
+}
+
+pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, focus: bool) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let task = slug(name)?;
+    let config::Settings { setup_skill, setup_command, .. } = config::resolve(Some(&repo))?.settings;
+    let prepare = config::setup_command_in(setup_command.value, &repo).map_or(String::new(), |command| format!(", which prepares it with {command}"));
+    if slots(&repo)?.iter().any(|slot| slot.task.as_deref() == Some(task.as_str())) {
+        return Err(format!("{task} already has a worktree; use kelpie start {task} to go there"));
+    }
+    fetch(&repo)?;
+    let upstream = default_branch(&repo)?;
+    let local = upstream.trim_start_matches("origin/");
+    let current = git(&repo, &["branch", "--show-current"])?;
+    let existing = branch_exists(&repo, &task);
+    if !existing && current != local {
+        return Err(format!("The main checkout is on {current}, not {local}; to move that work, use its branch name: kelpie move {current}"));
+    }
+
+    let message = format!("kelpie move {task}");
+    if !files.is_empty() {
+        let mut args = vec!["stash", "push", "--include-untracked", "--message", message.as_str(), "--"];
+        args.extend(files.iter().map(String::as_str));
+        git_writing(&repo, &args)?;
+    }
+    let stashed = |error: String| -> String {
+        if files.is_empty() { error } else { format!("{error}\nThe moved files are kept in the stash \"{message}\" (git stash list).") }
+    };
+
+    if existing && current == task {
+        git_writing(&repo, &["switch", "--quiet", local]).map_err(stashed)?;
+    } else if !existing {
+        git(&repo, &["branch", &task]).map_err(stashed)?;
+        if ahead_behind(&repo, &upstream)?.0 > 0 {
+            git_writing(&repo, &["reset", "--quiet", "--keep", &upstream]).map_err(stashed)?;
+        }
+    }
+
+    let slot = claim_slot(&repo, &upstream).map_err(stashed)?;
+    crate::push_block::warn_if_off(crate::push_block::install(&slot.path, &state_dir()?).map_err(stashed)?);
+    git_writing(&slot.path, &["switch", "--quiet", &task]).map_err(stashed)?;
+    if let Some(index) = stash_index(&repo, &message)? {
+        git_writing(&slot.path, &["stash", "pop", "--quiet", &format!("stash@{{{index}}}")]).map_err(stashed)?;
+    }
+
+    let space = open_space(&repo, &slot, &task, focus)?;
+    if let Some(pane) = pane {
+        herdr::move_pane_to_new_tab(pane, &space.workspace_id, "claude", focus)?;
+    }
+    let main = fast_forward_main(&repo, &upstream)?;
+    Ok(format!("Moved {task} to {}. {main}\nSet it up: run the skill {} in {}{prepare}.", slot.path.display(), setup_skill.value, slot.path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tasks::test_support::*;
+    use crate::repo::{git, is_clean, name_of, setup_line, slot_path};
+    use crate::tasks::started::started_file_in;
+
+    #[test]
+    fn a_slot_is_a_detached_worktree_with_its_setup_note_in_its_git_dir() {
+        let dir = repo();
+        let slot = create_slot(&dir, "HEAD").unwrap();
+        assert!(slot.path.join("a").exists());
+        assert_eq!(slot.path, slot_path(&dir, 1));
+        assert_eq!(setup_line(&slot.path), None);
+        let note = crate::repo::setup_note(&slot.path).unwrap();
+        assert!(note.parent().unwrap().canonicalize().unwrap().starts_with(dir.join(".git/worktrees").canonicalize().unwrap()), "{}", note.display());
+        std::fs::write(&note, "# wt1.app set up 2026-10-17 by task billing\n- gems: bundle install\n").unwrap();
+        assert_eq!(setup_line(&slot.path).as_deref(), Some("wt1.app set up 2026-10-17 by task billing"));
+        assert!(is_clean(&slot.path).unwrap());
+        git(&dir, &["worktree", "remove", "--force", &slot.path.to_string_lossy()]).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_task_address_and_its_files_follow_the_slug_not_the_name_given() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        assert_eq!(find_task(&dir, Some("Billing"), &dir).unwrap().path, slot.path);
+        assert_eq!(find_task(&dir, Some("BILLING!"), &dir).unwrap().task.as_deref(), Some("billing"));
+        assert!(find_task(&dir, Some("../billing"), &dir).is_ok(), "the slug of a path is the task");
+        assert!(find_task(&dir, Some("search"), &dir).err().unwrap().contains("No task \"search\""));
+        assert!(find_task(&dir, None, &dir).err().unwrap().contains("name the task"));
+        assert_eq!(find_task(&dir, None, &slot.path.join("src")).unwrap().task.as_deref(), Some("billing"), "a folder under the worktree is that task");
+        let state = state_of(&dir);
+        let file = started_file_in(&state, "billing", &dir).unwrap();
+        assert_eq!(file, state.join("started").join(format!("billing@{}", name_of(&dir))));
+        assert!(file.parent().unwrap().starts_with(&state));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_slot_is_free_only_on_its_placeholder_branch_or_detached_and_clean() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let slots_now = slots(&dir).unwrap();
+        assert_eq!(slots_now.len(), 1);
+        assert!(!slots_now[0].free && slots_now[0].task.as_deref() == Some("billing"));
+        git(&slot.path, &["switch", "--quiet", "--detach"]).unwrap();
+        assert!(slots(&dir).unwrap()[0].free, "a detached clean slot is free");
+        std::fs::write(slot.path.join("scratch"), "x").unwrap();
+        assert!(!slots(&dir).unwrap()[0].free, "an untracked file makes it busy, so a start never takes it");
+        assert_eq!(slots(&dir).unwrap()[0].task, None, "but it is no task either");
+        std::fs::remove_file(slot.path.join("scratch")).unwrap();
+        git(&slot.path, &["switch", "--quiet", "-c", "wt1"]).unwrap();
+        assert!(slots(&dir).unwrap()[0].free, "the wt<N> placeholder branch is free");
+        git(&slot.path, &["switch", "--quiet", "billing"]).unwrap();
+        git(&dir, &["branch", "-D", "wt1"]).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+}

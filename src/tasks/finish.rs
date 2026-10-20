@@ -1,0 +1,387 @@
+use std::path::Path;
+
+use crate::herdr;
+use crate::lead::state_dir;
+use crate::messages;
+use crate::peers;
+use crate::repo::{ahead_behind, changed_count, default_branch, git, git_writing, is_clean, main_checkout, name_of};
+use crate::sh::Result;
+use super::approval::forget_approval;
+use super::launch::forget_session;
+use super::{fast_forward_main, fetch};
+use super::pool::{Slot, find_task, release, task_of};
+use super::started::{NoteBack, forget_start, forget_start_in, note_to_backlog};
+
+// Stops a task for good: its work is discarded, its worktree and Space go, and the backlog item it came from returns.
+pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    let task = task_of(&slot).to_string();
+    let upstream = default_branch(&repo)?;
+    let discarded = git(&slot.path, &["log", "--format=%h %s", &format!("{upstream}..HEAD")]).unwrap_or_default();
+    let items = forget_start(&task, &repo).map(|text| crate::task_note::items(&text)).unwrap_or_default();
+    let state = state_dir()?;
+    let address = peers::address(&task, &name_of(&repo));
+    let vault = items.iter().any(|item| crate::vault_cli::is_note(item)).then(crate::vault_cli::detect).flatten();
+    let dropped = discard(&repo, Some(&task), true, "reset")?;
+    let mut notice = format!("The user reset {task}: it is gone, and its work was discarded and will never be pushed.");
+    if !discarded.is_empty() {
+        notice.push_str(&format!(" Discarded: {}.", discarded.lines().collect::<Vec<_>>().join("; ")));
+    }
+    let mut said = String::new();
+    for item in &items {
+        match vault.as_ref().filter(|_| crate::vault_cli::is_note(item)).map(|cli| note_to_backlog(cli, &state, &task, &address, item)) {
+            Some(NoteBack::Shared) => said.push_str(&format!(" Its note {item} stays open for the task's other halves.")),
+            Some(NoteBack::Back(path)) => notice.push_str(&format!(" kelpie put its note {path} back in the backlog.")),
+            Some(NoteBack::Failed(error)) => {
+                said.push_str(&format!(" Its note {item} could not be put back in the backlog ({error}); set its status to backlog in the vault."));
+                notice.push_str(&crate::backlog::reset_notice(item));
+            }
+            None => notice.push_str(&crate::backlog::reset_notice(item)),
+        }
+    }
+    notice.push_str(" Drop any review or recommendation about it.");
+    if let Err(error) = messages::notify_lead(&notice) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    Ok(format!("{dropped}{}{said}", if items.is_empty() { "" } else { " Its backlog item is back in the Backlog column." }))
+}
+
+// Last step of done and drop: closing the Space ends the task's Claude, which may be the one running this.
+fn close_space(workspace: Option<String>) -> String {
+    match workspace.map(|workspace| herdr::close_workspace(&workspace)) {
+        Some(Err(error)) => format!(" Its Space could not be closed: {error}"),
+        _ => String::new(),
+    }
+}
+
+pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let task = task_of(&find_task(&repo, name, cwd)?).to_string();
+    let state = state_dir()?;
+    let address = peers::address(&task, &name_of(&repo));
+    let vault = crate::task_note::linked(&state, &address).and_then(|_| crate::vault_cli::detect());
+    let said = note_ready(vault.as_ref(), &state, &address, &task)?;
+    close_task(cwd, name, vault.as_ref(), said)
+}
+
+// Done waits for the task's note to have its solution and decisions: Err is the refusal, the task told what to write; a vault that does not answer lets done go on, and Ok says so.
+pub(super) fn note_ready(vault: Option<&crate::vault_cli::Cli>, state: &Path, address: &str, task: &str) -> Result<String> {
+    let (Some(cli), Some(note)) = (vault, crate::task_note::linked(state, address)) else { return Ok(String::new()) };
+    match crate::task_note::waits(cli, &note, task) {
+        Ok(None) => Ok(String::new()),
+        Ok(Some((user, told))) => {
+            if let Err(error) = messages::notify(address, &told) {
+                eprintln!("Could not tell {address} what its note lacks: {error}");
+            }
+            Err(user)
+        }
+        Err(error) => Ok(format!(" Its note {note} could not be checked ({error}), so done went on without it.")),
+    }
+}
+
+pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::Cli>, said: String) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    fetch(&repo)?;
+    let upstream = default_branch(&repo)?;
+    let workspace = herdr::workspace_for(&slot.path)?;
+    let finished = finish(&repo, &slot, &upstream, &crate::lead::state_dir()?, vault)? + &said;
+    forget_session(task_of(&slot), &repo);
+    forget_approval(task_of(&slot), &repo);
+    crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
+    crate::review::forget(task_of(&slot), &repo);
+    crate::report::forget_card(task_of(&slot), &repo);
+    crate::evidence::forget(task_of(&slot), &repo);
+    crate::ci::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
+    crate::recover::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
+    end_life(task_of(&slot), &repo, "done");
+    Ok(finished + &close_space(workspace))
+}
+
+fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vault: Option<&crate::vault_cli::Cli>) -> Result<String> {
+    let task = task_of(slot);
+    if !is_clean(&slot.path)? {
+        return Err(format!("{task} has uncommitted changes; land or drop them first"));
+    }
+    let missing = missing_from(&slot.path, upstream)?;
+    if !missing.is_empty() {
+        return Err(format!("{task} has changes that are not on {upstream} yet; push them first, or use drop:\n{}", missing.join("\n")));
+    }
+    release(repo, slot, upstream)?;
+    let address = peers::address(task, &name_of(repo));
+    crate::task_note::forget(state, &address);
+    let mut said = String::new();
+    for item in forget_start_in(state, task, repo).map(|text| crate::task_note::items(&text)).unwrap_or_default() {
+        let notice = match vault.filter(|_| crate::vault_cli::is_note(&item)) {
+            Some(_) if crate::task_note::held_elsewhere(state, task, &address, &item) => {
+                said.push_str(&format!(" Its note {item} stays open for the task's other halves."));
+                continue;
+            }
+            Some(cli) => match crate::task_note::close(cli, &item) {
+                Ok(path) => {
+                    said.push_str(&format!(" Its note is closed ({path})."));
+                    format!("{task} is done and its commits are on the default branch; kelpie closed its note {item}. Update the area note when the task changed what it describes.")
+                }
+                Err(error) => {
+                    said.push_str(&format!(" Its note {item} could not be closed ({error})."));
+                    format!("{task} is done and its commits are on the default branch, but kelpie could not close its note {item} ({error}): close it with the vault tools.")
+                }
+            },
+            None => crate::backlog::done_notice(task, &item),
+        };
+        if let Err(error) = messages::notify_lead(&notice) {
+            eprintln!("Could not tell the lead: {error}");
+        }
+    }
+    Ok(format!("{task} is done; {} is free again.{said} {}", name_of(&slot.path), fast_forward_main(repo, upstream)?))
+}
+
+// The branch's commits whose change upstream lacks, as "sha subject"; empty when every change landed, however it was cherry-picked or squashed.
+fn missing_from(path: &Path, upstream: &str) -> Result<Vec<String>> {
+    let unmatched: Vec<String> = git(path, &["cherry", "-v", "--abbrev", upstream, "HEAD"])?.lines()
+        .filter_map(|line| line.strip_prefix("+ ")).map(str::to_string).collect();
+    if unmatched.is_empty() {
+        return Ok(unmatched);
+    }
+    let merged = git(path, &["merge-tree", "--write-tree", upstream, "HEAD"]);
+    if merged.is_ok_and(|tree| tree.lines().next() == git(path, &["rev-parse", &format!("{upstream}^{{tree}}")]).ok().as_deref()) {
+        return Ok(Vec::new());
+    }
+    Ok(unmatched)
+}
+
+pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
+    discard(cwd, name, force, "dropped")
+}
+
+fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, name, cwd)?;
+    let task = task_of(&slot);
+    let upstream = default_branch(&repo)?;
+    let changed = changed_count(&slot.path)?;
+    let (ahead, _) = ahead_behind(&slot.path, &upstream)?;
+    if !force && (changed > 0 || ahead > 0) {
+        return Err(format!(
+            "{task} has {changed} uncommitted change(s) and {ahead} commit(s) not on {upstream}; drop --force discards them"
+        ));
+    }
+    let workspace = herdr::workspace_for(&slot.path)?;
+    if force {
+        git_writing(&slot.path, &["reset", "--quiet", "--hard"])?;
+        git_writing(&slot.path, &["clean", "-fdq"])?;
+    }
+    release(&repo, &slot, &upstream)?;
+    let notes: Vec<String> = forget_start(task, &repo).map(|text| crate::task_note::items(&text)).unwrap_or_default().into_iter().filter(|item| crate::vault_cli::is_note(item)).collect();
+    let mut said = String::new();
+    if let Ok(state) = state_dir() {
+        let address = peers::address(task, &name_of(&repo));
+        crate::task_note::forget(&state, &address);
+        said = dropped_notes(if notes.is_empty() { None } else { crate::vault_cli::detect() }.as_ref(), &state, task, &address, &notes);
+    }
+    forget_session(task, &repo);
+    forget_approval(task, &repo);
+    crate::permit::forget(&peers::address(task, &name_of(&repo)));
+    crate::review::forget(task, &repo);
+    crate::report::forget_card(task, &repo);
+    crate::evidence::forget(task, &repo);
+    if let Ok(state) = state_dir() {
+        crate::ci::forget(&state, &peers::address(task, &name_of(&repo)));
+        crate::recover::forget(&state, &peers::address(task, &name_of(&repo)));
+    }
+    end_life(task, &repo, how);
+    Ok(format!("{task} dropped; {} is free again.{said}{}", name_of(&slot.path), close_space(workspace)))
+}
+
+// A dropped task's note goes back to the backlog as a reset's does, so no active note is left without a task; without the vault nothing is asked.
+fn dropped_notes(vault: Option<&crate::vault_cli::Cli>, state: &Path, task: &str, address: &str, notes: &[String]) -> String {
+    let Some(cli) = vault else { return String::new() };
+    notes.iter().map(|note| match note_to_backlog(cli, state, task, address, note) {
+        NoteBack::Shared => format!(" Its note {note} stays open for the task's other halves."),
+        NoteBack::Back(path) => format!(" kelpie put its note {path} back in the backlog."),
+        NoteBack::Failed(error) => format!(" Its note {note} could not be put back in the backlog ({error}); set its status to backlog in the vault."),
+    }).collect()
+}
+
+fn end_life(task: &str, repo: &Path, how: &str) {
+    if let Err(error) = messages::log_end(task, &name_of(repo), how) {
+        eprintln!("Could not log the end of {task}: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::tasks::test_support::*;
+    use crate::repo::{ahead_behind, branch_exists, git, is_clean};
+    use crate::tasks::launch::{TMP_VARS, settings, task_tmp};
+    use crate::tasks::pool::{find_task, release, slots};
+    use crate::tasks::started::{record_start, started_file_in};
+
+    #[test]
+    fn done_drop_and_reset_forget_the_approval() {
+        let source = include_str!("finish.rs");
+        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        assert!(body("done").contains("close_task(") && body("close_task").contains("forget_approval("));
+        assert!(body("discard").contains("forget_approval("));
+        assert!(body("reset").contains("discard("));
+        assert!(body("close_task").contains("review::forget(") && body("discard").contains("review::forget("), "a later task by the same name must not show this one's review");
+        assert!(body("close_task").contains("report::forget_card(") && body("discard").contains("report::forget_card("), "a later task by the same name must not show this one's card");
+        assert!(body("close_task").contains("evidence::forget(") && body("discard").contains("evidence::forget("), "a later task by the same name must not show this one's test runs");
+        assert!(body("close_task").contains("permit::forget(") && body("discard").contains("permit::forget("), "done, drop and reset take the push permission back");
+        assert!(body("finish").contains("task_note::forget(") && body("discard").contains("task_note::forget("), "a later task by the same name must not inherit this one's Problem pass");
+        assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
+    }
+
+    #[test]
+    fn drop_puts_the_note_back_in_the_backlog_unless_another_half_holds_it() {
+        let fake = crate::vault_cli::fake::Fake::new("drop");
+        let state = fake.state();
+        fake.answer("task-backlog", r#"{"path":"Projects/billing.md"}"#);
+        let notes = ["Projects/billing.md".to_string()];
+        assert_eq!(dropped_notes(None, &state, "billing", "billing@app", &notes), "", "without the vault a drop asks nothing");
+        assert!(fake.calls().is_empty());
+        assert_eq!(dropped_notes(Some(&fake.cli), &state, "billing", "billing@app", &notes), " kelpie put its note Projects/billing.md back in the backlog.");
+        std::fs::create_dir_all(state.join("started")).unwrap();
+        std::fs::write(state.join("started").join("billing@api"), "Projects/billing.md").unwrap();
+        assert!(dropped_notes(Some(&fake.cli), &state, "billing", "billing@app", &notes).contains("stays open for the task's other halves"));
+        assert_eq!(fake.calls(), ["task backlog Projects/billing.md"]);
+        let source = include_str!("finish.rs");
+        let discard = &source[source.find("\nfn discard(").unwrap()..];
+        assert!(discard[..discard.find("\n}\n").unwrap()].contains("dropped_notes("), "drop settles the note");
+    }
+
+    #[test]
+    fn done_closes_the_tasks_vault_note_and_without_the_vault_asks_nothing() {
+        let fake = crate::vault_cli::fake::Fake::new("finish");
+        fake.answer("task-close", r#"{"path":"Archive/billing.md"}"#);
+        for vault in [None, Some(&fake.cli)] {
+            let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+            git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+            let state = state_of(&dir);
+            record_start(&started_file_in(&state, "billing", &dir).unwrap(), "Projects/billing.md").unwrap();
+            let said = finish(&dir, &slot, &upstream, &state, vault).unwrap();
+            assert_eq!(said.contains("Its note is closed (Archive/billing.md)."), vault.is_some(), "{said}");
+            cleanup(dir, origin, &slot);
+        }
+        assert_eq!(fake.calls(), ["task close Projects/billing.md"], "the vault is asked only when it is on");
+    }
+
+    #[test]
+    fn done_on_one_half_leaves_the_shared_note_to_the_other_and_settles_the_backlog_item() {
+        let fake = crate::vault_cli::fake::Fake::new("finish-halves");
+        fake.answer("task-close", r#"{"path":"Archive/billing.md"}"#);
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        let state = state_of(&dir);
+        record_start(&started_file_in(&state, "billing", &dir).unwrap(), "Projects/billing.md\nlocal:Fix login").unwrap();
+        std::fs::write(state.join("started").join("billing@elsewhere"), "Projects/billing.md").unwrap();
+        let said = finish(&dir, &slot, &upstream, &state, Some(&fake.cli)).unwrap();
+        assert!(said.contains("Its note Projects/billing.md stays open for the task's other halves."), "{said}");
+        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+        assert!(!started_file_in(&state, "billing", &dir).unwrap().exists());
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn done_frees_a_pushed_task_whose_branch_has_no_upstream_while_the_local_branch_is_behind() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        assert_eq!(ahead_behind(&dir, &upstream).unwrap(), (0, 1));
+        finish(&dir, &slot, &upstream, &state_of(&dir), None).unwrap();
+        assert!(!branch_exists(&dir, "billing"));
+        assert!(slots(&dir).unwrap().iter().any(|free| free.path == slot.path && free.free));
+        assert_eq!(ahead_behind(&dir, &upstream).unwrap(), (0, 0));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_tasks_temp_dir_is_its_own_outside_the_worktree_and_goes_when_the_task_is_done() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("scratch");
+        let tmp = task_tmp(&slot.path).unwrap();
+        assert!(tmp.starts_with(dir.join(".git/worktrees").canonicalize().unwrap()), "{}", tmp.display());
+        std::fs::create_dir_all(tmp.join("deep")).unwrap();
+        std::fs::write(tmp.join("deep/file"), "x").unwrap();
+        assert!(is_clean(&slot.path).unwrap(), "temp files never show as changes in the worktree");
+        let written: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", None, Some(&tmp))).unwrap();
+        for name in TMP_VARS {
+            assert_eq!(written["env"][name], json!(tmp.to_string_lossy()), "{name}");
+        }
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "scratch"]).unwrap();
+        finish(&dir, &slot, &upstream, &state_of(&dir), None).unwrap();
+        assert!(!tmp.exists(), "done takes the temp dir and what is in it");
+        std::fs::create_dir_all(&tmp).unwrap();
+        git(&slot.path, &["switch", "--quiet", "--create", "again"]).unwrap();
+        let again = find_task(&dir, Some("again"), &dir).unwrap();
+        release(&dir, &again, &upstream).unwrap();
+        assert!(!tmp.exists(), "drop and reset free the worktree through the same release");
+        let source = include_str!("finish.rs");
+        let discard = &source[source.find("\nfn discard(").unwrap()..];
+        assert!(discard[..discard.find("\n}\n").unwrap()].contains("release(&repo, &slot, &upstream)"));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn done_refuses_a_task_with_commits_not_on_upstream_and_leaves_it_as_it_was() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("search");
+        assert!(finish(&dir, &slot, &upstream, &state_of(&dir), None).is_err());
+        assert!(branch_exists(&dir, "search"));
+        assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "search");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn done_frees_a_task_whose_commits_were_cherry_picked_onto_upstream() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fifth = commit(&slot.path, "e", "fifth");
+        let fourth = git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap();
+        land_on_main(&dir, &upstream, |dir| { pick(dir, &fourth); pick(dir, &fifth); });
+        assert!(ahead_behind(&slot.path, &upstream).unwrap().0 > 0);
+        finish(&dir, &slot, &upstream, &state_of(&dir), None).unwrap();
+        assert!(!branch_exists(&dir, "billing"));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn done_frees_a_task_whose_commits_were_squashed_into_one_on_upstream() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        commit(&slot.path, "d", "fifth, rewriting the fourth");
+        land_on_main(&dir, &upstream, |dir| {
+            git(dir, &["merge", "--squash", "--quiet", "billing"]).unwrap();
+            git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "commit", "--quiet", "-m", "billing, squashed"]).unwrap();
+        });
+        assert!(git(&slot.path, &["cherry", &upstream, "HEAD"]).unwrap().contains('+'));
+        finish(&dir, &slot, &upstream, &state_of(&dir), None).unwrap();
+        assert!(!branch_exists(&dir, "billing"));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn done_refuses_a_task_with_one_change_missing_from_upstream_and_names_that_commit() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fifth = commit(&slot.path, "e", "fifth");
+        let fourth = git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap();
+        land_on_main(&dir, &upstream, |dir| pick(dir, &fourth));
+        let error = finish(&dir, &slot, &upstream, &state_of(&dir), None).err().unwrap();
+        assert!(error.contains(&fifth[..7]) && error.contains("fifth"), "{error}");
+        assert!(!error.contains("fourth") && !error.contains(&fourth[..7]), "{error}");
+        assert!(branch_exists(&dir, "billing"));
+        assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "billing");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn missing_from_names_only_the_commits_whose_change_upstream_lacks() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fourth = git(&slot.path, &["rev-parse", "--short", "HEAD"]).unwrap();
+        let missing = missing_from(&slot.path, &upstream).unwrap();
+        assert_eq!(missing.len(), 1);
+        assert!(missing[0].starts_with(&fourth) && missing[0].ends_with("fourth"), "{missing:?}");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        assert!(missing_from(&slot.path, &upstream).unwrap().is_empty());
+        cleanup(dir, origin, &slot);
+    }
+}
