@@ -1,0 +1,38 @@
+# Send a task to review
+
+Hold a risky task's push until an independent, read-only Claude has passed its code.
+
+1. Select the task on the board and press `v`, or run:
+
+   ```bash
+   kelpie review billing
+   ```
+
+   The task moves to To review. Its push waits.
+
+2. Wait for the verdict. The row shows `reviewed` on a pass or `review: N findings`. The lead passes the findings that matter to the task, which fixes them and reports ready. kelpie then reviews the changed code again.
+
+3. Once the reviewer has passed the current code and the lead has approved the commits, the task shows under Ready to push. Press `l`.
+
+## Pick the reviewer's model
+
+```toml
+[review]
+model = "opus"
+```
+
+## Read the verdict
+
+The full verdict is `verdicts/<task>@<repo>.md` in the state directory: `ok` or `changes`, the sha it reviewed, and findings with `file:line`, bugs first.
+
+## Take it back out
+
+Press `v` again, or:
+
+```bash
+kelpie review --withdraw billing
+```
+
+The reviewer stops, its verdict goes, and push is offered again. Only you can withdraw.
+
+See also: [The review gate](../explanation/review-gate.md).

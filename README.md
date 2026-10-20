@@ -17,11 +17,9 @@ A kelpie is the working dog that keeps a herd moving while the drover directs. h
 - **Optional vault integration.** With the [notes-vault-mcp](https://github.com/gronare/notes-vault-mcp) plugin, every task gets a note, edits wait until the problem is written down, and pushes are logged.
 - **Update channels and fresh sessions.** Follow tagged releases or the main branch, and the board tells you when a new version is out. One `kelpie update` brings everything along, and idle Claude sessions resume on the new code with their conversation intact.
 
-## Requirements
-
-macOS or Linux with `git`, `herdr` 0.9.0 or later, Claude Code, `jq` and `cargo`. The review split also needs `fzf` 0.71+, `nvim` 0.10+ and `curl`; the history split needs `tig`. `kelpie doctor` checks all of it and prints the fix for anything missing.
-
 ## Install
+
+You need macOS or Linux with `git`, `herdr` 0.9.0 or later, Claude Code, `jq` and `cargo`; the review split also needs `fzf` 0.71+, `nvim` 0.10+ and `curl`, and the history split `tig`.
 
 ```bash
 herdr plugin install gronare/kelpie          # herdr clones and builds kelpie
@@ -32,25 +30,18 @@ claude plugin install kelpie@kelpie
 kelpie doctor
 ```
 
-Add the keys to your herdr config (see [Getting started](docs/getting-started.md)), press `prefix+space` and tell the lead what you want done.
+Add the keys to your herdr config, press `prefix+space` and tell the lead what you want done. [Your first task](docs/tutorial.md) walks through it step by step.
 
 ## Documentation
 
-- [Getting started](docs/getting-started.md): install, keys and your first task
-- [The board](docs/board.md): layout, groups and every key
-- [Tasks](docs/tasks.md): start, land, push, done and the rest of a task's life
-- [Review](docs/review.md): the review split and the reviewer gate
-- [Worktrees](docs/worktrees.md): the pool, setup, dev servers and URLs
-- [The lead](docs/lead.md): the lead, away mode, questions, messages and notifications
-- [Backlog](docs/backlog.md): where work comes from
-- [Areas](docs/areas.md): one page per repo, with its own actions
-- [Vault](docs/vault.md): the optional vault integration
-- [Configuration](docs/configuration.md): every key, team setups and the environment
-- [Updating](docs/updating.md): channels, overrides and stale sessions
-- [Commands](docs/commands.md): every `kelpie` command
-- [Security](docs/security.md): what kelpie guards against, and what it does not
-- [Troubleshooting](docs/troubleshooting.md): `kelpie doctor` and common fixes
-- [Releasing](docs/releasing.md): for maintainers
+[The documentation](docs/README.md) is organized as a tutorial, how-to guides, reference and explanation. Good places to start:
+
+- [Your first task](docs/tutorial.md): install to a pushed task
+- [Commands](docs/reference/commands.md) and [Configuration](docs/reference/configuration.md)
+- [Board keys](docs/reference/board.md)
+- [How kelpie fits together](docs/explanation/architecture.md)
+- [The trust boundary](docs/explanation/trust-boundary.md): what kelpie guards against, and what it does not
+- [Fix common problems](docs/how-to/troubleshoot.md)
 
 ## License
 

@@ -525,7 +525,7 @@ pub fn describe(loaded: &Loaded) -> String {
         "Whether the board restarts Claude sessions that run an older Claude Code, plugin, MCP config or kelpie than is installed, each with claude --resume in its own pane, keeping its flags; kelpie update restarts the idle ones at once. false restarts nothing on its own: the board still marks stale sessions, and kelpie restart restarts them when you want; config.toml only.");
     key("restart.idle_minutes", idle_minutes.value.to_string(), idle_minutes.layer,
         "How long a stale session waits idle and unfocused before the board restarts it; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
-    lines.push(format!("[[actions]]  (repo config only)\n  The Areas page's own actions for the repo, one table each, with the keys {}; docs/areas.md shows each.", crate::actions::ACTION_KEYS.join(", ")));
+    lines.push(format!("[[actions]]  (repo config only)\n  The Areas page's own actions for the repo, one table each, with the keys {}; docs/reference/configuration.md shows each.", crate::actions::ACTION_KEYS.join(", ")));
     lines.join("\n")
 }
 
