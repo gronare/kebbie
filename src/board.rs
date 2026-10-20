@@ -297,6 +297,8 @@ struct Detail {
     card: Option<(report::Card, bool)>,
     dev_server: bool,
     dev_worker: bool,
+    server_name: String,
+    worker_name: String,
 }
 
 enum Graphics {
@@ -631,6 +633,8 @@ fn gather_detail(path: &Path, repo: Option<&Path>) -> Detail {
         card: report::card_for(path),
         dev_server: settings.as_ref().is_some_and(|settings| settings.dev_server.value.is_some()),
         dev_worker: settings.as_ref().is_some_and(|settings| settings.dev_worker.value.is_some()),
+        server_name: Process::Server.tab(settings.as_ref()),
+        worker_name: Process::Worker.tab(settings.as_ref()),
     }
 }
 
@@ -1815,22 +1819,22 @@ fn wrapped_field(label: &str, text: &str, color: Color, width: usize, max_lines:
 }
 
 // The running dev server's address; the shown text is what link_cells finds again on screen.
-fn server_line(item: &Item, configured: bool, width: usize) -> Option<(Line<'static>, Option<Link>)> {
+fn server_line(item: &Item, configured: bool, name: &str, width: usize) -> Option<(Line<'static>, Option<Link>)> {
     if !item.server {
-        return configured.then(|| (field("server", vec![Span::styled("○ off · w starts it", style(MUTED))]), None));
+        return configured.then(|| (field(name, vec![Span::styled("○ off · w starts it", style(MUTED))]), None));
     }
-    let Some(url) = &item.url else { return Some((field("server", vec![Span::styled("● running", style(GREEN))]), None)) };
+    let Some(url) = &item.url else { return Some((field(name, vec![Span::styled("● running", style(GREEN))]), None)) };
     let room = width.saturating_sub(LABEL + 12).max(2);
     let shown = cut(url, room);
-    let line = field("server", vec![Span::styled("● running", style(GREEN)), Span::raw("  "), Span::styled(shown.clone(), style(TEAL))]);
+    let line = field(name, vec![Span::styled("● running", style(GREEN)), Span::raw("  "), Span::styled(shown.clone(), style(TEAL))]);
     Some((line, Some(Link { shown, url: url.clone() })))
 }
 
-fn worker_line(item: &Item, configured: bool) -> Option<Line<'static>> {
+fn worker_line(item: &Item, configured: bool, name: &str) -> Option<Line<'static>> {
     if item.worker {
-        Some(field("worker", vec![Span::styled("● running", style(GREEN))]))
+        Some(field(name, vec![Span::styled("● running", style(GREEN))]))
     } else {
-        configured.then(|| field("worker", vec![Span::styled("○ off · b starts it", style(MUTED))]))
+        configured.then(|| field(name, vec![Span::styled("○ off · b starts it", style(MUTED))]))
     }
 }
 
@@ -1937,11 +1941,11 @@ fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool) -> (Vec<L
     } else if item.agent.is_none() {
         lines.push(field("claude", vec![Span::styled("not running in its Space · g restarts it", style(MUTED))]));
     }
-    if let Some((line, link)) = server_line(item, detail.dev_server, width) {
+    if let Some((line, link)) = server_line(item, detail.dev_server, &detail.server_name, width) {
         lines.push(line);
         links.extend(link);
     }
-    lines.extend(worker_line(item, detail.dev_worker));
+    lines.extend(worker_line(item, detail.dev_worker, &detail.worker_name));
     if item.git.as_ref().is_some_and(|git| git.ahead > 0) || item.verdict.is_some() || item.review.is_some() {
         let (text, color) = review_text(item);
         lines.push(field("review", vec![Span::styled(text, style(color))]));
@@ -3123,17 +3127,18 @@ mod tests {
     fn the_server_line_links_the_address_only_while_the_dev_server_runs() {
         let mut item = crate::status::tests::task(Some("idle"), None, 0);
         item.url = Some("https://wt1.app.dev".to_string());
-        assert_eq!(server_line(&item, true, 60).unwrap().0.to_string(), "server  ○ off · w starts it", "an address from config is not a running server");
-        assert!(server_line(&item, false, 60).is_none(), "no dev_server, no line");
+        assert_eq!(server_line(&item, true, "server", 60).unwrap().0.to_string(), "server  ○ off · w starts it", "an address from config is not a running server");
+        assert!(server_line(&item, false, "server", 60).is_none(), "no dev_server, no line");
+        assert_eq!(server_line(&item, true, "web", 60).unwrap().0.to_string(), "web     ○ off · w starts it", "the label is worktree.server_name");
         item.server = true;
-        let (line, link) = server_line(&item, true, 60).unwrap();
+        let (line, link) = server_line(&item, true, "server", 60).unwrap();
         assert_eq!(line.to_string(), "server  ● running  https://wt1.app.dev");
         let link = link.unwrap();
         assert_eq!((link.shown.as_str(), link.url.as_str()), ("https://wt1.app.dev", "https://wt1.app.dev"));
         item.url = None;
-        assert!(server_line(&item, true, 60).unwrap().1.is_none(), "dev_url off, or no port for {{port}}");
+        assert!(server_line(&item, true, "server", 60).unwrap().1.is_none(), "dev_url off, or no port for {{port}}");
         item.url = Some("https://a-very-long-worktree-name.example.dev/path".to_string());
-        let (line, link) = server_line(&item, true, 40).unwrap();
+        let (line, link) = server_line(&item, true, "server", 40).unwrap();
         assert!(line.width() <= 40, "{}", line.width());
         let link = link.unwrap();
         assert!(link.shown.ends_with('…') && link.url.ends_with("/path"));
@@ -3144,7 +3149,7 @@ mod tests {
         let mut item = crate::status::tests::task(Some("idle"), None, 0);
         item.server = true;
         item.url = Some("http://localhost:3001".to_string());
-        let (line, link) = server_line(&item, true, 60).unwrap();
+        let (line, link) = server_line(&item, true, "server", 60).unwrap();
         let link = link.unwrap();
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 3)).unwrap();
         terminal.draw(|frame| {
@@ -3241,7 +3246,7 @@ mod tests {
 
     fn with_detail(app: &mut App) {
         let detail = Detail {
-            branch: "search-filters".to_string(), changed: vec!["app/filters.rb".to_string()], dev_server: true, dev_worker: true,
+            branch: "search-filters".to_string(), changed: vec!["app/filters.rb".to_string()], dev_server: true, dev_worker: true, server_name: "server".to_string(), worker_name: "worker".to_string(),
             commits: vec![tasks::Commit { sha: "a1f3c2e0000".to_string(), message: "Wire the price filter".to_string() }], card: None,
         };
         app.details.insert(PathBuf::from("/work/wt2.web"), std::rc::Rc::new(detail));
