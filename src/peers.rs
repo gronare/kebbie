@@ -120,10 +120,16 @@ pub fn peers(cwd: &Path) -> Result<String> {
 
 // The stable link when it leads to this binary, so a task's settings survive reinstalls.
 pub fn kelpie_command() -> Result<String> {
-    let exe = std::env::current_exe().and_then(|path| path.canonicalize()).map_err(|error| error.to_string())?;
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let exe = replaced_binary(&exe).canonicalize().map_err(|error| format!("{}: {error}", exe.display()))?;
     let home = std::env::var("HOME").unwrap_or_default();
     let stable = PathBuf::from(home).join(".local/share/kelpie/current/target/release/kelpie");
     Ok(if stable.canonicalize().ok() == Some(exe.clone()) { stable } else { exe }.to_string_lossy().to_string())
+}
+
+// Linux names a running binary that a rebuild replaced "<path> (deleted)"; the path itself holds the new one.
+fn replaced_binary(exe: &Path) -> PathBuf {
+    PathBuf::from(exe.to_string_lossy().trim_end_matches(" (deleted)"))
 }
 
 pub struct Place<'a> {
@@ -209,6 +215,12 @@ pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_binary_replaced_while_running_is_found_at_its_own_path() {
+        assert_eq!(replaced_binary(Path::new("/k/target/release/kelpie (deleted)")), PathBuf::from("/k/target/release/kelpie"));
+        assert_eq!(replaced_binary(Path::new("/k/target/release/kelpie")), PathBuf::from("/k/target/release/kelpie"));
+    }
 
     fn session(address: &str, status: Option<&str>) -> Session {
         let task = address.split_once('@').map(|(task, _)| task.to_string());

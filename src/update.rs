@@ -19,21 +19,41 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<String
     let places = Places { root: root.clone(), claude_dir: claude_dir.to_path_buf(), channel };
     let before = update_check::installed(&places);
     let mut lines = vec![herdr_plugin(&plugin, &state, channel, request, visible)?];
+    lines.extend(finish_on_new_binary(claude_dir, root.as_deref()));
     let running = release::read_override(&state);
-    lines.push(claude_plugin(claude_dir, &setup::claude_bin(), root.as_deref(), channel == Channel::Main && running.is_none()));
-    lines.extend(vault_plugin(claude_dir, &setup::claude_bin()));
     let mut summary = versions(&before, &update_check::installed(&places));
     summary.insert(0, match &running {
         Some(running) => format!("kelpie is {}", running.describe(channel)),
         None => format!("kelpie follows the {} channel", channel.key()),
     });
-    update_check::forget(&state);
-    crate::restart::mark_updated(&state, crate::restart::now())?;
-    lines.extend(crate::restart::report(&crate::restart::run(crate::restart::Mode::Update, &mut crate::restart::Memory::default(), None)?));
-    lines.push(crate::peers::kelpie_command().and_then(|kelpie| crate::sh::run(&kelpie, &["lead", "--renew-board"], None)).unwrap_or_else(|error| error));
     summary.push(String::new());
     summary.extend(lines);
     Ok(summary.join("\n"))
+}
+
+// The steps after the build run on the binary just built, so a fix to them reaches the update that installs it.
+fn finish_on_new_binary(claude_dir: &Path, root: Option<&Path>) -> Vec<String> {
+    let built = root.map(|root| root.join("target/release/kelpie")).filter(|binary| binary.is_file());
+    match built.map(|binary| sh::run(&binary.to_string_lossy(), &["update", "--finish"], None)) {
+        Some(Ok(output)) => output.lines().map(str::to_string).collect(),
+        Some(Err(error)) => vec![format!("the new kelpie could not finish the update ({error}); this one does")].into_iter().chain(finish(claude_dir).unwrap_or_else(|error| vec![error])).collect(),
+        None => finish(claude_dir).unwrap_or_else(|error| vec![error]),
+    }
+}
+
+pub fn finish(claude_dir: &Path) -> Result<Vec<String>> {
+    let plugin = kelpie_plugin()?;
+    let root = plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).map(PathBuf::from);
+    let channel = config::channel()?;
+    let state = lead::state_dir()?;
+    let running = release::read_override(&state);
+    let mut lines = vec![claude_plugin(claude_dir, &setup::claude_bin(), root.as_deref(), channel == Channel::Main && running.is_none())];
+    lines.extend(vault_plugin(claude_dir, &setup::claude_bin()));
+    update_check::forget(&state);
+    crate::restart::mark_updated(&state, crate::restart::now())?;
+    lines.extend(crate::restart::report(&crate::restart::run(crate::restart::Mode::Update, &mut crate::restart::Memory::default(), None)?));
+    lines.push(lead::renew_board().unwrap_or_else(|error| error));
+    Ok(lines)
 }
 
 pub fn check(claude_dir: &Path) -> String {
@@ -140,6 +160,17 @@ fn claude_plugin(claude_dir: &Path, claude: &str, root: Option<&Path>, follows_g
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_steps_after_the_build_run_on_the_binary_just_built() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("finish");
+        let binary = dir.join("target/release/kelpie");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, "#!/bin/sh\n[ \"$*\" = \"update --finish\" ] && printf 'Claude Code plugin: from the new binary\\nboard: up to date\\n'\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(finish_on_new_binary(&dir, Some(&dir)), ["Claude Code plugin: from the new binary", "board: up to date"]);
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("kelpie-update-{name}-{}", std::process::id()));

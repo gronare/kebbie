@@ -50,7 +50,7 @@ pub fn write_settings(dir: &Path, name: &str, settings: &str) -> Result<PathBuf>
 }
 
 fn executable() -> Result<PathBuf> {
-    std::env::current_exe().and_then(|path| path.canonicalize()).map_err(|error| error.to_string())
+    crate::peers::kelpie_command().map(PathBuf::from)
 }
 
 // The binary sits in <repo>/target/release, next to roles/.

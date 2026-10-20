@@ -337,6 +337,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("setup") => Err("kelpie setup knows vault: kelpie setup vault".to_string()),
         Some("restart") => restart::now_cli(arguments.flag("--all")),
         Some("update") if arguments.flag("--check") => Ok(update::check(&doctor::Env::current().claude_dir)),
+        Some("update") if arguments.flag("--finish") => update::finish(&doctor::Env::current().claude_dir).map(|lines| lines.join("\n")),
         Some("update") => {
             let request = match (arguments.value("--from"), arguments.flag("--stable")) {
                 (Some(_), true) => return Err("kelpie update takes --from <branch or path> or --stable, not both".to_string()),
