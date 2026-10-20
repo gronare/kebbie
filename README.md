@@ -19,10 +19,12 @@ A kelpie is the working dog that keeps a herd moving while the drover directs. h
 
 ## Install
 
-You need macOS or Linux with `git`, `herdr` 0.9.0 or later, Claude Code, `jq` and `cargo`; the review split also needs `fzf` 0.71+, `nvim` 0.10+ and `curl`, and the history split `tig`.
+You need macOS or Linux with `git`, `herdr` 0.9.0 or later, Claude Code, `jq` and `curl`; the review split also needs `fzf` 0.71+ and `nvim` 0.10+, and the history split `tig`.
+
+A release tag installs a prebuilt binary for macOS (Apple silicon and Intel) and Linux (x86_64 and arm64). Any other checkout, such as the default branch herdr clones without `--ref`, is built with `cargo`. Without Rust, name the latest release tag:
 
 ```bash
-herdr plugin install gronare/kelpie          # herdr clones and builds kelpie
+herdr plugin install --ref vX.Y.Z gronare/kelpie   # herdr clones the tag and installs its binary
 # restart herdr, then:
 ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie
 claude plugin marketplace add ~/.local/share/kelpie/current

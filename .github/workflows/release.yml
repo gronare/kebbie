@@ -38,13 +38,63 @@ jobs:
           mkdir -p "$RUNNER_TEMP/state"
           KELPIE_STATE_DIR="$RUNNER_TEMP/state" cargo test --locked
 
-  release:
+  binaries:
     needs: [test]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, runner: macos-14, runs: true }
+          - { target: x86_64-apple-darwin, runner: macos-14, runs: false }
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, runs: true }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, runs: true }
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: cargo build --release
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: The binary starts
+        if: matrix.runs
+        run: target/${{ matrix.target }}/release/kelpie help > /dev/null
+      - name: Pack kelpie-<version>-<target>.tar.gz
+        run: |
+          mkdir dist
+          tar -czf "dist/kelpie-${GITHUB_REF_NAME#v}-${{ matrix.target }}.tar.gz" -C target/${{ matrix.target }}/release kelpie
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kelpie-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [binaries]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: GitHub Release with notes from the commits since the last tag
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS over every binary
+        working-directory: dist
+        run: |
+          set -- kelpie-*.tar.gz
+          [ $# -eq 4 ] || { echo "::error::expected 4 binaries, got $*"; exit 1; }
+          sha256sum kelpie-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - name: Draft a GitHub Release with the binaries and notes from the commits since the last tag
+        working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "kelpie ${GITHUB_REF_NAME#v}"
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber kelpie-*.tar.gz SHA256SUMS
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "kelpie ${GITHUB_REF_NAME#v}" kelpie-*.tar.gz SHA256SUMS
+          fi

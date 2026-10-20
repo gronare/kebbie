@@ -15,18 +15,19 @@ On macOS:
 ```bash
 brew install herdr jq fzf neovim curl tig
 curl -fsSL https://claude.ai/install.sh | bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
 On Linux, see [Requirements](reference/requirements.md) for each tool's install command and the versions kelpie needs.
 
 ## 2. Install kelpie
 
-Install the herdr plugin. herdr clones kelpie and builds it with `cargo`, which takes a minute or two:
+Install the herdr plugin at the latest release tag, shown on [the releases page](https://github.com/gronare/kelpie/releases). herdr clones that tag and installs its prebuilt binary:
 
 ```bash
-herdr plugin install gronare/kelpie
+herdr plugin install --ref vX.Y.Z gronare/kelpie
 ```
+
+Without `--ref`, herdr clones the default branch, which kelpie builds with `cargo` (install Rust with `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`); that takes a minute or two.
 
 Restart herdr. On startup the plugin creates `~/.local/share/kelpie/current`, a link to where herdr installed it.
 

@@ -103,14 +103,55 @@ fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Reques
     let root = PathBuf::from(plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).ok_or("herdr names no folder kelpie is installed in")?);
     match release::install(&root, state, channel, request, plugin["source"]["kind"] != "local")? {
         Plan::Herdr => {
-            step(&herdr::bin(), &["plugin", "update", "--yes", "kelpie"], None, visible)?;
+            step("env", &["KELPIE_CHANNEL=main", &herdr::bin(), "plugin", "update", "--yes", "kelpie"], None, visible)?;
             Ok("herdr plugin: updated from GitHub and rebuilt".to_string())
         }
-        Plan::Done(line) => {
-            step("cargo", &["build", "--release", "--quiet"], Some(&root), visible)?;
-            Ok(format!("herdr plugin: {line}; built {}", root.display()))
+        Plan::Done(line) => Ok(format!("herdr plugin: {line}; {}", build(&root, channel, visible)?)),
+    }
+}
+
+pub const BUILD_SCRIPT: &str = "scripts/build.sh";
+const ORIGIN_FILE: &str = "target/release/kelpie.origin";
+
+#[derive(Debug, PartialEq)]
+pub enum Origin {
+    Downloaded { tag: String, target: String },
+    Built,
+}
+
+impl Origin {
+    pub fn describe(&self) -> String {
+        match self {
+            Origin::Downloaded { tag, target } => format!("downloaded {tag} for {target}"),
+            Origin::Built => "built from source".to_string(),
         }
     }
+}
+
+// The build script writes the origin file after the binary it downloaded, so a binary newer than it was built by cargo since.
+pub fn binary_origin(root: &Path) -> Option<Origin> {
+    let modified = |path: PathBuf| std::fs::metadata(path).and_then(|meta| meta.modified()).ok();
+    let binary = modified(root.join("target/release/kelpie"))?;
+    let downloaded = modified(root.join(ORIGIN_FILE)).filter(|written| *written >= binary).and_then(|_| std::fs::read_to_string(root.join(ORIGIN_FILE)).ok()).and_then(|text| {
+        let mut words = text.split_whitespace();
+        match (words.next(), words.next(), words.next()) {
+            (Some("downloaded"), Some(tag), Some(target)) => Some(Origin::Downloaded { tag: tag.to_string(), target: target.to_string() }),
+            _ => None,
+        }
+    });
+    Some(downloaded.unwrap_or(Origin::Built))
+}
+
+// An install root checked out at a commit from before the build script has only cargo.
+fn build(root: &Path, channel: Channel, visible: bool) -> Result<String> {
+    if root.join(BUILD_SCRIPT).is_file() {
+        step("env", &[&format!("KELPIE_CHANNEL={}", channel.key()), "sh", BUILD_SCRIPT, "--quiet"], Some(root), visible)?;
+    } else {
+        let _ = std::fs::remove_file(root.join(ORIGIN_FILE));
+        step("cargo", &["build", "--release", "--quiet"], Some(root), visible)?;
+    }
+    let origin = binary_origin(root).map_or_else(|| "built".to_string(), |origin| origin.describe());
+    Ok(format!("{origin} in {}", root.display()))
 }
 
 fn vault_plugin(claude_dir: &Path, claude: &str) -> Vec<String> {

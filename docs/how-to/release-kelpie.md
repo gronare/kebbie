@@ -20,6 +20,8 @@ For maintainers. A release happens only when you push a tag. CI runs the tests o
 
    Machines on the `release` channel show `↑ kelpie v1.4.0` within 6 hours, and `kelpie update` installs it.
 
-4. Publish the draft. The tag runs `.github/workflows/release.yml`. It fails when the tag and the three manifests disagree, runs the tests, and drafts a GitHub Release with notes generated from the commits since the previous tag. Review the notes and publish the draft yourself.
+4. Publish the draft. The tag runs `.github/workflows/release.yml`. It fails when the tag and the three manifests disagree, runs the tests, builds the binaries, and drafts a GitHub Release with notes generated from the commits since the previous tag. The draft carries `kelpie-<version>-<target>.tar.gz` for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, and a `SHA256SUMS` file over them. Review the notes and publish the draft yourself.
+
+   Until you publish it, the binaries cannot be downloaded, and a machine that updates to the tag builds it with `cargo` instead. Publishing makes them downloadable, so release machines without Rust can install the tag from then on.
 
 A release tag is exactly `v` and three numbers. `v1.4`, `v1.4.0-rc1` and other tags are never offered as releases.

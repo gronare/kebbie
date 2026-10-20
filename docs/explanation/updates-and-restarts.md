@@ -6,7 +6,17 @@ kelpie updates itself, its Claude Code plugin and the vault plugin with one comm
 
 ## One install root
 
-herdr installs kelpie into a folder of its choosing; herdr's startup links `~/.local/share/kelpie/current` to it. The binary on your `PATH`, the Claude Code plugin's marketplace and the hooks all point through that link. When `kelpie update` checks out new code there and rebuilds, every part moves together.
+herdr installs kelpie into a folder of its choosing; herdr's startup links `~/.local/share/kelpie/current` to it. The binary on your `PATH`, the Claude Code plugin's marketplace and the hooks all point through that link. When `kelpie update` checks out new code there and installs its binary, every part moves together.
+
+## Prebuilt binaries
+
+herdr's install and `kelpie update` both put the binary in place with `scripts/build.sh`, in this order:
+
+1. A `target/release/kelpie` that is newer than every source file is kept.
+2. When the checkout is exactly at the `vX.Y.Z` tag of its version and the machine is not on the `main` channel, the script downloads `kelpie-<version>-<target>.tar.gz` from that tag's published GitHub Release, checks it against the release's `SHA256SUMS`, and renames it into place. Releases are built for macOS on Apple silicon and Intel, and for Linux on x86_64 and arm64 (glibc).
+3. Otherwise it runs `cargo build --release`.
+
+A download that fails is not tried again for 10 minutes; meanwhile the script builds with `cargo`, or, without it, stops with what to install. A machine on the release channel therefore updates without Rust, while the `main` channel, `kelpie update --from` and an unpublished release build from source. `kelpie doctor` shows on its `plugin binary` line whether the binary was downloaded, and for which tag, or built, and its `cargo` line says whether this machine needs Rust.
 
 ## Channels
 

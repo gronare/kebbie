@@ -8,7 +8,7 @@ kelpie lets you run many Claude Code sessions at once without losing track of th
 
 **The keeper.** One `kelpie keeper` process per machine runs kelpie's routines in the background, so they go on while no board is open. See [The keeper](#the-keeper).
 
-**The herdr plugin.** herdr installs kelpie from its repo and builds the binary with `cargo`. The plugin gives herdr its actions (`kelpie.lead`, `kelpie.focus`, `kelpie.chat`, `kelpie.board`, `kelpie.update`), the board and update popups, and a startup script that links `~/.local/share/kelpie/current` to wherever herdr put the code and starts the keeper. That link gives configs, hooks and your `PATH` one stable address across updates. The plugin also keeps the lead Space at the top whenever Spaces are created or moved.
+**The herdr plugin.** herdr installs kelpie from its repo and runs `scripts/build.sh`, which downloads the release's prebuilt binary for a release tag and builds with `cargo` otherwise. The plugin gives herdr its actions (`kelpie.lead`, `kelpie.focus`, `kelpie.chat`, `kelpie.board`, `kelpie.update`), the board and update popups, and a startup script that links `~/.local/share/kelpie/current` to wherever herdr put the code and starts the keeper. That link gives configs, hooks and your `PATH` one stable address across updates. The plugin also keeps the lead Space at the top whenever Spaces are created or moved.
 
 **The Claude Code plugin.** It carries kelpie's skills (worktree setup, commit rules, the reviewer's instructions, the review split) and the hook that opens the review split. You add its marketplace from the same `current` folder, so the skills Claude loads are always the same code as the binary that runs them.
 

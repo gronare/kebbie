@@ -67,8 +67,8 @@ pub fn tools(min_herdr: &str) -> Vec<Tool> {
         tool("fzf", false, "the review split's file list (needs --id-nth)", Some("0.71.0"), "brew install fzf (brew upgrade fzf when older)", "git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf && ~/.fzf/install (distro packages are older than 0.71)"),
         tool("nvim", false, "the review split's diffs", Some("0.10.0"), "brew install neovim", "brew install neovim, or a release from https://github.com/neovim/neovim/releases (distro packages are often older than 0.10)"),
         tool("tig", false, "the history split", None, "brew install tig", "sudo apt install tig"),
-        tool("curl", false, "the review list reloading when files change", None, "brew install curl", "sudo apt install curl"),
-        tool("cargo", false, "herdr building the kelpie plugin", None, "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
+        tool("curl", false, "downloading a release's prebuilt binary, and the review list reloading when files change", None, "brew install curl", "sudo apt install curl"),
+        tool("cargo", false, "building kelpie where no prebuilt binary fits", None, "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
     ]
 }
 
@@ -149,10 +149,18 @@ pub fn keeper(enabled: bool, running: Option<&crate::keeper::Holder>, now: u64) 
 
 pub fn plugin_binary(root: &Path) -> Check {
     let binary = root.join("target/release/kelpie");
-    if binary.is_file() {
-        ok("plugin binary", binary.display().to_string())
-    } else {
-        fail("plugin binary", format!("{} is not built", binary.display()), one(format!("cargo build --release in {} (herdr runs it on install and update)", root.display())))
+    match crate::update::binary_origin(root).filter(|_| binary.is_file()) {
+        Some(origin) => ok("plugin binary", format!("{}, {}", binary.display(), origin.describe())),
+        None => fail("plugin binary", format!("{} is missing", binary.display()), one(format!("sh {} in {} (herdr runs it on install and update)", crate::update::BUILD_SCRIPT, root.display()))),
+    }
+}
+
+pub fn cargo(tool: &Tool, found: Option<&Path>, channel: crate::config::Channel, origin: Option<&crate::update::Origin>) -> Check {
+    let downloaded = matches!(origin, Some(crate::update::Origin::Downloaded { .. }));
+    match found {
+        None if downloaded && channel == crate::config::Channel::Release => ok("cargo", "not on PATH, not needed: each release installs its prebuilt binary"),
+        None => warn("cargo", "not on PATH; needed for the main channel, kelpie update --from, and a machine no prebuilt binary fits", both(tool.mac, tool.linux)),
+        Some(found) => self::tool(tool, Some(found), None),
     }
 }
 
@@ -485,8 +493,13 @@ fn read_json(path: &Path) -> Option<Value> {
 pub fn checks(env: &Env) -> Vec<Check> {
     let mut checks = Vec::new();
     let mut herdr = None;
+    let mut cargo = None;
     for tool in tools(&min_herdr()) {
         let found = which(tool.name, &env.path);
+        if tool.name == "cargo" {
+            cargo = Some((tool, found));
+            continue;
+        }
         let output = found.as_ref().filter(|_| tool.min.is_some()).and_then(|found| run(&found.to_string_lossy(), &["--version"], None).ok());
         if tool.name == "herdr" {
             herdr = found.clone();
@@ -499,11 +512,15 @@ pub fn checks(env: &Env) -> Vec<Check> {
     if let Some(plugin) = &plugin {
         checks.push(plugin_binary(&plugin.root));
     }
+    let channel = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.channel).unwrap_or_default();
+    if let Some((tool, found)) = &cargo {
+        let origin = plugin.as_ref().and_then(|plugin| crate::update::binary_origin(&plugin.root));
+        checks.push(self::cargo(tool, found.as_deref(), channel, origin.as_ref()));
+    }
     let installed = read_json(&env.claude_dir.join("plugins/installed_plugins.json"));
     let claude_settings = read_json(&env.claude_dir.join("settings.json")).unwrap_or_default();
     let checkout = plugin.as_ref().and_then(|plugin| read_json(&plugin.root.join(".claude-plugin/plugin.json"))).and_then(|manifest| manifest["version"].as_str().map(str::to_string));
     checks.push(claude_plugin(installed.as_ref(), &claude_settings, checkout.as_deref()));
-    let channel = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.channel).unwrap_or_default();
     let kelpie_id = installed.as_ref().and_then(|installed| installed["plugins"].as_object()?.keys().find(|id| id.starts_with("kelpie@")).cloned());
     if let Some(id) = kelpie_id {
         checks.push(plugin_source(&crate::update::marketplace(&env.claude_dir, &id), channel));
@@ -636,10 +653,34 @@ mod tests {
         let (check, plugin) = herdr_plugin(Some(r#"{"result":{"plugins":[]}}"#));
         assert!(check.level == Level::Fail && plugin.is_none() && check.fix[0].contains("herdr plugin install"));
         let dir = scratch("plugin");
-        assert_eq!(plugin_binary(&dir).level, Level::Fail);
+        let missing = plugin_binary(&dir);
+        assert!(missing.level == Level::Fail && missing.fix[0].starts_with("sh scripts/build.sh in "), "{missing:?}");
         std::fs::create_dir_all(dir.join("target/release")).unwrap();
         executable(&dir.join("target/release/kelpie"));
-        assert_eq!(plugin_binary(&dir).level, Level::Ok);
+        assert_eq!(plugin_binary(&dir).fact, format!("{}, built from source", dir.join("target/release/kelpie").display()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_plugin_binary_says_where_it_came_from_and_whether_cargo_is_needed() {
+        use crate::config::Channel;
+        use crate::update::{Origin, binary_origin};
+        let dir = scratch("origin");
+        std::fs::create_dir_all(dir.join("target/release")).unwrap();
+        executable(&dir.join("target/release/kelpie"));
+        std::fs::write(dir.join("target/release/kelpie.origin"), "downloaded v0.24.0 aarch64-apple-darwin\n").unwrap();
+        let downloaded = Origin::Downloaded { tag: "v0.24.0".to_string(), target: "aarch64-apple-darwin".to_string() };
+        assert_eq!(binary_origin(&dir).as_ref(), Some(&downloaded));
+        assert!(plugin_binary(&dir).fact.ends_with(", downloaded v0.24.0 for aarch64-apple-darwin"));
+        let tools = tools("0.9.0");
+        let cargo_tool = named(&tools, "cargo");
+        assert_eq!(cargo(cargo_tool, None, Channel::Release, Some(&downloaded)).level, Level::Ok, "a release machine with a downloaded binary needs no Rust");
+        assert_eq!(cargo(cargo_tool, None, Channel::Main, Some(&downloaded)).level, Level::Warn);
+        assert_eq!(cargo(cargo_tool, None, Channel::Release, Some(&Origin::Built)).level, Level::Warn);
+        assert_eq!(cargo(cargo_tool, Some(&dir.join("target/release/kelpie")), Channel::Main, None).level, Level::Ok);
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options().write(true).open(dir.join("target/release/kelpie")).unwrap().set_modified(later).unwrap();
+        assert_eq!(binary_origin(&dir), Some(Origin::Built), "a binary cargo replaced after the download is built");
         let _ = std::fs::remove_dir_all(dir);
     }
 
