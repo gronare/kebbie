@@ -15,6 +15,7 @@ mod peers;
 mod permit;
 mod push_block;
 mod questions;
+mod release;
 mod repo;
 mod report;
 mod review;
@@ -105,17 +106,22 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
   kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
                                   the backlog item it was started from back in the Backlog column
-  kelpie config [--repo <path>]   the config layers found (.kelpie.toml, machine config, defaults) and every
-                                  setting in effect with the layer it comes from (--get <key> prints one machine-wide
-                                  value, for scripts)
-  kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap
+  kelpie config [--repo <path>]   the config layers found (the repo config ~/.config/kelpie/repos/<repo>.toml,
+                                  config.toml, defaults; a symlink with its target) and every key with its value in
+                                  effect, the layer it comes from and what it does (--get <key> prints one
+                                  machine-wide value, for scripts)
+  kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap; checks
+                                  config.toml and every repo config
   kelpie setup vault              install the optional vault plugin in Claude Code (marketplace, plugin, its options),
                                   showing each claude command and running it only on your y
-  kelpie update                   update everything to the latest: the herdr and Claude Code plugins (rebuilt),
-                                  the vault plugin when installed; list each version before → after, reload the
-                                  plugins in every waiting Claude session, and restart an idle lead on its new role
-                                  (--check changes nothing: fetches and shows installed against latest available;
-                                  the board checks every 6 hours and shows ↑ when there is a newer one, U updates)
+  kelpie update                   update everything to this machine's channel ([update] channel: release, the
+                                  highest vX.Y.Z tag, or main, origin's default branch): the herdr plugin (rebuilt),
+                                  the Claude Code plugin, the vault plugin when installed; list each version before →
+                                  after, reload the plugins in every waiting Claude session, and restart an idle lead
+                                  (--check changes nothing: fetches and shows installed against the channel's latest;
+                                  the board checks every 6 hours and shows ↑ when there is a newer one, U updates;
+                                  --from <branch or path> installs that branch on origin or that checkout's commits
+                                  until --stable returns to the channel)
 
 With the vault plugin installed, enabled and configured, the vault holds each task: start opens the task's note
 (or claims the vault backlog note it starts from), edits wait until the note's Problem is written, push writes
@@ -323,7 +329,15 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("setup") if name == Some("vault") => setup::vault(),
         Some("setup") => Err("kelpie setup knows vault: kelpie setup vault".to_string()),
         Some("update") if arguments.flag("--check") => Ok(update::check(&doctor::Env::current().claude_dir)),
-        Some("update") => update::run(&doctor::Env::current().claude_dir, true),
+        Some("update") => {
+            let request = match (arguments.value("--from"), arguments.flag("--stable")) {
+                (Some(_), true) => return Err("kelpie update takes --from <branch or path> or --stable, not both".to_string()),
+                (Some(from), false) => release::Request::From(from.to_string()),
+                (None, true) => release::Request::Stable,
+                (None, false) => release::Request::Channel,
+            };
+            update::run(&doctor::Env::current().claude_dir, true, &request)
+        }
         None | Some("help") => Ok(USAGE.to_string()),
         Some(other) => Err(format!("Unknown command \"{other}\"\n\n{USAGE}")),
     }

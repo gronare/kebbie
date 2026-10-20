@@ -250,7 +250,7 @@ mod tests {
         use crate::config::{Machine, Worktree, parse_machine, parse_repo, settings};
         let template = include_str!("../roles/task.md");
         let machine = parse_machine("[worktree]\nsetup_skill = \"my-tools:set-up-worktree\"\n", "config.toml").unwrap();
-        let own = parse_repo("[worktree]\nsetup_skill = \"app-tools:set-up-worktree\"\n", ".kelpie.toml").unwrap();
+        let own = parse_repo("[worktree]\nsetup_skill = \"app-tools:set-up-worktree\"\n", "app.toml").unwrap();
         for (own, machine, skill) in [
             (own.clone(), machine.clone(), "app-tools:set-up-worktree"),
             (Worktree::default(), machine, "my-tools:set-up-worktree"),
@@ -268,7 +268,7 @@ mod tests {
     fn the_setup_command_reaches_the_role_only_when_set() {
         use crate::config::{Machine, Worktree, parse_repo, settings};
         let template = include_str!("../roles/task.md");
-        let own = parse_repo("[worktree]\nsetup_command = \"script/prepare_worktree\"\n", ".kelpie.toml").unwrap();
+        let own = parse_repo("[worktree]\nsetup_command = \"script/prepare_worktree\"\n", "app.toml").unwrap();
         let role = |own: &Worktree| fill(template, &[("setup_skill", "kelpie:set-up-worktree"), ("setup", &setup_line(settings(own, &Machine::default()).setup_command.value.as_deref()))]);
         let set = role(&own);
         assert!(set.contains("on what it did. It prepares the worktree with the repo's own command `script/prepare_worktree` (worktree.setup_command). The main checkout"), "{set}");
@@ -282,7 +282,7 @@ mod tests {
         use crate::config::{Machine, Worktree, parse_machine, parse_repo, settings};
         let template = include_str!("../roles/task.md");
         let machine = parse_machine("[task]\nrules_skill = \"my-rules\"\n", "config.toml").unwrap();
-        let own = parse_repo("[task]\nrules_skill = \"app-rules\"\n", ".kelpie.toml").unwrap();
+        let own = parse_repo("[task]\nrules_skill = \"app-rules\"\n", "app.toml").unwrap();
         for (own, machine, skill) in [
             (own.clone(), machine.clone(), "app-rules"),
             (Worktree::default(), machine, "my-rules"),

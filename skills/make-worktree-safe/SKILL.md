@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Make this repo worktree-safe
 
-The main checkout is the parent of `git rev-parse --path-format=absolute --git-common-dir`, and it is read-only: you audit it and write nothing there except the `dev_server` and `setup_command` keys in step 3. Fixes go into a linked worktree (`git rev-parse --git-dir` differs from `--git-common-dir`), where each one is a reviewable, uncommitted diff that deleting the worktree undoes. Anything that deletion does not undo waits for the user's yes.
+The main checkout is the parent of `git rev-parse --path-format=absolute --git-common-dir`, and it is read-only: you audit it and write nothing there. The `dev_server` and `setup_command` keys of step 3 go into the repo config on this machine. Fixes go into a linked worktree (`git rev-parse --git-dir` differs from `--git-common-dir`), where each one is a reviewable, uncommitted diff that deleting the worktree undoes. Anything that deletion does not undo waits for the user's yes.
 
 A **finding** is something two worktrees running at once collide on, or something a fresh worktree lacks to start.
 
@@ -19,11 +19,11 @@ A **finding** is something two worktrees running at once collide on, or somethin
    - Caches outside the tree keyed on nothing, e.g. `~/.cache/<tool>/<repo>`: two worktrees building at once collide.
    - Test parallelism: per-process test databases are fine on relative paths, a finding when their names are shared.
 2. **Propose** one list, a finding and its fix per line. Done when every finding has a fix or a reason it stays shared:
-   - `bin/setup-worktree`: executable, no arguments, idempotent, run from inside a worktree; it finds the main checkout with `git rev-parse --path-format=absolute --git-common-dir`, copies the inputs, installs, and prepares the worktree's own database. Port and dev server stay out of it. A repo that already prepares a worktree with its own script under another name (`script/prepare_worktree`) keeps that name: the fix is `[worktree] setup_command` in `<main>/.kelpie.toml`, on the same yes as `dev_server`, and step 4 runs that command.
+   - `bin/setup-worktree`: executable, no arguments, idempotent, run from inside a worktree; it finds the main checkout with `git rev-parse --path-format=absolute --git-common-dir`, copies the inputs, installs, and prepares the worktree's own database. Port and dev server stay out of it. A repo that already prepares a worktree with its own script under another name (`script/prepare_worktree`) keeps that name: the fix is `[worktree] setup_command` in the repo config, on the same yes as `dev_server`, and step 4 runs that command.
    - The smallest change that makes a fixed port overridable, when there is one.
    - A `## Working in a worktree` section in AGENTS.md, else CLAUDE.md, else README.md: run the prepare script, the port rule (the main checkout's port plus the slot number), and what is shared on purpose.
-   - When `<main>/.kelpie.toml` has no `[worktree] dev_server`: the command that starts the dev server, the same for every worktree.
-3. **Ask**, then write what the user said yes to. In a linked worktree, write the list there. The `dev_server` and `setup_command` keys go into `<main>/.kelpie.toml` on their own yes, creating the file when it is missing. Run from the main checkout, write only those keys, and say the other fixes belong in a worktree (`kelpie move` or `kelpie start`). Done when every approved fix is written.
+   - When `kelpie config --repo <main>` shows `worktree.dev_server = none`: the command that starts the dev server, the same for every worktree.
+3. **Ask**, then write what the user said yes to. In a linked worktree, write the list there. The `dev_server` and `setup_command` keys go into the repo config, the file `kelpie config --repo <main>` names on its `repo config:` line (on this machine, never in the repo), on their own yes, following `/kelpie:configure`. Run from the main checkout, write only those keys, and say the other fixes belong in a worktree (`kelpie move` or `kelpie start`). Done when every approved fix is written.
 4. **Prove** it: run `bin/setup-worktree`, or the `setup_command`, once in the worktree. Done when it exits 0. Reply in two lines: what you wrote, and what is still shared and why.
 
 ## Guardrails

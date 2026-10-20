@@ -558,7 +558,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     let config::Settings { setup_skill, setup_command, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
-    let (setup_skill, setup_command, rules_skill) = (setup_skill.value, config::setup_command_in(config::trusted(&setup_command, &repo), &repo), rules_skill.value);
+    let (setup_skill, setup_command, rules_skill) = (setup_skill.value, config::setup_command_in(setup_command.value, &repo), rules_skill.value);
     let vault = crate::vault_cli::detect();
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
@@ -1328,7 +1328,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     let config::Settings { setup_skill, setup_command, .. } = config::resolve(Some(&repo))?.settings;
-    let prepare = config::setup_command_in(config::trusted(&setup_command, &repo), &repo).map_or(String::new(), |command| format!(", which prepares it with {command}"));
+    let prepare = config::setup_command_in(setup_command.value, &repo).map_or(String::new(), |command| format!(", which prepares it with {command}"));
     if slots(&repo)?.iter().any(|slot| slot.task.as_deref() == Some(task.as_str())) {
         return Err(format!("{task} already has a worktree; use kelpie start {task} to go there"));
     }

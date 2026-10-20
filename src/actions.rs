@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use toml::{Table, Value};
 
@@ -132,7 +132,7 @@ fn action(table: &Table, source: &str) -> Result<Action> {
     })
 }
 
-// A .kelpie.toml's [[actions]]; a broken action is reported and the rest still load.
+// A repo config's [[actions]]; a broken action is reported and the rest still load.
 pub fn parse(text: &str, source: &str) -> Parsed {
     let (actions, mut errors) = parse_actions(text, source);
     if text.parse::<Table>().is_ok()
@@ -140,20 +140,12 @@ pub fn parse(text: &str, source: &str) -> Parsed {
     {
         errors.push(error);
     }
+    let (actions, key_errors) = unique_keys(actions);
+    errors.extend(key_errors);
     (actions, errors)
 }
 
-fn parse_override(text: &str, source: &str) -> Parsed {
-    let (actions, mut errors) = parse_actions(text, source);
-    if let Ok(table) = text.parse::<Table>()
-        && let Err(error) = crate::config::unknown_keys(&table, "", &["actions"])
-    {
-        errors.push(format!("{source}: {error}"));
-    }
-    (actions, errors)
-}
-
-const ACTION_KEYS: [&str; 12] = ["id", "key", "title", "about", "ask", "task", "bump", "run", "commit", "tag", "push", "then"];
+pub const ACTION_KEYS: [&str; 12] = ["id", "key", "title", "about", "ask", "task", "bump", "run", "commit", "tag", "push", "then"];
 
 fn known_keys(table: &Table, index: usize) -> Result<()> {
     crate::config::unknown_keys(table, &format!("actions[{index}]."), &ACTION_KEYS)?;
@@ -183,18 +175,8 @@ fn parse_actions(text: &str, source: &str) -> Parsed {
     (actions, errors)
 }
 
-// Repos you don't own get their actions from your own kelpie config, $KELPIE_ACTIONS_DIR or ~/.config/kelpie/actions (a private repo is a good home).
-pub fn overrides_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("KELPIE_ACTIONS_DIR") {
-        return PathBuf::from(dir);
-    }
-    crate::config::dir().join("actions")
-}
-
-// An override with the same id replaces the repo's action; the rest are added. Two actions on one key keep the first.
-pub fn merge(own: Vec<Action>, overrides: Vec<Action>) -> (Vec<Action>, Vec<String>) {
-    let mut actions: Vec<Action> = own.into_iter().filter(|action| !overrides.iter().any(|other| other.id == action.id)).collect();
-    actions.extend(overrides);
+// Two actions on one key keep the first.
+fn unique_keys(actions: Vec<Action>) -> (Vec<Action>, Vec<String>) {
     let mut kept: Vec<Action> = Vec::new();
     let mut errors = Vec::new();
     for action in actions {
@@ -206,18 +188,15 @@ pub fn merge(own: Vec<Action>, overrides: Vec<Action>) -> (Vec<Action>, Vec<Stri
     (kept, errors)
 }
 
-pub fn load(repo: &Path) -> (Vec<Action>, Vec<String>) {
-    let read = |path: PathBuf, source: String, parse: fn(&str, &str) -> Parsed| match std::fs::read_to_string(&path) {
-        Ok(text) => parse(&text, &source),
+pub fn load_from(file: &Path) -> (Vec<Action>, Vec<String>) {
+    match std::fs::read_to_string(file) {
+        Ok(text) => parse(&text, &file.display().to_string()),
         Err(_) => (Vec::new(), Vec::new()),
-    };
-    let (own, mut errors) = read(repo.join(".kelpie.toml"), ".kelpie.toml".to_string(), parse);
-    let file = overrides_dir().join(format!("{}.toml", name_of(repo)));
-    let (overrides, override_errors) = read(file.clone(), file.display().to_string(), parse_override);
-    errors.extend(override_errors);
-    let (actions, merge_errors) = merge(own, overrides);
-    errors.extend(merge_errors);
-    (actions, errors)
+    }
+}
+
+pub fn load(repo: &Path) -> (Vec<Action>, Vec<String>) {
+    load_from(&crate::config::repo_file(repo))
 }
 
 pub fn answer<'a>(answers: &'a Answers, name: &str) -> Option<&'a str> {
@@ -410,7 +389,7 @@ ask = ["plugin", "version"]
 task = "Bump {plugin}'s pin to {version}; commit."
 "#;
 
-    fn scratch(name: &str) -> PathBuf {
+    fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("kelpie-actions-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -418,37 +397,15 @@ task = "Bump {plugin}'s pin to {version}; commit."
     }
 
     fn release() -> Script {
-        match &parse(RELEASE, ".kelpie.toml").0[0].work {
+        match &parse(RELEASE, "app.toml").0[0].work {
             Work::Script(script) => script.clone(),
             Work::Task(_) => panic!("release is a script"),
         }
     }
 
     #[test]
-    fn the_example_parses_and_plans_against_notes_vault_mcp_files() {
-        let example = include_str!("../examples/notes-vault-mcp.kelpie.toml");
-        let (actions, errors) = parse(example, "example");
-        assert!(errors.is_empty(), "{errors:?}");
-        let pin = example.lines().filter_map(|line| line.strip_prefix("# ")).collect::<Vec<_>>().join("\n");
-        let (pins, errors) = parse(&pin[pin.find("[[actions]]").unwrap()..], "pin");
-        assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(pins[0].id, "bump-pin");
-        let Work::Script(script) = &actions[0].work else { panic!("release is a script") };
-        let repo = scratch("example");
-        std::fs::create_dir_all(repo.join("notes_vault_mcp")).unwrap();
-        std::fs::write(repo.join("pyproject.toml"), "[project]\nname = \"notes-vault-mcp\"\nversion = \"0.5.0\"\nrequires-python = \">=3.11\"\n").unwrap();
-        std::fs::write(repo.join("server.json"), "{\n  \"version\": \"0.5.0\",\n  \"packages\": [{\n    \"version\": \"0.5.0\"\n  }]\n}\n").unwrap();
-        std::fs::write(repo.join("notes_vault_mcp/server.py"), "VERSION = \"0.5.0\"\n").unwrap();
-        std::fs::write(repo.join("uv.lock"), "[[package]]\nname = \"mcp\"\nversion = \"0.5.0\"\n\n[[package]]\nname = \"notes-vault-mcp\"\nversion = \"0.5.0\"\n").unwrap();
-        let steps = plan(script, &repo, "main", &vec![("version".to_string(), "0.5.1".to_string())]).unwrap();
-        let edits: Vec<(&str, usize)> = steps.iter().filter_map(|step| match step { Step::Edit { file, line, .. } => Some((file.as_str(), *line)), _ => None }).collect();
-        assert_eq!(edits, [("pyproject.toml", 2), ("server.json", 1), ("server.json", 3), ("notes_vault_mcp/server.py", 0), ("uv.lock", 6)]);
-        let _ = std::fs::remove_dir_all(&repo);
-    }
-
-    #[test]
     fn parses_script_and_task_actions() {
-        let (actions, errors) = parse(RELEASE, ".kelpie.toml");
+        let (actions, errors) = parse(RELEASE, "app.toml");
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(actions[0].id, "release");
         assert_eq!(actions[0].key, 'R');
@@ -464,9 +421,9 @@ task = "Bump {plugin}'s pin to {version}; commit."
     #[test]
     fn a_broken_action_is_reported_and_the_rest_load() {
         let text = "[[actions]]\nkey = \"g\"\ntitle = \"Mine\"\nrun = \"x\"\n\n[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n\n[[actions]]\nkey = \"Z\"\ntitle = \"Nothing\"\n";
-        let (actions, errors) = parse(text, ".kelpie.toml");
+        let (actions, errors) = parse(text, "app.toml");
         assert_eq!(actions.iter().map(|action| action.key).collect::<Vec<_>>(), ['B']);
-        assert_eq!(errors, [".kelpie.toml, action 1: key g is the Areas page's own", ".kelpie.toml, action 3: needs task, or script steps (bump, run, commit, tag, push)"]);
+        assert_eq!(errors, ["app.toml, action 1: key g is the Areas page's own", "app.toml, action 3: needs task, or script steps (bump, run, commit, tag, push)"]);
         assert_eq!(parse("not toml [", "x").1.len(), 1);
         assert!(parse("[[actions]]\nkey = \"V\"\ntitle = \"v\"\nbump = [\"a\"]\n", "x").1[0].contains("ask = \"version\""));
     }
@@ -474,32 +431,45 @@ task = "Bump {plugin}'s pin to {version}; commit."
     #[test]
     fn an_unknown_key_in_an_action_or_a_bump_entry_is_named_and_that_action_skipped() {
         let text = "[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n\n[[actions]]\nkey = \"C\"\ntitle = \"Check\"\nrun = \"cargo check\"\ncolour = \"red\"\n\n[[actions]]\nkey = \"V\"\ntitle = \"Version\"\nask = \"version\"\nbump = [\"a\", { file = \"uv.lock\", afer = \"x\" }]\n";
-        let (actions, errors) = parse(text, ".kelpie.toml");
+        let (actions, errors) = parse(text, "app.toml");
         assert_eq!(actions.iter().map(|action| action.key).collect::<Vec<_>>(), ['B']);
         assert_eq!(errors, [
-            ".kelpie.toml: actions[1].colour: unknown key; known keys here: id, key, title, about, ask, task, bump, run, commit, tag, push, then",
-            ".kelpie.toml: actions[2].bump[1].afer: unknown key; known keys here: file, after",
+            "app.toml: actions[1].colour: unknown key; known keys here: id, key, title, about, ask, task, bump, run, commit, tag, push, then",
+            "app.toml: actions[2].bump[1].afer: unknown key; known keys here: file, after",
         ]);
-        assert_eq!(parse_override(text, "app.toml").1.len(), 2);
     }
 
     #[test]
-    fn a_repo_file_takes_worktree_next_to_actions_and_names_unknown_keys() {
+    fn a_repo_config_takes_worktree_next_to_actions_and_names_unknown_keys() {
         let text = "[worktree]\ndev_server = \"npm run dev\"\n\n[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n";
-        assert_eq!(parse(text, ".kelpie.toml"), (parse_actions(text, ".kelpie.toml").0, Vec::new()));
-        let (actions, errors) = parse(&format!("colour = 1\n{text}"), "/src/app/.kelpie.toml");
+        assert_eq!(parse(text, "app.toml"), (parse_actions(text, "app.toml").0, Vec::new()));
+        let (actions, errors) = parse(&format!("colour = 1\n{text}"), "/home/u/.config/kelpie/repos/app.toml");
         assert_eq!(actions.len(), 1);
-        assert_eq!(errors, ["/src/app/.kelpie.toml: colour: unknown key; known keys here: actions, worktree, task, review"]);
-        assert_eq!(parse_override(text, "app.toml").1, ["app.toml: worktree: unknown key; known keys here: actions"]);
+        assert_eq!(errors, ["/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review"]);
     }
 
     #[test]
-    fn overrides_replace_by_id_and_keys_stay_unique() {
-        let own = parse(RELEASE, ".kelpie.toml").0;
-        let theirs = parse("[[actions]]\nid = \"release\"\nkey = \"R\"\ntitle = \"Release\"\nrun = \"make release\"\n\n[[actions]]\nkey = \"P\"\ntitle = \"Other\"\nrun = \"x\"\n", "override").0;
-        let (merged, errors) = merge(own, theirs);
-        assert_eq!(merged.iter().map(|action| (action.key, action.source.as_str())).collect::<Vec<_>>(), [('P', ".kelpie.toml"), ('R', "override")]);
-        assert_eq!(errors, ["override: key P is taken by Bump a pin"]);
+    fn two_actions_on_one_key_keep_the_first() {
+        let (actions, errors) = parse(&format!("{RELEASE}\n[[actions]]\nkey = \"P\"\ntitle = \"Other\"\nrun = \"x\"\n"), "app.toml");
+        assert_eq!(actions.iter().map(|action| action.key).collect::<Vec<_>>(), ['R', 'P']);
+        assert_eq!(errors, ["app.toml: key P is taken by Bump a pin"]);
+    }
+
+    #[test]
+    fn actions_load_from_the_repo_config_named_after_the_main_checkout_and_never_from_the_repo() {
+        let root = scratch("load");
+        let (repos, repo) = (root.join("repos"), root.join("app"));
+        std::fs::create_dir_all(&repos).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("app.toml"), "[[actions]]\nkey = \"X\"\ntitle = \"From the repo\"\nrun = \"x\"\n").unwrap();
+        let file = crate::config::repo_file_in(&repos, &repo);
+        assert_eq!(file, repos.join("app.toml"));
+        assert_eq!(load_from(&file), (Vec::new(), Vec::new()), "a file inside the repo is never read");
+        std::fs::write(&file, "[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n").unwrap();
+        let (actions, errors) = load_from(&file);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(actions.iter().map(|action| action.title.as_str()).collect::<Vec<_>>(), ["Build"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -570,7 +540,7 @@ task = "Bump {plugin}'s pin to {version}; commit."
     fn a_bump_file_stays_inside_the_repo() {
         let repo = scratch("escape");
         std::fs::write(repo.parent().unwrap().join("kelpie-escape-outside.toml"), "version = \"0.5.0\"\n").unwrap();
-        let (actions, errors) = parse("[[actions]]\nkey = \"V\"\ntitle = \"V\"\nask = \"version\"\nbump = [\"../kelpie-escape-outside.toml\"]\n", ".kelpie.toml");
+        let (actions, errors) = parse("[[actions]]\nkey = \"V\"\ntitle = \"V\"\nask = \"version\"\nbump = [\"../kelpie-escape-outside.toml\"]\n", "app.toml");
         assert!(actions.is_empty() || !errors.is_empty(), "a path that leaves the repo is refused when the file is read: {actions:?}");
         let _ = std::fs::remove_file(repo.parent().unwrap().join("kelpie-escape-outside.toml"));
         let _ = std::fs::remove_dir_all(&repo);

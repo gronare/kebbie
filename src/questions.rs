@@ -67,10 +67,10 @@ pub fn record(id: &str, at: u64, from: &str, asked: &Asked, plan: Option<&str>, 
 }
 
 // The task may change or delete its plan file; the user reads the plan as it was asked. kelpie's own plans/ file is moved rather than copied, so it is stored once.
-pub fn keep_plan(source: &Path, state: &Path, me: &str, at: u64) -> Result<PathBuf> {
+pub fn keep_plan(source: &Path, state: &Path, me: &str, id: &str) -> Result<PathBuf> {
     let dir = state.join("plans");
     crate::state::private_dir(&dir)?;
-    let kept = dir.join(format!("{me}-{at}.md"));
+    let kept = dir.join(format!("{me}-{id}.md"));
     let own = source.parent().and_then(|parent| parent.canonicalize().ok()) == dir.canonicalize().ok();
     if own {
         fs::rename(source, &kept).map_err(|error| format!("{}: {error}", source.display()))?;
@@ -81,7 +81,7 @@ pub fn keep_plan(source: &Path, state: &Path, me: &str, at: u64) -> Result<PathB
 }
 
 // "vault:Projects/x" names the note Projects/x.md; anything else is a file, kept as a copy.
-pub fn plan_reference(plan: &str, cwd: &Path, state: &Path, me: &str, at: u64) -> Result<String> {
+pub fn plan_reference(plan: &str, cwd: &Path, state: &Path, me: &str, id: &str) -> Result<String> {
     let plan = plan.trim();
     match plan.strip_prefix(VAULT_PLAN) {
         Some(key) => {
@@ -91,7 +91,7 @@ pub fn plan_reference(plan: &str, cwd: &Path, state: &Path, me: &str, at: u64) -
             }
             Ok(format!("{VAULT_PLAN}{key}{}", if key.ends_with(".md") { "" } else { ".md" }))
         }
-        None => keep_plan(&cwd.join(plan), state, me, at).map(|copy| copy.display().to_string()),
+        None => keep_plan(&cwd.join(plan), state, me, id).map(|copy| copy.display().to_string()),
     }
 }
 
@@ -221,7 +221,7 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
         return Err("Your earlier question still waits for the user; one question at a time, so stop your turn and wait for the answer.".to_string());
     }
     let at = messages::now();
-    let plan = plan.map(|plan| plan_reference(plan, cwd, &state_dir()?, &me, at)).transpose()?;
+    let plan = plan.map(|plan| plan_reference(plan, cwd, &state_dir()?, &me, &messages::new_id("plan"))).transpose()?;
     let next = if plan.is_some() { format!("read and approve the plan: {}", asked.text) } else { format!("answer: {}", asked.text) };
     let report = Report { state: "needs-you".to_string(), next };
     messages::log_report(&me, &report, &format!("asked the user: {}", asked.text))?;
@@ -446,18 +446,32 @@ mod tests {
         fs::create_dir_all(&base).unwrap();
         let source = base.join("plan.md");
         fs::write(&source, "# Plan\n1. rename").unwrap();
-        let copy = keep_plan(&source, &base.join("state"), "billing@web", 10).unwrap();
+        let copy = keep_plan(&source, &base.join("state"), "billing@web", "10").unwrap();
         fs::write(&source, "changed").unwrap();
         assert_eq!(copy, base.join("state/plans/billing@web-10.md"));
         assert_eq!(fs::read_to_string(&copy).unwrap(), "# Plan\n1. rename");
-        assert!(keep_plan(&base.join("missing.md"), &base.join("state"), "billing@web", 11).is_err());
+        assert!(keep_plan(&base.join("missing.md"), &base.join("state"), "billing@web", "11").is_err());
         let question = Question { options: Vec::new(), recommend: 1, plan: Some(copy.display().to_string()), plan_at: None, answered: false, waits: false };
         assert_eq!(plan_text(&question).as_deref(), Some("# Plan\n1. rename"));
         let own = base.join("state/plans/billing@web.md");
         fs::write(&own, "# Own plan").unwrap();
-        let kept = keep_plan(&own, &base.join("state"), "billing@web", 12).unwrap();
+        let kept = keep_plan(&own, &base.join("state"), "billing@web", "12").unwrap();
         assert!(!own.exists(), "kelpie's own plan file is moved, so the plan is stored once");
         assert_eq!(fs::read_to_string(kept).unwrap(), "# Own plan");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn two_plans_asked_in_the_same_second_are_kept_apart() {
+        let base = std::env::temp_dir().join(format!("kelpie-plan-twice-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let (first, second) = (base.join("first.md"), base.join("second.md"));
+        fs::write(&first, "first").unwrap();
+        fs::write(&second, "second").unwrap();
+        let kept: Vec<PathBuf> = [&first, &second].iter().map(|source| keep_plan(source, &base.join("state"), "billing@web", &messages::new_id("plan")).unwrap()).collect();
+        assert_ne!(kept[0], kept[1]);
+        assert_eq!((fs::read_to_string(&kept[0]).unwrap(), fs::read_to_string(&kept[1]).unwrap()), ("first".to_string(), "second".to_string()));
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -476,7 +490,7 @@ mod tests {
     #[test]
     fn a_vault_plan_names_the_note_and_copies_nothing() {
         let state = std::env::temp_dir().join(format!("kelpie-vault-plan-{}", std::process::id()));
-        let reference = |plan: &str| plan_reference(plan, Path::new("/nowhere"), &state, "billing@web", 10);
+        let reference = |plan: &str| plan_reference(plan, Path::new("/nowhere"), &state, "billing@web", "10");
         assert_eq!(reference("vault:Projects/payload-rename.md").unwrap(), "vault:Projects/payload-rename.md");
         assert_eq!(reference(" vault:/Projects/payload-rename ").unwrap(), "vault:Projects/payload-rename.md");
         assert!(reference("vault:").is_err());
@@ -518,14 +532,14 @@ mod tests {
         let (cwd, state) = (base.join("wt1.app"), base.join("state"));
         fs::create_dir_all(cwd.join("docs")).unwrap();
         fs::write(cwd.join("docs/plan.md"), "# plan").unwrap();
-        let kept = plan_reference("docs/plan.md", &cwd, &state, "billing@app", 7).unwrap();
+        let kept = plan_reference("docs/plan.md", &cwd, &state, "billing@app", "7").unwrap();
         assert_eq!(kept, state.join("plans/billing@app-7.md").display().to_string());
         assert_eq!(fs::read_to_string(&kept).unwrap(), "# plan");
         assert!(cwd.join("docs/plan.md").exists(), "a file of the task's own is copied, not moved");
         let outside = base.join("elsewhere.md");
         fs::write(&outside, "outside").unwrap();
-        assert!(plan_reference("../elsewhere.md", &cwd, &state, "billing@app", 8).is_ok(), "any file the task can read may be its plan; the board shows the user what it is");
-        assert_eq!(plan_reference("vault:/Projects/x", &cwd, &state, "billing@app", 9).unwrap(), "vault:Projects/x.md");
+        assert!(plan_reference("../elsewhere.md", &cwd, &state, "billing@app", "8").is_ok(), "any file the task can read may be its plan; the board shows the user what it is");
+        assert_eq!(plan_reference("vault:/Projects/x", &cwd, &state, "billing@app", "9").unwrap(), "vault:Projects/x.md");
         fs::remove_dir_all(base).unwrap();
     }
 }

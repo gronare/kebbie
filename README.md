@@ -41,12 +41,14 @@ mkdir -p ~/.local/bin
 ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie
 ```
 
-**5. The Claude Code plugin.** It brings the skills (`kelpie:set-up-worktree`, `kelpie:work-rules`, `kelpie:review`, `/kelpie:review-split` and the rest) and the review hook:
+**5. The Claude Code plugin.** It brings the skills (`kelpie:set-up-worktree`, `kelpie:work-rules`, `kelpie:review`, `/kelpie:review-split` and the rest) and the review hook. Add it from the install root, so it is always the same code as the `kelpie` binary (Claude Code loads a folder marketplace's plugin in place at every session start):
 
 ```bash
-claude plugin marketplace add https://github.com/gronare/kelpie
+claude plugin marketplace add ~/.local/share/kelpie/current
 claude plugin install kelpie@kelpie
 ```
+
+`claude plugin marketplace add https://github.com/gronare/kelpie` works too, but it follows GitHub's default branch, so it fits only a machine on the `main` channel.
 
 **6. The herdr keys.** Add to your herdr `config.toml`:
 
@@ -86,9 +88,33 @@ command = 'curl -s -H "Title: kelpie $KELPIE_EVENT" -d "$KELPIE_TEXT" https://nt
 
 ### Update
 
-`kelpie update` (`prefix+u`, as a popup) brings everything to the latest version in one go: it updates the herdr plugin (a GitHub install through `herdr plugin update`; a linked checkout is fast-forwarded when it is clean, then built), runs `claude plugin update` for kelpie, refreshes the gronare marketplace and updates the vault plugin when it is installed, lists each version before → after (kelpie, the vault plugin and the notes-vault-mcp pin its hooks name), and sends `/reload-plugins` to every Claude session that is waiting. The lead reads its role and settings only when its Claude starts, so a waiting lead is restarted instead (`kelpie lead --restart`, run by the binary just built), resuming its conversation. The session you are in and the ones still working are listed instead, so nothing types into a prompt you are writing; for the lead that line says to run `kelpie lead --restart` when it waits.
+Each machine follows a channel, set in its machine config:
 
-`kelpie update --check` changes nothing: it fetches kelpie's install repo and the vault plugin's marketplace clone and shows the installed version against the latest on each origin's default branch. The board runs the same check in the background when it starts and every 6 hours after (kept in `update-check.json` in the state directory, so several boards share one fetch); when something is newer the Work status line shows a muted `↑ kelpie 0.18.2 · U updates`, and `U` runs `kelpie update` without leaving the board. `kelpie doctor` reports the last check's result without fetching.
+```toml
+[update]
+channel = "release"   # the default: the highest vX.Y.Z tag on origin
+# channel = "main"    # origin's default branch, every push
+```
+
+A release is a `vX.Y.Z` tag (see [Releasing](#releasing)); a push to main reaches only `main` machines. Tags that are not exactly `v` and three numbers (`v1.0`, `v1.2.3-rc1`, `nightly`) are not releases.
+
+`kelpie update` (`prefix+u`, as a popup) brings everything to the channel's latest in one go. On `release` it fetches the tags in the install root (the folder herdr runs kelpie from), checks out the highest one detached and builds it. It refuses, and changes nothing, when the install root has uncommitted changes or is not on a release tag: on `release` the install root must not be a checkout you develop in. `kelpie update --stable` moves a clean checkout that is on a branch to the tag the first time (the branch keeps its commits). On `main` it does what it always did: a GitHub install through `herdr plugin update`, a linked checkout fast-forwarded when it is clean, then built.
+
+To try code that is not released, `kelpie update --from <branch>` installs that branch from origin and `kelpie update --from <path>` installs the commits of another checkout (its uncommitted changes are refused, as only commits are installed; the path cannot be the install root itself). The override is kept in `update-override.json` in the state directory; while it holds, a plain `kelpie update` fetches the same branch or checkout again, and `kelpie update --check`, `kelpie doctor` and the board say `running <branch or path> @ <sha>, not the channel`. `kelpie update --stable` drops the override and returns to the channel. A branch or path starting with `-` is refused.
+
+The Claude Code plugin is the install root's own checkout when its marketplace was added from `~/.local/share/kelpie/current`: whatever `kelpie update` checked out is what the next session and `/reload-plugins` load, a tag, main or an override alike. A GitHub marketplace follows the default branch, so `kelpie update` runs `claude plugin update` for it only on the `main` channel without an override, and otherwise leaves it as it is and prints the commands that move it to the install root (`kelpie doctor` warns about it too). Claude Code cannot follow the newest tag by itself: a marketplace added as `…kelpie.git#v0.21.0` stays on that one tag, and moving it to the next means removing the marketplace, which uninstalls the plugin and forgets its options.
+
+Then kelpie refreshes the gronare marketplace and updates the vault plugin when it is installed, lists each version before → after (kelpie, the vault plugin and the notes-vault-mcp pin its hooks name), and sends `/reload-plugins` to every Claude session that is waiting. The lead reads its role and settings only when its Claude starts, so a waiting lead is restarted instead (`kelpie lead --restart`, run by the binary just built), resuming its conversation. The session you are in and the ones still working are listed instead, so nothing types into a prompt you are writing; for the lead that line says to run `kelpie lead --restart` when it waits.
+
+`kelpie update --check` changes nothing but fetched refs: it names the channel, fetches kelpie's install repo and the vault plugin's marketplace clone, and shows the installed version against the channel's latest (on `release` the highest tag, on `main` origin's default branch) and the vault plugin against its marketplace's default branch. On a `release` machine the notice names the new tag (`↑ kelpie v0.21.0`), never what main carries. The board runs the same check in the background when it starts and every 6 hours after (kept in `update-check.json` in the state directory, so several boards share one fetch); when something is newer the Work status line shows a muted `↑ kelpie 0.18.2 · U updates`, and `U` runs `kelpie update` without leaving the board. `kelpie doctor` reports the last check's result without fetching.
+
+### Releasing
+
+A release happens only when you tag it; CI runs the tests on every push and releases nothing.
+
+1. Bump the version in `Cargo.toml`, `herdr-plugin.toml` and `.claude-plugin/plugin.json` (a test fails when the three differ), then `cargo build` so `Cargo.lock` follows.
+2. Commit and push to main: `git commit -am "kelpie 0.21.0" && git push`. Machines on `main` can try it from here.
+3. Tag that commit and push the tag: `git tag v0.21.0 && git push origin v0.21.0`. Machines on `release` show `↑ kelpie v0.21.0` within 6 hours, and `kelpie update` installs it.
 
 ## First task
 
@@ -136,7 +162,7 @@ Git is the only state: a worktree on a task branch is busy, a clean one that is 
 
 ### Rules
 
-How commits look is a skill's call, not kelpie's code. `task.rules_skill` names the skill; kelpie ships [`kelpie:work-rules`](skills/work-rules/SKILL.md) as the default: a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to you. Your machine config replaces it for every repo, a repo's `.kelpie.toml` for that repo; personal rules go in your own skill. A task's Claude follows it from its first turn, and `tidy` reshapes commits by it. When a task reports `ready`, kelpie asks the lead to check its commits against the skill: the lead tells the task what to fix, or runs `kelpie approve`. Only an approved task shows under Ready to push; until then it waits under Needs you, marked "rules not checked by the lead", and Push works from there too.
+How commits look is a skill's call, not kelpie's code. `task.rules_skill` names the skill; kelpie ships [`kelpie:work-rules`](skills/work-rules/SKILL.md) as the default: a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to you. Your machine config replaces it for every repo, a [repo config](#configuration) for that repo; personal rules go in your own skill. A task's Claude follows it from its first turn, and `tidy` reshapes commits by it. When a task reports `ready`, kelpie asks the lead to check its commits against the skill: the lead tells the task what to fix, or runs `kelpie approve`. Only an approved task shows under Ready to push; until then it waits under Needs you, marked "rules not checked by the lead", and Push works from there too.
 
 ### The lead and the board
 
@@ -186,7 +212,7 @@ kelpie runs the vault through the plugin's own pinned command (read from its hoo
 
 `⏎` lists an area's actions, and `← →` moves into the detail to pick one; each has a letter that also works directly, and the mouse works as on Work. Built in: open its Space (`g`), start a task in its repo told the area's notes (`s`), ask the lead to refresh its backlog (`b`), its vault log (`l`), push main (`u`, only when main is ahead: shows the commits and pushes as you on `y`, like Push on a task), and let the lead push the repo's reviewed tasks (`a`).
 
-A repo adds its own actions in a `.kelpie.toml`, reviewed like any other code:
+A repo gets its own actions in its [repo config](#configuration), `~/.config/kelpie/repos/<repo>.toml`:
 
 ```toml
 [[actions]]
@@ -209,13 +235,13 @@ ask = ["plugin", "version"]
 task = "Bump {plugin}'s pin to {version}; commit."   # starts a kelpie task with a Claude instead
 ```
 
-A script action runs in the main checkout, which must be on the default branch, clean and not behind origin. The window shows each step first (the exact lines a bump changes, only lines that say version and hold the current one; `after` limits a file to the first such line after a marker), and nothing changes until `y`; pushing asks once more. [`examples/notes-vault-mcp.kelpie.toml`](examples/notes-vault-mcp.kelpie.toml) is the release for notes-vault-mcp. For a repo you don't own, put the same in `~/.config/kelpie/actions/<repo>.toml` (`KELPIE_ACTIONS_DIR` overrides the folder; keep it in a private repo): an action there with the same `id` replaces the repo's own, others are added.
+A script action runs in the main checkout, which must be on the default branch, clean and not behind origin. The window shows each step first (the exact lines a bump changes, only lines that say version and hold the current one; `after` limits a file to the first such line after a marker), and nothing changes until `y`; pushing asks once more.
 
 ## Worktree setup
 
 kelpie creates a bare worktree; the task's Claude makes it runnable as its first step, with the skill `worktree.setup_skill` names. Its role text gives it the worktree's path, its slot, the main checkout, that skill and, when set, `worktree.setup_command`.
 
-`/kelpie:set-up-worktree` is the default. It first reads what the repo says about worktrees: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md and any project skill in `.claude/skills` (in the worktree or the main checkout, through a symlink too) whose name or description is about worktrees. From them it takes what the worktree shares with the main checkout, which stays read-only (a shared development database is used, never migrated from the worktree), how its services start, and its URLs and ports; their steps for creating or removing a worktree do not apply, since kelpie made this one. Then it runs the repo's prepare command, `worktree.setup_command` when set, else `bin/setup-worktree` when there is one; else follows a worktree section in those docs or skills; else works the setup out from `bin/setup`, the lockfiles and CI: dependencies, the gitignored keys and `.env` files copied from the main checkout, the worktree's own databases, a free port, then one fast check. A worktree inherited from a previous task is taken over first, before any route, the prepare command included: databases holding that task's migrations are rebuilt from this tree's schema, and its runtime state inside the worktree (`tmp/`, logs, caches, compiled assets, and uploads along with a rebuilt database) is cleared, while dependencies, copied inputs and the port stay. It asks before anything that deleting the worktree does not undo, and never writes to the main checkout, except to add `[worktree] dev_server` to its `.kelpie.toml` when you say yes. What it did goes in a note at `$(git rev-parse --git-dir)/kelpie-setup.md`, outside `git status`, so the next task in that worktree only checks what has drifted. `kelpie move` and `/kelpie:move-to-worktree` run the same skill.
+`/kelpie:set-up-worktree` is the default. It first reads what the repo says about worktrees: AGENTS.md, CLAUDE.md, README.md, CONTRIBUTING.md and any project skill in `.claude/skills` (in the worktree or the main checkout, through a symlink too) whose name or description is about worktrees. From them it takes what the worktree shares with the main checkout, which stays read-only (a shared development database is used, never migrated from the worktree), how its services start, and its URLs and ports; their steps for creating or removing a worktree do not apply, since kelpie made this one. Then it runs the repo's prepare command, `worktree.setup_command` when set, else `bin/setup-worktree` when there is one; else follows a worktree section in those docs or skills; else works the setup out from `bin/setup`, the lockfiles and CI: dependencies, the gitignored keys and `.env` files copied from the main checkout, the worktree's own databases, a free port, then one fast check. A worktree inherited from a previous task is taken over first, before any route, the prepare command included: databases holding that task's migrations are rebuilt from this tree's schema, and its runtime state inside the worktree (`tmp/`, logs, caches, compiled assets, and uploads along with a rebuilt database) is cleared, while dependencies, copied inputs and the port stay. It asks before anything that deleting the worktree does not undo, and never writes to the main checkout, and adds `[worktree] dev_server` to the repo config on this machine when you say yes. What it did goes in a note at `$(git rev-parse --git-dir)/kelpie-setup.md`, outside `git status`, so the next task in that worktree only checks what has drifted. `kelpie move` and `/kelpie:move-to-worktree` run the same skill.
 
 `bin/setup-worktree` is the repo's own answer: executable, no arguments, idempotent, run from inside a worktree, with no knowledge of kelpie, so a colleague who runs `git worktree add` by hand gets the same result.:
 
@@ -294,29 +320,40 @@ tab_bar_right = [
 
 ## Configuration
 
-Three layers, read key by key; the first that sets a key wins:
+kelpie reads its settings from this machine only, never from a file inside a repo, so a repo carries nothing that applies to some of the people who clone it. Three layers, read key by key; the first that sets a key wins:
 
-1. The repo's own `.kelpie.toml`, read from the main checkout and never from a worktree, so it may be gitignored. It also holds the repo's [actions](#areas).
+1. The repo config, `~/.config/kelpie/repos/<repo>.toml` (`KELPIE_REPOS_DIR` names another folder), where `<repo>` is the main checkout's folder name, so every worktree of `app` reads `repos/app.toml`. It holds `[worktree]`, `[task]`, `[review]` and the repo's [actions](#areas).
 2. The machine config, `~/.config/kelpie/config.toml` (`$XDG_CONFIG_HOME/kelpie/config.toml`; `KELPIE_CONFIG` names another file).
 3. kelpie's built-in defaults.
 
-A command that a repo's own `.kelpie.toml` sets (`setup_command`, `dev_server`, `dev_worker`) runs only after you confirm it. The board shows the command the first time `w` or `b` would run it, or when a task it starts would be told it, and remembers your yes for that repo and that exact text; a changed command asks again. A task started elsewhere (by the lead, or `kelpie start`) before you confirmed is not told the repo's setup command. The machine config's commands are your own and run as they are. A path in a repo's file (an action's `bump` file) stays inside the repo, and a skill name (`setup_skill`, `rules_skill`) is a name, never a path.
+Either file may be a symlink, and kelpie follows it. `kelpie config` and `kelpie doctor` show a link together with its target. [`kelpie:configure`](skills/configure/SKILL.md) is the skill a Claude follows to change a setting or set a machine up, and it verifies each change with `kelpie doctor`.
 
-An unknown key in either file is an error that names the file and the key. `kelpie config [--repo <path>]` prints the layers it found, then every key with its value in effect, the layer it comes from (`.kelpie.toml`, `machine config` or `default`) and what it does. Inside a repo it reads that repo's `.kelpie.toml`; `--repo` names another.
+A team shares its setup through a team repo: the repo configs live there, with one short file that lists which file links to which kelpie path, and each developer clones it and links the files in:
+
+```sh
+ln -s ~/projects/dotclaude/kelpie/repos/app.toml ~/.config/kelpie/repos/app.toml
+```
+
+A pull in the team repo updates every linked setting; asking Claude to adopt the team's kelpie setup runs `kelpie:configure`, which finds that file, makes the links and checks them.
+
+A key that applies to every repo (`[board]`, `[notify]`, `[update]`, `[vault]`, `server_name`, `worker_name`) lives in config.toml; in a repo config it is an error that says so. An unknown key in either file is an error that names the file and the key. A path in a repo config (an action's `bump` file) stays inside the repo, and a skill name (`setup_skill`, `rules_skill`) is a name, never a path.
+
+`kelpie config [--repo <path>]` prints the files it found, then every key with its value in effect, the layer it comes from (`repo config`, `machine config` or `default`) and what it does. Inside a repo it reads that repo's file; `--repo` names another. `kelpie doctor` checks config.toml and every file in the repos folder, a broken link included.
 
 | Key | Where | Default | What it does |
 | --- | --- | --- | --- |
 | `[board.backlog] sources` | machine config | `["local"]` | Where the board's Backlog tab finds work, in any combination: `"local"`, the [local backlog file](#the-local-backlog); `"vault"`, the vault's backlog notes; `"linear"`, your open Linear issues, read by the lead through a Linear MCP server. The first one listed is where the lead files new ideas. `[]` turns the backlog off. Example: `sources = ["vault", "linear"]`. |
-| `[worktree] setup_skill` | both | `"kelpie:set-up-worktree"` | The skill a task's Claude runs first to make its worktree runnable: `plugin:skill` for a plugin's skill, a bare name for one in `~/.claude/skills` or the repo's `.claude/skills`. Example: `setup_skill = "my-tools:set-up-worktree"`. |
-| `[worktree] setup_command` | both | none | The repo's own shell command that prepares an existing worktree, run from inside it; the setup skill runs it, and a task's role text names it. A command whose program is a path applies only in a repo that has that file; elsewhere, and when none is set, `bin/setup-worktree` is used when the repo has one, else the setup skill's own routes. `kelpie doctor` warns when a repo's own `.kelpie.toml` names a path that is missing or not executable. Example: `setup_command = "script/prepare_worktree"`. |
-| `[worktree] dev_server` | both; usually `.kelpie.toml` | none | The shell command the board's `w` runs in a `server` tab of the task's Space, and `w` again stops with ctrl-c. `w` exports `PORT` as the worktree's own port, the one set-up-worktree recorded (`PORT` in the worktree's `.env`, else `port <n>` in its setup note), and sets none when neither has one. Without it the board has no `w`. In the machine config it applies to every repo that sets none. Example: `dev_server = "bin/dev"`. |
-| `[worktree] dev_worker` | both; usually `.kelpie.toml` | none | A second command, such as a job runner, that the board's `b` runs in a `worker` tab of the task's Space and `b` again stops with ctrl-c, with the same `PORT` as `w`. Without it the board has no `b`. Example: `dev_worker = "bin/jobs"`. |
-| `[worktree] dev_url` | both; usually machine config | `"http://localhost:{port}"` | The address of a task's running dev server, which the board shows under the task as a link and `w` names when it starts the server; `kelpie status --json` carries it as `url`. The address depends on where the servers run, so it is a template: `{worktree}` is the worktree's folder (`wt1.app`), `{repo}` the repo's (`app`), `{number}` its pool number (`1`) and `{port}` its port, read like `w`'s `PORT`. A worktree without what the template names (no recorded port for `{port}`) gets no link. `""` turns the link off. Any other `{…}` is an error. Examples: `dev_url = "http://localhost:{port}"` when the servers run on this machine; `dev_url = "https://{worktree}.dev"` behind a proxy that serves each checkout under its folder name, such as puma-dev. |
+| `[worktree] setup_skill` | either | `"kelpie:set-up-worktree"` | The skill a task's Claude runs first to make its worktree runnable: `plugin:skill` for a plugin's skill, a bare name for one in `~/.claude/skills` or the repo's `.claude/skills`. Example: `setup_skill = "my-tools:set-up-worktree"`. |
+| `[worktree] setup_command` | either | none | The repo's own shell command that prepares an existing worktree, run from inside it; the setup skill runs it, and a task's role text names it. A command whose program is a path applies only in a repo that has that file; elsewhere, and when none is set, `bin/setup-worktree` is used when the repo has one, else the setup skill's own routes. `kelpie doctor` warns when a repo config names a path that is missing or not executable. Example: `setup_command = "script/prepare_worktree"`. |
+| `[worktree] dev_server` | either; usually the repo config | none | The shell command the board's `w` runs in a `server` tab of the task's Space, and `w` again stops with ctrl-c. `w` exports `PORT` as the worktree's own port, the one set-up-worktree recorded (`PORT` in the worktree's `.env`, else `port <n>` in its setup note), and sets none when neither has one. Without it the board has no `w`. In the machine config it applies to every repo that sets none. Example: `dev_server = "bin/dev"`. |
+| `[worktree] dev_worker` | either; usually the repo config | none | A second command, such as a job runner, that the board's `b` runs in a `worker` tab of the task's Space and `b` again stops with ctrl-c, with the same `PORT` as `w`. Without it the board has no `b`. Example: `dev_worker = "bin/jobs"`. |
+| `[worktree] dev_url` | either; usually machine config | `"http://localhost:{port}"` | The address of a task's running dev server, which the board shows under the task as a link and `w` names when it starts the server; `kelpie status --json` carries it as `url`. The address depends on where the servers run, so it is a template: `{worktree}` is the worktree's folder (`wt1.app`), `{repo}` the repo's (`app`), `{number}` its pool number (`1`) and `{port}` its port, read like `w`'s `PORT`. A worktree without what the template names (no recorded port for `{port}`) gets no link. `""` turns the link off. Any other `{…}` is an error. Examples: `dev_url = "http://localhost:{port}"` when the servers run on this machine; `dev_url = "https://{worktree}.dev"` behind a proxy that serves each checkout under its folder name, such as puma-dev. |
 | `[worktree] server_name` | machine config | `"server"` | The name of the tab the board's `w` starts `dev_server` in, and the value of the Space's `$server` tag in herdr's sidebar while it runs. Machine config only, since the sidebar names every Space alike. Example: `server_name = "web"`. |
 | `[worktree] worker_name` | machine config | `"worker"` | The same for `b`'s worker tab and the `$worker` tag. Example: `worker_name = "jobs"`. |
-| `[task] rules_skill` | both | `"kelpie:work-rules"` | The skill with your rules for how work is planned, built and committed (a mock before a new screen, commit style, what never to do). A task's Claude runs it after the setup skill and follows it for the rest of the task, the lead checks a ready task against it, `tidy` reshapes commits by it, and the reviewer reads it. Named like `setup_skill`. Example: `rules_skill = "my-rules"`. |
-| `[review] model` | both | none | The model `kelpie review`'s reviewer runs on (`--model`); none leaves it to Claude's default. Example: `model = "opus"`. |
-| `[notify] command` | machine config | none | The shell command kelpie runs when something needs you; see [Notifications](#notifications). None sends nothing. Machine config only: a repo's `.kelpie.toml` naming it is an error, since a cloned repo's file would run its command on every report. |
+| `[task] rules_skill` | either | `"kelpie:work-rules"` | The skill with your rules for how work is planned, built and committed (a mock before a new screen, commit style, what never to do). A task's Claude runs it after the setup skill and follows it for the rest of the task, the lead checks a ready task against it, `tidy` reshapes commits by it, and the reviewer reads it. Named like `setup_skill`. Example: `rules_skill = "my-rules"`. |
+| `[review] model` | either | none | The model `kelpie review`'s reviewer runs on (`--model`); none leaves it to Claude's default. Example: `model = "opus"`. |
+| `[notify] command` | machine config | none | The shell command kelpie runs when something needs you; see [Notifications](#notifications). None sends nothing. |
+| `[update] channel` | machine config | `"release"` | What `kelpie update` installs on this machine: `"release"`, the highest `vX.Y.Z` tag on origin; `"main"`, origin's default branch as it is pushed. See [Update](#update). Example: `channel = "main"` on the machine you test new code on. |
 | `[vault] command` | machine config | none | The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments; none runs the vault plugin's pinned command from its hooks. Used only while the plugin is installed and enabled; see [With the vault](#with-the-vault). Example: `command = "uv run --project ~/src/notes-vault-mcp notes-vault-mcp"`. |
 
 A machine config:
@@ -336,7 +373,7 @@ rules_skill = "my-rules"
 model = "opus"
 ```
 
-A repo's `.kelpie.toml`, next to its actions:
+A repo config, `~/.config/kelpie/repos/app.toml`, next to its actions:
 
 ```toml
 [worktree]
@@ -352,7 +389,7 @@ dev_worker = "bin/jobs"
 | `KELPIE_STATE_DIR` | `$XDG_STATE_HOME/kelpie`, else `~/.local/state/kelpie` | kelpie's state: messages, reports, the saved backlog, roles, verdicts, review marks, `notify.log`. kelpie keeps it private: the folder is `0700` and its files `0600`, each replaced whole. Point it at a temp dir for a throwaway probe. `kelpie doctor` lists the directory in use. |
 | `KELPIE_REPO_DIRS` | `~/projects:~/personal:~/src:~/code` | Colon-separated folders where `start --repo` looks for checkouts, in them or one level down. |
 | `KELPIE_LEAD_DIR` | `lead` in the state directory | The lead Claude's working directory (Claude Code never remembers trust for the home directory, so the lead gets its own). |
-| `KELPIE_ACTIONS_DIR` | `~/.config/kelpie/actions` | Where your own actions for repos you don't own live. |
+| `KELPIE_REPOS_DIR` | `$XDG_CONFIG_HOME/kelpie/repos`, else `~/.config/kelpie/repos` | The folder of repo configs, one `<repo>.toml` per repo. |
 | `KELPIE_BIN` | `~/.local/share/kelpie/current/target/release/kelpie` | The binary the lead's role and kelpie's skills run. |
 | `XDG_DATA_HOME` | `~/.local/share` | Where herdr's startup writes the `current` link; kelpie reads it under `~/.local/share`, so `kelpie doctor` warns when this is set elsewhere. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's config, where kelpie and `kelpie doctor` read the installed plugins, their settings and the vault plugin's options. |

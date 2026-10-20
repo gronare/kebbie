@@ -176,8 +176,18 @@ pub struct LogLine {
 pub fn log_line(line: &str) -> Option<LogLine> {
     let rest = line.trim().strip_prefix("- [")?;
     let (date, text) = rest.split_once("] ")?;
+    if !is_date(date) {
+        return None;
+    }
     let text = text.split(" | ").next()?.trim();
     Some(LogLine { date: date.to_string(), text: text.to_string() })
+}
+
+fn is_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let digits = |range: std::ops::Range<usize>| bytes[range].iter().all(u8::is_ascii_digit);
+    let number = |range: std::ops::Range<usize>| text[range].parse::<u32>().unwrap_or(0);
+    bytes.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-' && digits(0..4) && digits(5..7) && digits(8..10) && (1..=12).contains(&number(5..7)) && (1..=31).contains(&number(8..10))
 }
 
 // A name's own log note when the vault command cannot say: Log/<name>-<word>.md, a word and not a month, so the compiled month pages stay out.
@@ -316,6 +326,9 @@ The payload says amount.');
         let shown: Vec<(&str, &str)> = lines.iter().map(|line| (line.date.as_str(), line.text.as_str())).collect();
         assert_eq!(shown, [("2026-10-03", "late"), ("2026-10-02", "linked"), ("2026-10-01", "same")]);
         assert_eq!(log_line("- [2026-10-01]x"), None, "the date needs its closing space");
+        for bad in ["- [zzzz] sorts first | [[x]]", "- [2026-1-01] short | [[x]]", "- [2026-13-01] month | [[x]]", "- [2026-10-32] day | [[x]]", "- [2026/10/01] slashes | [[x]]", "- [9999-99-99x] long | [[x]]", "- [] empty | [[x]]"] {
+            assert_eq!(log_line(bad), None, "{bad}");
+        }
         assert_eq!(log_line("  - [2026-10-01] indented | [[x]]  "), Some(LogLine { date: "2026-10-01".to_string(), text: "indented".to_string() }));
     }
 

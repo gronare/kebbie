@@ -604,7 +604,7 @@ impl Page {
                 self.selected = Some(area.key.clone());
                 self.begin(&area, action, next.answers);
             }
-            None => self.show(Err(format!("No action {id} in a repo named {repo_name}; is its .kelpie.toml there?"))),
+            None => self.show(Err(format!("No action {id} in a repo named {repo_name}; is it in {}?", crate::config::repos_dir().join(format!("{repo_name}.toml")).display()))),
         }
     }
 
@@ -788,7 +788,7 @@ impl Page {
                 selected_line = lines.len();
             }
             let background = if active { Style::new().bg(SURFACE) } else { Style::new() };
-            let source = if Self::is_repo_action(area, choice.key) { "  .kelpie.toml" } else { "" };
+            let source = if Self::is_repo_action(area, choice.key) { "  repo config" } else { "" };
             let used = choice.label.chars().count() + source.chars().count() + 3;
             rows.push((lines.len(), lines.len() + 2, Hit::Action(index)));
             lines.push(Line::from(vec![
@@ -853,7 +853,7 @@ impl Page {
                 let keys = [
                     ("⏎", "actions for the selected area (in the detail: run the selected action)"), ("← →", "list · detail"), ("↑ ↓ j k", "move"),
                     ("1 2", "the work and areas pages"), ("tab", "move focus to the lead's chat"), ("g", "open the area's Space"), ("s", "start a task in its repo, with its notes"), ("b", "ask the lead to refresh its backlog"),
-                    ("l", "its vault log"), ("a", "let the lead push the repo's reviewed tasks, or take that back"), ("u", "push main when it is ahead (asks first)"), ("A–Z", "the repo's own actions, from .kelpie.toml"),
+                    ("l", "its vault log"), ("a", "let the lead push the repo's reviewed tasks, or take that back"), ("u", "push main when it is ahead (asks first)"), ("A–Z", "the repo's own actions, from its repo config (kelpie config shows where)"),
                 ];
                 let lines = keys.into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect();
                 modal(frame, "keys".to_string(), lines, 76);
@@ -1012,7 +1012,7 @@ mod tests {
     #[test]
     fn a_repos_own_actions_are_marked_as_such_in_the_choices() {
         let mut app = with_git(area("Areas/app.md", "app"), 1, 0);
-        app.actions = crate::actions::parse("[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n", ".kelpie.toml").0;
+        app.actions = crate::actions::parse("[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n", "app.toml").0;
         let page = Page::new(vec![Source::Local]);
         let choices = page.choices(&app);
         let keys: String = choices.iter().map(|choice| choice.key).collect();
