@@ -111,11 +111,11 @@ fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 // The deny rules and the env rewrite name the rule; the worktree's own push block (push_block) is what holds when they are slipped.
 // gate is the task's address when kelpie keeps its note: its edits then wait for the note's Problem.
 fn settings(kelpie: &str, gate: Option<&str>) -> String {
-    let hook = json!([{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook") }] }]);
+    let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kelpie)) }] }]);
     let allow = ["peers", "tell", "report", "ask"].map(|command| format!("Bash({kelpie} {command}:*)"));
     let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook });
     if let Some(address) = gate {
-        hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook gate '{address}'"), "timeout": 40 }] }]);
+        hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kelpie), crate::sh::quote(address)), "timeout": 40 }] }]);
     }
     json!({
         "env": { "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" },
@@ -181,7 +181,7 @@ fn prompt_file(session: &Path) -> PathBuf {
 
 fn store_prompt(file: &Path, prompt: Option<&str>) -> Result<()> {
     match prompt {
-        Some(prompt) => std::fs::create_dir_all(file.parent().ok_or("prompt file has no folder")?).and_then(|_| std::fs::write(file, prompt)).map_err(|error| error.to_string()),
+        Some(prompt) => crate::state::write(file, prompt),
         None => std::fs::remove_file(file).or_else(|error| if error.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(error.to_string()) }),
     }
 }
@@ -328,7 +328,7 @@ fn start_entry(note: Option<&str>, backlog: Option<&str>) -> Option<String> {
 
 fn record_start(file: &Path, item: &str) -> Result<Option<String>> {
     let previous = std::fs::read_to_string(file).ok().map(|item| item.trim().to_string());
-    std::fs::write(file, item).map_err(|error| error.to_string())?;
+    crate::state::write(file, item)?;
     Ok(previous)
 }
 
@@ -558,7 +558,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     let config::Settings { setup_skill, setup_command, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
-    let (setup_skill, setup_command, rules_skill) = (setup_skill.value, config::setup_command_in(setup_command.value, &repo), rules_skill.value);
+    let (setup_skill, setup_command, rules_skill) = (setup_skill.value, config::setup_command_in(config::trusted(&setup_command, &repo), &repo), rules_skill.value);
     let vault = crate::vault_cli::detect();
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
@@ -586,7 +586,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     };
     if note.is_some() {
         let entry = start_entry(note.as_deref(), backlog).unwrap_or_default();
-        started_file(&task, &repo).and_then(|file| std::fs::write(file, entry).map_err(|error| error.to_string()))?;
+        started_file(&task, &repo).and_then(|file| crate::state::write(&file, entry))?;
     }
     store_prompt(&prompt_file(&session_file(&task, &repo)?), prompt)?;
     let space = open_space(&repo, &slot, &task, false)?;
@@ -606,7 +606,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     started?;
     prompted?;
     if let Some(item) = backlog.filter(|_| note.is_none()) {
-        started_file(&task, &repo).and_then(|file| std::fs::write(file, item).map_err(|error| error.to_string()))?;
+        started_file(&task, &repo).and_then(|file| crate::state::write(&file, item))?;
     }
     if let Err(error) = messages::announce(&task, &name_of(&repo)) {
         eprintln!("Could not tell {task}'s other halves it started: {error}");
@@ -642,7 +642,7 @@ fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Resul
     if let (Ok(()), Session::New(id)) = (&started, &session) {
         let record = format!("{id}\n{}\n", mode.unwrap_or_default());
         let file = session_file(task, repo)?;
-        std::fs::create_dir_all(file.parent().ok_or("session file has no folder")?).and_then(|_| std::fs::write(file, record)).map_err(|error| error.to_string())?;
+        crate::state::write(&file, record)?;
     }
     Ok((agent_name, started))
 }
@@ -1003,9 +1003,7 @@ fn approval_file(state: &Path, address: &str) -> PathBuf {
 }
 
 fn record_approval(state: &Path, address: &str, fingerprint: &str) -> Result<()> {
-    let file = approval_file(state, address);
-    std::fs::create_dir_all(file.parent().unwrap_or(state)).map_err(|error| error.to_string())?;
-    std::fs::write(file, fingerprint).map_err(|error| error.to_string())
+    crate::state::write(&approval_file(state, address), fingerprint)
 }
 
 fn approval_holds(state: &Path, address: &str, fingerprint: &str) -> bool {
@@ -1330,7 +1328,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     let config::Settings { setup_skill, setup_command, .. } = config::resolve(Some(&repo))?.settings;
-    let prepare = config::setup_command_in(setup_command.value, &repo).map_or(String::new(), |command| format!(", which prepares it with {command}"));
+    let prepare = config::setup_command_in(config::trusted(&setup_command, &repo), &repo).map_or(String::new(), |command| format!(", which prepares it with {command}"));
     if slots(&repo)?.iter().any(|slot| slot.task.as_deref() == Some(task.as_str())) {
         return Err(format!("{task} already has a worktree; use kelpie start {task} to go there"));
     }
@@ -1501,7 +1499,7 @@ mod tests {
         let off: Value = serde_json::from_str(&settings("/bin/kelpie", None)).unwrap();
         assert!(off["hooks"].get("PreToolUse").is_none(), "without the vault no edit hook runs");
         let on: Value = serde_json::from_str(&settings("/bin/kelpie", Some("billing@app"))).unwrap();
-        assert_eq!(on["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|MultiEdit|NotebookEdit");
+        assert_eq!(on["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|MultiEdit|NotebookEdit|Bash", "a Bash command that writes a file waits for the Problem too");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kelpie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
         assert_eq!(on["hooks"]["Stop"], off["hooks"]["Stop"]);
     }
@@ -2139,7 +2137,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: the hook commands single-quote kelpie's path and the task's address, so an apostrophe in either breaks the quoting and the hooks never run"]
     fn the_hook_commands_run_from_a_path_with_an_apostrophe() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("kelpie-hook-quote-{}", std::process::id())).join("o'brien");

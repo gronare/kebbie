@@ -246,7 +246,7 @@ pub fn on_with(cli: &Cli, state: &Path, at: u64, probe: impl FnOnce(&Cli) -> Res
         return cached["on"] == true;
     }
     let on = probe(cli).is_ok_and(|probe| probe.on());
-    let _ = std::fs::write(status_file(state), json!({ "command": cli.shown(), "at": at, "on": on }).to_string());
+    let _ = crate::state::write(&status_file(state), json!({ "command": cli.shown(), "at": at, "on": on }).to_string());
     on
 }
 
@@ -276,7 +276,7 @@ pub fn log_note(cli: &Cli, state: &Path, repo: &str) -> Option<String> {
         return Some(known);
     }
     let path = cli.log_path(repo).ok()?;
-    let _ = std::fs::create_dir_all(file.parent()?).and_then(|_| std::fs::write(&file, &path));
+    let _ = crate::state::write(&file, &path);
     Some(path)
 }
 

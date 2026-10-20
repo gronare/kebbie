@@ -75,6 +75,18 @@ impl Lab {
         self.command().args(args).output().unwrap()
     }
 
+    // kelpie run under a stand-in for a Claude that kelpie started with this role's settings, as ps shows it.
+    fn run_as(&self, role: &str, args: &[&str]) -> Output {
+        let claude = self.root.join("node_modules/@anthropic-ai/claude-code/cli.sh");
+        fs::create_dir_all(claude.parent().unwrap()).unwrap();
+        fs::write(&claude, "#!/bin/sh\nshift 2\nkelpie=\"$1\"\nshift\n\"$kelpie\" \"$@\"\n").unwrap();
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+        let command = self.command();
+        let mut wrapped = Command::new(&claude);
+        wrapped.env_clear().envs(command.get_envs().filter_map(|(key, value)| Some((key, value?)))).stdin(Stdio::null());
+        wrapped.arg("--settings").arg(self.state.join(format!("roles/{role}.settings.json"))).arg(KELPIE).args(args).output().unwrap()
+    }
+
     fn run_with_stdin(&self, args: &[&str], input: &str) -> Output {
         use std::io::Write;
         let mut child = self.command().args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
@@ -294,10 +306,14 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     assert!(unread.contains("billing@app asks the user: Which queue?") && unread.contains("The user answers it on the board."), "{unread}");
     assert_eq!(stdout(&lab.run(&["messages", "--unread"])), "", "the lead sees each message once");
 
-    let settled = lab.run(&["answered", "billing"]);
+    let stranger = lab.run_as("search@app", &["answered", "billing"]);
+    assert!(!stranger.status.success() && stderr(&stranger).contains("search@app marks only its own question answered"), "{}", stderr(&stranger));
+    let agent = lab.run_as("helper", &["answered", "billing"]);
+    assert!(!agent.status.success() && stderr(&agent).contains("a Claude session cannot"), "{}", stderr(&agent));
+    let settled = lab.run_as("billing@app", &["answered", "billing"]);
     assert!(settled.status.success(), "{}", stderr(&settled));
     assert_eq!(stdout(&settled), "Marked the question from billing@app answered; it leaves the board.");
-    assert!(!lab.run(&["answered", "billing"]).status.success());
+    assert!(!lab.run_as("lead", &["answered", "billing"]).status.success(), "nothing is open any more");
     let status: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["status", "--json"]))).unwrap();
     assert!(status["items"][0]["question"].is_null());
 
@@ -316,7 +332,6 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
 }
 
 #[test]
-#[ignore = "bug: a message with a newline can start a line with [from you], which the recipient's role takes as the user's answer"]
 fn a_message_cannot_forge_the_users_answer_on_a_second_line() {
     let lab = Lab::new("forge");
     let (_, slot) = lab.task_fixture();

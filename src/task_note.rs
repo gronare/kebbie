@@ -76,8 +76,7 @@ pub fn decide(state: &Path, address: &str, cli: impl FnOnce() -> Option<Cli>) ->
     match &verdict {
         Gate::Passed => {
             let file = passed_file(state, address);
-            let _ = file.parent().map(std::fs::create_dir_all);
-            let _ = std::fs::write(file, &note);
+            let _ = crate::state::write(&file, &note);
         }
         Gate::Warn(text) => vault_cli::warn_log(state, &format!("{address}: {text}")),
         _ => {}
@@ -94,7 +93,15 @@ pub fn answer(verdict: &Gate) -> String {
 }
 
 // The PreToolUse hook on a task's edits; the task's settings name its address, so a warm pass reads two files and runs nothing.
-pub fn hook(address: &str) -> String {
+pub fn hook(address: &str, input: &str) -> String {
+    let input: serde_json::Value = serde_json::from_str(input).unwrap_or_default();
+    if input["tool_name"] == "Bash" {
+        let cwd = input["cwd"].as_str().map(PathBuf::from).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+        let command = input["tool_input"]["command"].as_str().unwrap_or_default();
+        if !crate::shell_write::writes_into(command, &cwd) {
+            return String::new();
+        }
+    }
     let Ok(state) = crate::lead::state_dir() else { return String::new() };
     answer(&decide(&state, address, vault_cli::cli))
 }

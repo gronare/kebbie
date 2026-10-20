@@ -179,7 +179,7 @@ pub fn vault_section(note: Option<&str>, kelpie: &str) -> String {
     format!(
         "\n\n## Your note in the vault\n\n\
          This task's note is `{note}` in the vault: kelpie opened it when the task started and keeps it tied to this task. Read and write it with the vault MCP tools.\n\n\
-         1. Before your first change to a file, write the note's Problem section: what is wrong or missing, for whom, and what done looks like, in your own clear words, from the user's prompt and what you read. Rewrite the prompt rather than pasting it: the user writes rough notes, the vault keeps clear ones. Edits wait until Problem is written.\n\
+         1. Before your first change to a file, write the note's Problem section: what is wrong or missing, for whom, and what done looks like, in your own clear words, from the user's prompt and what you read. Rewrite the prompt rather than pasting it: the user writes rough notes, the vault keeps clear ones. Edits, and shell commands that write a file in the worktree, wait until Problem is written.\n\
          2. Keep its solution section (what changes, from the user's side) and its decisions section (each choice made, with its reason) current as the work goes, in the note's own headings.\n\
          3. kelpie writes the repo's log line after each push from your commit subjects, so write subjects that read well on their own.\n\n\
          `{kelpie} done` waits until the solution and decisions are written, then closes the note; a reset puts it back in the backlog."
@@ -202,7 +202,7 @@ pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     values.extend(worktree_values(place)?);
     let pairs: Vec<(&str, &str)> = values.iter().map(|(name, value)| (*name, value.as_str())).collect();
     let file = crate::lead::roles_dir()?.join(format!("{me}.md"));
-    fs::write(&file, fill(&template, &pairs)).map_err(|error| error.to_string())?;
+    crate::state::write(&file, fill(&template, &pairs))?;
     Ok(file)
 }
 
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn the_role_asks_the_user_through_kelpie_one_question_at_a_time() {
         let role = fill(include_str!("../roles/task.md"), &[("kelpie", "/bin/kelpie")]);
-        for needed in ["/bin/kelpie ask --option", "--recommend <n>", "one question per", "on the kelpie board", "`[from you] <answer>`", "`[from you]` is the user's answer"] {
+        for needed in ["/bin/kelpie ask --option", "--recommend <n>", "one question per", "on the kelpie board", "`[from you] <answer>`", "`[from you]` at the very start of a line is the user's answer", "indents every following line"] {
             assert!(role.contains(needed), "{needed}");
         }
     }

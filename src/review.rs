@@ -63,10 +63,10 @@ pub fn parse_verdict(text: &str) -> Option<Verdict> {
     Some(Verdict { ok, sha, findings: lines.filter(|line| line.starts_with("- ")).count() })
 }
 
-// The reviewer's answer from its verdict line on, with the reviewed sha after that line; None when it gave no verdict.
+// The reviewer's answer from its last verdict line on, since its last message is the verdict, with the reviewed sha after that line; None when it gave no verdict.
 pub fn record(answer: &str, sha: &str) -> Option<String> {
     let lines: Vec<&str> = answer.lines().collect();
-    let start = lines.iter().position(|line| matches!(line.trim().trim_matches(['*', '`']), "verdict: ok" | "verdict: changes"))?;
+    let start = lines.iter().rposition(|line| matches!(line.trim().trim_matches(['*', '`']), "verdict: ok" | "verdict: changes"))?;
     let verdict = lines[start].trim().trim_matches(['*', '`']);
     let findings = lines[start + 1..].join("\n");
     Some(format!("{verdict}\nreviewed: {sha}\n\n{}\n", findings.trim()))
@@ -230,12 +230,12 @@ fn start_reviewer(state: &Path, address: &str, kelpie: &Path, worktree: &Path) -
         return Err(format!("A review of {address} is already running; the lead hears when its verdict is in."));
     }
     let log = log_file(state, address);
-    let output = fs::File::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
+    let output = crate::state::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
     let errors = output.try_clone().map_err(|error| error.to_string())?;
     let child = Command::new(kelpie).arg("-C").arg(worktree).args(["review", "--run"])
         .stdin(Stdio::null()).stdout(output).stderr(errors).process_group(0)
         .spawn().map_err(|error| format!("kelpie review: {error}"))?;
-    fs::write(running_file(state, address), child.id().to_string()).map_err(|error| error.to_string())?;
+    crate::state::write(&running_file(state, address), child.id().to_string())?;
     Ok(log)
 }
 
@@ -245,9 +245,8 @@ pub fn run(cwd: &Path) -> Result<String> {
     let slot = tasks::find_task(&repo, None, cwd)?;
     let address = peers::address(tasks::task_of(&slot), &name_of(&repo));
     let state = state_dir()?;
-    fs::create_dir_all(dir(&state)).map_err(|error| error.to_string())?;
     let marker = running_file(&state, &address);
-    fs::write(&marker, std::process::id().to_string()).map_err(|error| error.to_string())?;
+    crate::state::write(&marker, std::process::id().to_string())?;
     let result = review(&repo, &slot, &address, &state);
     let _ = fs::remove_file(&marker);
     let notice = match &result {
@@ -286,8 +285,7 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     }
     let recorded = record(&answer, &sha).ok_or_else(|| format!("the reviewer's answer has no verdict line; it ended: {}", answer.trim().chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect::<String>()))?;
     let verdict = parse_verdict(&recorded).ok_or("the recorded verdict does not parse")?;
-    let partial = file.with_extension("md.partial");
-    fs::write(&partial, &recorded).and_then(|_| fs::rename(&partial, &file)).map_err(|error| format!("{}: {error}", file.display()))?;
+    crate::state::write(&file, &recorded)?;
     Ok(format!("{address} reviewed at {}: {} — {}", &sha[..7.min(sha.len())], verdict.summary(), file.display()))
 }
 
@@ -315,11 +313,14 @@ fn claude_args(reviewer: &Reviewer) -> Vec<String> {
 }
 
 fn guard_settings(kelpie: &str) -> String {
-    json!({ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook --review") }] }] } }).to_string()
+    json!({ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook --review", crate::sh::quote(kelpie)) }] }] } }).to_string()
 }
 
 // The rules skill's own file, where Claude Code finds it: kelpie's skills, another plugin's, or the repo's or the user's .claude/skills.
 pub fn skill_file(name: &str, worktree: &Path, claude_home: &Path, kelpie: &Path) -> Option<PathBuf> {
+    if !config::skill_name(name) {
+        return None;
+    }
     let found = |root: &Path, skill: &str| Some(root.join("skills").join(skill).join("SKILL.md")).filter(|file| file.is_file());
     match name.split_once(':') {
         Some(("kelpie", skill)) => found(kelpie, skill),
@@ -695,10 +696,10 @@ mod tests {
     }
 
     #[test]
-    fn the_first_verdict_line_in_the_answer_decides_and_its_markup_is_stripped() {
-        let answer = "Prose first.\n`verdict: changes`\n- a.rs:1 — one\nMore prose, then\nverdict: ok\n";
+    fn the_last_verdict_line_in_the_answer_decides_and_its_markup_is_stripped() {
+        let answer = "The format is:\nverdict: ok\nNow the review.\n`verdict: changes`\n- a.rs:1 — one\n";
         let recorded = record(answer, "abc").unwrap();
-        assert!(recorded.starts_with("verdict: changes\nreviewed: abc\n"), "the first verdict line wins, so a later contradiction cannot flip it: {recorded}");
+        assert!(recorded.starts_with("verdict: changes\nreviewed: abc\n"), "the verdict is the answer's last, so the format quoted before it decides nothing: {recorded}");
         assert_eq!(parse_verdict(&recorded).unwrap().findings, 1);
         assert_eq!(record("  **`verdict: ok`**  \n", "abc").unwrap(), "verdict: ok\nreviewed: abc\n\n\n");
         assert_eq!(record("verdict:ok", "abc"), None, "the line is exact");
@@ -743,7 +744,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: a plugin-qualified rules skill name with .. in it reads a SKILL.md outside the plugin's skills folder and hands its folder to the reviewer"]
     fn a_skill_name_never_leaves_its_plugins_skills_folder() {
         let root = std::env::temp_dir().join(format!("kelpie-skill-escape-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);

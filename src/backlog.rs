@@ -146,7 +146,7 @@ pub fn save() -> Result<String> {
         .filter(|item| entry(item).is_some()).cloned().collect();
     let count = entries.len();
     let path = file()?;
-    fs::write(&path, json!({ "updated": now(), "entries": entries }).to_string()).map_err(|error| error.to_string())?;
+    crate::state::write(&path, json!({ "updated": now(), "entries": entries }).to_string())?;
     Ok(format!("Saved {count} backlog entries to {}.", path.display()))
 }
 

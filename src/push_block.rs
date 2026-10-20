@@ -24,7 +24,7 @@ fn tokens_dir(state: &Path) -> PathBuf {
 }
 
 fn quoted(text: &str) -> String {
-    format!("'{}'", text.replace('\'', "'\\''"))
+    crate::sh::quote(text)
 }
 
 // One push's proof that kelpie runs it: the hook finds the file only while that push runs, and the value is never written where a task reads it.
@@ -38,10 +38,8 @@ impl Token {
         let mut bytes = [0u8; 16];
         fs::File::open("/dev/urandom").and_then(|mut random| random.read_exact(&mut bytes)).map_err(|error| error.to_string())?;
         let value: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-        let dir = tokens_dir(state);
-        fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
-        let file = dir.join(&value);
-        fs::write(&file, "").map_err(|error| format!("{}: {error}", file.display()))?;
+        let file = tokens_dir(state).join(&value);
+        crate::state::write(&file, "")?;
         Ok(Token { file, value })
     }
 }
@@ -55,7 +53,7 @@ impl Drop for Token {
 // Every hook the repo has runs as before; pre-push first asks for the token of a push kelpie runs.
 pub fn hook_script(original: &Path, state: &Path, main: &Path) -> String {
     format!(
-        "#!/bin/sh\nhook=$(basename \"$0\")\nrefuse() {{\n  echo {refusal} >&2\n  printf {for_a_pr} {main} \"$(git branch --show-current 2>/dev/null)\" >&2\n  exit 1\n}}\nif [ \"$hook\" = pre-push ]; then\n  token=\"${{{TOKEN_VAR}:-}}\"\n  case \"$token\" in\n    ''|*[!0-9a-f]*) refuse ;;\n  esac\n  if [ ${{#token}} -ne 32 ] || [ ! -f {tokens}/\"$token\" ]; then\n    refuse\n  fi\nfi\nif [ -x {original}/\"$hook\" ]; then\n  exec {original}/\"$hook\" \"$@\"\nfi\nexit 0\n",
+        "#!/bin/sh\nhook=$(basename \"$0\")\nrefuse() {{\n  echo {refusal} >&2\n  printf {for_a_pr} {main} \"$(git branch --show-current 2>/dev/null)\" >&2\n  exit 1\n}}\nif [ \"$hook\" = pre-push ]; then\n  token=\"${{{TOKEN_VAR}:-}}\"\n  case \"$token\" in\n    ''|*[!0123456789abcdef]*) refuse ;;\n  esac\n  if [ ${{#token}} -ne 32 ] || [ ! -f {tokens}/\"$token\" ]; then\n    refuse\n  fi\nfi\nif [ -x {original}/\"$hook\" ]; then\n  exec {original}/\"$hook\" \"$@\"\nfi\nexit 0\n",
         refusal = quoted(REFUSAL), for_a_pr = quoted(FOR_A_PR), main = quoted(&main.to_string_lossy()),
         tokens = quoted(&tokens_dir(state).to_string_lossy()), original = quoted(&original.to_string_lossy()),
     )
@@ -330,6 +328,11 @@ mod tests {
         assert_ne!(other.value, token.value);
         drop(token);
         assert!(!push(&other.value[..0]) && push(&other.value));
+        let upper = other.value.to_uppercase();
+        if upper != other.value {
+            let refused = std::process::Command::new("sh").arg(&file).current_dir(&main).env(TOKEN_VAR, &upper).env("LC_ALL", "en_US.UTF-8").output().unwrap();
+            assert!(!refused.status.success(), "an upper-case spelling never passes, in any locale or on a case-insensitive disk");
+        }
         fs::remove_dir_all(base).unwrap();
     }
 

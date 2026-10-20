@@ -39,9 +39,7 @@ pub fn from_status_input(input: &Value, seen_at: u64) -> Option<Usage> {
 // Written whole and renamed into place, so the board never reads half a file.
 pub fn save_in(state: &Path, usage: &Usage) -> Result<()> {
     let record = json!({ "five_hour": stored(&usage.session), "seven_day": stored(&usage.week), "seen_at": usage.seen_at });
-    let fresh = state.join(format!("usage.json.{}", std::process::id()));
-    fs::write(&fresh, record.to_string()).map_err(|error| error.to_string())?;
-    fs::rename(&fresh, file_in(state)).map_err(|error| error.to_string())
+    crate::state::write(&file_in(state), record.to_string())
 }
 
 // A window whose reset has passed says nothing about now, so it is left out.

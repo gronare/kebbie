@@ -32,8 +32,7 @@ fn switch(file: &Path, on: bool) -> Result<()> {
             _ => Ok(()),
         };
     }
-    fs::create_dir_all(file.parent().ok_or("permit file has no folder")?).map_err(|error| error.to_string())?;
-    fs::write(file, messages::now().to_string()).map_err(|error| error.to_string())
+    crate::state::write(file, messages::now().to_string())
 }
 
 pub fn in_state(state: &Path, address: &str, repo: &str) -> Option<Permit> {
@@ -117,7 +116,7 @@ fn away_file(state: &Path) -> PathBuf {
 }
 
 pub fn away_since_in(state: &Path) -> Option<u64> {
-    fs::read_to_string(away_file(state)).ok().map(|since| since.trim().parse().unwrap_or(0))
+    fs::read_to_string(away_file(state)).ok().and_then(|since| since.trim().parse().ok())
 }
 
 pub fn away_since() -> Option<u64> {
@@ -128,8 +127,12 @@ pub fn away_since() -> Option<u64> {
 pub fn set_away_in(state: &Path, on: bool, now: u64) -> Result<Option<u64>> {
     let since = away_since_in(state);
     match (on, since) {
-        (true, None) => fs::write(away_file(state), now.to_string()).map(|_| Some(now)).map_err(|error| error.to_string()),
+        (true, None) => crate::state::write(&away_file(state), now.to_string()).map(|_| Some(now)),
         (false, Some(since)) => fs::remove_file(away_file(state)).map(|_| Some(since)).map_err(|error| error.to_string()),
+        (false, None) => {
+            let _ = fs::remove_file(away_file(state));
+            Ok(None)
+        }
         _ => Ok(None),
     }
 }
@@ -213,16 +216,23 @@ fn inline_role(words: &[&str]) -> Caller {
     if args.contains("' messages --unread\"") { Caller::Lead } else { Caller::Agent }
 }
 
-// The strictest Claude in the chain decides, so a Claude a task starts with the lead's settings is still the task; no Claude above is the user, since an env variable is no proof either way.
+// The strictest Claude in the chain decides, so a Claude a task starts with the lead's settings is still the task; a chain kelpie cannot read, or one cut loose from any terminal while a kelpie-started Claude is alive, is an agent.
 pub fn caller_in(processes: &[(u32, u32, String)], pid: u32) -> Caller {
     let mut roles = Vec::new();
+    let mut hosted = false;
     let mut current = pid;
+    let mut rooted = false;
     for _ in 0..64 {
         let Some((_, parent, args)) = processes.iter().find(|(id, _, _)| *id == current) else { break };
         if current != pid {
             roles.extend(role_of(args));
+            hosted |= is_session_host(args);
         }
-        if *parent <= 1 || *parent == current {
+        if *parent <= 1 {
+            rooted = true;
+            break;
+        }
+        if *parent == current {
             break;
         }
         current = *parent;
@@ -230,10 +240,29 @@ pub fn caller_in(processes: &[(u32, u32, String)], pid: u32) -> Caller {
     if let Some(task) = roles.iter().find(|role| matches!(role, Caller::Task(_))) {
         return task.clone();
     }
-    if roles.contains(&Caller::Agent) {
+    if roles.contains(&Caller::Agent) || !rooted {
         return Caller::Agent;
     }
-    if roles.contains(&Caller::Lead) { Caller::Lead } else { Caller::User }
+    if roles.contains(&Caller::Lead) {
+        return Caller::Lead;
+    }
+    if !hosted && processes.iter().any(|(_, _, args)| matches!(role_of(args), Some(Caller::Lead | Caller::Task(_)))) {
+        return Caller::Agent;
+    }
+    Caller::User
+}
+
+// A terminal session: an interactive shell (no -c), a login, or a terminal multiplexer, herdr among them since the board runs straight under it; a shell running a script line is not one.
+fn is_session_host(args: &str) -> bool {
+    let words: Vec<&str> = args.split_whitespace().collect();
+    let Some(first) = words.first() else { return false };
+    let login = first.starts_with('-');
+    let program = Path::new(first.trim_start_matches('-')).file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
+    let shell = ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh"].contains(&program.as_str());
+    if shell {
+        return login || !words.iter().skip(1).any(|word| *word == "-c" || (word.starts_with('-') && !word.starts_with("--") && word.contains('c')));
+    }
+    ["herdr", "login", "sshd", "tmux", "screen", "zellij", "mosh-server"].iter().any(|host| program == *host || program.starts_with(&format!("{host}:")))
 }
 
 pub fn processes(table: &str) -> Vec<(u32, u32, String)> {
@@ -245,9 +274,12 @@ pub fn processes(table: &str) -> Vec<(u32, u32, String)> {
     }).collect()
 }
 
+// A ps that fails or answers nothing reads as an agent: no proof of the user is no permission.
 pub fn caller() -> Caller {
-    let table = crate::sh::run("ps", &["-A", "-o", "pid=,ppid=,args="], None).unwrap_or_default();
-    caller_in(&processes(&table), std::process::id())
+    match crate::sh::run("ps", &["-A", "-o", "pid=,ppid=,args="], None) {
+        Ok(table) => caller_in(&processes(&table), std::process::id()),
+        Err(_) => Caller::Agent,
+    }
 }
 
 pub fn user_only(what: &str) -> Result<()> {
@@ -348,8 +380,9 @@ mod tests {
         assert_eq!(caller_in(&table("/bin/zsh -l"), 70), Caller::User, "the user's own shell, also when herdr was started from a Claude and its panes inherit CLAUDECODE");
         let disguised = processes(&format!("  1 0 launchd\n 50 1 {task}\n 55 50 claude -p --settings /state/roles/lead.settings.json\n 70 55 kelpie push billing\n"));
         assert_eq!(caller_in(&disguised, 70), Caller::Task("billing@app".to_string()), "a task cannot pass as the lead by starting a Claude with the lead's settings");
-        assert_eq!(caller_in(&processes(" 70 70 /bin/kelpie board\n"), 70), Caller::User, "a loop in the table ends the walk");
-        assert_eq!(caller_in(&processes("garbage\n"), 70), Caller::User);
+        assert_eq!(caller_in(&processes(" 70 70 /bin/kelpie board\n"), 70), Caller::Agent, "a loop in the table ends the walk unread");
+        assert_eq!(caller_in(&processes("garbage\n"), 70), Caller::Agent, "a table without kelpie in it proves no user");
+        assert_eq!(caller_in(&[], 70), Caller::Agent, "an empty ps answer proves no user");
     }
 
     #[test]
@@ -398,16 +431,29 @@ mod tests {
         assert_eq!(caller_in(&chain(agent, task), 30), Caller::Task("billing@app".to_string()));
         assert_eq!(caller_in(&chain("/bin/zsh", lead), 30), Caller::Lead);
         assert_eq!(caller_in(&chain(task, lead), 30), Caller::Task("billing@app".to_string()), "a task under the lead's shell is still the task");
-        assert_eq!(caller_in(&processes(" 30 29 kelpie push\n"), 30), Caller::User, "a kelpie whose own entry is the only one reads as the user");
-        assert_eq!(caller_in(&processes(" 30 30 kelpie push\n"), 30), Caller::User);
+        assert_eq!(caller_in(&processes(" 30 29 kelpie push\n"), 30), Caller::Agent, "a parent missing from the table is ancestry kelpie cannot read");
+        assert_eq!(caller_in(&processes(" 30 30 kelpie push\n"), 30), Caller::Agent);
     }
 
     #[test]
-    #[ignore = "bug: a kelpie a task detaches (nohup, setsid, &) is reparented to launchd and reads as the user, so a task can approve, push and switch away mode"]
     fn a_kelpie_detached_from_the_claude_that_started_it_is_not_the_user() {
         let task = "claude --settings /state/roles/billing@app.settings.json";
         let orphaned = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 70 1 /bin/kelpie approve billing\n"));
         assert_ne!(caller_in(&orphaned, 70), Caller::User, "with a task's Claude alive on the machine, a parentless kelpie must not pass as the user");
+        let through_sh = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 60 1 /bin/zsh -c kelpie approve billing\n 70 60 /bin/kelpie approve billing\n"));
+        assert_eq!(caller_in(&through_sh, 70), Caller::Agent, "a detached shell running a command line is no terminal");
+        let bundled = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 60 1 /bin/zsh -lc kelpie\n 70 60 /bin/kelpie approve billing\n"));
+        assert_eq!(caller_in(&bundled, 70), Caller::Agent, "-lc is still a command line");
+        let lead = "claude --settings /state/roles/lead.settings.json";
+        let alone = processes(&format!("  1 0 /sbin/launchd\n 50 1 {lead}\n 70 1 /bin/kelpie away on\n"));
+        assert_eq!(caller_in(&alone, 70), Caller::Agent, "the lead alive is enough");
+        assert_eq!(caller_in(&processes("  1 0 /sbin/launchd\n 70 1 /bin/kelpie away on\n"), 70), Caller::User, "with no kelpie Claude alive there is no agent to suspect");
+        for host in ["-zsh", "/bin/zsh -l", "/bin/bash", "login -pf ada", "tmux: server", "/usr/sbin/sshd: ada@ttys001"] {
+            let terminal = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 40 1 /Applications/Ghostty.app/Contents/MacOS/ghostty\n 60 40 {host}\n 70 60 /bin/kelpie approve billing\n"));
+            assert_eq!(caller_in(&terminal, 70), Caller::User, "the user's terminal under {host} stays the user while tasks run");
+        }
+        let board = processes(&format!("  1 0 /sbin/launchd\n 40 1 /usr/local/bin/herdr server\n 50 40 {task}\n 70 40 /plugin/target/release/kelpie board --overlay\n"));
+        assert_eq!(caller_in(&board, 70), Caller::User, "the board herdr opens as a plugin pane is the user's");
     }
 
     #[test]
@@ -434,7 +480,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: an unreadable away file reads as away since the epoch, so the return brief lists every push and call ever logged"]
     fn an_away_file_that_holds_no_time_is_not_away_mode() {
         let state = std::env::temp_dir().join(format!("kelpie-away-garbage-{}", std::process::id()));
         let _ = fs::remove_dir_all(&state);

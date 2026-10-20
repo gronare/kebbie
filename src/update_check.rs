@@ -212,7 +212,7 @@ pub fn read_cache(state: &Path) -> Option<Cache> {
 
 fn write_cache(state: &Path, checked_at: u64, components: &[Component]) {
     let value = json!({ "checked_at": checked_at, "components": components.iter().map(Component::to_json).collect::<Vec<_>>() });
-    let _ = std::fs::write(cache_file(state), value.to_string());
+    let _ = crate::state::write(&cache_file(state), value.to_string());
 }
 
 pub fn forget(state: &Path) {

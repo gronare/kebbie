@@ -65,14 +65,18 @@ fn strings(table: &Table, field: &str) -> Result<Vec<String>> {
 fn bumps(table: &Table) -> Result<Vec<Bump>> {
     let Some(value) = table.get("bump") else { return Ok(Vec::new()) };
     let items = value.as_array().ok_or("bump must be a list")?;
-    items.iter().map(|item| match item {
+    let bumps: Vec<Bump> = items.iter().map(|item| match item {
         Value::String(file) => Ok(Bump { file: file.clone(), after: None }),
         Value::Table(entry) => Ok(Bump {
             file: string(entry, "file")?.ok_or("a bump entry needs a file")?,
             after: string(entry, "after")?,
         }),
         _ => Err("bump entries are files or { file, after }".to_string()),
-    }).collect()
+    }).collect::<Result<_>>()?;
+    match bumps.iter().find(|bump| !crate::config::inside(&bump.file)) {
+        Some(bump) => Err(format!("bump file \"{}\" must be a path inside the repo, without .. or a leading /", bump.file)),
+        None => Ok(bumps),
+    }
 }
 
 fn slug(text: &str) -> String {
@@ -563,7 +567,6 @@ task = "Bump {plugin}'s pin to {version}; commit."
     }
 
     #[test]
-    #[ignore = "bug: a bump file with .. in its path is read and written outside the repo the action belongs to"]
     fn a_bump_file_stays_inside_the_repo() {
         let repo = scratch("escape");
         std::fs::write(repo.parent().unwrap().join("kelpie-escape-outside.toml"), "version = \"0.5.0\"\n").unwrap();

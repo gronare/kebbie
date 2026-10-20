@@ -205,13 +205,31 @@ pub fn checkout_named(name: &str) -> Option<PathBuf> {
     roots().iter().flat_map(|root| checkouts_under(root)).find(|path| name_of(path) == name)
 }
 
+// A repo is named by its folder, so the clone lands next to your other checkouts and never outside them.
+fn folder_name(name: &str) -> Result<&str> {
+    let plain = !name.is_empty() && !name.starts_with(['.', '-']) && !name.contains(['/', '\\']) && !name.chars().any(char::is_control);
+    if plain { Ok(name) } else { Err(format!("--repo \"{name}\" is not a repo's folder name: name the checkout's folder, as in --repo api")) }
+}
+
 pub fn locate(name: &str) -> Result<PathBuf> {
+    let name = folder_name(name)?;
     checkout_named(name).map_or_else(|| clone(name, &roots()), Ok)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_repo_is_named_by_one_folder_name_and_never_a_path() {
+        for good in ["api", "notes-vault-mcp", "app.web", "x_y"] {
+            assert_eq!(folder_name(good), Ok(good));
+        }
+        for bad in ["", "..", "../x", "a/b", "/etc", ".hidden", "-x", "a\\b", "a\nb"] {
+            assert!(folder_name(bad).is_err(), "{bad:?}");
+            assert!(locate(bad).unwrap_err().contains("is not a repo's folder name"), "{bad:?}: refused before anything is cloned");
+        }
+    }
 
     #[test]
     fn the_port_is_read_from_env_lines_in_their_usual_shapes() {

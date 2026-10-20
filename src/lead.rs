@@ -32,20 +32,20 @@ pub fn state_location() -> Result<PathBuf> {
 
 pub fn state_dir() -> Result<PathBuf> {
     let dir = state_location()?;
-    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    crate::state::close_up(&dir)?;
     Ok(dir)
 }
 
 pub fn roles_dir() -> Result<PathBuf> {
     let dir = state_dir()?.join("roles");
-    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    crate::state::private_dir(&dir)?;
     Ok(dir)
 }
 
 // herdr refuses a start line longer than the terminal's line limit, so Claude's settings go in as a file.
 pub fn write_settings(dir: &Path, name: &str, settings: &str) -> Result<PathBuf> {
     let file = dir.join(format!("{name}.settings.json"));
-    fs::write(&file, settings).map_err(|error| format!("{}: {error}", file.display()))?;
+    crate::state::write(&file, settings)?;
     Ok(file)
 }
 
@@ -96,7 +96,7 @@ fn go() -> Result<String> {
         }
         Some(lead) => {
             if let Some(focused) = focused {
-                fs::write(&previous_file, focused).map_err(|error| error.to_string())?;
+                crate::state::write(&previous_file, focused)?;
             }
             repair(&lead)?;
             herdr::focus_workspace(&lead)?;
@@ -104,7 +104,7 @@ fn go() -> Result<String> {
         }
         None => {
             if let Some(focused) = focused {
-                fs::write(&previous_file, focused).map_err(|error| error.to_string())?;
+                crate::state::write(&previous_file, focused)?;
             }
             create()
         }
@@ -115,7 +115,7 @@ fn go() -> Result<String> {
 fn settings(kelpie: &str) -> String {
     let allow = ["peers", "tell", "answered", "messages", "status", "areas", "approve", "review", "land", "push", "decide", "defer", "notify"].map(|command| format!("Bash({kelpie} {command}:*)"));
     json!({
-        "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' messages --unread") }] }] },
+        "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kelpie)) }] }] },
         "permissions": { "allow": allow },
     }).to_string()
 }
@@ -162,7 +162,7 @@ fn role_file() -> Result<PathBuf> {
     let template = fs::read_to_string(install_root()?.join("roles/lead.md")).map_err(|error| format!("roles/lead.md: {error}"))?;
     let role = role_text(&template, &config::sources()?, crate::vault_cli::detect().is_some());
     let file = roles_dir()?.join("lead.md");
-    fs::write(&file, role).map_err(|error| error.to_string())?;
+    crate::state::write(&file, role)?;
     Ok(file)
 }
 
@@ -187,7 +187,7 @@ fn start_chat(pane: &str, session: Session) -> Result<()> {
     let settings = write_settings(&roles_dir()?, LEAD_LABEL, &settings(&peers::kelpie_command()?))?;
     let args = chat_args(&role, &settings, &session);
     tasks::start_claude("lead", pane, &args.iter().map(String::as_str).collect::<Vec<_>>(), true)?;
-    fs::write(session_file()?, session_id(&session)).map_err(|error| error.to_string())
+    crate::state::write(&session_file()?, session_id(&session))
 }
 
 fn new_chat(pane: &str) -> Result<()> {
@@ -271,7 +271,7 @@ fn repair(lead: &str) -> Result<()> {
     let places = places(lead)?;
     let board = places.board.ok_or("The lead Space has lost its board pane; close the Space and open the lead again")?;
     if !runs_kelpie(&board, "board") && herdr::foreground(&board)?.is_none() {
-        herdr::run_in_pane(&board, &format!("'{executable}' board"))?;
+        herdr::run_in_pane(&board, &format!("{} board", crate::sh::quote(&executable)))?;
     }
     close_messages(places.messages.as_deref())?;
     match places.chat {
@@ -294,7 +294,7 @@ fn create() -> Result<String> {
     let dir = lead_dir()?;
     let space = herdr::create_workspace(&dir, LEAD_LABEL)?;
     let board = space.root_pane_id.ok_or("herdr created the lead Space without a pane")?;
-    herdr::run_in_pane(&board, &format!("'{}' board", executable()?.display()))?;
+    herdr::run_in_pane(&board, &format!("{} board", crate::sh::quote(&executable()?.to_string_lossy())))?;
     let chat = herdr::split_right(&board, &dir, "0.68")?;
     let started = new_chat(&chat);
     herdr::focus_workspace(&space.workspace_id)?;
@@ -327,7 +327,7 @@ pub fn focus_toggle() -> Result<()> {
     let in_lead = focused.as_deref() == Some(lead.as_str());
     if !in_lead {
         if let Some(focused) = focused {
-            fs::write(state_dir()?.join("lead-previous"), focused).map_err(|error| error.to_string())?;
+            crate::state::write(&state_dir()?.join("lead-previous"), focused)?;
         }
         herdr::focus_workspace(&lead)?;
     }
@@ -490,7 +490,7 @@ mod tests {
     fn every_start_of_the_leads_claude_records_a_session_id() {
         let source = include_str!("lead.rs");
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
-        assert!(body("start_chat").contains("fs::write(session_file()?"));
+        assert!(body("start_chat").contains("crate::state::write(&session_file()?"));
         for caller in ["repair", "create"] {
             assert!(body(caller).contains("new_chat(") && !body(caller).contains("start_chat("), "{caller}");
         }
@@ -517,7 +517,9 @@ mod tests {
         assert_eq!(fs::read_to_string(&file).unwrap(), "{}");
         write_settings(&dir, "billing@app.review", "{\"a\":1}").unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "{\"a\":1}", "a rewrite replaces, never appends");
-        assert!(write_settings(&dir.join("missing"), "x", "{}").unwrap_err().contains("missing"));
+        use std::os::unix::fs::PermissionsExt;
+        let made = write_settings(&dir.join("missing"), "x", "{}").unwrap();
+        assert_eq!(fs::metadata(&made).unwrap().permissions().mode() & 0o777, 0o600, "settings carry the role's hooks and permissions, for the user only");
         fs::remove_dir_all(dir).unwrap();
     }
 

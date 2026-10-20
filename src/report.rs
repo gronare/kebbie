@@ -85,8 +85,7 @@ pub fn read_card(file: &Path) -> Result<String> {
 
 pub fn save_card(state: &Path, address: &str, sha: &str, text: &str) -> Result<()> {
     let file = card_file(state, address);
-    fs::create_dir_all(file.parent().unwrap_or(state)).map_err(|error| error.to_string())?;
-    fs::write(file, format!("card: {sha}\n\n{text}\n")).map_err(|error| error.to_string())
+    crate::state::write(&file, format!("card: {sha}\n\n{text}\n"))
 }
 
 // An untracked card left in the worktree would count as an uncommitted change and stop the push, so kelpie keeps the card and removes the file.
@@ -200,7 +199,7 @@ pub fn hook(input: &str) -> String {
     let Ok(turn) = turn_file(&me) else { return String::new() };
     match input["hook_event_name"].as_str() {
         Some("UserPromptSubmit") => {
-            let _ = fs::write(turn, messages::now().to_string());
+            let _ = crate::state::write(&turn, messages::now().to_string());
             String::new()
         }
         Some("Stop") => {

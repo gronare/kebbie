@@ -69,11 +69,14 @@ pub fn record(id: &str, at: u64, from: &str, asked: &Asked, plan: Option<&str>, 
 // The task may change or delete its plan file; the user reads the plan as it was asked. kelpie's own plans/ file is moved rather than copied, so it is stored once.
 pub fn keep_plan(source: &Path, state: &Path, me: &str, at: u64) -> Result<PathBuf> {
     let dir = state.join("plans");
-    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    crate::state::private_dir(&dir)?;
     let kept = dir.join(format!("{me}-{at}.md"));
     let own = source.parent().and_then(|parent| parent.canonicalize().ok()) == dir.canonicalize().ok();
-    let stored = if own { fs::rename(source, &kept) } else { fs::copy(source, &kept).map(|_| ()) };
-    stored.map_err(|error| format!("{}: {error}", source.display()))?;
+    if own {
+        fs::rename(source, &kept).map_err(|error| format!("{}: {error}", source.display()))?;
+    } else {
+        crate::state::write(&kept, fs::read(source).map_err(|error| format!("{}: {error}", source.display()))?)?;
+    }
     Ok(kept)
 }
 
@@ -248,9 +251,23 @@ fn of_task(question: &Message, to: &str) -> bool {
 
 // For a question the user settled elsewhere (in the task's Space, or by dropping it), so it leaves the board.
 pub fn answered(to: &str) -> Result<String> {
+    answered_as(&crate::permit::caller(), to)
+}
+
+// The user and the lead settle any question; a task only its own, so no session hides another's question from the user.
+fn answered_as(caller: &crate::permit::Caller, to: &str) -> Result<String> {
+    use crate::permit::Caller;
+    let own = match caller {
+        Caller::User | Caller::Lead => None,
+        Caller::Task(address) => Some(address.as_str()),
+        Caller::Agent => return Err(format!("marking a question answered is the user's or the lead's; {} cannot", crate::permit::describe(caller))),
+    };
     let _lock = Lock::take(true)?;
     let messages = messages::load();
     let settled: Vec<&Message> = open_now(&messages).into_iter().filter(|question| of_task(question, to)).collect();
+    if let Some(own) = own && settled.iter().any(|question| question.from != own) {
+        return Err(format!("{own} marks only its own question answered; the user or the lead settles the one from {to}"));
+    }
     if settled.is_empty() {
         return Err(format!("No question from \"{to}\" waits for the user; kelpie status --json lists each task's question"));
     }

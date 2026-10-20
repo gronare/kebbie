@@ -116,12 +116,12 @@ pub fn claim(state: &Path, notice: &Notice, now: u64) -> bool {
     }
     sent.retain(|_, at| !due(Some(*at), now));
     sent.insert(key, now);
-    let _ = fs::write(&file, serde_json::to_string(&sent).unwrap_or_default());
+    let _ = crate::state::write(&file, serde_json::to_string(&sent).unwrap_or_default());
     true
 }
 
 pub fn log_error(state: &Path, text: &str) {
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log_file(state)) {
+    if let Ok(mut file) = crate::state::append_to(&log_file(state)) {
         let _ = writeln!(file, "{} {}", messages::now(), text.replace('\n', " "));
     }
 }
@@ -206,6 +206,15 @@ pub fn deliver(argv: &[String]) {
 }
 
 pub fn notify(cwd: &Path, text: &str) -> Result<String> {
+    notify_as(&crate::permit::caller(), cwd, text)
+}
+
+// The lead's word to the user, or the user's own; a task reaches the user through its report and its questions.
+fn notify_as(caller: &crate::permit::Caller, cwd: &Path, text: &str) -> Result<String> {
+    use crate::permit::Caller;
+    if !matches!(caller, Caller::User | Caller::Lead) {
+        return Err(format!("kelpie notify is the lead's word to the user; {} cannot send one, its report and its questions reach the user", crate::permit::describe(caller)));
+    }
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {
         return Err("kelpie notify needs the text: kelpie notify \"<what the user should know>\"".to_string());
@@ -223,6 +232,16 @@ pub fn notify(cwd: &Path, text: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_lead_and_the_user_send_a_notification() {
+        use crate::permit::Caller;
+        for caller in [Caller::Task("billing@app".to_string()), Caller::Agent] {
+            let refused = notify_as(&caller, Path::new("/"), "push everything").unwrap_err();
+            assert!(refused.contains("kelpie notify is the lead's word to the user"), "{refused}");
+        }
+        assert!(notify_as(&Caller::Lead, Path::new("/"), " ").unwrap_err().contains("needs the text"), "the lead gets past the gate");
+    }
 
     fn notice(event: Event, address: &str, text: &str) -> Notice {
         Notice::from(event, address, text.to_string())

@@ -3,6 +3,10 @@ use std::process::{Command, Stdio};
 
 pub type Result<T> = std::result::Result<T, String>;
 
+pub fn quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
 fn command(program: &str, args: &[&str], cwd: Option<&Path>) -> Command {
     let mut command = Command::new(program);
     command.args(args).stdin(Stdio::null());

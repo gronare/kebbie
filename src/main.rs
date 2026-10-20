@@ -19,7 +19,9 @@ mod repo;
 mod report;
 mod review;
 mod sh;
+mod state;
 mod setup;
+mod shell_write;
 mod status;
 mod task_note;
 mod tasks;
@@ -286,7 +288,7 @@ fn run(arguments: &Arguments) -> Result<String> {
                 return Ok(review::guard(&input));
             }
             if name == Some("gate") {
-                return Ok(arguments.positional(2).map(task_note::hook).unwrap_or_default());
+                return Ok(arguments.positional(2).map(|address| task_note::hook(address, &input)).unwrap_or_default());
             }
             let _ = messages::flush();
             Ok(report::hook(&input))
