@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::config::AlsoNoticed;
 use crate::herdr;
 use crate::lead::install_root;
 use crate::repo::{main_checkout, name_of, setup_note};
@@ -196,6 +197,37 @@ pub fn vault_section(note: Option<&str>, kelpie: &str) -> String {
     )
 }
 
+// The {noticed} section of roles/task.md; vault is whether the task's Claude has the vault plugin's tools.
+pub fn noticed_section(choice: AlsoNoticed, vault: bool, kelpie: &str) -> String {
+    let intro = "As you work you will notice things outside this task: a bug nearby, a stale doc, a refactor worth doing.";
+    let file = if vault {
+        "file it in the vault's backlog with the vault's `backlog_add` tool: its area, one line, a priority and this task as the source".to_string()
+    } else {
+        format!("file it with `{kelpie} backlog add --priority <priority> \"<Title> — <summary> (<area>)\"`")
+    };
+    let failed = "`not filed` when filing fails, so the lead files it";
+    match choice {
+        AlsoNoticed::Backlog => format!(
+            "{intro} Keep your commits to this task's change, and {file}, the moment you notice it. \
+             List each under **Also noticed** on your sign-off card, one line each: what it is and where you filed it, or {failed}. \
+             This is done when everything you noticed is filed and listed."
+        ),
+        AlsoNoticed::Fix => format!(
+            "{intro} When one is small and sits in the code you are changing anyway (a few lines, nothing for the user to decide), fix it in this session as a commit of its own, apart from the task's commits. \
+             Anything bigger, {file}. \
+             List each under **Also noticed** on your sign-off card, one line each: what it is, and its commit or where you filed it, or {failed}. \
+             This is done when everything you noticed is fixed in its own commit or filed, and listed."
+        ),
+        AlsoNoticed::Ask => format!(
+            "{intro} Put each to the user before you change anything for it, one question each: \
+             `{kelpie} ask --option \"fix: fix it in this task, as a commit of its own\" --option \"file: file it for later\" --option \"leave: leave it as it is\" --recommend <n> \"<what you noticed, and where>\"`. \
+             Until the answer comes, your commits hold this task's change alone. On fix, commit it apart from the task's commits; on file, {file}. \
+             List each under **Also noticed** on your sign-off card, one line each: what it is and what the user chose, or {failed}. \
+             This is done when everything you noticed has the user's answer, is handled by it, and is listed."
+        ),
+    }
+}
+
 // roles/task.md filled in for this task, written to the state dir for --append-system-prompt-file.
 pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     let template = fs::read_to_string(install_root()?.join("roles/task.md")).map_err(|error| format!("roles/task.md: {error}"))?;
@@ -208,7 +240,9 @@ pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     let plans = crate::lead::state_dir()?.join("plans").join(format!("{me}.md"));
     let plan = plan_step(&crate::config::sources().unwrap_or_default(), place.note, &kelpie, task, &plans);
     let vault = vault_section(place.note, &kelpie);
-    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("kelpie", kelpie), ("peers", peers), ("plan", plan), ("vault", vault)];
+    let also_noticed = crate::config::resolve(Some(place.repo))?.settings.also_noticed.value;
+    let noticed = noticed_section(also_noticed, crate::vault_cli::detect().is_some(), &kelpie);
+    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("kelpie", kelpie), ("peers", peers), ("plan", plan), ("vault", vault)];
     values.extend(worktree_values(place)?);
     let pairs: Vec<(&str, &str)> = values.iter().map(|(name, value)| (*name, value.as_str())).collect();
     let file = crate::lead::roles_dir()?.join(format!("{me}.md"));
@@ -358,6 +392,31 @@ mod tests {
             assert!(on.contains(needed), "{needed}: {on}");
         }
         assert!(on.find("## Your note in the vault").unwrap() < on.find("## Probes").unwrap());
+    }
+
+    #[test]
+    fn what_a_task_does_with_what_it_notices_follows_the_setting_and_the_vault() {
+        let role = |choice, vault| fill(include_str!("../roles/task.md"), &[("noticed", &noticed_section(choice, vault, "/bin/kelpie"))]);
+        for vault in [true, false] {
+            for choice in AlsoNoticed::ALL {
+                let role = role(choice, vault);
+                assert!(role.contains("## What you notice outside your task\n\nAs you work you will notice things outside this task") && !role.contains("{noticed}"), "{role}");
+                assert!(role.contains("under **Also noticed** on your sign-off card") && role.contains("the **Also noticed** list when you noticed anything outside the task"), "{role}");
+                assert!(role.contains("`not filed` when filing fails, so the lead files it"), "{role}");
+                let filed_in_vault = role.contains("the vault's `backlog_add` tool");
+                let filed_locally = role.contains("`/bin/kelpie backlog add --priority <priority>");
+                assert_eq!((filed_in_vault, filed_locally), (vault, !vault), "{choice:?} with the vault {vault}: {role}");
+            }
+        }
+        let backlog = role(AlsoNoticed::Backlog, true);
+        assert!(backlog.contains("Keep your commits to this task's change") && backlog.contains("done when everything you noticed is filed and listed") && !backlog.contains("ask --option \"fix"), "{backlog}");
+        let fix = role(AlsoNoticed::Fix, false);
+        assert!(fix.contains("fix it in this session as a commit of its own, apart from the task's commits") && fix.contains("Anything bigger, file it with"), "{fix}");
+        let ask = role(AlsoNoticed::Ask, false);
+        assert!(ask.contains("/bin/kelpie ask --option \"fix: fix it in this task, as a commit of its own\" --option \"file: file it for later\" --option \"leave: leave it as it is\" --recommend <n>"), "{ask}");
+        assert!(ask.contains("before you change anything for it") && ask.contains("has the user's answer"), "{ask}");
+        let placed = role(AlsoNoticed::Backlog, false);
+        assert!(placed.find("## Questions").unwrap() < placed.find("## What you notice").unwrap() && placed.find("## What you notice").unwrap() < placed.find("## Reports").unwrap());
     }
 
     #[test]

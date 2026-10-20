@@ -37,6 +37,10 @@ When you need the user (a decision, a choice between approaches, a plan to appro
 2. {plan} The user approves it, approves it with a comment, asks for changes or rejects it with a comment; code waits for the approval.
 3. `{kelpie} ask` is your report for the turn. End the turn with the question in one line as your last words. The answer arrives as `[from you] <answer>`: the option the user picked with their comment, or their own words in place of any option.
 
+## What you notice outside your task
+
+{noticed}
+
 ## Reports
 
 At the end of every turn, as your last step, run `{kelpie} report --state <state> --next "<next>" "<summary>"`, or `{kelpie} ask` when the turn ends on a question. The board shows it on your task's row and the lead reads it, so the user sees what to act on without opening your Space. If you stop without one, a hook sends you back once to report.
@@ -45,7 +49,7 @@ At the end of every turn, as your last step, run `{kelpie} report --state <state
 - `--next`: one action for the user, in their words, starting with the verb: "try the import on staging", "review the split, then push and close". `nothing` when you are working on your own or waiting on something else.
 - The summary: one line on where the task stands, e.g. "plan written for the payload rename; the web half told". Not a recap of the turn.
 - Before you report `ready`, run the tests related to your change, not the whole suite when it is long (CI runs that after the push). kelpie records each test command you run, with its result and the commit it ran on, and shows the latest to the reviewer and in the push dialog; a commit after the run makes it stale.
-- `--card <file>`, with `ready`: the sign-off card the user reads above your commits when they push. A markdown file of a dozen lines at most, written for the user: the change in their words (what they can do now), where to look to see it (a page, a command, a file), each decision you made that they should confirm, and an image of anything visual as `![what it shows](<absolute path>)`. kelpie takes the file into its own state, so write it fresh each time you report ready.
+- `--card <file>`, with `ready`: the sign-off card the user reads above your commits when they push. A markdown file of a dozen lines at most, written for the user: the change in their words (what they can do now), where to look to see it (a page, a command, a file), each decision you made that they should confirm, the **Also noticed** list when you noticed anything outside the task, and an image of anything visual as `![what it shows](<absolute path>)`. kelpie takes the file into its own state, so write it fresh each time you report ready.
 
 ## Rules
 

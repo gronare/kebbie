@@ -48,6 +48,26 @@ impl Channel {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum AlsoNoticed {
+    #[default]
+    Backlog,
+    Fix,
+    Ask,
+}
+
+impl AlsoNoticed {
+    pub const ALL: [AlsoNoticed; 3] = [AlsoNoticed::Backlog, AlsoNoticed::Fix, AlsoNoticed::Ask];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            AlsoNoticed::Backlog => "backlog",
+            AlsoNoticed::Fix => "fix",
+            AlsoNoticed::Ask => "ask",
+        }
+    }
+}
+
 pub const DEFAULT_SETUP_SKILL: &str = "kelpie:set-up-worktree";
 pub const DEFAULT_RULES_SKILL: &str = "kelpie:work-rules";
 pub const DEFAULT_DEV_URL: &str = "http://localhost:{port}";
@@ -64,6 +84,7 @@ pub struct Worktree {
     pub dev_url: Option<String>,
     pub rules_skill: Option<String>,
     pub test_commands: Option<Vec<String>>,
+    pub also_noticed: Option<AlsoNoticed>,
     pub review_model: Option<String>,
     pub notify_command: Option<String>,
     pub vault_command: Option<String>,
@@ -124,6 +145,7 @@ pub struct Settings {
     pub dev_url: Setting<Option<String>>,
     pub rules_skill: Setting<String>,
     pub test_commands: Setting<Vec<String>>,
+    pub also_noticed: Setting<AlsoNoticed>,
     pub review_model: Setting<Option<String>>,
     pub notify_command: Setting<Option<String>>,
     pub vault_command: Setting<Option<String>>,
@@ -357,6 +379,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         dev_url: template(worktree, "dev_url", "worktree.dev_url")?,
         rules_skill: None,
         test_commands: None,
+        also_noticed: None,
         review_model: None,
         notify_command: None,
         vault_command: None,
@@ -368,11 +391,18 @@ fn worktree(table: &Table) -> Result<Worktree> {
 
 fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(task) = subtable(table, "task", "task")? {
-        unknown_keys(task, "task.", &["rules_skill", "test_commands"])?;
+        unknown_keys(task, "task.", &["rules_skill", "test_commands", "also_noticed"])?;
         worktree.rules_skill = skill(task, "rules_skill", "task.rules_skill")?;
         worktree.test_commands = task.get("test_commands").map(test_commands).transpose()?;
+        worktree.also_noticed = also_noticed(task)?;
     }
     Ok(worktree)
+}
+
+fn also_noticed(task: &Table) -> Result<Option<AlsoNoticed>> {
+    let Some(name) = text(task, "also_noticed", "task.also_noticed")? else { return Ok(None) };
+    AlsoNoticed::ALL.into_iter().find(|choice| choice.key() == name).map(Some)
+        .ok_or(format!("task.also_noticed: \"{name}\" is not a choice; use \"backlog\", \"fix\" or \"ask\""))
 }
 
 fn test_commands(value: &Value) -> Result<Vec<String>> {
@@ -474,6 +504,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
             .map(|setting| Setting { value: Some(setting.value).filter(|url| !url.is_empty()), layer: setting.layer }), Some(DEFAULT_DEV_URL.to_string())),
         rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
         test_commands: or_default(pick(repo.test_commands.as_ref(), machine.worktree.test_commands.as_ref()), Vec::new()),
+        also_noticed: or_default(pick(repo.also_noticed.as_ref(), machine.worktree.also_noticed.as_ref()), AlsoNoticed::default()),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
@@ -529,7 +560,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, test_commands, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, test_commands, also_noticed, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -571,6 +602,8 @@ pub fn describe(loaded: &Loaded) -> String {
     let own: Vec<&str> = test_commands.value.iter().map(String::as_str).collect();
     key("task.test_commands", quoted(&own), test_commands.layer,
         &format!("Test commands of this repo that kelpie records when a task's Claude runs them, on top of the built-in {}; matched on the command's start, after any cd … && and VAR=value. kelpie evidence, the board, the push dialog and the reviewer show the runs.", quoted(&crate::evidence::DEFAULT_COMMANDS)));
+    key("task.also_noticed", format!("{:?}", also_noticed.value.key()), also_noticed.layer,
+        "What a task's Claude does with what it notices outside its task (a bug nearby, a stale doc, a refactor): \"backlog\" files it, in the vault's backlog with the vault plugin, else with kelpie backlog add; \"fix\" fixes a small related one in a commit of its own and files the rest; \"ask\" puts each to you with kelpie ask first. Each is listed under Also noticed on the sign-off card, and the reviewer counts an unrelated change under \"backlog\" or \"ask\" as a finding.");
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
         "The model kelpie review's independent reviewer runs on; none leaves it to Claude's default.");
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
@@ -689,6 +722,20 @@ mod tests {
         assert!(parse_repo("[task]\ntest_commands = [\" \"]\n", "app.toml").unwrap_err().contains("must not be empty"));
         let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: own });
         assert!(shown.contains("task.test_commands = [\"bin/test\", \"make check\"]  (repo config)") && shown.contains("\"cargo test\""), "{shown}");
+    }
+
+    #[test]
+    fn also_noticed_files_by_default_and_a_repo_wins_over_the_machine() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).also_noticed, Setting { value: AlsoNoticed::Backlog, layer: Layer::Default });
+        assert_eq!(settings(&Worktree::default(), &machine("[task]\nalso_noticed = \"ask\"\n")).also_noticed, Setting { value: AlsoNoticed::Ask, layer: Layer::Machine });
+        let own = settings(&repo("[task]\nalso_noticed = \"fix\"\n"), &machine("[task]\nalso_noticed = \"ask\"\n"));
+        assert_eq!(own.also_noticed, Setting { value: AlsoNoticed::Fix, layer: Layer::Repo });
+        let refused = parse_repo("[task]\nalso_noticed = \"ignore\"\n", "app.toml").unwrap_err();
+        assert!(refused.contains("task.also_noticed: \"ignore\" is not a choice; use \"backlog\", \"fix\" or \"ask\""), "{refused}");
+        assert!(parse_machine("[task]\nalso_noticed = true\n", "config.toml").unwrap_err().contains("task.also_noticed: must be a string"));
+        assert!(parse_repo("[task]\nnoticed = \"fix\"\n", "app.toml").unwrap_err().contains("known keys here: rules_skill, test_commands, also_noticed"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: own });
+        assert!(shown.contains("task.also_noticed = \"fix\"  (repo config)") && shown.contains("outside its task"), "{shown}");
     }
 
     #[test]

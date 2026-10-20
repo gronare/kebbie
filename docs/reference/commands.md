@@ -136,7 +136,7 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 
 | Command | What it does |
 | --- | --- |
-| `kelpie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. `<state>` is `needs-you`, `ready`, `working` or `blocked`. With `ready`, `--card <file>` is the sign-off card the push window shows. |
+| `kelpie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. `<state>` is `needs-you`, `ready`, `working` or `blocked`. With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task. |
 | `kelpie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Put a question to you: two to four options, one recommended. `--plan <file>` or `--plan vault:<note>` asks you to approve a plan instead. |
 | `kelpie answered <task>` | The task's question was settled elsewhere; it leaves the board. |
 | `kelpie tell <to> <text>` | Message another session: a task (every half of it), `task@repo`, or `lead`. Held while the receiver waits for an answer, and logged. |

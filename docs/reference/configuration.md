@@ -36,6 +36,7 @@ Rules:
 | `worktree.worker_name` | string | `"worker"` | config.toml only | The same for `b`'s tab. |
 | `task.rules_skill` | string | `"kelpie:work-rules"` | either | The skill with the rules for how work is planned, built and committed. A task's Claude follows it, the lead checks a finished task against it, `tidy` reshapes commits by it, and the reviewer reads it. |
 | `task.test_commands` | list of strings | `[]` | either | Test commands that kelpie records when a task's Claude runs them, on top of the built-in ones (`cargo test`, `bin/rails test`, `pytest`, `npm test`, `go test` and others; `kelpie config` lists them). A command counts when it starts with one of these, whole words, after any `cd … &&` and `VAR=value`. See [`kelpie evidence`](commands.md#kelpie-evidence-name---json). |
+| `task.also_noticed` | `"backlog"`, `"fix"` or `"ask"` | `"backlog"` | either | What a task's Claude does with what it notices outside its task, such as a bug nearby, a stale doc or a refactor. `"backlog"` files it: in the vault's backlog with the vault plugin, else with `kelpie backlog add`. `"fix"` fixes a small one beside the code it is changing, in a commit of its own, and files the rest. `"ask"` puts each to you with `kelpie ask` first. Each is listed under Also noticed on the sign-off card, and the reviewer counts a change outside the task as a finding under `"backlog"` and `"ask"`. See [Decide what a task does with what it notices](../how-to/decide-what-a-task-does-with-what-it-notices.md). |
 | `review.model` | string | none | either | The model the reviewer runs on. Unset leaves it to Claude's default. |
 | `notify.command` | string | none | config.toml only | The shell command kelpie runs when something needs you. See [Notify command](#notify-command). Unset sends nothing. |
 | `vault.command` | string | none | config.toml only | The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments. Unset runs the vault plugin's pinned command from its hooks. Used only while the vault plugin is installed and enabled. |
@@ -147,6 +148,7 @@ dev_url = "https://{worktree}.test"
 
 [task]
 rules_skill = "my-rules"
+also_noticed = "backlog"
 
 [review]
 model = "opus"

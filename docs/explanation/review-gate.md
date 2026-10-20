@@ -14,7 +14,7 @@ A task in review shows under Ready to push only with both: the lead's approval a
 
 The task's own Claude has written the change and believes in it. The lead has the whole picture but also a stake in moving work along. A reviewer that starts fresh, with no part in writing the code, reads it the way a colleague would.
 
-So the reviewer is given what a colleague would want and nothing more: the [`kelpie:review`](../../skills/review/SKILL.md) skill as its instructions, the commits against the default branch, the task's prompt and later messages so it knows what was asked, and your rules skill. It runs with none of your own settings, hooks or plugins.
+So the reviewer is given what a colleague would want and nothing more: the [`kelpie:review`](../../skills/review/SKILL.md) skill as its instructions, the commits against the default branch, the task's prompt and later messages so it knows what was asked, your rules skill, and the repo's `task.also_noticed`. That setting draws the task's scope: under `"backlog"` and `"ask"` a change the task did not need is a finding, and under `"fix"` a small fix in a commit of its own is not. It runs with none of your own settings, hooks or plugins.
 
 ## Why read-only
 

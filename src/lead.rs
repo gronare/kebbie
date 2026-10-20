@@ -464,6 +464,14 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_files_what_a_task_noticed_and_could_not_file() {
+        let role = role_text(include_str!("../roles/lead.md"), &[Source::Local], false);
+        for needed in ["- **Also noticed**: a ready task's sign-off card (`cards/<task>@<repo>.md`", "File each line marked `not filed` the way Taking in ideas files an idea", "## Taking in ideas"] {
+            assert!(role.contains(needed), "{needed}");
+        }
+    }
+
+    #[test]
     fn the_lead_gets_copies_of_the_questions_the_user_answers_on_the_board() {
         let role = include_str!("../roles/lead.md");
         for needed in ["answers them on the board", "copy", "kelpie answered <task>", "kelpie decide <task>", "a task or a subagent"] {

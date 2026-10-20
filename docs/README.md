@@ -30,6 +30,7 @@ Repos and worktrees
 - [Set up a repo's worktrees](how-to/set-up-worktrees.md): `bin/setup-worktree` and the setup skill.
 - [Run a task's dev server](how-to/run-dev-servers.md): `w`, `b` and the link on the board.
 - [Use your own commit rules](how-to/use-your-own-commit-rules.md): replace the rules skill.
+- [Decide what a task does with what it notices](how-to/decide-what-a-task-does-with-what-it-notices.md): file it, fix it or ask you.
 - [Add a release action to a repo](how-to/add-a-release-action.md): bump, tag and push from the Areas page.
 - [Share a team setup](how-to/share-a-team-setup.md): repo configs linked in from a team repo.
 
