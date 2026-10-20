@@ -611,6 +611,7 @@ fn row_facts(item: &Item) -> String {
     let Some(git) = &item.git else { return String::new() };
     let mut parts: Vec<String> = absence(item).map(str::to_string).into_iter().collect();
     parts.extend(item.ci_note());
+    parts.extend(item.recover_note());
     if git.ahead > 0 {
         parts.push(plural(git.ahead, "commit"));
     }
@@ -728,10 +729,17 @@ fn spawn_refresher() -> (Receiver<std::result::Result<Snapshot, String>>, Sender
     let (snapshot_tx, snapshot_rx) = mpsc::channel();
     let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
     thread::spawn(move || {
+        let mut recovered: Option<Instant> = None;
         loop {
             if crate::keeper::current_owner() == crate::keeper::Owner::Board {
                 let _ = messages::flush();
                 crate::typing::check();
+                if recovered.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(30)) {
+                    recovered = Some(Instant::now());
+                    if let Ok(state) = crate::lead::state_dir() {
+                        crate::recover::tick(&state);
+                    }
+                }
             }
             let snapshot = status::gather().and_then(|items| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().collect();

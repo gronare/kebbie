@@ -41,6 +41,7 @@ pub fn routines() -> Vec<Routine> {
         Routine { name: "restart", every: 60, run: restart },
         Routine { name: "updates", every: 600, run: updates },
         Routine { name: "ci", every: 30, run: |_| { crate::ci::tick(&crate::lead::state_dir()?); Ok(()) } },
+        Routine { name: "recover", every: 30, run: |_| { crate::recover::tick(&crate::lead::state_dir()?); Ok(()) } },
     ]
 }
 

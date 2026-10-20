@@ -72,6 +72,7 @@ pub struct Item {
     pub report: Option<Message>,
     pub question: Option<Message>,
     pub ci: Option<crate::ci::Watch>,
+    pub recover: Option<crate::recover::Record>,
 }
 
 impl Item {
@@ -130,10 +131,26 @@ impl Item {
         self.ci.as_ref().map(crate::ci::Watch::note)
     }
 
+    fn recovering(&self) -> Option<&crate::recover::Record> {
+        let record = self.recover.as_ref()?;
+        let newer_report = self.report.as_ref().is_some_and(|report| report.at > record.error_at);
+        let working = self.agent.as_ref().is_some_and(|agent| agent.status == "working");
+        (!newer_report && !working).then_some(record)
+    }
+
+    // kelpie resuming the task keeps it under Working; an error it will not retry puts it under Needs you.
+    pub fn recover_group(&self) -> Option<Group> {
+        self.recovering().map(|record| if record.kind == crate::recover::Kind::Stuck { Group::NeedsYou } else { Group::Working })
+    }
+
+    pub fn recover_note(&self) -> Option<String> {
+        self.recovering().map(crate::recover::Record::note)
+    }
+
     // Between turns the task's own report says what it needs; herdr's "done" only says nobody has looked yet.
     pub fn group(&self) -> Group {
         let status = self.agent.as_ref().map(|agent| agent.status.as_str());
-        match (status, self.report_state(), self.ci_group()) {
+        match (status, self.report_state(), self.ci_group().or_else(|| self.recover_group())) {
             (Some("blocked"), _, _) => Group::NeedsYou,
             (Some("working"), _, _) | (_, Some("working"), _) => Group::Working,
             (_, _, Some(group)) => group,
@@ -153,7 +170,7 @@ impl Item {
         }
         match (self.agent.as_ref().map(|agent| agent.status.as_str()), self.report_state()) {
             (Some("blocked"), _) => 0,
-            _ if self.ci_group().is_some() => 1,
+            _ if self.ci_group().is_some() || self.recover_group().is_some() => 1,
             (_, Some("needs-you")) => 1,
             (_, Some("ready")) => 2,
             _ => 3,
@@ -162,7 +179,7 @@ impl Item {
 
     // A turn under way has most likely taken up what the last report asked.
     pub fn next_for_you(&self) -> Option<&str> {
-        if self.agent.as_ref().is_some_and(|agent| agent.status == "working") || self.ci_group().is_some() {
+        if self.agent.as_ref().is_some_and(|agent| agent.status == "working") || self.ci_group().is_some() || self.recover_group().is_some() {
             return None;
         }
         self.report.as_ref()?.next_for_you()
@@ -185,7 +202,7 @@ impl Item {
             let review = self.review_note().map(|note| format!(" · {note}")).unwrap_or_default();
             return format!("{} · rebased, ready to push{review}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.ci_note().into_iter().collect();
+        let mut parts: Vec<String> = self.ci_note().into_iter().chain(self.recover_note()).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -227,6 +244,7 @@ impl Item {
                 Some(json!({ "text": message.text, "options": options, "recommend": question.recommend, "plan": question.plan, "kept_for_user": question.waits, "age": messages::age(message.at) }))
             }),
             "ci": self.ci.as_ref().map(crate::ci::Watch::to_json),
+            "recover": self.recover.as_ref().map(|record| { let mut shown = record.to_json(); shown["note"] = json!(record.note()); shown }),
             "server": self.server,
             "url": self.url,
             "worker": self.worker,
@@ -363,6 +381,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 report: reports.get(&address).cloned(),
                 question: questions.iter().find(|question| question.from == address).map(|question| (*question).clone()),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
+                recover: state.as_deref().and_then(|state| crate::recover::load(state, &address)),
                 name: task,
             });
         }
@@ -391,6 +410,7 @@ pub fn gather() -> Result<Vec<Item>> {
             report: None,
             question: None,
             ci: None,
+            recover: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -414,6 +434,7 @@ pub(crate) mod tests {
             }),
             question: None,
             ci: None,
+            recover: None,
         }
     }
 
@@ -536,6 +557,32 @@ pub(crate) mod tests {
         partial.ci = Some(watched(crate::ci::State::Running, false));
         assert!(partial.group() == Group::Working, "a partial push leaves the task where it is");
         assert!(partial.summary().starts_with("CI running"));
+    }
+
+    fn stopped(kind: crate::recover::Kind, sent: bool) -> crate::recover::Record {
+        crate::recover::Record {
+            address: "billing@web".to_string(), kind, reason: "overload".to_string(), text: "API Error: Repeated 529 Overloaded errors.".to_string(), error_id: "e1".to_string(), error_at: 10,
+            attempts: 1, next_at: Some(4_000_000_000), reset_at: Some(4_000_000_000), sent_for: sent.then(|| "e1".to_string()),
+        }
+    }
+
+    #[test]
+    fn a_task_kelpie_resumes_stays_under_working_and_one_it_will_not_resume_needs_you() {
+        let mut item = task(Some("idle"), Some("needs-you"), 1);
+        item.recover = Some(stopped(crate::recover::Kind::Retrying, false));
+        assert!(item.group() == Group::Working);
+        assert!(item.summary().starts_with("retrying after overload (2/4, next "), "{}", item.summary());
+        assert_eq!(item.next_for_you(), None);
+        item.recover = Some(stopped(crate::recover::Kind::Allowance, false));
+        assert!(item.summary().starts_with("out of allowance until "), "{}", item.summary());
+        item.recover = Some(stopped(crate::recover::Kind::Stuck, false));
+        assert!(item.group() == Group::NeedsYou && item.urgency() == 1);
+        assert!(item.summary().starts_with("stopped by overload: API Error"), "{}", item.summary());
+        item.report.as_mut().unwrap().at = 20;
+        assert!(item.recover_group().is_none() && item.recover_note().is_none(), "a report after the error decides again");
+        let mut busy = task(Some("working"), None, 0);
+        busy.recover = Some(stopped(crate::recover::Kind::Stuck, false));
+        assert!(busy.group() == Group::Working && busy.recover_note().is_none(), "a turn under way is past the error");
     }
 
     #[test]

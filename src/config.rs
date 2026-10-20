@@ -79,6 +79,7 @@ pub struct Machine {
     pub channel: Option<Channel>,
     pub restart: Restart,
     pub keeper: Option<bool>,
+    pub recover: Option<bool>,
     pub worktree: Worktree,
 }
 
@@ -133,6 +134,7 @@ pub struct Settings {
     pub auto_restart: Setting<bool>,
     pub ci_watch: Setting<bool>,
     pub keeper: Setting<bool>,
+    pub recover: Setting<bool>,
 }
 
 pub struct Loaded {
@@ -338,10 +340,10 @@ fn restart(table: &Table) -> Result<Restart> {
     Ok(Restart { idle_minutes, auto })
 }
 
-fn keeper(table: &Table) -> Result<Option<bool>> {
-    let Some(keeper) = subtable(table, "keeper", "keeper")? else { return Ok(None) };
-    unknown_keys(keeper, "keeper.", &["enabled"])?;
-    keeper.get("enabled").map(|value| value.as_bool().ok_or_else(|| "keeper.enabled: must be true or false".to_string())).transpose()
+fn enabled_in(table: &Table, name: &str) -> Result<Option<bool>> {
+    let Some(section) = subtable(table, name, name)? else { return Ok(None) };
+    unknown_keys(section, &format!("{name}."), &["enabled"])?;
+    section.get("enabled").map(|value| value.as_bool().ok_or_else(|| format!("{name}.enabled: must be true or false"))).transpose()
 }
 
 fn worktree(table: &Table) -> Result<Worktree> {
@@ -424,9 +426,9 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "keys", "ci"]).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "keys", "ci"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: keeper(&table).map_err(fail)?, worktree })
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, worktree })
 }
 
 const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
@@ -435,7 +437,7 @@ const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("keys", "[keys]")] {
+    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("keys", "[keys]")] {
         if table.contains_key(key) {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
@@ -482,6 +484,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         auto_restart: or_default(pick(None, machine.restart.auto.as_ref()), true),
         ci_watch: or_default(pick(repo.ci_watch.as_ref(), machine.worktree.ci_watch.as_ref()), true),
         keeper: or_default(pick(None, machine.keeper.as_ref()), true),
+        recover: or_default(pick(None, machine.recover.as_ref()), true),
     }
 }
 
@@ -513,6 +516,10 @@ pub fn keeper_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.keeper.unwrap_or(true))
 }
 
+pub fn recover_enabled() -> Result<bool> {
+    Ok(load_machine(&path())?.recover.unwrap_or(true))
+}
+
 pub fn channel() -> Result<Channel> {
     Ok(load_machine(&path())?.channel.unwrap_or_default())
 }
@@ -522,7 +529,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, test_commands, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, rules_skill, test_commands, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -580,6 +587,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "How long a stale session waits idle and unfocused before it is restarted; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
     key("keeper.enabled", keeper.value.to_string(), keeper.layer,
         "Whether one background kelpie keeper per machine runs the routines (stale-session restarts, the update check, held messages, delivery checks of typed prompts), so they go on with the board closed; herdr's startup, the board and kelpie update start it. false runs them in an open board instead; config.toml only.");
+    key("recover.enabled", recover.value.to_string(), recover.layer,
+        "Whether kelpie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
     lines.push("[keys]  (config.toml only)\n  The board's keys, as name = \"key\" by action: a plain character for an action whose key is one (esc, ctrl+c, ⏎, the arrows and tab stay), and one not taken by another action where both act; moving two at once in the table works. An entry that breaks a rule is ignored, and named below. Help, hints and messages show the key in effect.".to_string());
     lines.extend(board_keys.describe(&key_errors).into_iter().map(|line| format!("  {line}")));
     lines.push(format!("[[actions]]  (repo config only)\n  The Areas page's own actions for the repo, one table each, with the keys {}; docs/reference/configuration.md shows each.", crate::actions::ACTION_KEYS.join(", ")));
@@ -795,8 +804,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, keys, ci");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, keys, ci");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, keys, ci");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, keys, ci");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -874,6 +883,19 @@ mod tests {
         assert!(parse_repo("[keeper]\nenabled = false\n", "app.toml").unwrap_err().contains("keeper: applies to every repo, so it lives in config.toml; set [keeper] enabled in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
         assert!(shown.contains("keeper.enabled = false  (machine config)\n  Whether one background kelpie keeper"), "{shown}");
+    }
+
+    #[test]
+    fn resuming_after_api_errors_is_on_unless_config_toml_turns_it_off() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).recover, Setting { value: true, layer: Layer::Default });
+        let off = settings(&Worktree::default(), &machine("[recover]\nenabled = false\n"));
+        assert_eq!(off.recover, Setting { value: false, layer: Layer::Machine });
+        let error = |text: &str| parse_machine(text, "config.toml").unwrap_err();
+        assert!(error("[recover]\nenabled = 1\n").contains("recover.enabled: must be true or false"));
+        assert!(error("[recover]\nretries = 3\n").contains("recover.retries: unknown key; known keys here: enabled"));
+        assert!(parse_repo("[recover]\nenabled = false\n", "app.toml").unwrap_err().contains("recover: applies to every repo, so it lives in config.toml; set [recover] enabled in"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
+        assert!(shown.contains("recover.enabled = false  (machine config)\n  Whether kelpie resumes a task"), "{shown}");
     }
 
     #[test]

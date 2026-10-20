@@ -1270,6 +1270,7 @@ fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::C
     crate::report::forget_card(task_of(&slot), &repo);
     crate::evidence::forget(task_of(&slot), &repo);
     crate::ci::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
+    crate::recover::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
     end_life(task_of(&slot), &repo, "done");
     Ok(finished + &close_space(workspace))
 }
@@ -1363,6 +1364,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     crate::evidence::forget(task, &repo);
     if let Ok(state) = state_dir() {
         crate::ci::forget(&state, &peers::address(task, &name_of(&repo)));
+        crate::recover::forget(&state, &peers::address(task, &name_of(&repo)));
     }
     end_life(task, &repo, how);
     Ok(format!("{task} dropped; {} is free again.{said}{}", name_of(&slot.path), close_space(workspace)))

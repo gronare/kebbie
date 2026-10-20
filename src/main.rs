@@ -20,6 +20,7 @@ mod peers;
 mod permit;
 mod push_block;
 mod questions;
+mod recover;
 mod release;
 mod repo;
 mod report;

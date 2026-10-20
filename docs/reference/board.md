@@ -33,14 +33,14 @@ No line means no test run is recorded. The wide panel shows the same line.
 
 | Group | Contains |
 | --- | --- |
-| Needs you | A question on screen; a task that asked for you; a task whose CI failed after a push, marked `CI failed: <workflow> · <job>`; a task Claude finished that you have not looked at; a ready task whose commits the lead has not approved, marked "rules not checked by the lead". Open questions first. |
-| Working | Claude is mid-turn. |
+| Needs you | A question on screen; a task that asked for you; a task whose CI failed after a push, marked `CI failed: <workflow> · <job>`; a task an API error stopped that kelpie will not resume, marked `stopped by <reason>: <Claude Code's words>`; a task Claude finished that you have not looked at; a ready task whose commits the lead has not approved, marked "rules not checked by the lead". Open questions first. |
+| Working | Claude is mid-turn, or kelpie resumes it after an API error: `retrying after overload (2/4, next 21:14)`, `out of allowance until 17:00`, then `resumed after …` until Claude answers. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task). |
 | To review | Sent to the reviewer, waiting for a pass on its current code. |
 | Ready to push | Approved by the lead, and passed by the reviewer when sent to review. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. The row names the runs, and the open task links each run's page. See [`kelpie ci`](commands.md#kelpie-ci---json). |
 | Waiting for work | Idle, or blocked on something outside you. |
 
-Between turns, the task's last report decides its group. A CI watch decides it until the task reports again.
+Between turns, the task's last report decides its group. A CI watch, or kelpie resuming the task after an API error, decides it until the task reports again.
 
 ## Keys
 

@@ -44,6 +44,7 @@ Rules:
 | `restart.auto` | boolean | `true` | config.toml only | Whether kelpie restarts stale idle Claude sessions on its own and `kelpie update` restarts idle ones at once. `false` restarts nothing on its own; the board still marks stale sessions. |
 | `restart.idle_minutes` | integer, 1 to 1440 | `10` | config.toml only | How long a stale session must be idle and out of focus before it is restarted. |
 | `keeper.enabled` | boolean | `true` | config.toml only | Whether the keeper, one background kelpie per machine, runs the routines: stale-session restarts, the update check, held messages and delivery checks of typed prompts. They then go on with the board closed. `false` runs them in an open board instead. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). |
+| `recover.enabled` | boolean | `true` | config.toml only | Whether kelpie resumes a task whose Claude an API error stopped. After overload, a server error, a rate limit, a timeout or a dropped connection it tells the task to carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. Login, billing, invalid request and refusal errors go to you under Needs you at once. The schedule is fixed. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task). |
 | `[keys]` | table of strings | the board's own | config.toml only | The board's keys by action, as `inbox = "I"`. See [Board](board.md#keys-in-configtoml) for the actions and the rules; `kelpie config` shows each key in effect and why an entry was ignored. |
 
 ## Backlog sources
@@ -73,7 +74,7 @@ The command gets:
 
 | Variable | Value |
 | --- | --- |
-| `KELPIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed` or `ci-green` |
+| `KELPIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed`, `ci-green` or `api-error` |
 | `KELPIE_TASK` | The task's name |
 | `KELPIE_REPO` | The task's repo |
 | `KELPIE_TEXT` | One line, such as `billing@app needs you: answer which queue` |
@@ -87,6 +88,7 @@ The command gets:
 | `summary` | You or the lead run `kelpie notify "<text>"`. Tasks cannot. |
 | `ci-failed` | A workflow run for a pushed commit failed. The text names the workflow and the job. |
 | `ci-green` | Every workflow run for a pushed commit passed, or none ran. |
+| `api-error` | An API error stopped a task and kelpie will not resume it: a login, billing, invalid request or refusal error, or one that persisted through every retry. The text gives the reason and Claude Code's words. |
 
 ## `[[actions]]`
 
@@ -160,6 +162,9 @@ auto = true
 idle_minutes = 10
 
 [keeper]
+enabled = true
+
+[recover]
 enabled = true
 ```
 

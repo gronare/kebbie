@@ -35,6 +35,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `ci/` | One file per CI watch, `<task>@<repo>.json`: the pushed sha, the GitHub repo, the runs as last seen, when it started and was last checked, and whether it failed. A watch survives board restarts. |
 | `away` | Present while away mode is on. |
 | `backlog.json` | The backlog the lead saved on its last refresh. |
+| `recover/` | One file per task an API error stopped, `<task>@<repo>.json`: the error, how many times kelpie resumed the task, when it resumes next and whether it is stuck. It survives restarts, so kelpie never resumes a task twice for one error. |
 | `usage.json` | Plan usage from the status line. |
 | `update-check.json` | The last update check. |
 | `update-override.json` | The `--from` override, while it holds. |

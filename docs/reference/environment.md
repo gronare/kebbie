@@ -29,7 +29,7 @@ For `notify.command`:
 
 | Variable | Value |
 | --- | --- |
-| `KELPIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed` or `ci-green` |
+| `KELPIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed`, `ci-green` or `api-error` |
 | `KELPIE_TASK` | The task's name |
 | `KELPIE_REPO` | The task's repo |
 | `KELPIE_TEXT` | The notification's one line |

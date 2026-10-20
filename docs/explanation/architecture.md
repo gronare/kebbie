@@ -45,6 +45,7 @@ Some of kelpie's work runs on a clock rather than on a command:
 - held messages are delivered once their receiver is free, every 3 seconds,
 - prompts kelpie typed are checked for delivery, every 3 seconds, and the board is told when one was not taken,
 - stale Claude sessions are restarted once idle, every minute,
+- tasks an API error stopped are resumed, every 30 seconds (see [When the API stops a task](lead-and-away-mode.md#when-the-api-stops-a-task)),
 - the update check reads its cache every 10 minutes and fetches when the last fetch is 6 hours old.
 
 The keeper runs all of them, each on its own interval, and sleeps in between. It has no terminal and logs to `keeper.log` in the state directory. A lock file in the state directory keeps it to one per machine; the kernel releases the lock when the keeper exits, so a crashed one never blocks the next. A routine that fails is retried later each time, up to every 15 minutes, and its error is logged once.

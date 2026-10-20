@@ -37,6 +37,18 @@ When you switch away mode off, kelpie hands the lead what was pushed, what it de
 
 Only you can switch away mode. A task or a message cannot turn it on for you. See [The trust boundary](trust-boundary.md).
 
+## When the API stops a task
+
+A task's Claude can stop because the API failed, not because the work is done: the API is overloaded, a server error, a rate limit, a timeout, a dropped connection, or the plan's usage limit. Claude Code retries some of these itself before it gives up. Once it has given up, it writes the error into the conversation (an assistant entry with `isApiErrorMessage`, its own `error` code and the HTTP status in `apiErrorStatus`) and the session sits idle. Away from the screen, that is a task that waits for nothing.
+
+kelpie reads that entry and gets the task going again. Every 30 seconds the keeper, or an open board with `[keeper] enabled = false`, looks at each task whose Claude is idle and whose last answer is an API error nobody has typed after. Then:
+
+- **Overload, a server error, a rate limit, a timeout or a dropped connection.** kelpie types `[from kelpie] … Carry on where you left off.` into the task 1, 2, 4 and 8 minutes after each error, one resume per error. The row says `retrying after overload (2/4, next 21:14)`. If the fifth error comes before Claude has answered once, the task stops.
+- **The usage limit.** kelpie reads the reset from Claude Code's message, such as `You've hit your session limit · resets 5pm (Europe/Stockholm)`, and resumes the task a minute after it. The row says `out of allowance until 17:00`. A message without a reset kelpie can read takes the reset of the session or week window from the status line instead (`kelpie statusline`). With neither, the task goes to you.
+- **A login, billing, invalid request or refusal error, or one kelpie does not know.** Waiting does not fix these. The task goes to Needs you at once with Claude Code's words, the lead gets a line, and `notify.command` gets an `api-error` event. The same happens to a task that kept failing through every retry.
+
+kelpie never types into a draft: a resume waits while the input box holds text, and the delivery is checked as for any typed message. A reply from Claude ends the episode and the count starts again. A prompt from you does too, for a task that waits on you. Only tasks kelpie started are resumed, never the lead or your own Claude sessions. `[recover] enabled = false` turns it off.
+
 ## Restarting the lead
 
 The lead reads its role and settings when it starts. `kelpie lead --restart` rewrites them and resumes the same conversation under the new role, so an update never costs you the lead's context. It waits until the lead is idle and not waiting on a question.
