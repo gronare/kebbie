@@ -353,6 +353,27 @@ fn choose_protocol(forced: Option<&str>, tty: bool, herdr: bool, answered: Optio
 
 const GUESSED_CELL: (u16, u16) = (10, 20);
 
+// herdr's plugin popup reports no pixels, so the popup board draws at the cell size a board in a normal pane last measured.
+fn cell_file() -> Option<PathBuf> {
+    lead::state_dir().ok().map(|state| state.join("cell-size"))
+}
+
+fn remember_cell((width, height): (u16, u16)) {
+    if let Some(file) = cell_file() && remembered_in(std::fs::read_to_string(&file).ok().as_deref()) != Some((width, height)) {
+        let _ = crate::state::write(&file, format!("{width} {height}"));
+    }
+}
+
+fn remembered_cell() -> Option<(u16, u16)> {
+    remembered_in(std::fs::read_to_string(cell_file()?).ok().as_deref())
+}
+
+fn remembered_in(text: Option<&str>) -> Option<(u16, u16)> {
+    let mut parts = text?.split_whitespace().map(str::parse::<u16>);
+    let cell = (parts.next()?.ok()?, parts.next()?.ok()?);
+    (cell.0 > 0 && cell.1 > 0).then_some(cell)
+}
+
 fn cell_size(answered: Option<(u16, u16)>, window: Option<(u16, u16, u16, u16)>) -> Option<(u16, u16)> {
     let known = |(width, height): (u16, u16)| width > 0 && height > 0;
     answered.filter(|cell| known(*cell)).or_else(|| {
@@ -1105,6 +1126,7 @@ impl App {
         }
         let Graphics::Ready(picker) = &self.graphics else { return };
         if let Some(cell) = cell_size(None, window_pixels()) {
+            remember_cell(cell);
             self.graphics = Graphics::Ready(picker_for(picker.protocol_type(), cell));
             self.images.clear();
             self.cell_guessed = false;
@@ -3684,7 +3706,10 @@ fn resolve_graphics(forced: Option<&str>, tty: bool, herdr: bool, asked: Option<
         reported.or_else(|| (picker.protocol_type() != ProtocolType::Halfblocks).then(|| (picker.font_size().width, picker.font_size().height)))
     });
     let cell = cell_size(answered, window_pixels());
-    (Graphics::Ready(picker_for(protocol, cell.unwrap_or(GUESSED_CELL))), cell.is_none() && protocol != ProtocolType::Halfblocks)
+    if let Some(cell) = cell {
+        remember_cell(cell);
+    }
+    (Graphics::Ready(picker_for(protocol, cell.or_else(remembered_cell).unwrap_or(GUESSED_CELL))), cell.is_none() && protocol != ProtocolType::Halfblocks)
 }
 
 pub fn run(overlay: bool) -> Result<String> {
@@ -3823,6 +3848,14 @@ pub fn run(overlay: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_remembered_cell_size_reads_back_and_garbage_is_none() {
+        assert_eq!(remembered_in(Some("16 34")), Some((16, 34)));
+        assert_eq!(remembered_in(Some("0 34")), None);
+        assert_eq!(remembered_in(Some("x")), None);
+        assert_eq!(remembered_in(None), None);
+    }
 
     #[test]
     fn a_kitty_placement_names_its_grid_in_cells_once() {
