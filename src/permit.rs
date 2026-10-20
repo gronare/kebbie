@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::lead::{state_dir, state_path};
+use crate::lead::state_dir;
 use crate::messages::{self, Message};
 use crate::sh::Result;
 
@@ -47,11 +47,11 @@ pub fn in_state(state: &Path, address: &str, repo: &str) -> Option<Permit> {
 }
 
 pub fn of(address: &str, repo: &str) -> Option<Permit> {
-    in_state(&state_path(|name| std::env::var(name).ok()).ok()?, address, repo)
+    in_state(&crate::lead::state_location().ok()?, address, repo)
 }
 
 pub fn repo_permitted(repo: &str) -> bool {
-    state_path(|name| std::env::var(name).ok()).is_ok_and(|state| repo_file(&state, repo).exists())
+    crate::lead::state_location().is_ok_and(|state| repo_file(&state, repo).exists())
 }
 
 pub fn set_task_in(state: &Path, address: &str, on: bool) -> Result<()> {
@@ -121,7 +121,7 @@ pub fn away_since_in(state: &Path) -> Option<u64> {
 }
 
 pub fn away_since() -> Option<u64> {
-    away_since_in(&state_path(|name| std::env::var(name).ok()).ok()?)
+    away_since_in(&crate::lead::state_location().ok()?)
 }
 
 // Returns when the user went away, for the summary on the way back; None when nothing changed.

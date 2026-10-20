@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use serde_json::{Value, json};
 
 use crate::config;
-use crate::lead::{install_root, roles_dir, state_dir, state_path, write_settings};
+use crate::lead::{install_root, roles_dir, state_dir, write_settings};
 use crate::messages;
 use crate::peers;
 use crate::repo::{ahead_behind, default_branch, git, main_checkout, name_of};
@@ -102,7 +102,7 @@ impl Shown {
 // A verdict holds for HEAD while HEAD makes the change it read, through a clean rebase, a reworded message or a squash.
 pub fn shown(address: &str, path: &Path, upstream: &str) -> Option<Shown> {
     let head = git(path, &["rev-parse", "HEAD"]).ok()?;
-    shown_in(&state_path(|name| std::env::var(name).ok()).ok()?, address, |sha| tasks::same_code(path, upstream, sha, &head))
+    shown_in(&crate::lead::state_location().ok()?, address, |sha| tasks::same_code(path, upstream, sha, &head))
 }
 
 pub fn shown_in(state: &Path, address: &str, current: impl Fn(&str) -> bool) -> Option<Shown> {

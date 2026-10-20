@@ -24,8 +24,14 @@ pub fn state_path(var: impl Fn(&str) -> Option<String>) -> Result<PathBuf> {
         .ok_or_else(|| "Neither XDG_STATE_HOME nor HOME is set".to_string())
 }
 
+pub fn state_location() -> Result<PathBuf> {
+    #[cfg(test)]
+    assert!(std::env::var_os(STATE_DIR_VAR).is_some_and(|own| !own.is_empty()), "a test reached kelpie's state dir without {STATE_DIR_VAR}; pass it a temp dir instead");
+    state_path(|name| std::env::var(name).ok())
+}
+
 pub fn state_dir() -> Result<PathBuf> {
-    let dir = state_path(|name| std::env::var(name).ok())?;
+    let dir = state_location()?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
 }

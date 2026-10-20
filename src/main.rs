@@ -73,8 +73,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie hook                     the hooks kelpie gives a task's Claude (reads the hook's JSON on stdin)
   kelpie messages [--print]       the sessions' messages, live (the board shows them too); --print the last 30,
                                   --unread those the lead has not seen (its prompt hook)
-  kelpie statusline               Claude Code's statusLine command: reads its JSON on stdin, keeps the plan's session and
-                                  week usage for the board, and prints the model and both percentages
+  kelpie statusline               Claude Code's statusLine command: reads its JSON on stdin and keeps the plan's session
+                                  and week usage for the board; prints nothing, so Claude Code shows no extra line
   kelpie backlog [save]           show the backlog the board shows; save reads the lead's JSON array on stdin
   kelpie backlog add [--priority <p>] \"<Title> — <summary> (<area>)\"
                                   add an item to the local backlog (backlog.md next to the machine config)
@@ -244,11 +244,6 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("lead") if arguments.flag("--restart") => lead::restart(),
         Some("lead") => lead::toggle(),
         Some("focus") => lead::focus_toggle().map(|_| String::new()),
-        Some("statusline") => {
-            let mut input = String::new();
-            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
-            Ok(usage::statusline(&input))
-        }
         Some("peers") => peers::peers(&cwd),
         Some("tell") => {
             let to = name.ok_or("kelpie tell needs a recipient: a task, task@repo or lead")?;
@@ -327,6 +322,12 @@ fn main() -> ExitCode {
     let arguments = Arguments::parse();
     if arguments.positional(0) == Some("doctor") {
         return doctor();
+    }
+    if arguments.positional(0) == Some("statusline") {
+        let mut input = String::new();
+        let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
+        usage::record(&input);
+        return ExitCode::SUCCESS;
     }
     match run(&arguments) {
         Ok(output) => {

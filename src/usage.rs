@@ -53,35 +53,19 @@ pub fn load_in(state: &Path, now: u64) -> Option<Usage> {
 }
 
 pub fn load() -> Option<Usage> {
-    load_in(&crate::lead::state_path(|name| std::env::var(name).ok()).ok()?, crate::messages::now())
+    load_in(&crate::lead::state_location().ok()?, crate::messages::now())
 }
 
-fn percent(used: f64) -> String {
-    format!("{}%", used.round() as i64)
-}
-
-pub fn line(input: &Value, usage: Option<&Usage>) -> String {
-    let model = input["model"]["display_name"].as_str().or_else(|| input["model"]["id"].as_str()).unwrap_or("Claude");
-    let mut parts = vec![model.to_string()];
-    if let Some(usage) = usage {
-        parts.extend(usage.session.as_ref().map(|window| format!("5h {}", percent(window.used))));
-        parts.extend(usage.week.as_ref().map(|window| format!("7d {}", percent(window.used))));
-    }
-    parts.join(" · ")
-}
-
-// Claude Code shows whatever this prints, so a state dir that cannot be written costs the board its numbers, never the user their line.
-pub fn statusline_in(input: &str, state: Result<PathBuf>) -> String {
+// Claude Code shows whatever this prints under every prompt, so it prints nothing and a state dir that cannot be written costs only the board its numbers.
+pub fn record_in(input: &str, state: Result<PathBuf>) {
     let input: Value = serde_json::from_str(input).unwrap_or_default();
-    let usage = from_status_input(&input, crate::messages::now());
-    if let Some(usage) = &usage {
-        let _ = state.and_then(|state| save_in(&state, usage));
+    if let Some(usage) = from_status_input(&input, crate::messages::now()) {
+        let _ = state.and_then(|state| save_in(&state, &usage));
     }
-    line(&input, usage.as_ref())
 }
 
-pub fn statusline(input: &str) -> String {
-    statusline_in(input, crate::lead::state_dir())
+pub fn record(input: &str) {
+    record_in(input, crate::lead::state_dir())
 }
 
 #[cfg(test)]
@@ -103,22 +87,21 @@ mod tests {
     }
 
     #[test]
-    fn the_status_line_names_the_model_and_the_windows_it_was_given() {
-        let usage = from_status_input(&input(), 1000);
-        assert_eq!(line(&input(), usage.as_ref()), "Opus 5.5 · 5h 23% · 7d 71%");
-        let bare = json!({ "model": { "id": "claude-opus-5-5" } });
-        assert_eq!(from_status_input(&bare, 1000), None);
-        assert_eq!(line(&bare, None), "claude-opus-5-5");
-        let week_only = json!({ "model": { "display_name": "Opus" }, "rate_limits": { "seven_day": { "used_percentage": 41, "resets_at": 9000 } } });
-        assert_eq!(line(&week_only, from_status_input(&week_only, 1000).as_ref()), "Opus · 7d 41%");
-        assert_eq!(line(&Value::Null, None), "Claude");
+    fn only_status_input_with_a_window_counts_as_usage() {
+        assert_eq!(from_status_input(&input(), 1000).map(|usage| usage.session.is_some() && usage.week.is_some()), Some(true));
+        assert_eq!(from_status_input(&json!({ "model": { "id": "claude-opus-5-5" } }), 1000), None);
+        let week_only = json!({ "rate_limits": { "seven_day": { "used_percentage": 41, "resets_at": 9000 } } });
+        assert_eq!(from_status_input(&week_only, 1000).map(|usage| (usage.session, usage.week)), Some((None, Some(Window { used: 41.0, resets_at: 9000 }))));
     }
 
     #[test]
-    fn the_status_line_prints_even_when_the_state_dir_cannot_be_written() {
-        let raw = input().to_string();
-        assert_eq!(statusline_in(&raw, Ok(PathBuf::from("/dev/null/x"))), "Opus 5.5 · 5h 23% · 7d 71%");
-        assert_eq!(statusline_in(&raw, Err("no HOME".to_string())), "Opus 5.5 · 5h 23% · 7d 71%");
+    fn recording_keeps_the_usage_and_survives_a_state_dir_that_cannot_be_written() {
+        let dir = state("record");
+        record_in(&input().to_string(), Ok(dir.clone()));
+        assert_eq!(load_in(&dir, 1500).and_then(|usage| usage.week), Some(Window { used: 71.0, resets_at: 9000 }));
+        record_in(&input().to_string(), Ok(PathBuf::from("/dev/null/x")));
+        record_in("not json", Err("no HOME".to_string()));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

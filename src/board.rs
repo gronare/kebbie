@@ -52,7 +52,7 @@ pub const TEAL: Color = Color::Rgb(0x94, 0xe2, 0xd5);
 pub const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Page {
     Work,
     Areas,
@@ -179,7 +179,7 @@ enum Mode {
     Help,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Hit {
     Task(usize),
     Entry(usize),
@@ -188,6 +188,8 @@ enum Hit {
     Tab(Page),
     Question(usize),
     Answer(usize),
+    Messages(Option<usize>),
+    Key(KeyCode),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -395,6 +397,9 @@ struct App {
     messages: Vec<Message>,
     fold: Fold,
     seen: u64,
+    fold_file: Option<PathBuf>,
+    in_messages: bool,
+    message_back: usize,
     questions: Vec<Message>,
     usage: Option<Usage>,
     ongoing: Vec<Ongoing>,
@@ -746,10 +751,11 @@ impl App {
 
     fn set_fold(&mut self, fold: Fold) {
         self.fold = fold;
+        self.in_messages &= fold == Fold::Open;
         if fold == Fold::Open {
             self.seen = self.seen.max(self.messages.last().map_or(0, |message| message.at));
         }
-        save_fold(fold, self.seen);
+        save_fold(self.fold_file.as_deref(), fold, self.seen);
     }
 
     fn detail(&mut self, item: &Item) -> Option<std::rc::Rc<Detail>> {
@@ -819,6 +825,43 @@ impl App {
         let _ = self.refresh.send(());
     }
 
+    fn press_m(&mut self) {
+        match (self.fold, self.in_messages) {
+            (Fold::Open, false) => self.enter_messages(),
+            (Fold::Line, _) => {
+                self.set_fold(Fold::Open);
+                self.enter_messages();
+            }
+            (fold, _) => self.set_fold(fold.next()),
+        }
+    }
+
+    fn enter_messages(&mut self) {
+        self.in_messages = true;
+        self.message_back = 0;
+    }
+
+    fn selected_message(&self) -> Option<&Message> {
+        self.messages.len().checked_sub(1 + self.message_back).and_then(|index| self.messages.get(index))
+    }
+
+    fn handle_messages(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.message_back = (self.message_back + 1).min(self.messages.len().saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.message_back = self.message_back.saturating_sub(1),
+            KeyCode::Esc => self.in_messages = false,
+            KeyCode::Char('m') => self.press_m(),
+            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('q') => self.open_questions(None),
+            KeyCode::Enter => {
+                if let Some(message) = self.selected_message() {
+                    self.mode = Mode::Message(format!("{} {} → {}\n\n{}", clock(message.at), message.from, message.to, message.text));
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn move_selection(&mut self, step: isize) {
         let (selected, length) = match self.column {
             Column::Work => (&mut self.work_selected, self.tasks.len()),
@@ -827,9 +870,13 @@ impl App {
         *selected = selected.saturating_add_signed(step).min(length.saturating_sub(1));
     }
 
+    fn hit_at(&self, column: u16, row: u16) -> Option<Hit> {
+        self.hits.iter().find(|(area, _)| area.contains(Position::new(column, row))).map(|(_, hit)| *hit)
+    }
+
     // A click selects a row, a click on the selected row opens its options, and the wheel moves through whatever is in front.
     fn mouse(&mut self, event: MouseEvent, terminal: &mut DefaultTerminal) {
-        let hit = self.hits.iter().find(|(area, _)| area.contains(Position::new(event.column, event.row))).map(|(_, hit)| *hit);
+        let hit = self.hit_at(event.column, event.row);
         if let (Some(Hit::Tab(page)), MouseEventKind::Down(MouseButton::Left)) = (hit, event.kind) {
             self.page = page;
             return;
@@ -840,57 +887,79 @@ impl App {
             }
             return;
         }
+        if let Some(key) = self.work_mouse(event, hit) {
+            self.handle(key, terminal);
+        }
+    }
+
+    fn work_mouse(&mut self, event: MouseEvent, hit: Option<Hit>) -> Option<KeyEvent> {
+        let normal = matches!(self.mode, Mode::Normal);
         match event.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 if let Mode::EditMessage(editor) = &mut self.mode {
                     editor.text.input(event);
-                    return;
+                    return None;
                 }
                 if let Mode::Questions(window) = &mut self.mode {
                     window.scroll = if event.kind == MouseEventKind::ScrollUp { window.scroll.saturating_sub(3) } else { window.scroll.saturating_add(3) };
-                    return;
+                    return None;
                 }
                 match hit {
-                    Some(Hit::Task(_)) if matches!(self.mode, Mode::Normal) => self.column = Column::Work,
-                    Some(Hit::Entry(_)) if matches!(self.mode, Mode::Normal) => self.column = Column::Backlog,
+                    Some(Hit::Task(_)) if normal => (self.column, self.in_messages) = (Column::Work, false),
+                    Some(Hit::Entry(_)) if normal => (self.column, self.in_messages) = (Column::Backlog, false),
+                    Some(Hit::Messages(_)) if normal && self.fold == Fold::Open => self.in_messages = true,
                     _ => {}
                 }
-                let code = if event.kind == MouseEventKind::ScrollUp { KeyCode::Up } else { KeyCode::Down };
-                self.handle(KeyEvent::from(code), terminal);
+                Some(KeyEvent::from(if event.kind == MouseEventKind::ScrollUp { KeyCode::Up } else { KeyCode::Down }))
             }
-            MouseEventKind::Down(MouseButton::Left) => match (hit, &mut self.mode) {
-                (Some(Hit::Task(index)), Mode::Normal) => {
-                    let again = self.column == Column::Work && self.work_selected == index;
-                    self.column = Column::Work;
-                    self.work_selected = index;
-                    if again {
-                        self.mode = Mode::Options(0);
+            MouseEventKind::Down(MouseButton::Left) => {
+                match (hit, &mut self.mode) {
+                    (Some(Hit::Task(index)), Mode::Normal) => {
+                        let again = self.column == Column::Work && self.work_selected == index && !self.in_messages;
+                        (self.column, self.work_selected, self.in_messages) = (Column::Work, index, false);
+                        if again {
+                            self.mode = Mode::Options(0);
+                        }
                     }
-                }
-                (Some(Hit::Entry(index)), Mode::Normal) => {
-                    let again = self.column == Column::Backlog && self.backlog_selected == index;
-                    self.column = Column::Backlog;
-                    self.backlog_selected = index;
-                    if again {
-                        self.mode = Mode::Options(0);
+                    (Some(Hit::Entry(index)), Mode::Normal) => {
+                        let again = self.column == Column::Backlog && self.backlog_selected == index && !self.in_messages;
+                        (self.column, self.backlog_selected, self.in_messages) = (Column::Backlog, index, false);
+                        if again {
+                            self.mode = Mode::Options(0);
+                        }
                     }
-                }
-                (Some(Hit::Choice(index)), Mode::Options(_)) => {
-                    if let Some(key) = self.choices().get(index).map(|choice| choice.key) {
-                        self.mode = Mode::Normal;
-                        self.act(key);
+                    (Some(Hit::Messages(None)), Mode::Normal) if self.fold == Fold::Open => self.in_messages = true,
+                    (Some(Hit::Messages(None)), Mode::Normal) => self.press_m(),
+                    (Some(Hit::Messages(Some(index))), Mode::Normal) => {
+                        let back = self.messages.len().saturating_sub(index + 1);
+                        let again = self.in_messages && self.message_back == back;
+                        (self.in_messages, self.message_back) = (true, back);
+                        if again {
+                            return Some(KeyEvent::from(KeyCode::Enter));
+                        }
                     }
+                    (Some(Hit::Key(code)), Mode::Normal) => {
+                        self.in_messages &= code == KeyCode::Char('m');
+                        return Some(KeyEvent::from(code));
+                    }
+                    (Some(Hit::Choice(index)), Mode::Options(_)) => {
+                        if let Some(key) = self.choices().get(index).map(|choice| choice.key) {
+                            self.mode = Mode::Normal;
+                            self.act(key);
+                        }
+                    }
+                    (Some(Hit::Commit(index)), Mode::ConfirmPush { selected, .. }) => *selected = index,
+                    (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
+                    (Some(Hit::Answer(index)), Mode::Questions(window)) => {
+                        window.option = index;
+                        window.part = Part::Options;
+                    }
+                    (None, Mode::Options(_) | Mode::Message(_) | Mode::Help) => self.mode = Mode::Normal,
+                    _ => {}
                 }
-                (Some(Hit::Commit(index)), Mode::ConfirmPush { selected, .. }) => *selected = index,
-                (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
-                (Some(Hit::Answer(index)), Mode::Questions(window)) => {
-                    window.option = index;
-                    window.part = Part::Options;
-                }
-                (None, Mode::Options(_) | Mode::Message(_) | Mode::Help) => self.mode = Mode::Normal,
-                _ => {}
-            },
-            _ => {}
+                None
+            }
+            _ => None,
         }
     }
 
@@ -909,7 +978,6 @@ impl App {
                 }
                 KeyCode::Char('1') => return self.page = Page::Work,
                 KeyCode::Char('2') => return self.page = Page::Areas,
-                KeyCode::Char('m') if self.page == Page::Work => return self.set_fold(self.fold.next()),
                 _ => {}
             }
         }
@@ -1049,7 +1117,11 @@ impl App {
     }
 
     fn handle_normal(&mut self, key: KeyEvent) {
+        if self.in_messages {
+            return self.handle_messages(key);
+        }
         match key.code {
+            KeyCode::Char('m') => self.press_m(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::Left | KeyCode::Right => {
@@ -1421,6 +1493,14 @@ fn edit_in_editor(terminal: &mut DefaultTerminal, message: &str) -> Result<Optio
 
 pub fn init_terminal() -> DefaultTerminal {
     let terminal = ratatui::init();
+    static MOUSE_OFF_ON_PANIC: std::sync::Once = std::sync::Once::new();
+    MOUSE_OFF_ON_PANIC.call_once(|| {
+        let restore = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(std::io::stdout(), DisableMouseCapture);
+            restore(info);
+        }));
+    });
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
     terminal
 }
@@ -1644,7 +1724,8 @@ fn running_dot(item: &Item) -> bool {
 }
 
 fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line<'static>>, usize, Rows) {
-    let focused = app.column == Column::Work;
+    let open = app.column == Column::Work;
+    let focused = open && !app.in_messages;
     let mut lines = column_title("WORK", format!("{}{}", plural(app.tasks.len(), "task"), free_worktrees(&app.checkouts)), focused, width);
     let mut selected_line = 0;
     let mut current: Option<Group> = None;
@@ -1672,9 +1753,9 @@ fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line<'static>>,
         }
         lines.push(line);
         if let Some(next) = item.next_for_you() {
-            lines.push(you_line(next, selected && focused && unfold, width));
+            lines.push(you_line(next, selected && open && unfold, width));
         }
-        if selected && focused && unfold {
+        if selected && open && unfold {
             let (detail, links, _) = detail_lines(app, item, width.saturating_sub(4), false);
             lines.extend(detail.into_iter().map(|line| {
                 let mut spans = vec![Span::raw("    ")];
@@ -1968,7 +2049,7 @@ fn ongoing_rows(app: &App, focused: bool, width: usize, lines: &mut Vec<Line<'st
 }
 
 fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
-    let focused = app.column == Column::Backlog;
+    let focused = app.column == Column::Backlog && !app.in_messages;
     let mut lines = column_title("BACKLOG", format!("{} items", app.backlog.entries.len()), focused, width);
     let mut rows = Vec::new();
     let mut selected_line = ongoing_rows(app, focused, width, &mut lines, &mut rows).unwrap_or(0);
@@ -2030,11 +2111,31 @@ pub fn hints(keys: &[(&str, &str)]) -> Line<'static> {
     Line::from(keys.iter().flat_map(|(key, label)| [Span::styled(key.to_string(), style(MAUVE)), Span::styled(format!(" {label}    "), style(MUTED))]).collect::<Vec<_>>())
 }
 
+const FULL_HINTS: [(&str, &str, KeyCode); 5] =
+    [("⏎", "options", KeyCode::Enter), ("q", "questions", KeyCode::Char('q')), ("m", "messages", KeyCode::Char('m')), ("prefix+tab", "lead", KeyCode::Tab), ("?", "keys", KeyCode::Char('?'))];
+const SHORT_HINTS: [(&str, &str, KeyCode); 3] = [("⏎", "options", KeyCode::Enter), ("q", "questions", KeyCode::Char('q')), ("?", "keys", KeyCode::Char('?'))];
+
+fn status_hints(keys: &[(&str, &str, KeyCode)]) -> Line<'static> {
+    Line::from(Span::styled(keys.iter().map(|(key, label, _)| format!("{key} {label}")).collect::<Vec<_>>().join(" · "), style(MUTED)))
+}
+
 fn hint_lines() -> (Line<'static>, Line<'static>) {
-    (
-        hints(&[("⏎", "options"), ("q", "questions"), ("m", "messages"), ("tab", "lead"), ("1 2", "work · areas"), ("s", "new task"), ("?", "all keys")]),
-        hints(&[("⏎", "options"), ("q", "questions"), ("?", "keys")]),
-    )
+    (status_hints(&FULL_HINTS), status_hints(&SHORT_HINTS))
+}
+
+fn hint_hits(line: &Line, area: Rect) -> Vec<(Rect, Hit)> {
+    let text = line.to_string();
+    let mut hits = Vec::new();
+    for (key, label, code) in FULL_HINTS {
+        let hint = format!("{key} {label}");
+        let Some(byte) = text.find(&hint) else { continue };
+        let x = Span::raw(&text[..byte]).width() as u16;
+        let width = Span::raw(hint.as_str()).width() as u16;
+        if x < area.width {
+            hits.push((Rect::new(area.x + x, area.y, width.min(area.width - x), 1), Hit::Key(code)));
+        }
+    }
+    hits
 }
 
 fn local(at: u64) -> Option<libc::tm> {
@@ -2075,10 +2176,9 @@ fn usage_spans(usage: &Usage, wide: bool, now: u64) -> Vec<Span<'static>> {
         spans.push(Span::styled(format!("{label} "), style(SUBTEXT)));
         if wide {
             let filled = (used / 100.0 * 8.0).round() as usize;
-            spans.push(Span::styled("▕", style(FAINT)));
-            spans.push(Span::styled("█".repeat(filled), style(color)));
-            spans.push(Span::styled("█".repeat(8 - filled), style(SURFACE)));
-            spans.push(Span::styled("▏ ", style(FAINT)));
+            spans.push(Span::styled("━".repeat(filled), style(color)));
+            spans.push(Span::styled("━".repeat(8 - filled), style(FAINT)));
+            spans.push(Span::raw(" "));
         }
         spans.push(Span::styled(format!("{used:.0}%"), style(color)));
         if wide {
@@ -2136,10 +2236,11 @@ fn messages_height(fold: Fold, height: u16) -> u16 {
     }
 }
 
-fn messages_lines(app: &App, fold: Fold, rows: usize, width: usize) -> Vec<Line<'static>> {
+// The second value is the index of the message on the panel's second line, which the mouse hits are counted from.
+fn messages_lines(app: &App, fold: Fold, rows: usize, width: usize) -> (Vec<Line<'static>>, usize) {
     let new = app.messages.iter().filter(|message| message.at > app.seen).count();
     match fold {
-        Fold::Hidden => Vec::new(),
+        Fold::Hidden => (Vec::new(), 0),
         Fold::Line => {
             let mut spans = vec![Span::styled("▸ messages", style(MAUVE))];
             if new > 0 {
@@ -2149,23 +2250,28 @@ fn messages_lines(app: &App, fold: Fold, rows: usize, width: usize) -> Vec<Line<
                 spans.push(Span::styled(format!(" · last: {} → {} {}", last.from.clone(), last.to.clone(), messages::age(last.at)), style(MUTED)));
             }
             spans.push(Span::styled(" · m opens", style(MUTED)));
-            vec![fit(spans, width)]
+            (vec![fit(spans, width)], 0)
         }
         Fold::Open => {
-            let mut lines = vec![Line::from(vec![Span::styled("▾ messages", style(MAUVE)), Span::styled("  m folds", style(MUTED))])];
+            let keys = if app.in_messages { "  ↑ ↓ scroll · ⏎ read · esc back · m folds" } else { "  m selects" };
+            let mut lines = vec![Line::from(vec![Span::styled("▾ messages", if app.in_messages { bold(MAUVE) } else { style(MAUVE) }), Span::styled(keys, style(MUTED))])];
             let room = rows.saturating_sub(1);
             if app.messages.is_empty() {
                 lines.push(Line::from(Span::styled("No messages yet.", style(MUTED))));
             }
-            for message in &app.messages[app.messages.len().saturating_sub(room)..] {
+            let length = app.messages.len();
+            let selected = length.saturating_sub(1 + app.message_back);
+            let start = length.saturating_sub(room).min(selected.saturating_sub(room.saturating_sub(1)));
+            for (index, message) in app.messages.iter().enumerate().skip(start).take(room) {
                 let fresh = message.at > app.seen;
-                lines.push(fit(vec![
+                let line = fit(vec![
                     Span::styled(format!("{} ", clock(message.at)), style(if fresh { YELLOW } else { MUTED })),
                     Span::styled(message.from.clone(), style(TEAL)), Span::styled(" → ", style(MUTED)), Span::styled(message.to.clone(), style(TEAL)),
                     Span::raw("  "), Span::styled(message_text(message), style(SUBTEXT)),
-                ], width));
+                ], width);
+                lines.push(if app.in_messages && index == selected { line.style(Style::new().bg(SURFACE)) } else { line });
             }
-            lines
+            (lines, start)
         }
     }
 }
@@ -2174,8 +2280,8 @@ fn fold_file() -> Option<PathBuf> {
     Some(lead::state_dir().ok()?.join("board-messages"))
 }
 
-fn load_fold(height: u16) -> (Fold, u64) {
-    fold_from(&fold_file().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default(), height)
+fn load_fold(file: Option<&Path>, height: u16) -> (Fold, u64) {
+    fold_from(&file.and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default(), height)
 }
 
 // A short terminal starts the panel on one line whatever was saved.
@@ -2191,8 +2297,8 @@ fn fold_from(saved: &str, height: u16) -> (Fold, u64) {
     (if fold == Fold::Open && height < 40 { Fold::Line } else { fold }, seen)
 }
 
-fn save_fold(fold: Fold, seen: u64) {
-    if let Some(file) = fold_file() {
+fn save_fold(file: Option<&Path>, fold: Fold, seen: u64) {
+    if let Some(file) = file {
         let _ = std::fs::write(file, format!("{}\t{seen}\n", fold.name()));
     }
 }
@@ -2279,7 +2385,7 @@ fn menu_lines(choices: &[Choice], index: usize, width: usize, running: impl Fn(c
 fn help_lines() -> Vec<Line<'static>> {
     [
         ("⏎", "options for the selected task or backlog item"), ("← →", "switch between work and backlog"), ("1 2", "the work and areas pages"), ("tab", "move focus to the lead's chat"), ("↑ ↓ j k", "move"),
-        ("q", "the questions waiting on you: read the plan, answer with a comment"), ("m", "messages at the bottom: one line, open, hidden"),
+        ("q", "the questions waiting on you: read the plan, answer with a comment"), ("m", "messages at the bottom: one line, then open with ↑ ↓ moving through them and ⏎ reading one (esc back to the tasks), then hidden"),
         ("s", "start a new task"), ("g", "go to the task's Space, or start the backlog item"), ("p", "message the task's Claude"),
         ("r", "open the task's review next to its Claude"), ("w", "start or stop the task's dev server (worktree.dev_server); its address shows in the task's details (worktree.dev_url)"), ("b", "start or stop the task's worker (worktree.dev_worker)"), ("v", "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it"), ("a", "let the lead push the task itself, or take that back"), ("l", "push: rebase, then its card and commits, all or the first few (on a task)"), ("d", "done: after you pushed"),
         ("z", "reset the task: its work goes, its backlog item returns (asks first)"), ("x", "drop the task (asks first)"), ("R", "ask the lead to refresh the backlog"), ("a", "in the Backlog column: add an item to the local backlog"), ("A", "away mode on or off: the lead settles how-questions and keeps what-questions for you"), ("esc", "close this, or the board when it is an overlay"),
@@ -2464,13 +2570,32 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Page::Work => hint_lines(),
         Page::Areas => area_page::Page::hint_lines(),
     };
-    frame.render_widget(Paragraph::new(status_line(full_hints, short_hints, app.usage.as_ref(), bottom.width as usize, messages::now())), bottom);
+    let status = status_line(full_hints, short_hints, app.usage.as_ref(), bottom.width as usize, messages::now());
     if app.page == Page::Areas {
+        frame.render_widget(Paragraph::new(status), bottom);
         app.areas.draw(frame, body);
         app.hits = if app.areas.is_normal() { tab_hits } else { Vec::new() };
         return;
     }
-    frame.render_widget(Paragraph::new(messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize)), messages_area);
+    let mut tab_hits = tab_hits;
+    tab_hits.extend(hint_hits(&status, bottom));
+    frame.render_widget(Paragraph::new(status), bottom);
+    let (message_lines, first_message) = messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize);
+    let shown_messages = message_lines.len();
+    frame.render_widget(Paragraph::new(message_lines), messages_area);
+    match fold {
+        Fold::Hidden => {}
+        Fold::Line => tab_hits.push((messages_area, Hit::Messages(None))),
+        Fold::Open => {
+            tab_hits.push((Rect { height: 1, ..messages_area }, Hit::Messages(None)));
+            for row in 1..shown_messages.min(messages_area.height as usize) {
+                let index = first_message + row - 1;
+                if index < app.messages.len() {
+                    tab_hits.push((Rect::new(messages_area.x, messages_area.y + row as u16, messages_area.width, 1), Hit::Messages(Some(index))));
+                }
+            }
+        }
+    }
 
     if let Some(error) = &app.error {
         frame.render_widget(Paragraph::new(Span::styled(error.clone(), style(RED))).wrap(Wrap { trim: false }), body);
@@ -2721,7 +2846,7 @@ impl App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), sources, fetch_failures: Vec::new(), away: false,
-            messages: Vec::new(), fold: Fold::Line, seen: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
+            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), plans: HashMap::new(),
         }
@@ -2746,7 +2871,8 @@ pub fn run(overlay: bool) -> Result<String> {
     app.detail_requests = Some(requests);
     app.detail_results = Some(results);
     let height = ratatui::crossterm::terminal::size().map_or(50, |(_, height)| height);
-    (app.fold, app.seen) = load_fold(height);
+    app.fold_file = fold_file();
+    (app.fold, app.seen) = load_fold(app.fold_file.as_deref(), height);
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
         match parts.next() {
@@ -2789,7 +2915,12 @@ pub fn run(overlay: bool) -> Result<String> {
                             app.sources = sources;
                         }
                         app.backlog = backlog::load();
+                        let kept = app.selected_message().filter(|_| app.message_back > 0).map(|message| message.id.clone());
                         app.messages = snapshot.messages;
+                        if let Some(index) = kept.and_then(|id| app.messages.iter().position(|message| message.id == id)) {
+                            app.message_back = app.messages.len() - 1 - index;
+                        }
+                        app.message_back = app.message_back.min(app.messages.len().saturating_sub(1));
                         app.questions = snapshot.questions;
                         app.usage = snapshot.usage;
                         app.ongoing = snapshot.ongoing;
@@ -2797,7 +2928,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         let newest = app.messages.last().map_or(0, |message| message.at);
                         if app.fold == Fold::Open && newest > app.seen {
                             app.seen = newest;
-                            save_fold(app.fold, app.seen);
+                            save_fold(app.fold_file.as_deref(), app.fold, app.seen);
                         }
                         if let Mode::Questions(window) = &mut app.mode {
                             window.follow(&app.questions);
@@ -3184,7 +3315,7 @@ mod tests {
         app.messages[1].text = "Approve this plan for the payload rename?".to_string();
         app.seen = 15;
         let (rows, _) = render(&mut app, 96, 48);
-        assert!(find(&rows, "messages").is_empty());
+        assert!(find(&rows, "▸ messages").is_empty() && find(&rows, "▾ messages").is_empty());
         app.fold = Fold::Line;
         let (rows, _) = render(&mut app, 96, 48);
         let line = find(&rows, "▸ messages · 1 new · last: payload@api → lead");
@@ -3228,7 +3359,7 @@ mod tests {
     }
 
     #[test]
-    fn the_status_bar_shows_plan_usage_wide_and_short() {
+    fn the_status_bar_shows_plan_usage_as_the_mockup_draws_it_wide_and_short() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         let now = messages::now();
         app.usage = Some(Usage {
@@ -3236,19 +3367,110 @@ mod tests {
         });
         let (rows, buffer) = render(&mut app, 170, 30);
         let bar = &rows[28];
-        assert!(bar.contains(&format!("session ▕██████▏ 23% resets {}", clock(now + 600)).replace("██████", "██░░░░░░").replace('░', "█")), "{bar}");
-        assert!(bar.contains("week ▕") && bar.contains("71% resets ") && bar.trim_start().starts_with("⏎ options"), "{bar}");
+        assert!(bar.trim_start().starts_with("⏎ options · q questions · m messages · prefix+tab lead · ? keys"), "{bar}");
+        assert!(bar.contains(&format!("session ━━━━━━━━ 23% resets {}   week ━━━━━━━━ 71% resets ", clock(now + 600))), "{bar}");
+        let (x, _) = find(&rows[28..29], "session ━")[0];
+        let fills: Vec<Color> = (0..8).map(|cell| buffer[(x as u16 + 8 + cell, 28)].fg).collect();
+        assert_eq!(fills, [GREEN, GREEN, FAINT, FAINT, FAINT, FAINT, FAINT, FAINT], "23% fills two of eight on a surface1 track");
+        assert_eq!(buffer[(x as u16, 28)].fg, SUBTEXT);
         let (x, _) = find(&rows[28..29], "23%")[0];
         assert_eq!(buffer[(x as u16, 28)].fg, GREEN);
+        assert_eq!(buffer[(x as u16 + 4, 28)].fg, MUTED, "the reset time is faint");
         let (x, _) = find(&rows[28..29], "71%")[0];
         assert_eq!(buffer[(x as u16, 28)].fg, YELLOW);
-        let (rows, _) = render(&mut app, 96, 30);
+        let (rows, _) = render(&mut app, 112, 30);
+        assert!(rows[28].trim_start().starts_with("⏎ options · q questions · ? keys") && rows[28].contains("session ━━━━━━━━ 23% resets"), "the herdr popup keeps the bars: {}", rows[28]);
+        let (rows, _) = render(&mut app, 80, 30);
         assert!(rows[28].trim_end().ends_with("5h 23% · 7d 71%"), "{}", rows[28]);
         app.usage = None;
         let (rows, _) = render(&mut app, 96, 30);
         assert!(!rows[28].contains('%'));
         assert_eq!(usage_color(49.0), GREEN);
         assert_eq!(usage_color(80.0), RED);
+    }
+
+    fn some_messages(count: usize) -> Vec<Message> {
+        let lines: Vec<String> = (0..count).map(|at| format!(r#"{{"id":"m{at}","at":{},"from":"task{at}@web","to":"lead","text":"note number {at}","state":"sent"}}"#, 100 + at)).collect();
+        messages::fold(&lines.join("\n"))
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::from(code)
+    }
+
+    fn click(app: &mut App, x: u16, y: u16) -> Option<KeyEvent> {
+        let hit = app.hit_at(x, y);
+        app.work_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE }, hit)
+    }
+
+    #[test]
+    fn m_opens_the_messages_into_a_selection_that_arrows_move_and_enter_reads_and_esc_leaves() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.messages = some_messages(5);
+        app.fold = Fold::Line;
+        app.handle_normal(key(KeyCode::Char('m')));
+        assert!(app.fold == Fold::Open && app.in_messages && app.selected_message().unwrap().id == "m4", "m from one line opens the panel at the newest message");
+        app.handle_normal(key(KeyCode::Up));
+        app.handle_normal(key(KeyCode::Char('k')));
+        assert_eq!(app.selected_message().unwrap().id, "m2");
+        for _ in 0..9 {
+            app.handle_normal(key(KeyCode::Up));
+        }
+        assert_eq!(app.selected_message().unwrap().id, "m0", "stops at the oldest");
+        app.handle_normal(key(KeyCode::Char('j')));
+        app.handle_normal(key(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::Normal), "a task's letters do nothing while the messages are selected");
+        let (rows, buffer) = render(&mut app, 112, 48);
+        let (x, y) = find(&rows, "task1@web → lead  note number 1")[0];
+        assert_eq!(buffer[(x as u16, y as u16)].bg, SURFACE, "the selected message is highlighted");
+        assert!(rows.iter().any(|row| row.contains("▾ messages  ↑ ↓ scroll · ⏎ read · esc back · m folds")));
+        app.handle_normal(key(KeyCode::Enter));
+        let Mode::Message(text) = &app.mode else { panic!("enter reads the message") };
+        assert!(text.contains("task1@web → lead") && text.ends_with("note number 1"), "{text}");
+        app.mode = Mode::Normal;
+        app.handle_normal(key(KeyCode::Esc));
+        assert!(!app.in_messages && app.fold == Fold::Open && !app.quit, "esc leaves the panel open and the board up");
+        app.handle_normal(key(KeyCode::Char('m')));
+        assert!(app.in_messages, "m on an open panel goes into it");
+        app.handle_normal(key(KeyCode::Char('m')));
+        assert!(app.fold == Fold::Hidden && !app.in_messages);
+        app.handle_normal(key(KeyCode::Char('m')));
+        assert!(app.fold == Fold::Line && !app.in_messages);
+    }
+
+    #[test]
+    fn the_mouse_hits_rows_messages_and_status_hints_where_they_are_drawn() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0), served("search-filters")]);
+        app.messages = some_messages(3);
+        app.fold = Fold::Line;
+        let (rows, _) = render(&mut app, 112, 40);
+        let (x, y) = find(&rows, "▸ messages")[0];
+        for (hint, code) in [("⏎ options", KeyCode::Enter), ("q questions", KeyCode::Char('q')), ("? keys", KeyCode::Char('?'))] {
+            let (hx, hy) = find(&rows, hint).into_iter().last().unwrap();
+            assert_eq!(app.hit_at(hx as u16, hy as u16), Some(Hit::Key(code)), "{hint}");
+            assert_eq!(app.hit_at((hx + hint.chars().count() - 1) as u16, hy as u16), Some(Hit::Key(code)), "the end of {hint}");
+            assert_eq!(click(&mut app, hx as u16, hy as u16), Some(key(code)));
+        }
+        assert_eq!(click(&mut app, x as u16, y as u16), None);
+        assert!(app.fold == Fold::Open && app.in_messages, "a click on the messages line opens them, selected");
+        let (rows, _) = render(&mut app, 112, 40);
+        let (x, y) = find(&rows, "note number 0")[0];
+        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Messages(Some(0))));
+        assert_eq!(click(&mut app, x as u16, y as u16), None);
+        assert_eq!(app.selected_message().unwrap().id, "m0");
+        assert_eq!(click(&mut app, x as u16, y as u16), Some(key(KeyCode::Enter)), "a second click reads it");
+        let (x, y) = find(&rows, "search-filters")[0];
+        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Task(1)));
+        click(&mut app, x as u16, y as u16);
+        assert!(!app.in_messages && app.work_selected == 1, "a click on a task takes the selection back to it");
+        let (rows, _) = render(&mut app, 112, 40);
+        let (x, y) = find(&rows, "▾ messages  m selects")[0];
+        click(&mut app, x as u16, y as u16);
+        assert!(app.in_messages && app.fold == Fold::Open, "a click on the open panel's title goes into it");
+        app.in_messages = false;
+        let (x, y) = find(&rows, "note number 2")[0];
+        let wheel = app.work_mouse(MouseEvent { kind: MouseEventKind::ScrollUp, column: x as u16, row: y as u16, modifiers: KeyModifiers::NONE }, app.hit_at(x as u16, y as u16));
+        assert!(wheel == Some(key(KeyCode::Up)) && app.in_messages, "the wheel over the messages scrolls them");
     }
 
     #[test]

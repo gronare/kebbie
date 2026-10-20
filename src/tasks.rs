@@ -151,7 +151,7 @@ pub(crate) fn new_session_id() -> Result<String> {
 }
 
 fn session_file(task: &str, repo: &Path) -> Result<PathBuf> {
-    Ok(crate::lead::state_path(|name| std::env::var(name).ok())?.join("sessions").join(peers::address(task, &name_of(repo))))
+    Ok(crate::lead::state_location()?.join("sessions").join(peers::address(task, &name_of(repo))))
 }
 
 // The task's Claude session id and permission mode, one per line, so a restart resumes that conversation in the same mode.
@@ -249,7 +249,11 @@ pub struct Start<'a> {
 
 // The backlog item a running task was started from: the Backlog column hides it while the task runs, and a reset brings it back.
 fn started_file(task: &str, repo: &Path) -> Result<PathBuf> {
-    let dir = crate::lead::state_dir()?.join("started");
+    started_file_in(&crate::lead::state_dir()?, task, repo)
+}
+
+fn started_file_in(state: &Path, task: &str, repo: &Path) -> Result<PathBuf> {
+    let dir = state.join("started");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir.join(peers::address(task, &name_of(repo))))
 }
@@ -285,7 +289,11 @@ fn record_start(file: &Path, item: &str) -> Result<Option<String>> {
 }
 
 fn forget_start(task: &str, repo: &Path) -> Option<String> {
-    let file = started_file(task, repo).ok()?;
+    forget_start_in(&crate::lead::state_dir().ok()?, task, repo)
+}
+
+fn forget_start_in(state: &Path, task: &str, repo: &Path) -> Option<String> {
+    let file = started_file_in(state, task, repo).ok()?;
     let item = std::fs::read_to_string(&file).ok();
     let _ = std::fs::remove_file(file);
     item.map(|item| item.trim().to_string())
@@ -1071,7 +1079,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
     let workspace = herdr::workspace_for(&slot.path)?;
-    let finished = finish(&repo, &slot, &upstream)?;
+    let finished = finish(&repo, &slot, &upstream, &crate::lead::state_dir()?)?;
     forget_session(task_of(&slot), &repo);
     forget_approval(task_of(&slot), &repo);
     crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
@@ -1081,7 +1089,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     Ok(finished + &close_space(workspace))
 }
 
-fn finish(repo: &Path, slot: &Slot, upstream: &str) -> Result<String> {
+fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path) -> Result<String> {
     let task = task_of(slot);
     if !is_clean(&slot.path)? {
         return Err(format!("{task} has uncommitted changes; land or drop them first"));
@@ -1091,7 +1099,7 @@ fn finish(repo: &Path, slot: &Slot, upstream: &str) -> Result<String> {
         return Err(format!("{task} has changes that are not on {upstream} yet; push them first, or use drop:\n{}", missing.join("\n")));
     }
     release(repo, slot, upstream)?;
-    if let Some(item) = forget_start(task, repo)
+    if let Some(item) = forget_start_in(state, task, repo)
         && let Err(error) = messages::notify_lead(&crate::backlog::done_notice(task, &item))
     {
         eprintln!("Could not tell the lead: {error}");
@@ -1548,7 +1556,14 @@ mod tests {
         (dir, origin, slot, format!("origin/{branch}"))
     }
 
+    fn state_of(dir: &Path) -> PathBuf {
+        let state = dir.with_extension("state");
+        std::fs::create_dir_all(&state).unwrap();
+        state
+    }
+
     fn cleanup(dir: PathBuf, origin: PathBuf, slot: &Slot) {
+        let _ = std::fs::remove_dir_all(dir.with_extension("state"));
         git(&dir, &["worktree", "remove", "--force", &slot.path.to_string_lossy()]).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
         std::fs::remove_dir_all(origin).unwrap();
@@ -1559,7 +1574,7 @@ mod tests {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
         assert_eq!(ahead_behind(&dir, &upstream).unwrap(), (0, 1));
-        finish(&dir, &slot, &upstream).unwrap();
+        finish(&dir, &slot, &upstream, &state_of(&dir)).unwrap();
         assert!(!branch_exists(&dir, "billing"));
         assert!(slots(&dir).unwrap().iter().any(|free| free.path == slot.path && free.free));
         assert_eq!(ahead_behind(&dir, &upstream).unwrap(), (0, 0));
@@ -1569,7 +1584,7 @@ mod tests {
     #[test]
     fn done_refuses_a_task_with_commits_not_on_upstream_and_leaves_it_as_it_was() {
         let (dir, origin, slot, upstream) = task_with_a_commit("search");
-        assert!(finish(&dir, &slot, &upstream).is_err());
+        assert!(finish(&dir, &slot, &upstream, &state_of(&dir)).is_err());
         assert!(branch_exists(&dir, "search"));
         assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "search");
         cleanup(dir, origin, &slot);
@@ -1600,7 +1615,7 @@ mod tests {
         let fourth = git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap();
         land_on_main(&dir, &upstream, |dir| { pick(dir, &fourth); pick(dir, &fifth); });
         assert!(ahead_behind(&slot.path, &upstream).unwrap().0 > 0);
-        finish(&dir, &slot, &upstream).unwrap();
+        finish(&dir, &slot, &upstream, &state_of(&dir)).unwrap();
         assert!(!branch_exists(&dir, "billing"));
         cleanup(dir, origin, &slot);
     }
@@ -1614,7 +1629,7 @@ mod tests {
             git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "commit", "--quiet", "-m", "billing, squashed"]).unwrap();
         });
         assert!(git(&slot.path, &["cherry", &upstream, "HEAD"]).unwrap().contains('+'));
-        finish(&dir, &slot, &upstream).unwrap();
+        finish(&dir, &slot, &upstream, &state_of(&dir)).unwrap();
         assert!(!branch_exists(&dir, "billing"));
         cleanup(dir, origin, &slot);
     }
@@ -1625,7 +1640,7 @@ mod tests {
         let fifth = commit(&slot.path, "e", "fifth");
         let fourth = git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap();
         land_on_main(&dir, &upstream, |dir| pick(dir, &fourth));
-        let error = finish(&dir, &slot, &upstream).err().unwrap();
+        let error = finish(&dir, &slot, &upstream, &state_of(&dir)).err().unwrap();
         assert!(error.contains(&fifth[..7]) && error.contains("fifth"), "{error}");
         assert!(!error.contains("fourth") && !error.contains(&fourth[..7]), "{error}");
         assert!(branch_exists(&dir, "billing"));

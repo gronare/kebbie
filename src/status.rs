@@ -223,7 +223,7 @@ fn review_progress(path: &Path, upstream: &str) -> Option<(usize, usize)> {
     if files.is_empty() {
         return None;
     }
-    let marks_dir = crate::lead::state_path(|name| std::env::var(name).ok()).ok()?;
+    let marks_dir = crate::lead::state_location().ok()?;
     let marks = fs::read_to_string(marks_dir.join(path.to_string_lossy().replace('/', "_"))).unwrap_or_default();
     let existing: Vec<&String> = files.iter().filter(|file| path.join(file).exists()).collect();
     let mut args = vec!["hash-object", "--"];

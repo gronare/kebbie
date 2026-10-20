@@ -291,7 +291,7 @@ pub fn status_line(settings: &Value) -> Check {
         return ok("status line", format!("{command:?} keeps the plan's usage for the board"));
     }
     let fact = if command.is_empty() { "no statusLine command in Claude Code's settings, so the board shows no plan usage".to_string() } else { format!("statusLine runs {command:?}, so the board shows no plan usage") };
-    let fix = if command.is_empty() { format!("add to ~/.claude/settings.json: {STATUS_LINE}") } else { "have your statusLine command pipe its stdin to `kelpie statusline` as well, or use kelpie's line: ".to_string() + STATUS_LINE };
+    let fix = if command.is_empty() { format!("add to ~/.claude/settings.json: {STATUS_LINE}") } else { "have your statusLine command pipe its stdin to `kelpie statusline` as well (it prints nothing, so your line stays as it is), or use kelpie's, which shows no line: ".to_string() + STATUS_LINE };
     warn("status line", fact, one(fix))
 }
 
@@ -384,7 +384,7 @@ impl Env {
         Self {
             path: std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default(),
             state_home: var("XDG_STATE_HOME").unwrap_or_else(|| home.join(".local/state")),
-            kelpie_state: crate::lead::state_path(|name| std::env::var(name).ok()).unwrap_or_else(|_| home.join(".local/state/kelpie")),
+            kelpie_state: crate::lead::state_location().unwrap_or_else(|_| home.join(".local/state/kelpie")),
             own_state: var(crate::lead::STATE_DIR_VAR).is_some(),
             data_home: var("XDG_DATA_HOME"),
             claude_dir: var("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn the_status_line_check_advises_kelpies_line_and_never_fails() {
+    fn the_status_line_check_advises_kelpies_command_and_never_fails() {
         let set = status_line(&serde_json::json!({ "statusLine": { "type": "command", "command": "~/.local/share/kelpie/current/target/release/kelpie statusline" } }));
         assert_eq!(set.level, Level::Ok);
         let unset = status_line(&serde_json::json!({}));
