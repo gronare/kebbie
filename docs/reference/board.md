@@ -8,12 +8,12 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 
 | Part | Shows |
 | --- | --- |
-| Status line, top | Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `chat hidden` while the lead's chat is hidden; `↑ kelpie <version> · U updates` when a newer version is out. |
+| Status line, top | The page tabs, `1 Work  2 Areas  3 Routines`, with `⚠N` on Routines while N routine runs wait for you with findings. Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `chat hidden` while the lead's chat is hidden; `↑ kelpie <version> · U updates` when a newer version is out. |
 | Work, left | Tasks from every repo with a worktree pool, grouped. A task's halves in other repos sit next to each other. |
 | Backlog, right | An ONGOING section of vault project notes in progress (status active or draft) when the vault is on, then the items from the configured sources, by priority. |
 | Messages, bottom | What sessions tell each other, newest last. |
 
-In a narrow pane the two columns stack.
+In a narrow pane the two columns stack, and the status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
 
 A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases first. Under it, a `you:` line gives your next step from the task's last report. While its dev server runs, a `web` line shows the server's address as a link.
 
@@ -53,7 +53,7 @@ Between turns, the task's last report decides its group. A CI watch, or kelpie r
 | `⏎` | Options for the selected task or backlog item. |
 | `↑` `↓`, `j` `k` | Move. |
 | `←` `→` | Switch between Work and Backlog. |
-| `1`, `2` | The Work page, the Areas page. |
+| `1`, `2`, `3` | The Work page, the Areas page, the Routines page. |
 | `tab` | Move focus to the lead's chat, showing it first when it is hidden. |
 | `h` | Hide the lead's chat, or show it again: the board takes the whole width while the chat runs on. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
 | `i` | The inbox: the questions waiting on you. Works on the Areas page too. |
@@ -186,6 +186,42 @@ An area's repo is the system note's `path`, else where the vault's hooks saw it,
 
 `esc` and `q` close the page's windows; at the top they act as on the Work page.
 
+## Routines page
+
+Press `3` to open it. It lists every routine from config.toml and the repo configs, one row each: its last run's outcome, its name, its schedule, and how its last run stands or when it runs next. Routines whose findings wait for you come first, paused ones last. The selected routine shows on the right: what it does in your words, its repo, what it may do and its last few runs. In a narrow pane the list stands alone; `⏎` opens the selected routine on the whole width and `esc` goes back.
+
+| Mark | Last run |
+| --- | --- |
+| `⚠` | Found something. Peach while its task is open and waits for you, and counted on the tab. |
+| `◐` | Running. |
+| `✓` | Found nothing and closed itself. |
+| `✗` | Failed to start, or its task closed before it reported. |
+| `‖` | The routine is paused. |
+
+A run is an ordinary task. It shows on the Work page like any other, marked `routine`, and waits under Needs you when it found something.
+
+| Key | Action |
+| --- | --- |
+| `⏎` | Options for the selected routine: go to its last run's task, show the report, run now, edit, pause or resume, delete. |
+| `n` | New routine: five steps, then the table it adds to config.toml. |
+| `g` | Run it now, unless its last run's task is still open. |
+| `e` | Edit it: the same five steps with its values. |
+| `p` | Pause it, or resume it. |
+| `s` | The last run's report: its task's sign-off card, or the run's outcome and summary. |
+| `D` | Delete it, after asking. |
+
+`n` asks, one step at a time:
+
+1. What it should do, in your words: this is its prompt. `ctrl-e` opens it in your editor.
+2. Which repo it runs in, from the checkouts under your repo folders; type to filter.
+3. When: `07:00` every day, `mon 08:00` every week, or `every 6h`.
+4. What it may do: Report, Plan, Fix, or Fix and push (the lead pushes the fix once reviewed).
+5. Its name. The id comes from the name.
+
+Then it shows the `[[routines]]` table it will add. Nothing is written before `y`; `g` adds it and starts a run at once, `←` goes back. A new routine always goes to config.toml, as `kelpie routine add` adds it. Editing, pausing and deleting change the routine in the file it is in, a repo config's in that repo config, and keep the rest of the file as it was. The page reads the files again every 15 seconds, so a change made by hand shows within a minute.
+
+With no routines yet, the page explains what a routine is and offers three to start from: a health check, a dependency bump and keeping CI green.
+
 ## Keys in config.toml
 
 `[keys]` in config.toml moves a key, as `action = "key"`. It lives in config.toml only; a repo config refuses it.
@@ -196,7 +232,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `hide_chat`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `done`, `reset`, `drop`, `refresh`, `away`, `update`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page) and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `done`, `reset`, `drop`, `refresh`, `away`, `update`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

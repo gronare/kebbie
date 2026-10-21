@@ -139,7 +139,7 @@ pub fn card_text(label: &str, text: &str, accent: Color, width: usize, max_lines
     lines.into_iter().map(|line| line.style(Style::new().bg(SURFACE))).collect()
 }
 
-pub(super) fn cut(text: &str, width: usize) -> String {
+pub fn cut(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
     }
@@ -218,6 +218,39 @@ pub fn options_lines(choices: Vec<Choice>, index: usize, width: usize) -> Vec<Li
     }
     lines.push(Line::from(Span::styled("↑ ↓ choose · ⏎ run · esc close", style(FAINT))));
     lines
+}
+
+// A menu in groups, as the task menu draws it; the second value is each choice's line, which the mouse hits are placed on.
+pub fn menu_lines(choices: &[Choice], index: usize, width: usize, running: impl Fn(Option<Act>) -> bool, group_of: impl Fn(Option<Act>) -> &'static str) -> (Vec<Line<'static>>, Vec<usize>) {
+    let mut lines = Vec::new();
+    let mut at = Vec::new();
+    let mut group = "";
+    for (position, choice) in choices.iter().enumerate() {
+        if group_of(choice.act) != group {
+            group = group_of(choice.act);
+            lines.push(Line::from(Span::styled(group, style(MUTED))));
+        }
+        let active = position == index;
+        let ending = matches!(choice.act, Some(Act::Reset | Act::Drop | Act::Delete));
+        let label_style = match (active, ending) {
+            (true, true) => bold(RED),
+            (true, false) => bold(MAUVE),
+            (false, true) => style(RED),
+            (false, false) => style(TEXT),
+        };
+        let dot = if running(choice.act) { Span::styled("● ", style(GREEN)) } else { Span::raw("  ") };
+        let gap = width.saturating_sub(choice.label.chars().count() + 5).max(1);
+        at.push(lines.len());
+        lines.push(Line::from(vec![
+            Span::raw(if active { "▸ " } else { "  " }), Span::styled(choice.label.clone(), label_style), Span::raw(" ".repeat(gap)), dot, Span::styled(choice.key.to_string(), style(MUTED)),
+        ]).style(if active { Style::new().bg(SURFACE) } else { Style::new() }));
+    }
+    lines.push(Line::from(Span::styled("─".repeat(width), style(SURFACE))));
+    if let Some(choice) = choices.get(index) {
+        lines.push(Line::from(Span::styled(choice.about.clone(), style(SUBTEXT))));
+    }
+    lines.push(Line::from(Span::styled("↑ ↓ choose · ⏎ run · a letter runs it directly · esc close", style(FAINT))));
+    (lines, at)
 }
 
 #[cfg(test)]

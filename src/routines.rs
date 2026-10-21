@@ -14,7 +14,7 @@ pub const KEYS: [&str; 9] = ["id", "title", "repo", "every", "at", "prompt", "mo
 pub const EVERY: u64 = 60;
 const DAY: u64 = 86_400;
 const NAME_LIMIT: usize = 32;
-const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+pub const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Mode {
@@ -90,6 +90,15 @@ impl Outcome {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Past {
+    pub start: u64,
+    pub outcome: Outcome,
+    pub summary: Option<String>,
+}
+
+pub const EARLIER: usize = 4;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
     pub seen: Option<u64>,
@@ -97,6 +106,7 @@ pub struct State {
     pub last_task: Option<String>,
     pub last_outcome: Option<Outcome>,
     pub last_summary: Option<String>,
+    pub earlier: Vec<Past>,
 }
 
 fn text(table: &Table, field: &str, key: &str) -> Result<Option<String>> {
@@ -343,12 +353,24 @@ pub fn prompt(routine: &Routine, kelpie: &str) -> String {
     )
 }
 
-fn state_file(dir: &Path, id: &str) -> PathBuf {
+pub fn keep_last(state: &mut State) {
+    if let (Some(start), Some(outcome)) = (state.last_start, state.last_outcome) {
+        state.earlier.insert(0, Past { start, outcome, summary: state.last_summary.clone() });
+        state.earlier.truncate(EARLIER);
+    }
+}
+
+pub fn state_file(dir: &Path, id: &str) -> PathBuf {
     dir.join("routines").join(format!("{id}.json"))
 }
 
 pub fn state_json(state: &State) -> Value {
-    json!({ "seen": state.seen, "last_start": state.last_start, "last_task": state.last_task, "last_outcome": state.last_outcome.map(Outcome::key), "last_summary": state.last_summary })
+    let earlier: Vec<Value> = state.earlier.iter().map(|past| json!({ "start": past.start, "outcome": past.outcome.key(), "summary": past.summary })).collect();
+    json!({ "seen": state.seen, "last_start": state.last_start, "last_task": state.last_task, "last_outcome": state.last_outcome.map(Outcome::key), "last_summary": state.last_summary, "earlier": earlier })
+}
+
+fn outcome_of(value: &Value) -> Option<Outcome> {
+    value.as_str().and_then(|key| Outcome::ALL.into_iter().find(|outcome| outcome.key() == key))
 }
 
 pub fn state_from(value: &Value) -> State {
@@ -356,8 +378,11 @@ pub fn state_from(value: &Value) -> State {
         seen: value["seen"].as_u64(),
         last_start: value["last_start"].as_u64(),
         last_task: value["last_task"].as_str().map(str::to_string),
-        last_outcome: value["last_outcome"].as_str().and_then(|key| Outcome::ALL.into_iter().find(|outcome| outcome.key() == key)),
+        last_outcome: outcome_of(&value["last_outcome"]),
         last_summary: value["last_summary"].as_str().map(str::to_string),
+        earlier: value["earlier"].as_array().into_iter().flatten().filter_map(|past| Some(Past {
+            start: past["start"].as_u64()?, outcome: outcome_of(&past["outcome"])?, summary: past["summary"].as_str().map(str::to_string),
+        })).collect(),
     }
 }
 
@@ -421,6 +446,7 @@ fn notify(cwd: &Path, event: crate::notify::Event, address: &str, text: String) 
 fn start_run(routine: &Routine, dir: &Path, now: u64, offset: i64) -> Result<String> {
     let mut state = load_state(dir, &routine.id);
     let task = task_name(&routine.id, now, offset);
+    keep_last(&mut state);
     state.last_start = Some(now);
     state.last_task = None;
     state.last_outcome = Some(Outcome::Running);
@@ -748,7 +774,8 @@ mod tests {
     fn the_state_survives_a_round_trip_and_finds_its_routine_by_task() {
         let dir = crate::sh::test_dir("routines-state");
         assert_eq!(load_state(&dir, "x"), State::default());
-        let state = State { seen: Some(1), last_start: Some(2), last_task: Some("x-20261019-0630@infra".to_string()), last_outcome: Some(Outcome::Running), last_summary: None };
+        let past = Past { start: 1, outcome: Outcome::Failed, summary: Some("kubectl: connection refused".to_string()) };
+        let state = State { seen: Some(1), last_start: Some(2), last_task: Some("x-20261019-0630@infra".to_string()), last_outcome: Some(Outcome::Running), last_summary: None, earlier: vec![past] };
         save_state(&dir, "x", &state).unwrap();
         assert_eq!(load_state(&dir, "x"), state);
         assert!(dir.join("routines/x.json").is_file());
@@ -763,6 +790,22 @@ mod tests {
             assert_eq!(state_from(&state_json(&State { last_outcome: Some(outcome), ..State::default() })).last_outcome, Some(outcome));
         }
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_run_keeps_the_last_few_runs_before_it_newest_first() {
+        let mut state = State::default();
+        keep_last(&mut state);
+        assert!(state.earlier.is_empty(), "a routine that never ran has nothing to keep");
+        for start in 1..=6 {
+            state.last_start = Some(start);
+            state.last_outcome = Some(if start % 2 == 0 { Outcome::Ok } else { Outcome::Findings });
+            state.last_summary = Some(format!("run {start}"));
+            keep_last(&mut state);
+        }
+        assert_eq!(state.earlier.iter().map(|past| past.start).collect::<Vec<_>>(), [6, 5, 4, 3]);
+        assert_eq!((state.earlier[0].outcome, state.earlier[0].summary.as_deref()), (Outcome::Ok, Some("run 6")));
+        assert_eq!(state_from(&json!({ "earlier": [{ "start": 1, "outcome": "nonsense" }, { "start": 2, "outcome": "ok" }] })).earlier.len(), 1, "an entry kelpie cannot read is left out");
     }
 
     #[test]
@@ -805,7 +848,7 @@ mod tests {
     fn the_list_shows_each_routines_schedule_next_run_and_last_outcome() {
         let mut off = one("[[routines]]\nid = \"deps\"\ntitle = \"Updates\"\nat = \"mon 07:00\"\nprompt = \"p\"\nmode = \"plan\"\n");
         off.enabled = false;
-        let ran = State { last_start: Some(1000), last_task: Some("cluster-health-x@infra".to_string()), last_outcome: Some(Outcome::Ok), last_summary: Some("all nodes Ready".to_string()), seen: Some(1) };
+        let ran = State { last_start: Some(1000), last_task: Some("cluster-health-x@infra".to_string()), last_outcome: Some(Outcome::Ok), last_summary: Some("all nodes Ready".to_string()), seen: Some(1), earlier: Vec::new() };
         let rows = [(one(CLUSTER), ran.clone(), false), (one(CLUSTER), State { last_outcome: Some(Outcome::Running), ..ran }, true), (off, State::default(), false)];
         assert_eq!(render(&rows, &["repos/web.toml: bad".to_string()], 1000 + 3600, 0), [
             "cluster-health  Cluster health",

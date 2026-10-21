@@ -37,7 +37,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `away` | Present while away mode is on. |
 | `backlog.json` | The backlog the lead saved on its last refresh. |
 | `recover/` | One file per task an API error stopped, `<task>@<repo>.json`: the error, how many times kelpie resumed the task, when it resumes next and whether it is stuck. It survives restarts, so kelpie never resumes a task twice for one error. |
-| `routines/` | One file per routine, `<id>.json`: when the scheduler first saw it, when its last run started, that run's task, its outcome (`running`, `ok`, `findings` or `failed`) and summary. `lock` keeps two schedulers from starting the same run. |
+| `routines/` | One file per routine, `<id>.json`: when the scheduler first saw it, when its last run started, that run's task, its outcome (`running`, `ok`, `findings` or `failed`) and summary, and the four runs before it, which the board's Routines page lists. `lock` keeps two schedulers from starting the same run. |
 | `usage.json` | Plan usage from the status line. |
 | `update-check.json` | The last update check. |
 | `update-override.json` | The `--from` override, while it holds. |

@@ -200,7 +200,7 @@ fn row_facts(area: &Area, tasks: &[Item]) -> String {
     parts.into_iter().take(3).collect::<Vec<_>>().join(" · ")
 }
 
-fn home_relative(path: &std::path::Path) -> String {
+pub fn home_relative(path: &std::path::Path) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     match path.strip_prefix(&home) {
         Ok(rest) if !home.is_empty() => format!("~/{}", rest.display()),

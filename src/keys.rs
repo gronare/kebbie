@@ -8,6 +8,7 @@ pub enum Ctx {
     Work,
     Backlog,
     Areas,
+    Routines,
     Card,
 }
 
@@ -18,6 +19,7 @@ pub enum Act {
     Switch,
     WorkPage,
     AreasPage,
+    RoutinesPage,
     Lead,
     HideChat,
     Messages,
@@ -43,6 +45,9 @@ pub enum Act {
     Filter,
     AreaRefresh,
     Log,
+    Edit,
+    Pause,
+    Delete,
     Fullscreen,
     OpenImage,
     Back,
@@ -71,16 +76,16 @@ pub struct Binding {
     pub hint: Hint,
 }
 
-use Ctx::{Areas, Backlog, Card, Work};
+use Ctx::{Areas, Backlog, Card, Routines, Work};
 
 const BOARD: &[Ctx] = &[Work, Backlog];
-const ALL: &[Ctx] = &[Work, Backlog, Areas];
+const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 
 impl Act {
-    pub const EVERY: [Act; 35] = [
-        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::Lead, Act::HideChat, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 39] = [
+        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Tidy, Act::Push, Act::Done, Act::Reset, Act::Drop, Act::Refresh, Act::Away,
-        Act::Update, Act::Filter, Act::AreaRefresh, Act::Log, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
+        Act::Update, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
     pub fn id(self) -> &'static str {
@@ -90,6 +95,7 @@ impl Act {
             Act::Switch => "switch",
             Act::WorkPage => "work_page",
             Act::AreasPage => "areas_page",
+            Act::RoutinesPage => "routines_page",
             Act::Lead => "lead",
             Act::HideChat => "hide_chat",
             Act::Messages => "messages",
@@ -115,6 +121,9 @@ impl Act {
             Act::Filter => "filter",
             Act::AreaRefresh => "area_refresh",
             Act::Log => "log",
+            Act::Edit => "edit",
+            Act::Pause => "pause",
+            Act::Delete => "delete",
             Act::Fullscreen => "fullscreen",
             Act::OpenImage => "open_image",
             Act::Back => "back",
@@ -135,6 +144,7 @@ impl Act {
             Act::Quit => Default::CtrlC,
             Act::WorkPage => Default::Char('1'),
             Act::AreasPage => Default::Char('2'),
+            Act::RoutinesPage => Default::Char('3'),
             Act::HideChat => Default::Char('h'),
             Act::Messages => Default::Char('m'),
             Act::Help => Default::Char('?'),
@@ -159,6 +169,9 @@ impl Act {
             Act::Filter => Default::Char('/'),
             Act::AreaRefresh => Default::Char('b'),
             Act::Log => Default::Char('l'),
+            Act::Edit => Default::Char('e'),
+            Act::Pause => Default::Char('p'),
+            Act::Delete => Default::Char('D'),
             Act::Close => Default::Char('q'),
         }
     }
@@ -173,11 +186,13 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Options, on: BOARD, help: "options for the selected task or backlog item", hint: Hint::Both },
     Binding { act: Act::Options, on: &[Areas], help: "actions for the selected area (in the detail: run the selected action)", hint: Hint::Both },
     Binding { act: Act::Switch, on: BOARD, help: "switch between work and backlog", hint: Hint::No },
+    Binding { act: Act::Options, on: &[Routines], help: "options for the selected routine (on a narrow board: open it, then options)", hint: Hint::No },
     Binding { act: Act::Switch, on: &[Areas], help: "list · detail", hint: Hint::No },
     Binding { act: Act::Move, on: ALL, help: "move", hint: Hint::No },
     Binding { act: Act::Move, on: &[Card], help: "in the card window: scroll", hint: Hint::No },
     Binding { act: Act::WorkPage, on: ALL, help: "the work page", hint: Hint::No },
     Binding { act: Act::AreasPage, on: ALL, help: "the areas page", hint: Hint::No },
+    Binding { act: Act::RoutinesPage, on: ALL, help: "the routines page; ⚠ on its tab counts the runs whose findings wait for you", hint: Hint::No },
     Binding { act: Act::Lead, on: ALL, help: "move focus to the lead's chat, showing it first when it is hidden", hint: Hint::Full },
     Binding { act: Act::HideChat, on: BOARD, help: "hide or show the lead's chat: hidden, it runs on and the board takes the whole width (on the board in the lead Space)", hint: Hint::Full },
     Binding { act: Act::Inbox, on: ALL, help: "inbox: the questions waiting on you; read the plan, answer with a comment", hint: Hint::Both },
@@ -207,12 +222,18 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Log, on: &[Areas], help: "its vault log", hint: Hint::No },
     Binding { act: Act::Permit, on: &[Areas], help: "let the lead push the repo's reviewed tasks, or take that back", hint: Hint::No },
     Binding { act: Act::Push, on: &[Areas], help: "push main when it is ahead (asks first)", hint: Hint::No },
+    Binding { act: Act::New, on: &[Routines], help: "new routine: five steps, then the table it adds to config.toml", hint: Hint::No },
+    Binding { act: Act::Go, on: &[Routines], help: "run the routine now, unless its last run's task is still open", hint: Hint::No },
+    Binding { act: Act::Edit, on: &[Routines], help: "edit the routine: the same five steps with its values, saved in the file it is in", hint: Hint::No },
+    Binding { act: Act::Pause, on: &[Routines], help: "pause the routine, or resume it (enabled = false in its table)", hint: Hint::No },
+    Binding { act: Act::Card, on: &[Routines], help: "the last run's report: its task's sign-off card, or its outcome and summary", hint: Hint::No },
+    Binding { act: Act::Delete, on: &[Routines], help: "delete the routine's table from its file (asks first)", hint: Hint::No },
     Binding { act: Act::Fullscreen, on: &[Card], help: "in the card window: the image alone over the whole board, as large as it fits (← → between images; esc, q or f back)", hint: Hint::No },
     Binding { act: Act::Switch, on: &[Card], help: "in the fullscreen image: the previous or next image", hint: Hint::No },
     Binding { act: Act::OpenImage, on: &[Card], help: "in the card window: open the image in the system viewer (not over SSH, and on Linux only with a display)", hint: Hint::No },
     Binding { act: Act::Help, on: ALL, help: "these keys", hint: Hint::Both },
-    Binding { act: Act::Back, on: &[Work, Backlog, Areas, Card], help: "one step back: close a window, a menu or the filter; at the top, close the board when it is an overlay", hint: Hint::No },
-    Binding { act: Act::Close, on: &[Work, Backlog, Areas, Card], help: "close the current view like esc; at the top, close an overlay board", hint: Hint::No },
+    Binding { act: Act::Back, on: &[Work, Backlog, Areas, Routines, Card], help: "one step back: close a window, a menu or the filter; at the top, close the board when it is an overlay", hint: Hint::No },
+    Binding { act: Act::Close, on: &[Work, Backlog, Areas, Routines, Card], help: "close the current view like esc; at the top, close an overlay board", hint: Hint::No },
     Binding { act: Act::Quit, on: ALL, help: "twice within 2 s: quit the board", hint: Hint::No },
 ];
 
@@ -384,7 +405,7 @@ mod tests {
             assert!(TABLE.iter().any(|row| row.act == act), "{} has no row", act.id());
         }
         let keys = Keys::defaults();
-        for ctx in [Work, Backlog, Areas, Card] {
+        for ctx in [Work, Backlog, Areas, Routines, Card] {
             let mut seen: Vec<(KeyCode, Act)> = Vec::new();
             for row in TABLE.iter().filter(|row| row.on.contains(&ctx)) {
                 for code in keys.codes(row.act) {
@@ -415,6 +436,19 @@ mod tests {
         assert_eq!(at(Areas, KeyCode::Char('b')), Some(Act::AreaRefresh));
         assert_eq!(at(Work, KeyCode::Char('b')), Some(Act::Worker));
         assert_eq!(keys.act(Work, &KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), Some(Act::Quit));
+    }
+
+    #[test]
+    fn the_routines_page_is_3_everywhere_and_has_its_own_letters() {
+        let keys = Keys::defaults();
+        let at = |ctx, code| keys.act(ctx, &KeyEvent::from(code));
+        for ctx in [Work, Backlog, Areas, Routines] {
+            assert_eq!(at(ctx, KeyCode::Char('3')), Some(Act::RoutinesPage), "{ctx:?}");
+        }
+        assert_eq!((at(Routines, KeyCode::Char('e')), at(Routines, KeyCode::Char('p')), at(Routines, KeyCode::Char('D'))), (Some(Act::Edit), Some(Act::Pause), Some(Act::Delete)));
+        assert_eq!((at(Routines, KeyCode::Char('g')), at(Routines, KeyCode::Char('s')), at(Routines, KeyCode::Char('n'))), (Some(Act::Go), Some(Act::Card), Some(Act::New)));
+        assert_eq!((at(Work, KeyCode::Char('e')), at(Work, KeyCode::Char('p')), at(Areas, KeyCode::Char('D'))), (None, Some(Act::Push), None), "pause and delete live on the Routines page alone");
+        assert_eq!(Keys::with(&entries(&[("pause", "P")])).0.act(Routines, &KeyEvent::from(KeyCode::Char('P'))), Some(Act::Pause));
     }
 
     #[test]
@@ -501,7 +535,7 @@ mod tests {
     fn a_repo_action_cannot_take_an_areas_key_and_follows_a_moved_one() {
         let keys = Keys::defaults();
         let reserved = keys.reserved();
-        for key in ['g', 'n', 'a', 'b', 'l', 'p', 'i', 'q', '?', 'j', 'k', '1', '2'] {
+        for key in ['g', 'n', 'a', 'b', 'l', 'p', 'i', 'q', '?', 'j', 'k', '1', '2', '3'] {
             assert!(reserved.contains(&key), "{key}: {reserved:?}");
         }
         assert!(!reserved.contains(&'s') && !reserved.contains(&'u') && !reserved.contains(&'R'), "{reserved:?}");

@@ -141,7 +141,7 @@ task = "Bump {package} to {version}; commit."
 
 ## `[[routines]]`
 
-Machine config or repo config. Each table is a check kelpie runs on a schedule as a task. See [Routines](../explanation/routines.md) and [Add a routine](../how-to/add-a-routine.md).
+Machine config or repo config. Each table is a check kelpie runs on a schedule as a task. The board's [Routines page](board.md#routines-page) and `kelpie routine add` write new ones into config.toml, and edit, pause and delete them in the file they are in. See [Routines](../explanation/routines.md) and [Add a routine](../how-to/add-a-routine.md).
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |

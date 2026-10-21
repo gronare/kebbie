@@ -37,6 +37,7 @@ use ratatui_image::picker::Picker;
 use ratatui_image::protocol::Protocol;
 
 use crate::area_page::{self, Effect};
+use crate::routine_page;
 use crate::backlog::{self, Backlog, Entry};
 use crate::config::{self, Source};
 use crate::fetch::Fetcher;
@@ -71,6 +72,7 @@ use threads::{DetailRequest, spawn_ci_watcher, spawn_detailer, spawn_refresher, 
 enum Page {
     Work,
     Areas,
+    Routines,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -129,6 +131,7 @@ struct App {
     links: Vec<Link>,
     page: Page,
     areas: area_page::Page,
+    routines: routine_page::Page,
     sources: Vec<Source>,
     fetch_failures: Vec<String>,
     away: bool,
@@ -249,7 +252,7 @@ impl App {
 
     // Pages switch only when nothing is open on either.
     fn at_rest(&self) -> bool {
-        matches!(self.mode, Mode::Normal) && self.areas.is_normal()
+        matches!(self.mode, Mode::Normal) && self.areas.is_normal() && self.routines.is_normal()
     }
 
     fn in_background(&mut self, label: String, step: impl FnOnce() -> Result<String> + Send + 'static) {
@@ -322,7 +325,11 @@ impl App {
         }
         self.notice = None;
         if self.at_rest() {
-            let ctx = if self.page == Page::Areas { Ctx::Areas } else { self.ctx() };
+            let ctx = match self.page {
+                Page::Areas => Ctx::Areas,
+                Page::Routines => Ctx::Routines,
+                Page::Work => self.ctx(),
+            };
             match map.act(ctx, &key) {
                 Some(Act::Lead) => {
                     if let Err(error) = lead::focus_toggle() {
@@ -335,12 +342,18 @@ impl App {
                 Some(Act::HideChat) => return self.toggle_chat(),
                 Some(Act::WorkPage) => return self.page = Page::Work,
                 Some(Act::AreasPage) => return self.page = Page::Areas,
+                Some(Act::RoutinesPage) => return self.page = Page::Routines,
                 Some(Act::Inbox) => {
                     self.page = Page::Work;
                     return self.open_questions(None);
                 }
                 _ => {}
             }
+        }
+        if self.page == Page::Routines {
+            let top = self.routines.is_normal();
+            let effect = self.routines.handle(key, terminal);
+            return self.after_routines(effect, top.then(|| map.act(Ctx::Routines, &key)).flatten());
         }
         if self.page == Page::Areas {
             let top = self.areas.is_normal();
@@ -369,6 +382,29 @@ impl App {
             Mode::ConfirmPush { path, commits, selected, card, tests } => self.handle_push(path, commits, selected, card, tests, key),
             Mode::EditMessage(editor) => self.handle_editor(editor, key, terminal),
             Mode::Input { purpose, label, buffer } => self.handle_input(purpose, label, buffer, key, terminal),
+        }
+    }
+
+    fn after_routines(&mut self, effect: routine_page::Effect, top: Option<Act>) {
+        let mut select = |address: &str| -> Option<Item> {
+            let index = self.tasks.iter().position(|item| peers::address(&item.name, &item.place) == address)?;
+            (self.page, self.column, self.work_selected, self.filter, self.in_messages) = (Page::Work, Column::Work, index, None, false);
+            self.tasks.get(index).cloned()
+        };
+        match effect {
+            routine_page::Effect::Unhandled if top.is_some() => self.at_top(top),
+            routine_page::Effect::Task(address) => {
+                select(&address);
+            }
+            routine_page::Effect::Card(address) => {
+                if let Some(item) = select(&address) {
+                    match (item.path.clone(), self.card_of(&item)) {
+                        (Some(path), Some(_)) => self.mode = Mode::Card { path, name: item.name, scroll: 0 },
+                        _ => self.show(Ok(format!("{}'s card is still loading; s shows it here in a moment.", item.name))),
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -615,6 +651,7 @@ impl Rebuild {
         let Some(path) = &self.path else { return "Cannot tell where kelpie's binary is".to_string() };
         let column = match (app.page, app.column) {
             (Page::Areas, _) => "areas",
+            (Page::Routines, _) => "routines",
             (_, Column::Backlog) => "backlog",
             _ => "work",
         };
@@ -631,7 +668,7 @@ impl App {
         App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
-            page: Page::Work, areas: area_page::Page::new(sources.clone()), sources, fetch_failures: Vec::new(), away: false,
+            page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), sources, fetch_failures: Vec::new(), away: false,
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, card_image_lines: Vec::new(), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
@@ -663,6 +700,7 @@ pub fn run(overlay: bool) -> Result<String> {
         match parts.next() {
             Some("backlog") => app.column = Column::Backlog,
             Some("areas") => app.page = Page::Areas,
+            Some("routines") => app.page = Page::Routines,
             _ => {}
         }
         app.backlog_selected = parts.next().and_then(|index| index.parse().ok()).unwrap_or(0);
@@ -698,6 +736,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         let previous = app.selected_task().map(|item| (item.name, item.place));
                         app.tasks = snapshot.items.into_iter().filter(Item::is_task).collect();
                         app.areas.tasks = app.tasks.clone();
+                        app.routines.tasks = app.tasks.clone();
                         app.checkouts = snapshot.checkouts;
                         let wanted = app.wanted_task.take();
                         let position = previous.and_then(|(name, place)| app.tasks.iter().position(|item| item.name == name && item.place == place))
@@ -741,6 +780,7 @@ pub fn run(overlay: bool) -> Result<String> {
             if app.page == Page::Areas {
                 app.areas.tick();
             }
+            app.routines.tick();
             let mut repos: Vec<PathBuf> = app.tasks.iter().filter_map(|item| item.repo.clone()).chain(app.areas.repos()).collect();
             repos.sort();
             repos.dedup();
@@ -750,7 +790,7 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             app.fetch_failures = fetcher.failures();
             app.away = permit::away_since().is_some();
-            if (matches!(app.mode, Mode::Normal | Mode::Help) || matches!(app.mode, Mode::Message(_)) && !app.update_shown) && app.areas.is_idle() && rebuild.ready() {
+            if (matches!(app.mode, Mode::Normal | Mode::Help) || matches!(app.mode, Mode::Message(_)) && !app.update_shown) && app.areas.is_idle() && app.routines.is_idle() && rebuild.ready() {
                 let error = rebuild.restart(&app);
                 terminal = init_terminal();
                 app.mode = Mode::Message(error);
@@ -886,6 +926,35 @@ mod tests {
         app.mode = Mode::Normal;
         app.handle_normal(key(KeyCode::Char('i')));
         assert!(matches!(&app.mode, Mode::Message(text) if text.contains("No questions")), "i is the inbox");
+    }
+
+    #[test]
+    fn three_opens_the_routines_page_its_tab_counts_the_runs_waiting_on_you_and_enter_goes_to_the_run() {
+        let mut run = crate::status::tests::task(Some("idle"), Some("needs-you"), 0);
+        (run.name, run.place) = ("cluster-health-20261019-0600".to_string(), "infra".to_string());
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0), run]);
+        app.routines.tasks = app.tasks.clone();
+        let routine = crate::routines::Routine {
+            id: "cluster-health".to_string(), title: "Cluster health".to_string(), repo: "infra".to_string(), schedule: crate::routines::Schedule::Daily(420),
+            prompt: "Check every node.".to_string(), mode: crate::routines::Mode::Report, push: false, enabled: true, source: "/c/config.toml".to_string(),
+        };
+        let state = crate::routines::State { last_start: Some(1), last_task: Some("cluster-health-20261019-0600@infra".to_string()), last_outcome: Some(crate::routines::Outcome::Findings), ..Default::default() };
+        app.routines.shown(vec![(routine, state)]);
+        assert!(header(&app, 200).0.to_string().ends_with(" 1 Work  2 Areas  3 Routines ⚠1 "), "{}", header(&app, 200).0);
+        press(&mut app, key(KeyCode::Char('3')));
+        assert_eq!(app.page, Page::Routines);
+        let (rows, _) = render(&mut app, 120, 30);
+        let screen = rows.join("\n");
+        assert!(screen.contains("▌⚠ Cluster health") && screen.contains("⏎ options · n new · g run now · e edit · p pause · s last report · ? keys"), "{screen}");
+        assert!(header(&app, 70).0.to_string().ends_with(" 1  2  3 Routines ⚠1 "), "a narrow header names only the page it is on: {}", header(&app, 70).0);
+        let (x, y) = find(&rows, "3 Routines")[0];
+        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Tab(Page::Routines)));
+        press(&mut app, key(KeyCode::Enter));
+        press(&mut app, key(KeyCode::Enter));
+        assert!(app.page == Page::Work && app.column == Column::Work, "Go to its task opens the Work page");
+        assert_eq!(app.selected_task().map(|item| item.name).as_deref(), Some("cluster-health-20261019-0600"), "with the run selected");
+        app.routines.tasks.clear();
+        assert!(!header(&app, 200).0.to_string().contains('⚠'), "a closed run's findings wait for no one");
     }
 
     #[test]

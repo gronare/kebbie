@@ -236,6 +236,10 @@ fn pooled_under(roots: &[PathBuf]) -> Vec<PathBuf> {
     }).collect()
 }
 
+pub fn checkouts() -> Vec<PathBuf> {
+    roots().iter().flat_map(|root| checkouts_under(root)).collect()
+}
+
 pub fn checkout_named(name: &str) -> Option<PathBuf> {
     roots().iter().flat_map(|root| checkouts_under(root)).find(|path| name_of(path) == name)
 }

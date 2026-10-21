@@ -2,6 +2,21 @@
 
 Have kelpie run a check on a schedule, as a task that reports what it finds or proposes a plan.
 
+## Add one from the board
+
+1. Open the board's Routines page with `3` and press `n`.
+2. Answer the five steps: what it should do, the repo, when (`07:00`, `mon 08:00` or `every 6h`), what it may do, and its name.
+3. Check the table it shows and press `y` to add it to config.toml, or `g` to add it and run it at once.
+
+The same from a shell:
+
+```bash
+kelpie routine add --title "Cluster health" --repo infra --every 6h \
+  "Check the cluster with kubectl: every node Ready, no pod crash-looping, every volume healthy."
+```
+
+To write the table yourself, or to keep a routine in a repo's own config, follow the examples below.
+
 ## Check a cluster's health every six hours
 
 The cluster's manifests live in a gitops repo, `~/code/infra`, so the routine goes in that repo's config and runs there.
@@ -68,6 +83,6 @@ prompt = "Check free disk space on every node and flag any under 15 percent."
 
 ## Turn one off
 
-Set `enabled = false` in its table. `kelpie routine run <id>` still starts it by hand.
+Press `p` on it on the Routines page, or set `enabled = false` in its table. `kelpie routine run <id>` still starts it by hand.
 
 See also: [Routines](../explanation/routines.md), [`[[routines]]`](../reference/configuration.md#routines).

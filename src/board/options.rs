@@ -1,7 +1,5 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 use crate::backlog::{self, Entry};
@@ -11,7 +9,7 @@ use crate::permit::Permit;
 use crate::status::{Group, Item};
 use super::{App, Column, Hit, Mode, Ongoing};
 use super::space::{Process, settings_of};
-use super::widgets::{Choice, FAINT, GREEN, MAUVE, MUTED, RED, SUBTEXT, SURFACE, TEXT, bold, choice, modal, options_lines, style};
+use super::widgets::{Choice, choice, menu_lines, modal, options_lines};
 
 pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_worker: Option<&str>) -> Vec<Choice> {
     let go = if item.is_some_and(|item| item.agent.is_none()) {
@@ -126,39 +124,6 @@ fn menu_group(act: Option<Act>) -> &'static str {
     }
 }
 
-// The second value is each choice's line, which the mouse hits are placed on.
-fn menu_lines(choices: &[Choice], index: usize, width: usize, running: impl Fn(Option<Act>) -> bool) -> (Vec<Line<'static>>, Vec<usize>) {
-    let mut lines = Vec::new();
-    let mut at = Vec::new();
-    let mut group = "";
-    for (position, choice) in choices.iter().enumerate() {
-        if menu_group(choice.act) != group {
-            group = menu_group(choice.act);
-            lines.push(Line::from(Span::styled(group, style(MUTED))));
-        }
-        let active = position == index;
-        let ending = matches!(choice.act, Some(Act::Reset | Act::Drop));
-        let label_style = match (active, ending) {
-            (true, true) => bold(RED),
-            (true, false) => bold(MAUVE),
-            (false, true) => style(RED),
-            (false, false) => style(TEXT),
-        };
-        let dot = if running(choice.act) { Span::styled("● ", style(GREEN)) } else { Span::raw("  ") };
-        let gap = width.saturating_sub(choice.label.chars().count() + 5).max(1);
-        at.push(lines.len());
-        lines.push(Line::from(vec![
-            Span::raw(if active { "▸ " } else { "  " }), Span::styled(choice.label.clone(), label_style), Span::raw(" ".repeat(gap)), dot, Span::styled(choice.key.to_string(), style(MUTED)),
-        ]).style(if active { Style::new().bg(SURFACE) } else { Style::new() }));
-    }
-    lines.push(Line::from(Span::styled("─".repeat(width), style(SURFACE))));
-    if let Some(choice) = choices.get(index) {
-        lines.push(Line::from(Span::styled(choice.about.clone(), style(SUBTEXT))));
-    }
-    lines.push(Line::from(Span::styled("↑ ↓ choose · ⏎ run · a letter runs it directly · esc close", style(FAINT))));
-    (lines, at)
-}
-
 impl App {
     pub(super) fn handle_options(&mut self, index: usize, act: Option<Act>, key: KeyEvent) {
         let choices = self.choices();
@@ -188,7 +153,7 @@ pub(super) fn draw_options(frame: &mut Frame, app: &App, index: usize) -> Vec<(R
             let item = app.selected_task();
             let title: String = item.as_ref().map(|item| item.name.clone()).unwrap_or_default().chars().take(44).collect();
             let running = |act: Option<Act>| item.as_ref().is_some_and(|item| (act == Some(Act::Server) && item.server) || (act == Some(Act::Worker) && item.worker));
-            let (lines, at) = menu_lines(&app.choices(), index, 48, running);
+            let (lines, at) = menu_lines(&app.choices(), index, 48, running, menu_group);
             let area = modal(frame, title, lines, 52);
             for (choice, line) in at.into_iter().enumerate() {
                 let y = area.y + 1 + line as u16;
@@ -330,7 +295,7 @@ mod tests {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
         item.server = true;
         let choices = task_choices(Some(&item), Some("bin/dev"), Some("bin/jobs"));
-        let (lines, at) = menu_lines(&choices, 7, 48, |act| act == Some(Act::Server) && item.server);
+        let (lines, at) = menu_lines(&choices, 7, 48, |act| act == Some(Act::Server) && item.server, menu_group);
         let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
         assert_eq!(text.iter().filter(|line| ["SESSION", "DEV", "BRANCH", "END IT"].contains(&line.as_str())).count(), 4, "{text:#?}");
         assert!(text[at[3]].starts_with("  Stop the dev server") && text[at[3]].ends_with("● w"), "{}", text[at[3]]);

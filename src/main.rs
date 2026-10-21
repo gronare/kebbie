@@ -26,6 +26,9 @@ mod repo;
 mod report;
 mod restart;
 mod review;
+mod routine_file;
+mod routine_page;
+mod routine_wizard;
 mod routines;
 mod sh;
 mod state;
@@ -127,6 +130,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   the keeper starts each due one as a task (--no-focus), never while its last run's
                                   task is still open
   kelpie routines tick            one round of the routine scheduler, as the keeper runs every minute
+  kelpie routine add --title <name> --repo <repo> --at <time> | --every <interval> [--mode report|plan|fix]
+                  [--push] [--paused] [--id <id>] <prompt>
+                                  add a routine to config.toml, as the board's Routines page does (n); the id comes
+                                  from the title unless --id names one; --push lets the lead push a fix routine's fix
   kelpie routine run <id>         start a routine's run now, by the same rules
   kelpie routine ok <summary>     run by a routine's task when all is well: records the run as ok and closes the task,
                                   which must have no changes and no commits
@@ -181,7 +188,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -368,7 +375,11 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("routines") => routines::list(arguments.flag("--json")),
         Some("routine") if name == Some("run") => routines::run_now(arguments.positional(2).ok_or("kelpie routine run needs the routine's id; kelpie routines lists them")?),
         Some("routine") if name == Some("ok") => routines::ok(&cwd, &arguments.positionals[2..].join(" ")),
-        Some("routine") => Err("kelpie routine knows run <id> and ok <summary>".to_string()),
+        Some("routine") if name == Some("add") => routine_file::add_cli(&routine_file::Asked {
+            title: arguments.value("--title"), id: arguments.value("--id"), repo: arguments.value("--repo"), at: arguments.value("--at"), every: arguments.value("--every"),
+            mode: arguments.value("--mode"), push: arguments.flag("--push"), paused: arguments.flag("--paused"), prompt: &arguments.positionals[2..].join(" "),
+        }),
+        Some("routine") => Err("kelpie routine knows add, run <id> and ok <summary>".to_string()),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
         Some("reset") => tasks::reset(&cwd, name),

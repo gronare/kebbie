@@ -4,11 +4,11 @@ A routine is a check kelpie runs on a schedule: the health of a cluster every si
 
 ## What a run is
 
-You write a routine as a `[[routines]]` table, in config.toml or in a repo's own config (see [`[[routines]]`](../reference/configuration.md#routines)). It names the repo the run works in, a schedule, a prompt in your words and a mode.
+You write a routine as a `[[routines]]` table, in config.toml or in a repo's own config (see [`[[routines]]`](../reference/configuration.md#routines)), or let the board's Routines page or `kelpie routine add` write it into config.toml for you. It names the repo the run works in, a schedule, a prompt in your words and a mode.
 
 When a run is due, kelpie starts a task named `<id>-<yyyymmdd-hhmm>` in that repo through the same start path as `kelpie start`, without taking focus. The task's first prompt is built from the routine: its title, your prompt, the mode's instructions and how to finish. The run's Claude works in Claude's `auto` permission mode, since nobody is there to answer a permission prompt, and without a vault note: a run that finds nothing leaves nothing behind.
 
-On the board a run's task shows a `routine` marker next to its name and reports like any other task. The lead knows routine tasks come from kelpie and treats them like the rest.
+On the board a run's task shows a `routine` marker next to its name and reports like any other task. The Routines page (`3`) lists the routines themselves, with their last runs, and marks its tab with `⚠` while a run's findings wait for you. The lead knows routine tasks come from kelpie and treats them like the rest.
 
 ## When it runs
 
@@ -19,7 +19,7 @@ The keeper checks the routines every minute. A routine is due:
 
 A machine that slept through several slots runs the routine once when it wakes, not once per missed slot. A run never starts while the last run's task is still open: the next one waits until you, the lead or the task itself closed it. With `[keeper] enabled = false` an open board runs the checks instead, and a lock keeps two boards from starting the same run.
 
-`kelpie routines` shows each routine's next run and the outcome of its last one. `kelpie routine run <id>` starts a run at once, by the same rules.
+`kelpie routines` and the Routines page show each routine's next run and the outcome of its last one. `kelpie routine run <id>` starts a run at once, by the same rules.
 
 ## The modes
 

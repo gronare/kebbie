@@ -134,6 +134,7 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 | --- | --- |
 | `kelpie routines [--json]` | Every routine from config.toml and the repo configs: its schedule, repo, mode, next run, and its last run's outcome (`ok`, `findings`, `failed` or `running`) with its summary. A routine that is not valid is listed as ignored, with the reason. `--json` gives `routines` and `errors`. |
 | `kelpie routines tick` | One round of the scheduler, as the keeper runs it every minute: a run whose task closed without a word is marked failed, and each due routine without an open run starts one. |
+| `kelpie routine add --title <name> --repo <repo> --at <time> \| --every <interval> [--mode <mode>] [--push] [--paused] [--id <id>] <prompt>` | Add a routine to config.toml, the same table the board's Routines page adds with `n`. `--repo` is the repo's folder name or path, `--at` takes `07:00` or `mon 07:00`, `--every` takes `30m`, `6h` or `1d`, `--mode` is `report` (the default), `plan` or `fix`. The id comes from the title, with `-2` added when it is taken, unless `--id` names one. `--push` lets the lead push a fix routine's fix; `--paused` adds it with `enabled = false`. Refused when the id is taken or config.toml does not parse. |
 | `kelpie routine run <id>` | Start a run now, by the same rules: never while the last run's task is open. Also starts a routine with `enabled = false`. |
 
 ## The lead and away mode
