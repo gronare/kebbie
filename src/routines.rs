@@ -585,7 +585,7 @@ pub fn row_json(routine: &Routine, state: &State, open: bool, now: u64, offset: 
 pub fn render(rows: &[(Routine, State, bool)], errors: &[String], now: u64, offset: i64) -> String {
     let mut lines = Vec::new();
     if rows.is_empty() {
-        lines.push("No routines yet: add a [[routines]] table to config.toml or a repo config; kelpie config shows the keys.".to_string());
+        lines.push("No routines yet: press n on the board's Routines page (3), or run kelpie routine add (kelpie help shows its flags).".to_string());
     }
     for (routine, state, open) in rows {
         let push = if routine.push { ", pushes its fix" } else { "" };
