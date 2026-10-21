@@ -27,6 +27,14 @@ Every report, message and question passes through kelpie, and the lead gets a co
 
 Questions are different: they are yours. A task asks with `kelpie ask`, and the question waits on the board until you answer it there. The lead can help you decide, but the answer comes from you, and it reaches the task as `[from you]`. Until you answer, kelpie holds every other message to that task, so nothing starts a turn under an open question.
 
+## Claude's own prompts in a task
+
+A task's Claude can stop on a prompt of its own in its pane rather than through `kelpie ask`: a permission question such as "Do you want to proceed?" with "Yes", "Yes, allow reading from web/ during this session" and "No", the folder-trust question, or a menu it puts up. Until someone answers, the task waits, and the board's `you:` line says so.
+
+Every 5 seconds the keeper, or an open board with `[keeper] enabled = false`, reads the screen of each task whose Claude waits like this. It sends the lead the question and the options in order, numbered (by kelpie when the menu shows no numbers), with the focused one marked and an id for this prompt, marked as read from the task's screen. The lead hears of each prompt once. It hears again of a new prompt in the same task, of the same prompt once another showed in between or the task stopped waiting, and of the same prompt asked again after `kelpie choose` answered it. When kelpie cannot read the screen as a menu, such as a question with checkboxes, the lead gets its last lines and the answer stays in the task's Space.
+
+The lead puts the question to you in its chat, with its recommendation, and names an option that grants more than this one action, such as "during this session" or "don't ask again". It answers only on a choice you type in its chat, with [`kelpie choose`](../reference/commands.md#the-lead-and-away-mode), never on its own, away mode included. kelpie's settings for the lead do not allow `kelpie choose`, so Claude Code asks you before the lead runs it. When Claude Code asks you whether the lead may run `kelpie choose`, answer plain "Yes", never "don't ask again": that question is the gate only while your settings hold no allow rule for `kelpie choose`. `kelpie choose` reads the pane again first and refuses when the prompt is no longer the one you chose from. You can always answer in the task's Space yourself instead.
+
 ## Away mode
 
 Some work should continue while you are gone. Away mode lets the lead keep tasks moving without deciding things that are yours.

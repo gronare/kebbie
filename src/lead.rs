@@ -548,6 +548,16 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_puts_a_tasks_own_prompt_to_the_user_and_answers_only_on_their_choice() {
+        let role = include_str!("../roles/lead.md");
+        for needed in ["kelpie choose <task> <number> --prompt <id>", "Never choose yourself, not even in away mode", "grants broader access", "verbatim", "types it in this chat", "never defaults to"] {
+            assert!(role.contains(needed), "{needed}");
+        }
+        let written: Value = serde_json::from_str(&settings("/bin/kelpie")).unwrap();
+        assert!(!written["permissions"]["allow"].as_array().unwrap().iter().any(|rule| rule.as_str().is_some_and(|rule| rule.contains(" choose"))), "Claude Code asks the user before each kelpie choose the lead runs");
+    }
+
+    #[test]
     fn focus_moves_between_the_board_and_the_chat_in_the_lead_and_to_the_chat_from_elsewhere() {
         assert_eq!(hop(true, false), Some(Hop::ToChat));
         assert_eq!(hop(true, true), Some(Hop::ToBoard));

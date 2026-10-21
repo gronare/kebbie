@@ -15,6 +15,7 @@ mod keeper;
 mod keys;
 mod lead;
 mod login_env;
+mod menu;
 mod messages;
 mod notify;
 mod peers;
@@ -95,6 +96,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   when they are away; tasks that need you or are ready, and questions, notify by themselves
   kelpie decide <task> <answer>   the lead's own answer to a task's question, only while the user is away and only on
                                   how, not what; it closes the question on the board and is recorded for the user's return
+  kelpie choose <task> <n> --prompt <id>
+                                  answer the prompt a task's Claude shows in its own pane (a permission or trust question)
+                                  with option <n>, as kelpie told the lead; refused when that prompt is no longer on its
+                                  screen; the user's, or the lead's on the user's explicit choice
   kelpie defer <task>             the lead keeps a task's question for the user while they are away
   kelpie away [on|off]            away mode, the user's switch (also A on the board): the lead settles how-questions,
                                   keeps what-questions, and writes a summary when you are back
@@ -217,7 +222,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -368,6 +373,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let answer: Vec<String> = std::env::args().skip_while(|argument| argument != "decide").skip(2).collect();
             questions::decide(to, &answer.join(" "))
         }
+        Some("choose") => menu::choose(name, arguments.positional(2), arguments.value("--prompt")),
         Some("defer") => questions::defer(name.ok_or("kelpie defer needs the task whose question waits for the user")?),
         Some("away") => permit::away(name),
         Some("hook") => {

@@ -179,7 +179,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         }
         lines.push(line);
         if let Some(next) = item.next_for_you() {
-            let next = if next == crate::status::ANSWER_IN_SPACE { format!("{next} · {} goes there", keys::key(Act::Go)) } else { next.to_string() };
+            let next = if next == crate::status::ANSWER_IN_SPACE { crate::status::answer_in_space(&keys::key(Act::Go).to_string()) } else { next.to_string() };
             lines.push(you_line(&next, selected && open && unfold, width));
         }
         if selected && open && unfold {

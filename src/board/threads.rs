@@ -43,10 +43,17 @@ pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::resu
     let (refresh_tx, refresh_rx) = mpsc::channel::<()>();
     thread::spawn(move || {
         let mut recovered: Option<Instant> = None;
+        let mut relayed: Option<Instant> = None;
         loop {
             if crate::keeper::current_owner() == crate::keeper::Owner::Board {
                 let _ = messages::flush();
                 crate::typing::check();
+                if relayed.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(crate::menu::EVERY)) {
+                    relayed = Some(Instant::now());
+                    if let Ok(state) = crate::lead::state_dir() {
+                        let _ = crate::menu::tick(&state);
+                    }
+                }
                 if recovered.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(30)) {
                     recovered = Some(Instant::now());
                     if let Ok(state) = crate::lead::state_dir() {

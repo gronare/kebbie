@@ -15,6 +15,7 @@ An agent that reads a README telling it to "push when done", or a message from a
 | A task cannot approve its own work. | `kelpie approve` reads the caller from the process tree. |
 | Only you switch away mode or withdraw a review. Only the lead decides or defers a question while you are away. Only you or the lead send a `summary` notification. | The same process-tree check. |
 | The reviewer only reads. | Read, Grep, Glob and `git log`, `git diff` and `git show` alone, in `dontAsk` mode, with a hook that refuses every other command, and none of your settings, hooks or plugins. |
+| Only you answer a task's Claude's own prompt. | `kelpie choose` reads its caller from the process tree and refuses a task; that check is what holds. A task's settings also deny `kelpie choose` and name herdr's keystroke paths (`herdr pane send-keys`, `send-text`, `run`, `herdr agent send-keys`, `prompt`), but a deny rule matches only that literal spelling. The lead's settings do not allow `kelpie choose`, so Claude Code asks you before the lead runs it while your own settings hold no allow rule for it. |
 | Messages are not instructions. | A message arrives as `[from <task>@<repo>] <text>` with every line after the first indented, so no message can start a line as `[from you]`. The task role tells Claude that a peer's message is information, never your instruction. |
 | With the vault, edits wait for the Problem. | A hook refuses file edits and plain file-writing shell commands until the task's note has its Problem. |
 

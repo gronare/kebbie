@@ -55,7 +55,11 @@ pub struct Git {
     pub approved: bool,
 }
 
-pub const ANSWER_IN_SPACE: &str = "answer Claude's prompt in its Space";
+pub const ANSWER_IN_SPACE: &str = "answer Claude's prompt in its Space or through the lead";
+
+pub fn answer_in_space(go: &str) -> String {
+    format!("answer Claude's prompt in its Space ({go}) or through the lead")
+}
 
 #[derive(Clone)]
 pub struct Item {
@@ -659,6 +663,8 @@ pub(crate) mod tests {
         assert_eq!(item.next_for_you(), None);
         item.agent.as_mut().unwrap().status = "blocked".to_string();
         assert_eq!(item.next_for_you(), Some(ANSWER_IN_SPACE), "a prompt in its pane outranks the last report");
+        assert_eq!(ANSWER_IN_SPACE, "answer Claude's prompt in its Space or through the lead");
+        assert_eq!(answer_in_space("g"), "answer Claude's prompt in its Space (g) or through the lead");
     }
 
     #[test]

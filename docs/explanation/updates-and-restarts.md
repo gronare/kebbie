@@ -65,7 +65,7 @@ A restart never interrupts work:
 
 ## The keeper
 
-The keeper is the background `kelpie keeper` process that runs the restarts, the update check and the delivery of held messages and typed prompts while no board is open. See [How kelpie fits together](architecture.md#the-keeper).
+The keeper is the background `kelpie keeper` process that runs the restarts, the update check, the delivery of held messages and typed prompts, and the relay of a task's Claude's own prompts to the lead while no board is open. See [How kelpie fits together](architecture.md#the-keeper).
 
 It starts in three places, and each starts it only when none runs:
 
