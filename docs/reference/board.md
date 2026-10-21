@@ -15,7 +15,7 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 
 In a narrow pane the two columns stack.
 
-A task row shows its commits, changed files and how far it is behind the default branch. Under it, a `you:` line gives your next step from the task's last report. While its dev server runs, a `web` line shows the server's address as a link.
+A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases first. Under it, a `you:` line gives your next step from the task's last report. While its dev server runs, a `web` line shows the server's address as a link.
 
 The selected task opens in place with its review progress, its question and options, its report, its latest test run, and a warning about files changed in a main checkout outside any task.
 
@@ -36,7 +36,7 @@ No line means no test run is recorded. The wide panel shows the same line.
 | Needs you | A question on screen; a task that asked for you; a task whose CI failed after a push, marked `CI failed: <workflow> · <job>`; a task an API error stopped that kelpie will not resume, marked `stopped by <reason>: <Claude Code's words>`; a task Claude finished that you have not looked at; a ready task whose commits the lead has not approved, marked "rules not checked by the lead". Open questions first. |
 | Working | Claude is mid-turn, or kelpie resumes it after an API error: `retrying after overload (2/4, next 21:14)`, `out of allowance until 17:00`, then `resumed after …` until Claude answers. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task). |
 | To review | Sent to the reviewer, waiting for a pass on its current code. |
-| Ready to push | Approved by the lead, and passed by the reviewer when sent to review. |
+| Ready to push | Reported ready, approved by the lead, passed by the reviewer when sent to review, with no uncommitted changes to tracked files. How far it is behind the default branch does not matter. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. The row names the runs, and the open task links each run's page. See [`kelpie ci`](commands.md#kelpie-ci---json). |
 | Waiting for work | Idle, or blocked on something outside you. |
 
@@ -83,7 +83,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
 | `v` | Send to review; on a task in review, withdraw it. | It has commits and Claude is not mid-turn. |
 | `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn. |
-| `p` | Push: rebase, then open the push window. | Claude is not mid-turn and it is not waiting for the reviewer. |
+| `p` | Push: open the push window; `y` or `p` there rebases onto the default branch and pushes. | Claude is not mid-turn and it is not waiting for the reviewer. |
 | `d` | Done: close a task you already pushed elsewhere and free its worktree, also one under CI running or with failed CI you choose to leave. Asks first. | Claude is not mid-turn. |
 | `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task. |
 | `z` | Reset: its work goes, its backlog item returns. Asks first. | Always. |

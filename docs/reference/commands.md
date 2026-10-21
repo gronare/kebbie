@@ -36,11 +36,19 @@ Move work under way in the main checkout into a task: branch `<name>` if it exis
 
 ### `kelpie land [name]`
 
-Rebase the task onto the default branch and check it has no uncommitted changes. Never pushes. On a conflict it aborts its own rebase, leaves the worktree as it was, and hands the rebase to the task's Claude.
+Rebase the task onto the default branch without pushing. Uncommitted changes to tracked files stop it; untracked files do not. On a conflict it aborts its own rebase, leaves the worktree as it was, and hands the rebase to the task's Claude. `push` rebases by itself, so `land` is never required. When git refuses to start the rebase, kelpie shows git's reason, and names any files hidden from `git status` by skip-worktree or assume-unchanged that block it.
 
 ### `kelpie push [name]`
 
-After `land`: push the task's commits to the default branch, then close it as `done`. Only you may run it, or the lead for a task you gave push permission. The lead is told what landed.
+Fetch, rebase the task onto the default branch, push its commits there, then close it as `done`. Only you may run it, or the lead for a task you gave push permission. The lead is told what landed. Uncommitted changes to tracked files stop it; untracked files do not.
+
+How far the task is behind the default branch does not matter. The rebase decides what happens next:
+
+| Rebase | What happens |
+| --- | --- |
+| Clean, and the new upstream commits changed none of the task's files | kelpie pushes. |
+| Clean, but the new upstream commits changed files the task changes too | Nothing is pushed yet. kelpie hands the task to its Claude with the files and the commits that touched them, to run their tests and report ready. When it reports ready with the same commits, kelpie pushes for whoever asked: you, or the lead under its permission, with the same checks. When its commits changed, the lead checks them again and the push is asked for again. |
+| Conflict | kelpie aborts the rebase and hands it to the task's Claude, which resolves it, asks you when the conflict is a choice between two behaviours, and reports ready. The resolved commits need the lead's check before the next push. |
 
 When origin is on GitHub and `gh` is logged in, the task stays open under CI running instead, and closes as `done` once every workflow run for the pushed commit is green. See `kelpie ci`. Otherwise the push result ends with `CI not watched:` and the reason.
 

@@ -48,7 +48,7 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
         }
         choices.push(choice(Act::Tidy, "Tidy commits", "its Claude reshapes them by the rules skill"));
         if !item.is_some_and(Item::awaiting_review) {
-            choices.push(choice(Act::Push, "Push", "rebase, then its card and commits: push them all and close, or the first few and keep it open"));
+            choices.push(choice(Act::Push, "Push", "its card and commits: push them all and close, or the first few and keep it open; rebases first"));
         }
         choices.push(choice(Act::Done, "Done", "already pushed elsewhere: close it and free the worktree"));
     }
@@ -56,7 +56,7 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
         choices.push(if item.is_some_and(|item| item.permit == Some(Permit::Task)) {
             choice(Act::Permit, "Take back push permission", "the lead no longer pushes it; it waits for you under Ready to push")
         } else {
-            choice(Act::Permit, "Let the lead push it", "the lead may push this task itself once it is landed and approved; done, drop and reset take it back")
+            choice(Act::Permit, "Let the lead push it", "the lead may push this task itself once its commits are approved; done, drop and reset take it back")
         });
     }
     choices.push(choice(Act::Reset, "Reset", "stop it for good: its work goes, its backlog item comes back (asks first)"));

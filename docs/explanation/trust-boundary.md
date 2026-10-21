@@ -11,7 +11,7 @@ An agent that reads a README telling it to "push when done", or a message from a
 | Guard | How |
 | --- | --- |
 | A task cannot push. | A pre-push hook and a push URL rewrite in the worktree's own git config block `git push` in a task's worktree. The task's Claude settings also deny `git push`, `kelpie approve` and `kelpie push`. |
-| Only you and the lead push, and the lead only with your permission. | `kelpie push` reads who runs it from the process tree, not from the folder. The lead pushes only tasks you gave it permission for, and only while its rules approval matches the commits. |
+| Only you and the lead push, and the lead only with your permission. | `kelpie push` reads who runs it from the process tree, not from the folder. The lead pushes only tasks you gave it permission for, and only while its rules approval matches the commits. A push that waits for the task's Claude to run tests is recorded only after those checks pass, names you or the lead, and completes only for the exact commits it was recorded for, with the same checks run again for whoever asked; a task's report can end the wait, never start a push. |
 | A task cannot approve its own work. | `kelpie approve` reads the caller from the process tree. |
 | Only you switch away mode or withdraw a review. Only the lead decides or defers a question while you are away. Only you or the lead send a `summary` notification. | The same process-tree check. |
 | The reviewer only reads. | Read, Grep, Glob and `git log`, `git diff` and `git show` alone, in `dontAsk` mode, with a hook that refuses every other command, and none of your settings, hooks or plugins. |

@@ -45,6 +45,7 @@ Some of kelpie's work runs on a clock rather than on a command:
 - held messages are delivered once their receiver is free, every 3 seconds,
 - prompts kelpie typed are checked for delivery, every 3 seconds, and the board is told when one was not taken,
 - stale Claude sessions are restarted once idle, every minute,
+- a push that waits for a task's Claude to test the files the default branch changed under it completes once the task reports ready with the same commits, every 15 seconds,
 - tasks an API error stopped are resumed, every 30 seconds (see [When the API stops a task](lead-and-away-mode.md#when-the-api-stops-a-task)),
 - the update check reads its cache every 10 minutes and fetches when the last fetch is 6 hours old,
 - due [routines](routines.md) start their runs as tasks, every minute.

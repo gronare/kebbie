@@ -74,6 +74,23 @@ pub fn is_clean(path: &Path) -> Result<bool> {
     Ok(changed_count(path)? == 0)
 }
 
+// Tracked files with changes not committed yet; untracked files are not counted.
+pub fn uncommitted(path: &Path) -> Result<Vec<String>> {
+    Ok(git(path, &["diff", "--name-only", "HEAD"])?.lines().map(str::to_string).collect())
+}
+
+// Files git status never shows: skip-worktree (S) or assume-unchanged (a lowercase tag).
+pub fn hidden_from_status(path: &Path) -> Result<Vec<String>> {
+    Ok(git(path, &["ls-files", "-v"])?.lines().filter_map(|line| {
+        let (tag, file) = line.split_once(' ')?;
+        (tag == "S" || tag.chars().all(|character| character.is_ascii_lowercase())).then(|| file.to_string())
+    }).collect())
+}
+
+pub fn rebase_in_progress(path: &Path) -> bool {
+    ["rebase-merge", "rebase-apply"].iter().any(|name| git(path, &["rev-parse", "--path-format=absolute", "--git-path", name]).is_ok_and(|dir| Path::new(&dir).exists()))
+}
+
 pub fn ahead_behind(path: &Path, upstream: &str) -> Result<(usize, usize)> {
     let counts = git(path, &["rev-list", "--left-right", "--count", &format!("HEAD...{upstream}")])?;
     let mut numbers = counts.split_whitespace().map(|count| count.parse::<usize>().unwrap_or(0));

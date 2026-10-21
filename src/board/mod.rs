@@ -525,15 +525,13 @@ impl App {
                     Act::Push | Act::Done | Act::Drop => {
                         let Some(path) = item.path.clone() else { return };
                         match act {
-                            Act::Push => match tasks::land(&path, None) {
-                                Ok(_) => match tasks::commits(&path) {
-                                    Ok(commits) => {
-                                        let (card, tests) = (report::card_for(&path), evidence::for_path(&path));
-                                        self.mode = Mode::ConfirmPush { path, commits, selected: 0, card, tests };
-                                    }
-                                    Err(error) => self.show(Err(error)),
-                                },
-                                error => self.show(error),
+                            Act::Push => match tasks::commits(&path) {
+                                Ok(commits) if commits.is_empty() => self.show(Err(format!("{} has no commits to push.", item.name))),
+                                Ok(commits) => {
+                                    let (card, tests) = (report::card_for(&path), evidence::for_path(&path));
+                                    self.mode = Mode::ConfirmPush { path, commits, selected: 0, card, tests };
+                                }
+                                Err(error) => self.show(Err(error)),
                             },
                             Act::Done => self.mode = Mode::ConfirmDone { path, name: item.name, nudged: false },
                             _ => self.mode = Mode::ConfirmDrop { path, name: item.name, force: false, nudged: false },

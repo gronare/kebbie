@@ -154,11 +154,11 @@ The lead checks the task's commits against the rules skill. Once it approves the
 
 With `greet` selected, press `p`.
 
-kelpie rebases the task onto `origin/main`, then opens the push window. At the top is the task's sign-off card: what changed, where to look, and anything to confirm. Below it are the commits that will land. Use `↑` `↓` to read each commit's full message.
+kelpie opens the push window. At the top is the task's sign-off card: what changed, where to look, and anything to confirm. Below it are the commits that will land. Use `↑` `↓` to read each commit's full message.
 
 Press `y`.
 
-kelpie pushes the commits to `main`, closes the `greet` Space and gives `wt1.hello` back to the pool. The board's Work column is empty again.
+kelpie fetches, rebases the task onto `origin/main`, pushes the commits to `main`, closes the `greet` Space and gives `wt1.hello` back to the pool. The board's Work column is empty again.
 
 Check the remote:
 

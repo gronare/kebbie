@@ -194,7 +194,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::SendReview, on: &[Work], help: "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it", hint: Hint::No },
     Binding { act: Act::Permit, on: &[Work], help: "let the lead push the task itself, or take that back", hint: Hint::No },
     Binding { act: Act::Tidy, on: &[Work], help: "tidy commits: its Claude reshapes them by the rules skill", hint: Hint::No },
-    Binding { act: Act::Push, on: &[Work, Card], help: "push: rebase, then its card and commits, all or the first few", hint: Hint::No },
+    Binding { act: Act::Push, on: &[Work, Card], help: "push: its card and commits, all or the first few; rebases first", hint: Hint::No },
     Binding { act: Act::Done, on: &[Work], help: "done: after you pushed elsewhere (asks first)", hint: Hint::No },
     Binding { act: Act::Reset, on: &[Work], help: "reset the task: its work goes, its backlog item returns (asks first)", hint: Hint::No },
     Binding { act: Act::Drop, on: &[Work], help: "drop the task (asks first)", hint: Hint::No },

@@ -6,7 +6,7 @@ kelpie lands a task by rebasing its commits onto the default branch and pushing 
 
 With several Claude sessions working at once, branches multiply fast. Every hour a branch stays open, the default branch moves under it, and the next task to land has more to reconcile. Pull requests make that worse: each one waits for a reviewer, and each wait lets the branches drift further apart.
 
-kelpie keeps branches short instead. A task is meant to finish, land and free its worktree. `kelpie land` rebases it onto the remote's default branch first, so what you push is exactly what you read, on top of what everyone else has pushed. When the rebase conflicts, kelpie aborts it, leaves the worktree as it was, and hands the conflict to the task's Claude, which knows the change best.
+kelpie keeps branches short instead. A task is meant to finish, land and free its worktree. `kelpie push` rebases it onto the remote's default branch first, so what you push is exactly what you read, on top of what everyone else has pushed. However far behind the task is, that rebase is part of the push. When the commits it goes over changed files the task changes too, kelpie hands the task to its Claude to run their tests, and pushes once it reports ready with the same commits. When the rebase conflicts, kelpie aborts it, leaves the worktree as it was, and hands the conflict to the task's Claude, which knows the change best.
 
 The result on the default branch is a straight line of commits, each written to stand on its own.
 

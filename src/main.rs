@@ -97,8 +97,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   add an item to the local backlog (backlog.md next to the machine config)
   kelpie link <name> <item>       tie a running task to a backlog item or project note, as start --backlog does:
                                   done tells the lead to close it, reset puts it back in the backlog
-  kelpie land [name]              rebase a task onto the default branch and check it is clean; on a conflict, its
-                                  Claude resolves the rebase
+  kelpie land [name]              rebase a task onto the default branch without pushing; on a conflict, its Claude
+                                  resolves the rebase (push rebases by itself, so land is optional)
   kelpie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
   kelpie review [name]            send the task to review: a separate, read-only Claude reviews its commits in the
                                   background, by the skill kelpie:review and the rules skill; the task waits under To
@@ -109,8 +109,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   commit it ran on and whether the code changed since (task.test_commands adds commands)
   kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
                                   changes, the board shows it ready to push
-  kelpie push [name]              after land: push the task to the default branch, then close it as done (once CI is
-                                  green, when kelpie watches it; see kelpie ci)
+  kelpie push [name]              fetch, rebase the task onto the default branch and push it, then close it as done
+                                  (once CI is green, when kelpie watches it; see kelpie ci); when the new upstream
+                                  commits changed files the task changes, its Claude runs their tests first and kelpie
+                                  pushes once it reports ready with the same commits; a conflict goes to its Claude
                                   (--through <sha> pushes its commits up to that one and keeps the task open, the rest
                                   of its branch on top of what was pushed); the user's step, or the lead's for a task the
                                   user gave push permission on the board (a), or in a repo they did on the Areas page (a)

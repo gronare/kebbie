@@ -68,7 +68,7 @@ impl App {
                 thread::spawn(move || {
                     let _ = sender.send(tasks::push(&path, None, Some(&through), keep_open));
                 });
-                let label = if keep_open { format!("Pushing {}; the task stays open…", plural(count, "commit")) } else { format!("Pushing {} and closing the task…", plural(count, "commit")) };
+                let label = if keep_open { format!("Rebasing and pushing {}; the task stays open…", plural(count, "commit")) } else { format!("Rebasing and pushing {}, then closing the task…", plural(count, "commit")) };
                 self.mode = Mode::Working { label, result };
             }
             KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1), card, tests },

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::herdr;
 use crate::messages::{self, Message};
 use crate::peers;
-use crate::repo::{ahead_behind, changed_count, default_branch, git, name_of, pooled_checkouts};
+use crate::repo::{ahead_behind, changed_count, default_branch, git, name_of, pooled_checkouts, uncommitted};
 use crate::sh::Result;
 use crate::tasks::{self, slots};
 
@@ -51,6 +51,7 @@ pub struct Git {
     pub ahead: usize,
     pub behind: usize,
     pub changed: usize,
+    pub uncommitted: usize,
     pub approved: bool,
 }
 
@@ -81,17 +82,17 @@ impl Item {
         self.git.is_some()
     }
 
-    fn rebased(&self) -> bool {
-        self.git.as_ref().is_some_and(|git| git.ahead > 0 && git.behind == 0 && git.changed == 0)
+    // Commits and no tracked file left uncommitted; how far behind the default branch it is plays no part, push rebases first.
+    fn committed(&self) -> bool {
+        self.git.as_ref().is_some_and(|git| git.ahead > 0 && git.uncommitted == 0)
     }
 
-    // Ready to push takes the lead's check against the rules skill as well as a clean rebase.
     fn pushable(&self) -> bool {
-        self.rebased() && self.git.as_ref().is_some_and(|git| git.approved)
+        self.committed() && self.git.as_ref().is_some_and(|git| git.approved)
     }
 
     pub fn unchecked(&self) -> bool {
-        self.rebased() && !self.pushable() && self.group() != Group::Working
+        self.git.as_ref().is_some_and(|git| git.ahead > 0 && !git.approved) && self.group() != Group::Working
     }
 
     // Sent to review and not passed yet: it waits under To review, and push waits with it.
@@ -201,14 +202,18 @@ impl Item {
     fn work(&self, git: &Git) -> String {
         if self.group() == Group::ReadyToPush {
             let review = self.review_note().map(|note| format!(" · {note}")).unwrap_or_default();
-            return format!("{} · rebased, ready to push{review}", plural(git.ahead, "commit"));
+            let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
+            return format!("{} · ready to push{behind}{review}", plural(git.ahead, "commit"));
         }
         let mut parts: Vec<String> = self.ci_note().into_iter().chain(self.recover_note()).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
-        if git.changed > 0 {
-            parts.push(format!("{} changed", plural(git.changed, "file")));
+        if git.uncommitted > 0 {
+            parts.push(plural(git.uncommitted, "uncommitted file"));
+        }
+        if git.changed > git.uncommitted {
+            parts.push(plural(git.changed - git.uncommitted, "untracked file"));
         }
         if git.behind > 0 {
             parts.push(format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")));
@@ -251,7 +256,7 @@ impl Item {
             "url": self.url,
             "worker": self.worker,
             "git": self.git.as_ref().map(|git| json!({
-                "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed, "approved": git.approved,
+                "upstream": git.upstream, "ahead": git.ahead, "behind": git.behind, "changed": git.changed, "uncommitted": git.uncommitted, "approved": git.approved,
             })),
         })
     }
@@ -363,8 +368,9 @@ pub fn gather() -> Result<Vec<Item>> {
                 .map(agent_from);
             let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
             let changed = changed_count(&slot.path)?;
+            let uncommitted = uncommitted(&slot.path)?.len();
             let address = peers::address(&task, &name_of(repo));
-            let approved = ahead > 0 && behind == 0 && changed == 0 && tasks::approved(&slot.path, &upstream, &address);
+            let approved = ahead > 0 && tasks::approved(&slot.path, &upstream, &address);
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             let server = tokens["server"].is_string();
             items.push(Item {
@@ -379,7 +385,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 path: Some(slot.path.clone()),
                 workspace,
                 agent,
-                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, approved }),
+                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved }),
                 report: reports.get(&address).cloned(),
                 question: questions.iter().find(|question| question.from == address).map(|question| (*question).clone()),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
@@ -431,7 +437,7 @@ pub(crate) mod tests {
         Item {
             review: None, verdict: None, permit: None, server: false, worker: false, url: None, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
-            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, approved: true }),
+            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None, kind: None,
@@ -458,12 +464,13 @@ pub(crate) mod tests {
     #[test]
     fn a_task_without_its_space_or_its_claude_says_so() {
         let mut item = task(None, None, 1);
-        item.git.as_mut().unwrap().changed = 2;
-        assert_eq!(item.summary(), "no Space · 1 commit · 2 files changed");
+        item.git.as_mut().unwrap().changed = 3;
+        item.git.as_mut().unwrap().uncommitted = 2;
+        assert_eq!(item.summary(), "no Space · 1 commit · 2 uncommitted files · 1 untracked file");
         item.workspace = Some("w1".to_string());
-        assert_eq!(item.summary(), "no Claude · 1 commit · 2 files changed");
+        assert_eq!(item.summary(), "no Claude · 1 commit · 2 uncommitted files · 1 untracked file");
         item.agent = task(Some("idle"), None, 0).agent;
-        assert_eq!(item.summary(), "1 commit · 2 files changed");
+        assert_eq!(item.summary(), "1 commit · 2 uncommitted files · 1 untracked file");
         assert_eq!(task(None, None, 0).summary(), "no Space · nothing yet");
     }
 
@@ -491,9 +498,30 @@ pub(crate) mod tests {
         assert!(!working.summary().contains("rules not checked"), "{}", working.summary());
         let approved = task(Some("idle"), Some("ready"), 2);
         assert!(approved.group() == Group::ReadyToPush && !approved.summary().contains("rules not checked"));
+    }
+
+    #[test]
+    fn being_behind_the_default_branch_never_keeps_a_task_out_of_ready_to_push() {
         let mut behind = task(Some("idle"), Some("ready"), 2);
-        behind.git.as_mut().unwrap().behind = 1;
-        assert!(behind.group() == Group::NeedsYou);
+        behind.git.as_mut().unwrap().behind = 3;
+        assert!(behind.group() == Group::ReadyToPush, "push rebases first, so behind is information only");
+        assert_eq!(behind.summary(), "2 commits · ready to push · 3 behind main");
+        assert!(!behind.unchecked());
+        let mut quiet = task(Some("idle"), None, 2);
+        quiet.git.as_mut().unwrap().behind = 3;
+        assert!(quiet.group() == Group::ReadyToPush);
+    }
+
+    #[test]
+    fn untracked_files_leave_a_task_ready_and_uncommitted_ones_keep_it_out_and_say_so() {
+        let mut untracked = task(Some("idle"), Some("ready"), 2);
+        untracked.git.as_mut().unwrap().changed = 1;
+        assert!(untracked.group() == Group::ReadyToPush, "an untracked file is no unfinished commit");
+        let mut dirty = task(Some("idle"), Some("ready"), 2);
+        dirty.git.as_mut().unwrap().changed = 2;
+        dirty.git.as_mut().unwrap().uncommitted = 2;
+        assert!(dirty.group() == Group::NeedsYou);
+        assert!(dirty.summary().contains("2 uncommitted files") && !dirty.summary().contains(UNCHECKED), "the approval holds; the row names what keeps it from push: {}", dirty.summary());
     }
 
     pub(crate) fn in_review(ok: bool, findings: usize, stale: bool, running: bool) -> crate::review::Shown {
@@ -514,7 +542,7 @@ pub(crate) mod tests {
         assert!(stale.summary().ends_with("review stale"));
         let passed = reviewed(in_review(true, 0, false, false));
         assert!(passed.group() == Group::ReadyToPush);
-        assert_eq!(passed.summary(), "2 commits · rebased, ready to push · reviewed");
+        assert_eq!(passed.summary(), "2 commits · ready to push · reviewed");
         assert!(!task(Some("idle"), Some("ready"), 2).awaiting_review(), "a task never sent to review goes straight to push");
     }
 

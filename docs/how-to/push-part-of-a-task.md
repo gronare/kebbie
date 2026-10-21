@@ -4,7 +4,7 @@ Land a task's first commits while the rest of its branch keeps working.
 
 ## From the board
 
-1. Select the task and press `p`. kelpie rebases it and opens the push window.
+1. Select the task and press `p`. kelpie opens the push window.
 2. Move to the last commit you want to land with `↑` `↓`.
 3. Press `p`.
 
@@ -13,7 +13,6 @@ kelpie pushes the commits up to and including the selected one. The task stays o
 ## From the command line
 
 ```bash
-kelpie land billing
 kelpie push billing --through 3f2a91c
 ```
 

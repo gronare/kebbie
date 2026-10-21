@@ -73,7 +73,7 @@ pub fn toggle_task(address: &str) -> Result<String> {
     let on = !task_file(&state, address).exists();
     set_task_in(&state, address, on)?;
     let (told, shown) = if on {
-        (format!("The user gave you push permission for {address}: you may push it with kelpie push once it is landed, rules-approved and through any review it is in."), format!("The lead may push {address} now; done, drop and reset take the permission back."))
+        (format!("The user gave you push permission for {address}: you may push it with kelpie push once it is rules-approved and through any review it is in."), format!("The lead may push {address} now; done, drop and reset take the permission back."))
     } else {
         (format!("The user took back push permission for {address}: route it to them again."), format!("Only you push {address} now."))
     };

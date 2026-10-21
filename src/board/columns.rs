@@ -66,8 +66,11 @@ pub(super) fn row_facts(item: &Item) -> String {
     if git.ahead > 0 {
         parts.push(plural(git.ahead, "commit"));
     }
-    if git.changed > 0 {
-        parts.push(plural(git.changed, "file"));
+    if git.uncommitted > 0 {
+        parts.push(plural(git.uncommitted, "uncommitted file"));
+    }
+    if git.changed > git.uncommitted {
+        parts.push(plural(git.changed - git.uncommitted, "untracked file"));
     }
     if git.behind > 0 {
         parts.push(format!("{} behind", git.behind));

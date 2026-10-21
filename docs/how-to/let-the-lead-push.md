@@ -4,7 +4,7 @@ Let the lead push tasks without you, under a permission you can take back at any
 
 ## One task
 
-Select the task on the board and press `a`. The lead may now push it once it is landed and its commits hold to your rules. Press `a` again to take it back. `done`, `drop` and `reset` take it back too.
+Select the task on the board and press `a`. The lead may now push it once its commits hold to your rules. Press `a` again to take it back. `done`, `drop` and `reset` take it back too.
 
 A fix routine with `push = true` gives each of its runs' tasks this permission when the run starts. See [Routines](../explanation/routines.md#the-push-exception).
 

@@ -258,7 +258,10 @@ fn state_spans(app: &App, item: &Item) -> Vec<Span<'static>> {
     let mut facts: Vec<(String, Color)> = Vec::new();
     facts.extend(absence(item).map(|absent| (absent.to_string(), YELLOW)));
     if let Some(git) = &item.git && git.behind > 0 {
-        facts.push((format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")), YELLOW));
+        facts.push((format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")), MUTED));
+    }
+    if let Some(git) = &item.git && git.uncommitted > 0 {
+        facts.push((format!("{}, not ready to push", plural(git.uncommitted, "uncommitted file")), YELLOW));
     }
     let halves: Vec<String> = app.tasks.iter().filter(|other| other.name == item.name && other.place != item.place).map(|other| other.place.clone()).collect();
     if !halves.is_empty() {
