@@ -8,6 +8,7 @@
 | --- | --- |
 | `-C <dir>` | Run as if started in `<dir>`. Works with every command. |
 | `-h`, `--help`, `help` | Print the usage. |
+| `--version`, `version` | Print the version and the commit and date the binary was built from, such as `kelpie 0.24.0 (db8963f 2026-10-21)`. Many commits share a version number, so the commit says whether a fix is in. A build outside git prints the version alone. |
 
 Without a name, `land`, `review`, `push`, `done`, `drop` and `reset` act on the task whose worktree you are in.
 
@@ -173,7 +174,7 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 | `kelpie update --check` | Fetch and show the installed versions against the channel's latest. Changes nothing else. |
 | `kelpie update --from <branch or path>` | Install that branch on origin, or that checkout's commits, until `--stable`. |
 | `kelpie update --stable` | Return to the channel. |
-| `kelpie restart` | Restart each stale Claude session that is idle, not the pane you are in, and has no background work. Works with `restart.auto = false`. |
+| `kelpie restart` | Restart each stale Claude session that is idle, not the pane you are in, and has no background work. A task's Claude gets its role and settings written anew. Works with `restart.auto = false`. |
 | `kelpie restart --all` | Restart every idle session, stale or not. |
 | `kelpie keeper --status` | Whether the keeper runs, with its pid, binary, uptime, log and each of its routines' interval, last run and last error. |
 | `kelpie keeper --start` | Start the keeper in the background unless one runs. Says `off` while `keeper.enabled = false`. |

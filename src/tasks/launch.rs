@@ -188,8 +188,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
     let Start { prompt, focus, from, mode, backlog, note: with_note } = *options;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
-    let config::Settings { setup_skill, setup_command, rules_skill, .. } = config::resolve(Some(&repo))?.settings;
-    let (setup_skill, setup_command, rules_skill) = (setup_skill.value, config::setup_command_in(setup_command.value, &repo), rules_skill.value);
+    let (setup_skill, setup_command, rules_skill) = skills(&repo)?;
     let vault = if with_note { crate::vault_cli::detect() } else { None };
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
@@ -257,19 +256,47 @@ struct Launch<'a> {
     note: Option<&'a str>,
 }
 
-// Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
-fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<()>)> {
-    let Launch { repo, task, mode, setup_skill, setup_command, rules_skill, ref worktree, vault, note } = *place;
+fn skills(repo: &Path) -> Result<(String, Option<String>, String)> {
+    let config::Settings { setup_skill, setup_command, rules_skill, .. } = config::resolve(Some(repo))?.settings;
+    Ok((setup_skill.value, config::setup_command_in(setup_command.value, repo), rules_skill.value))
+}
+
+// Every Claude kelpie starts or resumes for a task runs with these two files, written afresh: a session without them never reports.
+fn prepare(place: &Launch) -> Result<(PathBuf, PathBuf)> {
+    let Launch { repo, task, setup_skill, setup_command, rules_skill, ref worktree, vault, note, .. } = *place;
     crate::push_block::warn_if_off(crate::push_block::install(worktree, &state_dir()?)?);
-    // herdr's agent names are global, so a task's half in another repo is named with its repo.
-    let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
-    let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
     let address = peers::address(task, &name_of(repo));
     let note = note.filter(|_| vault);
     let tmp = task_tmp(worktree)?;
     std::fs::create_dir_all(&tmp).map_err(|error| format!("{}: {error}", tmp.display()))?;
     let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &settings(&peers::kelpie_command()?, &address, note.map(|_| address.as_str()), Some(&tmp)))?;
     let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill, note })?;
+    Ok((settings, role))
+}
+
+pub(crate) fn task_at(cwd: &Path) -> Option<(PathBuf, Slot)> {
+    let repo = main_checkout(cwd).ok()?;
+    let slot = slots(&repo).ok()?.into_iter().find(|slot| slot.task.is_some() && cwd.starts_with(&slot.path))?;
+    Some((repo, slot))
+}
+
+pub(crate) fn task_role(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
+    let Some((repo, slot)) = task_at(cwd) else { return Ok(None) };
+    let task = slot.task.clone().unwrap_or_default();
+    let (setup_skill, setup_command, rules_skill) = skills(&repo)?;
+    let note = read_start(&task, &repo).and_then(|text| crate::task_note::note_in(&text));
+    let vault = note.is_some() && crate::vault_cli::detect().is_some();
+    let place = Launch { repo: &repo, task: &task, mode: None, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault, note: note.as_deref() };
+    prepare(&place).map(Some)
+}
+
+// Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
+fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<()>)> {
+    let Launch { repo, task, mode, .. } = *place;
+    let (settings, role) = prepare(place)?;
+    // herdr's agent names are global, so a task's half in another repo is named with its repo.
+    let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
+    let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
     let agent_args = claude_args(mode, &settings, &role, &session);
     let started = start_claude(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(repo));
     if let (Ok(()), Session::New(id)) = (&started, &session) {
@@ -368,7 +395,7 @@ mod tests {
     fn every_task_worktree_gets_the_push_block_before_its_claude_or_its_work_arrives() {
         let source = [include_str!("launch.rs"), include_str!("pool.rs")].concat();
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
-        assert!(body("launch").find("push_block::install(").unwrap() < body("launch").find("start_claude(").unwrap(), "a start and a restart both block pushes before Claude runs");
+        assert!(body("prepare").contains("push_block::install(") && body("launch").find("prepare(").unwrap() < body("launch").find("start_claude(").unwrap(), "a start and a restart both block pushes before Claude runs");
         assert!(body("move_work").find("push_block::install(").unwrap() < body("move_work").find("stash\", \"pop").unwrap(), "moved work lands in a blocked worktree");
     }
 

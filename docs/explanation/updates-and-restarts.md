@@ -46,9 +46,10 @@ A running Claude session keeps the code it started with. kelpie calls it stale w
 - the `claude` binary on `PATH` changed after it started,
 - a plugin was updated after it started,
 - your MCP server config changed after it started, or
-- `kelpie update` ran after it started.
+- `kelpie update` ran after it started, or
+- it is a task's Claude running without the role and settings kelpie gives a task, or its role file is gone. Such a session has none of kelpie's hooks and never reports, so the board would keep it under Needs you.
 
-A restart is `claude --resume <session id>` in the same pane, with the process's own flags such as `--model`, `--permission-mode` and `--add-dir`. The conversation stays, and the new process loads the new Claude Code, plugins, MCP servers and hooks. The lead is restarted through `kelpie lead --restart`, which also rewrites its role.
+A restart is `claude --resume <session id>` in the same pane, with the process's own flags such as `--model`, `--permission-mode` and `--add-dir`. The conversation stays, and the new process loads the new Claude Code, plugins, MCP servers and hooks. A task's Claude gets its role and settings written anew, as `kelpie start` writes them, in place of the ones it ran with. The lead is restarted through `kelpie lead --restart`, which also rewrites its role.
 
 ## When restarts happen
 

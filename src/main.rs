@@ -152,7 +152,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie restart [--all]          restart, with claude --resume in its own pane and with its own flags, each Claude
                                   session that runs older code than is installed (Claude Code, a plugin, MCP servers,
                                   kelpie) and is idle, not the pane you are in and without background work (that one
-                                  is asked about on the board); --all every idle one; works with [restart] auto = false
+                                  is asked about on the board); a task's Claude gets its role and settings written
+                                  anew, and one running without them counts as stale; --all every idle one; works
+                                  with [restart] auto = false
   kelpie keeper                   the keeper: one background kelpie per machine that runs the routines (stale-session
                                   restarts, the update check, held messages, delivery checks of typed prompts, the
                                   scheduled routines) with no board open; herdr's startup, the board and kelpie update
@@ -175,7 +177,8 @@ the repo's log line from the commit subjects, done waits for the note's solution
 it, and reset puts it back in the backlog. Without the plugin none of this runs.
 
 Without a name, land, review, evidence, push, done, drop and reset act on the task whose worktree you are in.
--C <dir> runs as if started in <dir>.";
+-C <dir> runs as if started in <dir>. kelpie --version (or kelpie version) prints the version and the commit and
+date it was built from.";
 
 struct Arguments {
     positionals: Vec<String>,
@@ -276,6 +279,8 @@ fn run(arguments: &Arguments) -> Result<String> {
     }
     let name = arguments.positional(1);
     match arguments.positional(0) {
+        None if arguments.flag("--version") => Ok(version(env!("KELPIE_BUILT_FROM"))),
+        Some("version") => Ok(version(env!("KELPIE_BUILT_FROM"))),
         Some("start") => {
             let name = name.ok_or("kelpie start needs a task name")?;
             let prompt = arguments.positionals[2..].join(" ");
@@ -414,6 +419,12 @@ fn run(arguments: &Arguments) -> Result<String> {
     }
 }
 
+// Many commits carry one version number, so the commit and its date say which code this binary is.
+fn version(built: &str) -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    if built.is_empty() { format!("kelpie {version}") } else { format!("kelpie {version} ({built})") }
+}
+
 fn doctor() -> ExitCode {
     let checks = doctor::checks(&doctor::Env::current());
     println!("{}", doctor::render(&checks));
@@ -447,6 +458,25 @@ fn main() -> ExitCode {
         Err(error) => {
             eprintln!("{error}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_version_names_the_commit_and_its_date_the_binary_was_built_from() {
+        let number = env!("CARGO_PKG_VERSION");
+        assert_eq!(version("db8963f 2026-10-21"), format!("kelpie {number} (db8963f 2026-10-21)"));
+        assert_eq!(version(""), format!("kelpie {number}"), "a build outside git still says its version");
+        let built = env!("KELPIE_BUILT_FROM");
+        if Path::new(env!("CARGO_MANIFEST_DIR")).join(".git").exists() {
+            let (sha, date) = built.split_once(' ').unwrap_or_else(|| panic!("a build from git names its commit: {built:?}"));
+            assert!(sha.len() >= 7 && sha.chars().all(|character| character.is_ascii_hexdigit()), "{built}");
+            let parts: Vec<&str> = date.split('-').collect();
+            assert!(parts.len() == 3 && [4, 2, 2] == [parts[0].len(), parts[1].len(), parts[2].len()] && date.chars().all(|character| character.is_ascii_digit() || character == '-'), "{built}");
         }
     }
 }

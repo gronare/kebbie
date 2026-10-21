@@ -184,6 +184,34 @@ pub fn resume_args(argv: &[String], session: &str) -> std::result::Result<Vec<St
     Ok(kept)
 }
 
+pub const NO_ROLE: &str = "it runs without its task role";
+const ROLE_FLAGS: [&str; 2] = ["--settings", "--append-system-prompt-file"];
+
+fn value_of<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let inline = format!("{flag}=");
+    args.iter().enumerate().find_map(|(index, word)| if word == flag { args.get(index + 1).map(String::as_str) } else { word.strip_prefix(&inline) })
+}
+
+// A task's Claude without the settings and role kelpie writes, or whose role file is gone, has none of kelpie's hooks and never reports.
+pub fn lacks_role(argv: &[String]) -> bool {
+    ROLE_FLAGS.iter().any(|flag| value_of(argv, flag).is_none_or(|file| !Path::new(file).is_file()))
+}
+
+pub fn with_role(args: &[String], settings: &Path, role: &Path) -> Vec<String> {
+    let mut kept = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if ROLE_FLAGS.contains(&word.as_str()) {
+            words.next();
+        } else if !ROLE_FLAGS.iter().any(|flag| word.starts_with(&format!("{flag}="))) {
+            kept.push(word.clone());
+        }
+    }
+    let at = kept.iter().rposition(|word| word == "--resume").unwrap_or(kept.len());
+    kept.splice(at..at, ["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), role.to_string_lossy().to_string()]);
+    kept
+}
+
 // ps prints the elapsed time as [[dd-]hh:]mm:ss.
 pub fn parse_etime(text: &str) -> Option<u64> {
     let text = text.trim();
@@ -620,6 +648,8 @@ fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Resu
     if lead {
         return sh::run(&crate::peers::kelpie_command()?, &["lead", "--restart"], None).map(|_| ());
     }
+    let role = own.or(pane.cwd.as_deref()).map(tasks::task_role).transpose()?.flatten();
+    let args = role.map_or_else(|| args.to_vec(), |(settings, role)| with_role(args, &settings, &role));
     tasks::end_claude(&pane.pane)?;
     // A Claude started in a worktree from a pane in the main checkout resumes only from the worktree, where its conversation is kept.
     if let Some(own) = own.filter(|own| pane.cwd.as_deref().is_none_or(|shell| !same_folder(own, shell))) {
@@ -710,7 +740,10 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
         };
         let cwd = process.cwd.clone().or_else(|| pane.cwd.clone());
         let exe = exe_of(process.pid);
-        let reasons = changes.reasons(exe.as_deref(), start, cwd.as_deref());
+        let mut reasons = changes.reasons(exe.as_deref(), start, cwd.as_deref());
+        if process.argv.as_deref().is_some_and(lacks_role) && cwd.as_deref().and_then(tasks::task_at).is_some() {
+            reasons.push(NO_ROLE.to_string());
+        }
         if !reasons.is_empty() && let Some(why) = held_back(restarted.get(&session), exe.as_deref(), &reasons, matches!(mode, Mode::Manual { .. }), at) {
             lines.push(Line { label: pane.label.clone(), said: format!("stale, held: {why}"), stale: false });
             continue;
@@ -906,6 +939,37 @@ mod tests {
         assert_eq!(resume_args(&argv(&["claude", "explain this", "--resume=abc", "--fork-session"]), "id").unwrap(), argv(&["--resume", "id"]));
         assert_eq!(resume_args(&argv(&["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js", "--model", "sonnet", "hello"]), "id").unwrap(), argv(&["--model", "sonnet", "--resume", "id"]));
         assert_eq!(resume_args(&argv(&["claude", "--debug", "hooks"]), "id").unwrap(), argv(&["--debug", "hooks", "--resume", "id"]));
+    }
+
+    #[test]
+    fn a_resumed_task_gets_its_settings_and_role_written_now_in_place_of_missing_or_stale_ones() {
+        let (settings, role) = (Path::new("/s/roles/billing@app.settings.json"), Path::new("/s/roles/billing@app.md"));
+        let fresh = ["--settings", "/s/roles/billing@app.settings.json", "--append-system-prompt-file", "/s/roles/billing@app.md", "--resume", "id"];
+        let bare = resume_args(&argv(&["claude", "--permission-mode", "acceptEdits", "--resume", "old"]), "id").unwrap();
+        assert_eq!(with_role(&bare, settings, role), [&["--permission-mode", "acceptEdits"][..], &fresh].concat(), "a session started before roles existed gets them on its resume");
+        let stale = resume_args(&argv(&["claude", "--settings", "/old/x.json", "--model=opus", "--append-system-prompt-file=/old/task.md", "--resume", "old"]), "id").unwrap();
+        assert_eq!(with_role(&stale, settings, role), [&["--model=opus"][..], &fresh].concat(), "an old path is replaced, never kept beside the new one");
+        let source = include_str!("restart.rs");
+        let perform = &source[source.find("\nfn perform(").unwrap()..];
+        let perform = &perform[..perform.find("\n}\n").unwrap()];
+        assert!(perform.find("tasks::task_role").unwrap() < perform.find("end_claude(").unwrap() && perform.contains("with_role(args, &settings, &role)"), "every task Claude kelpie resumes runs with its settings and role, written before the old one ends");
+    }
+
+    #[test]
+    fn a_task_claude_without_its_settings_or_role_file_is_told_apart() {
+        let dir = scratch("role");
+        let (settings, role) = (dir.join("t@r.settings.json"), dir.join("t@r.md"));
+        std::fs::write(&settings, "{}").unwrap();
+        std::fs::write(&role, "role").unwrap();
+        let (settings, role) = (settings.to_string_lossy().to_string(), role.to_string_lossy().to_string());
+        assert!(!lacks_role(&argv(&["claude", "--settings", &settings, "--append-system-prompt-file", &role, "--resume", "id"])));
+        assert!(!lacks_role(&argv(&["claude", &format!("--settings={settings}"), &format!("--append-system-prompt-file={role}")])));
+        assert!(lacks_role(&argv(&["claude", "--permission-mode", "acceptEdits", "--resume", "id"])), "started before kelpie gave tasks a role");
+        assert!(lacks_role(&argv(&["claude", "--settings", &settings, "--resume", "id"])));
+        assert!(lacks_role(&argv(&["claude", "--settings", &settings, "--append-system-prompt-file", &format!("{role}.gone")])), "its role file was lost");
+        let source = include_str!("restart.rs").split("#[cfg(test)]").next().unwrap();
+        assert!(source.contains("is_some_and(lacks_role) && cwd.as_deref().and_then(tasks::task_at).is_some()") && source.contains("reasons.push(NO_ROLE.to_string())"), "a task Claude without its role counts as stale, so it is restarted with it");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
