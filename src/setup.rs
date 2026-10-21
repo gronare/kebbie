@@ -59,7 +59,7 @@ pub fn run_steps(steps: &[Vec<String>], input: &mut impl BufRead, output: &mut i
 
 pub fn vault() -> Result<String> {
     let claude = claude_bin();
-    let home = crate::tasks::claude_home().unwrap_or_default();
+    let home = crate::agent::claude::home().unwrap_or_default();
     let steps = steps(&claude, &crate::vault_cli::plugin(&home), marketplace_known(&home));
     println!("kelpie setup vault: the vault plugin keeps each task's note and the repos' logs in your Obsidian vault. Optional: kelpie works the same without it.");
     let stdin = std::io::stdin();

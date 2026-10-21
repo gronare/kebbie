@@ -162,7 +162,7 @@ fn place(target: &str) -> (String, Option<PathBuf>) {
     let pane = agent["pane_id"].as_str().unwrap_or(target).to_string();
     let session = agent["agent_session"]["value"].as_str().filter(|id| !id.is_empty());
     let cwd = agent["cwd"].as_str().map(Path::new);
-    let transcript = session.zip(crate::tasks::claude_home()).and_then(|(session, home)| crate::restart::transcript(&home, cwd, session));
+    let transcript = session.zip(crate::agent::claude::home()).and_then(|(session, home)| crate::restart::transcript(&home, cwd, session));
     (pane, transcript)
 }
 

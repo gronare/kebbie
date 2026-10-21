@@ -502,9 +502,9 @@ pub struct Task {
 // Only the Claudes kelpie started in its pooled worktrees: never the lead, never the user's own sessions.
 fn tasks() -> Result<(Vec<String>, Vec<Task>)> {
     let workspaces = crate::herdr::workspaces()?;
-    let agents: Vec<Value> = crate::herdr::agents()?.into_iter().filter(|agent| agent["agent"] == "claude").collect();
+    let agents: Vec<Value> = crate::herdr::agents()?.into_iter().filter(|agent| agent["agent"] == crate::agent::Agent::Claude.kind()).collect();
     let repos: BTreeSet<PathBuf> = workspaces.iter().filter_map(|workspace| workspace["worktree"]["repo_root"].as_str()).map(PathBuf::from).collect();
-    let home = crate::tasks::claude_home();
+    let home = crate::agent::claude::home();
     let mut found = Vec::new();
     let mut all = Vec::new();
     for repo in &repos {

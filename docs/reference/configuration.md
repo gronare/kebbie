@@ -12,7 +12,9 @@ kelpie reads each key from the first layer that sets it:
 | Machine config | `~/.config/kelpie/config.toml` | Every key. |
 | Defaults | built in | Every key. |
 
-`$XDG_CONFIG_HOME/kelpie` replaces `~/.config/kelpie` when it is set. `KELPIE_CONFIG` and `KELPIE_REPOS_DIR` override each path; see [Environment](environment.md).
+[Profiles](#profiles) are files of their own, one per profile in `~/.config/kelpie/profiles/`.
+
+`$XDG_CONFIG_HOME/kelpie` replaces `~/.config/kelpie` when it is set. `KELPIE_CONFIG`, `KELPIE_REPOS_DIR` and `KELPIE_PROFILES_DIR` override each path; see [Environment](environment.md).
 
 kelpie never reads settings from a file inside a repo.
 
@@ -38,8 +40,9 @@ Rules:
 | `task.rules_skill` | string | `"kelpie:work-rules"` | either | The skill with the rules for how work is planned, built and committed. A task's Claude follows it, the lead checks a finished task against it, `tidy` reshapes commits by it, and the reviewer reads it. |
 | `task.test_commands` | list of strings | `[]` | either | Test commands that kelpie records when a task's Claude runs them, on top of the built-in ones (`cargo test`, `bin/rails test`, `pytest`, `npm test`, `go test` and others; `kelpie config` lists them). A command counts when it starts with one of these, whole words, after any `cd … &&` and `VAR=value`. See [`kelpie evidence`](commands.md#kelpie-evidence-name---json). |
 | `task.also_noticed` | `"backlog"`, `"fix"` or `"ask"` | `"backlog"` | either | What a task's Claude does with what it notices outside its task, such as a bug nearby, a stale doc or a refactor. `"backlog"` files it: in the vault's backlog with the vault plugin, else with `kelpie backlog add`. `"fix"` fixes a small one beside the code it is changing, in a commit of its own, and files the rest. `"ask"` puts each to you with `kelpie ask` first. Each is listed under Also noticed on the sign-off card, and the reviewer counts a change outside the task as a finding under `"backlog"` and `"ask"`. See [Decide what a task does with what it notices](../how-to/decide-what-a-task-does-with-what-it-notices.md). |
-| `task.permission_mode` | `"default"`, `"acceptEdits"`, `"plan"`, `"auto"`, `"dontAsk"` or `"bypassPermissions"` | none | either | The [permission mode](https://code.claude.com/docs/en/permission-modes) a task's Claude starts in. Unset, Claude Code's own default applies. `kelpie start --mode` overrides it for one task, and a restarted task keeps the mode it started in. Any other value is refused when the config loads. `"bypassPermissions"` runs every tool without asking; Claude Code recommends it only for an isolated container or VM. A task still never pushes nor approves its own commits in it, since kelpie's deny rules and the worktree's push block hold in every mode. See [Let tasks run without permission prompts](../how-to/let-tasks-run-without-prompts.md). |
-| `review.model` | string | none | either | The model the reviewer runs on. Unset leaves it to Claude's default. |
+| `task.profile` | string | none | either | The [profile](#profiles) a task starts with when `kelpie start` names none with `--profile`. Unset, tasks start with the built-in `task`. A restarted task keeps the profile it started with. See [Give tasks a profile](../how-to/give-tasks-a-profile.md). |
+| `task.permission_mode` | `"default"`, `"acceptEdits"`, `"plan"`, `"auto"`, `"dontAsk"` or `"bypassPermissions"` | none | either | The [permission mode](https://code.claude.com/docs/en/permission-modes) a task's Claude starts in. Unset, Claude Code's own default applies. `kelpie start --mode` and then the task's profile's `permission_mode` override it, and a restarted task keeps the mode it started in. Any other value is refused when the config loads. `"bypassPermissions"` runs every tool without asking; Claude Code recommends it only for an isolated container or VM. A task still never pushes nor approves its own commits in it, since kelpie's deny rules and the worktree's push block hold in every mode. See [Let tasks run without permission prompts](../how-to/let-tasks-run-without-prompts.md). |
+| `review.model` | string | none | either | The model the reviewer runs on: the `reviewer` profile's `model` by another name, and ahead of it when both are set. Unset leaves it to that profile, and then to Claude's default. |
 | `notify.command` | string | none | config.toml only | The shell command kelpie runs when something needs you. See [Notify command](#notify-command). Unset sends nothing. |
 | `vault.command` | string | none | config.toml only | The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments. Unset runs the vault plugin's pinned command from its hooks. Used only while the vault plugin is installed and enabled. |
 | `ci.watch` | boolean | `true` | either | Whether kelpie watches CI after a push and closes the task only once every workflow run for the pushed commit is green. Needs origin on GitHub and `gh` logged in. `false` closes the task right after the push, as for a repo without useful CI. See [Watch CI after a push](../explanation/trunk-based.md#ci-after-the-push). |
@@ -156,6 +159,7 @@ Machine config or repo config. Each table is a check kelpie runs on a schedule a
 | `mode` | `"report"`, `"plan"` or `"fix"` | `"report"` | What the task does with what it finds: report it, propose a plan for your approval, or fix it in commits. |
 | `push` | boolean | `false` | Fix routines only: the run's task carries the push permission the board's `a` gives, so the lead pushes its fix once its commits hold to the rules. |
 | `enabled` | boolean | `true` | `false` keeps the routine off the schedule; `kelpie routine run <id>` still starts it. |
+| `profile` | string | `task.profile`, else `task` | The [profile](#profiles) the run's task starts with. A routine's task runs in `auto` mode whatever the profile's `permission_mode` says. |
 
 A routine that is not valid is an error that names its file, its index and the key, as for every other key. `kelpie config` lists the routines it found.
 
@@ -168,6 +172,49 @@ id = "cluster-health"
 title = "Cluster health"
 every = "6h"
 prompt = "Check that every node is Ready, no pod is crash-looping and every volume is healthy."
+```
+
+## Profiles
+
+A profile names the agent, model, extra role, skills, permission mode and rules a task starts with. Each is a file, `~/.config/kelpie/profiles/<name>.toml`, its name lower-case letters, digits and dashes, starting with a letter. A task gets kelpie's own role, hooks, deny rules and push block whatever its profile says; a profile only adds to them.
+
+Two are built in:
+
+| Profile | What it is |
+| --- | --- |
+| `task` | kelpie's task as it is: nothing added. Tasks start with it unless `--profile` or `task.profile` names another. |
+| `reviewer` | The read-only reviewer `kelpie review` runs. It is never a task's profile. |
+
+A file named `task.toml` or `reviewer.toml` adds its keys to that built-in profile.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `about` | string | none | One line on what the profile does. `kelpie profiles` shows it, and the task's role opens its profile section with it. |
+| `for` | string | none | The work it fits, in your words. The lead chooses a task's profile by it. |
+| `agent` | `"claude"` | `"claude"` | The agent CLI the task runs. `"codex"` is refused as not supported yet. |
+| `model` | string | none | The model, as `claude --model` takes it. Unset leaves it to Claude's default. |
+| `effort` | `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"` | none | The effort level, as `claude --effort` takes it. |
+| `role` | string | none | A markdown file in the profiles folder, its path relative to it: no absolute path, no `..`, and not a symlink. The task's role carries it after kelpie's own, under `## Your profile: <name>`. |
+| `skills` | list of strings | `[]` | Skills the task's Claude runs once its worktree is set up, named as `task.rules_skill` is. The role names them; this is an instruction, not a guarantee. |
+| `permission_mode` | the values of `task.permission_mode` | none | The permission mode, ahead of `task.permission_mode` and behind `kelpie start --mode`. |
+| `deny` | list of strings | `[]` | Claude Code permission rules added after kelpie's own deny rules. |
+| `allow` | list of strings | `[]` | Claude Code permission rules added to the task's allow list. A rule that would let the task run `kelpie push`, `approve`, `choose`, `away`, `decide` or `after`, and a rule that allows every shell command, are refused when the profile loads. This check reads the rule's text; what keeps a task from pushing, approving or deciding is kelpie's deny rules, the push block and kelpie's own check of who calls it. |
+| `claude.plugins` | list of strings | `[]` | Claude Code plugins to turn on for the task, as `<plugin>@<marketplace>`; they go into the task's settings as `enabledPlugins`. The plugin must be installed. |
+
+The `reviewer` profile takes `about`, `for`, `agent`, `model`, `effort` and `role`: the reviewer only reads, so its tools and permission mode are kelpie's. Its `role` goes after the review skill.
+
+A profile that does not load is an error that names its file and key, and a task asked to start with it does not start. A running task whose recorded profile no longer loads, when it is restarted, goes on as the built-in `task`, and kelpie says so with the file and the error: in `kelpie start`'s answer, or to the lead for a restart by `kelpie restart` or the keeper. `kelpie profiles` lists the profiles with what each is for, and names a file it ignored with the reason.
+
+```toml
+# ~/.config/kelpie/profiles/designer.toml
+about = "UI work: a mockup first, measured in the browser"
+for = "UI, CSS, new screens, mockups"
+model = "opus"
+effort = "high"
+role = "designer.md"
+skills = ["frontend-design:frontend-design"]
+permission_mode = "acceptEdits"
+allow = ["Bash(npx playwright:*)"]
 ```
 
 ## Example files

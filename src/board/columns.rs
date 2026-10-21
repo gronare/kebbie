@@ -177,7 +177,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         let start = lines.len();
         let dot = running_dot(item);
         let marker = if item.routine.is_some() { ROUTINE_MARKER } else { "" };
-        let mut line = row(selected, focused, status_icon(item), &item.name, place, &row_facts(item), width.saturating_sub(if dot { 2 } else { 0 } + marker.chars().count()));
+        let mut line = row(selected, focused, status_icon(item), &item.titled(), place, &row_facts(item), width.saturating_sub(if dot { 2 } else { 0 } + marker.chars().count()));
         if !marker.is_empty() {
             line.spans.insert(4, Span::styled(marker, style(MUTED)));
         }

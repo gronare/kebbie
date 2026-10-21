@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | `KELPIE_CONFIG` | `$XDG_CONFIG_HOME/kelpie/config.toml`, else `~/.config/kelpie/config.toml` | The machine config. The local `backlog.md` is read next to it. |
 | `KELPIE_REPOS_DIR` | `$XDG_CONFIG_HOME/kelpie/repos`, else `~/.config/kelpie/repos` | The folder of repo configs. |
+| `KELPIE_PROFILES_DIR` | `$XDG_CONFIG_HOME/kelpie/profiles`, else `~/.config/kelpie/profiles` | The folder of [profiles](configuration.md#profiles). |
 | `KELPIE_STATE_DIR` | `$XDG_STATE_HOME/kelpie`, else `~/.local/state/kelpie` | The state directory. Point it at a temp directory for a throwaway run. |
 | `KELPIE_REPO_DIRS` | `~/projects:~/personal:~/src:~/code` | Colon-separated folders where `start --repo` looks for checkouts, in them or one level down. |
 | `KELPIE_LEAD_DIR` | `lead` in the state directory | The lead Claude's working directory. kelpie moves the lead's chat pane there before each start, as Claude Code never remembers trust for the home folder. |

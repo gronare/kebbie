@@ -76,6 +76,7 @@ pub struct Item {
     pub permit: Option<crate::permit::Permit>,
     pub follows: bool,
     pub bypass: bool,
+    pub profile: Option<String>,
     pub server: bool,
     pub worker: bool,
     pub url: Option<String>,
@@ -100,9 +101,16 @@ impl Item {
         self.git.is_some() || self.queued.is_some()
     }
 
+    pub fn titled(&self) -> String {
+        match self.profile.as_deref() {
+            Some(profile) if profile != crate::profiles::TASK => format!("{} · {profile}", self.name),
+            _ => self.name.clone(),
+        }
+    }
+
     fn queued_from(wait: &tasks::Wait, after: Vec<(String, String)>) -> Item {
         Item {
-            review: None, verdict: None, permit: None, follows: false, bypass: false, server: false, worker: false, url: None,
+            review: None, verdict: None, permit: None, follows: false, bypass: false, profile: Some(wait.profile.clone().unwrap_or_else(|| crate::profiles::TASK.to_string())), server: false, worker: false, url: None,
             name: wait.task.clone(), place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone() }),
@@ -300,6 +308,7 @@ impl Item {
             "verdict": self.verdict.as_ref().map(crate::review::Shown::to_json),
             "follows_main": self.follows,
             "bypass_permissions": self.bypass,
+            "profile": self.profile,
             "push_permission": self.permit.map(|permit| match permit { crate::permit::Permit::Task => "task", crate::permit::Permit::Repo => "repo, once reviewed" }),
             "report": self.report.as_ref().and_then(|message| Some(json!({
                 "state": message.report.as_ref()?.state, "next": message.report.as_ref()?.next, "summary": message.text, "age": messages::age(message.at),
@@ -398,7 +407,7 @@ pub fn running_url(repo: &Path, worktree: &Path) -> Option<String> {
 
 pub fn gather() -> Result<Vec<Item>> {
     let workspaces = herdr::workspaces()?;
-    let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| agent["agent"] == "claude").collect();
+    let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| crate::agent::Agent::of(agent).is_some()).collect();
     let label_of = |id: &str| {
         workspaces.iter().find(|workspace| workspace["workspace_id"] == id)
             .and_then(|workspace| workspace["label"].as_str()).unwrap_or(id).to_string()
@@ -440,6 +449,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 permit: crate::permit::of(&address, &name_of(repo)),
                 follows: tasks::follows(&address),
                 bypass: tasks::bypasses(&address),
+                profile: Some(tasks::profile_of(&address).unwrap_or_else(|| crate::profiles::TASK.to_string())),
                 server,
                 worker: tokens["worker"].is_string(),
                 url: if server { running_url(repo, &slot.path) } else { None },
@@ -477,6 +487,7 @@ pub fn gather() -> Result<Vec<Item>> {
             permit: None,
             follows: false,
             bypass: false,
+            profile: None,
             server: false,
             worker: false,
             url: None,
@@ -508,7 +519,7 @@ pub(crate) mod tests {
 
     pub(crate) fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         Item {
-            review: None, verdict: None, permit: None, follows: false, bypass: false, server: false, worker: false, url: None, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
+            review: None, verdict: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::TASK.to_string()), server: false, worker: false, url: None, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true }),
             report: report.map(|state| Message {

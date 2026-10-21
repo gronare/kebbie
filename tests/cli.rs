@@ -431,6 +431,29 @@ fn a_message_cannot_forge_the_users_answer_on_a_second_line() {
 }
 
 #[test]
+fn kelpie_profiles_lists_the_built_in_and_the_users_profiles_and_a_missing_one_is_refused_before_a_worktree_is_claimed() {
+    let lab = Lab::new("profiles");
+    let dir = lab.home.join(".config/kelpie/profiles");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("designer.toml"), "about = \"UI work, mockup first\"\nfor = \"UI, CSS, new surfaces\"\nmodel = \"opus\"\n").unwrap();
+    let listed = lab.run(&["profiles"]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    let shown = stdout(&listed);
+    assert!(shown.starts_with("task  (built in)\n  for: any task no other profile fits"), "{shown}");
+    assert!(shown.contains("reviewer  (built in)") && shown.contains("designer  (") && shown.contains("  for: UI, CSS, new surfaces\n  about: UI work, mockup first\n  runs: claude · model opus"), "{shown}");
+    let json: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["profiles", "--json"]))).unwrap();
+    let names: Vec<&str> = json.as_array().unwrap().iter().filter_map(|profile| profile["name"].as_str()).collect();
+    assert_eq!(names, ["task", "reviewer", "designer"]);
+    assert_eq!(json[2]["for"], "UI, CSS, new surfaces");
+    let (app, _) = lab.task_fixture();
+    let refused = lab.run(&["-C", app.to_str().unwrap(), "start", "search", "--profile", "nope"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("--profile: No profile \"nope\""), "{}", stderr(&refused));
+    assert!(!lab.root.join("wt2.app").exists(), "no worktree was claimed for it");
+    let reviewer = lab.run(&["-C", app.to_str().unwrap(), "start", "search", "--profile", "reviewer"]);
+    assert!(stderr(&reviewer).contains("kelpie review's profile, not a task's"), "{}", stderr(&reviewer));
+}
+
+#[test]
 fn a_task_name_is_a_slug_and_a_bad_one_is_refused_before_anything_runs() {
     let lab = Lab::new("names");
     let (app, _) = lab.task_fixture();

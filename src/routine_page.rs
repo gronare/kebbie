@@ -908,7 +908,7 @@ mod tests {
 
     fn routine(id: &str, title: &str, schedule: Schedule, mode: routines::Mode) -> Routine {
         Routine {
-            id: id.to_string(), title: title.to_string(), repo: "~/homelab-gitops".to_string(), schedule, prompt: format!("Check {title}."), mode, push: false, enabled: true,
+            id: id.to_string(), title: title.to_string(), repo: "~/homelab-gitops".to_string(), schedule, prompt: format!("Check {title}."), mode, push: false, enabled: true, profile: None,
             source: "/c/config.toml".to_string(),
         }
     }

@@ -1,44 +1,20 @@
 use std::time::Duration;
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
+use crate::agent::{Agent, Started};
 use crate::config;
 use crate::herdr;
 use crate::lead::state_dir;
 use crate::messages;
 use crate::peers;
+use crate::profiles::{self, Profile};
 use crate::repo::{branch_exists, default_branch, git, git_writing, main_checkout, name_of};
 use crate::sh::Result;
-use super::claude::{Started, start_claude, trusted_by_user};
 use super::{fetch, slug};
 use super::pool::{Slot, claim_slot, slots};
 use super::started::{read_start, start_entry, started_file};
-
-// The deny rules and the env rewrite name the rule; the worktree's own push block (push_block) is what holds when they are slipped.
-// gate is the task's address when kelpie keeps its note: its edits then wait for the note's Problem.
-pub(super) fn settings(kelpie: &str, address: &str, gate: Option<&str>, tmp: Option<&Path>) -> String {
-    let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kelpie)) }] }]);
-    let allow = ["peers", "tell", "report", "ask", "routine ok"].map(|command| format!("Bash({kelpie} {command}:*)"));
-    let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kelpie), crate::sh::quote(address)) }] }]);
-    let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PostToolUse": evidence, "PostToolUseFailure": evidence });
-    if let Some(address) = gate {
-        hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kelpie), crate::sh::quote(address)), "timeout": 40 }] }]);
-    }
-    let mut env = json!({ "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" });
-    if let Some(tmp) = tmp {
-        for name in TMP_VARS {
-            env[name] = json!(tmp.to_string_lossy());
-        }
-    }
-    json!({
-        "env": env,
-        "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)"), format!("Bash({kelpie} choose:*)"), format!("Bash({kelpie} after:*)"), "Bash(herdr pane send-keys:*)".to_string(), "Bash(herdr pane send-text:*)".to_string(), "Bash(herdr pane run:*)".to_string(), "Bash(herdr agent send-keys:*)".to_string(), "Bash(herdr agent prompt:*)".to_string()], "allow": allow },
-        "hooks": hooks,
-    }).to_string()
-}
-
-pub(super) const TMP_VARS: [&str; 4] = ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"];
 
 // A task's temporary files live in its worktree's own git dir, so they go with the task and never land in the repo.
 pub(super) fn task_tmp(worktree: &Path) -> Result<PathBuf> {
@@ -54,22 +30,6 @@ pub(super) fn clear_tmp(worktree: &Path) {
 pub(crate) enum Session {
     New(String),
     Resume(String),
-}
-
-impl Session {
-    pub(crate) fn args(&self) -> [String; 2] {
-        match self {
-            Session::New(id) => ["--session-id".to_string(), id.clone()],
-            Session::Resume(id) => ["--resume".to_string(), id.clone()],
-        }
-    }
-}
-
-fn claude_args(mode: Option<&str>, settings: &Path, role: &Path, session: &Session) -> Vec<String> {
-    let mut args: Vec<String> = mode.map(|mode| vec!["--permission-mode".to_string(), mode.to_string()]).unwrap_or_default();
-    args.extend(["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), role.to_string_lossy().to_string()]);
-    args.extend(session.args());
-    args
 }
 
 pub(crate) fn new_session_id() -> Result<String> {
@@ -97,7 +57,12 @@ pub fn bypasses(address: &str) -> bool {
 }
 
 fn bypasses_in(state: &Path, address: &str) -> bool {
-    std::fs::read_to_string(session_file_in(state, address)).is_ok_and(|text| text.lines().nth(1).map(str::trim) == Some(BYPASS))
+    std::fs::read_to_string(session_file_in(state, address)).is_ok_and(|text| parse_record(&text).mode.as_deref() == Some(BYPASS))
+}
+
+pub fn profile_of(address: &str) -> Option<String> {
+    let state = crate::lead::state_location().ok()?;
+    std::fs::read_to_string(session_file_in(&state, address)).ok().and_then(|text| parse_record(&text).profile)
 }
 
 fn chosen_mode<'a>(given: Option<&'a str>, recorded: Option<&'a str>, configured: Option<&'a str>) -> Option<&'a str> {
@@ -108,11 +73,41 @@ fn configured_mode(repo: &Path) -> Result<Option<String>> {
     Ok(config::resolve(Some(repo))?.settings.permission_mode.value)
 }
 
-// The task's Claude session id and permission mode, one per line, so a restart resumes that conversation in the same mode.
-fn recorded_session(task: &str, repo: &Path) -> (Option<String>, Option<String>) {
-    let text = session_file(task, repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default();
+fn task_profile(repo: &Path, given: Option<&str>, recorded: Option<&str>) -> Result<(Profile, Option<String>)> {
+    let configured = config::resolve(Some(repo))?.settings.profile.value;
+    profiles::for_running_task(&profiles::dir(), given, recorded, configured.as_deref()).map_err(|error| if given.is_some() { format!("--profile: {error}") } else { error })
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Record {
+    pub session: Option<String>,
+    pub mode: Option<String>,
+    pub profile: Option<String>,
+    pub agent: Option<String>,
+}
+
+impl Record {
+    fn agent(&self) -> Agent {
+        self.agent.as_deref().and_then(|name| Agent::named(name).ok()).unwrap_or(Agent::Claude)
+    }
+}
+
+// The task's session id, permission mode, profile and agent, so a restart resumes that conversation the same way; a file of two lines, id then mode, is a task on Claude.
+pub(crate) fn parse_record(text: &str) -> Record {
+    if let Ok(value) = serde_json::from_str::<Value>(text) && value.is_object() {
+        let field = |key: &str| value[key].as_str().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string);
+        return Record { session: field("session"), mode: field("mode"), profile: field("profile"), agent: field("agent") };
+    }
     let mut lines = text.lines().map(str::trim).map(|line| (!line.is_empty()).then(|| line.to_string()));
-    (lines.next().flatten(), lines.next().flatten())
+    Record { session: lines.next().flatten(), mode: lines.next().flatten(), profile: Some(profiles::TASK.to_string()), agent: Some(Agent::Claude.key().to_string()) }
+}
+
+pub(crate) fn record_text(record: &Record) -> String {
+    json!({ "session": record.session, "mode": record.mode, "profile": record.profile, "agent": record.agent }).to_string()
+}
+
+fn recorded_session(task: &str, repo: &Path) -> Record {
+    parse_record(&session_file(task, repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default())
 }
 
 pub(super) fn forget_session(task: &str, repo: &Path) {
@@ -151,16 +146,6 @@ fn prompt_for(session: &Session, given: Option<&str>, stored: Option<String>, un
     }
 }
 
-// Claude Code keeps a folder's conversations as <session id>.jsonl under its projects dir, the folder's path with every other character than a letter or digit as '-'.
-pub(crate) fn transcripts_dir(claude_home: &Path, folder: &Path) -> PathBuf {
-    let name: String = folder.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect();
-    claude_home.join("projects").join(name)
-}
-
-pub fn claude_home() -> Option<PathBuf> {
-    std::env::var("CLAUDE_CONFIG_DIR").map(PathBuf::from).ok().or_else(|| std::env::var("HOME").ok().map(|home| Path::new(&home).join(".claude")))
-}
-
 // A slot is reused across tasks, so only a conversation written since this task's branch was created can be this task's.
 fn latest_transcript(dir: &Path, since: std::time::SystemTime) -> Option<String> {
     std::fs::read_dir(dir).ok()?.flatten()
@@ -177,18 +162,20 @@ fn branch_created(repo: &Path, task: &str) -> Option<std::time::SystemTime> {
     Some(std::time::UNIX_EPOCH + Duration::from_secs(seconds))
 }
 
-fn previous_session(repo: &Path, slot: &Slot, task: &str, claude_home: &Path, recorded: Option<String>) -> Option<String> {
-    let dir = transcripts_dir(claude_home, &slot.path);
+fn previous_session(agent: Agent, repo: &Path, slot: &Slot, task: &str, home: &Path, recorded: Option<String>) -> Option<String> {
+    let dir = agent.transcripts_dir(home, &slot.path);
     recorded.filter(|id| dir.join(format!("{id}.jsonl")).exists())
         .or_else(|| latest_transcript(&dir, branch_created(repo, task)?))
 }
 
 // The task's own conversation, where the user's prompt and later word to it are.
-pub fn transcript(repo: &Path, slot: &Slot) -> Option<PathBuf> {
+pub fn transcript(repo: &Path, slot: &Slot) -> Option<(Agent, PathBuf)> {
     let task = slot.task.as_deref()?;
-    let home = claude_home()?;
-    let id = previous_session(repo, slot, task, &home, recorded_session(task, repo).0)?;
-    Some(transcripts_dir(&home, &slot.path).join(format!("{id}.jsonl")))
+    let record = recorded_session(task, repo);
+    let agent = record.agent();
+    let home = agent.home()?;
+    let id = previous_session(agent, repo, slot, task, &home, record.session)?;
+    Some((agent, agent.transcripts_dir(&home, &slot.path).join(format!("{id}.jsonl"))))
 }
 
 pub(super) fn open_space(repo: &Path, slot: &Slot, task: &str, focus: bool) -> Result<herdr::Space> {
@@ -202,6 +189,7 @@ pub struct Start<'a> {
     pub focus: bool,
     pub from: Option<&'a str>,
     pub mode: Option<&'a str>,
+    pub profile: Option<&'a str>,
     pub backlog: Option<&'a str>,
     pub note: bool,
 }
@@ -216,16 +204,22 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
 }
 
 pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
-    let Start { prompt, focus, from, mode, backlog, note: with_note } = *options;
+    let Start { prompt, focus, from, mode, profile: given, backlog, note: with_note } = *options;
     mode.map(config::permission_mode).transpose().map_err(|error| format!("--mode: {error}"))?;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     super::after::queued_refusal(&state_dir()?, &peers::address(&task, &name_of(&repo)))?;
     let (setup_skill, setup_command, rules_skill) = skills(&repo)?;
     let vault = if with_note { crate::vault_cli::detect() } else { None };
-    let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
-    if let Some(existing) = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str())) {
-        return restart(&place(&existing), &existing, focus, prompt);
+    let running = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str()));
+    let recorded = running.as_ref().and_then(|_| recorded_session(&task, &repo).profile);
+    let (profile, fell_back) = task_profile(&repo, given, recorded.as_deref())?;
+    let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
+    if let Some(existing) = running {
+        return restart(&place(&existing), &existing, focus, prompt).map(|begun| match &fell_back {
+            Some(why) => Begun { said: format!("{} Careful: {why}.", begun.said), ..begun },
+            None => begun,
+        });
     }
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
@@ -254,12 +248,13 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     }
     store_prompt(&prompt_file(&session_file(&task, &repo)?), prompt)?;
     let space = open_space(&repo, &slot, &task, false)?;
-    let claude_pane = match space.root_pane_id {
+    let agent_pane = match space.root_pane_id {
         Some(pane) => pane,
-        None => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
+        None => herdr::create_tab(&space.workspace_id, &slot.path, profile.agent.key())?,
     };
     let configured = configured_mode(&repo)?;
-    let (agent_name, started) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place(&slot) }, &claude_pane, Session::New(new_session_id()?))?;
+    let configured = profile.permission_mode.clone().or(configured);
+    let (agent_name, started) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place(&slot) }, &agent_pane, Session::New(new_session_id()?))?;
     let prompted = match &started {
         Ok(started) => send_prompt(started, prompt, |text| crate::typing::prompt_confirmed(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
             .map_err(|error| format!("Started {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
@@ -283,6 +278,7 @@ struct Launch<'a> {
     repo: &'a Path,
     task: &'a str,
     mode: Option<&'a str>,
+    profile: &'a Profile,
     setup_skill: &'a str,
     setup_command: Option<&'a str>,
     rules_skill: &'a str,
@@ -298,14 +294,16 @@ fn skills(repo: &Path) -> Result<(String, Option<String>, String)> {
 
 // Every Claude kelpie starts or resumes for a task runs with these two files, written afresh: a session without them never reports.
 fn prepare(place: &Launch) -> Result<(PathBuf, PathBuf)> {
-    let Launch { repo, task, setup_skill, setup_command, rules_skill, ref worktree, vault, note, .. } = *place;
+    let Launch { repo, task, profile, setup_skill, setup_command, rules_skill, ref worktree, vault, note, .. } = *place;
     crate::push_block::warn_if_off(crate::push_block::install(worktree, &state_dir()?)?);
     let address = peers::address(task, &name_of(repo));
     let note = note.filter(|_| vault);
     let tmp = task_tmp(worktree)?;
     std::fs::create_dir_all(&tmp).map_err(|error| format!("{}: {error}", tmp.display()))?;
-    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &settings(&peers::kelpie_command()?, &address, note.map(|_| address.as_str()), Some(&tmp)))?;
-    let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill, note })?;
+    let written = profile.agent.task_settings(&peers::kelpie_command()?, &address, note.map(|_| address.as_str()), Some(&tmp), profile);
+    let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &written)?;
+    let added = profiles::role_section(profile)?;
+    let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added })?;
     Ok((settings, role))
 }
 
@@ -321,13 +319,21 @@ pub(crate) fn task_role(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
     let (setup_skill, setup_command, rules_skill) = skills(&repo)?;
     let note = read_start(&task, &repo).and_then(|text| crate::task_note::note_in(&text));
     let vault = note.is_some() && crate::vault_cli::detect().is_some();
-    let place = Launch { repo: &repo, task: &task, mode: None, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault, note: note.as_deref() };
+    let (profile, fell_back) = task_profile(&repo, None, recorded_session(&task, &repo).profile.as_deref())?;
+    if let Some(why) = fell_back {
+        let said = format!("{} restarts as the built-in task: {why}.", peers::address(&task, &name_of(&repo)));
+        eprintln!("{said}");
+        if let Err(error) = messages::notify_lead(&said) {
+            eprintln!("Could not tell the lead: {error}");
+        }
+    }
+    let place = Launch { repo: &repo, task: &task, mode: None, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault, note: note.as_deref() };
     prepare(&place).map(Some)
 }
 
 // Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
 fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<Started>)> {
-    let Launch { repo, task, mode, .. } = *place;
+    let Launch { repo, task, mode, profile, .. } = *place;
     let (settings, role) = prepare(place)?;
     if let Err(error) = messages::drop_held_prompts(&peers::address(task, &name_of(repo))) {
         eprintln!("Could not drop a prompt still held for {task} from an earlier start: {error}");
@@ -335,21 +341,23 @@ fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Resul
     // herdr's agent names are global, so a task's half in another repo is named with its repo.
     let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
-    let agent_args = claude_args(mode, &settings, &role, &session);
-    let started = start_claude(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(repo));
+    let agent = profile.agent;
+    let agent_args = agent.start_args(mode, profile, &settings, &role, &session);
+    let started = agent.start(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), agent.trusted_by_user(repo));
     if let Ok(started) = &started {
         let id = match &session {
             Session::New(id) => Some(id.clone()),
-            Session::Resume(_) => recorded_session(task, repo).0,
+            Session::Resume(_) => recorded_session(task, repo).session,
         };
-        let mode = if *started == Started::BypassDisabled { "" } else { mode.unwrap_or_default() };
-        crate::state::write(&session_file(task, repo)?, format!("{}\n{mode}\n", id.unwrap_or_default()))?;
+        let mode = if *started == Started::BypassDisabled { None } else { mode.map(str::to_string) };
+        let record = Record { session: id, mode, profile: Some(profile.name.clone()), agent: Some(agent.key().to_string()) };
+        crate::state::write(&session_file(task, repo)?, record_text(&record))?;
     }
     Ok((agent_name, started))
 }
 
-fn claude_in(workspace: &str) -> Result<bool> {
-    Ok(herdr::agents()?.iter().any(|agent| agent["agent"] == "claude" && agent["workspace_id"].as_str() == Some(workspace)))
+fn agent_in(workspace: &str) -> Result<bool> {
+    Ok(herdr::agents()?.iter().any(|agent| Agent::of(agent).is_some() && agent["workspace_id"].as_str() == Some(workspace)))
 }
 
 // A task whose Space or Claude is gone gets them back: its last conversation resumed, or a new one given the task's first prompt again.
@@ -357,7 +365,7 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     let task = place.task;
     let open = herdr::workspace_for(&slot.path)?;
     if let Some(workspace) = &open
-        && claude_in(workspace)?
+        && agent_in(workspace)?
     {
         if focus {
             herdr::focus_workspace(workspace)?;
@@ -367,12 +375,14 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     let space = open_space(place.repo, slot, task, false)?;
     let pane = match (&open, space.root_pane_id) {
         (None, Some(pane)) => pane,
-        _ => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
+        _ => herdr::create_tab(&space.workspace_id, &slot.path, place.profile.agent.key())?,
     };
-    let (recorded, mode) = recorded_session(task, place.repo);
-    let previous = claude_home().and_then(|home| previous_session(place.repo, slot, task, &home, recorded));
+    let Record { session: recorded, mode, .. } = recorded_session(task, place.repo);
+    let agent = place.profile.agent;
+    let previous = agent.home().and_then(|home| previous_session(agent, place.repo, slot, task, &home, recorded));
     let note = read_start(task, place.repo).and_then(|text| crate::task_note::note_in(&text));
     let configured = configured_mode(place.repo)?;
+    let configured = place.profile.permission_mode.clone().or(configured);
     let place = Launch { mode: chosen_mode(place.mode, mode.as_deref(), configured.as_deref()), worktree: place.worktree.clone(), note: note.as_deref(), ..*place };
     let session = match previous {
         Some(id) => Session::Resume(id),
@@ -385,7 +395,7 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
         store_prompt(path, Some(given))?;
     }
     let unheard = match &session {
-        Session::Resume(id) => claude_home().and_then(|home| std::fs::read_to_string(transcripts_dir(&home, &slot.path).join(format!("{id}.jsonl"))).ok()).is_none_or(|text| crate::review::user_messages(&text).is_empty()),
+        Session::Resume(id) => agent.home().and_then(|home| std::fs::read_to_string(agent.transcripts_dir(&home, &slot.path).join(format!("{id}.jsonl"))).ok()).is_none_or(|text| agent.user_messages(&text).is_empty()),
         Session::New(_) => true,
     };
     let prompt = prompt_for(&session, given, stored, unheard);
@@ -442,8 +452,13 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+    use crate::agent::claude::{settings, start_args, transcripts_dir};
     use crate::tasks::test_support::*;
     use crate::peers;
+
+    fn claude_args(mode: Option<&str>, settings: &Path, role: &Path, session: &Session) -> Vec<String> {
+        start_args(mode, &profiles::built_in(profiles::TASK).unwrap(), settings, role, session)
+    }
 
     #[test]
     fn edits_are_gated_only_in_a_task_started_with_the_vault_on() {
@@ -476,7 +491,7 @@ mod tests {
         let source = include_str!("launch.rs");
         let launch = &source[source.find("\nfn launch(").unwrap()..];
         let launch = &launch[..launch.find("\n}\n").unwrap()];
-        assert!(launch.find("drop_held_prompts(").unwrap() < launch.find("start_claude(").unwrap(), "a prompt held for an earlier start is dropped before a new one decides its own");
+        assert!(launch.find("drop_held_prompts(").unwrap() < launch.find("agent.start(").unwrap(), "a prompt held for an earlier start is dropped before a new one decides its own");
         assert!(launch.contains("if let Err(error) = messages::drop_held_prompts("), "a busy message log never stops a start");
     }
 
@@ -484,7 +499,7 @@ mod tests {
     fn every_task_worktree_gets_the_push_block_before_its_claude_or_its_work_arrives() {
         let source = [include_str!("launch.rs"), include_str!("pool.rs")].concat();
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
-        assert!(body("prepare").contains("push_block::install(") && body("launch").find("prepare(").unwrap() < body("launch").find("start_claude(").unwrap(), "a start and a restart both block pushes before Claude runs");
+        assert!(body("prepare").contains("push_block::install(") && body("launch").find("prepare(").unwrap() < body("launch").find("agent.start(").unwrap(), "a start and a restart both block pushes before Claude runs");
         assert!(body("move_work").find("push_block::install(").unwrap() < body("move_work").find("stash\", \"pop").unwrap(), "moved work lands in a blocked worktree");
     }
 
@@ -556,19 +571,19 @@ mod tests {
         assert_eq!(transcripts.parent().unwrap(), home.join("projects"));
         assert!(!transcripts.file_name().unwrap().to_string_lossy().contains(['/', '.']));
         std::fs::create_dir_all(&transcripts).unwrap();
-        assert_eq!(previous_session(&dir, &slot, "billing", &home, None), None);
+        assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, None), None);
         let created = branch_created(&dir, "billing").unwrap();
         let write = |id: &str, at: std::time::SystemTime| {
             let file = std::fs::File::create(transcripts.join(format!("{id}.jsonl"))).unwrap();
             file.set_modified(at).unwrap();
         };
         write("previous-task", created - Duration::from_secs(60));
-        assert_eq!(previous_session(&dir, &slot, "billing", &home, None), None);
+        assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, None), None);
         write("first", created + Duration::from_secs(10));
         write("latest", created + Duration::from_secs(20));
-        assert_eq!(previous_session(&dir, &slot, "billing", &home, None).as_deref(), Some("latest"));
-        assert_eq!(previous_session(&dir, &slot, "billing", &home, Some("first".to_string())).as_deref(), Some("first"));
-        assert_eq!(previous_session(&dir, &slot, "billing", &home, Some("gone".to_string())).as_deref(), Some("latest"));
+        assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, None).as_deref(), Some("latest"));
+        assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, Some("first".to_string())).as_deref(), Some("first"));
+        assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, Some("gone".to_string())).as_deref(), Some("latest"));
         std::fs::remove_dir_all(home).unwrap();
         cleanup(dir, origin, &slot);
     }
@@ -604,7 +619,7 @@ mod tests {
         assert!(body("begin").contains("mode: chosen_mode(mode, None, configured.as_deref())") && body("begin").contains("configured_mode(&repo)?"));
         assert!(body("restart").contains("chosen_mode(place.mode, mode.as_deref(), configured.as_deref())"));
         assert!(body("begin").find("config::permission_mode").unwrap() < body("begin").find("fetch(").unwrap(), "a mistyped --mode is refused before a worktree is claimed");
-        assert!(body("launch").contains("Started::BypassDisabled { \"\" }"), "a Claude that policy keeps out of bypass is not recorded as bypassing");
+        assert!(body("launch").contains("Started::BypassDisabled { None }"), "a Claude that policy keeps out of bypass is not recorded as bypassing");
     }
 
     #[test]
@@ -666,5 +681,61 @@ mod tests {
             assert!(String::from_utf8_lossy(&output.stdout).starts_with("ran hook"), "{command}");
         }
         std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_tasks_session_record_keeps_its_profile_and_an_old_two_line_record_reads_as_task_on_claude() {
+        let designer = Record { session: Some("1f0c".to_string()), mode: Some(BYPASS.to_string()), profile: Some("designer".to_string()), agent: Some("claude".to_string()) };
+        assert_eq!(parse_record(&record_text(&designer)), designer);
+        let old = |session: &str, mode: Option<&str>| Record { session: Some(session.to_string()), mode: mode.map(str::to_string), profile: Some("task".to_string()), agent: Some("claude".to_string()) };
+        assert_eq!(parse_record("1f0c\nacceptEdits\n"), old("1f0c", Some("acceptEdits")));
+        assert_eq!(parse_record("1f0c\n\n"), old("1f0c", None));
+        assert_eq!(parse_record("1f0c\n"), old("1f0c", None));
+        assert_eq!(parse_record(&record_text(&Record { mode: None, ..designer.clone() })).mode, None);
+        assert_eq!(Record::default().agent(), Agent::Claude);
+        let state = crate::sh::test_dir("task-record");
+        std::fs::create_dir_all(state.join("sessions")).unwrap();
+        std::fs::write(session_file_in(&state, "billing@app"), record_text(&designer)).unwrap();
+        assert!(bypasses_in(&state, "billing@app"), "the board reads bypass from the new record too");
+        std::fs::remove_dir_all(state).unwrap();
+        let source = include_str!("launch.rs");
+        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(crate) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        assert!(body("launch").contains("profile: Some(profile.name.clone())") && body("launch").contains("record_text(&record)"), "every start records the profile it ran with");
+        assert!(body("begin").contains("recorded_session(&task, &repo).profile") && body("begin").find("task_profile(").unwrap() < body("begin").find("fetch(").unwrap(), "a running task keeps its profile, and a missing one is refused before a worktree is claimed");
+        assert!(body("task_role").contains("recorded_session(&task, &repo).profile"), "kelpie restart writes the role and settings of the profile the task started with");
+        assert!(body("begin").contains("Careful: {why}.") && body("task_role").contains("messages::notify_lead(&said)"), "a recorded profile that no longer loads is said where the restart reports, and the restart goes on");
+    }
+
+    #[test]
+    fn a_task_started_with_a_profile_runs_its_model_effort_mode_and_rules_on_top_of_kelpies_own() {
+        let task = profiles::built_in(profiles::TASK).unwrap();
+        let designer = Profile {
+            name: "designer".to_string(), model: Some("opus".to_string()), effort: Some("high".to_string()), permission_mode: Some("acceptEdits".to_string()),
+            deny: vec!["Bash(rm -rf:*)".to_string()], allow: vec!["Bash(npx playwright:*)".to_string()], plugins: vec!["design@claude-plugins".to_string()], ..task.clone()
+        };
+        let plain: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", Some("billing@app"), None)).unwrap();
+        let ours: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kelpie", "billing@app", Some("billing@app"), None, &task)).unwrap();
+        assert_eq!(ours, plain, "the built-in task's settings are kelpie's own, nothing added");
+        let written: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kelpie", "billing@app", Some("billing@app"), None, &designer)).unwrap();
+        let deny = written["permissions"]["deny"].as_array().unwrap();
+        let kelpies = plain["permissions"]["deny"].as_array().unwrap();
+        assert_eq!(deny[..kelpies.len()], kelpies[..], "kelpie's deny rules stay, first and whole");
+        assert_eq!(deny[kelpies.len()..], [json!("Bash(rm -rf:*)")]);
+        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!("Bash(npx playwright:*)")) && written["permissions"]["allow"].as_array().unwrap().contains(&json!("Bash(/bin/kelpie ask:*)")));
+        assert_eq!((&written["hooks"], &written["env"]), (&plain["hooks"], &plain["env"]), "the hooks and the push block's env are kelpie's whatever the profile");
+        assert_eq!(written["enabledPlugins"], json!({ "design@claude-plugins": true }));
+        let configured = designer.permission_mode.clone().or(Some("plan".to_string()));
+        assert_eq!(chosen_mode(None, None, configured.as_deref()), Some("acceptEdits"), "the profile's mode goes ahead of task.permission_mode");
+        assert_eq!(chosen_mode(Some(BYPASS), None, configured.as_deref()), Some(BYPASS), "--mode goes ahead of the profile's");
+        let (file, role) = (Path::new("/state/roles/billing@app.settings.json"), Path::new("/state/roles/billing@app.md"));
+        let args = Agent::Claude.start_args(chosen_mode(None, None, configured.as_deref()), &designer, file, role, &Session::New("1f0c".to_string()));
+        assert_eq!(args, ["--permission-mode", "acceptEdits", "--model", "opus", "--effort", "high", "--settings", "/state/roles/billing@app.settings.json", "--append-system-prompt-file", "/state/roles/billing@app.md", "--session-id", "1f0c"]);
+        assert_eq!(Agent::Claude.start_args(None, &task, file, role, &Session::Resume("1f0c".to_string())), claude_args(None, file, role, &Session::Resume("1f0c".to_string())));
+        assert!(!claude_args(None, file, role, &Session::Resume("1f0c".to_string())).iter().any(|arg| arg == "--model" || arg == "--effort"), "the built-in task leaves the model to Claude");
+        let source = include_str!("launch.rs");
+        let prepare = &source[source.find("\nfn prepare(").unwrap()..];
+        let prepare = &prepare[..prepare.find("\n}\n").unwrap()];
+        assert!(prepare.contains("profile.agent.task_settings(") && prepare.contains("profiles::role_section(profile)?") && prepare.contains("profile: &added"), "the profile's rules reach the settings and its role and skills the role file");
+        assert!(include_str!("../peers.rs").contains("write_role(&file, &template, &pairs, place.profile)"), "the profile's section goes after kelpie's own role");
     }
 }

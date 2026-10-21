@@ -61,7 +61,7 @@ pub struct Places {
 
 impl Places {
     pub fn current() -> Self {
-        Self { root: install_root(), claude_dir: crate::tasks::claude_home().unwrap_or_default(), channel: crate::config::channel().unwrap_or_default() }
+        Self { root: install_root(), claude_dir: crate::agent::claude::home().unwrap_or_default(), channel: crate::config::channel().unwrap_or_default() }
     }
 }
 

@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
+use crate::agent::Reviewer;
 use crate::config;
 use crate::lead::{install_root, roles_dir, state_dir, write_settings};
 use crate::messages;
@@ -12,9 +13,6 @@ use crate::peers;
 use crate::repo::{ahead_behind, default_branch, git, main_checkout, name_of};
 use crate::sh::Result;
 use crate::tasks::{self, Slot};
-
-const TOOLS: &str = "Read,Grep,Glob,Bash";
-const ALLOWED: [&str; 6] = ["Read", "Grep", "Glob", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)"];
 
 // Not reviews/, where the review split keeps its state.
 fn dir(state: &Path) -> PathBuf {
@@ -265,25 +263,27 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     let sha = git(&slot.path, &["rev-parse", "HEAD"])?;
     let settings = config::resolve(Some(repo))?.settings;
     let commits = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
-    let said = tasks::transcript(repo, slot).and_then(|file| fs::read_to_string(file).ok()).map(|text| user_messages(&text)).unwrap_or_default();
+    let said = tasks::transcript(repo, slot).and_then(|(agent, file)| Some(agent.user_messages(&fs::read_to_string(file).ok()?))).unwrap_or_default();
     let file = verdict_file(state, address);
     let kelpie = install_root()?;
+    let profile = reviewer_profile(&crate::profiles::load(crate::profiles::REVIEWER)?, settings.review_model.value.as_deref());
+    let agent = profile.agent;
     let rules = &settings.rules_skill.value;
-    let rules_file = tasks::claude_home().and_then(|home| skill_file(rules, &slot.path, &home, &kelpie));
+    let rules_file = crate::agent::claude::home().and_then(|home| skill_file(rules, &slot.path, &home, &kelpie));
     let tests = crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha);
     let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value });
-    let guard = write_settings(&roles_dir()?, &format!("{address}.review"), &guard_settings(&peers::kelpie_command()?))?;
-    let skill = kelpie.join("skills/review/SKILL.md");
-    let args = claude_args(&Reviewer { model: settings.review_model.value.as_deref(), settings: &guard, skill: &skill, rules: rules_file.as_deref().and_then(Path::parent) });
-    let mut child = Command::new("claude").args(&args).current_dir(&slot.path)
+    let guard = write_settings(&roles_dir()?, &format!("{address}.review"), &agent.reviewer_settings(&peers::kelpie_command()?))?;
+    let prompt = reviewer_prompt(&kelpie.join("skills/review/SKILL.md"), &profile, &roles_dir()?.join(format!("{address}.review.md")))?;
+    let (program, args) = agent.reviewer_command(&Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: &guard, prompt: &prompt, rules: rules_file.as_deref().and_then(Path::parent) });
+    let mut child = Command::new(program).args(&args).current_dir(&slot.path)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .spawn().map_err(|error| format!("claude: {error}"))?;
+        .spawn().map_err(|error| format!("{program}: {error}"))?;
     use std::io::Write;
-    child.stdin.take().ok_or("claude has no stdin")?.write_all(input.as_bytes()).map_err(|error| error.to_string())?;
+    child.stdin.take().ok_or(format!("{program} has no stdin"))?.write_all(input.as_bytes()).map_err(|error| error.to_string())?;
     let output = child.wait_with_output().map_err(|error| error.to_string())?;
     let answer = String::from_utf8_lossy(&output.stdout).to_string();
     if !output.status.success() {
-        return Err(format!("claude stopped with {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim()));
+        return Err(format!("{program} stopped with {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim()));
     }
     let recorded = record(&answer, &sha).ok_or_else(|| format!("the reviewer's answer has no verdict line; it ended: {}", answer.trim().chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect::<String>()))?;
     let verdict = parse_verdict(&recorded).ok_or("the recorded verdict does not parse")?;
@@ -291,31 +291,19 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     Ok(format!("{address} reviewed at {}: {} — {}", &sha[..7.min(sha.len())], verdict.summary(), file.display()))
 }
 
-struct Reviewer<'a> {
-    model: Option<&'a str>,
-    settings: &'a Path,
-    skill: &'a Path,
-    rules: Option<&'a Path>,
+// review.model, from the repo or machine config, is the reviewer profile's model by another name and wins over its file.
+pub fn reviewer_profile(profile: &crate::profiles::Profile, review_model: Option<&str>) -> crate::profiles::Profile {
+    crate::profiles::Profile { model: review_model.map(str::to_string).or_else(|| profile.model.clone()), ..profile.clone() }
 }
 
-// Only these tools exist, only the allowed ones run, the guard hook stops any other shell command, and no user setting, hook or plugin joins in.
-fn claude_args(reviewer: &Reviewer) -> Vec<String> {
-    let Reviewer { model, settings, skill, rules } = *reviewer;
-    let mut args: Vec<String> = ["-p", "--setting-sources", "", "--output-format", "text", "--no-session-persistence", "--strict-mcp-config", "--permission-mode", "dontAsk", "--tools", TOOLS, "--allowedTools"]
-        .map(str::to_string).to_vec();
-    args.extend(ALLOWED.map(str::to_string));
-    args.extend(["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), skill.to_string_lossy().to_string()]);
-    if let Some(rules) = rules {
-        args.extend(["--add-dir".to_string(), rules.to_string_lossy().to_string()]);
+fn reviewer_prompt(skill: &Path, profile: &crate::profiles::Profile, combined: &Path) -> Result<PathBuf> {
+    let added = crate::profiles::role_section(profile)?;
+    if added.is_empty() {
+        return Ok(skill.to_path_buf());
     }
-    if let Some(model) = model {
-        args.extend(["--model".to_string(), model.to_string()]);
-    }
-    args
-}
-
-fn guard_settings(kelpie: &str) -> String {
-    json!({ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook --review", crate::sh::quote(kelpie)) }] }] } }).to_string()
+    let text = fs::read_to_string(skill).map_err(|error| format!("{}: {error}", skill.display()))?;
+    crate::state::write(combined, text.trim_end().to_string() + &added)?;
+    Ok(combined.to_path_buf())
 }
 
 // The rules skill's own file, where Claude Code finds it: kelpie's skills, another plugin's, or the repo's or the user's .claude/skills.
@@ -357,26 +345,6 @@ pub fn guard(input: &str) -> String {
     }
     let reason = "The reviewer only reads: run git log, git diff or git show on their own (no pipes, redirection or --output), and use Read, Grep and Glob for files.";
     json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason } }).to_string()
-}
-
-// What the user typed into the task's conversation, oldest first: its prompt and every later word, without tool results or kelpie's own wrappers.
-pub fn user_messages(transcript: &str) -> Vec<String> {
-    user_messages_at(transcript).into_iter().map(|(_, text)| text).collect()
-}
-
-pub fn user_messages_at(transcript: &str) -> Vec<(Option<u64>, String)> {
-    transcript.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|entry| entry["type"] == "user" && entry["isMeta"] != true && entry["isSidechain"] != true)
-        .filter_map(|entry| {
-            let text = match &entry["message"]["content"] {
-                Value::String(text) => text.clone(),
-                Value::Array(blocks) if blocks.iter().all(|block| block["type"] == "text") => blocks.iter().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join("\n"),
-                _ => return None,
-            };
-            Some((entry["timestamp"].as_str().and_then(crate::typing::iso_millis), text.trim().to_string()))
-        })
-        .filter(|(_, text)| !text.is_empty() && !text.starts_with('<') && !text.starts_with("[Request interrupted"))
-        .collect()
 }
 
 const PROMPT_BUDGET: usize = 12_000;
@@ -457,10 +425,11 @@ fn scope(also_noticed: config::AlsoNoticed) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::claude::{reviewer_args as claude_args, reviewer_settings as guard_settings, user_messages};
 
     #[test]
     fn the_reviewer_has_only_reading_tools_and_git_log_diff_show_on_the_shell() {
-        let reviewer = Reviewer { model: None, settings: Path::new("/state/roles/billing@app.review.settings.json"), skill: Path::new("/kelpie/skills/review/SKILL.md"), rules: None };
+        let reviewer = Reviewer { model: None, effort: None, settings: Path::new("/state/roles/billing@app.review.settings.json"), prompt: Path::new("/kelpie/skills/review/SKILL.md"), rules: None };
         let args = claude_args(&reviewer);
         let after = |flag: &str| args[args.iter().position(|arg| arg == flag).unwrap() + 1].clone();
         assert_eq!(args[0], "-p");
@@ -806,5 +775,33 @@ mod tests {
         let settings: Value = serde_json::from_str(&guard_settings("/bin/kelpie")).unwrap();
         assert_eq!(settings.as_object().unwrap().keys().collect::<Vec<_>>(), ["hooks"], "no permissions, env or model of its own: the command line decides those");
         assert_eq!(settings["hooks"].as_object().unwrap().keys().collect::<Vec<_>>(), ["PreToolUse"]);
+    }
+
+    #[test]
+    fn the_built_in_reviewer_profile_runs_the_reviewer_as_before_and_review_model_still_names_its_model() {
+        let built_in = crate::profiles::built_in(crate::profiles::REVIEWER).unwrap();
+        let dir = crate::sh::test_dir("reviewer-profile");
+        let skill = dir.join("SKILL.md");
+        fs::write(&skill, "---\nname: review\n---\nRead every commit.\n").unwrap();
+        let combined = dir.join("billing@app.review.md");
+        assert_eq!(reviewer_prompt(&skill, &built_in, &combined).unwrap(), skill, "without a role of its own the reviewer reads the review skill itself");
+        assert!(!combined.exists());
+        let plain = reviewer_profile(&built_in, None);
+        let (program, args) = crate::agent::Agent::Claude.reviewer_command(&Reviewer { model: plain.model.as_deref(), effort: plain.effort.as_deref(), settings: Path::new("/s/review.settings.json"), prompt: &skill, rules: None });
+        let skill_arg = skill.to_string_lossy().to_string();
+        assert_eq!(program, "claude");
+        assert_eq!(args, ["-p", "--setting-sources", "", "--output-format", "text", "--no-session-persistence", "--strict-mcp-config", "--permission-mode", "dontAsk", "--tools", "Read,Grep,Glob,Bash", "--allowedTools", "Read", "Grep", "Glob", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "--settings", "/s/review.settings.json", "--append-system-prompt-file", skill_arg.as_str()]);
+        assert_eq!(reviewer_profile(&built_in, Some("opus")).model.as_deref(), Some("opus"), "review.model is the reviewer profile's model");
+        let filed = crate::profiles::Profile { model: Some("sonnet".to_string()), effort: Some("max".to_string()), ..built_in.clone() };
+        assert_eq!(reviewer_profile(&filed, None).model.as_deref(), Some("sonnet"));
+        assert_eq!(reviewer_profile(&filed, Some("opus")).model.as_deref(), Some("opus"), "review.model, set per repo, wins over the profile file");
+        let (_, args) = crate::agent::Agent::Claude.reviewer_command(&Reviewer { model: Some("opus"), effort: Some("max"), settings: Path::new("/s.json"), prompt: &skill, rules: None });
+        assert_eq!(args[args.len() - 4..], ["--model", "opus", "--effort", "max"]);
+        fs::write(dir.join("strict.md"), "Count every unwrap as a finding.\n").unwrap();
+        let strict = crate::profiles::Profile { role: Some(dir.join("strict.md")), ..built_in };
+        assert_eq!(reviewer_prompt(&skill, &strict, &combined).unwrap(), combined);
+        let written = fs::read_to_string(&combined).unwrap();
+        assert!(written.starts_with("---\nname: review\n---\nRead every commit.\n\n## Your profile: reviewer\n\n") && written.ends_with("Count every unwrap as a finding.\n"), "{written:?}");
+        fs::remove_dir_all(dir).unwrap();
     }
 }

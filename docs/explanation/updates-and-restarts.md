@@ -49,7 +49,9 @@ A running Claude session keeps the code it started with. kelpie calls it stale w
 - `kelpie update` ran after it started, or
 - it is a task's Claude running without the role and settings kelpie gives a task, or its role file is gone. Such a session has none of kelpie's hooks and never reports, so the board would keep it under Needs you.
 
-A restart is `claude --resume <session id>` in the same pane, with the process's own flags such as `--model`, `--permission-mode` and `--add-dir`. The conversation stays, and the new process loads the new Claude Code, plugins, MCP servers and hooks. A task's Claude gets its role and settings written anew, as `kelpie start` writes them, in place of the ones it ran with. The lead is restarted through `kelpie lead --restart`, which also rewrites its role.
+A restart is `claude --resume <session id>` in the same pane, with the process's own flags such as `--model`, `--permission-mode` and `--add-dir`. The conversation stays, and the new process loads the new Claude Code, plugins, MCP servers and hooks. A task's Claude gets its role and settings written anew, as `kelpie start` writes them, in place of the ones it ran with, from the profile it started with. When that profile no longer loads, the task restarts as the built-in `task` and the lead is told which file failed and why. The lead is restarted through `kelpie lead --restart`, which also rewrites its role.
+
+Going back to an older kelpie, it reads a task's session record, now JSON, as its session id: it finds no conversation by it and resumes the task's newest one, and the task loses its recorded mode and profile until its next start.
 
 ## When restarts happen
 

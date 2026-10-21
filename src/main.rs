@@ -1,4 +1,5 @@
 mod actions;
+mod agent;
 mod area_page;
 mod areas;
 mod backlog;
@@ -20,6 +21,7 @@ mod messages;
 mod notify;
 mod peers;
 mod permit;
+mod profiles;
 mod push_block;
 mod questions;
 mod recover;
@@ -58,6 +60,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   (--repo <name> finds or clones that repo, repeated for a task across repos,
                                   --from <ref> branches off it
                                   instead of the default branch, --mode <mode> is Claude's permission mode,
+                                  --profile <name> starts it with that profile instead of task.profile or task,
                                   --no-focus keeps you where you are, --after <task[@repo]> (repeatable) queues it
                                   to start from the default branch once each of those tasks ended as done and,
                                   where kelpie watches CI, its CI is green; the user's or the lead's)
@@ -163,6 +166,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
   kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
                                   the backlog item it was started from back in the Backlog column
+  kelpie profiles [--json]        the profiles a task can start with (kelpie start --profile, task.profile): the built-in
+                                  task and reviewer, then each file in ~/.config/kelpie/profiles, with what each is for
   kelpie config [--repo <path>]   the config layers found (the repo config ~/.config/kelpie/repos/<repo>.toml,
                                   config.toml, defaults; a symlink with its target) and every key with its value in
                                   effect, the layer it comes from and what it does (--get <key> prints one
@@ -228,7 +233,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--profile"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -332,12 +337,12 @@ fn run(arguments: &Arguments) -> Result<String> {
                 if arguments.value("--from").is_some() {
                     return Err("kelpie start --after starts from the default branch, so it takes no --from".to_string());
                 }
-                if let Some(queued) = tasks::queue(&repos, name, prompt.unwrap_or_default(), &after, arguments.value("--mode"), arguments.value("--backlog"))? {
+                if let Some(queued) = tasks::queue(&repos, name, prompt.unwrap_or_default(), &after, arguments.value("--mode"), arguments.value("--profile"), arguments.value("--backlog"))? {
                     return Ok(queued);
                 }
             }
             tasks::refuse_queued_name(name)?;
-            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), backlog: arguments.value("--backlog"), note: true };
+            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), profile: arguments.value("--profile"), backlog: arguments.value("--backlog"), note: true };
             // One task across repos: a half per repo, the first one focused.
             let started: Vec<Result<String>> = repos.iter().enumerate()
                 .map(|(index, repo)| tasks::start(repo, name, &tasks::Start { focus: options.focus && index == 0, ..options }))
@@ -446,6 +451,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let name = name.ok_or("kelpie link needs a task name and the item")?;
             tasks::link(&cwd, name, &arguments.positionals[2..].join(" "))
         }
+        Some("profiles") => profiles::print(arguments.flag("--json")),
         Some("config") => match arguments.value("--get") {
             Some(key) => config::get(key),
             None => config::show(&cwd, arguments.value("--repo")),

@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
 
+use crate::agent::Agent;
 use crate::config;
 use crate::herdr;
 use crate::lead;
@@ -109,108 +110,11 @@ pub fn decide(mode: Mode, auto: bool, facts: &Facts, background: impl FnOnce() -
     }
 }
 
-const SWITCHES: [&str; 20] = ["--allow-dangerously-skip-permissions", "--ax-screen-reader", "--bare", "--brief", "--chrome", "--no-chrome", "--dangerously-skip-permissions", "--disable-slash-commands", "--exclude-dynamic-system-prompt-sections", "--forward-subagent-text", "--ide", "--include-hook-events", "--include-partial-messages", "--no-session-persistence", "--replay-user-messages", "--restricted", "--safe-mode", "--strict-mcp-config", "--verbose", "--mcp-debug"];
-const VALUES: [&str; 27] = ["--agent", "--agents", "--append-system-prompt", "--append-system-prompt-file", "--autocompact", "--debug-file", "--effort", "--environment", "--fallback-model", "--input-format", "--json-schema", "--max-budget-usd", "--max-turns", "--model", "-n", "--name", "--output-format", "--permission-mode", "--permission-prompts", "--permission-prompt-tool", "--plugin-dir", "--plugin-url", "--remote-control-session-name-prefix", "--setting-sources", "--settings", "--system-prompt", "--system-prompt-file"];
-const OPTIONALS: [&str; 4] = ["-d", "--debug", "--prompt-suggestions", "--remote-control"];
-const MANY: [&str; 9] = ["--add-dir", "--allowedTools", "--allowed-tools", "--betas", "--disallowedTools", "--disallowed-tools", "--file", "--mcp-config", "--tools"];
-const DROPPED_SWITCHES: [&str; 4] = ["-c", "--continue", "--fork-session", "--tmux"];
-const DROPPED_OPTIONALS: [&str; 7] = ["-r", "--resume", "--from-pr", "--teleport", "--cloud", "-w", "--worktree"];
-const REFUSED: [&str; 9] = ["-p", "--print", "--bg", "--background", "--desktop", "-h", "--help", "-v", "--version"];
-
 fn base(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-// The process's own flags, without its conversation and prompt, then --resume <session>; an option kelpie cannot place is refused, since its next word could be a prompt that would be sent again.
-pub fn resume_args(argv: &[String], session: &str) -> std::result::Result<Vec<String>, String> {
-    let start = match argv {
-        [program, ..] if base(program) == "claude" => 1,
-        [program, script, ..] if ["node", "bun"].iter().any(|name| base(program).starts_with(name)) && (script.contains("claude") || script.ends_with("cli.js")) => 2,
-        [] => return Err("its command line is empty".to_string()),
-        [program, ..] => return Err(format!("its command is {}, not claude", base(program))),
-    };
-    let words = &argv[start..];
-    let next_is_value = |index: usize| words.get(index).is_some_and(|word| !word.starts_with('-'));
-    let mut kept = Vec::new();
-    let mut index = 0;
-    while index < words.len() {
-        let word = words[index].as_str();
-        index += 1;
-        if word == "--" {
-            break;
-        }
-        if !word.starts_with('-') || word == "-" {
-            continue;
-        }
-        let flag = word.split_once('=').map_or(word, |(flag, _)| flag);
-        let inline = flag.len() < word.len();
-        if REFUSED.contains(&flag) {
-            return Err(format!("it runs with {flag}, which a resumed session cannot keep"));
-        }
-        if DROPPED_SWITCHES.contains(&flag) {
-            continue;
-        }
-        if flag == "--session-id" {
-            index += usize::from(!inline);
-            continue;
-        }
-        if DROPPED_OPTIONALS.contains(&flag) {
-            index += usize::from(!inline && next_is_value(index));
-            continue;
-        }
-        kept.push(word.to_string());
-        if SWITCHES.contains(&flag) || inline {
-            continue;
-        }
-        if VALUES.contains(&flag) {
-            let value = words.get(index).ok_or(format!("its {flag} has no value"))?;
-            kept.push(value.clone());
-            index += 1;
-        } else if OPTIONALS.contains(&flag) {
-            if next_is_value(index) {
-                kept.push(words[index].clone());
-                index += 1;
-            }
-        } else if MANY.contains(&flag) {
-            while next_is_value(index) {
-                kept.push(words[index].clone());
-                index += 1;
-            }
-        } else {
-            return Err(format!("it runs with {flag}, an option kelpie does not know"));
-        }
-    }
-    kept.extend(["--resume".to_string(), session.to_string()]);
-    Ok(kept)
-}
-
 pub const NO_ROLE: &str = "it runs without its task role";
-const ROLE_FLAGS: [&str; 2] = ["--settings", "--append-system-prompt-file"];
-
-fn value_of<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
-    let inline = format!("{flag}=");
-    args.iter().enumerate().find_map(|(index, word)| if word == flag { args.get(index + 1).map(String::as_str) } else { word.strip_prefix(&inline) })
-}
-
-// A task's Claude without the settings and role kelpie writes, or whose role file is gone, has none of kelpie's hooks and never reports.
-pub fn lacks_role(argv: &[String]) -> bool {
-    ROLE_FLAGS.iter().any(|flag| value_of(argv, flag).is_none_or(|file| !Path::new(file).is_file()))
-}
-
-pub fn with_role(args: &[String], settings: &Path, role: &Path) -> Vec<String> {
-    let mut kept = Vec::new();
-    let mut words = args.iter();
-    while let Some(word) = words.next() {
-        if ROLE_FLAGS.contains(&word.as_str()) {
-            words.next();
-        } else if !ROLE_FLAGS.iter().any(|flag| word.starts_with(&format!("{flag}="))) {
-            kept.push(word.clone());
-        }
-    }
-    let at = kept.iter().rposition(|word| word == "--resume").unwrap_or(kept.len());
-    kept.splice(at..at, ["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), role.to_string_lossy().to_string()]);
-    kept
-}
 
 // ps prints the elapsed time as [[dd-]hh:]mm:ss.
 pub fn parse_etime(text: &str) -> Option<u64> {
@@ -340,7 +244,7 @@ pub fn observe_mcp(record: &Path, claude: &Value, now: u64) -> HashMap<String, u
 impl Changes {
     pub fn gather(state: &Path, now: u64) -> Changes {
         let claude = on_path(&crate::setup::claude_bin()).and_then(|path| path.canonicalize().ok());
-        let home = tasks::claude_home();
+        let home = crate::agent::claude::home();
         let read = |path: Option<PathBuf>| path.and_then(|path| std::fs::read_to_string(path).ok()).and_then(|text| serde_json::from_str::<Value>(&text).ok()).unwrap_or_default();
         let installed = read(home.map(|home| home.join("plugins/installed_plugins.json")));
         let dir = restart_dir(state).ok();
@@ -455,7 +359,7 @@ pub fn background_running(lines: impl Iterator<Item = String>, since: u64, now: 
 
 pub fn transcript(home: &Path, cwd: Option<&Path>, session: &str) -> Option<PathBuf> {
     let file = format!("{session}.jsonl");
-    cwd.map(|cwd| tasks::transcripts_dir(home, cwd).join(&file)).filter(|path| path.is_file())
+    cwd.map(|cwd| crate::agent::claude::transcripts_dir(home, cwd).join(&file)).filter(|path| path.is_file())
         .or_else(|| std::fs::read_dir(home.join("projects")).ok()?.flatten().map(|dir| dir.path().join(&file)).find(|path| path.is_file()))
 }
 
@@ -469,13 +373,12 @@ pub struct Pane {
     pub focused: bool,
     pub cwd: Option<PathBuf>,
     pub workspace: Option<String>,
+    pub agent: Agent,
 }
 
 impl Pane {
     pub fn from_agent(agent: &Value) -> Option<Pane> {
-        if agent["agent"] != "claude" {
-            return None;
-        }
+        let kind = Agent::of(agent)?;
         let pane = agent["pane_id"].as_str()?.to_string();
         let name = agent["name"].as_str().filter(|name| !name.is_empty()).map(str::to_string);
         let label = name.clone().or_else(|| agent["display_agent"].as_str().filter(|title| !title.is_empty()).map(|title| format!("{title} ({pane})"))).unwrap_or_else(|| pane.clone());
@@ -487,6 +390,7 @@ impl Pane {
             focused: agent["focused"] == true,
             cwd: agent["cwd"].as_str().map(PathBuf::from),
             workspace: agent["workspace_id"].as_str().map(str::to_string),
+            agent: kind,
             pane,
         })
     }
@@ -636,7 +540,7 @@ fn same_folder(one: &Path, other: &Path) -> bool {
 
 fn wait_for_claude(pane: &str) -> Result<()> {
     for _ in 0..120 {
-        if herdr::agents()?.iter().any(|agent| agent["pane_id"] == pane && agent["agent"] == "claude" && agent["interactive_ready"] == true) {
+        if herdr::agents()?.iter().any(|agent| agent["pane_id"] == pane && Agent::of(agent).is_some() && agent["interactive_ready"] == true) {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -649,8 +553,8 @@ fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Resu
         return sh::run(&crate::peers::kelpie_command()?, &["lead", "--restart"], None).map(|_| tasks::Started::Ready);
     }
     let role = own.or(pane.cwd.as_deref()).map(tasks::task_role).transpose()?.flatten();
-    let args = role.map_or_else(|| args.to_vec(), |(settings, role)| with_role(args, &settings, &role));
-    tasks::end_claude(&pane.pane)?;
+    let args = role.map_or_else(|| args.to_vec(), |(settings, role)| pane.agent.with_role(args, &settings, &role));
+    pane.agent.end(&pane.pane)?;
     // A Claude started in a worktree from a pane in the main checkout resumes only from the worktree, where its conversation is kept.
     if let Some(own) = own.filter(|own| pane.cwd.as_deref().is_none_or(|shell| !same_folder(own, shell))) {
         tasks::wait_for_prompt(&pane.pane)?;
@@ -658,10 +562,10 @@ fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Resu
     }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     match &pane.name {
-        Some(name) => tasks::start_claude(name, &pane.pane, &refs, pane.cwd.as_deref().is_some_and(tasks::trusted_by_user)),
+        Some(name) => pane.agent.start(name, &pane.pane, &refs, pane.cwd.as_deref().is_some_and(|cwd| pane.agent.trusted_by_user(cwd))),
         None => {
             tasks::wait_for_prompt(&pane.pane)?;
-            let line = std::iter::once("claude".to_string()).chain(args.iter().map(|arg| sh::quote(arg))).collect::<Vec<_>>().join(" ");
+            let line = std::iter::once(pane.agent.kind().to_string()).chain(args.iter().map(|arg| sh::quote(arg))).collect::<Vec<_>>().join(" ");
             herdr::run_in_pane(&pane.pane, &line)?;
             wait_for_claude(&pane.pane).map(|()| tasks::Started::Ready)
         }
@@ -721,7 +625,7 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
     let at = now();
     let changes = Changes::gather(&state, at);
     let lead_space = lead::lead_workspace(&herdr::workspaces()?);
-    let home = tasks::claude_home();
+    let home = crate::agent::claude::home();
     let mut asked = load_asked(&state);
     let mut restarted = load_restarted(&state);
     let mut live: HashMap<String, u32> = HashMap::new();
@@ -748,14 +652,14 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
         let cwd = process.cwd.clone().or_else(|| pane.cwd.clone());
         let exe = exe_of(process.pid);
         let mut reasons = changes.reasons(exe.as_deref(), start, cwd.as_deref());
-        if process.argv.as_deref().is_some_and(lacks_role) && cwd.as_deref().and_then(tasks::task_at).is_some() {
+        if process.argv.as_deref().is_some_and(|argv| pane.agent.lacks_role(argv)) && cwd.as_deref().and_then(tasks::task_at).is_some() {
             reasons.push(NO_ROLE.to_string());
         }
         if !reasons.is_empty() && let Some(why) = held_back(restarted.get(&session), exe.as_deref(), &reasons, matches!(mode, Mode::Manual { .. }), at) {
             lines.push(Line { label: pane.label.clone(), said: format!("stale, held: {why}"), stale: false });
             continue;
         }
-        let args = match process.argv.as_deref().map(|argv| resume_args(argv, &session)) {
+        let args = match process.argv.as_deref().map(|argv| pane.agent.resume_args(argv, &session)) {
             None => Err("its command line cannot be read".to_string()),
             Some(args) => args,
         };
@@ -852,6 +756,7 @@ pub fn now_cli(all: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::claude::{lacks_role, resume_args, with_role};
 
     #[test]
     fn a_session_restarted_lately_or_into_the_same_claude_is_held_back() {
@@ -972,7 +877,7 @@ mod tests {
         let source = include_str!("restart.rs");
         let perform = &source[source.find("\nfn perform(").unwrap()..];
         let perform = &perform[..perform.find("\n}\n").unwrap()];
-        assert!(perform.find("tasks::task_role").unwrap() < perform.find("end_claude(").unwrap() && perform.contains("with_role(args, &settings, &role)"), "every task Claude kelpie resumes runs with its settings and role, written before the old one ends");
+        assert!(perform.find("tasks::task_role").unwrap() < perform.find(".end(&pane.pane)").unwrap() && perform.contains("with_role(args, &settings, &role)"), "every task Claude kelpie resumes runs with its settings and role, written before the old one ends");
     }
 
     #[test]
@@ -988,7 +893,7 @@ mod tests {
         assert!(lacks_role(&argv(&["claude", "--settings", &settings, "--resume", "id"])));
         assert!(lacks_role(&argv(&["claude", "--settings", &settings, "--append-system-prompt-file", &format!("{role}.gone")])), "its role file was lost");
         let source = include_str!("restart.rs").split("#[cfg(test)]").next().unwrap();
-        assert!(source.contains("is_some_and(lacks_role) && cwd.as_deref().and_then(tasks::task_at).is_some()") && source.contains("reasons.push(NO_ROLE.to_string())"), "a task Claude without its role counts as stale, so it is restarted with it");
+        assert!(source.contains("is_some_and(|argv| pane.agent.lacks_role(argv)) && cwd.as_deref().and_then(tasks::task_at).is_some()") && source.contains("reasons.push(NO_ROLE.to_string())"), "a task Claude without its role counts as stale, so it is restarted with it");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

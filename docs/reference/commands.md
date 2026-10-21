@@ -16,7 +16,7 @@ Without a name, `land`, `review`, `push`, `done`, `drop` and `reset` act on the 
 
 ### `kelpie start <name> [prompt]`
 
-Start a task in a pooled worktree, in its own herdr Space, with Claude. Running it on a task that already runs shows it; on a task whose Space or Claude is gone, it restarts them in the same permission mode and resumes the last conversation without sending the prompt again.
+Start a task in a pooled worktree, in its own herdr Space, with Claude. Running it on a task that already runs shows it; on a task whose Space or Claude is gone, it restarts them in the same permission mode and profile and resumes the last conversation without sending the prompt again.
 
 In a folder you have trusted in Claude Code, kelpie answers Claude's "Do you trust this folder?" itself. In one you have not, that answer is yours: the prompt waits, and kelpie types it in once you have answered and Claude's input box is empty, while the keeper or an open board runs. If you type a first message yourself before then, kelpie drops the prompt instead of sending it again.
 
@@ -27,7 +27,8 @@ Started in `bypassPermissions`, Claude shows its bypass permissions warning unti
 | `--repo <name>` | Start in that repo instead of the current one. Repeat it for one task across repos: one half per repo, the first focused. See [Finding repos](#finding-repos). |
 | `--from <ref>` | Branch off this ref instead of the remote's default branch. |
 | `--backlog <item>` | Tie the task to a backlog item, as `kelpie link` does. |
-| `--mode <mode>` | Claude's permission mode for the task, one of Claude Code's: `default`, `acceptEdits`, `plan`, `auto`, `dontAsk` or `bypassPermissions`. Without it, the task starts in [`task.permission_mode`](configuration.md#keys), and without that in Claude Code's own default. |
+| `--mode <mode>` | Claude's permission mode for the task, one of Claude Code's: `default`, `acceptEdits`, `plan`, `auto`, `dontAsk` or `bypassPermissions`. Without it, the task starts in its profile's `permission_mode`, then [`task.permission_mode`](configuration.md#keys), and without those in Claude Code's own default. |
+| `--profile <name>` | Start the task with this [profile](configuration.md#profiles) instead of `task.profile`, or the built-in `task`. A task that already runs keeps the profile it started with unless this names another; restarted with a new one, it gets that profile's model, role and rules, and keeps its recorded permission mode unless `--mode` is given too. A profile that does not load is refused before a worktree is claimed. With `--after`, the queued task starts with it. |
 | `--no-focus` | Stay where you are. |
 | `--after <task[@repo]>` | Queue the task instead of starting it: it starts once that task has ended as done. Repeat it to wait for several. `<task>` alone means every half of that task; `<task>@<repo>` means that half. Needs a prompt, and takes no `--from`. See [`kelpie after`](#kelpie-after-name). |
 
@@ -155,7 +156,8 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 | Command | Output |
 | --- | --- |
 | `kelpie board [--overlay]` | The board. `--overlay` is the popup form, which `esc` closes. See [Board](board.md). |
-| `kelpie status [--json]` | Every task and Claude session, grouped by what it needs from you. `--json` gives `away_since`, `items` and `checkouts`; a task's `push_waits` is `user` or `lead` while a push it asked for waits for the task's tests. |
+| `kelpie status [--json]` | Every task and Claude session, grouped by what it needs from you. `--json` gives `away_since`, `items` and `checkouts`; a task's `push_waits` is `user` or `lead` while a push it asked for waits for the task's tests, and its `profile` is the profile it started with (`task` for the built-in one, `null` for a session that is no task). |
+| `kelpie profiles [--json]` | The [profiles](configuration.md#profiles) a task can start with: the built-in `task` and `reviewer`, then each file in `~/.config/kelpie/profiles`, each with what it is for, what it is about, and its agent, model, effort, permission mode and skills. A file that does not load is listed as ignored, with the reason. `--json` gives one object per profile, and `{"error": …}` for an ignored file. |
 | `kelpie list [--json]` | The pool's worktrees: each one's task or `free`, uncommitted changes, commits ahead and behind, its port, and the first line of its setup note. `--json` adds `port` and `url`, the worktree's `dev_url` filled in, each `null` when there is none. |
 | `kelpie areas` | The vault's areas with their repo: main against origin, the last release, notes and actions. Needs the vault. |
 | `kelpie peers` | Who you are and the other task sessions, with what each is doing. |

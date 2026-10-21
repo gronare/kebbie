@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::agent::Agent;
 use crate::backlog;
 use crate::config::{self, Source};
 use crate::herdr;
@@ -181,7 +182,7 @@ fn role_file() -> Result<PathBuf> {
 
 fn chat_args(role: &Path, settings: &Path, session: &Session) -> Vec<String> {
     let mut args = ["--append-system-prompt-file", &role.to_string_lossy(), "--settings", &settings.to_string_lossy()].map(str::to_string).to_vec();
-    args.extend(session.args());
+    args.extend(crate::agent::claude::session_args(session));
     args
 }
 
@@ -206,7 +207,7 @@ fn start_chat(pane: &str, session: Session) -> Result<()> {
     let args = chat_args(&role, &settings, &session);
     tasks::wait_for_prompt(pane)?;
     herdr::run_in_pane(pane, &cd_line(&lead_dir()?))?;
-    tasks::start_claude("lead", pane, &args.iter().map(String::as_str).collect::<Vec<_>>(), true)?;
+    Agent::Claude.start("lead", pane, &args.iter().map(String::as_str).collect::<Vec<_>>(), true)?;
     crate::state::write(&session_file()?, session_id(&session))
 }
 
@@ -246,7 +247,7 @@ enum Restart {
 }
 
 fn restart_verdict(agent: Option<&Value>) -> Restart {
-    let Some(agent) = agent.filter(|agent| agent["agent"] == "claude") else { return Restart::Nothing };
+    let Some(agent) = agent.filter(|agent| agent["agent"] == Agent::Claude.kind()) else { return Restart::Nothing };
     match agent["agent_status"].as_str().unwrap_or_default() {
         "blocked" => Restart::Asking,
         "idle" | "done" if agent["interactive_ready"] == true => Restart::Go,
@@ -259,7 +260,7 @@ pub fn lead_workspace(workspaces: &[Value]) -> Option<String> {
 }
 
 pub fn lead_agent<'a>(agents: &'a [Value], lead: &str) -> Option<&'a Value> {
-    agents.iter().find(|agent| agent["agent"] == "claude" && agent["workspace_id"].as_str() == Some(lead))
+    agents.iter().find(|agent| agent["agent"] == Agent::Claude.kind() && agent["workspace_id"].as_str() == Some(lead))
 }
 
 pub fn restart() -> Result<String> {
@@ -281,8 +282,8 @@ pub fn restart() -> Result<String> {
     let recorded = fs::read_to_string(session_file()?).ok().map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
     let mut own: Vec<PathBuf> = [Some(dir.clone()), dir.canonicalize().ok()].into_iter().flatten().collect();
     own.dedup();
-    let home = tasks::claude_home();
-    let mut transcripts: Vec<Transcript> = home.iter().flat_map(|home| own.iter().flat_map(|dir| transcripts_in(&tasks::transcripts_dir(home, dir)))).collect();
+    let home = Agent::Claude.home();
+    let mut transcripts: Vec<Transcript> = home.iter().flat_map(|home| own.iter().flat_map(|dir| transcripts_in(&Agent::Claude.transcripts_dir(home, dir)))).collect();
     let moved = home.zip(recorded.as_deref()).filter(|(_, id)| !transcripts.iter().any(|(_, stem)| stem == id)).and_then(|(home, id)| transcript_elsewhere(&home.join("projects"), id));
     transcripts.extend(moved.clone());
     let previous = lead_session(&transcripts, recorded.as_deref());
@@ -296,7 +297,7 @@ pub fn restart() -> Result<String> {
         None => Session::New(tasks::new_session_id()?),
     };
     if agent.is_some() {
-        tasks::end_claude(&pane)?;
+        Agent::Claude.end(&pane)?;
     }
     close_messages(places(&lead)?.messages.as_deref())?;
     start_chat(&pane, session)?;

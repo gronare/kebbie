@@ -61,9 +61,13 @@ The keeper calls the same functions the board did, with the same rules: it never
 
 herdr's startup hook starts the keeper in its own session, so it outlives the hook and any pane. See [Updates and stale sessions](updates-and-restarts.md#the-keeper) for how it follows an update.
 
+## The agent seam
+
+Everything kelpie knows about Claude Code sits behind one seam, the `Agent` type in `src/agent`: the settings file and start flags a task's Claude gets, the trust and bypass dialogs it answers or leaves to you, how it is ended, where its conversation is kept and which messages in it are yours, how a running session is resumed with its own flags, and the read-only reviewer's command line. Claude is the one agent behind it today. The rest of kelpie, from the pool and the worktrees to the push block, the messages, the questions, the board and the routines, asks the seam and knows nothing of the CLI. A task's [profile](../reference/configuration.md#profiles) names its agent, and the task's session record keeps it, so a restart reaches the same one. Reading a Claude's screen for its own menus, its input box and its API errors, and the staleness checks on Claude Code's binary, plugins and MCP config, are Claude's alone and stay where they are.
+
 ## Where configuration lives
 
-kelpie reads its settings only from your home directory: one machine config and one optional file per repo. It never reads a file inside a repo. A repo's collaborators may use kelpie or not, and cloning a repo can never change how kelpie behaves on your machine. A team that wants a shared setup keeps it in a team repo and links the files in. See [Share a team setup](../how-to/share-a-team-setup.md).
+kelpie reads its settings only from your home directory: one machine config, one optional file per repo, and one file per profile. It never reads a file inside a repo. A repo's collaborators may use kelpie or not, and cloning a repo can never change how kelpie behaves on your machine. A team that wants a shared setup keeps it in a team repo and links the files in. See [Share a team setup](../how-to/share-a-team-setup.md).
 
 ## Related
 

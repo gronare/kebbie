@@ -25,6 +25,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `messages.jsonl` | Every message between sessions. |
 | `turns/` | Task reports. |
 | `roles/` | The task and lead roles. |
+| `sessions/` | One file per task, `<task>@<repo>`: its Claude session id, permission mode, profile and agent as JSON, so a restart resumes the same conversation with the same profile. A file of two lines, the id and the mode, reads as the `task` profile on Claude. `<task>@<repo>.prompt` keeps its first prompt. |
 | `reviews/` | Review split marks. |
 | `verdicts/<task>@<repo>.md` | The reviewer's latest verdict for a task. |
 | `cards/` | Sign-off cards. |
@@ -119,6 +120,7 @@ What happened: …
 | Path in the install root | Purpose |
 | --- | --- |
 | `examples/herdr-config.toml` | A complete herdr config with kelpie's keys, the sidebar sync and a sidebar layout. |
+| `examples/profiles/` | Two [profiles](configuration.md#profiles) to copy into `~/.config/kelpie/profiles/`: `designer` for UI work and `careful` for risky changes, each with its role file. |
 | `scripts/sync.sh` | The sidebar sync, run from herdr's tab bar. |
 | `roles/lead.md`, `roles/task.md` | The lead's and a task's role templates. |
 | `skills/` | The Claude Code plugin's skills. See [Skills](skills.md). |

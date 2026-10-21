@@ -94,6 +94,7 @@ pub struct Worktree {
     pub test_commands: Option<Vec<String>>,
     pub also_noticed: Option<AlsoNoticed>,
     pub permission_mode: Option<String>,
+    pub profile: Option<String>,
     pub review_model: Option<String>,
     pub notify_command: Option<String>,
     pub vault_command: Option<String>,
@@ -157,6 +158,7 @@ pub struct Settings {
     pub test_commands: Setting<Vec<String>>,
     pub also_noticed: Setting<AlsoNoticed>,
     pub permission_mode: Setting<Option<String>>,
+    pub profile: Setting<Option<String>>,
     pub review_model: Setting<Option<String>>,
     pub notify_command: Setting<Option<String>>,
     pub vault_command: Setting<Option<String>>,
@@ -393,6 +395,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         test_commands: None,
         also_noticed: None,
         permission_mode: None,
+        profile: None,
         review_model: None,
         notify_command: None,
         vault_command: None,
@@ -404,12 +407,14 @@ fn worktree(table: &Table) -> Result<Worktree> {
 
 fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(task) = subtable(table, "task", "task")? {
-        unknown_keys(task, "task.", &["rules_skill", "test_commands", "also_noticed", "permission_mode"])?;
+        unknown_keys(task, "task.", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile"])?;
         worktree.rules_skill = skill(task, "rules_skill", "task.rules_skill")?;
         worktree.test_commands = task.get("test_commands").map(test_commands).transpose()?;
         worktree.also_noticed = also_noticed(task)?;
         worktree.permission_mode = text(task, "permission_mode", "task.permission_mode")?
             .map(|mode| permission_mode(&mode).map(str::to_string).map_err(|error| format!("task.permission_mode: {error}"))).transpose()?;
+        worktree.profile = text(task, "profile", "task.profile")?
+            .map(|profile| crate::profiles::name(&profile).map(str::to_string).map_err(|error| format!("task.profile: {error}"))).transpose()?;
     }
     Ok(worktree)
 }
@@ -528,6 +533,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         test_commands: or_default(pick(repo.test_commands.as_ref(), machine.worktree.test_commands.as_ref()), Vec::new()),
         also_noticed: or_default(pick(repo.also_noticed.as_ref(), machine.worktree.also_noticed.as_ref()), AlsoNoticed::default()),
         permission_mode: optional(pick(repo.permission_mode.as_ref(), machine.worktree.permission_mode.as_ref())),
+        profile: optional(pick(repo.profile.as_ref(), machine.worktree.profile.as_ref())),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
@@ -583,7 +589,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, rules_skill, test_commands, also_noticed, permission_mode, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, rules_skill, test_commands, also_noticed, permission_mode, profile, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -631,8 +637,10 @@ pub fn describe(loaded: &Loaded) -> String {
         "What a task's Claude does with what it notices outside its task (a bug nearby, a stale doc, a refactor): \"backlog\" files it, in the vault's backlog with the vault plugin, else with kelpie backlog add; \"fix\" fixes a small related one in a commit of its own and files the rest; \"ask\" puts each to you with kelpie ask first. Each is listed under Also noticed on the sign-off card, and the reviewer counts an unrelated change under \"backlog\" or \"ask\" as a finding.");
     key("task.permission_mode", permission_mode.value.as_ref().map_or("none".to_string(), |mode| format!("{mode:?}")), permission_mode.layer,
         &format!("The permission mode a task's Claude starts in, one of {}; none leaves it to Claude's own default. kelpie start --mode overrides it for one task, and a restarted task keeps the mode it started in. \"bypassPermissions\" runs every tool without asking, for an isolated machine only; a task still never pushes nor approves its own commits.", quoted(&PERMISSION_MODES)));
+    key("task.profile", profile.value.as_ref().map_or(format!("none ({:?})", crate::profiles::TASK), |profile| format!("{profile:?}")), profile.layer,
+        &format!("The profile a task starts with when kelpie start names none with --profile: a file in {}/<name>.toml with the agent, model, extra role, skills, permission mode and rules it adds to kelpie's own; none starts the built-in task. A restarted task keeps the profile it started with; kelpie profiles lists them.", crate::profiles::dir().display()));
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
-        "The model kelpie review's independent reviewer runs on; none leaves it to Claude's default.");
+        "The model kelpie review's independent reviewer runs on, ahead of the reviewer profile's model; none leaves it to that profile, then to Claude's default.");
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
         "The shell command kelpie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KELPIE_EVENT, KELPIE_TASK, KELPIE_REPO and KELPIE_TEXT describe it, and $1 is the text. None sends no notifications; config.toml only.");
     key("vault.command", vault_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), vault_command.layer,
@@ -1208,5 +1216,19 @@ mod tests {
         assert_eq!(resolved.notify_command.value, None);
         assert_eq!(resolved.server_name.value, DEFAULT_SERVER_NAME);
         assert_eq!(resolved.worker_name.value, DEFAULT_WORKER_NAME);
+    }
+
+    #[test]
+    fn task_profile_names_the_profile_a_task_starts_with_and_a_repo_config_wins() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).profile, Setting { value: None, layer: Layer::Default });
+        let machine = machine("[task]\nprofile = \"quick\"\n");
+        assert_eq!(settings(&Worktree::default(), &machine).profile, Setting { value: Some("quick".to_string()), layer: Layer::Machine });
+        let both = settings(&repo("[task]\nprofile = \"designer\"\n"), &machine);
+        assert_eq!(both.profile, Setting { value: Some("designer".to_string()), layer: Layer::Repo });
+        assert!(parse_repo("[task]\nprofile = \"Design Work\"\n", "app.toml").unwrap_err().contains("task.profile: \"Design Work\" is not a profile name"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: both });
+        assert!(shown.contains("task.profile = \"designer\"  (repo config)\n  The profile a task starts with when kelpie start names none with --profile"), "{shown}");
+        let none = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
+        assert!(none.contains("task.profile = none (\"task\")  (default)"), "{none}");
     }
 }

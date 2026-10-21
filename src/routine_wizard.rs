@@ -141,6 +141,7 @@ impl Wizard {
         Ok(Draft {
             id: self.id()?, title: self.title.trim().to_string(), repo: self.repo().ok_or("choose a repo")?, schedule: routine_file::parse_when(&self.when)?,
             prompt: self.prompt.trim().to_string(), mode, push, enabled: self.editing.as_ref().is_none_or(|routine| routine.enabled),
+            profile: self.editing.as_ref().and_then(|routine| routine.profile.clone()),
         })
     }
 
@@ -488,7 +489,7 @@ mod tests {
     fn edit_opens_the_steps_with_the_routines_values_and_keeps_its_id() {
         let routine = Routine {
             id: "deps".to_string(), title: "Deps".to_string(), repo: "infra".to_string(), schedule: Schedule::Weekly(0, 480), prompt: "p".to_string(),
-            mode: Mode::Plan, push: false, enabled: false, source: "/c/repos/infra.toml".to_string(),
+            mode: Mode::Plan, push: false, enabled: false, profile: None, source: "/c/repos/infra.toml".to_string(),
         };
         let mut wizard = Wizard::edit(&routine, repos(), PathBuf::from("/c/repos/infra.toml"), Some("infra".to_string()));
         assert_eq!((wizard.when.as_str(), wizard.mode, wizard.repo().as_deref(), wizard.title()), ("mon 08:00", 1, Some("infra"), "edit routine".to_string()));

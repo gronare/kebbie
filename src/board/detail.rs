@@ -301,7 +301,7 @@ pub(super) fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool
     let mut lines = Vec::new();
     let mut links = Vec::new();
     let mut images = Vec::new();
-    let mut head = vec![Span::styled(item.name.clone(), bold(MAUVE))];
+    let mut head = vec![Span::styled(item.titled(), bold(MAUVE))];
     let mut where_ = Vec::new();
     if let Some(path) = &item.path {
         where_.push(name_of(path));
@@ -538,6 +538,21 @@ mod tests {
         assert_eq!((links[0].shown.as_str(), links[0].url.as_str()), ("https://github.com/acme/web/actions/runs/42", "https://github.com/acme/web/actions/runs/42"));
         assert_eq!(row_facts(&item), "CI running: CI");
         assert_eq!(group_color(item.group()), YELLOW);
+    }
+
+    #[test]
+    fn a_task_started_with_a_profile_other_than_task_shows_it_beside_its_name_on_its_row_and_in_its_panel() {
+        let mut app = test_app(vec![served("search-filters")]);
+        with_detail(&mut app);
+        let (rows, _) = render(&mut app, 170, 50);
+        assert!(!rows.join("\n").contains("· task"), "the built-in task is not named: {}", rows.join("\n"));
+        app.tasks[0].profile = Some("designer".to_string());
+        let (rows, _) = render(&mut app, 170, 50);
+        assert!(rows.iter().filter(|row| row.contains("search-filters · designer")).count() >= 2, "on its row and at the head of its panel: {}", rows.join("\n"));
+        let mut item = crate::status::tests::task(Some("idle"), None, 0);
+        assert_eq!((item.titled(), item.to_json()["profile"].as_str()), ("billing".to_string(), Some("task")));
+        item.profile = Some("designer".to_string());
+        assert_eq!((item.titled(), item.to_json()["profile"].as_str()), ("billing · designer".to_string(), Some("designer")), "kelpie status --json names it too");
     }
 
     #[test]

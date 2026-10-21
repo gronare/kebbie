@@ -210,7 +210,7 @@ pub fn command(env_bin: Option<String>, configured: Option<String>, plugin: &Plu
 }
 
 fn claude_home() -> PathBuf {
-    crate::tasks::claude_home().unwrap_or_default()
+    crate::agent::claude::home().unwrap_or_default()
 }
 
 pub fn cli() -> Option<Cli> {

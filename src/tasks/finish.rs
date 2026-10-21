@@ -238,7 +238,8 @@ mod tests {
     use super::*;
     use crate::tasks::test_support::*;
     use crate::repo::{ahead_behind, branch_exists, git, is_clean};
-    use crate::tasks::launch::{TMP_VARS, settings, task_tmp};
+    use crate::agent::claude::{TMP_VARS, settings};
+    use crate::tasks::launch::task_tmp;
     use crate::tasks::pool::{find_task, release, slots};
     use crate::tasks::started::{record_start, started_file_in};
 

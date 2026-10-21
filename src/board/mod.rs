@@ -521,7 +521,7 @@ impl App {
                         let (sender, result) = mpsc::channel();
                         let name = item.name.clone();
                         thread::spawn(move || {
-                            let options = tasks::Start { prompt: None, focus: true, from: None, mode: None, backlog: None, note: true };
+                            let options = tasks::Start { prompt: None, focus: true, from: None, mode: None, profile: None, backlog: None, note: true };
                             let _ = sender.send(tasks::start(&path, &name, &options));
                         });
                         self.mode = Mode::Working { label: format!("Restarting {}…", item.name), result };
@@ -956,7 +956,7 @@ mod tests {
         app.routines.tasks = app.tasks.clone();
         let routine = crate::routines::Routine {
             id: "cluster-health".to_string(), title: "Cluster health".to_string(), repo: "infra".to_string(), schedule: crate::routines::Schedule::Daily(420),
-            prompt: "Check every node.".to_string(), mode: crate::routines::Mode::Report, push: false, enabled: true, source: "/c/config.toml".to_string(),
+            prompt: "Check every node.".to_string(), mode: crate::routines::Mode::Report, push: false, enabled: true, profile: None, source: "/c/config.toml".to_string(),
         };
         let state = crate::routines::State { last_start: Some(1), last_task: Some("cluster-health-20261019-0600@infra".to_string()), last_outcome: Some(crate::routines::Outcome::Findings), ..Default::default() };
         app.routines.shown(vec![(routine, state)]);

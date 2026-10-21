@@ -318,12 +318,12 @@ fn heard(address: &str, since: u64) -> bool {
     let Some((task, repo)) = address.split_once('@') else { return false };
     let Some(repo) = crate::repo::checkout_named(repo) else { return false };
     crate::tasks::slots(&repo).ok().and_then(|slots| slots.into_iter().find(|slot| slot.task.as_deref() == Some(task)))
-        .and_then(|slot| crate::tasks::transcript(&repo, &slot)).and_then(|file| fs::read_to_string(file).ok())
+        .and_then(|slot| crate::tasks::transcript(&repo, &slot)).and_then(|(_, file)| fs::read_to_string(file).ok())
         .is_some_and(|text| typed_by_user_since(&text, since))
 }
 
 fn typed_by_user_since(transcript: &str, since: u64) -> bool {
-    crate::review::user_messages_at(transcript).iter().any(|(at, text)| at.is_some_and(|at| at >= since * 1000) && !text.starts_with("[from "))
+    crate::agent::Agent::Claude.user_messages_at(transcript).iter().any(|(at, text)| at.is_some_and(|at| at >= since * 1000) && !text.starts_with("[from "))
 }
 
 fn flush_held_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &dyn Fn(&str, u64) -> bool) -> Result<usize> {

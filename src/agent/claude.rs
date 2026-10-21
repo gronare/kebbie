@@ -1,10 +1,12 @@
 use std::time::Duration;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::herdr;
+use crate::profiles::Profile;
 use crate::sh::Result;
+use crate::tasks::Session;
 
 enum Refusal {
     NotYet,
@@ -227,6 +229,222 @@ pub fn trusted_by_user(dir: &Path) -> bool {
 
 fn trusted_in(claude: &Value, dir: &Path) -> bool {
     dir.ancestors().any(|folder| folder.to_str().is_some_and(|folder| claude["projects"][folder]["hasTrustDialogAccepted"] == true))
+}
+
+// The deny rules and the env rewrite name the rule; the worktree's own push block (push_block) is what holds when they are slipped.
+// gate is the task's address when kelpie keeps its note: its edits then wait for the note's Problem.
+pub(crate) fn settings(kelpie: &str, address: &str, gate: Option<&str>, tmp: Option<&Path>) -> String {
+    let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kelpie)) }] }]);
+    let allow = ["peers", "tell", "report", "ask", "routine ok"].map(|command| format!("Bash({kelpie} {command}:*)"));
+    let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kelpie), crate::sh::quote(address)) }] }]);
+    let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PostToolUse": evidence, "PostToolUseFailure": evidence });
+    if let Some(address) = gate {
+        hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kelpie), crate::sh::quote(address)), "timeout": 40 }] }]);
+    }
+    let mut env = json!({ "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" });
+    if let Some(tmp) = tmp {
+        for name in TMP_VARS {
+            env[name] = json!(tmp.to_string_lossy());
+        }
+    }
+    json!({
+        "env": env,
+        "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)"), format!("Bash({kelpie} choose:*)"), format!("Bash({kelpie} after:*)"), "Bash(herdr pane send-keys:*)".to_string(), "Bash(herdr pane send-text:*)".to_string(), "Bash(herdr pane run:*)".to_string(), "Bash(herdr agent send-keys:*)".to_string(), "Bash(herdr agent prompt:*)".to_string()], "allow": allow },
+        "hooks": hooks,
+    }).to_string()
+}
+
+pub(crate) const TMP_VARS: [&str; 4] = ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"];
+
+// A profile's rules go after kelpie's own, so kelpie's deny rules, hooks and env stay whatever the profile says.
+pub(crate) fn with_profile(settings: &str, profile: &Profile) -> String {
+    let mut written: Value = serde_json::from_str(settings).expect("kelpie writes its own task settings as JSON");
+    for (key, rules) in [("deny", &profile.deny), ("allow", &profile.allow)] {
+        if let Some(list) = written["permissions"][key].as_array_mut() {
+            list.extend(rules.iter().map(|rule| json!(rule)));
+        }
+    }
+    if !profile.plugins.is_empty() {
+        written["enabledPlugins"] = profile.plugins.iter().map(|plugin| (plugin.clone(), json!(true))).collect::<serde_json::Map<_, _>>().into();
+    }
+    written.to_string()
+}
+
+pub(crate) fn session_args(session: &Session) -> [String; 2] {
+    match session {
+        Session::New(id) => ["--session-id".to_string(), id.clone()],
+        Session::Resume(id) => ["--resume".to_string(), id.clone()],
+    }
+}
+
+pub(crate) fn start_args(mode: Option<&str>, profile: &Profile, settings: &Path, role: &Path, session: &Session) -> Vec<String> {
+    let mut args: Vec<String> = mode.map(|mode| vec!["--permission-mode".to_string(), mode.to_string()]).unwrap_or_default();
+    for (flag, value) in [("--model", &profile.model), ("--effort", &profile.effort)] {
+        if let Some(value) = value {
+            args.extend([flag.to_string(), value.clone()]);
+        }
+    }
+    args.extend(["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), role.to_string_lossy().to_string()]);
+    args.extend(session_args(session));
+    args
+}
+
+// Claude Code keeps a folder's conversations as <session id>.jsonl under its projects dir, the folder's path with every other character than a letter or digit as '-'.
+pub(crate) fn transcripts_dir(claude_home: &Path, folder: &Path) -> PathBuf {
+    let name: String = folder.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect();
+    claude_home.join("projects").join(name)
+}
+
+pub fn home() -> Option<PathBuf> {
+    std::env::var("CLAUDE_CONFIG_DIR").map(PathBuf::from).ok().or_else(|| std::env::var("HOME").ok().map(|home| Path::new(&home).join(".claude")))
+}
+
+// What the user typed into the task's conversation, oldest first: its prompt and every later word, without tool results or kelpie's own wrappers.
+pub fn user_messages(transcript: &str) -> Vec<String> {
+    user_messages_at(transcript).into_iter().map(|(_, text)| text).collect()
+}
+
+pub fn user_messages_at(transcript: &str) -> Vec<(Option<u64>, String)> {
+    transcript.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["type"] == "user" && entry["isMeta"] != true && entry["isSidechain"] != true)
+        .filter_map(|entry| {
+            let text = match &entry["message"]["content"] {
+                Value::String(text) => text.clone(),
+                Value::Array(blocks) if blocks.iter().all(|block| block["type"] == "text") => blocks.iter().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join("\n"),
+                _ => return None,
+            };
+            Some((entry["timestamp"].as_str().and_then(crate::typing::iso_millis), text.trim().to_string()))
+        })
+        .filter(|(_, text)| !text.is_empty() && !text.starts_with('<') && !text.starts_with("[Request interrupted"))
+        .collect()
+}
+
+const SWITCHES: [&str; 20] = ["--allow-dangerously-skip-permissions", "--ax-screen-reader", "--bare", "--brief", "--chrome", "--no-chrome", "--dangerously-skip-permissions", "--disable-slash-commands", "--exclude-dynamic-system-prompt-sections", "--forward-subagent-text", "--ide", "--include-hook-events", "--include-partial-messages", "--no-session-persistence", "--replay-user-messages", "--restricted", "--safe-mode", "--strict-mcp-config", "--verbose", "--mcp-debug"];
+const VALUES: [&str; 27] = ["--agent", "--agents", "--append-system-prompt", "--append-system-prompt-file", "--autocompact", "--debug-file", "--effort", "--environment", "--fallback-model", "--input-format", "--json-schema", "--max-budget-usd", "--max-turns", "--model", "-n", "--name", "--output-format", "--permission-mode", "--permission-prompts", "--permission-prompt-tool", "--plugin-dir", "--plugin-url", "--remote-control-session-name-prefix", "--setting-sources", "--settings", "--system-prompt", "--system-prompt-file"];
+const OPTIONALS: [&str; 4] = ["-d", "--debug", "--prompt-suggestions", "--remote-control"];
+const MANY: [&str; 9] = ["--add-dir", "--allowedTools", "--allowed-tools", "--betas", "--disallowedTools", "--disallowed-tools", "--file", "--mcp-config", "--tools"];
+const DROPPED_SWITCHES: [&str; 4] = ["-c", "--continue", "--fork-session", "--tmux"];
+const DROPPED_OPTIONALS: [&str; 7] = ["-r", "--resume", "--from-pr", "--teleport", "--cloud", "-w", "--worktree"];
+const REFUSED: [&str; 9] = ["-p", "--print", "--bg", "--background", "--desktop", "-h", "--help", "-v", "--version"];
+
+fn base(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+// The process's own flags, without its conversation and prompt, then --resume <session>; an option kelpie cannot place is refused, since its next word could be a prompt that would be sent again.
+pub fn resume_args(argv: &[String], session: &str) -> std::result::Result<Vec<String>, String> {
+    let start = match argv {
+        [program, ..] if base(program) == "claude" => 1,
+        [program, script, ..] if ["node", "bun"].iter().any(|name| base(program).starts_with(name)) && (script.contains("claude") || script.ends_with("cli.js")) => 2,
+        [] => return Err("its command line is empty".to_string()),
+        [program, ..] => return Err(format!("its command is {}, not claude", base(program))),
+    };
+    let words = &argv[start..];
+    let next_is_value = |index: usize| words.get(index).is_some_and(|word| !word.starts_with('-'));
+    let mut kept = Vec::new();
+    let mut index = 0;
+    while index < words.len() {
+        let word = words[index].as_str();
+        index += 1;
+        if word == "--" {
+            break;
+        }
+        if !word.starts_with('-') || word == "-" {
+            continue;
+        }
+        let flag = word.split_once('=').map_or(word, |(flag, _)| flag);
+        let inline = flag.len() < word.len();
+        if REFUSED.contains(&flag) {
+            return Err(format!("it runs with {flag}, which a resumed session cannot keep"));
+        }
+        if DROPPED_SWITCHES.contains(&flag) {
+            continue;
+        }
+        if flag == "--session-id" {
+            index += usize::from(!inline);
+            continue;
+        }
+        if DROPPED_OPTIONALS.contains(&flag) {
+            index += usize::from(!inline && next_is_value(index));
+            continue;
+        }
+        kept.push(word.to_string());
+        if SWITCHES.contains(&flag) || inline {
+            continue;
+        }
+        if VALUES.contains(&flag) {
+            let value = words.get(index).ok_or(format!("its {flag} has no value"))?;
+            kept.push(value.clone());
+            index += 1;
+        } else if OPTIONALS.contains(&flag) {
+            if next_is_value(index) {
+                kept.push(words[index].clone());
+                index += 1;
+            }
+        } else if MANY.contains(&flag) {
+            while next_is_value(index) {
+                kept.push(words[index].clone());
+                index += 1;
+            }
+        } else {
+            return Err(format!("it runs with {flag}, an option kelpie does not know"));
+        }
+    }
+    kept.extend(["--resume".to_string(), session.to_string()]);
+    Ok(kept)
+}
+
+const ROLE_FLAGS: [&str; 2] = ["--settings", "--append-system-prompt-file"];
+
+fn value_of<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let inline = format!("{flag}=");
+    args.iter().enumerate().find_map(|(index, word)| if word == flag { args.get(index + 1).map(String::as_str) } else { word.strip_prefix(&inline) })
+}
+
+// A task's Claude without the settings and role kelpie writes, or whose role file is gone, has none of kelpie's hooks and never reports.
+pub fn lacks_role(argv: &[String]) -> bool {
+    ROLE_FLAGS.iter().any(|flag| value_of(argv, flag).is_none_or(|file| !Path::new(file).is_file()))
+}
+
+pub fn with_role(args: &[String], settings: &Path, role: &Path) -> Vec<String> {
+    let mut kept = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if ROLE_FLAGS.contains(&word.as_str()) {
+            words.next();
+        } else if !ROLE_FLAGS.iter().any(|flag| word.starts_with(&format!("{flag}="))) {
+            kept.push(word.clone());
+        }
+    }
+    let at = kept.iter().rposition(|word| word == "--resume").unwrap_or(kept.len());
+    kept.splice(at..at, ["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), role.to_string_lossy().to_string()]);
+    kept
+}
+
+const REVIEW_TOOLS: &str = "Read,Grep,Glob,Bash";
+const REVIEW_ALLOWED: [&str; 6] = ["Read", "Grep", "Glob", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)"];
+
+// Only these tools exist, only the allowed ones run, the guard hook stops any other shell command, and no user setting, hook or plugin joins in.
+pub(crate) fn reviewer_args(reviewer: &super::Reviewer) -> Vec<String> {
+    let super::Reviewer { model, effort, settings, prompt, rules } = *reviewer;
+    let mut args: Vec<String> = ["-p", "--setting-sources", "", "--output-format", "text", "--no-session-persistence", "--strict-mcp-config", "--permission-mode", "dontAsk", "--tools", REVIEW_TOOLS, "--allowedTools"]
+        .map(str::to_string).to_vec();
+    args.extend(REVIEW_ALLOWED.map(str::to_string));
+    args.extend(["--settings".to_string(), settings.to_string_lossy().to_string(), "--append-system-prompt-file".to_string(), prompt.to_string_lossy().to_string()]);
+    if let Some(rules) = rules {
+        args.extend(["--add-dir".to_string(), rules.to_string_lossy().to_string()]);
+    }
+    if let Some(model) = model {
+        args.extend(["--model".to_string(), model.to_string()]);
+    }
+    if let Some(effort) = effort {
+        args.extend(["--effort".to_string(), effort.to_string()]);
+    }
+    args
+}
+
+pub(crate) fn reviewer_settings(kelpie: &str) -> String {
+    json!({ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook --review", crate::sh::quote(kelpie)) }] }] } }).to_string()
 }
 
 #[cfg(test)]

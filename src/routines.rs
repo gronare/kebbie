@@ -10,7 +10,7 @@ use crate::permit::Caller;
 use crate::repo::{ahead_behind, changed_count, default_branch, main_checkout, name_of};
 use crate::sh::Result;
 
-pub const KEYS: [&str; 9] = ["id", "title", "repo", "every", "at", "prompt", "mode", "push", "enabled"];
+pub const KEYS: [&str; 10] = ["id", "title", "repo", "every", "at", "prompt", "mode", "push", "enabled", "profile"];
 pub const EVERY: u64 = 60;
 const DAY: u64 = 86_400;
 const NAME_LIMIT: usize = 32;
@@ -66,6 +66,7 @@ pub struct Routine {
     pub mode: Mode,
     pub push: bool,
     pub enabled: bool,
+    pub profile: Option<String>,
     pub source: String,
 }
 
@@ -190,7 +191,8 @@ fn routine(table: &Table, index: usize, default_repo: Option<&str>, source: &str
     if push && mode != Mode::Fix {
         return Err(format!("{}: only a fix routine pushes; set mode = \"fix\" or leave push out", key("push")));
     }
-    Ok(Routine { id, title, repo, schedule, prompt, mode, push, enabled: flag(table, "enabled", &key("enabled"))?.unwrap_or(true), source: source.to_string() })
+    let profile = text(table, "profile", &key("profile"))?.map(|profile| crate::profiles::name(&profile).map(str::to_string).map_err(|error| format!("{}: {error}", key("profile")))).transpose()?;
+    Ok(Routine { id, title, repo, schedule, prompt, mode, push, enabled: flag(table, "enabled", &key("enabled"))?.unwrap_or(true), profile, source: source.to_string() })
 }
 
 // A config file's [[routines]]; a repo config's run in its own repo unless they name another.
@@ -461,7 +463,7 @@ fn start_run(routine: &Routine, dir: &Path, now: u64, offset: i64) -> Result<Str
             crate::permit::set_task_in(dir, &address, true)?;
         }
         let prompt = prompt(routine, &crate::peers::kelpie_command()?);
-        let options = crate::tasks::Start { prompt: Some(&prompt), focus: false, from: None, mode: Some("auto"), backlog: None, note: false };
+        let options = crate::tasks::Start { prompt: Some(&prompt), focus: false, from: None, mode: Some("auto"), profile: routine.profile.as_deref(), backlog: None, note: false };
         crate::tasks::begin(&repo, &task, &options)
     });
     let cwd = repo_path(&routine.repo).unwrap_or_else(|_| dir.to_path_buf());
@@ -598,7 +600,7 @@ fn ago(seconds: u64) -> String {
 pub fn row_json(routine: &Routine, state: &State, open: bool, now: u64, offset: i64) -> Value {
     json!({
         "id": routine.id, "title": routine.title, "repo": routine.repo, "schedule": routine.schedule.text(), "mode": routine.mode.key(), "push": routine.push,
-        "enabled": routine.enabled, "source": routine.source, "open": open,
+        "enabled": routine.enabled, "profile": routine.profile, "source": routine.source, "open": open,
         "next_run": routine.enabled.then(|| next_run(routine.schedule, state, now, offset)),
         "last_start": state.last_start, "last_task": state.last_task, "last_outcome": state.last_outcome.map(Outcome::key), "last_summary": state.last_summary,
     })
@@ -667,11 +669,22 @@ mod tests {
         let routine = one(CLUSTER);
         assert_eq!(routine, Routine {
             id: "cluster-health".to_string(), title: "Cluster health".to_string(), repo: "infra".to_string(), schedule: Schedule::Every(6 * 3600),
-            prompt: "Check that every node is Ready.".to_string(), mode: Mode::Report, push: false, enabled: true, source: "config.toml".to_string(),
+            prompt: "Check that every node is Ready.".to_string(), mode: Mode::Report, push: false, enabled: true, profile: None, source: "config.toml".to_string(),
         });
         let full = one("[[routines]]\nid = \"deps\"\ntitle = \"Updates\"\nrepo = \"~/code/app\"\nat = \"mon 07:00\"\nprompt = \"x\"\nmode = \"fix\"\npush = true\nenabled = false\n");
         assert_eq!((full.repo.as_str(), full.schedule, full.mode, full.push, full.enabled), ("~/code/app", Schedule::Weekly(0, 420), Mode::Fix, true, false));
         assert!(parsed("", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_routine_may_name_the_profile_its_task_starts_with() {
+        let routine = one(&format!("{CLUSTER}profile = \"ops\"\n"));
+        assert_eq!(routine.profile.as_deref(), Some("ops"));
+        assert_eq!(row_json(&routine, &State::default(), false, 0, 0)["profile"], "ops");
+        assert!(parsed(&format!("{CLUSTER}profile = \"Ops Team\"\n"), Some("infra")).unwrap_err().contains("routines[0].profile: \"Ops Team\" is not a profile name"));
+        let source = include_str!("routines.rs");
+        let start = &source[source.find("\nfn start_run(").unwrap()..];
+        assert!(start[..start.find("\n}\n").unwrap()].contains("profile: routine.profile.as_deref()"), "the routine's task starts with its profile");
     }
 
     #[test]

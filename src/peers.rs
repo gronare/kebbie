@@ -37,7 +37,7 @@ pub fn address(task: &str, repo: &str) -> String {
 
 pub fn sessions() -> Result<Vec<Session>> {
     let workspaces = herdr::workspaces()?;
-    let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| agent["agent"] == "claude").collect();
+    let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| crate::agent::Agent::of(agent).is_some()).collect();
     let agent_in = |workspace: Option<&str>| workspace.and_then(|id| agents.iter().find(|agent| agent["workspace_id"].as_str() == Some(id)));
     let text = |value: &Value| value.as_str().map(str::to_string);
     let mut list = Vec::new();
@@ -144,6 +144,7 @@ pub struct Place<'a> {
     pub setup_command: Option<&'a str>,
     pub rules_skill: &'a str,
     pub note: Option<&'a str>,
+    pub profile: &'a str,
 }
 
 pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
@@ -228,7 +229,7 @@ pub fn noticed_section(choice: AlsoNoticed, vault: bool, kelpie: &str) -> String
     }
 }
 
-// roles/task.md filled in for this task, written to the state dir for --append-system-prompt-file.
+// roles/task.md filled in for this task, its profile's section after it, written to the state dir for --append-system-prompt-file.
 pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     let template = fs::read_to_string(install_root()?.join("roles/task.md")).map_err(|error| format!("roles/task.md: {error}"))?;
     let repo = name_of(place.repo);
@@ -246,13 +247,31 @@ pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     values.extend(worktree_values(place)?);
     let pairs: Vec<(&str, &str)> = values.iter().map(|(name, value)| (*name, value.as_str())).collect();
     let file = crate::lead::roles_dir()?.join(format!("{me}.md"));
-    crate::state::write(&file, fill(&template, &pairs))?;
+    write_role(&file, &template, &pairs, place.profile)?;
     Ok(file)
+}
+
+pub fn write_role(file: &Path, template: &str, pairs: &[(&str, &str)], profile: &str) -> Result<()> {
+    crate::state::write(file, fill(template, pairs) + profile)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tasks_role_file_carries_its_profiles_section_after_kelpies_role() {
+        let dir = crate::sh::test_dir("role-profile");
+        let file = dir.join("billing@app.md");
+        let section = "\n\n## Your profile: designer\n\nMeasure in the browser.\n";
+        write_role(&file, include_str!("../roles/task.md"), &[("task", "billing"), ("repo", "app")], section).unwrap();
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(written.starts_with("# You are a kelpie task\n\nYou are the Claude for the task **billing** in the repo **app**"), "{}", &written[..200]);
+        assert!(written.ends_with(section), "the profile's section closes the role");
+        write_role(&file, "role", &[], "").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "role", "the built-in task adds nothing");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn every_use_of_kelpies_own_path_goes_through_own_exe() {

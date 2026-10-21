@@ -17,6 +17,7 @@ pub struct Draft {
     pub mode: Mode,
     pub push: bool,
     pub enabled: bool,
+    pub profile: Option<String>,
 }
 
 pub fn parse_when(text: &str) -> Result<Schedule> {
@@ -107,6 +108,9 @@ pub fn block(draft: &Draft, default_repo: Option<&str>) -> String {
     }
     if !draft.enabled {
         lines.push("enabled = false".to_string());
+    }
+    if let Some(profile) = &draft.profile {
+        lines.push(format!("profile = {}", quoted(profile)));
     }
     lines.push(format!("prompt = {}", multiline(draft.prompt.trim())));
     lines.join("\n") + "\n"
@@ -353,7 +357,7 @@ pub fn draft_from(asked: &Asked, taken: &[String]) -> Result<Draft> {
         Some(id) => id.to_string(),
         None => free_id(&slug(title), taken),
     };
-    Ok(Draft { id, title: title.to_string(), repo: repo.to_string(), schedule, prompt: prompt.to_string(), mode, push: asked.push, enabled: !asked.paused })
+    Ok(Draft { id, title: title.to_string(), repo: repo.to_string(), schedule, prompt: prompt.to_string(), mode, push: asked.push, enabled: !asked.paused, profile: None })
 }
 
 pub fn add_cli(asked: &Asked) -> Result<String> {
@@ -373,7 +377,7 @@ mod tests {
         fn of(routine: &Routine) -> Draft {
             Draft {
                 id: routine.id.clone(), title: routine.title.clone(), repo: routine.repo.clone(), schedule: routine.schedule, prompt: routine.prompt.clone(),
-                mode: routine.mode, push: routine.push, enabled: routine.enabled,
+                mode: routine.mode, push: routine.push, enabled: routine.enabled, profile: routine.profile.clone(),
             }
         }
     }
@@ -381,7 +385,7 @@ mod tests {
     fn draft() -> Draft {
         Draft {
             id: "cluster-health".to_string(), title: "Cluster health".to_string(), repo: "~/homelab-gitops".to_string(), schedule: Schedule::Daily(7 * 60),
-            prompt: "Check every node, Longhorn volume and certificate.".to_string(), mode: Mode::Report, push: false, enabled: true,
+            prompt: "Check every node, Longhorn volume and certificate.".to_string(), mode: Mode::Report, push: false, enabled: true, profile: None,
         }
     }
 
@@ -422,6 +426,14 @@ mod tests {
         assert_eq!(free_id("cluster-health", &["backups".to_string()]), "cluster-health");
         assert_eq!(free_id("cluster-health", &["cluster-health".to_string(), "cluster-health-2".to_string()]), "cluster-health-3");
         assert!(free_id(&"a".repeat(40), &["a".repeat(40)]).len() <= 40);
+    }
+
+    #[test]
+    fn an_edited_routine_keeps_the_profile_its_table_names() {
+        let text = block(&Draft { profile: Some("ops".to_string()), ..draft() }, None);
+        assert!(text.contains("mode = \"report\"\nprofile = \"ops\"\n"), "{text}");
+        let parsed = routines::parse_list(&text.parse::<Table>().unwrap(), None, "x").unwrap().remove(0);
+        assert_eq!(Draft::of(&parsed).profile.as_deref(), Some("ops"), "the board's edit writes the table again with its profile");
     }
 
     #[test]

@@ -1,0 +1,13 @@
+# Copy to ~/.config/kelpie/profiles/designer.toml, with designer.md beside it.
+about = "UI work: a mockup first, then the code, measured in the browser"
+for = "UI, CSS, new screens and components, mockups"
+agent = "claude"
+model = "opus"
+effort = "high"
+role = "designer.md"
+skills = ["frontend-design:frontend-design"]
+permission_mode = "acceptEdits"
+allow = ["Bash(npx playwright:*)"]
+
+[claude]
+plugins = ["frontend-design@claude-plugins-official"]
