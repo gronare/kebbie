@@ -15,6 +15,8 @@ kelpie routine add --title "Cluster health" --repo infra --every 6h \
   "Check the cluster with kubectl: every node Ready, no pod crash-looping, every volume healthy."
 ```
 
+Or ask the lead for it in your words: it shows you the routine's title, repo, schedule, mode and push, and adds it with `kelpie routine add` once you say yes. It sets `--push` only when you ask for it.
+
 To write the table yourself, or to keep a routine in a repo's own config, follow the examples below.
 
 ## Check a cluster's health every six hours
