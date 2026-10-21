@@ -92,6 +92,7 @@ impl App {
                         }
                     }
                     (Some(Hit::Commit(index)), Mode::ConfirmPush { selected, .. }) => *selected = index,
+                    (Some(Hit::CardImage(index)), Mode::Card { image, .. }) => *image = index,
                     (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
                     (Some(Hit::Answer(index)), Mode::Questions(window)) => {
                         window.option = index;

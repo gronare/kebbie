@@ -193,12 +193,16 @@ fn ci_lines(item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
 
 // The task's latest recorded test run: green on the code as it is, yellow on older code, red when it failed.
 pub(super) fn tests_line(tests: &evidence::Shown, width: usize) -> Line<'static> {
+    field("tests", tests_spans(tests, width.saturating_sub(LABEL + 2)))
+}
+
+pub(super) fn tests_spans(tests: &evidence::Shown, width: usize) -> Vec<Span<'static>> {
     let color = match tests.mark {
         evidence::Mark::Covered => GREEN,
         evidence::Mark::Stale => YELLOW,
         evidence::Mark::Failed => RED,
     };
-    field("tests", vec![Span::styled(format!("{} ", tests.symbol()), style(color)), Span::styled(cut(&tests.text, width.saturating_sub(LABEL + 2)), style(color))])
+    vec![Span::styled(format!("{} ", tests.symbol()), style(color)), Span::styled(cut(&tests.text, width), style(color))]
 }
 
 fn worker_line(item: &Item, configured: bool, name: &str) -> Option<Line<'static>> {
@@ -478,13 +482,14 @@ mod tests {
         }
         let commits = vec![tasks::Commit { sha: "1111111aaaa".to_string(), message: "Add refunds".to_string() }];
         let stale = evidence::Shown { mark: evidence::Mark::Stale, text: "cargo test · 493 passed · at a1b2c3d, code changed since".to_string() };
-        let (lines, first) = push_lines(None, Some(&stale), &commits, 0);
-        assert_eq!(lines[0].spans.iter().map(|span| span.content.to_string()).collect::<String>(), "tests   ○ cargo test · 493 passed · at a1b2c3d, code changed since");
-        assert_eq!(lines[0].spans[1].style.fg, Some(YELLOW));
-        assert_eq!(first, 2, "the tests line sits above the commits");
+        let (lines, first) = push_lines(None, Some(&stale), &commits, 0, 88);
+        assert!(lines[0].to_string().starts_with("TESTS ─"));
+        assert_eq!(lines[1].to_string(), "  ○ cargo test · 493 passed · at a1b2c3d, code changed since");
+        assert_eq!(lines[1].spans[2].style.fg, Some(YELLOW));
+        assert_eq!(first, 4, "the tests section sits above the commits");
         let failed = evidence::Shown { mark: evidence::Mark::Failed, text: "cargo test failed · 2 failed · at a1b2c3d".to_string() };
-        let (lines, _) = push_lines(None, Some(&failed), &commits, 0);
-        assert_eq!(lines[0].spans[1].style.fg, Some(RED));
+        let (lines, _) = push_lines(None, Some(&failed), &commits, 0, 88);
+        assert_eq!(lines[1].spans[2].style.fg, Some(RED));
     }
 
     #[test]

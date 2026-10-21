@@ -77,6 +77,25 @@ pub fn column_title(title: &str, right: String, focused: bool, width: usize) -> 
     ]
 }
 
+pub(super) fn section_header(label: &str, extra: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let mut spans = vec![Span::styled(label.to_string(), bold(TEAL))];
+    for span in extra {
+        spans.push(Span::raw(" "));
+        spans.push(span);
+    }
+    let used: usize = spans.iter().map(Span::width).sum();
+    let mut line = fit(spans, width);
+    if used + 2 <= width {
+        line.spans.push(Span::raw(" "));
+        line.spans.push(Span::styled("─".repeat(width - used - 1), style(FAINT)));
+    }
+    line
+}
+
+pub(super) fn rule(width: usize) -> Line<'static> {
+    Line::from(Span::styled("─".repeat(width), style(FAINT)))
+}
+
 pub fn group_line(title: &str, count: usize, color: Color) -> Line<'static> {
     Line::from(vec![Span::styled(title.to_string(), bold(color)), Span::styled(format!("  {count}"), style(FAINT))])
 }

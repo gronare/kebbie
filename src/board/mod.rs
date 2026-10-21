@@ -90,7 +90,7 @@ enum Mode {
     ConfirmReset { path: PathBuf, name: String, nudged: bool },
     ConfirmDone { path: PathBuf, name: String, nudged: bool },
     Filter { buffer: String },
-    Card { path: PathBuf, name: String, scroll: u16 },
+    Card { path: PathBuf, name: String, scroll: u16, image: usize },
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
     ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, tests: Option<evidence::Shown> },
     EditMessage(Box<MessageEditor>),
@@ -105,6 +105,7 @@ enum Hit {
     Entry(usize),
     Choice(usize),
     Commit(usize),
+    CardImage(usize),
     Tab(Page),
     Question(usize),
     Answer(usize),
@@ -152,7 +153,6 @@ struct App {
     images: HashMap<(PathBuf, u16, u16), Option<Protocol>>,
     cell_guessed: bool,
     viewer: Option<&'static str>,
-    card_image_lines: Vec<usize>,
     decoded: HashMap<PathBuf, Option<image::DynamicImage>>,
     image_requests: Option<Sender<PathBuf>>,
     image_results: Option<Receiver<Decoded>>,
@@ -376,7 +376,7 @@ impl App {
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
             Mode::ConfirmDone { path, name, .. } => self.confirm_done(path, name, key, cancels),
             Mode::ConfirmDrop { path, name, force, .. } => self.confirm_drop(path, name, force, key, cancels),
-            Mode::Card { path, name, scroll } => self.handle_card(path, name, scroll, key),
+            Mode::Card { path, name, scroll, image } => self.handle_card(path, name, scroll, image, key),
             Mode::Fullscreen { path, name, scroll, index } => self.handle_fullscreen(path, name, scroll, index, key),
             Mode::Filter { buffer } => self.handle_filter(buffer, key),
             Mode::ConfirmPush { path, commits, selected, card, tests } => self.handle_push(path, commits, selected, card, tests, key),
@@ -399,7 +399,7 @@ impl App {
             routine_page::Effect::Card(address) => {
                 if let Some(item) = select(&address) {
                     match (item.path.clone(), self.card_of(&item)) {
-                        (Some(path), Some(_)) => self.mode = Mode::Card { path, name: item.name, scroll: 0 },
+                        (Some(path), Some(_)) => self.mode = Mode::Card { path, name: item.name, scroll: 0, image: 0 },
                         _ => self.show(Ok(format!("{}'s card is still loading; s shows it here in a moment.", item.name))),
                     }
                 }
@@ -530,7 +530,7 @@ impl App {
                     }
                     Act::Review => self.open_review(&item),
                     Act::Card => match (item.path.clone(), self.card_of(&item)) {
-                        (Some(path), Some(_)) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0 },
+                        (Some(path), Some(_)) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0, image: 0 },
                         _ => self.show(Ok(format!("{} has no sign-off card yet; it writes one when it reports ready.", item.name))),
                     },
                     Act::Inbox => {
@@ -671,7 +671,7 @@ impl App {
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), sources, fetch_failures: Vec::new(), away: false,
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
-            graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, card_image_lines: Vec::new(), decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
+            graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
             filter: None, ctrl_c: None, notice: None, lead_chat: None,
         }

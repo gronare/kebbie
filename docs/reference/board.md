@@ -102,21 +102,29 @@ kelpie types into a Claude's input box only when the box is empty. While you hav
 
 ### The card window
 
-Opened by `s`, in a narrow board and a wide one alike. The title names the task; the first line says whether the card is current at its commit, or written at an earlier one with the code changed since. The card's text follows. Each image line shows `▣ <path>  <alt text>`, the path a link to the file, and the image is drawn under it across the window's full width, its height following from its aspect ratio (at most the window's height).
+Opened by `s`, in a narrow board and a wide one alike. The title names the task; the first line says whether the card is current at its commit, or written at an earlier one with the code changed since.
+
+The card's text follows in parts, each under a header on a rule. A paragraph that opens with a short label and a colon, such as `To check:` or `Please confirm:`, starts a part of its own headed by that label; the text before the first label is headed `CARD`, and a card with no label is one `CARD` part. `**bold**` shows bold.
+
+The images show one at a time, each as large as its space allows:
+
+- In a window 120 columns wide or more, the text sits on the left with an `IMAGES` part listing every image by file name and alt text, and the selected image fills the right side. Over it, `1/3 <file name>  <alt text>` says which image it is; the file name is a link to the file. A click on an image in the list selects it.
+- In a narrower window the parts stack, and the lower part of the window shows the selected image across the window's width under `IMAGE 1/3 <file name>`.
 
 How an image shows depends on the terminal:
 
 - With a graphics protocol (Kitty, Sixel or iTerm2) the image is sharp. Inside herdr kelpie uses the Kitty protocol, which herdr passes on to a Kitty-capable outer terminal such as Ghostty or Kitty.
 - With only halfblocks the image is a coarse preview in text cells, with `preview · f larger · o opens the image` under it.
-- With images off (`KELPIE_IMAGES=off`, or the board not on a terminal), or a file that does not decode as an image, only the image line shows.
+- With images off (`KELPIE_IMAGES=off`, or the board not on a terminal), or a file that does not decode as an image, only its name shows.
 
 `KELPIE_IMAGES` picks the protocol by hand; see [environment](environment.md).
 
 | Key | Action | Shown when |
 | --- | --- | --- |
-| `↑` `↓`, `j` `k` | Scroll. `PageUp`, `PageDown` scroll by ten lines. | Always. |
-| `f` | Fullscreen: the first image in view, alone over the whole board, as large as it fits. `←` `→` go between the card's images; `esc`, `q` or `f` go back to the card. | The card has an image and images are on. |
-| `o` | Open the image in the system viewer: `open` on macOS, `xdg-open` on Linux. In fullscreen it opens the image shown. | The card has an image, the board does not run over SSH (`SSH_CONNECTION` or `SSH_TTY`), and on Linux `DISPLAY` or `WAYLAND_DISPLAY` is set. |
+| `←` `→` | The previous or next image, wrapping around. | The card has two images or more. |
+| `↑` `↓`, `j` `k` | Scroll the text. `PageUp`, `PageDown` scroll by ten lines. | Always. |
+| `f` | Fullscreen: the selected image alone over the whole board, as large as it fits. `←` `→` go between the card's images; `esc`, `q` or `f` go back to the card. | The card has an image and images are on. |
+| `o` | Open the selected image in the system viewer: `open` on macOS, `xdg-open` on Linux. In fullscreen it opens the image shown. | The card has an image, the board does not run over SSH (`SSH_CONNECTION` or `SSH_TTY`), and on Linux `DISPLAY` or `WAYLAND_DISPLAY` is set. |
 | `p` | Go on to the push window. | Always. |
 | `esc`, `q` | Close. | Always. |
 
@@ -124,7 +132,14 @@ In a narrow board the selected task also shows the card under its row: whether i
 
 ### The push window
 
-Opened by `p`. The task's sign-off card sits above the commits, marked when the code changed after it was written. Under it, the `tests` line shows the latest recorded test run, as on the task's row. A run before a clean rebase, a reworded message or a squash still counts as current.
+Opened by `p`. The window is in four parts, each under a header on a rule:
+
+- `CARD`: the task's sign-off card, marked current at its commit or written before the code changed. Its images are listed by file name; `s` on the board shows them.
+- `TESTS`: the latest recorded test run, as on the task's row. A run before a clean rebase, a reworded message or a squash still counts as current.
+- `COMMITS`: the commits that will land, with their count.
+- `MESSAGE`: the selected commit's full message, set off by a bar so it does not read as part of the card.
+
+The keys sit under a rule at the bottom.
 
 | Key | Action |
 | --- | --- |

@@ -113,7 +113,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Normal => {}
         Mode::Options(index) => modal_hits = draw_options(frame, app, *index),
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),
-        Mode::Card { .. } => draw_card(frame, app),
+        Mode::Card { .. } => modal_hits = draw_card(frame, app),
         Mode::Fullscreen { .. } => draw_fullscreen(frame, app),
         Mode::Help => {
             modal(frame, "keys".to_string(), help_lines(app.lead_chat.is_some()), 72);
