@@ -65,6 +65,10 @@ kelpie never types into a draft: a resume waits while the input box holds text, 
 
 The lead reads its role and settings when it starts. `kelpie lead --restart` rewrites them and resumes the same conversation under the new role, so an update never costs you the lead's context. It waits until the lead is idle and not waiting on a question.
 
+## The lead's folder
+
+The lead always runs in a folder of its own, `lead` in the state directory or `KELPIE_LEAD_DIR`. Claude Code never remembers that you trust your home folder, so a lead started there would ask "Do you trust this folder?" on every start. Before each start of the lead's Claude, from `kelpie lead`, `kelpie lead --restart` or the keeper's restart after an update, kelpie moves the chat pane's shell to that folder with `cd`. herdr then keeps that folder as the pane's, so its own restore after a reboot resumes the lead there too. A lead that ran in another folder, such as your home folder, keeps its conversation: `kelpie lead --restart` resumes it from the new folder, as Claude Code finds a conversation by its id in any one project.
+
 ## Related
 
 - [Work while you are away](../how-to/work-while-away.md)

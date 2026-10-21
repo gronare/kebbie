@@ -195,10 +195,17 @@ fn session_id(session: &Session) -> &str {
     }
 }
 
+fn cd_line(dir: &Path) -> String {
+    format!("cd {}", crate::sh::quote(&dir.to_string_lossy()))
+}
+
+// herdr's agent start has no cwd and runs Claude where the pane's shell is, and herdr's restore uses the pane's last cwd, so the shell goes to the lead's folder first.
 fn start_chat(pane: &str, session: Session) -> Result<()> {
     let role = role_file()?;
     let settings = write_settings(&roles_dir()?, LEAD_LABEL, &settings(&peers::kelpie_command()?))?;
     let args = chat_args(&role, &settings, &session);
+    tasks::wait_for_prompt(pane)?;
+    herdr::run_in_pane(pane, &cd_line(&lead_dir()?))?;
     tasks::start_claude("lead", pane, &args.iter().map(String::as_str).collect::<Vec<_>>(), true)?;
     crate::state::write(&session_file()?, session_id(&session))
 }
@@ -208,11 +215,23 @@ fn new_chat(pane: &str) -> Result<()> {
 }
 
 // The lead's directory is its own, so its newest conversation there is the lead's; the recorded one wins unless a newer one exists, as after /clear.
-fn lead_session(dir: &Path, recorded: Option<&str>) -> Option<String> {
-    let transcripts: Vec<(std::time::SystemTime, String)> = fs::read_dir(dir).ok()?.flatten()
+type Transcript = (std::time::SystemTime, String);
+
+fn transcripts_in(dir: &Path) -> Vec<Transcript> {
+    fs::read_dir(dir).into_iter().flatten().flatten()
         .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "jsonl"))
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path().file_stem()?.to_string_lossy().to_string())))
-        .collect();
+        .collect()
+}
+
+// claude --resume <id> finds a transcript in another folder's project when exactly one project holds it, and the resumed conversation goes on writing there.
+fn transcript_elsewhere(projects: &Path, id: &str) -> Option<Transcript> {
+    let mut found = fs::read_dir(projects).ok()?.flatten().filter_map(|project| fs::metadata(project.path().join(format!("{id}.jsonl"))).ok()?.modified().ok());
+    let modified = found.next()?;
+    found.next().is_none().then(|| (modified, id.to_string()))
+}
+
+fn lead_session(transcripts: &[Transcript], recorded: Option<&str>) -> Option<String> {
     let newest = transcripts.iter().map(|(modified, _)| *modified).max()?;
     recorded.filter(|id| transcripts.iter().any(|(modified, stem)| stem == id && *modified == newest)).map(str::to_string)
         .or_else(|| transcripts.iter().find(|(modified, _)| *modified == newest).map(|(_, stem)| stem.clone()))
@@ -260,11 +279,18 @@ pub fn restart() -> Result<String> {
     };
     let dir = lead_dir()?;
     let recorded = fs::read_to_string(session_file()?).ok().map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
-    let previous = tasks::claude_home().and_then(|home| {
-        let canonical = dir.canonicalize().ok();
-        [Some(dir.clone()), canonical].into_iter().flatten().find_map(|dir| lead_session(&tasks::transcripts_dir(&home, &dir), recorded.as_deref()))
-    });
-    let resumed = previous.is_some();
+    let mut own: Vec<PathBuf> = [Some(dir.clone()), dir.canonicalize().ok()].into_iter().flatten().collect();
+    own.dedup();
+    let home = tasks::claude_home();
+    let mut transcripts: Vec<Transcript> = home.iter().flat_map(|home| own.iter().flat_map(|dir| transcripts_in(&tasks::transcripts_dir(home, dir)))).collect();
+    let moved = home.zip(recorded.as_deref()).filter(|(_, id)| !transcripts.iter().any(|(_, stem)| stem == id)).and_then(|(home, id)| transcript_elsewhere(&home.join("projects"), id));
+    transcripts.extend(moved.clone());
+    let previous = lead_session(&transcripts, recorded.as_deref());
+    let how = match (&previous, &moved) {
+        (Some(id), Some((_, from))) if id == from => "resuming its conversation, started before the lead had its own folder",
+        (Some(_), _) => "resuming its conversation",
+        (None, _) => "with a new conversation, as none of its own was found",
+    };
     let session = match previous {
         Some(id) => Session::Resume(id),
         None => Session::New(tasks::new_session_id()?),
@@ -274,7 +300,6 @@ pub fn restart() -> Result<String> {
     }
     close_messages(places(&lead)?.messages.as_deref())?;
     start_chat(&pane, session)?;
-    let how = if resumed { "resuming its conversation" } else { "with a new conversation, as none of its own was found" };
     Ok(format!("Restarted the lead with its current role and settings, {how}."))
 }
 
@@ -661,7 +686,7 @@ mod tests {
     fn a_restart_resumes_the_recorded_conversation_unless_a_newer_one_is_in_the_leads_folder() {
         let dir = std::env::temp_dir().join(format!("kelpie-lead-session-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        assert_eq!(lead_session(&dir, Some("recorded")), None);
+        assert_eq!(lead_session(&transcripts_in(&dir), Some("recorded")), None);
         let at = |name: &str, seconds: u64| {
             let file = fs::File::create(dir.join(name)).unwrap();
             file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
@@ -669,12 +694,34 @@ mod tests {
         at("older.jsonl", 100);
         at("recorded.jsonl", 200);
         at("newest.txt", 900);
-        assert_eq!(lead_session(&dir, Some("recorded")).as_deref(), Some("recorded"));
-        assert_eq!(lead_session(&dir, None).as_deref(), Some("recorded"));
-        assert_eq!(lead_session(&dir, Some("gone")).as_deref(), Some("recorded"));
+        assert_eq!(lead_session(&transcripts_in(&dir), Some("recorded")).as_deref(), Some("recorded"));
+        assert_eq!(lead_session(&transcripts_in(&dir), None).as_deref(), Some("recorded"));
+        assert_eq!(lead_session(&transcripts_in(&dir), Some("gone")).as_deref(), Some("recorded"));
         at("after-clear.jsonl", 300);
-        assert_eq!(lead_session(&dir, Some("recorded")).as_deref(), Some("after-clear"));
+        assert_eq!(lead_session(&transcripts_in(&dir), Some("recorded")).as_deref(), Some("after-clear"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_conversation_from_before_the_leads_own_folder_is_found_in_exactly_one_other_project_as_claude_finds_it() {
+        let projects = std::env::temp_dir().join(format!("kelpie-lead-projects-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&projects);
+        let at = |project: &str, seconds: u64| {
+            fs::create_dir_all(projects.join(project)).unwrap();
+            fs::File::create(projects.join(project).join("moved.jsonl")).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
+        };
+        assert_eq!(transcript_elsewhere(&projects, "moved"), None);
+        at("-Users-ada", 500);
+        assert_eq!(transcript_elsewhere(&projects, "moved"), Some((std::time::UNIX_EPOCH + std::time::Duration::from_secs(500), "moved".to_string())));
+        assert_eq!(lead_session(&[transcript_elsewhere(&projects, "moved").unwrap()], Some("moved")).as_deref(), Some("moved"));
+        at("-Users-ada-app", 600);
+        assert_eq!(transcript_elsewhere(&projects, "moved"), None, "claude --resume refuses an id that two projects hold");
+        fs::remove_dir_all(projects).unwrap();
+    }
+
+    #[test]
+    fn the_lead_goes_to_its_folder_by_a_quoted_cd() {
+        assert_eq!(cd_line(Path::new("/Users/ada/state dir/it's lead")), "cd '/Users/ada/state dir/it'\\''s lead'");
     }
 
     #[test]

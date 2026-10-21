@@ -8,7 +8,7 @@
 | `KELPIE_REPOS_DIR` | `$XDG_CONFIG_HOME/kelpie/repos`, else `~/.config/kelpie/repos` | The folder of repo configs. |
 | `KELPIE_STATE_DIR` | `$XDG_STATE_HOME/kelpie`, else `~/.local/state/kelpie` | The state directory. Point it at a temp directory for a throwaway run. |
 | `KELPIE_REPO_DIRS` | `~/projects:~/personal:~/src:~/code` | Colon-separated folders where `start --repo` looks for checkouts, in them or one level down. |
-| `KELPIE_LEAD_DIR` | `lead` in the state directory | The lead Claude's working directory. |
+| `KELPIE_LEAD_DIR` | `lead` in the state directory | The lead Claude's working directory. kelpie moves the lead's chat pane there before each start, as Claude Code never remembers trust for the home folder. |
 | `KELPIE_BIN` | `~/.local/share/kelpie/current/target/release/kelpie` | The binary the lead's role, the task role, kelpie's skills and the sidebar sync run. |
 | `KELPIE_CLAUDE_BIN` | `claude` | The Claude Code binary `kelpie setup vault` runs. |
 | `KELPIE_GH_BIN` | `gh` | The GitHub CLI kelpie watches CI with. |

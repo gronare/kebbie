@@ -48,7 +48,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `keeper.json` | The keeper's routines, each with its last run and error, and the stale sessions it last saw. |
 | `keeper.log` | What the keeper did: starts, exits, routine errors and restarts. Past 256 KB it moves to `keeper.log.1`. |
 | `lead.log` | What herdr's startup did to bring the board back in the lead Space: a line when it started the board, and any error. |
-| `lead/` | The lead's working directory. |
+| `lead/` | The lead's working directory, where kelpie starts its Claude every time. |
 
 ## The local backlog file
 

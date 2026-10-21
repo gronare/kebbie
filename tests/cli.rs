@@ -982,6 +982,48 @@ fn kelpie_lead_leaves_a_hidden_chat_hidden_and_starts_no_second_one() {
     assert_eq!(changes(&lab), [["workspace", "focus", "w_lead"]], "no split, no new Claude, no zoom change");
 }
 
+fn lead_at_shell(lab: &Lab, in_lead: bool) -> (PathBuf, PathBuf) {
+    lead_space(lab, in_lead, false, "w_lead:p1");
+    let answers = lab.root.join("answers");
+    fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"pid":1,"argv":["-zsh"]}]}}}"#).unwrap();
+    for ok in ["pane-run", "agent-start"] {
+        fs::write(answers.join(format!("{ok}.json")), r#"{"result":{}}"#).unwrap();
+    }
+    (lab.root.join("lead's dir"), lab.root.join("claude"))
+}
+
+fn position(calls: &[Vec<String>], wanted: &[&str]) -> usize {
+    calls.iter().position(|call| call.len() >= wanted.len() && call[..wanted.len()] == *wanted).unwrap_or_else(|| panic!("no {wanted:?} in {calls:?}"))
+}
+
+#[test]
+fn a_lead_restart_puts_the_chat_panes_shell_in_the_leads_folder_before_claude_starts_and_resumes_its_conversation_from_home() {
+    let lab = Lab::new("lead-restart-dir");
+    let (dir, claude) = lead_at_shell(&lab, true);
+    fs::create_dir_all(claude.join("projects/-Users-ada")).unwrap();
+    fs::write(claude.join("projects/-Users-ada/9f1c2d3e-0000-4000-8000-000000000001.jsonl"), "{}\n").unwrap();
+    fs::write(lab.state.join("lead-session"), "9f1c2d3e-0000-4000-8000-000000000001\n").unwrap();
+    let restarted = lab.command().env("KELPIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).args(["lead", "--restart"]).output().unwrap();
+    assert!(restarted.status.success(), "{}", stderr(&restarted));
+    assert_eq!(stdout(&restarted), "Restarted the lead with its current role and settings, resuming its conversation, started before the lead had its own folder.");
+    let calls = changes(&lab);
+    let cd = position(&calls, &["pane", "run", "w_lead:p2", &format!("cd '{}'\\''s dir'", lab.root.join("lead").display())]);
+    let start = position(&calls, &["agent", "start", "lead", "--kind", "claude", "--pane", "w_lead:p2"]);
+    assert!(cd < start, "{calls:?}");
+    assert!(calls[start].windows(2).any(|pair| pair == ["--resume", "9f1c2d3e-0000-4000-8000-000000000001"]), "{calls:?}");
+}
+
+#[test]
+fn kelpie_lead_starts_a_quit_chat_again_in_the_leads_folder() {
+    let lab = Lab::new("lead-repair-dir");
+    let (dir, claude) = lead_at_shell(&lab, false);
+    let lead = lab.command().env("KELPIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).args(["lead"]).output().unwrap();
+    assert!(lead.status.success(), "{}", stderr(&lead));
+    let calls = changes(&lab);
+    let cd = position(&calls, &["pane", "run", "w_lead:p2", &format!("cd '{}'\\''s dir'", lab.root.join("lead").display())]);
+    assert!(cd < position(&calls, &["agent", "start", "lead", "--kind", "claude", "--pane", "w_lead:p2"]), "{calls:?}");
+}
+
 #[test]
 fn herdrs_startup_starts_the_board_in_a_restored_lead_space_and_leaves_the_chat_to_herdr() {
     let lab = Lab::new("revive-board");
