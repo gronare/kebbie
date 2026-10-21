@@ -12,27 +12,27 @@ fn status_hints(keys: &Hints) -> Line<'static> {
     Line::from(Span::styled(keys.iter().map(|(key, label, _)| format!("{key} {label}")).collect::<Vec<_>>().join(" · "), style(MUTED)))
 }
 
-fn work_hints(card: bool, lead: bool) -> (Hints, Hints) {
+fn work_hints(opens: Option<&'static str>, lead: bool) -> (Hints, Hints) {
     let (mut full, mut short) = keys::map().hints(Ctx::Work, lead);
-    if card {
-        let entry = (keys::key(Act::Card).to_string(), "card", keys::map().code(Act::Card));
+    if let Some(opens) = opens {
+        let entry = (keys::key(Act::Card).to_string(), opens, keys::map().code(Act::Card));
         full.insert(1, entry.clone());
         short.insert(1, entry);
     }
     (full, short)
 }
 
-pub(super) fn hint_lines(card: bool, lead: bool) -> (Line<'static>, Line<'static>) {
-    let (full, short) = work_hints(card, lead);
+pub(super) fn hint_lines(opens: Option<&'static str>, lead: bool) -> (Line<'static>, Line<'static>) {
+    let (full, short) = work_hints(opens, lead);
     (status_hints(&full), status_hints(&short))
 }
 
-pub(super) fn hint_hits(line: &Line, area: Rect, card: bool, lead: bool) -> Vec<(Rect, Hit)> {
+pub(super) fn hint_hits(line: &Line, area: Rect, opens: Option<&'static str>, lead: bool) -> Vec<(Rect, Hit)> {
     let text = line.to_string();
     let mut hits = Vec::new();
     let update = keys::map().code(Act::Update);
     let update_hints = [(update_hint(), update), (short_update_hint(), update)];
-    for (hint, code) in work_hints(card, lead).0.into_iter().map(|(key, label, code)| (format!("{key} {label}"), code)).chain(update_hints) {
+    for (hint, code) in work_hints(opens, lead).0.into_iter().map(|(key, label, code)| (format!("{key} {label}"), code)).chain(update_hints) {
         let Some(byte) = text.find(&hint) else { continue };
         let x = Span::raw(&text[..byte]).width() as u16;
         let width = Span::raw(hint.as_str()).width() as u16;

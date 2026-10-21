@@ -529,14 +529,11 @@ impl App {
                         }
                     }
                     Act::Review => self.open_review(&item),
-                    Act::Card => match (item.path.clone(), self.card_of(&item)) {
-                        (Some(path), Some(_)) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0, image: 0 },
+                    Act::Card => match (item.path.clone(), self.card_of(&item), self.question_of(&item)) {
+                        (_, _, Some(at)) => self.open_questions(Some(at)),
+                        (Some(path), Some(_), None) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0, image: 0 },
                         _ => self.show(Ok(format!("{} has no sign-off card yet; it writes one when it reports ready.", item.name))),
                     },
-                    Act::Inbox => {
-                        let at = self.question_of(&item);
-                        self.open_questions(at);
-                    }
                     Act::Tidy | Act::Push | Act::Done | Act::SendReview | Act::Rebase if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
                     Act::Push if item.awaiting_review() => self.show(Err(format!("{} is in review; push opens once its reviewer passes its commits.", item.name))),
                     Act::Tidy => {
@@ -850,7 +847,7 @@ mod tests {
         let mut app = test_app(Vec::new());
         app.handle_key(KeyEvent::from(KeyCode::Char('h')), None);
         assert_eq!(app.notice.as_ref().map(|(text, _)| text.as_str()), Some("h hides the lead's chat only on the board in the lead Space"));
-        assert!(!hint_lines(false, false).0.to_string().contains("h chat") && hint_lines(false, true).0.to_string().contains("h chat"));
+        assert!(!hint_lines(None, false).0.to_string().contains("h chat") && hint_lines(None, true).0.to_string().contains("h chat"));
         assert!(!help_lines(false).iter().any(|line| line.to_string().starts_with("h ")) && help_lines(true).iter().any(|line| line.to_string().starts_with("h ")));
         assert!(!header(&app, 200).0.to_string().contains("chat hidden"));
         app.lead_chat = Some(true);

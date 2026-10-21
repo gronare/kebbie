@@ -186,7 +186,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
                 Line::from(spans).style(Style::new().bg(SURFACE))
             }));
             app.links.extend(links);
-            lines.push(if app.card_of(item).is_some() { card_hint() } else { options_hint() });
+            lines.push(app.s_opens(item).map_or_else(options_hint, card_hint));
         }
         rows.push((start, lines.len(), Hit::Task(index)));
     }

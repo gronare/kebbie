@@ -217,10 +217,14 @@ impl App {
     }
 
     pub(super) fn open_image(&mut self, file: &Path) {
-        let Some(viewer) = self.viewer else { return };
-        if !openable(file) {
+        if self.viewer.is_some() && !openable(file) {
             return self.say(format!("{} is not an image file kelpie opens", file.display()));
         }
+        self.open_file(file);
+    }
+
+    pub(super) fn open_file(&mut self, file: &Path) {
+        let Some(viewer) = self.viewer else { return };
         match Command::new(viewer).arg(file).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(mut child) => {
                 thread::spawn(move || child.wait());

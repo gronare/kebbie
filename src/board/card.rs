@@ -23,8 +23,14 @@ impl App {
         self.details.get(item.path.as_ref()?).filter(|detail| detail.card.is_some()).cloned()
     }
 
-    pub(super) fn selected_has_card(&self) -> bool {
-        self.column == Column::Work && self.selected_task().is_some_and(|item| self.card_of(&item).is_some())
+    // What s opens on a task: its waiting question before its card, since the question waits on the user.
+    pub(super) fn s_opens(&self, item: &Item) -> Option<&'static str> {
+        if self.question_of(item).is_some() { Some("question") } else if self.card_of(item).is_some() { Some("card") } else { None }
+    }
+
+    pub(super) fn selected_s_opens(&self) -> Option<&'static str> {
+        if self.column != Column::Work { return None }
+        self.selected_task().and_then(|item| self.s_opens(&item))
     }
 
     fn card_images(&self, path: &Path) -> Vec<PathBuf> {
@@ -175,11 +181,11 @@ fn section_lines(sections: &[Section], width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-pub(super) fn card_hint() -> Line<'static> {
-    Line::from(vec![Span::raw("   "), Span::styled("⏎", style(MAUVE)), Span::styled(" options · ", style(MUTED)), Span::styled(keys::key(Act::Card).to_string(), style(MAUVE)), Span::styled(" card", style(MUTED))]).style(Style::new().bg(SURFACE))
+pub(super) fn card_hint(opens: &str) -> Line<'static> {
+    Line::from(vec![Span::raw("   "), Span::styled("⏎", style(MAUVE)), Span::styled(" options · ", style(MUTED)), Span::styled(keys::key(Act::Card).to_string(), style(MAUVE)), Span::styled(format!(" {opens}"), style(MUTED))]).style(Style::new().bg(SURFACE))
 }
 
-const WIDE: u16 = 120;
+pub(super) const WIDE: u16 = 120;
 
 pub(super) fn draw_card(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
     let Mode::Card { path, name, scroll, image } = &app.mode else { return Vec::new() };
@@ -507,6 +513,26 @@ mod tests {
         assert!(cut[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
         let full = rich_wrap("one two three four", 9, 1, TEXT);
         assert!(full[0].to_string().chars().count() <= 10, "{}", full[0]);
+    }
+
+    #[test]
+    fn s_on_a_task_with_a_waiting_question_opens_that_question_before_its_card() {
+        let mut app = carded(true);
+        let place = app.tasks[0].place.clone();
+        let asked = super::super::test_support::QUESTION.replace("billing@web", &format!("search-filters@{place}"));
+        app.questions = crate::messages::fold(&[super::super::test_support::PLAN, asked.as_str()].join("\n"));
+        let (rows, _) = render(&mut app, 112, 40);
+        assert!(rows.join("\n").contains("s question") && !rows.join("\n").contains("s card"), "the hints name what s opens: {}", rows.join("\n"));
+        let menu = app.choices();
+        assert!(menu.iter().any(|choice| choice.act == Some(Act::Card) && choice.label == "Answer its question" && choice.key == 's'));
+        assert!(!menu.iter().any(|choice| choice.label == "Show the card"), "one s in the menu");
+        app.handle_normal(key(KeyCode::Char('s')));
+        assert!(matches!(app.mode, Mode::Questions(_)));
+        let (rows, _) = render(&mut app, 112, 40);
+        assert!(rows.join("\n").contains("question 2/2 · ask · search-filters"), "{}", rows.join("\n"));
+        app.mode = Mode::Normal;
+        app.handle_normal(key(KeyCode::Char('i')));
+        assert!(render(&mut app, 112, 40).0.join("\n").contains("question 1/2 · plan · payload"), "i opens at the first question");
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(line), top);
     let tab_hits: Vec<(Rect, Hit)> = tabs.into_iter().map(|(x, width, page)| (Rect::new(top.x + x, top.y, width, 1), Hit::Tab(page))).collect();
     let (full_hints, short_hints) = match app.page {
-        Page::Work => hint_lines(app.selected_has_card(), app.lead_chat.is_some()),
+        Page::Work => hint_lines(app.selected_s_opens(), app.lead_chat.is_some()),
         Page::Areas => area_page::Page::hint_lines(),
         Page::Routines => crate::routine_page::Page::hint_lines(),
     };
@@ -58,7 +58,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let mut tab_hits = tab_hits;
-    tab_hits.extend(hint_hits(&status, bottom, app.selected_has_card(), app.lead_chat.is_some()));
+    tab_hits.extend(hint_hits(&status, bottom, app.selected_s_opens(), app.lead_chat.is_some()));
     frame.render_widget(Paragraph::new(status), bottom);
     let (message_lines, first_message) = messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize);
     let shown_messages = message_lines.len();

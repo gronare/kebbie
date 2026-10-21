@@ -4,7 +4,6 @@ use ratatui::DefaultTerminal;
 
 use crate::area_page::Effect;
 use crate::keys::{self, Act};
-use super::inbox::Part;
 use super::message_log::Fold;
 use super::{App, Column, Hit, Mode, Page};
 
@@ -96,7 +95,7 @@ impl App {
                     (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
                     (Some(Hit::Answer(index)), Mode::Questions(window)) => {
                         window.option = index;
-                        window.part = Part::Options;
+                        window.typing = false;
                     }
                     (None, Mode::Options(_) | Mode::Message(_) | Mode::Help) => self.mode = Mode::Normal,
                     _ => {}

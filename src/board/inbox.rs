@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -5,7 +6,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 use ratatui_textarea::TextArea;
 
@@ -17,30 +18,15 @@ use crate::sh::Result;
 use crate::status::Item;
 use crate::questions;
 use super::{App, Hit, Mode};
-use super::widgets::{BLUE, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEXT, YELLOW, bold, centered, fill, fit, plural, style, wrap};
-
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum Part {
-    List,
-    Plan,
-    Options,
-    Comment,
-}
-
-impl Part {
-    fn next(self, back: bool) -> Self {
-        let order = [Part::List, Part::Plan, Part::Options, Part::Comment];
-        let at = order.iter().position(|part| *part == self).unwrap_or(0);
-        order[if back { (at + 3) % 4 } else { (at + 1) % 4 }]
-    }
-}
+use super::card::{WIDE, rich_wrap};
+use super::widgets::{BLUE, FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEXT, YELLOW, bold, centered, fill, fit, rule, section_header, style};
 
 pub(super) struct QuestionWindow {
     id: String,
     selected: usize,
     pub(super) option: usize,
     pub(super) scroll: u16,
-    pub(super) part: Part,
+    pub(super) typing: bool,
     comment: TextArea<'static>,
     notice: Option<(bool, String)>,
     answering: Option<(String, Receiver<Result<String>>)>,
@@ -56,7 +42,7 @@ fn comment_field() -> TextArea<'static> {
 
 impl QuestionWindow {
     fn new(questions: &[Message], selected: usize) -> Self {
-        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, part: Part::Options, comment: comment_field(), notice: None, answering: None };
+        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, typing: false, comment: comment_field(), notice: None, answering: None };
         window.select(questions, selected);
         window
     }
@@ -68,6 +54,7 @@ impl QuestionWindow {
         let id = message.map(|message| message.id.clone()).unwrap_or_default();
         if id != self.id {
             self.comment = comment_field();
+            self.typing = false;
         }
         self.id = id;
         self.option = message.and_then(|message| message.question.as_ref()).map_or(0, |question| question.recommend.saturating_sub(1));
@@ -91,6 +78,40 @@ impl QuestionWindow {
     }
 }
 
+struct Answer {
+    key: char,
+    short: String,
+    label: String,
+    about: String,
+    choice: Option<usize>,
+    takes_comment: bool,
+}
+
+const PLAN_KEYS: [(char, &str); 4] = [('a', "approve"), ('c', "comment"), ('r', "changes"), ('x', "reject")];
+const OWN_WORDS: &str = "In my own words";
+
+fn answers(message: &Message) -> Vec<Answer> {
+    let question = message.question.as_ref();
+    let plan = question.is_some_and(|question| question.plan.is_some());
+    let mut answers: Vec<Answer> = question.map(|question| question.options.clone()).unwrap_or_default().into_iter().enumerate().map(|(index, (label, meaning))| {
+        let planned = questions::PLAN_OPTIONS.iter().position(|(plan_label, _)| *plan_label == label).filter(|_| plan);
+        let (key, short) = match planned {
+            Some(at) => (PLAN_KEYS[at].0, PLAN_KEYS[at].1.to_string()),
+            None => (char::from_digit(index as u32 + 1, 10).unwrap_or(' '), label.clone()),
+        };
+        let about = if question.is_some_and(|question| question.recommend == index + 1) { format!("recommended · {meaning}") } else { meaning };
+        Answer { key, short, label, about, choice: Some(index), takes_comment: planned.is_some_and(|at| at > 0) }
+    }).collect();
+    answers.push(Answer { key: 'w', short: "own words".to_string(), label: OWN_WORDS.to_string(), about: "the comment is the whole answer".to_string(), choice: None, takes_comment: true });
+    answers
+}
+
+fn plan_file(message: &Message) -> Option<PathBuf> {
+    let plan = message.question.as_ref()?.plan.as_deref()?;
+    let file = PathBuf::from(plan);
+    (!plan.starts_with(questions::VAULT_PLAN) && file.is_file()).then_some(file)
+}
+
 impl App {
     pub(super) fn question_of(&self, item: &Item) -> Option<usize> {
         let address = peers::address(&item.name, &item.place);
@@ -110,35 +131,46 @@ impl App {
     }
 
     pub(super) fn handle_questions(&mut self, mut window: Box<QuestionWindow>, key: KeyEvent) {
-        let count = self.questions.len();
-        let options = self.questions.get(window.selected).and_then(|message| message.question.as_ref()).map_or(0, |question| question.options.len());
-        let typing = window.part == Part::Comment;
-        match key.code {
-            KeyCode::Esc => return,
-            KeyCode::Char(character) if !typing && character == keys::key(Act::Close) => return,
-            KeyCode::Tab | KeyCode::BackTab => window.part = window.part.next(key.code == KeyCode::BackTab),
-            KeyCode::PageUp => window.scroll = window.scroll.saturating_sub(10),
-            KeyCode::PageDown => window.scroll = window.scroll.saturating_add(10),
-            KeyCode::Enter if window.answering.is_some() => {}
-            KeyCode::Enter => {
-                let Some(message) = self.questions.get(window.selected) else { return };
-                let comment = window.comment();
-                let choice = (window.option < options).then_some(window.option);
-                if choice.is_none() && comment.is_empty() {
-                    window.part = Part::Comment;
-                    window.notice = Some((false, "In your own words: write the answer in the comment field first.".to_string()));
-                } else {
-                    let (sender, result) = mpsc::channel();
-                    let id = message.id.clone();
-                    let asked = id.clone();
-                    thread::spawn(move || {
-                        let _ = sender.send(questions::answer(&asked, choice, &comment));
-                    });
-                    window.answering = Some((id, result));
-                    window.notice = Some((true, "Answering…".to_string()));
+        let map = keys::map();
+        let count = self.questions.len().max(1);
+        let answers = self.questions.get(window.selected).map(answers).unwrap_or_default();
+        let busy = window.answering.is_some();
+        if window.typing {
+            match key.code {
+                KeyCode::Esc => window.typing = false,
+                KeyCode::PageUp => window.scroll = window.scroll.saturating_sub(10),
+                KeyCode::PageDown => window.scroll = window.scroll.saturating_add(10),
+                KeyCode::Enter if !busy => self.send(&mut window, &answers),
+                KeyCode::Enter => {}
+                _ => {
+                    window.comment.input(key);
                 }
             }
-            KeyCode::Char('g') if !typing => {
+            self.mode = Mode::Questions(window);
+            return;
+        }
+        let pressed = match key.code {
+            KeyCode::Char(character) if !busy => answers.iter().position(|answer| answer.key == character),
+            _ => None,
+        };
+        let open = map.codes(Act::OpenImage).contains(&key.code);
+        match key.code {
+            _ if pressed.is_some() => {
+                window.option = pressed.unwrap_or_default();
+                self.choose(&mut window, &answers);
+            }
+            KeyCode::Esc => return,
+            KeyCode::Char(character) if character == keys::key(Act::Close) => return,
+            KeyCode::Tab => window.select(&self.questions, (window.selected + 1) % count),
+            KeyCode::BackTab => window.select(&self.questions, (window.selected + count - 1) % count),
+            KeyCode::Up | KeyCode::Char('k') => window.scroll = window.scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => window.scroll = window.scroll.saturating_add(1),
+            KeyCode::PageUp => window.scroll = window.scroll.saturating_sub(10),
+            KeyCode::PageDown => window.scroll = window.scroll.saturating_add(10),
+            KeyCode::Left => window.option = (window.option + answers.len().max(1) - 1) % answers.len().max(1),
+            KeyCode::Right => window.option = (window.option + 1) % answers.len().max(1),
+            KeyCode::Enter if !busy => self.choose(&mut window, &answers),
+            KeyCode::Char(character) if character == keys::key(Act::Go) => {
                 let workspace = self.questions.get(window.selected).and_then(|message| self.task_of(&message.from)).and_then(|item| item.workspace.clone());
                 match workspace {
                     Some(workspace) => {
@@ -151,27 +183,43 @@ impl App {
                     None => window.notice = Some((false, "Its task has no Space open.".to_string())),
                 }
             }
-            KeyCode::Up | KeyCode::Down if typing => {}
-            KeyCode::Up | KeyCode::Char('k') if !typing => match window.part {
-                Part::List => window.select(&self.questions, window.selected.saturating_sub(1)),
-                Part::Plan => window.scroll = window.scroll.saturating_sub(1),
-                _ => window.option = window.option.saturating_sub(1),
-            },
-            KeyCode::Down | KeyCode::Char('j') if !typing => match window.part {
-                Part::List => window.select(&self.questions, (window.selected + 1).min(count.saturating_sub(1))),
-                Part::Plan => window.scroll = window.scroll.saturating_add(1),
-                _ => window.option = (window.option + 1).min(options),
-            },
-            _ => {
-                if !typing && !matches!(key.code, KeyCode::Char(_)) {
-                    self.mode = Mode::Questions(window);
-                    return;
+            _ if open => {
+                if let Some(file) = self.questions.get(window.selected).and_then(plan_file) {
+                    self.open_file(&file);
                 }
-                window.part = Part::Comment;
-                window.comment.input(key);
             }
+            _ => {}
         }
         self.mode = Mode::Questions(window);
+    }
+
+    fn choose(&mut self, window: &mut QuestionWindow, answers: &[Answer]) {
+        let Some(answer) = answers.get(window.option) else { return };
+        if answer.takes_comment {
+            window.comment.set_placeholder_text(if answer.choice.is_none() { "your answer" } else { "comment (optional)" });
+            window.typing = true;
+        } else {
+            self.send(window, answers);
+        }
+    }
+
+    fn send(&mut self, window: &mut QuestionWindow, answers: &[Answer]) {
+        let (Some(message), Some(answer)) = (self.questions.get(window.selected), answers.get(window.option)) else { return };
+        let comment = if answer.takes_comment { window.comment() } else { String::new() };
+        if answer.choice.is_none() && comment.is_empty() {
+            window.typing = true;
+            window.notice = Some((false, "In your own words: write the answer in the comment field first.".to_string()));
+            return;
+        }
+        let (sender, result) = mpsc::channel();
+        let id = message.id.clone();
+        let asked = id.clone();
+        let choice = answer.choice;
+        thread::spawn(move || {
+            let _ = sender.send(questions::answer(&asked, choice, &comment));
+        });
+        window.answering = Some((id, result));
+        window.notice = Some((true, "Answering…".to_string()));
     }
 
     pub(super) fn poll_answer(&mut self) {
@@ -252,8 +300,6 @@ pub fn markdown(text: &str) -> Text<'static> {
     }).collect::<Vec<_>>())
 }
 
-const OWN_WORDS: &str = "In my own words";
-
 fn split_address(address: &str) -> (String, String) {
     match address.split_once('@') {
         Some((name, place)) => (name.to_string(), place.to_string()),
@@ -261,15 +307,92 @@ fn split_address(address: &str) -> (String, String) {
     }
 }
 
+pub(super) fn plan_header(scroll: u16, last: u16, changed: bool, width: usize) -> Line<'static> {
+    let mut extra = Vec::new();
+    if last > 0 {
+        extra.push(Span::styled(format!("{}%", u32::from(scroll) * 100 / u32::from(last)), style(MUTED)));
+    }
+    if changed {
+        extra.push(Span::styled("changed since asked", style(YELLOW)));
+    }
+    section_header("PLAN", extra, width)
+}
+
+fn answer_row(answers: &[Answer], option: usize, area: Rect, hits: &mut Vec<(Rect, Hit)>) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut x = 0usize;
+    for (index, answer) in answers.iter().enumerate() {
+        let active = index == option;
+        let ending = answer.label.starts_with("Reject");
+        let label = match (active, ending) {
+            (true, true) => bold(RED),
+            (true, false) => bold(MAUVE),
+            (false, true) => style(RED),
+            (false, false) => style(TEXT),
+        };
+        let background = if active { Style::new().bg(SURFACE) } else { Style::new() };
+        if index > 0 {
+            spans.push(Span::raw(" "));
+            x += 1;
+        }
+        let key = answer.key.to_string();
+        let short = format!(" {}", answer.short);
+        let width = key.chars().count() + short.chars().count();
+        let shown = width.min((area.width as usize).saturating_sub(x));
+        if shown > 0 {
+            hits.push((Rect::new(area.x + x as u16, area.y, shown as u16, 1), Hit::Answer(index)));
+        }
+        x += width;
+        spans.push(Span::styled(key, style(MAUVE).patch(background)));
+        spans.push(Span::styled(short, label.patch(background)));
+    }
+    fit(spans, area.width as usize)
+}
+
+fn question_keys(typing: bool, plan: bool, several: bool, open: bool) -> String {
+    let map = keys::map();
+    if typing {
+        return format!("{} send · pgup pgdn plan · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
+    }
+    let mut keys = Vec::new();
+    if plan {
+        keys.push("↑ ↓ scroll".to_string());
+    }
+    keys.push(format!("{} answer", map.label(Act::Switch)));
+    keys.push(format!("{} send", map.label(Act::Options)));
+    if several {
+        keys.push(format!("{} next", map.label(Act::Lead)));
+    }
+    if open {
+        keys.push(format!("{} open the plan", map.label(Act::OpenImage)));
+    }
+    keys.push(format!("{} its Space", map.label(Act::Go)));
+    keys.push(format!("{} close", map.label(Act::Back)));
+    keys.join(" · ")
+}
+
+fn question_list(questions: &[Message], selected: usize, area: Rect, hits: &mut Vec<(Rect, Hit)>) -> Vec<Line<'static>> {
+    let width = area.width as usize;
+    let mut lines = vec![section_header("QUESTIONS", vec![Span::styled(questions.len().to_string(), style(MUTED))], width)];
+    for (index, message) in questions.iter().enumerate() {
+        let active = index == selected;
+        let (name, place) = split_address(&message.from);
+        let kind = if message.question.as_ref().is_some_and(|question| question.plan.is_some()) { "plan" } else { "ask " };
+        let row = fit(vec![
+            Span::raw(if active { "▸ " } else { "  " }), Span::styled(format!("{kind}  "), style(YELLOW)), Span::styled(name, if active { bold(TEXT) } else { style(TEXT) }),
+            Span::styled(format!("  {place} · {}", messages::age(message.at)), style(MUTED)),
+        ], width);
+        let y = area.y + 1 + index as u16;
+        if y < area.bottom() {
+            hits.push((Rect::new(area.x, y, area.width, 1), Hit::Question(index)));
+        }
+        lines.push(if active { row.style(Style::new().bg(SURFACE)) } else { row });
+    }
+    lines
+}
+
 pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
     let mut hits = Vec::new();
-    let full = frame.area();
-    let area = centered(full, (full.width * 92 / 100).max(40), (full.height * 84 / 100).max(16));
-    frame.render_widget(Clear, area);
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
-        .title(Span::styled(" questions ", bold(MAUVE))).style(Style::new().bg(MANTLE));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
     let selected = match &app.mode { Mode::Questions(window) => window.selected, _ => return hits };
     let plan = app.questions.get(selected).cloned().and_then(|message| {
         let question = message.question.clone()?;
@@ -279,87 +402,80 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
         app.plans.get(&message.id).cloned()
     });
     let questions = app.questions.clone();
+    let viewer = app.viewer.is_some();
     let Mode::Questions(window) = &mut app.mode else { return hits };
-    let [title_area, _, body, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(4), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
-    let mut title = vec![Span::styled(format!("{} waiting · answered here, the lead gets a copy", questions.len()), style(MUTED))];
-    if let Some((ok, notice)) = &window.notice {
-        title.push(Span::styled(format!("   {} {}", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
-    }
-    frame.render_widget(Paragraph::new(fit(title, title_area.width as usize)), title_area);
-    let wide = body.width >= 90;
-    let (list_area, main) = if wide {
-        let [list, _, main] = Layout::horizontal([Constraint::Percentage(30), Constraint::Length(2), Constraint::Min(20)]).areas(body);
-        (list, main)
-    } else {
-        let height = (questions.len() as u16 * 2).min(body.height / 3).max(2);
-        let [list, _, main] = Layout::vertical([Constraint::Length(height), Constraint::Length(1), Constraint::Min(3)]).areas(body);
-        (list, main)
-    };
-    let list_block = if wide { Block::new().borders(Borders::RIGHT).border_style(style(SURFACE)) } else { Block::new().borders(Borders::BOTTOM).border_style(style(SURFACE)) };
-    let list_inner = list_block.inner(list_area);
-    frame.render_widget(list_block, list_area);
-    let mut list = Vec::new();
-    for (index, message) in questions.iter().enumerate() {
-        let active = index == window.selected;
-        let (name, place) = split_address(&message.from);
-        let kind = if message.question.as_ref().is_some_and(|question| question.plan.is_some()) { "plan" } else { "ask " };
-        let background = if active && window.part == Part::List { Style::new().bg(SURFACE) } else { Style::new() };
-        list.push(Line::from(vec![Span::raw(if active { "▸ " } else { "  " }), Span::styled(format!("{kind}  "), style(YELLOW)), Span::styled(name, if active { bold(TEXT) } else { style(TEXT) })]).style(background));
-        list.push(Line::from(Span::styled(format!("        {place} · {}", messages::age(message.at)), style(MUTED))).style(background));
-        let y = list_inner.y + 2 * index as u16;
-        if y + 1 < list_inner.bottom() {
-            hits.push((Rect::new(list_inner.x, y, list_inner.width, 2), Hit::Question(index)));
-        }
-    }
-    frame.render_widget(Paragraph::new(fill(list, list_inner.width as usize)), list_inner);
     let Some(message) = questions.get(window.selected) else { return hits };
-    let mut options = message.question.as_ref().map(|question| question.options.clone()).unwrap_or_default();
-    options.push((OWN_WORDS.to_string(), "the comment is the whole answer".to_string()));
-    let recommend = message.question.as_ref().map_or(0, |question| question.recommend);
-    let asked = wrap(&message.text, main.width as usize, 3);
-    let plan_height = if plan.is_some() { Constraint::Min(4) } else { Constraint::Length(0) };
-    let [asked_area, _, plan_area, _, options_area, _, comment_area] = Layout::vertical([
-        Constraint::Length(asked.len() as u16), Constraint::Length(1), plan_height, Constraint::Length(u16::from(plan.is_some())),
-        Constraint::Length(options.len() as u16), Constraint::Length(1), Constraint::Length(3),
-    ]).areas(main);
-    frame.render_widget(Paragraph::new(asked.into_iter().map(|line| Line::from(Span::styled(line, bold(TEXT)))).collect::<Vec<_>>()), asked_area);
-    if let Some(plan) = plan {
-        let paragraph = Paragraph::new(plan).wrap(Wrap { trim: false });
-        let mut source = vec![Span::styled(format!(" {} ", message.question.as_ref().and_then(|question| question.plan.clone()).unwrap_or_default()), style(MUTED))];
-        if message.question.as_ref().is_some_and(questions::plan_changed) {
-            source.push(Span::styled("changed since asked ", style(YELLOW)));
+    let question = message.question.as_ref();
+    let planned = question.is_some_and(|question| question.plan.is_some());
+    let (name, _) = split_address(&message.from);
+    let full = frame.area();
+    let area = centered(full, (full.width * 92 / 100).max(40), (full.height * 84 / 100).max(16));
+    frame.render_widget(Clear, area);
+    let title = format!(" question {}/{} · {} · {name} ", window.selected + 1, questions.len(), if planned { "plan" } else { "ask" });
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
+        .title(Span::styled(title, bold(MAUVE))).style(Style::new().bg(MANTLE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [body, line, foot] = Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let main = if inner.width >= WIDE {
+        let left = (inner.width * 3 / 10).clamp(30, 48);
+        let [list, _, bar, _, main] = Layout::horizontal([Constraint::Length(left), Constraint::Length(2), Constraint::Length(1), Constraint::Length(2), Constraint::Min(1)]).areas(body);
+        frame.render_widget(Paragraph::new((0..bar.height).map(|_| Line::from(Span::styled("│", style(FAINT)))).collect::<Vec<_>>()), bar);
+        let lines = question_list(&questions, window.selected, list, &mut hits);
+        frame.render_widget(Paragraph::new(fill(lines, list.width as usize)), list);
+        main
+    } else {
+        body
+    };
+    let width = main.width as usize;
+    let answers = answers(message);
+    window.option = window.option.min(answers.len().saturating_sub(1));
+    let asked: Vec<Line> = rich_wrap(&message.text, width, 4, TEXT).into_iter().map(|line| line.style(Style::new().add_modifier(Modifier::BOLD))).collect();
+    let comment_rows = (window.comment.lines().len() as u16 + 2).clamp(3, 8);
+    let answer_height = if window.typing { 2 + comment_rows } else { 3 };
+    let [asked_area, plan_area, answer_area] = Layout::vertical([Constraint::Length(asked.len() as u16), Constraint::Min(0), Constraint::Length(answer_height)]).areas(main);
+    frame.render_widget(Paragraph::new(asked), asked_area);
+    if planned && plan_area.height > 0 {
+        let [header, text] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(plan_area);
+        let changed = question.is_some_and(questions::plan_changed);
+        match plan {
+            Some(plan) => {
+                let paragraph = Paragraph::new(plan).wrap(Wrap { trim: false });
+                let last = (paragraph.line_count(text.width) as u16).saturating_sub(text.height);
+                window.scroll = window.scroll.min(last);
+                frame.render_widget(Paragraph::new(plan_header(window.scroll, last, changed, width)), header);
+                frame.render_widget(paragraph.scroll((window.scroll, 0)), text);
+            }
+            None => {
+                frame.render_widget(Paragraph::new(plan_header(0, 0, changed, width)), header);
+                let source = question.and_then(|question| question.plan.clone()).unwrap_or_default();
+                frame.render_widget(Paragraph::new(fit(vec![Span::styled(format!("not readable yet: {source}"), style(MUTED))], width)), text);
+            }
         }
-        let box_block = Block::bordered().border_type(BorderType::Rounded).border_style(style(if window.part == Part::Plan { MAUVE } else { SURFACE })).padding(Padding::horizontal(1))
-            .title(Line::from(source));
-        let plan_inner = box_block.inner(plan_area);
-        let total = paragraph.line_count(plan_inner.width) as u16;
-        window.scroll = window.scroll.min(total.saturating_sub(plan_inner.height));
-        let below = total.saturating_sub(plan_inner.height + window.scroll);
-        let box_block = if below > 0 { box_block.title_bottom(Span::styled(format!(" ↓ {} · pgdn ", plural(below as usize, "more line")), style(MUTED))) } else { box_block };
-        frame.render_widget(paragraph.scroll((window.scroll, 0)).block(box_block), plan_area);
     }
-    let mut option_lines = Vec::new();
-    for (index, (label, meaning)) in options.iter().enumerate() {
-        let active = index == window.option;
-        let color = if label.starts_with("Reject") { RED } else if index + 1 == recommend { GREEN } else { TEXT };
-        let about = if index + 1 == recommend { format!("recommended · {meaning}") } else { meaning.clone() };
-        let background = if active && window.part == Part::Options { Style::new().bg(SURFACE) } else { Style::new() };
-        option_lines.push(fit(vec![
-            Span::raw(if active { "▸ " } else { "  " }), Span::styled(label.clone(), if active { style(color).add_modifier(Modifier::BOLD) } else { style(color) }),
-            Span::raw("  "), Span::styled(about, style(MUTED)),
-        ], options_area.width as usize).style(background));
-        let y = options_area.y + index as u16;
-        if y < options_area.bottom() {
-            hits.push((Rect::new(options_area.x, y, options_area.width, 1), Hit::Answer(index)));
-        }
+    let [answer_header, choices, rest] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)]).areas(answer_area);
+    frame.render_widget(Paragraph::new(section_header("ANSWER", Vec::new(), width)), answer_header);
+    let chosen = answers.get(window.option);
+    if window.typing {
+        let about = chosen.map_or(Vec::new(), |answer| vec![Span::styled(answer.label.clone(), bold(TEXT)), Span::styled(format!(" · {}", answer.about), style(MUTED))]);
+        frame.render_widget(Paragraph::new(fit(about, width)), choices);
+        window.comment.set_block(Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)));
+        window.comment.set_cursor_style(Style::new().add_modifier(Modifier::REVERSED));
+        frame.render_widget(&window.comment, rest);
+    } else {
+        let row = answer_row(&answers, window.option, choices, &mut hits);
+        frame.render_widget(Paragraph::new(row), choices);
+        let about = chosen.map(|answer| answer.about.clone()).unwrap_or_default();
+        frame.render_widget(Paragraph::new(fit(vec![Span::styled(about, style(MUTED))], width)), Rect { height: 1, ..rest });
     }
-    frame.render_widget(Paragraph::new(fill(option_lines, options_area.width as usize)), options_area);
-    let typing = window.part == Part::Comment;
-    window.comment.set_block(Block::bordered().border_type(BorderType::Rounded).border_style(style(if typing { MAUVE } else { SURFACE })));
-    window.comment.set_cursor_style(if typing { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() });
-    frame.render_widget(&window.comment, comment_area);
-    let keys = "↑ ↓ choose · tab questions / plan / options / comment · pgup pgdn plan · ⏎ answer · g go to its Space · esc close";
-    frame.render_widget(Paragraph::new(fit(vec![Span::styled(keys, style(MUTED))], foot.width as usize)), foot);
+    frame.render_widget(Paragraph::new(rule(line.width as usize)), line);
+    let mut keys = Vec::new();
+    if let Some((ok, notice)) = &window.notice {
+        keys.push(Span::styled(format!("{} {} · ", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
+    }
+    let open = viewer && plan_file(message).is_some();
+    keys.push(Span::styled(question_keys(window.typing, planned, questions.len() > 1, open), style(MUTED)));
+    frame.render_widget(Paragraph::new(fit(keys, foot.width as usize)), foot);
     hits
 }
 
@@ -375,28 +491,143 @@ mod tests {
     use crate::messages;
     use crate::report;
     use crate::board::card::card_lines;
-    use crate::board::{Hit, Mode};
+    use crate::board::{App, Hit, Mode};
+    use crate::board::widgets::{FAINT, SURFACE, YELLOW};
+
+    fn press(app: &mut App, code: KeyCode) {
+        let Mode::Questions(window) = std::mem::replace(&mut app.mode, Mode::Normal) else { panic!("the questions window is open") };
+        app.handle_questions(window, KeyEvent::from(code));
+    }
+
+    fn long_plan(app: &mut App) {
+        app.questions = messages::fold(&[QUESTION, PLAN].join("\n"));
+        let steps: String = (1..=40).map(|step| format!("- plan step {step}\n")).collect();
+        app.plans.insert("q2".to_string(), markdown(&format!("## Problem\n\nThe payload says *amount*.\n\n{steps}")));
+    }
+
+    fn row_of(rows: &[String], text: &str) -> usize {
+        find(rows, text).first().unwrap_or_else(|| panic!("{text} is not on screen:\n{}", rows.join("\n"))).1
+    }
 
     #[test]
-    fn the_question_window_lists_every_question_and_shows_the_selected_plan_as_markdown() {
+    fn in_a_narrow_window_the_plan_takes_the_height_and_the_answers_sit_on_one_row_above_the_keys() {
         let mut app = test_app(Vec::new());
-        app.questions = messages::fold(&[QUESTION, PLAN].join("\n"));
-        app.plans.insert("q2".to_string(), markdown(&format!("## Problem\n\nThe payload says *amount*.\n\n- one release per repo\n- the fallback goes\n\n{}", "more\n\n".repeat(30))));
+        long_plan(&mut app);
         app.open_questions(Some(1));
-        let (rows, _) = render(&mut app, 170, 44);
+        let (rows, _) = render(&mut app, 60, 30);
         let screen = rows.join("\n");
-        assert!(screen.contains("2 waiting · answered here, the lead gets a copy"), "{screen}");
-        assert!(screen.contains("ask   billing") && screen.contains("▸ plan  payload"), "{screen}");
+        assert!(screen.contains("question 2/2 · plan · payload"), "{screen}");
+        assert!(screen.contains("Approve this plan?") && screen.contains("PLAN 0% ─"), "{screen}");
         assert!(screen.contains("Problem") && !screen.contains("## Problem") && screen.contains("The payload says amount."), "{screen}");
-        assert!(screen.contains("one release per repo") && screen.contains("more lines · pgdn"), "{screen}");
-        assert!(screen.contains("▸ Approve  recommended · build it as planned") && screen.contains("Reject with a comment"), "{screen}");
-        assert!(screen.contains("comment (optional)"), "{screen}");
-        let questions = app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Question(_))).count();
-        let answers = app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Answer(_))).count();
-        assert_eq!((questions, answers), (2, 5), "four options and in my own words");
-        assert!(screen.contains(" /state/plans/payload@api-20.md ") && !screen.contains("changed since asked"), "the plan's source above it: {screen}");
-        let (rows, _) = render(&mut app, 80, 40);
-        assert!(rows.join("\n").contains("Approve this plan?"), "a narrow window stacks the list above the question");
+        let plan_lines = rows.iter().filter(|row| row.contains("plan step")).count();
+        assert!(plan_lines >= 12, "the plan gets most of the window, {plan_lines} lines: {screen}");
+        assert!(!screen.contains("/state/plans") && !screen.contains("waiting ·"), "no path line and no list: {screen}");
+        let answers = row_of(&rows, "a approve");
+        assert!(rows[answers].contains("c comment") && rows[answers].contains("r changes"), "{screen}");
+        assert_eq!(row_of(&rows, "recommended · build it as planned"), answers + 1, "the selected answer's meaning under the row");
+        assert!(rows[answers].contains("x reject w own words"), "every answer fits a 60-column window: {screen}");
+        assert!(rows[answers + 2].contains("────") && rows[answers + 3].contains("│ ↑ ↓ scroll · ← → answer · ⏎ send"), "the footer: a rule, then the keys: {screen}");
+        assert!(rows[answers + 4].contains("╰"), "the keys are the window's last inner row: {screen}");
+        assert_eq!(row_of(&rows, "ANSWER ─"), answers - 1);
+        assert_eq!(app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Question(_))).count(), 0, "no list in a narrow window");
+        assert_eq!(app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Answer(_))).count(), 5, "four plan answers and in my own words");
+    }
+
+    #[test]
+    fn left_and_right_move_the_selected_answer_and_its_meaning_and_a_click_selects_one() {
+        let mut app = test_app(Vec::new());
+        long_plan(&mut app);
+        app.open_questions(Some(1));
+        let (_, buffer) = render(&mut app, 60, 30);
+        let surface = |buffer: &ratatui::buffer::Buffer, rows: &[String], text: &str| {
+            let (x, y) = find(rows, text)[0];
+            buffer[(x as u16, y as u16)].bg == SURFACE
+        };
+        let rows: Vec<String> = (0..30).map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect()).collect();
+        assert!(surface(&buffer, &rows, "approve") && !surface(&buffer, &rows, "comment"));
+        press(&mut app, KeyCode::Right);
+        let (rows, buffer) = render(&mut app, 60, 30);
+        assert!(surface(&buffer, &rows, "comment") && !surface(&buffer, &rows, "approve"), "the selection moved");
+        assert!(rows.join("\n").contains("build it, taking the comment in") && !rows.join("\n").contains("build it as planned"), "the meaning follows the selection");
+        press(&mut app, KeyCode::Left);
+        press(&mut app, KeyCode::Left);
+        let (rows, _) = render(&mut app, 60, 30);
+        assert!(rows.join("\n").contains("the comment is the whole answer"), "left from the first wraps to in my own words");
+        let (x, y) = find(&rows, "x reject")[0];
+        assert_eq!(app.hit_at(x as u16 + 1, y as u16), Some(Hit::Answer(3)));
+        click(&mut app, x as u16 + 1, y as u16);
+        let (rows, _) = render(&mut app, 60, 30);
+        assert!(rows.join("\n").contains("drop this approach"), "a click selects the answer");
+    }
+
+    #[test]
+    fn an_answer_that_takes_a_comment_opens_the_comment_box_in_place_of_the_row_and_esc_returns() {
+        let mut app = test_app(Vec::new());
+        long_plan(&mut app);
+        app.open_questions(Some(1));
+        let (before, _) = render(&mut app, 60, 30);
+        let plan_before = before.iter().filter(|row| row.contains("plan step")).count();
+        press(&mut app, KeyCode::Char('c'));
+        let (rows, _) = render(&mut app, 60, 30);
+        let screen = rows.join("\n");
+        assert!(screen.contains("Approve with a comment · build it, taking") && screen.contains("comment (optional)"), "{screen}");
+        assert!(!screen.contains("a approve") && screen.contains("esc back to the answers"), "{screen}");
+        let plan_after = rows.iter().filter(|row| row.contains("plan step")).count();
+        assert_eq!(plan_before - plan_after, 2, "the plan gives up only the box's rows: {screen}");
+        press(&mut app, KeyCode::Char('a'));
+        let Mode::Questions(window) = &app.mode else { panic!() };
+        assert!(window.answering.is_none() && window.comment() == "a", "a letter in the box is text, not an answer");
+        press(&mut app, KeyCode::PageDown);
+        let Mode::Questions(window) = &app.mode else { panic!() };
+        assert!(window.scroll > 0 && window.typing, "pgdn scrolls the plan while typing");
+        press(&mut app, KeyCode::Esc);
+        let (rows, _) = render(&mut app, 60, 30);
+        let screen = rows.join("\n");
+        assert!(matches!(app.mode, Mode::Questions(_)) && screen.contains("a approve") && !screen.contains("comment (optional)"), "esc goes back to the answers: {screen}");
+    }
+
+    #[test]
+    fn tab_moves_to_the_next_question_and_the_title_counts_it() {
+        let mut app = test_app(Vec::new());
+        long_plan(&mut app);
+        app.open_questions(Some(0));
+        let (rows, _) = render(&mut app, 60, 30);
+        let screen = rows.join("\n");
+        assert!(screen.contains("question 1/2 · ask · billing") && screen.contains("tab next"), "{screen}");
+        assert!(screen.contains("1 Sidekiq") && screen.contains("2 Solid Queue") && screen.contains("w own words") && !screen.contains("PLAN"), "a plain question numbers its options: {screen}");
+        press(&mut app, KeyCode::Tab);
+        assert!(render(&mut app, 60, 30).0.join("\n").contains("question 2/2 · plan · payload"));
+        press(&mut app, KeyCode::Tab);
+        assert!(render(&mut app, 60, 30).0.join("\n").contains("question 1/2 · ask · billing"), "tab wraps around");
+    }
+
+    #[test]
+    fn a_wide_window_keeps_the_list_on_the_left_of_a_bar() {
+        let mut app = test_app(Vec::new());
+        long_plan(&mut app);
+        app.open_questions(Some(1));
+        let (rows, buffer) = render(&mut app, 160, 40);
+        let screen = rows.join("\n");
+        let (list_x, header) = find(&rows, "QUESTIONS 2")[0];
+        let (x, y) = find(&rows, "▸ plan  payload")[0];
+        assert_eq!(y, header + 2, "{screen}");
+        assert!(buffer[(x as u16, y as u16)].bg == SURFACE, "the selected question on the surface, as the card's images");
+        let bar = rows[y].chars().enumerate().position(|(at, character)| character == '│' && at > list_x).expect("a bar right of the list");
+        assert_eq!(buffer[(bar as u16, y as u16)].fg, FAINT);
+        let (plan_x, _) = find(&rows, "Approve this plan?")[0];
+        assert!(plan_x > bar && find(&rows, "a approve")[0].0 > bar, "the question and answers right of the bar: {screen}");
+        assert_eq!(app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Question(_))).count(), 2);
+        click(&mut app, list_x as u16 + 4, (header + 1) as u16);
+        assert!(render(&mut app, 160, 40).0.join("\n").contains("question 1/2 · ask · billing"), "a click on a question opens it");
+    }
+
+    #[test]
+    fn the_plan_header_shows_the_scroll_position_and_a_change_since_asked() {
+        let header = plan_header(19, 50, true, 60);
+        let shown = header.to_string();
+        assert!(shown.starts_with("PLAN 38% changed since asked ─"), "{shown}");
+        assert!(header.spans.iter().any(|span| span.content == "changed since asked" && span.style.fg == Some(YELLOW)));
+        assert!(plan_header(0, 0, false, 60).to_string().starts_with("PLAN ──"), "a plan that fits shows no position");
     }
 
     #[test]
@@ -425,17 +656,19 @@ mod tests {
         let mut app = test_app(Vec::new());
         app.questions = three_questions();
         app.open_questions(Some(0));
-        let (rows, _) = render(&mut app, 170, 40);
+        let (rows, _) = render(&mut app, 60, 30);
         let screen = rows.join("\n");
-        let (_, two) = find(&rows, "Two  recommended · the second")[0];
-        let (_, own) = find(&rows, "In my own words  the comment is the whole answer")[0];
-        assert_eq!(own, two + 1, "{screen}");
+        let (one, y) = find(&rows, "1 One")[0];
+        let (own, own_y) = find(&rows, "w own words")[0];
+        assert!(y == own_y && own > one && rows[y].contains("2 Two"), "{screen}");
+        assert!(screen.contains("recommended · the second"), "{screen}");
         assert_eq!(app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Answer(_))).count(), 3);
-        let Mode::Questions(mut window) = std::mem::replace(&mut app.mode, Mode::Normal) else { panic!() };
-        window.option = 2;
-        app.handle_questions(window, KeyEvent::from(KeyCode::Enter));
+        press(&mut app, KeyCode::Char('w'));
+        let (rows, _) = render(&mut app, 60, 30);
+        assert!(rows.join("\n").contains("In my own words · the comment is the whole answer") && rows.join("\n").contains("your answer"));
+        press(&mut app, KeyCode::Enter);
         let Mode::Questions(window) = &app.mode else { panic!("the window stays open") };
-        assert!(window.answering.is_none() && window.part == Part::Comment, "an empty answer in your own words is refused");
+        assert!(window.answering.is_none() && window.typing, "an empty answer in your own words is refused");
         assert!(window.notice.as_ref().is_some_and(|(ok, text)| !ok && text.contains("own words")));
     }
 
@@ -460,14 +693,5 @@ mod tests {
         assert!(shown.contains("▣ ../../etc/passwd"), "an image is shown by its path, read by the user before anything opens it: {shown}");
         terminal.draw(|frame| frame.render_widget(Paragraph::new(lines.clone()), frame.area())).unwrap();
         no_escape_reaches_the_terminal(terminal.backend().buffer(), "a card");
-    }
-
-    #[test]
-    fn the_question_windows_parts_cycle_both_ways() {
-        let order = [Part::List, Part::Plan, Part::Options, Part::Comment];
-        for (index, part) in order.iter().enumerate() {
-            assert!(part.next(false) == order[(index + 1) % 4]);
-            assert!(part.next(true) == order[(index + 3) % 4]);
-        }
     }
 }

@@ -56,7 +56,7 @@ Between turns, the task's last report decides its group. A CI watch, or kelpie r
 | `1`, `2`, `3` | The Work page, the Areas page, the Routines page. |
 | `tab` | Move focus to the lead's chat, showing it first when it is hidden. |
 | `h` | Hide the lead's chat, or show it again: the board takes the whole width while the chat runs on. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
-| `i` | The inbox: the questions waiting on you. Works on the Areas page too. |
+| `i` | The inbox: the questions waiting on you, opened at the first. Works on the Areas page too. |
 | `m` | Messages: once shows them on one line, again opens them, again hides them. |
 | `n` | New task: a name, then an optional prompt. Starts in the background. In the Backlog column, a new item. |
 | `/` | Filter the selected column: type part of a name, `⏎` keeps the filter, `esc` clears it. |
@@ -74,11 +74,11 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 
 | Key | Action | Offered when |
 | --- | --- | --- |
-| `i` | Answer its question. | It has an open question. |
+| `s` | Answer its question: the questions window, at this task's question. | It has an open question. |
 | `g` | Go to its Space. On a task whose Space or Claude is gone, restart it and resume its conversation. | Always. |
 | `c` | Chat: message its Claude. | Always. |
 | `r` | Open the review split next to its Claude, or go to the one already open in its Space. | Always. |
-| `s` | Show the sign-off card. | It has a card. |
+| `s` | Show the sign-off card. | It has a card and no open question. |
 | `w` | Start or stop the dev server. | `worktree.dev_server` is set. |
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
 | `v` | Send to review; on a task in review, withdraw it. | It has commits and Claude is not mid-turn. |
@@ -104,7 +104,7 @@ kelpie types into a Claude's input box only when the box is empty. While you hav
 
 ### The card window
 
-Opened by `s`, in a narrow board and a wide one alike. The title names the task; the first line says whether the card is current at its commit, or written at an earlier one with the code changed since.
+Opened by `s` on a task with a sign-off card and no open question, in a narrow board and a wide one alike. The title names the task; the first line says whether the card is current at its commit, or written at an earlier one with the code changed since.
 
 The card's text follows in parts, each under a header on a rule. A paragraph that opens with a short label and a colon, such as `To check:` or `Please confirm:`, starts a part of its own headed by that label; the text before the first label is headed `CARD`, and a card with no label is one `CARD` part. `**bold**` shows bold.
 
@@ -158,19 +158,25 @@ Only messages and squashes change here; the code stays identical. A commit that 
 
 ### The inbox
 
-Opened by `i`. Questions list on the left; the selected one's plan or detail is in the middle.
+Opened by `i` at the first question, or by `s` on a task at that task's question. It shows one question at a time; the title reads `question 2/3 · plan · <task>`, with `plan` for a plan to approve and `ask` for a plain question. In a window 120 columns wide or more, the questions also list on the left under `QUESTIONS`, set off by a bar, with the open one highlighted; a click on one opens it.
+
+The question's text comes first, in bold. A plan question then shows its plan under a `PLAN` header, which gives how far down the plan you have scrolled, as a percentage, and `changed since asked` when the vault note changed after the question was asked. The plan fills the height that is left.
+
+The answers sit on one row at the bottom under an `ANSWER` header, each as its key and a short name, the selected one highlighted. The line under the row says what the selected answer means, with `recommended` on the one the task recommends. A plan question offers `a` approve, `c` approve with a comment, `r` ask for changes, `x` reject with a comment and `w` in my own words; a plain question numbers its options `1` to `9` and adds `w` in my own words. A click on an answer selects it.
+
+An answer that takes a comment opens the comment box in place of the row, under the answer's name and meaning; the plan gives up only the box's rows. The comment is optional, except for "In my own words", where it is the answer.
 
 | Key | Action |
 | --- | --- |
-| `tab`, `shift-tab` | Move between the list, the plan, the options and the comment field. |
-| `↑` `↓`, `j` `k` | Move in the list or the options, or scroll the plan. |
-| `PageUp`, `PageDown` | Scroll the plan by ten lines. |
-| any character | Type into the comment field. |
-| `⏎` | Answer with the selected option and the comment. With "In my own words" selected, the comment is the answer. |
+| `tab`, `shift-tab` | The next or previous question, wrapping around. |
+| `↑` `↓`, `j` `k` | Scroll the plan. `PageUp`, `PageDown` scroll by ten lines, also while typing a comment. |
+| `←` `→` | Select an answer, wrapping around. |
+| `⏎` | Send the selected answer, or open the comment box when it takes a comment. In the comment box, send the answer with the comment. |
+| an answer's letter or number | Send that answer at once, or open the comment box when it takes a comment. |
+| `o` | Open the plan file in the system viewer, as `o` opens a card's image. Offered for a plan kept as a file, not for a vault note. |
 | `g` | Go to the asking task's Space. |
-| `esc`, or `q` outside the comment field | Close. |
-
-A plan question offers approve, approve with a comment, ask for changes, and reject with a comment.
+| `esc` | In the comment box, back to the answers. Otherwise, close. |
+| `q` | Close, outside the comment box. |
 
 ### Messages panel
 

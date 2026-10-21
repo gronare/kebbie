@@ -101,7 +101,7 @@ fn asked_question(item: &Item) -> Option<&messages::Message> {
 fn question_summary(message: &messages::Message, width: usize) -> String {
     let count = message.question.as_ref().map_or(0, |question| question.options.len());
     let plan = message.question.as_ref().is_some_and(|question| question.plan.is_some());
-    let inbox = keys::key(Act::Inbox);
+    let inbox = keys::key(Act::Card);
     let suffix = if plan { format!(" · plan to approve · {inbox}") } else { format!(" · {} · {inbox}", plural(count, "option")) };
     let one_line = message.text.split_whitespace().collect::<Vec<_>>().join(" ");
     format!("{}{suffix}", cut(&one_line, width.saturating_sub(suffix.chars().count()).max(8)))
@@ -389,8 +389,8 @@ pub(super) fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool
     }
     lines.push(Line::default());
     let mut foot = vec![Span::styled("⏎", style(MAUVE)), Span::styled(" options", style(MUTED))];
-    if detail.card.is_some() {
-        foot.extend([Span::styled(" · ", style(MUTED)), Span::styled(keys::key(Act::Card).to_string(), style(MAUVE)), Span::styled(" card", style(MUTED))]);
+    if let Some(opens) = app.s_opens(item) {
+        foot.extend([Span::styled(" · ", style(MUTED)), Span::styled(keys::key(Act::Card).to_string(), style(MAUVE)), Span::styled(format!(" {opens}"), style(MUTED))]);
     }
     lines.push(Line::from(foot));
     (lines, links, images)
@@ -585,8 +585,8 @@ mod tests {
         assert_eq!(asked_question(&item).map(|message| message.id.as_str()), Some("q1"));
         item.agent.as_mut().unwrap().status = "blocked".to_string();
         assert!(asked_question(&item).is_none());
-        assert_eq!(question_summary(&asked, 60), "Which queue for refund mails? · 3 options · i");
-        assert_eq!(question_summary(&asked, 30), "Which queue f… · 3 options · i");
+        assert_eq!(question_summary(&asked, 60), "Which queue for refund mails? · 3 options · s");
+        assert_eq!(question_summary(&asked, 30), "Which queue f… · 3 options · s");
     }
 
     #[test]
@@ -603,7 +603,7 @@ mod tests {
         let mut app = test_app(vec![item]);
         let (rows, _) = render(&mut app, 170, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("asks    Which queue for refund mails? · 3 options · i"), "{screen}");
+        assert!(screen.contains("asks    Which queue for refund mails? · 3 options · s"), "{screen}");
         assert!(!screen.contains("reuse the jobs") && !screen.contains("one less service"), "{screen}");
     }
 

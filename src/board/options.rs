@@ -116,9 +116,8 @@ impl App {
                 let command = |process: Process| settings.as_ref().and_then(|settings| process.command(settings));
                 let mut choices = task_choices(item, command(Process::Server).as_deref(), command(Process::Worker).as_deref());
                 if item.is_some_and(|item| self.question_of(item).is_some()) {
-                    choices.insert(0, choice(Act::Inbox, "Answer its question", "the inbox, at this task's question"));
-                }
-                if item.is_some_and(|item| self.card_of(item).is_some()) {
+                    choices.insert(0, choice(Act::Card, "Answer its question", "the questions window, at this task's question"));
+                } else if item.is_some_and(|item| self.card_of(item).is_some()) {
                     let after = choices.iter().position(|choice| choice.act == Some(Act::Review)).map_or(choices.len(), |at| at + 1);
                     choices.insert(after, choice(Act::Card, "Show the card", "its sign-off card with its images; p goes on to push"));
                 }
