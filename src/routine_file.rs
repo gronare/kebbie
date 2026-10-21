@@ -60,7 +60,7 @@ pub fn free_id(base: &str, taken: &[String]) -> String {
     }).find(|id| !taken.contains(id)).unwrap_or_default()
 }
 
-fn quoted(text: &str) -> String {
+pub fn quoted(text: &str) -> String {
     let mut out = String::from("\"");
     for character in text.chars() {
         match character {

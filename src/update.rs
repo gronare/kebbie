@@ -67,6 +67,7 @@ fn finish_in(claude_dir: &Path, state: &Path) -> Result<Vec<String>> {
     crate::restart::mark_updated(state, crate::restart::now())?;
     lines.extend(crate::restart::report(&crate::restart::run(crate::restart::Mode::Update, &mut crate::restart::Memory::default(), None)?));
     lines.push(lead::renew_board().unwrap_or_else(|error| error));
+    lines.extend(crate::issues::after_update(state, root.as_deref()));
     Ok(lines)
 }
 

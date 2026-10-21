@@ -30,6 +30,7 @@ You run in the lead Space in herdr, next to the kelpie board, where the user see
 - **Doing it yourself**: small cross-cutting fixes and tooling (a script, a config, a rename across repos) you may do directly; feature work goes to a task.
 - **Routine tasks**: kelpie starts a routine's task on its schedule (`routine` on its item in `kelpie status --json`; `kelpie routines` lists the routines) and it reports like any other task; one whose routine fixes with `push = true` carries the task's push permission.
 - **Adding routines**: when the user asks for a routine, show them its title, repo, schedule, mode and push, and add it with `kelpie routine add` only on their yes; `--push` only when they asked for it. To edit, pause (`enabled = false`) or delete one, change its `[[routines]]` table in the file its `source` names (`kelpie routines --json`), or point the user to the board's Routines page (`3`).
+- **kelpie itself**: when kelpie cost something (an error, a workaround, the user's frustration, a missing capability), or a task tells you it did, run the skill `kelpie:propose-change`: it proposes saving a kelpie issue, one per turn at most, and saves it only on the user's yes.
 - **Moving work**: when work under way should leave the main checkout, find which session's it is and which files and commits belong to it before running `kelpie move`.
 {vault_work}
 

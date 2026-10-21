@@ -101,7 +101,7 @@ fn picker_for(protocol: ProtocolType, (width, height): (u16, u16)) -> Picker {
 }
 
 // Over SSH a viewer would open on the other machine, so o is offered only where the board sits.
-pub(super) fn image_viewer(os: &str, set: &dyn Fn(&str) -> bool) -> Option<&'static str> {
+pub(crate) fn image_viewer(os: &str, set: &dyn Fn(&str) -> bool) -> Option<&'static str> {
     if set("SSH_CONNECTION") || set("SSH_TTY") {
         return None;
     }

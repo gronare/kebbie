@@ -5,7 +5,7 @@ mod detail;
 mod draw;
 mod editor;
 mod header;
-mod images;
+pub(crate) mod images;
 mod inbox;
 mod input;
 mod link;

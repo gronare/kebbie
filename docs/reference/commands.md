@@ -170,7 +170,7 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 | `kelpie config --get <key>` | Print one machine-wide value for scripts: `worktree.server_name` or `worktree.worker_name`. |
 | `kelpie doctor` | Check this machine, with the fix for each gap. Exits non-zero on a `fail`. See [Requirements](requirements.md#what-kelpie-doctor-checks). |
 | `kelpie setup vault` | Install the optional vault plugin in Claude Code, showing each `claude plugin` command and running it only on your `y`. |
-| `kelpie update` | Update everything to this machine's channel and restart idle Claude sessions. |
+| `kelpie update` | Update everything to this machine's channel and restart idle Claude sessions. With open [kelpie issues](#kelpie-issues), it looks them up on GitHub through `gh` and asks the lead which ones the new commits likely fix. |
 | `kelpie update --check` | Fetch and show the installed versions against the channel's latest. Changes nothing else. |
 | `kelpie update --from <branch or path>` | Install that branch on origin, or that checkout's commits, until `--stable`. |
 | `kelpie update --stable` | Return to the channel. |
@@ -181,6 +181,22 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 | `kelpie keeper --stop` | Stop the keeper. It finishes the routine under way first. The board or herdr's next startup starts it again; `keeper.enabled = false` keeps it off. |
 
 `--from` and `--stable` cannot be combined.
+
+## kelpie issues
+
+Problems and wishes about kelpie itself, saved on this machine, one file each under `issues/` in the state directory. See [Report a problem with kelpie](../how-to/report-a-problem-with-kelpie.md) and [the issue file](files.md#the-issue-file).
+
+| Command | What it does |
+| --- | --- |
+| `kelpie issues [--json] [--all]` | The open issues (`open` and `retry`): id, kind, status, the version and commit they were filed on, and the GitHub issue when linked. `--all` lists every status. |
+| `kelpie issue add --kind bug\|wish --title <title> [<text>\|-]` | Save an issue. The text comes from the argument, or from stdin with `-`: what happened, what you expected, how to reproduce. kelpie records its version, commit, the date and who filed it. Yours or the lead's; a task is told to tell the lead instead. |
+| `kelpie issue show <id>` | Print one issue with its text. |
+| `kelpie issue close <id> fixed\|wontfix\|duplicate` | Close it. |
+| `kelpie issue retry <id>` | Mark it worth retrying, typically after an update that may have fixed it. |
+| `kelpie issue link <id> <number\|url>` | Tie it to its issue in kelpie's GitHub repo. |
+| `kelpie issue send <id>` | Print the text and a prefilled new-issue URL on GitHub, and open it in the browser (`open` on macOS, `xdg-open` on Linux with a display; over SSH only the URL). The body adds the kind, version, commit and OS, and a `kelpie-issue: <id>` line; a text that would make the URL longer than GitHub accepts is shortened, and says so. Nothing is sent until you press Submit. |
+
+After `kelpie update`, when `gh` is installed and logged in, kelpie searches kelpie's GitHub repo for each unlinked issue's `kelpie-issue:` line and links what it finds, and an issue closed on GitHub becomes `retry`. Without `gh` this step is skipped. Then the lead gets one message: the open issues filed on older code than the update installed, with the commit subjects since, to judge which are likely fixed.
 
 ## Used by kelpie itself
 

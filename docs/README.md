@@ -48,6 +48,7 @@ Your machine
 - [Show plan usage on the board](how-to/show-plan-usage.md): the status line command.
 - [Show task state in herdr's sidebar](how-to/show-task-state-in-the-sidebar.md): the sidebar sync.
 - [Fix common problems](how-to/troubleshoot.md): `kelpie doctor` and what each message means.
+- [Report a problem with kelpie](how-to/report-a-problem-with-kelpie.md): save it on the machine, check it after an update, send it to GitHub.
 
 Working on kelpie
 

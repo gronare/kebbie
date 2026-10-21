@@ -38,6 +38,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `backlog.json` | The backlog the lead saved on its last refresh. |
 | `recover/` | One file per task an API error stopped, `<task>@<repo>.json`: the error, how many times kelpie resumed the task, when it resumes next and whether it is stuck. It survives restarts, so kelpie never resumes a task twice for one error. |
 | `routines/` | One file per routine, `<id>.json`: when the scheduler first saw it, when its last run started, that run's task, its outcome (`running`, `ok`, `findings` or `failed`) and summary, and the four runs before it, which the board's Routines page lists. `lock` keeps two schedulers from starting the same run. |
+| `issues/` | One file per [kelpie issue](commands.md#kelpie-issues), `<id>.md`. See [The issue file](#the-issue-file). |
 | `usage.json` | Plan usage from the status line. |
 | `update-check.json` | The last update check. |
 | `update-override.json` | The `--from` override, while it holds. |
@@ -64,6 +65,37 @@ One item per line:
 | Title | Required. kelpie knows the item by its title, so keep titles unique. |
 | ` — summary` | Optional. |
 | `(area)` | The folder name of the repo the work happens in. Optional, but starting the item as a task needs it. |
+
+## The issue file
+
+`issues/<id>.md` in the state directory: TOML between `+++` lines, then the text.
+
+```markdown
++++
+id = "3f9a2c"
+title = "push hides git's error when the rebase fails"
+kind = "bug"
+status = "open"
+version = "0.24.0"
+commit = "869bc49"
+filed = "2026-10-21"
+by = "lead"
+github = "https://github.com/gronare/kelpie/issues/12"
+sent = "2026-10-21"
++++
+
+What happened: …
+```
+
+| Key | Value |
+| --- | --- |
+| `id` | Six hex characters, kept for the issue's life. The `kelpie-issue: <id>` line in a sent issue is how `kelpie update` finds it on GitHub. |
+| `kind` | `bug` or `wish`. |
+| `status` | `open`, `retry`, `fixed`, `wontfix` or `duplicate`. |
+| `version`, `commit` | The kelpie it was filed on. `commit` is empty for a build outside git. |
+| `by` | `user` or `lead`. |
+| `github` | The linked GitHub issue. Optional. |
+| `sent` | The date of the last `kelpie issue send`. Optional. |
 
 ## The verdict file
 

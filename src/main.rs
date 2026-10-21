@@ -10,6 +10,7 @@ mod doctor;
 mod evidence;
 mod fetch;
 mod herdr;
+mod issues;
 mod keeper;
 mod keys;
 mod lead;
@@ -161,6 +162,19 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   start it ([keeper] enabled = false hands them to the board) (--start starts it
                                   detached unless one runs, --status shows its pid, binary, uptime and each routine's
                                   last run, --stop stops it)
+  kelpie issues [--json] [--all]  the problems and wishes about kelpie itself saved on this machine (open ones;
+                                  --all every status): id, kind, status, the version they were filed on, GitHub link
+  kelpie issue add --kind bug|wish --title <title> [<text>|-]
+                                  save one, the text from the argument or stdin: what happened, what you expected,
+                                  how to reproduce; the user's or the lead's (a task tells the lead)
+  kelpie issue show|retry <id>    print one; retry marks it worth trying again
+  kelpie issue close <id> fixed|wontfix|duplicate
+  kelpie issue link <id> <number|url>
+                                  tie it to its GitHub issue
+  kelpie issue send <id>          print the text and a prefilled new-issue URL on GitHub (shortened past GitHub's
+                                  limit), and open it in the browser for you to check and submit; nothing is sent
+                                  without your Submit (kelpie update looks the issues up with gh and asks the lead
+                                  which ones the new commits likely fix)
   kelpie update                   update everything to this machine's channel ([update] channel: release, the
                                   highest vX.Y.Z tag, or main, origin's default branch): the herdr plugin (rebuilt),
                                   the Claude Code plugin, the vault plugin when installed; list each version before →
@@ -191,7 +205,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -396,6 +410,8 @@ fn run(arguments: &Arguments) -> Result<String> {
             Some(key) => config::get(key),
             None => config::show(&cwd, arguments.value("--repo")),
         },
+        Some("issues") => Ok(issues::list_in(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"))),
+        Some("issue") => issue(arguments, name),
         Some("setup") if name == Some("vault") => setup::vault(),
         Some("setup") => Err("kelpie setup knows vault: kelpie setup vault".to_string()),
         Some("restart") => restart::now_cli(arguments.flag("--all")),
@@ -416,6 +432,27 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         None | Some("help") => Ok(USAGE.to_string()),
         Some(other) => Err(format!("Unknown command \"{other}\"\n\n{USAGE}")),
+    }
+}
+
+fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
+    let dir = issues::dir(&lead::state_dir()?);
+    let id = || arguments.positional(2).ok_or_else(|| format!("kelpie issue {} needs the issue's id; kelpie issues lists them", action.unwrap_or_default()));
+    let caller = permit::caller;
+    match action {
+        Some("add") => {
+            let body = issues::read_body(&arguments.positionals[2..], arguments.flag("-"));
+            issues::add_in(&dir, &caller(), &issues::Filing { kind: arguments.value("--kind"), title: arguments.value("--title"), body: &body }, env!("KELPIE_BUILT_FROM"), messages::now())
+        }
+        Some("show") => issues::show_in(&dir, id()?),
+        Some("close") => issues::close_in(&dir, &caller(), id()?, arguments.positional(3)),
+        Some("retry") => issues::retry_in(&dir, &caller(), id()?),
+        Some("link") => issues::link_in(&dir, &caller(), id()?, arguments.positional(3)),
+        Some("send") => {
+            let opener = board::images::image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
+            issues::send_in(&dir, &caller(), id()?, opener, &issues::open_url, messages::now())
+        }
+        _ => Err("kelpie issue knows add, show <id>, close <id> fixed|wontfix|duplicate, retry <id>, link <id> <number|url> and send <id>".to_string()),
     }
 }
 

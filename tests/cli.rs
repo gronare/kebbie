@@ -166,6 +166,24 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
 }
 
 #[test]
+fn the_user_files_a_kelpie_issue_and_a_task_is_sent_to_the_lead_instead() {
+    let lab = Lab::new("issues");
+    let refused = lab.run_as("billing@app", &["issue", "add", "--kind", "bug", "--title", "push hid the error", "it said nothing"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("kelpie tell lead"), "{}", stderr(&refused));
+    let added = run_as_user(&lab, &["issue", "add", "--kind", "bug", "--title", "push hid the error", "it said nothing"]);
+    assert!(added.status.success(), "{}", stderr(&added));
+    let listed = stdout(&lab.run(&["issues"]));
+    let id = listed.split_whitespace().next().unwrap().to_string();
+    assert!(listed.contains("bug") && listed.contains("open") && listed.contains("push hid the error"), "{listed}");
+    let file = fs::read_to_string(lab.state.join(format!("issues/{id}.md"))).unwrap();
+    assert!(file.contains("by = \"user\"") && file.ends_with("it said nothing\n"), "{file}");
+    assert!(stdout(&lab.run(&["issue", "show", &id])).contains("it said nothing"));
+    assert!(run_as_user(&lab, &["issue", "close", &id, "fixed"]).status.success());
+    assert_eq!(stdout(&lab.run(&["issues"])), "No open kelpie issues; --all lists the closed ones too.");
+    assert!(stdout(&lab.run(&["issues", "--all", "--json"])).contains("\"status\": \"fixed\""));
+}
+
+#[test]
 fn the_review_guard_denies_every_command_but_a_plain_git_read() {
     let lab = Lab::new("guard");
     let deny = lab.run_with_stdin(&["hook", "--review"], r#"{"tool_input":{"command":"git log | sh"}}"#);
