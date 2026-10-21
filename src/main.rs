@@ -58,7 +58,12 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   (--repo <name> finds or clones that repo, repeated for a task across repos,
                                   --from <ref> branches off it
                                   instead of the default branch, --mode <mode> is Claude's permission mode,
-                                  --no-focus keeps you where you are)
+                                  --no-focus keeps you where you are, --after <task[@repo]> (repeatable) queues it
+                                  to start from the default branch once each of those tasks ended as done and,
+                                  where kelpie watches CI, its CI is green; the user's or the lead's)
+  kelpie after [name]             the queued tasks: what each waits for, with that task's state; one blocked because
+                                  a task it waited for was dropped, reset or is gone waits for you (--now starts it
+                                  anyway and tells its Claude what was not done, --drop drops the wait)
   kelpie move <name> [file ...]   move work under way in the main checkout into a task: branch <name> if it
                                   exists, else the unpushed commits, plus the given uncommitted files
                                   (--pane <id> moves that herdr pane along, --no-focus stays put)
@@ -174,7 +179,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   with [restart] auto = false
   kelpie keeper                   the keeper: one background kelpie per machine that runs the routines (stale-session
                                   restarts, the update check, held messages, delivery checks of typed prompts, the
-                                  scheduled routines, rebasing the tasks that follow main) with no board open; herdr's
+                                  scheduled routines, rebasing the tasks that follow main, starting queued tasks) with no
+                                  board open; herdr's
                                   startup, the board and kelpie update start it ([keeper] enabled = false hands them to
                                   the board) (--start starts it
                                   detached unless one runs, --status shows its pid, binary, uptime and each routine's
@@ -222,7 +228,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -321,6 +327,16 @@ fn run(arguments: &Arguments) -> Result<String> {
             if repos.is_empty() {
                 repos.push(cwd);
             }
+            let after = arguments.values_of("--after");
+            if !after.is_empty() {
+                if arguments.value("--from").is_some() {
+                    return Err("kelpie start --after starts from the default branch, so it takes no --from".to_string());
+                }
+                if let Some(queued) = tasks::queue(&repos, name, prompt.unwrap_or_default(), &after, arguments.value("--mode"), arguments.value("--backlog"))? {
+                    return Ok(queued);
+                }
+            }
+            tasks::refuse_queued_name(name)?;
             let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), backlog: arguments.value("--backlog"), note: true };
             // One task across repos: a half per repo, the first one focused.
             let started: Vec<Result<String>> = repos.iter().enumerate()
@@ -329,6 +345,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let report = started.iter().map(|result| match result { Ok(text) | Err(text) => text.as_str() }).collect::<Vec<_>>().join("\n");
             if started.iter().any(Result::is_err) { Err(report) } else { Ok(report) }
         }
+        Some("after") => tasks::after_command(&arguments.positionals[1..], arguments.flag("--now"), arguments.flag("--drop")),
         Some("move") => {
             let name = name.ok_or("kelpie move needs a task name")?;
             tasks::move_work(&cwd, name, &arguments.positionals[2..], arguments.value("--pane"), !arguments.flag("--no-focus"))
@@ -507,7 +524,7 @@ fn main() -> ExitCode {
         usage::record(&input);
         return ExitCode::SUCCESS;
     }
-    if matches!(arguments.positional(0), Some("board" | "start" | "land" | "push" | "done" | "move" | "update" | "ci" | "routine" | "routines")) {
+    if matches!(arguments.positional(0), Some("board" | "start" | "after" | "land" | "push" | "done" | "move" | "update" | "ci" | "routine" | "routines")) {
         login_env::import();
     }
     match run(&arguments) {

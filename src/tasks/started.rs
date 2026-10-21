@@ -18,7 +18,9 @@ pub(super) fn started_file_in(state: &Path, task: &str, repo: &Path) -> Result<P
 }
 
 pub fn started_items() -> HashSet<String> {
-    started_links().into_values().flatten().collect()
+    let mut items: HashSet<String> = started_links().into_values().flatten().collect();
+    items.extend(crate::lead::state_dir().map(|state| super::after::held_items(&state)).unwrap_or_default());
+    items
 }
 
 // Each running task's address (task@repo) and the items it was started from or linked to: a vault note's key (Projects/x.md), a Linear id, or local:<Title>.
@@ -110,7 +112,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "local:Fix login");
         std::fs::remove_file(file).unwrap();
         let source = include_str!("finish.rs");
-        let finish = &source[source.find("\nfn finish(").unwrap()..];
+        let finish = &source[source.find("\npub(super) fn finish(").unwrap()..];
         assert!(finish[..finish.find("\n}\n").unwrap()].contains("done_notice("), "a finished task tells the lead which item it came from");
     }
 

@@ -39,6 +39,7 @@ No line means no test run is recorded. The wide panel shows the same line.
 | Ready to push | Reported ready, approved by the lead, passed by the reviewer when sent to review, with no uncommitted changes to tracked files. How far it is behind the default branch does not matter. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. The row names the runs, and the open task links each run's page. See [`kelpie ci`](commands.md#kelpie-ci---json). |
 | Waiting for work | Idle, or blocked on something outside you. |
+| Queued | Waiting to start after other tasks, with no worktree, Space or Claude. The row, marked `⧗`, names each task it waits for with that task's state: `after billing@api: ci running`. It starts by itself once each of them has ended as done. When one of them is dropped, reset or gone, the row moves to Needs you with the reason instead. See [`kelpie after`](commands.md#kelpie-after-name). |
 
 Between turns, the task's last report decides its group. A CI watch, or kelpie resuming the task after an API error, decides it until the task reports again.
 
@@ -67,6 +68,8 @@ Between turns, the task's last report decides its group. A CI watch, or kelpie r
 | `esc` | One step back: close a window, a menu or the filter. At the top, close the board when it is a popup; on the full board it does nothing. |
 | `q` | Close the current view, like `esc`. At the top, close the popup; on the full board it says that `ctrl+c` twice quits. |
 | `ctrl+c` | Twice within 2 seconds quits the board. The first press says so. |
+
+On a queued row, `⏎` offers two things, each asking first: `g` starts it now, before what it waits for is done, and `x` drops the wait.
 
 A question that asks first, as reset, drop and done do, takes `y` to go ahead and `n` or `esc` to cancel. Any other key keeps the question and says "press y or n".
 

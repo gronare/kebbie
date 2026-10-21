@@ -19,6 +19,7 @@ pub(super) fn group_color(group: Group) -> Color {
         Group::ReadyToPush => GREEN,
         Group::CiRunning => YELLOW,
         Group::Idle => MUTED,
+        Group::Queued => MAUVE,
     }
 }
 
@@ -40,6 +41,9 @@ fn priority_icon(priority: &str) -> &'static str {
 }
 
 fn status_icon(item: &Item) -> Span<'static> {
+    if item.queued.is_some() {
+        return Span::styled("⧗", style(MAUVE));
+    }
     match item.agent.as_ref().map(|agent| agent.status.as_str()) {
         Some("blocked") => Span::styled("●", style(PEACH)),
         Some("done") => Span::styled("✓", style(GREEN)),
@@ -59,6 +63,9 @@ pub(super) fn absence(item: &Item) -> Option<&'static str> {
 }
 
 pub(super) fn row_facts(item: &Item) -> String {
+    if let Some(note) = item.queued_note() {
+        return note;
+    }
     let Some(git) = &item.git else { return String::new() };
     let mut parts: Vec<String> = absence(item).map(str::to_string).into_iter().collect();
     parts.extend(item.ci_note());

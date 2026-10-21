@@ -1,3 +1,4 @@
+mod after;
 mod approval;
 mod claude;
 mod finish;
@@ -11,9 +12,10 @@ mod started;
 #[cfg(test)]
 mod test_support;
 
+pub(crate) use after::{EVERY as AFTER_EVERY, Wait, after as after_command, drop as drop_wait, now as start_now, queue, refuse_queued_name, shown as waits_shown, tick as after_tick};
 pub(crate) use approval::{approve, approved, rules_check, same_code};
 pub(crate) use claude::{Started, end_claude, start_claude, trusted_by_user, wait_for_prompt};
-pub(crate) use finish::{done, drop, reset};
+pub(crate) use finish::{done, drop, drop_routine_ok, reset};
 pub(crate) use follow::{follow, follows, tick as follow_tick, toggle as toggle_follow};
 pub(crate) use history::{Commit, commits, draft_squash_message, reword, squash};
 pub(crate) use intent::{By as PushBy, complete as complete_pushes, pending as pending_push};

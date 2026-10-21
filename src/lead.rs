@@ -761,7 +761,7 @@ mod tests {
         let written: Value = serde_json::from_str(&settings("/opt/kelpie")).unwrap();
         let allow: Vec<&str> = written["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(allow.iter().all(|rule| rule.starts_with("Bash(/opt/kelpie ") && rule.ends_with(":*)")), "{allow:?}");
-        for never in ["start", "drop", "reset", "done", "away", "tidy", "hook", "backlog"] {
+        for never in ["start", "after", "drop", "reset", "done", "away", "tidy", "hook", "backlog"] {
             assert!(!allow.iter().any(|rule| rule.contains(&format!(" {never}:"))), "{never} is asked for, not pre-approved: {allow:?}");
         }
         assert!(allow.iter().any(|rule| rule.contains(" decide:")) && allow.iter().any(|rule| rule.contains(" defer:")));

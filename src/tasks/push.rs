@@ -320,7 +320,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
             tell_lead_pushed(&landed(false, true));
             return Ok(format!("Pushed {} to {upstream}.{logged}{ci} {waits}", plural(count, "commit")));
         }
-        let closed = close_task(repo, Some(&task), vault.as_ref(), ready.unwrap_or_default());
+        let closed = close_task(repo, Some(&task), vault.as_ref(), ready.unwrap_or_default(), Some(&pushed));
         tell_lead_pushed(&landed(closed.is_ok(), false));
         return closed.map(|closed| format!("Pushed {} to {upstream}.{logged}{ci} {closed}", plural(count, "commit")));
     }
@@ -355,7 +355,7 @@ pub fn after_ci(repo: &Path, task: &str, address: &str, told: &crate::ci::Pushed
         tell_lead_pushed(&landed(false, true));
         return Ok(waits.clone());
     }
-    let closed = close_task(repo, Some(task), vault.as_ref(), ready.unwrap_or_default());
+    let closed = close_task(repo, Some(task), vault.as_ref(), ready.unwrap_or_default(), Some(&told.commits));
     tell_lead_pushed(&landed(closed.is_ok(), false));
     closed
 }

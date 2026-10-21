@@ -12,6 +12,12 @@ use super::space::{Process, settings_of};
 use super::widgets::{Choice, choice, menu_lines, modal, options_lines};
 
 pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_worker: Option<&str>) -> Vec<Choice> {
+    if item.is_some_and(|item| item.queued.is_some()) {
+        return vec![
+            choice(Act::Go, "Start it now", "before what it waits for is done: from the default branch, its Claude told what was not done (asks first)"),
+            choice(Act::Drop, "Drop the wait", "nothing was started; its backlog item comes back (asks first)"),
+        ];
+    }
     let go = if item.is_some_and(|item| item.agent.is_none()) {
         choice(Act::Go, "Restart it", "reopen its Space and its Claude, resuming its last conversation")
     } else {

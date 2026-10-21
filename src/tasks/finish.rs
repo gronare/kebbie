@@ -23,7 +23,7 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
     let state = state_dir()?;
     let address = peers::address(&task, &name_of(&repo));
     let vault = items.iter().any(|item| crate::vault_cli::is_note(item)).then(crate::vault_cli::detect).flatten();
-    let dropped = discard(&repo, Some(&task), true, "reset")?;
+    let dropped = discard(&repo, Some(&task), true, "reset", None)?;
     let mut notice = format!("The user reset {task}: it is gone, and its work was discarded and will never be pushed.");
     if !discarded.is_empty() {
         notice.push_str(&format!(" Discarded: {}.", discarded.lines().collect::<Vec<_>>().join("; ")));
@@ -62,7 +62,7 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
     let address = peers::address(&task, &name_of(&repo));
     let vault = crate::task_note::linked(&state, &address).and_then(|_| crate::vault_cli::detect());
     let said = note_ready(vault.as_ref(), &state, &address, &task)?;
-    close_task(cwd, name, vault.as_ref(), said)
+    close_task(cwd, name, vault.as_ref(), said, None)
 }
 
 // Done waits for the task's note to have its solution and decisions: Err is the refusal, the task told what to write; a vault that does not answer lets done go on, and Ok says so.
@@ -80,12 +80,16 @@ pub(super) fn note_ready(vault: Option<&crate::vault_cli::Cli>, state: &Path, ad
     }
 }
 
-pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::Cli>, said: String) -> Result<String> {
+pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::Cli>, said: String, landed: Option<&str>) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
     let workspace = herdr::workspace_for(&slot.path)?;
+    let address = peers::address(task_of(&slot), &name_of(&repo));
+    let state = crate::lead::state_dir()?;
+    let landed = landed.map(str::to_string).or_else(|| crate::ci::load(&state, &address).map(|watch| watch.pushed.commits).filter(|commits| !commits.is_empty()))
+        .or_else(|| git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..HEAD")]).ok().filter(|commits| !commits.is_empty()));
     let finished = finish(&repo, &slot, &upstream, &crate::lead::state_dir()?, vault)? + &said;
     forget_session(task_of(&slot), &repo);
     forget_approval(task_of(&slot), &repo);
@@ -94,14 +98,14 @@ pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::v
     crate::review::forget(task_of(&slot), &repo);
     crate::report::forget_card(task_of(&slot), &repo);
     crate::evidence::forget(task_of(&slot), &repo);
-    crate::ci::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
-    crate::recover::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
-    forget_held_prompt(&peers::address(task_of(&slot), &name_of(&repo)));
-    end_life(task_of(&slot), &repo, "done");
+    super::after::settle_ci(&state, &address);
+    crate::recover::forget(&state, &address);
+    forget_held_prompt(&address);
+    end_life(task_of(&slot), &repo, "done", landed.as_deref(), None);
     Ok(finished + &close_space(workspace))
 }
 
-fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vault: Option<&crate::vault_cli::Cli>) -> Result<String> {
+pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vault: Option<&crate::vault_cli::Cli>) -> Result<String> {
     let task = task_of(slot);
     if !is_clean(&slot.path)? {
         return Err(format!("{task} has uncommitted changes; land or drop them first"));
@@ -154,10 +158,17 @@ fn missing_from(path: &Path, upstream: &str) -> Result<Vec<String>> {
 }
 
 pub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {
-    discard(cwd, name, force, "dropped")
+    discard(cwd, name, force, "dropped", None)
 }
 
-fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<String> {
+pub const ROUTINE_OK: &str = "routine-ok";
+
+// A routine's ok closes its task as a drop does, and its end line says ok so a task waiting on it starts.
+pub fn drop_routine_ok(cwd: &Path) -> Result<String> {
+    discard(cwd, None, false, "dropped", Some(ROUTINE_OK))
+}
+
+fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<&str>) -> Result<String> {
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
     let task = task_of(&slot);
@@ -194,7 +205,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
         crate::recover::forget(&state, &peers::address(task, &name_of(&repo)));
     }
     forget_held_prompt(&peers::address(task, &name_of(&repo)));
-    end_life(task, &repo, how);
+    end_life(task, &repo, how, None, kind);
     Ok(format!("{task} dropped; {} is free again.{said}{}", name_of(&slot.path), close_space(workspace)))
 }
 
@@ -214,8 +225,8 @@ fn forget_held_prompt(address: &str) {
     }
 }
 
-fn end_life(task: &str, repo: &Path, how: &str) {
-    if let Err(error) = messages::log_end(task, &name_of(repo), how) {
+fn end_life(task: &str, repo: &Path, how: &str, landed: Option<&str>, kind: Option<&str>) {
+    if let Err(error) = messages::log_end(task, &name_of(repo), how, landed, kind) {
         eprintln!("Could not log the end of {task}: {error}");
     }
 }
@@ -246,6 +257,7 @@ mod tests {
         assert!(body("finish").contains("task_note::forget(") && body("discard").contains("task_note::forget("), "a later task by the same name must not inherit this one's Problem pass");
         assert!(body("close_task").contains("forget_held_prompt(") && body("discard").contains("forget_held_prompt("), "a prompt still held for the task is never typed into a later task by the same name");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
+        assert!(source.contains("discard(cwd, None, false, \"dropped\", Some(ROUTINE_OK))"), "a routine's ok closes like a drop, marked ok");
     }
 
     #[test]

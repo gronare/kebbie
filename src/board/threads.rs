@@ -131,20 +131,25 @@ pub(super) fn spawn_restarter(overlay: bool) -> Receiver<Vec<String>> {
     stale_rx
 }
 
-// With the keeper off, the full board starts due routines and rebases the tasks that follow main; the routines' own lock keeps a second board from starting them too.
+// With the keeper off, the full board starts due routines, rebases the tasks that follow main and starts the queued tasks whose wait is over; each one's own lock keeps a second board from doing it too.
 pub(super) fn spawn_routine_runner(overlay: bool) {
     if overlay {
         return;
     }
     thread::spawn(move || {
+        let mut ran: Option<Instant> = None;
         loop {
             if crate::keeper::current_owner() == crate::keeper::Owner::Board
                 && let Ok(state) = crate::lead::state_dir()
             {
-                crate::routines::tick(&state);
-                crate::tasks::follow_tick(&state);
+                crate::tasks::after_tick(&state);
+                if ran.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(crate::routines::EVERY)) {
+                    ran = Some(Instant::now());
+                    crate::routines::tick(&state);
+                    crate::tasks::follow_tick(&state);
+                }
             }
-            thread::sleep(Duration::from_secs(crate::routines::EVERY));
+            thread::sleep(Duration::from_secs(crate::tasks::AFTER_EVERY));
         }
     });
 }

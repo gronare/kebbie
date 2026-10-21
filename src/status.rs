@@ -22,6 +22,7 @@ pub enum Group {
     ReadyToPush,
     CiRunning,
     Idle,
+    Queued,
 }
 
 impl Group {
@@ -33,6 +34,7 @@ impl Group {
             Group::ReadyToPush => "READY TO PUSH",
             Group::CiRunning => "CI RUNNING",
             Group::Idle => "WAITING FOR WORK",
+            Group::Queued => "QUEUED",
         }
     }
 }
@@ -61,6 +63,12 @@ pub fn answer_in_space(go: &str) -> String {
     format!("answer Claude's prompt in its Space ({go}) or through the lead")
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Queued {
+    pub after: Vec<(String, String)>,
+    pub blocked: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct Item {
     pub review: Option<(usize, usize)>,
@@ -84,11 +92,21 @@ pub struct Item {
     pub recover: Option<crate::recover::Record>,
     pub routine: Option<String>,
     pub push_waits: Option<tasks::PushBy>,
+    pub queued: Option<Queued>,
 }
 
 impl Item {
     pub fn is_task(&self) -> bool {
-        self.git.is_some()
+        self.git.is_some() || self.queued.is_some()
+    }
+
+    fn queued_from(wait: &tasks::Wait, after: Vec<(String, String)>) -> Item {
+        Item {
+            review: None, verdict: None, permit: None, follows: false, bypass: false, server: false, worker: false, url: None,
+            name: wait.task.clone(), place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
+            report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
+            queued: Some(Queued { after, blocked: wait.blocked.clone() }),
+        }
     }
 
     // Commits and no tracked file left uncommitted; how far behind the default branch it is plays no part, push rebases first.
@@ -168,6 +186,9 @@ impl Item {
 
     // Between turns the task's own report says what it needs; herdr's "done" only says nobody has looked yet.
     pub fn group(&self) -> Group {
+        if let Some(queued) = &self.queued {
+            return if queued.blocked.is_some() { Group::NeedsYou } else { Group::Queued };
+        }
         let status = self.agent.as_ref().map(|agent| agent.status.as_str());
         match (status, self.report_state(), self.ci_group().or_else(|| self.recover_group())) {
             (Some("blocked"), _, _) => Group::NeedsYou,
@@ -188,6 +209,7 @@ impl Item {
             return 0;
         }
         match (self.agent.as_ref().map(|agent| agent.status.as_str()), self.report_state()) {
+            _ if self.queued.is_some() => 1,
             (Some("blocked"), _) => 0,
             _ if self.ci_group().is_some() || self.recover_group().is_some() => 1,
             (_, Some("needs-you")) => 1,
@@ -198,6 +220,9 @@ impl Item {
 
     // A turn under way has most likely taken up what the last report asked.
     pub fn next_for_you(&self) -> Option<&str> {
+        if let Some(queued) = &self.queued {
+            return queued.blocked.as_ref().map(|_| "start it anyway or drop the wait");
+        }
         if self.agent.as_ref().is_some_and(|agent| agent.status == "blocked") {
             return Some(ANSWER_IN_SPACE);
         }
@@ -207,7 +232,18 @@ impl Item {
         self.report.as_ref()?.next_for_you()
     }
 
+    pub fn queued_note(&self) -> Option<String> {
+        let queued = self.queued.as_ref()?;
+        Some(match &queued.blocked {
+            Some(blocked) => blocked.clone(),
+            None => format!("after {}", queued.after.iter().map(|(address, state)| format!("{address}: {state}")).collect::<Vec<_>>().join(" · ")),
+        })
+    }
+
     pub fn summary(&self) -> String {
+        if let Some(note) = self.queued_note() {
+            return note;
+        }
         let Some(git) = &self.git else {
             return "Claude session outside a task worktree".to_string();
         };
@@ -249,7 +285,9 @@ impl Item {
         json!({
             "name": self.name,
             "place": self.place,
-            "kind": if self.is_task() { "task" } else { "session" },
+            "kind": if self.queued.is_some() { "queued" } else if self.is_task() { "task" } else { "session" },
+            "after": self.queued.as_ref().map(|queued| queued.after.iter().map(|(address, state)| json!({ "address": address, "state": state })).collect::<Vec<_>>()),
+            "blocked": self.queued.as_ref().and_then(|queued| queued.blocked.clone()),
             "group": self.group().title(),
             "summary": self.summary(),
             "repo": self.repo,
@@ -417,9 +455,14 @@ pub fn gather() -> Result<Vec<Item>> {
                 recover: state.as_deref().and_then(|state| crate::recover::load(state, &address)),
                 routine: state.as_deref().and_then(|state| crate::routines::run_of(state, &address)).map(|(id, _)| id),
                 push_waits: state.as_deref().and_then(|state| tasks::pending_push(state, &address)),
+                queued: None,
                 name: task,
             });
         }
+    }
+    if let Some(state) = state.as_deref() {
+        let queued: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(|(wait, after)| Item::queued_from(&wait, after)).collect();
+        items.extend(queued);
     }
     for agent in &agents {
         let workspace = agent["workspace_id"].as_str().unwrap_or_default().to_string();
@@ -450,6 +493,7 @@ pub fn gather() -> Result<Vec<Item>> {
             recover: None,
             routine: None,
             push_waits: None,
+            queued: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -469,13 +513,14 @@ pub(crate) mod tests {
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
-                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None, kind: None,
+                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None, kind: None, landed: None,
             }),
             question: None,
             ci: None,
             recover: None,
             routine: None,
             push_waits: None,
+            queued: None,
         }
     }
 
@@ -733,11 +778,53 @@ pub(crate) mod tests {
         assert_eq!(item.to_json()["push_permission"], "task");
         item.question = Some(Message {
             id: "q".to_string(), at: 0, from: "billing@web".to_string(), to: "you".to_string(), text: "Which?".to_string(), held: false, report: None, ended: false,
-            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, answered: false, waits: true }), about: None, kind: None,
+            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, answered: false, waits: true }), about: None, kind: None, landed: None,
         });
         let shown = item.to_json();
         assert_eq!(shown["question"]["kept_for_user"], true);
         assert_eq!(shown["question"]["options"][0]["label"], "A");
         assert_eq!(shown["report"]["summary"], "plan written");
+    }
+
+    fn queued(state: &Path, blocked: Option<&str>) -> Vec<Item> {
+        let wait = json!({ "task": "web-billing", "repo": "/repos/web", "after": [{ "address": "billing@api", "repo": "/repos/api" }], "prompt": "Use the rounding field", "by": "lead", "at": 4_000_000_000u64, "blocked": blocked });
+        crate::state::write(&state.join("after").join("web-billing@web.json"), wait.to_string()).unwrap();
+        let mut billing = task(Some("idle"), Some("ready"), 0);
+        billing.place = "api".to_string();
+        billing.ci = Some(watched(crate::ci::State::Running, true));
+        let mut items = vec![billing];
+        let shown: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(|(wait, after)| Item::queued_from(&wait, after)).collect();
+        items.extend(shown);
+        items
+    }
+
+    #[test]
+    fn a_queued_task_shows_under_queued_with_what_it_waits_for() {
+        let state = crate::sh::test_dir("status-queued");
+        let items = queued(&state, None);
+        let item = &items[1];
+        assert!(item.is_task() && item.group() == Group::Queued && Group::Queued.title() == "QUEUED");
+        assert!(Group::Idle < Group::Queued, "queued tasks come last among the tasks");
+        assert_eq!(item.summary(), "after billing@api: ci running");
+        assert_eq!(item.next_for_you(), None);
+        let shown = item.to_json();
+        assert_eq!((shown["kind"].clone(), shown["group"].clone(), shown["after"][0]["address"].clone(), shown["after"][0]["state"].clone()), (json!("queued"), json!("QUEUED"), json!("billing@api"), json!("ci running")));
+        assert!(shown["git"].is_null() && shown["path"].is_null() && shown["workspace"].is_null(), "no worktree, no Space");
+        let source = include_str!("status.rs");
+        let gather = &source[source.find("\npub fn gather(").unwrap()..];
+        assert!(gather[..gather.find("\n}\n").unwrap()].contains("tasks::waits_shown(state, &items)"), "kelpie status and the board list them");
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_blocked_wait_shows_under_needs_you_with_its_reason() {
+        let state = crate::sh::test_dir("status-blocked");
+        let items = queued(&state, Some("billing@api was dropped, so web-billing did not start"));
+        let item = &items[1];
+        assert!(item.group() == Group::NeedsYou && item.urgency() == 1);
+        assert_eq!(item.summary(), "billing@api was dropped, so web-billing did not start");
+        assert_eq!(item.next_for_you(), Some("start it anyway or drop the wait"));
+        assert_eq!(item.to_json()["blocked"], json!("billing@api was dropped, so web-billing did not start"));
+        std::fs::remove_dir_all(state).unwrap();
     }
 }

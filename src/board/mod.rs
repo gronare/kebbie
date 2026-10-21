@@ -90,6 +90,7 @@ enum Mode {
     ConfirmDrop { path: PathBuf, name: String, force: bool, nudged: bool },
     ConfirmReset { path: PathBuf, name: String, nudged: bool },
     ConfirmDone { path: PathBuf, name: String, nudged: bool },
+    ConfirmQueued { name: String, about: String, now: bool, nudged: bool },
     Filter { buffer: String },
     Card { path: PathBuf, name: String, scroll: u16, image: usize },
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
@@ -376,6 +377,7 @@ impl App {
             Mode::Questions(window) => self.handle_questions(window, key),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
             Mode::ConfirmDone { path, name, .. } => self.confirm_done(path, name, key, cancels),
+            Mode::ConfirmQueued { name, about, now, .. } => self.confirm_queued(name, about, now, key, cancels),
             Mode::ConfirmDrop { path, name, force, .. } => self.confirm_drop(path, name, force, key, cancels),
             Mode::Card { path, name, scroll, image } => self.handle_card(path, name, scroll, image, key),
             Mode::Fullscreen { path, name, scroll, index } => self.handle_fullscreen(path, name, scroll, index, key),
@@ -504,6 +506,15 @@ impl App {
             },
             Column::Work => {
                 let Some(item) = self.selected_task() else { return };
+                if let Some(note) = item.queued_note() {
+                    let (go, drop) = (keys::key(Act::Go), keys::key(Act::Drop));
+                    match act {
+                        Act::Go => self.mode = Mode::ConfirmQueued { name: item.name, about: note, now: true, nudged: false },
+                        Act::Drop => self.mode = Mode::ConfirmQueued { name: item.name, about: note, now: false, nudged: false },
+                        _ => self.show(Err(format!("{} is queued and has no worktree yet: {go} starts it now, {drop} drops the wait.", item.name))),
+                    }
+                    return;
+                }
                 match act {
                     Act::Go if item.agent.is_none() => {
                         let Some(path) = item.path.clone() else { return };

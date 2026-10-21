@@ -9,7 +9,7 @@ use crate::area_page;
 use crate::messages;
 use super::card::{draw_card, draw_fullscreen};
 use super::columns::{backlog_lines, work_lines};
-use super::confirm::{draw_done, draw_drop, draw_reset};
+use super::confirm::{draw_done, draw_drop, draw_queued, draw_reset};
 use super::detail::draw_panel;
 use super::editor::draw_editor;
 use super::header::header;
@@ -125,6 +125,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         }
         Mode::ConfirmReset { name, nudged, .. } => draw_reset(frame, name, *nudged),
         Mode::ConfirmDone { name, nudged, .. } => draw_done(frame, name, *nudged),
+        Mode::ConfirmQueued { name, about, now, nudged } => draw_queued(frame, name, about, *now, *nudged),
         Mode::ConfirmDrop { name, force, nudged, .. } => draw_drop(frame, name, *force, *nudged),
         Mode::Filter { buffer } => draw_filter(frame, app, buffer),
         Mode::ConfirmPush { .. } => modal_hits = draw_push(frame, app),

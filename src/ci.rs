@@ -271,6 +271,12 @@ pub fn forget(state: &Path, address: &str) {
     let _ = fs::remove_file(file(state, address));
 }
 
+pub fn keep_watching(state: &Path, address: &str) {
+    if let Some(watch) = load(state, address) {
+        let _ = save(state, &Watch { close: false, ..watch });
+    }
+}
+
 pub fn all(state: &Path) -> Vec<Watch> {
     let Ok(entries) = fs::read_dir(dir(state)) else { return Vec::new() };
     let mut watches: Vec<Watch> = entries.filter_map(|entry| {

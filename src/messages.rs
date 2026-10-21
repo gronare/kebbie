@@ -34,6 +34,7 @@ pub struct Message {
     pub question: Option<Question>,
     pub about: Option<String>,
     pub kind: Option<String>,
+    pub landed: Option<String>,
 }
 
 // A question a task put to the user through kelpie: its options as (label, meaning), the recommended one (1-based), the plan to read (a file, or vault:<note>), and whether the lead kept it for the user while they were away.
@@ -113,6 +114,7 @@ pub fn fold(log: &str) -> Vec<Message> {
                 question: question_from(&record),
                 about: record["about"].as_str().map(str::to_string),
                 kind: record["kind"].as_str().map(str::to_string),
+                landed: record["landed"].as_str().map(str::to_string),
             }),
             None => {
                 let Some(message) = messages.iter_mut().find(|message| message.id == id) else { continue };
@@ -502,10 +504,14 @@ pub fn log_report(from: &str, report: &Report, text: &str) -> Result<()> {
     append(&json!({ "id": id, "at": now(), "from": from, "to": LEAD_LABEL, "text": text, "state": "logged", "report": { "state": report.state, "next": report.next } }))
 }
 
-// The end of a task's life, so a later task by the same name does not inherit its reports.
-pub fn log_end(task: &str, repo: &str, how: &str) -> Result<()> {
+// The end of a task's life, so a later task by the same name does not inherit its reports; landed is the "sha subject" lines a done task put on the default branch.
+pub fn log_end(task: &str, repo: &str, how: &str, landed: Option<&str>, kind: Option<&str>) -> Result<()> {
     let id = new_id("end");
-    append(&json!({ "id": id, "at": now(), "from": "kelpie", "to": peers::address(task, repo), "text": format!("{task} ended ({how})"), "state": "ended" }))
+    append(&json!({ "id": id, "at": now(), "from": "kelpie", "to": peers::address(task, repo), "text": format!("{task} ended ({how})"), "state": "ended", "landed": landed, "kind": kind }))
+}
+
+pub fn ended_how(message: &Message) -> Option<&str> {
+    message.text.rsplit_once(" ended (")?.1.strip_suffix(')').filter(|_| message.ended)
 }
 
 // Each session's latest report since its address last ended, by its address.
@@ -768,7 +774,7 @@ mod tests {
 
     #[test]
     fn the_lead_is_copied_on_new_messages_between_others() {
-        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false, report: None, ended: false, question: None, about: None, kind: None };
+        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false, report: None, ended: false, question: None, about: None, kind: None, landed: None };
         let messages = [message("1", "a@x", "b@x"), message("2", "a@x", "lead"), message("3", "lead", "b@x"), message("4", "b@x", "a@x")];
         let ids = |seen| copies_for_lead(&messages, seen).iter().map(|message| message.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(0), ["1", "4"]);
@@ -799,7 +805,7 @@ mod tests {
     #[test]
     fn the_lead_is_copied_on_reports_to_it() {
         let report = Some(Report { state: "ready".to_string(), next: "push and close".to_string() });
-        let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false, question: None, about: None, kind: None }];
+        let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false, question: None, about: None, kind: None, landed: None }];
         assert_eq!(copies_for_lead(&messages, 0).len(), 1);
         assert_eq!(report_line(&messages[0]), "- a@x (ready): done — you: push and close");
     }

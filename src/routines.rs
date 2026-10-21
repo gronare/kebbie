@@ -588,7 +588,7 @@ pub fn ok(cwd: &Path, summary: &str) -> Result<String> {
     state.last_outcome = Some(Outcome::Ok);
     state.last_summary = Some(summary);
     save_state(&dir, &id, &state)?;
-    crate::tasks::drop(cwd, None, false).map(|said| format!("Recorded {id} as ok. {said}"))
+    crate::tasks::drop_routine_ok(cwd).map(|said| format!("Recorded {id} as ok. {said}"))
 }
 
 fn ago(seconds: u64) -> String {

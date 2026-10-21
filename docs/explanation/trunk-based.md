@@ -32,6 +32,14 @@ Without a pull request, the default branch is where CI runs, so a task is finish
 
 The board does the watching while it is open, every 30 seconds, and the watch is kept in the state directory, so it picks up again after a restart. Set `[ci] watch = false` for a repo whose CI says nothing useful, and its tasks close right after the push. See [`kelpie ci`](../reference/commands.md#kelpie-ci---json).
 
+## Work that waits for other work
+
+Sometimes one change has to land before another can start: an API field before the page that shows it. kelpie does not stack the second branch on the first. Stacked, the second task would carry the first one's commits through its own review and push, and every rewrite of the first (a review fix, a tidy, a rebase) would leave the second conflicting with code it never wrote. Instead the second task waits, and starts from the default branch once the first has landed there.
+
+`kelpie start web-billing "<prompt>" --repo web --after billing@api` queues it. While it waits it has no worktree, Space or Claude, only its place under Queued on the board. kelpie counts the first task as finished when it has ended as done. In a repo where kelpie watches CI, a task closes as done only once CI is green for what it pushed, so the second task starts on a default branch CI has passed; if you close the first task as done while its CI still runs, kelpie keeps watching that CI for the waiting task and starts it on green. A task closed by `kelpie routine ok` counts as done too. Without CI, the first task's commits on the default branch are enough. A task that lands no commits, an investigation that ends with a report, is finished when it ends as done.
+
+While the first task is still open, the second one waits quietly, whatever holds the first up: CI running or red, a review, a conflict its Claude is resolving. Those are the first task's business. When the first task is dropped or reset instead, is closed as done while its CI is red, or disappears without ending as done, the second one does not start and does not go away either: it moves to Needs you with the reason. Dropping the first often means the approach changed, not that the second is unwanted, so whether it starts anyway or goes is your call. See [`kelpie after`](../reference/commands.md#kelpie-after-name).
+
 ## Pushing in parts
 
 A task does not have to land all at once. `kelpie push --through <sha>`, or `p` in the push window, pushes the commits up to one and keeps the task open, with the rest of its branch rebased on top. A long task can land its safe first steps while it keeps working. See [Push part of a task](../how-to/push-part-of-a-task.md).

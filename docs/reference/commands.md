@@ -29,6 +29,22 @@ Started in `bypassPermissions`, Claude shows its bypass permissions warning unti
 | `--backlog <item>` | Tie the task to a backlog item, as `kelpie link` does. |
 | `--mode <mode>` | Claude's permission mode for the task, one of Claude Code's: `default`, `acceptEdits`, `plan`, `auto`, `dontAsk` or `bypassPermissions`. Without it, the task starts in [`task.permission_mode`](configuration.md#keys), and without that in Claude Code's own default. |
 | `--no-focus` | Stay where you are. |
+| `--after <task[@repo]>` | Queue the task instead of starting it: it starts once that task has ended as done. Repeat it to wait for several. `<task>` alone means every half of that task; `<task>@<repo>` means that half. Needs a prompt, and takes no `--from`. See [`kelpie after`](#kelpie-after-name). |
+
+### `kelpie after [name]`
+
+The queued tasks, each with what it waits for and that task's state (`working`, `ci running`, `queued`, `done`, …). With a name, that task only.
+
+`kelpie start <name> "<prompt>" --after <task>` queues a task. It gets no worktree, Space or Claude while it waits; it shows under Queued on the board. A task it waits for is finished once it has ended as done: its commits are on the default branch and, where kelpie [watches its CI](#kelpie-ci---json), CI is green for them. A task with no commits is finished once it ends as done, and so is a routine's task closed by `kelpie routine ok`. Then the keeper starts the queued task from the default branch, fetched fresh, without taking focus, and its prompt opens with a line naming each task it waited for and the commits that task landed. The lead is told.
+
+A task it waits for that is still open, under CI running, with failed CI, in review or resolving a conflict keeps it waiting. A task it waits for that was dropped or reset, that was closed as done with red CI, or that is gone without ending as done, keeps it from starting: it moves to Needs you with the reason, the lead is told and `notify.command` runs with `needs-you`. It never starts by itself after that.
+
+Queueing is refused, and nothing is written, for a name that is already a task or queued, for a task that would wait for itself or in a circle, and for a task to wait for that is neither open, queued nor done. When every task named is done already, the task starts at once. Only you and the lead queue a task or change a wait. `kelpie start` on a queued name, without `--after`, is refused and names `--now` and `--drop`.
+
+| Option | Meaning |
+| --- | --- |
+| `--now` | Start it now anyway, from the default branch; its prompt says which tasks it waited for were not done. |
+| `--drop` | Drop the wait. Nothing was started; the backlog item it was queued from shows in the Backlog column again. |
 
 ### `kelpie move <name> [file ...]`
 

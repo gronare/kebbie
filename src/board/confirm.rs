@@ -36,6 +36,15 @@ impl App {
         }
     }
 
+    pub(super) fn confirm_queued(&mut self, name: String, about: String, now: bool, key: KeyEvent, cancels: bool) {
+        match key.code {
+            KeyCode::Char('y') if now => self.in_background(format!("Starting {name}…"), move || tasks::start_now(&name)),
+            KeyCode::Char('y') => self.show(tasks::drop_wait(&name)),
+            _ if cancels => {}
+            _ => self.mode = Mode::ConfirmQueued { name, about, now, nudged: true },
+        }
+    }
+
     pub(super) fn confirm_drop(&mut self, path: PathBuf, name: String, force: bool, key: KeyEvent, cancels: bool) {
         match key.code {
             KeyCode::Char('y') => match tasks::drop(&path, None, force) {
@@ -56,6 +65,11 @@ pub(super) fn draw_reset(frame: &mut Frame, name: &str, nudged: bool) {
 
 pub(super) fn draw_done(frame: &mut Frame, name: &str, nudged: bool) {
     modal(frame, "done".to_string(), confirm_lines(name, Some("Its commits are on the default branch already: its worktree is freed and its Space closes."), "Close this task as done?", nudged), 72);
+}
+
+pub(super) fn draw_queued(frame: &mut Frame, name: &str, about: &str, now: bool, nudged: bool) {
+    let (title, question) = if now { ("start now", "Start it now, before what it waits for is done?") } else { ("drop the wait", "Drop the wait? Nothing was started.") };
+    modal(frame, title.to_string(), confirm_lines(name, Some(about), question, nudged), 72);
 }
 
 pub(super) fn draw_drop(frame: &mut Frame, name: &str, force: bool, nudged: bool) {
@@ -91,5 +105,31 @@ mod tests {
         app.handle_normal(key(KeyCode::Char('z')));
         press(&mut app, key(KeyCode::Char('q')));
         assert!(matches!(app.mode, Mode::Normal), "q closes a question like esc");
+    }
+
+    #[test]
+    fn a_queued_task_starts_now_on_enter_and_drops_its_wait_on_the_drop_key_after_asking() {
+        let mut item = crate::status::tests::task(None, None, 0);
+        (item.name, item.git) = ("web-billing".to_string(), None);
+        item.queued = Some(crate::status::Queued { after: vec![("billing@api".to_string(), "ci running".to_string())], blocked: None });
+        let mut app = test_app(vec![item]);
+        let (rows, _) = render(&mut app, 100, 30);
+        let screen = rows.join("\n");
+        assert!(screen.contains("QUEUED") && screen.contains("⧗ web-billing") && screen.contains("after billing@api: ci running"), "{screen}");
+        let menu: Vec<_> = crate::board::options::task_choices(app.selected_task().as_ref(), None, None).into_iter().map(|choice| choice.act).collect();
+        assert_eq!(menu, [Some(crate::keys::Act::Go), Some(crate::keys::Act::Drop)], "its options are start now and drop the wait");
+        app.handle_normal(key(KeyCode::Char('g')));
+        assert!(matches!(&app.mode, Mode::ConfirmQueued { now: true, nudged: false, name, .. } if name == "web-billing"), "go asks before it starts the task early");
+        let (rows, _) = render(&mut app, 100, 30);
+        assert!(rows.join("\n").contains("Start it now, before what it waits for is done?"));
+        press(&mut app, key(KeyCode::Char('n')));
+        assert!(matches!(app.mode, Mode::Normal));
+        app.handle_normal(key(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::ConfirmQueued { now: false, .. }), "the drop key asks to drop the wait");
+        press(&mut app, key(KeyCode::Esc));
+        app.handle_normal(key(KeyCode::Char('p')));
+        assert!(matches!(app.mode, Mode::Normal), "a task's keys a queued row does not offer do nothing");
+        app.handle_normal(key(KeyCode::Char('s')));
+        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("web-billing is queued and has no worktree yet")), "the card key, offered on every row, says what a queued row takes");
     }
 }
