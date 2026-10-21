@@ -93,7 +93,7 @@ enum Mode {
     Filter { buffer: String },
     Card { path: PathBuf, name: String, scroll: u16, image: usize },
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
-    ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, tests: Option<evidence::Shown> },
+    ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, tests: Option<evidence::Shown>, scroll: push::Scroll },
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
@@ -380,7 +380,7 @@ impl App {
             Mode::Card { path, name, scroll, image } => self.handle_card(path, name, scroll, image, key),
             Mode::Fullscreen { path, name, scroll, index } => self.handle_fullscreen(path, name, scroll, index, key),
             Mode::Filter { buffer } => self.handle_filter(buffer, key),
-            Mode::ConfirmPush { path, commits, selected, card, tests } => self.handle_push(path, commits, selected, card, tests, key),
+            Mode::ConfirmPush { path, commits, selected, card, tests, scroll } => self.handle_push(path, commits, selected, card, tests, scroll, key),
             Mode::EditMessage(editor) => self.handle_editor(editor, key, terminal),
             Mode::Input { purpose, label, buffer } => self.handle_input(purpose, label, buffer, key, terminal),
         }
@@ -573,7 +573,7 @@ impl App {
                                 Ok(commits) if commits.is_empty() => self.show(Err(format!("{} has no commits to push.", item.name))),
                                 Ok(commits) => {
                                     let (card, tests) = (report::card_for(&path), evidence::for_path(&path));
-                                    self.mode = Mode::ConfirmPush { path, commits, selected: 0, card, tests };
+                                    self.mode = Mode::ConfirmPush { path, commits, selected: 0, card, tests, scroll: push::Scroll::default() };
                                 }
                                 Err(error) => self.show(Err(error)),
                             },

@@ -141,11 +141,12 @@ Opened by `p`. The window is in four parts, each under a header on a rule:
 - `COMMITS`: the commits that will land, with their count.
 - `MESSAGE`: the selected commit's full message, set off by a bar so it does not read as part of the card.
 
-The keys sit under a rule at the bottom.
+The keys sit under a rule at the bottom and stay there: a window taller than the screen scrolls the parts above them, keeping the selected commit in view.
 
 | Key | Action |
 | --- | --- |
 | `↑` `↓`, `j` `k` | Select a commit and read its full message. |
+| `PageUp` `PageDown`, the wheel | Scroll the window, by ten lines or three, to read the card or a long message. |
 | `e` | Edit the selected commit's message. |
 | `s` | Squash all commits into one. Claude drafts the message in the background, ready to edit. Needs two or more commits. |
 | `y` | Push every commit shown and close the task. |

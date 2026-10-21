@@ -127,7 +127,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::ConfirmDone { name, nudged, .. } => draw_done(frame, name, *nudged),
         Mode::ConfirmDrop { name, force, nudged, .. } => draw_drop(frame, name, *force, *nudged),
         Mode::Filter { buffer } => draw_filter(frame, app, buffer),
-        Mode::ConfirmPush { commits, selected, card, tests, .. } => modal_hits = draw_push(frame, commits, *selected, card.as_ref(), tests.as_ref()),
+        Mode::ConfirmPush { .. } => modal_hits = draw_push(frame, app),
         Mode::Working { label, .. } => {
             modal(frame, "kelpie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
         }

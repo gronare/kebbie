@@ -46,6 +46,10 @@ impl App {
                     window.scroll = if event.kind == MouseEventKind::ScrollUp { window.scroll.saturating_sub(3) } else { window.scroll.saturating_add(3) };
                     return None;
                 }
+                if let Mode::ConfirmPush { scroll, .. } = &mut self.mode {
+                    *scroll = scroll.by(if event.kind == MouseEventKind::ScrollUp { -3 } else { 3 });
+                    return None;
+                }
                 match hit {
                     Some(Hit::Task(_)) if normal => (self.column, self.in_messages) = (Column::Work, false),
                     Some(Hit::Entry(_)) if normal => (self.column, self.in_messages) = (Column::Backlog, false),

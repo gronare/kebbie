@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn the_commit_message_editor_takes_the_paste_at_its_cursor() {
         let mut app = test_app(Vec::new());
-        app.mode = Mode::EditMessage(Box::new(MessageEditor::new(PathBuf::from("/work/wt2.web"), Vec::new(), 0, (None, None), Rewrite::Squash, "")));
+        app.mode = Mode::EditMessage(Box::new(MessageEditor::new(PathBuf::from("/work/wt2.web"), Vec::new(), (0, crate::board::push::Scroll::default()), (None, None), Rewrite::Squash, "")));
         assert_eq!(app.take_paste("Fix the filter".to_string()), None);
         let Mode::EditMessage(editor) = &app.mode else { panic!() };
         assert_eq!(editor.text.lines(), ["Fix the filter"]);

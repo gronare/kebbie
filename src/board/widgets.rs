@@ -159,10 +159,16 @@ pub fn card_text(label: &str, text: &str, accent: Color, width: usize, max_lines
 }
 
 pub fn cut(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
+    if Span::raw(text).width() <= width {
         return text.to_string();
     }
-    text.chars().take(width.saturating_sub(1)).chain(['…']).collect()
+    let mut used = 0;
+    let mut shown: String = text.chars().take_while(|ch| {
+        used += Span::raw(ch.encode_utf8(&mut [0; 4]).to_string()).width();
+        used < width
+    }).collect();
+    shown.push('…');
+    shown
 }
 
 pub fn options_hint() -> Line<'static> {
@@ -190,7 +196,7 @@ pub(super) fn fit(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
     let mut left = width;
     let mut out = Vec::new();
     for span in spans {
-        let count = span.content.chars().count();
+        let count = span.width();
         if count <= left {
             left -= count;
             out.push(span);
@@ -210,8 +216,7 @@ pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
 
 // Sized to the wrapped text, so a long line in a narrow pane cannot push the last line, often the keys, out of the window.
 pub fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width: u16) -> Rect {
-    let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
-        .title(Span::styled(format!(" {title} "), bold(MAUVE)));
+    let block = modal_block(title);
     let width = width.min(frame.area().width.saturating_sub(4));
     let rows = Paragraph::new(lines.clone()).wrap(Wrap { trim: false }).line_count(width.saturating_sub(4));
     let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
@@ -219,6 +224,11 @@ pub fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width:
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
     area
+}
+
+pub fn modal_block(title: String) -> Block<'static> {
+    Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
+        .title(Span::styled(format!(" {title} "), bold(MAUVE)))
 }
 
 pub fn options_lines(choices: Vec<Choice>, index: usize, width: usize) -> Vec<Line<'static>> {
@@ -307,6 +317,8 @@ mod tests {
         assert_eq!(cut("abcd", 3), "ab…");
         assert_eq!(cut("åäöü", 3), "åä…");
         assert_eq!(cut("abc", 0), "…", "a zero width still yields the ellipsis, never a panic");
+        assert_eq!(cut("退款显示在页面", 7), "退款显…", "a wide character takes two cells");
+        assert_eq!(fit(vec![Span::raw("ab"), Span::raw("退款显示")], 7).to_string(), "ab退款…", "the cut line fits its seven cells");
         let line = fit(vec![Span::raw("12345"), Span::raw("678"), Span::raw("90")], 7);
         assert_eq!(line.to_string(), "123456…");
         assert_eq!(line.spans.len(), 2, "the span that overflows is the last one");

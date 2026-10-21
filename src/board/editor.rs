@@ -30,14 +30,15 @@ pub(super) struct MessageEditor {
     selected: usize,
     card: Option<(report::Card, bool)>,
     tests: Option<evidence::Shown>,
+    scroll: super::push::Scroll,
     rewrite: Rewrite,
     pub(super) text: TextArea<'static>,
     pub(super) draft: Option<Receiver<Result<String>>>,
 }
 
 impl MessageEditor {
-    pub(super) fn new(path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, (card, tests): (Option<(report::Card, bool)>, Option<evidence::Shown>), rewrite: Rewrite, message: &str) -> Self {
-        let mut editor = Self { path, commits, selected, card, tests, rewrite, text: TextArea::default(), draft: None };
+    pub(super) fn new(path: PathBuf, commits: Vec<tasks::Commit>, (selected, scroll): (usize, super::push::Scroll), (card, tests): (Option<(report::Card, bool)>, Option<evidence::Shown>), rewrite: Rewrite, message: &str) -> Self {
+        let mut editor = Self { path, commits, selected, card, tests, scroll, rewrite, text: TextArea::default(), draft: None };
         editor.set_text(message);
         editor
     }
@@ -94,8 +95,8 @@ impl App {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
-                let MessageEditor { path, commits, selected, card, tests, .. } = *editor;
-                self.mode = Mode::ConfirmPush { path, commits, selected, card, tests };
+                let MessageEditor { path, commits, selected, card, tests, scroll, .. } = *editor;
+                self.mode = Mode::ConfirmPush { path, commits, selected, card, tests, scroll };
             }
             KeyCode::Char('s') if control => {
                 let message = editor.message();
@@ -103,15 +104,15 @@ impl App {
                     self.mode = Mode::EditMessage(editor);
                     return;
                 }
-                let MessageEditor { path, selected, rewrite, card, tests, .. } = *editor;
+                let MessageEditor { path, selected, rewrite, card, tests, scroll, .. } = *editor;
                 let result = match &rewrite {
                     Rewrite::Reword(sha) => tasks::reword(&path, sha, &message),
                     Rewrite::Squash => tasks::squash(&path, &message),
                 }.and_then(|_| tasks::commits(&path));
                 match result {
                     Ok(fresh) => {
-                        let selected = if matches!(rewrite, Rewrite::Squash) { 0 } else { selected.min(fresh.len().saturating_sub(1)) };
-                        self.mode = Mode::ConfirmPush { path, commits: fresh, selected, card, tests };
+                        let (selected, scroll) = if matches!(rewrite, Rewrite::Squash) { (0, super::push::Scroll::default()) } else { (selected.min(fresh.len().saturating_sub(1)), scroll) };
+                        self.mode = Mode::ConfirmPush { path, commits: fresh, selected, card, tests, scroll };
                     }
                     Err(error) => self.show(Err(error)),
                 }
