@@ -323,7 +323,7 @@ impl Checkout {
 }
 
 // Repos open in herdr and repos with a worktree pool on disk, once each however their paths are spelled.
-fn known_repos(workspaces: &[Value], pooled: Vec<PathBuf>) -> BTreeSet<PathBuf> {
+pub(crate) fn known_repos(workspaces: &[Value], pooled: Vec<PathBuf>) -> BTreeSet<PathBuf> {
     workspaces.iter().filter_map(|workspace| workspace["worktree"]["repo_root"].as_str()).map(PathBuf::from).chain(pooled)
         .map(|repo| repo.canonicalize().unwrap_or(repo)).collect()
 }

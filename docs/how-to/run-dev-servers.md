@@ -27,6 +27,8 @@ dev_url = "https://{worktree}.test"
 
 `""` turns the link off. See [URL placeholders](../reference/configuration.md#url-placeholders).
 
+When kelpie runs on a remote machine and your browser is on your laptop, see [Open dev servers from a remote machine](open-dev-servers-from-a-remote-machine.md).
+
 ## Rename the tabs
 
 ```toml

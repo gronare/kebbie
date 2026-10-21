@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::config;
 use crate::herdr;
 use crate::lead::state_dir;
-use crate::repo::{ahead_behind, branch_exists, changed_count, default_branch, git, git_writing, is_clean, main_checkout, name_of, setup_line, slot_number, slot_path, worktrees};
+use crate::repo::{ahead_behind, branch_exists, changed_count, default_branch, git, git_writing, is_clean, main_checkout, name_of, setup_line, slot_number, slot_path, worktree_port, worktrees};
 use crate::sh::Result;
 use super::launch::{clear_tmp, open_space};
 use super::{fast_forward_main, fetch, slug};
@@ -65,6 +65,7 @@ pub(super) fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
 pub fn list(cwd: &Path) -> Result<Vec<Value>> {
     let repo = main_checkout(cwd)?;
     let upstream = default_branch(&repo)?;
+    let template = config::resolve(Some(&repo)).ok().and_then(|loaded| loaded.settings.dev_url.value);
     slots(&repo)?.into_iter().map(|slot| {
         let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
         Ok(json!({
@@ -76,6 +77,8 @@ pub fn list(cwd: &Path) -> Result<Vec<Value>> {
             "setup": setup_line(&slot.path),
             "ahead": ahead,
             "behind": behind,
+            "port": worktree_port(&slot.path),
+            "url": config::dev_url(template.as_deref(), &repo, &slot.path),
         }))
     }).collect()
 }

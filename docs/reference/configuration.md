@@ -32,6 +32,7 @@ Rules:
 | `worktree.dev_server` | string | none | either | The command the board's `w` runs in a server tab of the task's Space, with `PORT` set to the worktree's port. Unset, there is no `w`. |
 | `worktree.dev_worker` | string | none | either | A second command, such as a job runner, that `b` runs in a worker tab, with the same `PORT`. Unset, there is no `b`. |
 | `worktree.dev_url` | string | `"http://localhost:{port}"` | either | The running dev server's address, shown on the board as a link. See [URL placeholders](#url-placeholders). `""` turns the link off. |
+| `worktree.dev_route` | boolean | `false` | repo config only | Whether [`kelpie routes`](commands.md#setup-and-maintenance) writes a Caddy site for each of this repo's worktrees, at the host `dev_url` names, proxied to the worktree's port. Opt-in per repo, so a repo that serves its worktrees itself stays out. See [Open dev servers from a remote machine](../how-to/open-dev-servers-from-a-remote-machine.md). |
 | `worktree.server_name` | string | `"server"` | config.toml only | The name of the tab `w` starts, and of the Space's tag in herdr's sidebar while it runs. |
 | `worktree.worker_name` | string | `"worker"` | config.toml only | The same for `b`'s tab. |
 | `task.rules_skill` | string | `"kelpie:work-rules"` | either | The skill with the rules for how work is planned, built and committed. A task's Claude follows it, the lead checks a finished task against it, `tidy` reshapes commits by it, and the reviewer reads it. |

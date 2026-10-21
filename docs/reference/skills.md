@@ -12,6 +12,7 @@ The Claude Code plugin `kelpie@kelpie` ships these skills. You run the ones mark
 | `kelpie:review-split` | `/kelpie:review-split [base or what to review]` | Opens the [review split](review-split.md). |
 | `kelpie:history-split` | `/kelpie:history-split` | Opens `tig` in a split next to the pane. |
 | `kelpie:move-to-worktree` | `/kelpie:move-to-worktree <task name>` | Moves this session's work in progress out of the main checkout into its own worktree and Space, and continues there. |
+| `kelpie:expose-dev-servers` | `/kelpie:expose-dev-servers` | On a remote Linux machine you reach over ssh, serves each worktree's dev server through Caddy at its own host so it opens in your laptop's browser: turns on `worktree.dev_route` per repo on your yes, installs Caddy, writes `kelpie routes` to `/etc/caddy/kelpie.caddy` and reloads it, and says what DNS or the proxy in front must point where. |
 | `kelpie:make-worktree-safe` | `/kelpie:make-worktree-safe` | Audits a repo for what breaks across worktrees and, on your yes, drafts `bin/setup-worktree` and the fixes in a worktree for you to review. |
 
 ## The review hook

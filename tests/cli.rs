@@ -468,6 +468,36 @@ fn without_herdr_the_commands_that_need_it_say_so_and_the_state_dir_stays_privat
     assert!(!lab.home.join(".local").exists() && !lab.home.join(".claude").exists(), "nothing under HOME: {:?}", fs::read_dir(&lab.home).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>());
 }
 
+#[test]
+fn routes_prints_a_caddy_site_per_worktree_of_the_repos_that_opt_in() {
+    let lab = Lab::new("routes");
+    let (app, slot) = lab.task_fixture();
+    fs::write(slot.join(".env"), "PORT=3001\n").unwrap();
+    git(&app, &["worktree", "add", "--quiet", "--detach", lab.root.join("wt2.app").to_str().unwrap()]);
+    let api = lab.root.join("api");
+    fs::create_dir_all(&api).unwrap();
+    git(&api, &["init", "--quiet", "--initial-branch=main"]);
+    commit(&api, "a", "first");
+    git(&api, &["worktree", "add", "--quiet", "--detach", lab.root.join("wt1.api").to_str().unwrap()]);
+    fs::write(lab.root.join("wt1.api/.env"), "PORT=4001\n").unwrap();
+    fs::write(&lab.config, "[worktree]\ndev_url = \"https://{repo}-{number}.dev.example.com\"\n").unwrap();
+    fs::create_dir_all(lab.root.join("repos")).unwrap();
+    fs::write(lab.root.join("repos/app.toml"), "[worktree]\ndev_route = true\n").unwrap();
+    let run = |args: &[&str]| lab.command().env("KELPIE_REPO_DIRS", &lab.root).env("KELPIE_REPOS_DIR", lab.root.join("repos")).args(args).output().unwrap();
+    let routes = run(&["routes"]);
+    assert!(routes.status.success(), "{}", stderr(&routes));
+    let shown = stdout(&routes);
+    assert!(shown.starts_with("# kelpie routes:"), "{shown}");
+    assert!(shown.contains("\nhttps://app-1.dev.example.com {\n\treverse_proxy localhost:3001\n}\n"), "{shown}");
+    assert!(!shown.contains("api-1"), "api has no worktree.dev_route: {shown}");
+    assert!(shown.ends_with("# 1 site; skipped 1: no port: wt2.app; 1 repo without worktree.dev_route left out"), "{shown}");
+    assert!(stdout(&run(&["routes", "--plain-http"])).contains("\nhttp://app-1.dev.example.com {\n\treverse_proxy localhost:3001\n}\n"));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&run(&["-C", app.to_str().unwrap(), "list", "--json"]))).unwrap();
+    assert_eq!((json[0]["port"].clone(), json[0]["url"].clone()), (serde_json::json!(3001), serde_json::json!("https://app-1.dev.example.com")));
+    assert_eq!((json[1]["port"].clone(), json[1]["url"].clone()), (serde_json::Value::Null, serde_json::json!("https://app-2.dev.example.com")));
+    assert!(stdout(&run(&["-C", app.to_str().unwrap(), "list"])).contains("port 3001 · "));
+}
+
 // Five Claude sessions in herdr, all started before kelpie update, as the fake herdr shows them: billing idle, Notes focused, api mid-turn, worker idle with a background Bash running, and one herdr names no session for.
 struct Sessions {
     sleeper: std::process::Child,

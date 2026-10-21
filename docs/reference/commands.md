@@ -136,7 +136,7 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 | --- | --- |
 | `kelpie board [--overlay]` | The board. `--overlay` is the popup form, which `esc` closes. See [Board](board.md). |
 | `kelpie status [--json]` | Every task and Claude session, grouped by what it needs from you. `--json` gives `away_since`, `items` and `checkouts`; a task's `push_waits` is `user` or `lead` while a push it asked for waits for the task's tests. |
-| `kelpie list [--json]` | The pool's worktrees: each one's task or `free`, uncommitted changes, commits ahead and behind, and the first line of its setup note. |
+| `kelpie list [--json]` | The pool's worktrees: each one's task or `free`, uncommitted changes, commits ahead and behind, its port, and the first line of its setup note. `--json` adds `port` and `url`, the worktree's `dev_url` filled in, each `null` when there is none. |
 | `kelpie areas` | The vault's areas with their repo: main against origin, the last release, notes and actions. Needs the vault. |
 | `kelpie peers` | Who you are and the other task sessions, with what each is doing. |
 | `kelpie messages` | The sessions' messages, live. `--print` prints the last 30. |
@@ -185,6 +185,7 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 | `kelpie config [--repo <path>]` | The config layers found and every key with its value in effect, the layer it comes from and what it does. See [Configuration](configuration.md). |
 | `kelpie config --get <key>` | Print one machine-wide value for scripts: `worktree.server_name` or `worktree.worker_name`. |
 | `kelpie doctor` | Check this machine, with the fix for each gap. Exits non-zero on a `fail`. See [Requirements](requirements.md#what-kelpie-doctor-checks). |
+| `kelpie routes [--plain-http]` | Print a Caddy config with one site per pooled worktree that has a port, in every repo kelpie knows whose repo config sets [`worktree.dev_route = true`](configuration.md#keys): the host its `dev_url` names, `reverse_proxy localhost:<port>`. Sites keep the scheme and port `dev_url` names, so Caddy serves their TLS; `--plain-http` serves each as `http://<host>` for a proxy in front that ends TLS. A worktree without a port, a `dev_url` on localhost or without a host, or a host another worktree already has gets no site; the last comment line counts them with the reason, and the repos left out. It writes nothing. See [Open dev servers from a remote machine](../how-to/open-dev-servers-from-a-remote-machine.md). |
 | `kelpie setup vault` | Install the optional vault plugin in Claude Code, showing each `claude plugin` command and running it only on your `y`. |
 | `kelpie update` | Update everything to this machine's channel and restart idle Claude sessions. With open [kelpie issues](#kelpie-issues), it looks them up on GitHub through `gh` and asks the lead which ones the new commits likely fix. |
 | `kelpie update --check` | Fetch and show the installed versions against the channel's latest. Changes nothing else. |

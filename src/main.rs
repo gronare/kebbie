@@ -27,6 +27,7 @@ mod repo;
 mod report;
 mod restart;
 mod review;
+mod routes;
 mod routine_file;
 mod routine_page;
 mod routine_wizard;
@@ -60,7 +61,11 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie move <name> [file ...]   move work under way in the main checkout into a task: branch <name> if it
                                   exists, else the unpushed commits, plus the given uncommitted files
                                   (--pane <id> moves that herdr pane along, --no-focus stays put)
-  kelpie list [--json]            the pool's worktrees and their tasks
+  kelpie list [--json]            the pool's worktrees and their tasks, with each one's port and dev_url
+  kelpie routes [--plain-http]    print a Caddy config with a site per pooled worktree with a port, at the host its
+                                  dev_url names, proxied to localhost:<port>, for the repos that turn on
+                                  worktree.dev_route (opt-in per repo); --plain-http serves each as http://<host> for
+                                  a proxy in front that ends TLS; writes nothing
   kelpie status [--json]          every task and Claude session, grouped by what it needs from you
   kelpie board [--overlay]        the board: tasks and sessions, with keys to act on them
   kelpie areas                    the vault's areas with their repo: main against origin, last release, notes, actions
@@ -246,6 +251,7 @@ fn table(cwd: &Path) -> Result<String> {
     Ok(rows.iter().map(|row| {
         let slot = row["slot"].as_str().unwrap_or_default();
         let setup = row["setup"].as_str().unwrap_or("not set up");
+        let setup = row["port"].as_u64().map_or(setup.to_string(), |port| format!("port {port} · {setup}"));
         if row["free"].as_bool() == Some(true) {
             return format!("{slot:<22} free  · {setup}");
         }
@@ -332,6 +338,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("status") => status_text(),
         Some("board") => board::run(arguments.flag("--overlay")),
         Some("areas") => areas::print(),
+        Some("routes") => Ok(routes::print(arguments.flag("--plain-http"))),
         Some("lead") if arguments.flag("--first") => lead::keep_first(),
         Some("lead") if arguments.flag("--restart") => lead::restart(),
         Some("lead") if arguments.flag("--renew-board") => lead::renew_board(),
