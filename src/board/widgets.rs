@@ -246,8 +246,11 @@ pub fn menu_lines(choices: &[Choice], index: usize, width: usize, running: impl 
         ]).style(if active { Style::new().bg(SURFACE) } else { Style::new() }));
     }
     lines.push(Line::from(Span::styled("─".repeat(width), style(SURFACE))));
+    let rows = |about: &str| Paragraph::new(about.to_string()).wrap(Wrap { trim: false }).line_count(width as u16);
+    let tallest = choices.iter().map(|choice| rows(&choice.about)).max().unwrap_or(0);
     if let Some(choice) = choices.get(index) {
         lines.push(Line::from(Span::styled(choice.about.clone(), style(SUBTEXT))));
+        lines.extend((rows(&choice.about)..tallest).map(|_| Line::default()));
     }
     lines.push(Line::from(Span::styled("↑ ↓ choose · ⏎ run · a letter runs it directly · esc close", style(FAINT))));
     (lines, at)
@@ -267,6 +270,16 @@ mod tests {
         terminal.draw(|frame| { modal(frame, "push".to_string(), lines, 96); }).unwrap();
         let screen: String = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect();
         assert!(screen.contains("y push · esc cancel"), "{screen}");
+    }
+
+    #[test]
+    fn a_menu_keeps_its_height_while_the_choice_moves() {
+        let choices = vec![choice(Act::Go, "Go", "short"), choice(Act::Chat, "Chat", &"a long help text that wraps ".repeat(6))];
+        let heights: Vec<usize> = (0..choices.len()).map(|index| {
+            let (lines, _) = menu_lines(&choices, index, 48, |_| false, |_| "SESSION");
+            Paragraph::new(lines).wrap(Wrap { trim: false }).line_count(48)
+        }).collect();
+        assert_eq!(heights[0], heights[1], "a centred popup that changes height moves every row on each step");
     }
 
     #[test]
