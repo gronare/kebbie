@@ -982,6 +982,27 @@ fn kelpie_lead_leaves_a_hidden_chat_hidden_and_starts_no_second_one() {
     assert_eq!(changes(&lab), [["workspace", "focus", "w_lead"]], "no split, no new Claude, no zoom change");
 }
 
+#[test]
+fn herdrs_startup_starts_the_board_in_a_restored_lead_space_and_leaves_the_chat_to_herdr() {
+    let lab = Lab::new("revive-board");
+    lead_space(&lab, false, false, "w_lead:p1");
+    let answers = lab.root.join("answers");
+    fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"pid":1,"argv":["-zsh"]}]}}}"#).unwrap();
+    fs::write(answers.join("pane-run.json"), r#"{"result":{}}"#).unwrap();
+    let revived = lab.run(&["lead", "--revive-board", "--wait"]);
+    assert!(revived.status.success(), "{}", stderr(&revived));
+    let started = changes(&lab);
+    assert_eq!(started.len(), 1, "{started:?}");
+    assert_eq!(started[0][..3], ["pane", "run", "w_lead:p1"]);
+    assert!(started[0][3].ends_with("kelpie' board"), "{started:?}");
+    assert!(!lab.herdr_calls().iter().any(|call| call.iter().any(|arg| arg == "w_lead:p2")), "herdr resumes the lead's Claude itself; the chat pane is never looked at");
+
+    lead_space(&lab, false, false, "w_lead:p1");
+    let running = lab.run(&["lead", "--revive-board", "--wait"]);
+    assert!(running.status.success() && stdout(&running).is_empty(), "{}", stderr(&running));
+    assert!(changes(&lab).is_empty(), "a board already running is left alone: {:?}", changes(&lab));
+}
+
 fn routine_status(lab: &Lab) -> serde_json::Value {
     let listed = lab.run(&["routines", "--json"]);
     assert!(listed.status.success(), "{}", stderr(&listed));

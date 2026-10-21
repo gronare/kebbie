@@ -18,7 +18,9 @@ Every `warn` and `fail` comes with its fix. What it checks: [Requirements](../re
 | The `current` link is missing or points elsewhere | Restart herdr. Keep `XDG_DATA_HOME` unset for herdr, or create the link under `~/.local/share/kelpie` yourself. |
 | `Cannot tell <repo>'s default branch` | `git remote set-head origin -a` in that repo. |
 | A new task asks "Do you trust this folder?" | You have not trusted the repo in Claude Code, so kelpie leaves the answer to you. Answer it in the task's Space; kelpie then types the task's prompt in, while the keeper or an open board runs. If neither runs, paste the prompt yourself. |
-| A task shows `no Space` | Its Space or Claude is gone, for example after a herdr restart. Press `g` to restart it; it resumes its last conversation. |
+| A task shows `no Space` | Its Space was closed. herdr reopens Spaces after a restart, so a restart alone does not cause it. Press `g` to restart the task; it resumes its last conversation. |
+| A task shows `no Claude` | Its Claude exited, or herdr has not resumed it yet after a restart: herdr resumes each Claude once a client is attached. Still there with herdr open, or with herdr's `[session] resume_agents_on_restore = false`: press `g`. |
+| The lead Space shows a shell where the board was | herdr's startup starts the board again within a minute of herdr starting. If you quit the board yourself, go to the lead (`kelpie lead`, or herdr's `kelpie.lead` action) and it starts again. `lead.log` in the state directory says what the startup did. |
 | `kelpie update` refuses on the `release` channel | The install root has uncommitted changes or is not on a release tag. Move your work elsewhere, or run `kelpie update --stable` on a clean checkout. |
 | `kelpie lead --restart` refuses | The lead is working or waiting on a question. Run it once the lead is idle. |
 | The lead cannot push a task | You have not given it push permission for that task (`a`), or under a repo-wide permission the reviewer has not passed the current code. The task waits for you under Ready to push. |

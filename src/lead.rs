@@ -280,12 +280,9 @@ pub fn restart() -> Result<String> {
 
 // Whatever was quit or closed since the lead Space was made comes back when the user goes there: the board, or the lead's Claude.
 fn repair(lead: &str) -> Result<()> {
-    let executable = executable()?.display().to_string();
     let places = places(lead)?;
     let board = places.board.ok_or("The lead Space has lost its board pane; close the Space and open the lead again")?;
-    if !runs_kelpie(&board, "board") && herdr::foreground(&board)?.is_none() {
-        herdr::run_in_pane(&board, &format!("{} board", crate::sh::quote(&executable)))?;
-    }
+    start_board_at_shell(&board)?;
     close_messages(places.messages.as_deref())?;
     match places.chat {
         Some(pane) if herdr::foreground(&pane)?.is_none() => new_chat(&pane)?,
@@ -293,6 +290,57 @@ fn repair(lead: &str) -> Result<()> {
         None => new_chat(&herdr::split_right(&board, &lead_dir()?, "0.68")?)?,
     }
     Ok(())
+}
+
+fn board_command() -> Result<String> {
+    Ok(format!("{} board", crate::sh::quote(&executable()?.to_string_lossy())))
+}
+
+fn start_board_at_shell(board: &str) -> Result<bool> {
+    if runs_kelpie(board, "board") || herdr::foreground(board)?.is_some() {
+        return Ok(false);
+    }
+    herdr::run_in_pane(board, &board_command()?)?;
+    Ok(true)
+}
+
+const REVIVE_TRIES: usize = 30;
+const REVIVE_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
+
+// herdr's startup hook must not wait on herdr, so the waiting half runs in its own session.
+pub fn revive_board_detached() -> Result<String> {
+    use std::os::unix::process::CommandExt;
+    let file = state_dir()?.join("lead.log");
+    let log = crate::state::append_to(&file).map_err(|error| format!("{}: {error}", file.display()))?;
+    let mut command = std::process::Command::new(executable()?);
+    command.args(["lead", "--revive-board", "--wait"]).stdin(std::process::Stdio::null())
+        .stdout(log.try_clone().map_err(|error| error.to_string())?).stderr(log)
+        .env_remove("HERDR_PANE_ID").env_remove("HERDR_TAB_ID").env_remove("HERDR_WORKSPACE_ID");
+    // SAFETY: setsid is async-signal-safe and touches nothing but the child.
+    unsafe { command.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) }) };
+    command.spawn().map_err(|error| format!("lead --revive-board: {error}"))?;
+    Ok(String::new())
+}
+
+fn lead_board() -> Option<String> {
+    let lead = lead_workspace(&herdr::workspaces().ok()?)?;
+    places(&lead).ok()?.board
+}
+
+fn wait_for_board(mut look: impl FnMut() -> Option<String>, mut pause: impl FnMut(), tries: usize) -> Option<String> {
+    for _ in 0..tries {
+        if let Some(board) = look() {
+            return Some(board);
+        }
+        pause();
+    }
+    None
+}
+
+// herdr restores the lead Space but not the board in it, and resumes the chat's Claude itself, so only the board pane is touched.
+pub fn revive_board() -> Result<String> {
+    let Some(board) = wait_for_board(lead_board, || std::thread::sleep(REVIVE_PAUSE), REVIVE_TRIES) else { return Ok(String::new()) };
+    Ok(if start_board_at_shell(&board)? { format!("board: started in {board} after herdr's restore") } else { String::new() })
 }
 
 // A build still writing the binary changes its mtime between looks; only the same mtime on two looks is a finished one.
@@ -331,7 +379,7 @@ pub fn renew_board() -> Result<String> {
     }
     for _ in 0..10 {
         if herdr::foreground(&board)?.is_none() {
-            herdr::run_in_pane(&board, &format!("{} board", crate::sh::quote(&executable()?.to_string_lossy())))?;
+            herdr::run_in_pane(&board, &board_command()?)?;
             return Ok("board: restarted on the new kelpie".to_string());
         }
         herdr::send_keys(&board, &["ctrl+c"])?;
@@ -352,7 +400,7 @@ fn create() -> Result<String> {
     let dir = lead_dir()?;
     let space = herdr::create_workspace(&dir, LEAD_LABEL)?;
     let board = space.root_pane_id.ok_or("herdr created the lead Space without a pane")?;
-    herdr::run_in_pane(&board, &format!("{} board", crate::sh::quote(&executable()?.to_string_lossy())))?;
+    herdr::run_in_pane(&board, &board_command()?)?;
     let chat = herdr::split_right(&board, &dir, "0.68")?;
     let started = new_chat(&chat);
     herdr::focus_workspace(&space.workspace_id)?;
@@ -443,6 +491,25 @@ mod tests {
         let mut growing = (0..).map(at);
         assert_eq!(settled(|| growing.next().flatten(), || {}, 5), None, "a build that never settles is not renewed onto");
         assert_eq!(settled(|| None, || {}, 3), None, "a missing binary is never settled");
+    }
+
+    #[test]
+    fn the_board_is_revived_once_the_lead_space_shows_up_and_never_after_the_wait() {
+        let mut looks = 0;
+        let mut pauses = 0;
+        let late = wait_for_board(|| { looks += 1; (looks == 4).then(|| "w_lead:p1".to_string()) }, || pauses += 1, REVIVE_TRIES);
+        assert_eq!((late.as_deref(), looks, pauses), (Some("w_lead:p1"), 4, 3), "a lead Space herdr restores late is still found");
+        let (mut looks, mut pauses) = (0, 0);
+        assert_eq!(wait_for_board(|| { looks += 1; None }, || pauses += 1, REVIVE_TRIES), None);
+        assert_eq!(looks, REVIVE_TRIES, "without a lead Space the wait ends quietly");
+        assert!(REVIVE_PAUSE * REVIVE_TRIES as u32 <= std::time::Duration::from_secs(60) && REVIVE_PAUSE >= std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn herdrs_startup_revives_the_board_apart_from_the_keeper() {
+        let script = include_str!("../scripts/herdr-startup.sh");
+        let revive = script.lines().find(|line| line.ends_with("kelpie\" lead --revive-board")).expect("the startup revives the board");
+        assert!(!revive.contains("&&") && !script.contains("enabled"), "the revive runs whether or not the keeper is enabled");
     }
 
     #[test]

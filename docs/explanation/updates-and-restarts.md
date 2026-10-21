@@ -77,6 +77,12 @@ It starts in three places, and each starts it only when none runs:
 
 `kelpie keeper --status` shows whether one runs, its pid, binary and uptime, and each routine's last run; `kelpie keeper --stop` stops it after the routine under way.
 
+## After herdr restarts
+
+herdr saves its Spaces and panes and restores them when its server starts again. A pane that ran Claude comes back with that conversation resumed, unless herdr's `[session] resume_agents_on_restore` is off, so tasks and the lead keep their Space and their Claude. herdr resumes each Claude once a client is attached to show it, so a task can show `no Claude` for a moment after the restart.
+
+Any other program comes back as a bare shell, the board in the lead Space too. herdr's startup hook therefore runs `kelpie lead --revive-board`, which returns at once and leaves a background kelpie to wait for the lead Space, looking every 2 seconds for up to a minute. When the lead Space's board pane sits at a shell prompt, it starts the board there. A board already running, or a program of your own in that pane, is left alone, and the lead's chat is left to herdr. Without a lead Space it does nothing. It runs whether or not the keeper is enabled, and only when the herdr server starts, never when the keeper restarts itself after an update, so a board you quit on purpose stays quit until herdr starts again or you go to the lead. What it did is in `lead.log` in the state directory.
+
 ## Related
 
 - [Switch update channel](../how-to/switch-update-channel.md)
