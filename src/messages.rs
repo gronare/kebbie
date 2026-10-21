@@ -231,12 +231,18 @@ pub fn indented(text: &str) -> String {
     text.split('\n').collect::<Vec<_>>().join("\n  ")
 }
 
-fn deliver(session: &Session, from: &str, text: &str) -> std::result::Result<(), &'static str> {
+fn typed_form(message: &Message) -> String {
+    if message.kind.as_deref() == Some(PROMPT_KIND) { message.text.clone() } else { delivered(&message.from, &message.text) }
+}
+
+type TypeInto<'a> = &'a mut dyn FnMut(&str, &str, &str) -> std::result::Result<(), crate::typing::Refused>;
+
+fn deliver(session: &Session, text: &str, type_into: TypeInto) -> std::result::Result<(), &'static str> {
     if let Some(reason) = hold_reason(session) {
         return Err(reason);
     }
     let pane = session.pane.as_deref().unwrap_or_default();
-    match crate::typing::prompt(pane, &delivered(from, text), &session.address) {
+    match type_into(pane, text, &session.address) {
         Ok(()) => Ok(()),
         Err(crate::typing::Refused::Draft) => Err("has a draft in its input box"),
         Err(crate::typing::Refused::Unreadable) => Err("shows no input box to type into"),
@@ -303,22 +309,75 @@ fn stale(message: &Message, open: &[&Message]) -> bool {
 }
 
 fn flush_held(sessions: &[Session]) -> Result<usize> {
-    let messages = load();
+    flush_held_in(&state_dir()?, sessions, &mut crate::typing::prompt, &heard)
+}
+
+fn heard(address: &str, since: u64) -> bool {
+    let Some((task, repo)) = address.split_once('@') else { return false };
+    let Some(repo) = crate::repo::checkout_named(repo) else { return false };
+    crate::tasks::slots(&repo).ok().and_then(|slots| slots.into_iter().find(|slot| slot.task.as_deref() == Some(task)))
+        .and_then(|slot| crate::tasks::transcript(&repo, &slot)).and_then(|file| fs::read_to_string(file).ok())
+        .is_some_and(|text| typed_by_user_since(&text, since))
+}
+
+fn typed_by_user_since(transcript: &str, since: u64) -> bool {
+    crate::review::user_messages_at(transcript).iter().any(|(at, text)| at.is_some_and(|at| at >= since * 1000) && !text.starts_with("[from "))
+}
+
+fn flush_held_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &dyn Fn(&str, u64) -> bool) -> Result<usize> {
+    let messages = load_in(dir);
     let open = questions::open_now(&messages);
     let mut delivered = 0;
-    for message in messages.iter().filter(|message| message.held) {
+    let mut held: Vec<&Message> = messages.iter().filter(|message| message.held).collect();
+    held.sort_by_key(|message| message.kind.as_deref() != Some(PROMPT_KIND));
+    for message in held {
         if stale(message, &open) {
-            append(&json!({ "id": message.id, "at": now(), "state": "dropped" }))?;
+            append_in(dir, &json!({ "id": message.id, "at": now(), "state": "dropped" }), ROTATE_BYTES)?;
             continue;
         }
         let Some(session) = sessions.iter().find(|session| session.address == message.to) else { continue };
         let open_question = open.iter().find(|question| question.from == session.address).map(|question| question.id.as_str());
-        if question_hold(message.about.as_deref(), open_question).is_none() && deliver(session, &message.from, &message.text).is_ok() {
-            append(&json!({ "id": message.id, "at": now(), "state": "delivered" }))?;
+        if question_hold(message.about.as_deref(), open_question).is_some() || hold_reason(session).is_some() {
+            continue;
+        }
+        let prompt = message.kind.as_deref() == Some(PROMPT_KIND);
+        if prompt && heard(&message.to, message.at) {
+            append_in(dir, &json!({ "id": message.id, "at": now(), "state": "dropped" }), ROTATE_BYTES)?;
+            crate::routines::trust_answered_in(dir, &message.to);
+            continue;
+        }
+        if deliver(session, &typed_form(message), type_into).is_ok() {
+            append_in(dir, &json!({ "id": message.id, "at": now(), "state": "delivered" }), ROTATE_BYTES)?;
+            if prompt {
+                crate::routines::trust_answered_in(dir, &message.to);
+            }
             delivered += 1;
         }
     }
     Ok(delivered)
+}
+
+pub const PROMPT_KIND: &str = "prompt";
+
+pub fn hold_prompt(to: &str, text: &str) -> Result<()> {
+    hold_prompt_in(&state_dir()?, to, text)
+}
+
+fn hold_prompt_in(dir: &Path, to: &str, text: &str) -> Result<()> {
+    let _lock = if holds(dir) { None } else { Lock::take_in(dir, true)? };
+    append_in(dir, &json!({ "id": new_id("prompt"), "at": now(), "from": "kelpie", "to": to, "text": text, "state": "held", "kind": PROMPT_KIND }), ROTATE_BYTES)
+}
+
+pub fn drop_held_prompts(to: &str) -> Result<()> {
+    drop_held_prompts_in(&state_dir()?, to)
+}
+
+fn drop_held_prompts_in(dir: &Path, to: &str) -> Result<()> {
+    let _lock = if holds(dir) { None } else { Lock::take_in(dir, true)? };
+    for message in load_in(dir).iter().filter(|message| message.held && message.to == to && message.kind.as_deref() == Some(PROMPT_KIND)) {
+        append_in(dir, &json!({ "id": message.id, "at": now(), "state": "dropped" }), ROTATE_BYTES)?;
+    }
+    Ok(())
 }
 
 // Held messages to sessions that are free again; the board runs this every few seconds, and so does `kelpie messages`.
@@ -348,7 +407,7 @@ pub fn send_locked(from: &str, recipients: &[&Session], text: &str, sessions: &[
         let outcome = match question_hold(about, question.map(|question| question.id.as_str())) {
             Some(reason) => Err(reason),
             None if earlier_held && !answering => Err("still has earlier messages held"),
-            None => deliver(session, from, text),
+            None => deliver(session, &delivered(from, text), &mut crate::typing::prompt),
         };
         let id = new_id(&index.to_string());
         let mut record = json!({ "id": id, "at": now(), "from": from, "to": session.address, "text": text, "state": if outcome.is_ok() { "delivered" } else { "held" } });
@@ -546,9 +605,9 @@ fn unread_in(dir: &Path) -> Result<String> {
     Ok(sections.join("\n\n"))
 }
 
-// What sessions said to each other: not a report, a task's end marker, a question, an answer from the board or the lead's copy of one.
+// What sessions said to each other: not a report, a task's end marker, a question, an answer from the board, the lead's copy of one, or a task's own prompt waiting to be typed.
 fn is_told(message: &Message) -> bool {
-    message.report.is_none() && !message.ended && message.question.is_none() && !is_copy(message) && message.kind.as_deref() != Some("answer")
+    message.report.is_none() && !message.ended && message.question.is_none() && !is_copy(message) && !matches!(message.kind.as_deref(), Some("answer" | PROMPT_KIND))
 }
 
 fn is_copy(message: &Message) -> bool {
@@ -804,6 +863,93 @@ mod tests {
         assert!(stale(&relay[0], &[]));
         let plain = fold(r#"{"id":"m2","at":11,"from":"kelpie","to":"lead","text":"rebased","state":"held"}"#);
         assert!(!stale(&plain[0], &[]));
+    }
+
+    #[test]
+    fn a_prompt_held_behind_the_trust_prompt_is_typed_as_is_once_the_box_is_empty_and_never_again() {
+        let dir = state("trust-prompt");
+        hold_prompt_in(&dir, "billing@app", "Fix the flaky test").unwrap();
+        let held = load_in(&dir);
+        assert!(held[0].held && held[0].kind.as_deref() == Some(PROMPT_KIND) && held[0].to == "billing@app");
+        let rule = "────────────────────────────────────────";
+        let trust = "Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit".to_string();
+        let drafted = ["⏺ Hi", rule, "❯ my own words", rule].join("\n");
+        let empty = ["⏺ Hi", rule, "❯ ", rule].join("\n");
+        let screens = std::cell::RefCell::new(vec![trust, drafted, empty.clone(), empty].into_iter());
+        let typed = std::cell::RefCell::new(Vec::new());
+        let mut type_into = |pane: &str, text: &str, label: &str| match crate::typing::draft(&screens.borrow_mut().next().unwrap_or_default()) {
+            crate::typing::Draft::Empty => { typed.borrow_mut().push((pane.to_string(), text.to_string(), label.to_string())); Ok(()) }
+            crate::typing::Draft::Typed(_) => Err(crate::typing::Refused::Draft),
+            crate::typing::Draft::Unreadable => Err(crate::typing::Refused::Unreadable),
+        };
+        let session = |status: &str| Session { address: "billing@app".to_string(), task: Some("billing".to_string()), pane: Some("p_1".to_string()), status: Some(status.to_string()) };
+        assert_eq!(flush_held_in(&dir, &[session("blocked")], &mut type_into, &|_, _| false).unwrap(), 0, "a Claude herdr calls blocked is not typed into");
+        assert_eq!(flush_held_in(&dir, &[session("idle")], &mut type_into, &|_, _| false).unwrap(), 0, "the trust prompt is no input box");
+        assert_eq!(flush_held_in(&dir, &[session("idle")], &mut type_into, &|_, _| false).unwrap(), 0, "the user's draft is never typed over");
+        assert_eq!(flush_held_in(&dir, &[session("idle")], &mut type_into, &|_, _| false).unwrap(), 1);
+        assert_eq!(flush_held_in(&dir, &[session("idle")], &mut type_into, &|_, _| false).unwrap(), 0);
+        assert_eq!(typed.into_inner(), [("p_1".to_string(), "Fix the flaky test".to_string(), "billing@app".to_string())], "typed once, as the task's own prompt and not as a message from kelpie");
+        assert!(!load_in(&dir)[0].held);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_start_drops_a_prompt_still_held_for_the_task_and_nothing_else() {
+        let dir = state("drop-prompt");
+        write_log(&dir, &[told("m1", 1, "lead", "billing@app", "held")]);
+        hold_prompt_in(&dir, "billing@app", "Fix the flaky test").unwrap();
+        hold_prompt_in(&dir, "search@app", "Index faster").unwrap();
+        drop_held_prompts_in(&dir, "billing@app").unwrap();
+        let held: Vec<(String, String)> = load_in(&dir).into_iter().filter(|message| message.held).map(|message| (message.to, message.text)).collect();
+        assert_eq!(held, [("billing@app".to_string(), "text of m1".to_string()), ("search@app".to_string(), "Index faster".to_string())]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_held_prompt_the_user_already_gave_by_hand_is_dropped_and_never_typed() {
+        let dir = state("heard-prompt");
+        hold_prompt_in(&dir, "billing@app", "Fix the flaky test").unwrap();
+        let typed = std::cell::RefCell::new(Vec::new());
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let session = Session { address: "billing@app".to_string(), task: Some("billing".to_string()), pane: Some("p_1".to_string()), status: Some("idle".to_string()) };
+        assert_eq!(flush_held_in(&dir, &[session], &mut type_into, &|address, _| address == "billing@app").unwrap(), 0);
+        assert!(typed.into_inner().is_empty(), "a second copy of the prompt would start a second turn");
+        assert!(!load_in(&dir)[0].held);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_a_word_the_user_typed_after_the_hold_counts_as_the_prompt_given_by_hand() {
+        let entry = |stamp: &str, text: &str| json!({ "type": "user", "timestamp": stamp, "message": { "role": "user", "content": text } }).to_string();
+        let held_at = crate::typing::iso_millis("2026-10-21T10:00:00.000Z").unwrap() / 1000;
+        let older = entry("2026-10-20T09:00:00.000Z", "Fix the login page");
+        assert!(!typed_by_user_since(&older, held_at), "an older conversation's turns do not drop a newly held prompt");
+        let told = entry("2026-10-21T10:00:05.000Z", &delivered("lead", "also check the cache"));
+        assert!(!typed_by_user_since(&told, held_at), "a message kelpie delivered is not the user's word");
+        let typed = entry("2026-10-21T10:00:05.000Z", "Fix the flaky test");
+        assert!(typed_by_user_since(&[older, told, typed].join("\n"), held_at), "a word typed after the hold drops the prompt");
+    }
+
+    #[test]
+    fn a_tell_held_before_the_prompt_never_makes_the_prompt_look_given_in_the_same_pass() {
+        let dir = state("tell-then-prompt");
+        write_log(&dir, &[told("m1", 1, "lead", "billing@app", "held")]);
+        hold_prompt_in(&dir, "billing@app", "Fix the flaky test").unwrap();
+        let typed = std::cell::RefCell::new(Vec::new());
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let heard = |_: &str, _: u64| typed.borrow().iter().any(|text: &String| text.starts_with("[from "));
+        let session = Session { address: "billing@app".to_string(), task: Some("billing".to_string()), pane: Some("p_1".to_string()), status: Some("idle".to_string()) };
+        assert_eq!(flush_held_in(&dir, &[session], &mut type_into, &heard).unwrap(), 2, "the tell landing in the transcript first would have dropped the prompt");
+        assert_eq!(typed.borrow()[0], "Fix the flaky test", "the task's prompt goes in ahead of what others told it");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_held_prompt_is_never_echoed_to_the_lead_as_a_message_between_sessions() {
+        let dir = state("prompt-not-told");
+        hold_prompt_in(&dir, "billing@app", "Fix the flaky test").unwrap();
+        assert_eq!(unread_in(&dir).unwrap(), "");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     fn state(name: &str) -> PathBuf {

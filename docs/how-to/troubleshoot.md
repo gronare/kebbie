@@ -17,6 +17,7 @@ Every `warn` and `fail` comes with its fix. What it checks: [Requirements](../re
 | `kelpie: command not found` in a task or the lead | `ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie`, with `~/.local/bin` on your `PATH`. |
 | The `current` link is missing or points elsewhere | Restart herdr. Keep `XDG_DATA_HOME` unset for herdr, or create the link under `~/.local/share/kelpie` yourself. |
 | `Cannot tell <repo>'s default branch` | `git remote set-head origin -a` in that repo. |
+| A new task asks "Do you trust this folder?" | You have not trusted the repo in Claude Code, so kelpie leaves the answer to you. Answer it in the task's Space; kelpie then types the task's prompt in, while the keeper or an open board runs. If neither runs, paste the prompt yourself. |
 | A task shows `no Space` | Its Space or Claude is gone, for example after a herdr restart. Press `g` to restart it; it resumes its last conversation. |
 | `kelpie update` refuses on the `release` channel | The install root has uncommitted changes or is not on a release tag. Move your work elsewhere, or run `kelpie update --stable` on a clean checkout. |
 | `kelpie lead --restart` refuses | The lead is working or waiting on a question. Run it once the lead is idle. |

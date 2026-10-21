@@ -96,6 +96,7 @@ pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::v
     crate::evidence::forget(task_of(&slot), &repo);
     crate::ci::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
     crate::recover::forget(&crate::lead::state_dir()?, &peers::address(task_of(&slot), &name_of(&repo)));
+    forget_held_prompt(&peers::address(task_of(&slot), &name_of(&repo)));
     end_life(task_of(&slot), &repo, "done");
     Ok(finished + &close_space(workspace))
 }
@@ -192,6 +193,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
         crate::ci::forget(&state, &peers::address(task, &name_of(&repo)));
         crate::recover::forget(&state, &peers::address(task, &name_of(&repo)));
     }
+    forget_held_prompt(&peers::address(task, &name_of(&repo)));
     end_life(task, &repo, how);
     Ok(format!("{task} dropped; {} is free again.{said}{}", name_of(&slot.path), close_space(workspace)))
 }
@@ -204,6 +206,12 @@ fn dropped_notes(vault: Option<&crate::vault_cli::Cli>, state: &Path, task: &str
         NoteBack::Back(path) => format!(" kelpie put its note {path} back in the backlog."),
         NoteBack::Failed(error) => format!(" Its note {note} could not be put back in the backlog ({error}); set its status to backlog in the vault."),
     }).collect()
+}
+
+fn forget_held_prompt(address: &str) {
+    if let Err(error) = messages::drop_held_prompts(address) {
+        eprintln!("Could not drop the prompt still held for {address}: {error}");
+    }
 }
 
 fn end_life(task: &str, repo: &Path, how: &str) {
@@ -236,6 +244,7 @@ mod tests {
         assert!(body("close_task").contains("permit::forget(") && body("discard").contains("permit::forget("), "done, drop and reset take the push permission back");
         assert!(body("close_task").contains("follow::forget(") && body("discard").contains("follow::forget("), "a later task by the same name must not follow main unasked");
         assert!(body("finish").contains("task_note::forget(") && body("discard").contains("task_note::forget("), "a later task by the same name must not inherit this one's Problem pass");
+        assert!(body("close_task").contains("forget_held_prompt(") && body("discard").contains("forget_held_prompt("), "a prompt still held for the task is never typed into a later task by the same name");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
     }
 

@@ -35,7 +35,7 @@ A machine that slept through several slots runs the routine once when it wakes, 
 
 Each routine keeps its last run in the state directory: when it started, its task, its outcome and a one-line summary. The outcome is `running` from the start, `ok` after `kelpie routine ok`, `findings` from the task's first report or question, and `failed` when the run could not start or its task closed before it said anything.
 
-A run with findings sends `notify.command` a `routine-findings` event in place of that report's usual event, and a failed run sends `routine-failed`. An ok run sends nothing, so a quiet night stays quiet. See [Notify command](../reference/configuration.md#notify-command).
+A run with findings sends `notify.command` a `routine-findings` event in place of that report's usual event, and a failed run sends `routine-failed`. A run whose Claude asks whether you trust its folder sends `needs-you`, and the Routines page shows it waiting for that answer. An ok run sends nothing, so a quiet night stays quiet. See [Notify command](../reference/configuration.md#notify-command).
 
 ## The push exception
 

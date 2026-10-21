@@ -26,11 +26,18 @@ fn refusal(error: &str) -> Refusal {
 #[derive(Debug, PartialEq)]
 enum Launched {
     Ready,
+    AwaitsTrust,
     ShellBack(String),
 }
 
+#[derive(Debug, PartialEq)]
+pub enum Started {
+    Ready,
+    AwaitsTrust,
+}
+
 // herdr types Claude's command into the pane's shell, so it is typed only once that shell is idle at its prompt.
-pub fn start_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<()> {
+pub fn start_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<Started> {
     start_twice(pane, || {
         wait_for_prompt(pane)?;
         type_claude(name, pane, args, trusted)
@@ -38,11 +45,12 @@ pub fn start_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Res
 }
 
 // A line read away by the shell's own startup, as oh-my-zsh's update question takes its first key, leaves the shell at its prompt: one more try then lands.
-fn start_twice(pane: &str, mut attempt: impl FnMut() -> Result<Launched>) -> Result<()> {
+fn start_twice(pane: &str, mut attempt: impl FnMut() -> Result<Launched>) -> Result<Started> {
     let mut shown = String::new();
     for _ in 0..2 {
         match attempt()? {
-            Launched::Ready => return Ok(()),
+            Launched::Ready => return Ok(Started::Ready),
+            Launched::AwaitsTrust => return Ok(Started::AwaitsTrust),
             Launched::ShellBack(line) => shown = line,
         }
     }
@@ -148,26 +156,37 @@ fn end_with(mut send: impl FnMut(&str) -> Result<()>, mut at_shell: impl FnMut()
     if at_shell()? { Ok(()) } else { Err("still running".to_string()) }
 }
 
-// Claude asks about a folder it has not seen with "No, exit" selected; a prompt sent before it is ready is lost.
 fn wait_until_ready(name: &str, pane: &str, trusted: bool) -> Result<Launched> {
+    let look = || Ok((herdr::foreground(pane)?.is_none(), herdr::read_pane(pane)?));
+    let press = |key: &str| herdr::send_keys(pane, &[key]);
+    ready_with(look, || herdr::agent_ready(name).unwrap_or(false), press, || std::thread::sleep(Duration::from_millis(500)), trusted, 120)?
+        .ok_or_else(|| format!("Claude in pane {pane} never became ready; see what it waits for there"))
+}
+
+fn yes_selected(screen: &str) -> bool {
+    screen.lines().any(|line| line.trim_start().trim_start_matches('│').trim_start().starts_with('❯') && line.contains("Yes, I trust this folder"))
+}
+
+// Claude asks about a folder it has not seen with "No, exit" selected; a prompt sent before it is ready is lost.
+fn ready_with(mut look: impl FnMut() -> Result<(bool, String)>, mut ready: impl FnMut() -> bool, mut press: impl FnMut(&str) -> Result<()>, mut pause: impl FnMut(), trusted: bool, tries: usize) -> Result<Option<Launched>> {
     let mut at_shell = 0;
-    for _ in 0..120 {
-        let screen = herdr::read_pane(pane)?;
-        at_shell = if herdr::foreground(pane)?.is_none() { at_shell + 1 } else { 0 };
+    for _ in 0..tries {
+        let (shell, screen) = look()?;
+        at_shell = if shell { at_shell + 1 } else { 0 };
         if at_shell >= QUIET_LOOKS {
-            return Ok(Launched::ShellBack(last_line(&screen).to_string()));
+            return Ok(Some(Launched::ShellBack(last_line(&screen).to_string())));
         }
         if screen.contains("trust this folder") {
             if !trusted {
-                return Err(format!("Claude in pane {pane} asks whether you trust its folder; you have not trusted the repo in Claude Code, so that answer is yours"));
+                return Ok(Some(Launched::AwaitsTrust));
             }
-            herdr::send_keys(pane, &[if screen.contains("❯ Yes, I trust this folder") { "enter" } else { "down" }])?;
-        } else if herdr::agent_ready(name).unwrap_or(false) {
-            return Ok(Launched::Ready);
+            press(if yes_selected(&screen) { "enter" } else { "down" })?;
+        } else if ready() {
+            return Ok(Some(Launched::Ready));
         }
-        std::thread::sleep(Duration::from_millis(500));
+        pause();
     }
-    Err(format!("Claude in pane {pane} never became ready; see what it waits for there"))
+    Ok(None)
 }
 
 // Claude Code's own record of the folders the user trusted, counting a folder under a trusted one.
@@ -248,11 +267,31 @@ mod tests {
             let result = start_twice("w1-2", || { tries += 1; Ok(outcomes.next().unwrap()) });
             (result, tries)
         };
-        assert_eq!(run(vec![Launched::Ready]), (Ok(()), 1));
-        assert_eq!(run(vec![Launched::ShellBack("zsh: command not found: laude".to_string()), Launched::Ready]), (Ok(()), 2));
+        assert_eq!(run(vec![Launched::Ready]), (Ok(Started::Ready), 1));
+        assert_eq!(run(vec![Launched::ShellBack("zsh: command not found: laude".to_string()), Launched::Ready]), (Ok(Started::Ready), 2));
+        assert_eq!(run(vec![Launched::AwaitsTrust]), (Ok(Started::AwaitsTrust), 1), "a trust prompt waiting for the user is a start, not a failure");
         let (result, tries) = run(vec![Launched::ShellBack("❯".to_string()), Launched::ShellBack("❯".to_string())]);
         assert_eq!(tries, 2);
         assert!(result.unwrap_err().starts_with("Claude did not start in pane w1-2: its shell is back at the prompt, showing \"❯\""));
+    }
+
+    const TRUST: &str = "│ Do you trust this folder?\n│ ❯ No, exit\n│   Yes, I trust this folder";
+    const TRUST_YES: &str = "│ Do you trust this folder?\n│   No, exit\n│ ❯ Yes, I trust this folder";
+
+    fn readied(screens: &[&str], ready_after: usize, trusted: bool) -> (Option<Launched>, Vec<String>) {
+        let mut screens = screens.iter().map(|screen| screen.to_string());
+        let keys = std::cell::RefCell::new(Vec::new());
+        let mut asked = 0;
+        let result = ready_with(|| Ok((false, screens.next().unwrap_or_default())), || { asked += 1; asked > ready_after }, |key| { keys.borrow_mut().push(key.to_string()); Ok(()) }, || {}, trusted, 20).unwrap();
+        (result, keys.into_inner())
+    }
+
+    #[test]
+    fn an_untrusted_folder_leaves_the_trust_prompt_to_the_user_and_a_trusted_one_is_answered() {
+        assert_eq!(readied(&[TRUST, TRUST, TRUST], 0, false), (Some(Launched::AwaitsTrust), Vec::new()), "no key reaches a trust prompt the user has not answered for this repo");
+        assert_eq!(readied(&[TRUST, TRUST_YES, "❯ "], 0, true), (Some(Launched::Ready), vec!["down".to_string(), "enter".to_string()]), "Claude Code 2.1.306 focuses No, exit first, inside a box");
+        assert_eq!(readied(&["Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit", "❯ "], 0, true), (Some(Launched::Ready), vec!["enter".to_string()]), "Claude numbers its choices");
+        assert_eq!(readied(&["", "", "❯ "], 2, false), (Some(Launched::Ready), Vec::new()), "a folder Claude does not ask about is ready as before");
     }
 
     #[test]

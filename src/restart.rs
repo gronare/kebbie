@@ -644,9 +644,9 @@ fn wait_for_claude(pane: &str) -> Result<()> {
     Err(format!("Claude did not come back in pane {pane}; see what the pane shows"))
 }
 
-fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Result<()> {
+fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Result<tasks::Started> {
     if lead {
-        return sh::run(&crate::peers::kelpie_command()?, &["lead", "--restart"], None).map(|_| ());
+        return sh::run(&crate::peers::kelpie_command()?, &["lead", "--restart"], None).map(|_| tasks::Started::Ready);
     }
     let role = own.or(pane.cwd.as_deref()).map(tasks::task_role).transpose()?.flatten();
     let args = role.map_or_else(|| args.to_vec(), |(settings, role)| with_role(args, &settings, &role));
@@ -663,8 +663,15 @@ fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Resu
             tasks::wait_for_prompt(&pane.pane)?;
             let line = std::iter::once("claude".to_string()).chain(args.iter().map(|arg| sh::quote(arg))).collect::<Vec<_>>().join(" ");
             herdr::run_in_pane(&pane.pane, &line)?;
-            wait_for_claude(&pane.pane)
+            wait_for_claude(&pane.pane).map(|()| tasks::Started::Ready)
         }
+    }
+}
+
+fn restarted_said(label: &str, reasons: &[String], started: &tasks::Started) -> String {
+    match started {
+        tasks::Started::Ready => format!("Restarted {label} with claude --resume, as it ran older code ({}).", reasons.join(", ")),
+        tasks::Started::AwaitsTrust => format!("Restarted {label}, as it ran older code ({}); Claude there asks whether you trust its folder. Answer it there, and it resumes its conversation.", reasons.join(", ")),
     }
 }
 
@@ -788,13 +795,16 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
         restarted.insert(session.clone(), json!({ "at": at, "exe": exe.as_deref().map(|exe| exe.to_string_lossy().to_string()), "reasons": reasons }));
         crate::state::write(&restarted_file(&state)?, Value::Object(restarted.clone()).to_string())?;
         match done {
-            Ok(()) => {
+            Ok(started) => {
                 memory.active.insert(session.clone(), at);
                 live.remove(&session);
-                if matches!(mode, Mode::Routine { .. }) {
-                    tell_board(&format!("Restarted {} with claude --resume, as it ran older code ({}).", pane.label, reasons.join(", ")));
+                if matches!(mode, Mode::Routine { .. }) || started == tasks::Started::AwaitsTrust {
+                    tell_board(&restarted_said(&pane.label, &reasons, &started));
                 }
-                lines.push(line(&Verdict::Restart));
+                lines.push(match started {
+                    tasks::Started::Ready => line(&Verdict::Restart),
+                    tasks::Started::AwaitsTrust => Line { label: pane.label.clone(), said: "restarted; Claude there asks whether you trust its folder, answer it there".to_string(), stale: true },
+                });
             }
             Err(error) => {
                 tell_board(&format!("Restarting {} failed: {error}", pane.label));
@@ -939,6 +949,16 @@ mod tests {
         assert_eq!(resume_args(&argv(&["claude", "explain this", "--resume=abc", "--fork-session"]), "id").unwrap(), argv(&["--resume", "id"]));
         assert_eq!(resume_args(&argv(&["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js", "--model", "sonnet", "hello"]), "id").unwrap(), argv(&["--model", "sonnet", "--resume", "id"]));
         assert_eq!(resume_args(&argv(&["claude", "--debug", "hooks"]), "id").unwrap(), argv(&["--debug", "hooks", "--resume", "id"]));
+    }
+
+    #[test]
+    fn a_restart_that_waits_at_the_trust_prompt_tells_the_board_to_answer_it_rather_than_that_it_runs() {
+        let reasons = ["kelpie was rebuilt".to_string()];
+        assert_eq!(restarted_said("billing@app", &reasons, &tasks::Started::Ready), "Restarted billing@app with claude --resume, as it ran older code (kelpie was rebuilt).");
+        let waits = restarted_said("billing@app", &reasons, &tasks::Started::AwaitsTrust);
+        assert!(waits.contains("asks whether you trust its folder") && waits.contains("Answer it there, and it resumes its conversation") && !waits.contains("with claude --resume"), "{waits}");
+        let source = include_str!("restart.rs").split("#[cfg(test)]").next().unwrap();
+        assert!(source.contains("Ok(started) => {") && source.contains("tell_board(&restarted_said(&pane.label, &reasons, &started))"), "the board hears how the restart came out");
     }
 
     #[test]

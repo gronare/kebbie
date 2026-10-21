@@ -462,18 +462,38 @@ fn start_run(routine: &Routine, dir: &Path, now: u64, offset: i64) -> Result<Str
         }
         let prompt = prompt(routine, &crate::peers::kelpie_command()?);
         let options = crate::tasks::Start { prompt: Some(&prompt), focus: false, from: None, mode: Some("auto"), backlog: None, note: false };
-        crate::tasks::start(&repo, &task, &options).map(|said| (repo, said))
+        crate::tasks::begin(&repo, &task, &options)
     });
+    let cwd = repo_path(&routine.repo).unwrap_or_else(|_| dir.to_path_buf());
+    settle_start(routine, dir, &mut state, address.as_deref(), started, |event, address, text| notify(&cwd, event, address, text))
+}
+
+pub const AWAITS_TRUST: &str = "waits for your answer to Claude's trust prompt in its Space";
+
+fn settle_start(routine: &Routine, dir: &Path, state: &mut State, address: Option<&str>, started: Result<crate::tasks::Begun>, mut tell: impl FnMut(crate::notify::Event, &str, String)) -> Result<String> {
+    let to = address.unwrap_or(&routine.id);
     match started {
-        Ok((_, said)) => Ok(format!("routine {}: {said}", routine.id)),
+        Ok(crate::tasks::Begun { said, started: crate::tasks::Started::Ready }) => Ok(format!("routine {}: {said}", routine.id)),
+        Ok(crate::tasks::Begun { said, started: crate::tasks::Started::AwaitsTrust }) => {
+            state.last_summary = Some(AWAITS_TRUST.to_string());
+            save_state(dir, &routine.id, state)?;
+            tell(crate::notify::Event::NeedsYou, to, format!("routine {} waits for you: Claude in {to} asks whether you trust its folder; answer it there and the run goes on", routine.title));
+            Ok(format!("routine {}: {said}", routine.id))
+        }
         Err(error) => {
             state.last_outcome = Some(Outcome::Failed);
             state.last_summary = Some(error.clone());
-            save_state(dir, &routine.id, &state)?;
-            let cwd = repo_path(&routine.repo).unwrap_or_else(|_| dir.to_path_buf());
-            notify(&cwd, crate::notify::Event::RoutineFailed, address.as_deref().unwrap_or(&routine.id), format!("routine {} failed to start: {error}", routine.title));
+            save_state(dir, &routine.id, state)?;
+            tell(crate::notify::Event::RoutineFailed, to, format!("routine {} failed to start: {error}", routine.title));
             Err(format!("routine {}: {error}", routine.id))
         }
+    }
+}
+
+pub fn trust_answered_in(dir: &Path, address: &str) {
+    if let Some((id, mut state)) = run_of(dir, address).filter(|(_, state)| state.last_summary.as_deref() == Some(AWAITS_TRUST)) {
+        state.last_summary = None;
+        let _ = save_state(dir, &id, &state);
     }
 }
 
@@ -789,6 +809,30 @@ mod tests {
         for outcome in Outcome::ALL {
             assert_eq!(state_from(&state_json(&State { last_outcome: Some(outcome), ..State::default() })).last_outcome, Some(outcome));
         }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_run_whose_claude_waits_at_the_trust_prompt_tells_the_user_and_says_so_until_its_prompt_is_in() {
+        let dir = crate::sh::test_dir("routines-trust");
+        let routine = one(CLUSTER);
+        let address = "cluster-health-20261019-0630@infra";
+        let mut state = State { last_start: Some(1), last_task: Some(address.to_string()), last_outcome: Some(Outcome::Running), ..State::default() };
+        save_state(&dir, &routine.id, &state).unwrap();
+        let mut told = Vec::new();
+        let begun = crate::tasks::Begun { said: "Started cluster-health-20261019-0630 in /src/wt1.infra.".to_string(), started: crate::tasks::Started::AwaitsTrust };
+        let said = settle_start(&routine, &dir, &mut state, Some(address), Ok(begun), |event, to, text| told.push((event, to.to_string(), text))).unwrap();
+        assert!(said.starts_with(&format!("routine {}: Started", routine.id)));
+        assert_eq!(told.len(), 1);
+        assert!(told[0].0 == crate::notify::Event::NeedsYou && told[0].1 == address && told[0].2.contains("asks whether you trust its folder"), "{told:?}");
+        let saved = load_state(&dir, &routine.id);
+        assert_eq!((saved.last_outcome, saved.last_summary.as_deref()), (Some(Outcome::Running), Some(AWAITS_TRUST)), "the Routines page shows the run waits on the user");
+        trust_answered_in(&dir, address);
+        assert_eq!(load_state(&dir, &routine.id).last_summary, None);
+        let mut ready = Vec::new();
+        let begun = crate::tasks::Begun { said: "Started.".to_string(), started: crate::tasks::Started::Ready };
+        settle_start(&routine, &dir, &mut state, Some(address), Ok(begun), |event, to, text| ready.push((event, to.to_string(), text))).unwrap();
+        assert!(ready.is_empty(), "a run that started cleanly tells nobody");
         fs::remove_dir_all(dir).unwrap();
     }
 

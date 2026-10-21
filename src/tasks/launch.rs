@@ -10,7 +10,7 @@ use crate::messages;
 use crate::peers;
 use crate::repo::{branch_exists, default_branch, git, git_writing, main_checkout, name_of};
 use crate::sh::Result;
-use super::claude::{start_claude, trusted_by_user};
+use super::claude::{Started, start_claude, trusted_by_user};
 use super::{fetch, slug};
 use super::pool::{Slot, claim_slot, slots};
 use super::started::{read_start, start_entry, started_file};
@@ -184,7 +184,16 @@ pub struct Start<'a> {
     pub note: bool,
 }
 
+pub struct Begun {
+    pub said: String,
+    pub started: Started,
+}
+
 pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
+    begin(cwd, name, options).map(|begun| begun.said)
+}
+
+pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     let Start { prompt, focus, from, mode, backlog, note: with_note } = *options;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
@@ -225,23 +234,23 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
         None => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
     };
     let (agent_name, started) = launch(&Launch { note: note.as_deref(), ..place(&slot) }, &claude_pane, Session::New(new_session_id()?))?;
-    // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
-    let prompted = match (&started, prompt) {
-        (Ok(()), Some(prompt)) => crate::typing::prompt_confirmed(&agent_name, prompt, &address).map_err(|error| format!("Started {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
-        _ => Ok(()),
+    let prompted = match &started {
+        Ok(started) => send_prompt(started, prompt, |text| crate::typing::prompt_confirmed(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
+            .map_err(|error| format!("Started {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
+        Err(_) => Ok(String::new()),
     };
     if focus {
         herdr::focus_workspace(&space.workspace_id)?;
     }
-    started?;
-    prompted?;
+    let started = started?;
+    let trust_said = prompted?;
     if let Some(item) = backlog.filter(|_| note.is_none()) {
         started_file(&task, &repo).and_then(|file| crate::state::write(&file, item))?;
     }
     if let Err(error) = messages::announce(&task, &name_of(&repo)) {
         eprintln!("Could not tell {task}'s other halves it started: {error}");
     }
-    Ok(format!("Started {task} in {}.{vault_said}", slot.path.display()))
+    Ok(Begun { said: format!("Started {task} in {}.{vault_said}{trust_said}", slot.path.display()), started })
 }
 
 struct Launch<'a> {
@@ -291,15 +300,18 @@ pub(crate) fn task_role(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
 }
 
 // Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
-fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<()>)> {
+fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<Started>)> {
     let Launch { repo, task, mode, .. } = *place;
     let (settings, role) = prepare(place)?;
+    if let Err(error) = messages::drop_held_prompts(&peers::address(task, &name_of(repo))) {
+        eprintln!("Could not drop a prompt still held for {task} from an earlier start: {error}");
+    }
     // herdr's agent names are global, so a task's half in another repo is named with its repo.
     let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
     let agent_args = claude_args(mode, &settings, &role, &session);
     let started = start_claude(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(repo));
-    if let (Ok(()), Session::New(id)) = (&started, &session) {
+    if let (Ok(_), Session::New(id)) = (&started, &session) {
         let record = format!("{id}\n{}\n", mode.unwrap_or_default());
         let file = session_file(task, repo)?;
         crate::state::write(&file, record)?;
@@ -312,7 +324,7 @@ fn claude_in(workspace: &str) -> Result<bool> {
 }
 
 // A task whose Space or Claude is gone gets them back: its last conversation resumed, or a new one given the task's first prompt again.
-fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Result<String> {
+fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Result<Begun> {
     let task = place.task;
     let open = herdr::workspace_for(&slot.path)?;
     if let Some(workspace) = &open
@@ -321,7 +333,7 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
         if focus {
             herdr::focus_workspace(workspace)?;
         }
-        return Ok(format!("{task} is already running in {}.", slot.path.display()));
+        return Ok(Begun { said: format!("{task} is already running in {}.", slot.path.display()), started: Started::Ready });
     }
     let space = open_space(place.repo, slot, task, false)?;
     let pane = match (&open, space.root_pane_id) {
@@ -348,22 +360,40 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     };
     let prompt = prompt_for(&session, given, stored, unheard);
     let (agent_name, started) = launch(&place, &pane, session)?;
-    let prompted = match (&started, &prompt) {
-        (Ok(()), Some(prompt)) => crate::typing::prompt_confirmed(&agent_name, prompt, &peers::address(task, &name_of(place.repo))).map_err(|error| format!("Restarted {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
-        _ => Ok(()),
+    let address = peers::address(task, &name_of(place.repo));
+    let prompted = match &started {
+        Ok(started) => send_prompt(started, prompt.as_deref(), |text| crate::typing::prompt_confirmed(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
+            .map_err(|error| format!("Restarted {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
+        Err(_) => Ok(String::new()),
     };
     if focus {
         herdr::focus_workspace(&space.workspace_id)?;
     }
-    started?;
-    prompted?;
+    let started = started?;
+    let trust_said = prompted?;
+    let held = started == Started::AwaitsTrust;
     let how = match (resumed, prompt.is_some()) {
-        (true, true) => "resuming its last conversation, and sent it the prompt",
-        (true, false) => "resuming its last conversation",
-        (false, true) => "with a new conversation, as none of its own was found, and sent it the task's prompt again",
+        (true, true) if !held => "resuming its last conversation, and sent it the prompt",
+        (true, _) => "resuming its last conversation",
+        (false, true) if !held => "with a new conversation, as none of its own was found, and sent it the task's prompt again",
+        (false, true) => "with a new conversation, as none of its own was found",
         (false, false) => "with a new conversation, as none of its own was found; it had no prompt to send again",
     };
-    Ok(format!("Restarted {task} in {}, {how}.", slot.path.display()))
+    Ok(Begun { said: format!("Restarted {task} in {}, {how}.{trust_said}", slot.path.display()), started })
+}
+
+// The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
+fn send_prompt(started: &Started, prompt: Option<&str>, type_now: impl FnOnce(&str) -> Result<()>, hold: impl FnOnce(&str) -> Result<()>) -> Result<String> {
+    const ASKS: &str = " Claude there asks whether you trust the repo's folder, and that answer is yours";
+    Ok(match (started, prompt) {
+        (Started::Ready, Some(prompt)) => type_now(prompt).map(|()| String::new())?,
+        (Started::Ready, None) => String::new(),
+        (Started::AwaitsTrust, None) => format!("{ASKS}."),
+        (Started::AwaitsTrust, Some(prompt)) => match hold(prompt) {
+            Ok(()) => format!("{ASKS}; once you give it, kelpie types the task's prompt in while the keeper or an open board runs."),
+            Err(error) => format!("{ASKS}; its prompt could not be kept for it ({error}), so paste the prompt there yourself once you have answered."),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -389,6 +419,27 @@ mod tests {
         assert_eq!(on["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|MultiEdit|NotebookEdit|Bash", "a Bash command that writes a file waits for the Problem too");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kelpie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
         assert_eq!(on["hooks"]["Stop"], off["hooks"]["Stop"]);
+    }
+
+    #[test]
+    fn a_prompt_is_typed_at_once_into_a_ready_claude_and_held_while_the_user_owes_the_trust_answer() {
+        let sent = |started: Started, prompt: Option<&str>, keeps: bool| {
+            let (typed, held) = (std::cell::RefCell::new(Vec::new()), std::cell::RefCell::new(Vec::new()));
+            let said = send_prompt(&started, prompt, |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |text| { held.borrow_mut().push(text.to_string()); if keeps { Ok(()) } else { Err("Another kelpie is holding the message log; try again".to_string()) } });
+            (said, typed.into_inner(), held.into_inner())
+        };
+        assert_eq!(sent(Started::Ready, Some("Fix the flaky test"), true), (Ok(String::new()), vec!["Fix the flaky test".to_string()], Vec::new()));
+        let (said, typed, held) = sent(Started::AwaitsTrust, Some("Fix the flaky test"), true);
+        assert_eq!((typed, held), (Vec::new(), vec!["Fix the flaky test".to_string()]));
+        assert!(said.unwrap().contains("kelpie types the task's prompt in while the keeper or an open board runs"));
+        let (said, _, _) = sent(Started::AwaitsTrust, Some("Fix the flaky test"), false);
+        assert!(said.unwrap().contains("paste the prompt there yourself"), "a prompt kelpie could not keep is the user's to paste, and the start still stands");
+        assert_eq!(sent(Started::AwaitsTrust, None, true).0.unwrap(), " Claude there asks whether you trust the repo's folder, and that answer is yours.");
+        let source = include_str!("launch.rs");
+        let launch = &source[source.find("\nfn launch(").unwrap()..];
+        let launch = &launch[..launch.find("\n}\n").unwrap()];
+        assert!(launch.find("drop_held_prompts(").unwrap() < launch.find("start_claude(").unwrap(), "a prompt held for an earlier start is dropped before a new one decides its own");
+        assert!(launch.contains("if let Err(error) = messages::drop_held_prompts("), "a busy message log never stops a start");
     }
 
     #[test]
@@ -437,9 +488,9 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
         let source = include_str!("launch.rs");
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
-        assert!(body("start").find("store_prompt(").unwrap() < body("start").find("launch(").unwrap(), "the prompt is kept even when the first start fails");
-        assert!(body("start").contains("restart(&place(&existing), &existing, focus, prompt)"), "start's prompt reaches the resume path");
-        assert!(body("restart").contains("prompt_for(&session, given, stored, unheard)") && body("restart").contains("typing::prompt_confirmed(&agent_name, prompt"));
+        assert!(body("begin").find("store_prompt(").unwrap() < body("begin").find("launch(").unwrap(), "the prompt is kept even when the first start fails");
+        assert!(body("begin").contains("restart(&place(&existing), &existing, focus, prompt)"), "start's prompt reaches the resume path");
+        assert!(body("restart").contains("prompt_for(&session, given, stored, unheard)") && body("restart").contains("send_prompt(started, prompt.as_deref(),"));
         assert!(body("restart").contains("user_messages(&text).is_empty()"));
         assert!(body("forget_session").contains("prompt_file("));
     }

@@ -85,7 +85,7 @@ The command gets:
 
 | Event | Sent when |
 | --- | --- |
-| `needs-you` | A task reports that it needs you. |
+| `needs-you` | A task reports that it needs you, or a routine's Claude asks whether you trust its folder. |
 | `ready` | A task reports ready. |
 | `question` | A task asks you a question. |
 | `summary` | You or the lead run `kelpie notify "<text>"`. Tasks cannot. |

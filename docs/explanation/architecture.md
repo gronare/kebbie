@@ -42,7 +42,7 @@ This keeps the traffic visible. You can see every message on the board, and the 
 
 Some of kelpie's work runs on a clock rather than on a command:
 
-- held messages are delivered once their receiver is free, every 3 seconds,
+- held messages are delivered once their receiver is free, every 3 seconds, and so is a new task's prompt that waited for your answer to Claude's trust prompt,
 - prompts kelpie typed are checked for delivery, every 3 seconds, and the board is told when one was not taken,
 - stale Claude sessions are restarted once idle, every minute,
 - a push that waits for a task's Claude to test the files the default branch changed under it completes once the task reports ready with the same commits, every 15 seconds,

@@ -361,17 +361,21 @@ pub fn guard(input: &str) -> String {
 
 // What the user typed into the task's conversation, oldest first: its prompt and every later word, without tool results or kelpie's own wrappers.
 pub fn user_messages(transcript: &str) -> Vec<String> {
+    user_messages_at(transcript).into_iter().map(|(_, text)| text).collect()
+}
+
+pub fn user_messages_at(transcript: &str) -> Vec<(Option<u64>, String)> {
     transcript.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|entry| entry["type"] == "user" && entry["isMeta"] != true && entry["isSidechain"] != true)
-        .filter_map(|entry| match &entry["message"]["content"] {
-            Value::String(text) => Some(text.clone()),
-            Value::Array(blocks) if blocks.iter().all(|block| block["type"] == "text") => {
-                Some(blocks.iter().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join("\n"))
-            }
-            _ => None,
+        .filter_map(|entry| {
+            let text = match &entry["message"]["content"] {
+                Value::String(text) => text.clone(),
+                Value::Array(blocks) if blocks.iter().all(|block| block["type"] == "text") => blocks.iter().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>().join("\n"),
+                _ => return None,
+            };
+            Some((entry["timestamp"].as_str().and_then(crate::typing::iso_millis), text.trim().to_string()))
         })
-        .map(|text| text.trim().to_string())
-        .filter(|text| !text.is_empty() && !text.starts_with('<') && !text.starts_with("[Request interrupted"))
+        .filter(|(_, text)| !text.is_empty() && !text.starts_with('<') && !text.starts_with("[Request interrupted"))
         .collect()
 }
 

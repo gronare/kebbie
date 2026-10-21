@@ -18,6 +18,8 @@ Without a name, `land`, `review`, `push`, `done`, `drop` and `reset` act on the 
 
 Start a task in a pooled worktree, in its own herdr Space, with Claude. Running it on a task that already runs shows it; on a task whose Space or Claude is gone, it restarts them in the same permission mode and resumes the last conversation without sending the prompt again.
 
+In a folder you have trusted in Claude Code, kelpie answers Claude's "Do you trust this folder?" itself. In one you have not, that answer is yours: the prompt waits, and kelpie types it in once you have answered and Claude's input box is empty, while the keeper or an open board runs. If you type a first message yourself before then, kelpie drops the prompt instead of sending it again.
+
 | Option | Meaning |
 | --- | --- |
 | `--repo <name>` | Start in that repo instead of the current one. Repeat it for one task across repos: one half per repo, the first focused. See [Finding repos](#finding-repos). |
