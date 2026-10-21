@@ -16,7 +16,7 @@ use super::detail::Detail;
 use super::images::{Shown, image_shown, preview_note, render_image};
 use super::link::file_link;
 use super::{App, Column, Hit, Mode};
-use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, bold, centered, fill, fit, section_header, rule, style, wrap};
+use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, bold, centered, fill, fit, section_header, rule, style};
 
 impl App {
     pub(super) fn card_of(&self, item: &Item) -> Option<std::rc::Rc<Detail>> {
@@ -136,7 +136,10 @@ pub(super) fn rich_wrap(text: &str, width: usize, max_lines: usize, color: Color
     }
     if lines.len() > max_lines {
         lines.truncate(max_lines);
-        if let Some((parts, _)) = lines.last_mut() {
+        if let Some((parts, used)) = lines.last_mut() {
+            if *used >= width && let Some((last, _)) = parts.last_mut() {
+                last.pop();
+            }
             parts.push(("…".to_string(), false));
         }
     }
@@ -386,7 +389,7 @@ pub(super) fn card_lines(card: &report::Card, current: bool, width: usize) -> Ve
         match card_image_in(line) {
             Some((alt, path)) => body.push(Line::from(vec![Span::styled("▣ ", style(TEAL)), Span::styled(path.to_string(), style(TEXT)), Span::styled(format!("  {alt}"), style(MUTED))])),
             None if line.trim().is_empty() => body.push(Line::default()),
-            None => body.extend(wrap(line, width, 4).into_iter().map(|part| Line::from(Span::styled(part, style(TEXT))))),
+            None => body.extend(rich_wrap(line, width, 4, TEXT)),
         }
     }
     if body.len() > CARD_LINES {
@@ -499,6 +502,11 @@ mod tests {
         assert!(bold("a bold") && bold("run that is long") && bold("enough to wrap"), "the run stays bold on each line it reaches");
         assert!(!bold("Plain then") && !bold("plain."));
         assert_eq!(rich_wrap("an odd ** marker stays", 40, 1, TEXT)[0].to_string(), "an odd ** marker stays");
+        let cut = rich_wrap("**The heart is twice as big.** Every thumb", 16, 1, TEXT);
+        assert_eq!(cut[0].to_string(), "The heart is…", "a cut line ends in an ellipsis inside its width");
+        assert!(cut[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
+        let full = rich_wrap("one two three four", 9, 1, TEXT);
+        assert!(full[0].to_string().chars().count() <= 10, "{}", full[0]);
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::evidence;
 use crate::report;
 use crate::status::{self, Item};
 use crate::tasks;
-use super::card::{card_image_in, card_lines};
+use super::card::{card_image_in, card_lines, rich_wrap};
 use super::columns::absence;
 use super::images::{ImageAt, render_image};
 use super::link::{Link, file_link};
@@ -114,7 +114,7 @@ fn card_field(card: &report::Card, current: bool, width: usize) -> Vec<Line<'sta
     let mut lines = Vec::new();
     for (index, line) in text.iter().enumerate() {
         let mut spans = if index == 0 { vec![Span::styled(mark, style(color))] } else { vec![Span::raw("  ")] };
-        spans.push(Span::styled(cut(line, room), style(TEXT)));
+        spans.extend(rich_wrap(line, room, 1, TEXT).into_iter().next().map(|first| first.spans).unwrap_or_default());
         lines.push(field(if index == 0 { "card" } else { "" }, spans));
     }
     if text.is_empty() {
