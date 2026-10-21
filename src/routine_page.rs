@@ -9,13 +9,13 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, Mous
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::board::widgets::{BLUE, Choice, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SURFACE, TEXT, YELLOW, bold, choice, column_title, cut, menu_lines, modal, render_column, style, wrap};
 use crate::keys::{self, Act, Ctx};
 use crate::peers;
 use crate::routine_file;
-use crate::routine_wizard::{self, Repo, Step, Wizard};
+use crate::routine_wizard::{self, Repo, Spot, Step, Wizard};
 use crate::routines::{self, Outcome, Routine, Schedule, State, WEEKDAYS};
 use crate::sh::Result;
 use crate::status::Item;
@@ -40,6 +40,7 @@ pub enum Hit {
     Row(usize),
     Template(usize),
     Choice(usize),
+    Key(KeyEvent),
 }
 
 struct Template {
@@ -559,7 +560,7 @@ impl Page {
         Effect::Handled
     }
 
-    pub fn mouse(&mut self, event: MouseEvent) -> Effect {
+    pub fn mouse(&mut self, event: MouseEvent, terminal: Option<&mut DefaultTerminal>) -> Effect {
         let hit = self.hits.iter().find(|(area, _)| area.contains(Position::new(event.column, event.row))).map(|(_, hit)| *hit);
         match event.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
@@ -583,6 +584,11 @@ impl Page {
                     }
                     Effect::Handled
                 }
+                (Some(Hit::Choice(index)), Mode::Wizard(_)) => {
+                    let Mode::Wizard(wizard) = &mut self.mode else { return Effect::Handled };
+                    if wizard.choose(index) { self.handle(KeyEvent::from(KeyCode::Enter), terminal) } else { Effect::Handled }
+                }
+                (Some(Hit::Key(key)), Mode::Wizard(_)) => self.handle(key, terminal),
                 (Some(Hit::Choice(index)), Mode::Options(_)) => {
                     self.mode = Mode::Normal;
                     match self.current().and_then(|(routine, state)| self.choices(&routine, &state).get(index).map(|choice| choice.act)) {
@@ -769,7 +775,20 @@ impl Page {
             Mode::Wizard(wizard) => {
                 let (now, offset) = self.now();
                 let width = 64.min(frame.area().width.saturating_sub(8) as usize);
-                modal(frame, wizard.title(), wizard.lines(now, offset, width), width as u16 + 4);
+                let (lines, spots) = wizard.view(now, offset, width);
+                let rows: Vec<u16> = lines.iter().map(|line| Paragraph::new(line.clone()).wrap(Wrap { trim: false }).line_count(width as u16) as u16).collect();
+                let area = modal(frame, wizard.title(), lines, width as u16 + 4);
+                for (line, spot) in spots {
+                    let y = area.y + 1 + rows[..line].iter().sum::<u16>();
+                    if y >= area.bottom().saturating_sub(1) {
+                        continue;
+                    }
+                    match spot {
+                        Spot::Choice(index) => modal_hits.push((Rect::new(area.x, y, area.width, rows[line]), Hit::Choice(index))),
+                        Spot::Key { at, width: hint, key } if at < width => modal_hits.push((Rect::new(area.x + 2 + at as u16, y, hint.min(width - at) as u16, 1), Hit::Key(key))),
+                        Spot::Key { .. } => {}
+                    }
+                }
             }
             Mode::ConfirmDelete { id, nudged } => {
                 let found = self.rows.iter().find(|(routine, _)| &routine.id == id);
@@ -1075,6 +1094,73 @@ mod tests {
         press(&mut page, KeyCode::Char('y'));
         assert!(page.rows.is_empty());
         assert_eq!(std::fs::read_to_string(&machine).unwrap(), "[keys]\ninbox = \"I\"\n");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn spot(page: &mut Page, text: &str) -> (u16, u16) {
+        let rows = render(page, 120, 40);
+        let (y, row) = rows.iter().enumerate().find(|(_, row)| row.contains(text)).unwrap_or_else(|| panic!("{text:?} is not on the screen:\n{}", rows.join("\n")));
+        (row[..row.find(text).unwrap()].chars().count() as u16, y as u16)
+    }
+
+    fn mouse(page: &mut Page, kind: MouseEventKind, (column, row): (u16, u16)) -> Effect {
+        page.mouse(MouseEvent { kind, column, row, modifiers: ratatui::crossterm::event::KeyModifiers::NONE }, None)
+    }
+
+    fn click_on(page: &mut Page, text: &str) -> Effect {
+        let at = spot(page, text);
+        mouse(page, MouseEventKind::Down(MouseButton::Left), at)
+    }
+
+    fn step(page: &Page) -> usize {
+        let Mode::Wizard(wizard) = &page.mode else { panic!("the steps are closed") };
+        wizard.step
+    }
+
+    #[test]
+    fn the_steps_take_clicks_on_choices_and_hints_and_the_wheel_moves_through_a_list() {
+        let dir = crate::sh::test_dir("routine-page-mouse");
+        let machine = dir.join("config.toml");
+        let mut page = Page::new(machine.clone(), dir.join("repos"));
+        page.clock = Some((MONDAY_0630_UTC, 0));
+        page.loaded = true;
+        press(&mut page, KeyCode::Char('n'));
+        click_on(&mut page, "esc cancel");
+        assert!(page.is_normal(), "a click on esc cancel closes the steps");
+        press(&mut page, KeyCode::Char('n'));
+        let Mode::Wizard(wizard) = &mut page.mode else { panic!("n opens the steps") };
+        wizard.repos = ["homelab-gitops", "greenhouse", "kelpie"].iter().map(|name| Repo { value: format!("~/{name}"), name: name.to_string(), shown: format!("~/{name}") }).collect();
+        typed(&mut page, "Check every node.");
+        click_on(&mut page, "⏎ next");
+        assert_eq!(step(&page), 1, "a click on ⏎ next is ⏎");
+        click_on(&mut page, "greenhouse");
+        let Mode::Wizard(wizard) = &page.mode else { panic!() };
+        assert_eq!((wizard.step, wizard.repo().as_deref()), (1, Some("~/greenhouse")), "a click selects the repo");
+        assert!(render(&mut page, 120, 40).join("\n").contains("▌greenhouse"));
+        let list = spot(&mut page, "kelpie");
+        mouse(&mut page, MouseEventKind::ScrollDown, list);
+        let Mode::Wizard(wizard) = &page.mode else { panic!() };
+        assert_eq!(wizard.repo().as_deref(), Some("~/kelpie"), "the wheel moves down the list");
+        mouse(&mut page, MouseEventKind::ScrollUp, list);
+        click_on(&mut page, "greenhouse");
+        assert_eq!(step(&page), 2, "a click on the selected repo goes on");
+        click_on(&mut page, "⏎ next");
+        click_on(&mut page, "Fix and push");
+        let Mode::Wizard(wizard) = &page.mode else { panic!() };
+        assert_eq!((wizard.step, wizard.mode), (3, 3), "a click selects what it may do");
+        click_on(&mut page, "Fix and push");
+        assert_eq!(step(&page), 4);
+        click_on(&mut page, "⏎ next");
+        assert_eq!(step(&page), routine_wizard::STEPS);
+        click_on(&mut page, "← back");
+        assert_eq!(step(&page), 4, "a click on ← back goes back");
+        click_on(&mut page, "⏎ next");
+        let at = spot(&mut page, "g add and run now");
+        assert!(matches!(page.hits.iter().find(|(area, _)| area.contains(Position::new(at.0 + 3, at.1))), Some((_, Hit::Key(key))) if *key == KeyEvent::from(KeyCode::Char('g'))), "g add and run now is g");
+        click_on(&mut page, "y add");
+        assert!(matches!(&page.mode, Mode::Message(text) if text.starts_with("Added the routine check-every-node")), "a click on y add writes it");
+        let text = std::fs::read_to_string(&machine).unwrap();
+        assert!(text.contains("repo = \"~/greenhouse\"\nat = \"07:00\"\nmode = \"fix\"\npush = true"), "{text}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

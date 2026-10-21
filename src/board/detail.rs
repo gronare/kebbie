@@ -257,6 +257,7 @@ fn report_text(app: &mut App, item: &Item, width: usize) -> Option<(String, Stri
 fn state_spans(app: &App, item: &Item) -> Vec<Span<'static>> {
     let mut facts: Vec<(String, Color)> = Vec::new();
     facts.extend(absence(item).map(|absent| (absent.to_string(), YELLOW)));
+    facts.extend(item.push_note().map(|note| (note, MUTED)));
     if let Some(git) = &item.git && git.behind > 0 {
         facts.push((format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")), MUTED));
     }
@@ -484,6 +485,28 @@ mod tests {
         let failed = evidence::Shown { mark: evidence::Mark::Failed, text: "cargo test failed · 2 failed · at a1b2c3d".to_string() };
         let (lines, _) = push_lines(None, Some(&failed), &commits, 0);
         assert_eq!(lines[0].spans[1].style.fg, Some(RED));
+    }
+
+    #[test]
+    fn a_push_waiting_for_the_tasks_tests_shows_on_its_row_and_in_its_panel_with_who_asked() {
+        let mut item = served("search-filters");
+        item.agent.as_mut().unwrap().status = "working".to_string();
+        let mut app = test_app(vec![item]);
+        with_detail(&mut app);
+        let (rows, _) = render(&mut app, 170, 40);
+        assert!(!rows.join("\n").contains("push waits"), "no intent, nothing waits: {}", rows.join("\n"));
+        for (by, word) in [(tasks::PushBy::User, "you"), (tasks::PushBy::Lead, "lead")] {
+            app.tasks[0].push_waits = Some(by);
+            let shown = format!("push waits for tests · {word}");
+            let (rows, buffer) = render(&mut app, 170, 40);
+            let at: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.contains(&shown)).map(|(at, _)| at).collect();
+            assert_eq!(at.len(), 2, "the row and the panel: {}", rows.join("\n"));
+            assert!(rows[at[1]].contains(&format!("▌◐ search-filters  {shown} · 2 c")), "the row, in the Work column: {}", rows.join("\n"));
+            let panel = rows[at[0]].split('│').nth(1).unwrap();
+            assert_eq!(panel.trim(), shown, "the panel's state line: {}", rows.join("\n"));
+            let column = rows[at[0]].find(&shown).map(|byte| rows[at[0]][..byte].chars().count()).unwrap() as u16;
+            assert_eq!(buffer[(column, at[0] as u16)].fg, MUTED, "muted in the panel");
+        }
     }
 
     #[test]

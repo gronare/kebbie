@@ -42,6 +42,12 @@ pub struct Repo {
     pub shown: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Spot {
+    Choice(usize),
+    Key { at: usize, width: usize, key: KeyEvent },
+}
+
 pub enum Step {
     Stay,
     Cancel,
@@ -62,6 +68,19 @@ pub struct Wizard {
     pub taken: Vec<String>,
     pub file: PathBuf,
     pub default_repo: Option<String>,
+}
+
+fn hints(lines: &mut Vec<Line<'static>>, spots: &mut Vec<(usize, Spot)>, parts: &[(&str, Option<KeyEvent>)]) {
+    let mut at = 0;
+    for (index, (text, key)) in parts.iter().enumerate() {
+        let width = Span::raw(*text).width();
+        if let Some(key) = key {
+            spots.push((lines.len(), Spot::Key { at, width, key: *key }));
+        }
+        at += width + if index + 1 < parts.len() { 3 } else { 0 };
+    }
+    let text = parts.iter().map(|(text, _)| *text).collect::<Vec<_>>().join(" · ");
+    lines.push(Line::from(Span::styled(text, style(MUTED))));
 }
 
 fn suggested_title(prompt: &str) -> String {
@@ -189,6 +208,18 @@ impl Wizard {
         Step::Stay
     }
 
+    // True when the choice was already the selected one, which a click takes as ⏎.
+    pub fn choose(&mut self, index: usize) -> bool {
+        let chosen = match self.step {
+            1 => &mut self.repo_index,
+            3 => &mut self.mode,
+            _ => return false,
+        };
+        let again = *chosen == index;
+        *chosen = index;
+        again
+    }
+
     pub fn title(&self) -> String {
         if self.editing.is_some() { "edit routine".to_string() } else { "new routine".to_string() }
     }
@@ -212,7 +243,9 @@ impl Wizard {
         if selected { line.style(Style::new().bg(SURFACE)) } else { line }
     }
 
-    pub fn lines(&self, now: u64, offset: i64, width: usize) -> Vec<Line<'static>> {
+    // The second value is each clickable spot with the line it is drawn on.
+    pub fn view(&self, now: u64, offset: i64, width: usize) -> (Vec<Line<'static>>, Vec<(usize, Spot)>) {
+        let mut spots = Vec::new();
         let heading = |text: &str| Line::from(Span::styled(text.to_string(), bold(MAUVE)));
         let muted = |text: String| Line::from(Span::styled(text, style(MUTED)));
         let mut lines = vec![Line::from(Span::styled(if self.step < STEPS { format!("step {} of {STEPS}", self.step + 1) } else { "check".to_string() }, style(FAINT)))];
@@ -223,7 +256,7 @@ impl Wizard {
                 lines.push(Line::default());
                 lines.extend(Self::input(&self.prompt, width));
                 lines.push(Line::default());
-                lines.push(muted("⏎ next · ctrl-e open in editor · esc cancel".to_string()));
+                hints(&mut lines, &mut spots, &[("⏎ next", Some(KeyCode::Enter.into())), ("ctrl-e open in editor", Some(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL))), ("esc cancel", Some(KeyCode::Esc.into()))]);
             }
             1 => {
                 lines.push(heading("Which repo?"));
@@ -236,13 +269,14 @@ impl Wizard {
                 let name_width = shown.iter().map(|repo| repo.name.chars().count()).max().unwrap_or(0) + 3;
                 let first = self.repo_index.saturating_sub(7);
                 for (index, repo) in shown.iter().enumerate().skip(first).take(8) {
+                    spots.push((lines.len(), Spot::Choice(index)));
                     lines.push(Self::choice(index == self.repo_index, &repo.name, name_width, &repo.shown, MUTED));
                 }
                 if shown.is_empty() {
                     lines.push(muted(if self.filter.trim().is_empty() { "No checkouts found under your repo folders; type the repo's path.".to_string() } else { format!("⏎ uses \"{}\" as the repo", self.filter.trim()) }));
                 }
                 lines.push(Line::default());
-                lines.push(muted("↑ ↓ choose · type to filter · ⏎ next".to_string()));
+                hints(&mut lines, &mut spots, &[("↑ ↓ choose", None), ("type to filter", None), ("⏎ next", Some(KeyCode::Enter.into()))]);
             }
             2 => {
                 lines.push(heading("When?"));
@@ -255,16 +289,17 @@ impl Wizard {
                     Err(error) => Line::from(Span::styled(format!("  {error}"), style(RED))),
                 });
                 lines.push(Line::default());
-                lines.push(muted("⏎ next".to_string()));
+                hints(&mut lines, &mut spots, &[("⏎ next", Some(KeyCode::Enter.into()))]);
             }
             3 => {
                 lines.push(heading("What may it do?"));
                 lines.push(Line::default());
                 for (index, (label, about)) in MODES.iter().enumerate() {
+                    spots.push((lines.len(), Spot::Choice(index)));
                     lines.push(Self::choice(index == self.mode, label, 14, about, MUTED));
                 }
                 lines.push(Line::default());
-                lines.push(muted("↑ ↓ choose · ⏎ next".to_string()));
+                hints(&mut lines, &mut spots, &[("↑ ↓ choose", None), ("⏎ next", Some(KeyCode::Enter.into()))]);
             }
             4 => {
                 lines.push(heading("Name"));
@@ -277,7 +312,7 @@ impl Wizard {
                     Err(error) => Line::from(Span::styled(error, style(RED))),
                 });
                 lines.push(Line::default());
-                lines.push(muted("⏎ next".to_string()));
+                hints(&mut lines, &mut spots, &[("⏎ next", Some(KeyCode::Enter.into()))]);
             }
             _ => {
                 let file = crate::area_page::home_relative(&self.file);
@@ -289,10 +324,11 @@ impl Wizard {
                 }
                 lines.push(Line::default());
                 let verb = if self.editing.is_some() { "save" } else { "add" };
-                lines.push(muted(format!("y {verb} · g {verb} and run now · ← back · esc cancel")));
+                let (add, run) = (format!("y {verb}"), format!("g {verb} and run now"));
+                hints(&mut lines, &mut spots, &[(&add, Some(KeyCode::Char('y').into())), (&run, Some(KeyCode::Char('g').into())), ("← back", Some(KeyCode::Left.into())), ("esc cancel", Some(KeyCode::Esc.into()))]);
             }
         }
-        lines
+        (lines, spots)
     }
 
     fn when_said(&self, schedule: Schedule, now: u64, offset: i64) -> String {
@@ -340,7 +376,7 @@ mod tests {
     }
 
     fn screen(wizard: &Wizard) -> String {
-        wizard.lines(1_792_391_400, 0, 60).iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n")
+        wizard.view(1_792_391_400, 0, 60).0.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n")
     }
 
     #[test]

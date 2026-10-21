@@ -63,6 +63,7 @@ pub(super) fn row_facts(item: &Item) -> String {
     let mut parts: Vec<String> = absence(item).map(str::to_string).into_iter().collect();
     parts.extend(item.ci_note());
     parts.extend(item.recover_note());
+    parts.extend(item.push_note());
     if git.ahead > 0 {
         parts.push(plural(git.ahead, "commit"));
     }

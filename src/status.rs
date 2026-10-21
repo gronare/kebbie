@@ -75,6 +75,7 @@ pub struct Item {
     pub ci: Option<crate::ci::Watch>,
     pub recover: Option<crate::recover::Record>,
     pub routine: Option<String>,
+    pub push_waits: Option<tasks::PushBy>,
 }
 
 impl Item {
@@ -149,6 +150,14 @@ impl Item {
         self.recovering().map(crate::recover::Record::note)
     }
 
+    pub fn push_note(&self) -> Option<String> {
+        let who = match self.push_waits? {
+            tasks::PushBy::User => "you",
+            tasks::PushBy::Lead => "lead",
+        };
+        Some(format!("push waits for tests · {who}"))
+    }
+
     // Between turns the task's own report says what it needs; herdr's "done" only says nobody has looked yet.
     pub fn group(&self) -> Group {
         let status = self.agent.as_ref().map(|agent| agent.status.as_str());
@@ -205,7 +214,7 @@ impl Item {
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
             return format!("{} · ready to push{behind}{review}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.ci_note().into_iter().chain(self.recover_note()).collect();
+        let mut parts: Vec<String> = self.ci_note().into_iter().chain(self.recover_note()).chain(self.push_note()).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -252,6 +261,7 @@ impl Item {
             "ci": self.ci.as_ref().map(crate::ci::Watch::to_json),
             "recover": self.recover.as_ref().map(|record| { let mut shown = record.to_json(); shown["note"] = json!(record.note()); shown }),
             "routine": self.routine,
+            "push_waits": self.push_waits.map(tasks::PushBy::key),
             "server": self.server,
             "url": self.url,
             "worker": self.worker,
@@ -391,6 +401,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
                 recover: state.as_deref().and_then(|state| crate::recover::load(state, &address)),
                 routine: state.as_deref().and_then(|state| crate::routines::run_of(state, &address)).map(|(id, _)| id),
+                push_waits: state.as_deref().and_then(|state| tasks::pending_push(state, &address)),
                 name: task,
             });
         }
@@ -421,6 +432,7 @@ pub fn gather() -> Result<Vec<Item>> {
             ci: None,
             recover: None,
             routine: None,
+            push_waits: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -446,6 +458,7 @@ pub(crate) mod tests {
             ci: None,
             recover: None,
             routine: None,
+            push_waits: None,
         }
     }
 
@@ -638,6 +651,16 @@ pub(crate) mod tests {
         assert!(task(Some("done"), None, 0).group() == Group::NeedsYou);
         assert!(task(Some("idle"), None, 1).group() == Group::ReadyToPush);
         assert!(task(Some("idle"), None, 0).group() == Group::Idle);
+    }
+
+    #[test]
+    fn a_push_waiting_for_the_tasks_tests_says_who_asked_in_the_summary_and_the_json() {
+        let mut item = task(Some("working"), None, 1);
+        assert_eq!((item.to_json()["push_waits"].clone(), item.push_note()), (Value::Null, None));
+        item.push_waits = Some(tasks::PushBy::Lead);
+        assert_eq!((item.to_json()["push_waits"].clone(), item.summary()), (json!("lead"), "push waits for tests · lead · 1 commit".to_string()));
+        item.push_waits = Some(tasks::PushBy::User);
+        assert_eq!(item.to_json()["push_waits"], json!("user"));
     }
 
     #[test]

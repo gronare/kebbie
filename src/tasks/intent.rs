@@ -18,7 +18,7 @@ pub(super) enum Through {
 
 // Only the user or the lead ever push, so an intent names one of them and nothing else.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum By {
+pub(crate) enum By {
     User,
     Lead,
 }
@@ -36,6 +36,13 @@ impl By {
         match self {
             By::User => Caller::User,
             By::Lead => Caller::Lead,
+        }
+    }
+
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            By::User => "user",
+            By::Lead => "lead",
         }
     }
 
@@ -67,7 +74,7 @@ impl Intent {
             Through::First { count, of } => json!({ "count": count, "of": of }),
         };
         json!({
-            "by": match self.by { By::User => "user", By::Lead => "lead" },
+            "by": self.by.key(),
             "address": self.address, "repo": self.repo, "task": self.task, "fingerprint": self.fingerprint,
             "through": through, "at": self.at, "seen": self.seen,
         })
@@ -110,6 +117,11 @@ pub(super) fn save(state: &Path, intent: &Intent) -> Result<()> {
 
 pub(super) fn load(state: &Path, address: &str) -> Option<Intent> {
     Intent::from_json(&serde_json::from_str(&std::fs::read_to_string(file(state, address)).ok()?).ok()?).filter(|intent| intent.address == address)
+}
+
+// Reads only: the board and kelpie status never claim or drop an intent.
+pub(crate) fn pending(state: &Path, address: &str) -> Option<By> {
+    load(state, address).map(|intent| intent.by)
 }
 
 pub(super) fn forget(state: &Path, address: &str) {
@@ -243,7 +255,10 @@ mod tests {
         assert_eq!(By::of(&Caller::Task("billing@app".to_string())), None);
         assert_eq!(By::of(&Caller::Lead).map(By::caller), Some(Caller::Lead));
         save(&state, &written).unwrap();
+        assert_eq!((pending(&state, "billing@app"), pending(&state, "other@app")), (Some(By::Lead), None));
+        assert_eq!(load(&state, "billing@app"), Some(written.clone()), "reading what waits leaves the intent in place");
         assert!(claim(&state, "billing@app") && !claim(&state, "billing@app"), "one claim wins");
+        assert_eq!(pending(&state, "billing@app"), None, "a claimed intent waits no more");
         std::fs::remove_dir_all(state).unwrap();
     }
 

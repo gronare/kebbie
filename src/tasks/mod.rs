@@ -14,7 +14,7 @@ pub(crate) use approval::{approve, approved, rules_check, same_code};
 pub(crate) use claude::{end_claude, start_claude, trusted_by_user, wait_for_prompt};
 pub(crate) use finish::{done, drop, reset};
 pub(crate) use history::{Commit, commits, draft_squash_message, reword, squash};
-pub(crate) use intent::complete as complete_pushes;
+pub(crate) use intent::{By as PushBy, complete as complete_pushes, pending as pending_push};
 pub(crate) use launch::{Session, Start, claude_home, new_session_id, start, transcript, transcripts_dir};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of};
 pub(crate) use push::{after_ci, land, push, tidy};

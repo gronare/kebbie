@@ -21,7 +21,7 @@ impl App {
             return;
         }
         if self.page == Page::Routines {
-            let effect = self.routines.mouse(event);
+            let effect = self.routines.mouse(event, Some(terminal));
             return self.after_routines(effect, None);
         }
         if self.page == Page::Areas {

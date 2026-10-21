@@ -15,7 +15,7 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 
 In a narrow pane the two columns stack, and the status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
 
-A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases first. Under it, a `you:` line gives your next step from the task's last report. While its dev server runs, a `web` line shows the server's address as a link.
+A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases first. Under it, a `you:` line gives your next step from the task's last report. While its dev server runs, a `web` line shows the server's address as a link. While a push waits for the task's Claude to test the files the default branch changed under it, the row and the open task say `push waits for tests · you`, or `· lead` when the lead pushed; kelpie pushes once the task reports ready with the same commits.
 
 The selected task opens in place with its review progress, its question and options, its report, its latest test run, and a warning about files changed in a main checkout outside any task.
 
@@ -218,6 +218,8 @@ A run is an ordinary task. It shows on the Work page like any other, marked `rou
 4. What it may do: Report, Plan, Fix, or Fix and push (the lead pushes the fix once reviewed).
 5. Its name. The id comes from the name.
 
+Each step takes the mouse too: a click selects a repo or what it may do, a second click on it goes on, the hints under a step (`⏎ next`, `esc cancel`, and `y`, `g` and `←` on the table) work as keys, and the wheel moves through the list.
+
 Then it shows the `[[routines]]` table it will add. Nothing is written before `y`; `g` adds it and starts a run at once, `←` goes back. A new routine always goes to config.toml, as `kelpie routine add` adds it. Editing, pausing and deleting change the routine in the file it is in, a repo config's in that repo config, and keep the rest of the file as it was. The page reads the files again every 15 seconds, so a change made by hand shows within a minute.
 
 With no routines yet, the page explains what a routine is and offers three to start from: a health check, a dependency bump and keeping CI green.
@@ -247,4 +249,4 @@ The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messag
 | Click an option, a commit or a key in the status line | Use it. |
 | Click the messages line | Open it. |
 | Scroll | Move through whatever is under the pointer. |
-| Click outside a window | Close it. |
+| Click outside a window | Close it, except the routine steps, which keep what you typed. |

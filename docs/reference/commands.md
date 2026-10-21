@@ -118,7 +118,7 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 | Command | Output |
 | --- | --- |
 | `kelpie board [--overlay]` | The board. `--overlay` is the popup form, which `esc` closes. See [Board](board.md). |
-| `kelpie status [--json]` | Every task and Claude session, grouped by what it needs from you. `--json` gives `away_since`, `items` and `checkouts`. |
+| `kelpie status [--json]` | Every task and Claude session, grouped by what it needs from you. `--json` gives `away_since`, `items` and `checkouts`; a task's `push_waits` is `user` or `lead` while a push it asked for waits for the task's tests. |
 | `kelpie list [--json]` | The pool's worktrees: each one's task or `free`, uncommitted changes, commits ahead and behind, and the first line of its setup note. |
 | `kelpie areas` | The vault's areas with their repo: main against origin, the last release, notes and actions. Needs the vault. |
 | `kelpie peers` | Who you are and the other task sessions, with what each is doing. |
