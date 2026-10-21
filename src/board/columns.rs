@@ -176,7 +176,8 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         }
         lines.push(line);
         if let Some(next) = item.next_for_you() {
-            lines.push(you_line(next, selected && open && unfold, width));
+            let next = if next == crate::status::ANSWER_IN_SPACE { format!("{next} · {} goes there", keys::key(Act::Go)) } else { next.to_string() };
+            lines.push(you_line(&next, selected && open && unfold, width));
         }
         if selected && open && unfold {
             let (detail, links, _) = detail_lines(app, item, width.saturating_sub(4), false);

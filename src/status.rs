@@ -55,6 +55,8 @@ pub struct Git {
     pub approved: bool,
 }
 
+pub const ANSWER_IN_SPACE: &str = "answer Claude's prompt in its Space";
+
 #[derive(Clone)]
 pub struct Item {
     pub review: Option<(usize, usize)>,
@@ -191,6 +193,9 @@ impl Item {
 
     // A turn under way has most likely taken up what the last report asked.
     pub fn next_for_you(&self) -> Option<&str> {
+        if self.agent.as_ref().is_some_and(|agent| agent.status == "blocked") {
+            return Some(ANSWER_IN_SPACE);
+        }
         if self.agent.as_ref().is_some_and(|agent| agent.status == "working") || self.ci_group().is_some() || self.recover_group().is_some() {
             return None;
         }
@@ -648,6 +653,8 @@ pub(crate) mod tests {
         assert_eq!(item.next_for_you(), Some("answer: which queue?"));
         item.agent.as_mut().unwrap().status = "working".to_string();
         assert_eq!(item.next_for_you(), None);
+        item.agent.as_mut().unwrap().status = "blocked".to_string();
+        assert_eq!(item.next_for_you(), Some(ANSWER_IN_SPACE), "a prompt in its pane outranks the last report");
     }
 
     #[test]
