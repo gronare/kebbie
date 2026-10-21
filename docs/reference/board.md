@@ -15,7 +15,7 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 
 In a narrow pane the two columns stack, and the status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
 
-A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases first. Under it, a `you:` line gives your next step from the task's last report. While its dev server runs, a `web` line shows the server's address as a link. While a push waits for the task's Claude to test the files the default branch changed under it, the row and the open task say `push waits for tests · you`, or `· lead` when the lead pushed; kelpie pushes once the task reports ready with the same commits.
+A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases first, `e` rebases now, and a task you keep rebased on main catches up by itself. The open task says `follows main` while that is on. Under it, a `you:` line gives your next step from the task's last report. While its dev server runs, a `web` line shows the server's address as a link. While a push waits for the task's Claude to test the files the default branch changed under it, the row and the open task say `push waits for tests · you`, or `· lead` when the lead pushed; kelpie pushes once the task reports ready with the same commits.
 
 The selected task opens in place with its review progress, its question and options, its report, its latest test run, and a warning about files changed in a main checkout outside any task.
 
@@ -82,10 +82,12 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `w` | Start or stop the dev server. | `worktree.dev_server` is set. |
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
 | `v` | Send to review; on a task in review, withdraw it. | It has commits and Claude is not mid-turn. |
+| `e` | Rebase onto the default branch now, in the background, without pushing; the result shows when it is done. A conflict goes to its Claude, as with [`kelpie land`](commands.md#kelpie-land-name). | It is behind the default branch and Claude is not mid-turn. |
 | `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn. |
 | `p` | Push: open the push window; `y` or `p` there rebases onto the default branch and pushes. | Claude is not mid-turn and it is not waiting for the reviewer. |
 | `d` | Done: close a task you already pushed elsewhere and free its worktree, also one under CI running or with failed CI you choose to leave. Asks first. | Claude is not mid-turn. |
 | `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task. |
+| `u` | Keep it rebased on main, or switch that off; `●` marks it on. When main moves, the keeper rebases it, never pushes it. See [`kelpie follow`](commands.md#kelpie-follow-name-onoff). Off by default; `done`, `drop` and `reset` switch it off. | It is a task. |
 | `z` | Reset: its work goes, its backlog item returns. Asks first. | Always. |
 | `x` | Drop. Asks first; on uncommitted work or unpushed commits, asks again to force. | Always. |
 

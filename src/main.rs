@@ -103,6 +103,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   done tells the lead to close it, reset puts it back in the backlog
   kelpie land [name]              rebase a task onto the default branch without pushing; on a conflict, its Claude
                                   resolves the rebase (push rebases by itself, so land is optional)
+  kelpie follow [name] [on|off]   keep a task rebased on the default branch (also u on the board), off by default: when
+                                  main moves, the keeper rebases it while its Claude is idle, its tracked files are
+                                  committed and no rebase, review or waiting push is under way; a conflict goes to its
+                                  Claude once per new main; never pushes; without on or off, says whether it follows
   kelpie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
   kelpie review [name]            send the task to review: a separate, read-only Claude reviews its commits in the
                                   background, by the skill kelpie:review and the rules skill; the task waits under To
@@ -158,8 +162,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   with [restart] auto = false
   kelpie keeper                   the keeper: one background kelpie per machine that runs the routines (stale-session
                                   restarts, the update check, held messages, delivery checks of typed prompts, the
-                                  scheduled routines) with no board open; herdr's startup, the board and kelpie update
-                                  start it ([keeper] enabled = false hands them to the board) (--start starts it
+                                  scheduled routines, rebasing the tasks that follow main) with no board open; herdr's
+                                  startup, the board and kelpie update start it ([keeper] enabled = false hands them to
+                                  the board) (--start starts it
                                   detached unless one runs, --status shows its pid, binary, uptime and each routine's
                                   last run, --stop stops it)
   kelpie issues [--json] [--all]  the problems and wishes about kelpie itself saved on this machine (open ones;
@@ -190,7 +195,7 @@ With the vault plugin installed, enabled and configured, the vault holds each ta
 the repo's log line from the commit subjects, done waits for the note's solution and decisions and then closes
 it, and reset puts it back in the backlog. Without the plugin none of this runs.
 
-Without a name, land, review, evidence, push, done, drop and reset act on the task whose worktree you are in.
+Without a name, land, follow, review, evidence, push, done, drop and reset act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>. kelpie --version (or kelpie version) prints the version and the commit and
 date it was built from.";
 
@@ -379,6 +384,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), &arguments.positionals[2..].join(" ")),
         Some("backlog") => backlog::show(),
         Some("land") => tasks::land(&cwd, name),
+        Some("follow") => tasks::follow(&cwd, &arguments.positionals[1..]),
         Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
         Some("review") if arguments.flag("--run") => review::run(&cwd),

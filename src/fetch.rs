@@ -30,7 +30,7 @@ pub fn failed_note(names: &[String]) -> String {
     if names.is_empty() { String::new() } else { format!("fetch failed: {}   ", names.join(", ")) }
 }
 
-fn fetched_at(repo: &Path) -> Option<SystemTime> {
+pub fn fetched_at(repo: &Path) -> Option<SystemTime> {
     std::fs::metadata(repo.join(".git/FETCH_HEAD")).and_then(|meta| meta.modified()).ok()
 }
 

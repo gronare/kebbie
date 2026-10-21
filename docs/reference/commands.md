@@ -39,6 +39,22 @@ Move work under way in the main checkout into a task: branch `<name>` if it exis
 
 Rebase the task onto the default branch without pushing. Uncommitted changes to tracked files stop it; untracked files do not. On a conflict it aborts its own rebase, leaves the worktree as it was, and hands the rebase to the task's Claude. `push` rebases by itself, so `land` is never required. When git refuses to start the rebase, kelpie shows git's reason, and names any files hidden from `git status` by skip-worktree or assume-unchanged that block it.
 
+### `kelpie follow [name] [on|off]`
+
+Keep the task rebased on the default branch, or stop. Off by default; `u` on the board switches it too. Without `on` or `off`, it says whether the task follows.
+
+While it is on, the keeper checks the task every minute, fetching the repo when its last fetch is over five minutes old. When the task is behind, kelpie rebases it, but only when nothing is under way in it:
+
+| The task | kelpie |
+| --- | --- |
+| Its Claude is mid-turn or asking for something | Waits for it to finish. |
+| Has uncommitted changes to tracked files, or a rebase in progress | Waits. Untracked files do not count. |
+| Is in review, or a push waits for its tests | Waits. |
+| Rebases cleanly | Rebases it and logs a line in the messages. When the new commits changed files the task changes too, its Claude is asked to run their tests. |
+| Conflicts | Aborts the rebase, hands it to the task's Claude as `land` does, and tells the lead. It tries again only once main or the task moves. |
+
+Nothing is ever pushed. You or the lead switch it; a task's own Claude cannot. `done`, `drop` and `reset` switch it off.
+
 ### `kelpie push [name]`
 
 Fetch, rebase the task onto the default branch, push its commits there, then close it as `done`. Only you may run it, or the lead for a task you gave push permission. The lead is told what landed. Uncommitted changes to tracked files stop it; untracked files do not.

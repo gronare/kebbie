@@ -66,3 +66,11 @@ pub(super) fn land_on_main(dir: &Path, upstream: &str, land: impl Fn(&Path)) {
 pub(super) fn pick(dir: &Path, sha: &str) {
     git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "cherry-pick", sha]).unwrap();
 }
+
+pub(super) fn upstream_commit(dir: &Path, file: &str, text: &str, message: &str) {
+    std::fs::write(dir.join(file), text).unwrap();
+    git(dir, &["add", file]).unwrap();
+    git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "commit", "--quiet", "-m", message]).unwrap();
+    git(dir, &["push", "--quiet", "origin", "HEAD"]).unwrap();
+    git(dir, &["fetch", "--quiet", "origin"]).unwrap();
+}

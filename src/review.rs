@@ -154,7 +154,7 @@ fn running_pid(state: &Path, address: &str) -> Option<String> {
     crate::sh::run("ps", &["-p", &pid, "-o", "args="], None).ok().filter(|args| is_reviewer(args)).map(|_| pid)
 }
 
-fn running_in(state: &Path, address: &str) -> bool {
+pub(crate) fn running_in(state: &Path, address: &str) -> bool {
     running_pid(state, address).is_some()
 }
 

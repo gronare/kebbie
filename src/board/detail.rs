@@ -147,6 +147,10 @@ pub(super) fn permit_chip(permit: Option<Permit>) -> Option<(String, Color)> {
     }
 }
 
+pub(super) fn follow_chip(item: &Item) -> Option<(String, Color)> {
+    item.follows.then(|| ("follows main".to_string(), BLUE))
+}
+
 const LABEL: usize = 8;
 
 pub(super) fn field(label: &str, value: Vec<Span<'static>>) -> Line<'static> {
@@ -276,6 +280,7 @@ fn state_spans(app: &App, item: &Item) -> Vec<Span<'static>> {
         facts.push((status::UNCHECKED.to_string(), YELLOW));
     }
     facts.extend(permit_chip(item.permit));
+    facts.extend(follow_chip(item));
     let mut spans = Vec::new();
     for (index, (text, color)) in facts.into_iter().enumerate() {
         if index > 0 {

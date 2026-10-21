@@ -34,8 +34,24 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
     Ok(format!("{task} is rebased onto {upstream} and ready:\n{commits}\n\nPush with:  kelpie push {task}"))
 }
 
+pub fn rebase(cwd: &Path) -> Result<String> {
+    let repo = main_checkout(cwd)?;
+    let slot = find_task(&repo, None, cwd)?;
+    let task = task_of(&slot);
+    committed(&slot.path, task)?;
+    fetch(&repo)?;
+    let upstream = default_branch(&repo)?;
+    if ahead_behind(&slot.path, &upstream)?.1 == 0 {
+        return Ok(format!("{task} is already on top of {upstream}."));
+    }
+    if !rebase_or_hand_over(&slot, &upstream, "The user asked kelpie to rebase this task")? {
+        return Err(format!("{task} conflicts with {upstream}; its Claude is resolving the rebase and reports back."));
+    }
+    Ok(format!("{task} is rebased onto {upstream}; nothing was pushed."))
+}
+
 // Uncommitted changes to tracked files may be unfinished work, so they keep a task from landing or pushing; untracked files do not.
-fn committed(path: &Path, task: &str) -> Result<()> {
+pub(super) fn committed(path: &Path, task: &str) -> Result<()> {
     let dirty = uncommitted(path)?;
     if dirty.is_empty() {
         return Ok(());
@@ -107,7 +123,7 @@ fn rebase_or_hand_over(slot: &Slot, upstream: &str, why: &str) -> Result<bool> {
     Ok(false)
 }
 
-fn conflict_prompt(why: &str, upstream: &str) -> String {
+pub(super) fn conflict_prompt(why: &str, upstream: &str) -> String {
     format!(
         "{why} and rebasing onto {upstream} conflicts (already fetched). Rebase this branch onto {upstream} with git rebase {upstream} (no -i), \
          resolve each conflict keeping the intent of both sides (read the upstream commits that touched the file), run the tests for the files \
@@ -129,7 +145,7 @@ fn overlap_prompt(by: By, upstream: &str, touched: &[Touched]) -> String {
     )
 }
 
-fn hand_over(slot: &Slot, text: &str) -> std::result::Result<(), String> {
+pub(super) fn hand_over(slot: &Slot, text: &str) -> std::result::Result<(), String> {
     let task = task_of(slot);
     let pane = claude_of(&slot.path).ok_or_else(|| "it has no Claude running to take it over".to_string())?;
     crate::typing::prompt(&pane, text, task).map_err(|refused| format!("its Claude {}, so kelpie typed nothing", refused.reason()))
@@ -225,7 +241,7 @@ pub(super) enum Prepared {
     Handed(String),
 }
 
-type HandOver<'a> = &'a dyn Fn(&Slot, &str) -> std::result::Result<(), String>;
+pub(super) type HandOver<'a> = &'a dyn Fn(&Slot, &str) -> std::result::Result<(), String>;
 
 fn prepare(caller: &Caller, repo: &Path, slot: &Slot, through: Through, hand_over: HandOver) -> Result<Prepared> {
     let task = task_of(slot).to_string();
@@ -572,14 +588,6 @@ mod tests {
         assert!(!stays_open(true, "abc", "abc"), "p on the last commit, or --through HEAD, leaves no commit to keep open for");
         assert!(stays_open(true, "abc", "def"));
         assert!(!stays_open(false, "abc", "def"));
-    }
-
-    fn upstream_commit(dir: &std::path::Path, file: &str, text: &str, message: &str) {
-        std::fs::write(dir.join(file), text).unwrap();
-        git(dir, &["add", file]).unwrap();
-        git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "commit", "--quiet", "-m", message]).unwrap();
-        git(dir, &["push", "--quiet", "origin", "HEAD"]).unwrap();
-        git(dir, &["fetch", "--quiet", "origin"]).unwrap();
     }
 
     // A file both main and the task change, apart, so the rebase is clean but the files overlap.

@@ -90,6 +90,7 @@ pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::v
     forget_session(task_of(&slot), &repo);
     forget_approval(task_of(&slot), &repo);
     crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
+    super::follow::forget(&peers::address(task_of(&slot), &name_of(&repo)));
     crate::review::forget(task_of(&slot), &repo);
     crate::report::forget_card(task_of(&slot), &repo);
     crate::evidence::forget(task_of(&slot), &repo);
@@ -183,6 +184,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str) -> Result<Str
     forget_session(task, &repo);
     forget_approval(task, &repo);
     crate::permit::forget(&peers::address(task, &name_of(&repo)));
+    super::follow::forget(&peers::address(task, &name_of(&repo)));
     crate::review::forget(task, &repo);
     crate::report::forget_card(task, &repo);
     crate::evidence::forget(task, &repo);
@@ -232,6 +234,7 @@ mod tests {
         assert!(body("close_task").contains("report::forget_card(") && body("discard").contains("report::forget_card("), "a later task by the same name must not show this one's card");
         assert!(body("close_task").contains("evidence::forget(") && body("discard").contains("evidence::forget("), "a later task by the same name must not show this one's test runs");
         assert!(body("close_task").contains("permit::forget(") && body("discard").contains("permit::forget("), "done, drop and reset take the push permission back");
+        assert!(body("close_task").contains("follow::forget(") && body("discard").contains("follow::forget("), "a later task by the same name must not follow main unasked");
         assert!(body("finish").contains("task_note::forget(") && body("discard").contains("task_note::forget("), "a later task by the same name must not inherit this one's Problem pass");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard("));
     }

@@ -34,6 +34,8 @@ pub enum Act {
     Worker,
     SendReview,
     Permit,
+    Rebase,
+    Follow,
     Tidy,
     Push,
     Done,
@@ -82,9 +84,9 @@ const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 
 impl Act {
-    pub const EVERY: [Act; 39] = [
+    pub const EVERY: [Act; 41] = [
         Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
-        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Tidy, Act::Push, Act::Done, Act::Reset, Act::Drop, Act::Refresh, Act::Away,
+        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Done, Act::Reset, Act::Drop, Act::Refresh, Act::Away,
         Act::Update, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
@@ -110,6 +112,8 @@ impl Act {
             Act::Worker => "worker",
             Act::SendReview => "send_review",
             Act::Permit => "permit",
+            Act::Rebase => "rebase",
+            Act::Follow => "follow",
             Act::Tidy => "tidy",
             Act::Push => "push",
             Act::Done => "done",
@@ -158,6 +162,8 @@ impl Act {
             Act::Worker => Default::Char('b'),
             Act::SendReview => Default::Char('v'),
             Act::Permit => Default::Char('a'),
+            Act::Rebase => Default::Char('e'),
+            Act::Follow => Default::Char('u'),
             Act::Tidy => Default::Char('t'),
             Act::Push => Default::Char('p'),
             Act::Done => Default::Char('d'),
@@ -208,6 +214,8 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Worker, on: &[Work], help: "start or stop the task's worker (worktree.dev_worker)", hint: Hint::No },
     Binding { act: Act::SendReview, on: &[Work], help: "send the task to review: a read-only Claude reads its commits; on a task in review, withdraw it", hint: Hint::No },
     Binding { act: Act::Permit, on: &[Work], help: "let the lead push the task itself, or take that back", hint: Hint::No },
+    Binding { act: Act::Rebase, on: &[Work], help: "rebase the task onto main now, without pushing; offered when it is behind, and a conflict goes to its Claude", hint: Hint::No },
+    Binding { act: Act::Follow, on: &[Work], help: "keep the task rebased on main: the keeper rebases it when main moves, while its Claude is idle and its files are committed; or switch that off", hint: Hint::No },
     Binding { act: Act::Tidy, on: &[Work], help: "tidy commits: its Claude reshapes them by the rules skill", hint: Hint::No },
     Binding { act: Act::Push, on: &[Work, Card], help: "push: its card and commits, all or the first few; rebases first", hint: Hint::No },
     Binding { act: Act::Done, on: &[Work], help: "done: after you pushed elsewhere (asks first)", hint: Hint::No },
@@ -447,7 +455,7 @@ mod tests {
         }
         assert_eq!((at(Routines, KeyCode::Char('e')), at(Routines, KeyCode::Char('p')), at(Routines, KeyCode::Char('D'))), (Some(Act::Edit), Some(Act::Pause), Some(Act::Delete)));
         assert_eq!((at(Routines, KeyCode::Char('g')), at(Routines, KeyCode::Char('s')), at(Routines, KeyCode::Char('n'))), (Some(Act::Go), Some(Act::Card), Some(Act::New)));
-        assert_eq!((at(Work, KeyCode::Char('e')), at(Work, KeyCode::Char('p')), at(Areas, KeyCode::Char('D'))), (None, Some(Act::Push), None), "pause and delete live on the Routines page alone");
+        assert_eq!((at(Work, KeyCode::Char('e')), at(Work, KeyCode::Char('p')), at(Areas, KeyCode::Char('D'))), (Some(Act::Rebase), Some(Act::Push), None), "edit, pause and delete live on the Routines page alone");
         assert_eq!(Keys::with(&entries(&[("pause", "P")])).0.act(Routines, &KeyEvent::from(KeyCode::Char('P'))), Some(Act::Pause));
     }
 

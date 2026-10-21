@@ -8,6 +8,8 @@ With several Claude sessions working at once, branches multiply fast. Every hour
 
 kelpie keeps branches short instead. A task is meant to finish, land and free its worktree. `kelpie push` rebases it onto the remote's default branch first, so what you push is exactly what you read, on top of what everyone else has pushed. However far behind the task is, that rebase is part of the push. When the commits it goes over changed files the task changes too, kelpie hands the task to its Claude to run their tests, and pushes once it reports ready with the same commits. When the rebase conflicts, kelpie aborts it, leaves the worktree as it was, and hands the conflict to the task's Claude, which knows the change best.
 
+A task that lives longer, a refactor under way while others land, can follow main instead of waiting for its push. Switch it on with `u` on the board or `kelpie follow <name> on`, and the keeper rebases it each time main moves, whenever its Claude sits idle with its work committed. Clean rebases happen quietly; when main's new commits touch the task's own files, its Claude runs their tests; a conflict goes to its Claude once, like any other. The task stays close to main the whole time, so its push holds no surprises. For a single catch-up, `e` on the board rebases now.
+
 The result on the default branch is a straight line of commits, each written to stand on its own.
 
 ## What replaces the pull request

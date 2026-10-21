@@ -537,7 +537,7 @@ impl App {
                         let at = self.question_of(&item);
                         self.open_questions(at);
                     }
-                    Act::Tidy | Act::Push | Act::Done | Act::SendReview if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
+                    Act::Tidy | Act::Push | Act::Done | Act::SendReview | Act::Rebase if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
                     Act::Push if item.awaiting_review() => self.show(Err(format!("{} is in review; push opens once its reviewer passes its commits.", item.name))),
                     Act::Tidy => {
                         if let Some(path) = item.path.clone() {
@@ -547,6 +547,16 @@ impl App {
                     }
                     Act::Server => self.toggle(&item, Process::Server),
                     Act::Worker => self.toggle(&item, Process::Worker),
+                    Act::Rebase => {
+                        if let Some(path) = item.path.clone() {
+                            self.in_background(format!("Rebasing {}…", item.name), move || tasks::rebase(&path));
+                        }
+                    }
+                    Act::Follow => {
+                        if let Some(repo) = &item.repo {
+                            self.show(tasks::toggle_follow(repo, &item.name));
+                        }
+                    }
                     Act::Permit if item.is_task() => self.show(permit::toggle_task(&peers::address(&item.name, &item.place))),
                     Act::SendReview => {
                         if let Some(path) = &item.path {

@@ -1,6 +1,7 @@
 mod approval;
 mod claude;
 mod finish;
+mod follow;
 mod history;
 mod intent;
 mod launch;
@@ -13,11 +14,12 @@ mod test_support;
 pub(crate) use approval::{approve, approved, rules_check, same_code};
 pub(crate) use claude::{end_claude, start_claude, trusted_by_user, wait_for_prompt};
 pub(crate) use finish::{done, drop, reset};
+pub(crate) use follow::{follow, follows, tick as follow_tick, toggle as toggle_follow};
 pub(crate) use history::{Commit, commits, draft_squash_message, reword, squash};
 pub(crate) use intent::{By as PushBy, complete as complete_pushes, pending as pending_push};
 pub(crate) use launch::{Session, Start, claude_home, new_session_id, start, task_at, task_role, transcript, transcripts_dir};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of};
-pub(crate) use push::{after_ci, land, push, tidy};
+pub(crate) use push::{after_ci, land, push, rebase, tidy};
 pub(crate) use started::{link, started_items, started_links};
 
 use std::path::Path;
@@ -87,7 +89,7 @@ mod tests {
     #[test]
     fn the_board_never_waits_on_the_vault_on_its_own_thread() {
         let board: String = std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/board")).unwrap().map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap()).collect();
-        for call in ["tasks::done(", "tasks::reset(", "tasks::push(", "tasks::start("] {
+        for call in ["tasks::done(", "tasks::reset(", "tasks::push(", "tasks::start(", "tasks::rebase("] {
             for (at, _) in board.match_indices(call) {
                 let line = board[..at].rsplit('\n').next().unwrap_or_default();
                 assert!(line.contains("move ||") || line.contains("sender.send("), "{call} runs on the board's thread: {line}");

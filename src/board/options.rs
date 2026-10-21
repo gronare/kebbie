@@ -44,6 +44,9 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
                 choice(Act::SendReview, "Send to review", "a separate, read-only Claude reviews its commits; the task waits under To review until it passes them")
             });
         }
+        if let Some(git) = item.and_then(|item| item.git.as_ref()).filter(|git| git.behind > 0) {
+            choices.push(choice(Act::Rebase, &format!("Rebase onto {}", trunk(git)), "fetch and rebase it now, without pushing; a conflict goes to its Claude"));
+        }
         choices.push(choice(Act::Tidy, "Tidy commits", "its Claude reshapes them by the rules skill"));
         if !item.is_some_and(Item::awaiting_review) {
             choices.push(choice(Act::Push, "Push", "its card and commits: push them all and close, or the first few and keep it open; rebases first"));
@@ -57,9 +60,21 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
             choice(Act::Permit, "Let the lead push it", "the lead may push this task itself once its commits are approved; done, drop and reset take it back")
         });
     }
+    if let Some(git) = item.and_then(|item| item.git.as_ref()) {
+        let about = if item.is_some_and(|item| item.follows) {
+            "on: the keeper rebases it when main moves, while its Claude is idle and its files are committed; never pushes. Choose it to switch off"
+        } else {
+            "the keeper rebases it whenever main moves, while its Claude is idle and its files are committed; a conflict goes to its Claude, nothing is pushed"
+        };
+        choices.push(choice(Act::Follow, &format!("Keep rebased on {}", trunk(git)), about));
+    }
     choices.push(choice(Act::Reset, "Reset", "stop it for good: its work goes, its backlog item comes back (asks first)"));
     choices.push(choice(Act::Drop, "Drop", "throw the task away (asks first)"));
     choices
+}
+
+fn trunk(git: &crate::status::Git) -> &str {
+    git.upstream.trim_start_matches("origin/")
 }
 
 // While its Claude works, the branch can still move, so the steps that rewrite, push or close it wait.
@@ -147,13 +162,22 @@ impl App {
     }
 }
 
+fn running(item: &Item, act: Option<Act>) -> bool {
+    match act {
+        Some(Act::Server) => item.server,
+        Some(Act::Worker) => item.worker,
+        Some(Act::Follow) => item.follows,
+        _ => false,
+    }
+}
+
 pub(super) fn draw_options(frame: &mut Frame, app: &App, index: usize) -> Vec<(Rect, Hit)> {
     let mut modal_hits = Vec::new();
     if app.column == Column::Work {
             let item = app.selected_task();
             let title: String = item.as_ref().map(|item| item.name.clone()).unwrap_or_default().chars().take(44).collect();
-            let running = |act: Option<Act>| item.as_ref().is_some_and(|item| (act == Some(Act::Server) && item.server) || (act == Some(Act::Worker) && item.worker));
-            let (lines, at) = menu_lines(&app.choices(), index, 48, running, menu_group);
+            let on = |act: Option<Act>| item.as_ref().is_some_and(|item| running(item, act));
+            let (lines, at) = menu_lines(&app.choices(), index, 48, on, menu_group);
             let area = modal(frame, title, lines, 52);
             for (choice, line) in at.into_iter().enumerate() {
                 let y = area.y + 1 + line as u16;
@@ -203,9 +227,9 @@ mod tests {
     #[test]
     fn a_working_task_offers_no_tidy_push_or_done() {
         let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gcrazx");
-        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gcrvtpdazx");
-        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gcrtpdazx", "no commits, nothing to review");
+        assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gcrauzx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gcrvtpdauzx");
+        assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gcrtpdauzx", "no commits, nothing to review");
     }
 
     #[test]
@@ -213,16 +237,16 @@ mod tests {
         let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
-        assert_eq!(keys(&item), "gcrvtdazx");
+        assert_eq!(keys(&item), "gcrvtdauzx");
         assert_eq!(row_facts(&item), "1 commit · review: 2 findings");
         let withdraw = task_choices(Some(&item), None, None).into_iter().find(|choice| choice.key == 'v').unwrap();
         assert_eq!(withdraw.label, "Withdraw from review", "the push stays the user's: a task in review can always be taken out");
         item.verdict = None;
-        assert_eq!(keys(&item), "gcrvtpdazx", "withdrawn, it offers push again");
+        assert_eq!(keys(&item), "gcrvtpdauzx", "withdrawn, it offers push again");
         assert_eq!(task_choices(Some(&item), None, None).into_iter().find(|choice| choice.key == 'v').unwrap().label, "Send to review");
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         item.verdict = Some(crate::status::tests::in_review(true, 0, false, false));
-        assert_eq!(keys(&item), "gcrvtpdazx");
+        assert_eq!(keys(&item), "gcrvtpdauzx");
         assert_eq!(row_facts(&item), "1 commit · reviewed");
     }
 
@@ -265,6 +289,44 @@ mod tests {
         let mut session = item.clone();
         session.git = None;
         assert_eq!(permission(&session), None, "a session outside a task has nothing to push");
+    }
+
+    #[test]
+    fn rebase_onto_main_is_offered_only_when_the_task_is_behind_and_not_mid_turn() {
+        let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
+        assert!(!keys(&item).contains('e'), "up to date: nothing to rebase");
+        item.git.as_mut().unwrap().behind = 3;
+        assert_eq!(keys(&item), "gcrvetpdauzx");
+        let rebase = task_choices(Some(&item), None, None).into_iter().find(|choice| choice.key == 'e').unwrap();
+        assert_eq!(rebase.label, "Rebase onto main");
+        assert_eq!(menu_group(rebase.act), "BRANCH");
+        let mut working = crate::status::tests::task(Some("working"), None, 1);
+        working.git.as_mut().unwrap().behind = 3;
+        assert!(!keys(&working).contains('e'), "its Claude is mid-turn");
+    }
+
+    #[test]
+    fn keep_rebased_on_main_is_a_toggle_with_the_running_marker_and_a_chip_in_the_detail() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
+        let marked = |item: &Item| {
+            let choices = task_choices(Some(item), None, None);
+            let at = choices.iter().position(|choice| choice.act == Some(Act::Follow)).unwrap();
+            let (lines, rows) = menu_lines(&choices, 0, 48, |act| running(item, act), menu_group);
+            (choices[at].label.clone(), lines[rows[at]].to_string())
+        };
+        let (label, line) = marked(&item);
+        assert_eq!(label, "Keep rebased on main");
+        assert!(line.ends_with("  u") && !line.contains('●'), "off by default: {line}");
+        assert_eq!(crate::board::detail::follow_chip(&item), None);
+        item.follows = true;
+        let (_, line) = marked(&item);
+        assert!(line.ends_with("● u"), "{line}");
+        assert_eq!(crate::board::detail::follow_chip(&item), Some(("follows main".to_string(), crate::board::widgets::BLUE)));
+        assert_eq!(menu_group(Some(Act::Follow)), "BRANCH");
+        let mut session = item.clone();
+        session.git = None;
+        assert!(!task_choices(Some(&session), None, None).iter().any(|choice| choice.act == Some(Act::Follow)), "a session outside a task has no branch");
     }
 
     #[test]
@@ -324,7 +386,7 @@ mod tests {
         assert_eq!(menu_group(Some(Act::Permit)), "BRANCH");
         let help = help_lines(false);
         let labels: Vec<&str> = help.iter().map(|line| line.spans[0].content.trim()).collect();
-        for key in ['n', 'g', 'c', 'r', 'w', 'b', 'v', 'a', 'p', 'd', 'z', 'x', 'R', 'A', 'U', 'i', 'm', 'q', '/'] {
+        for key in ['n', 'g', 'c', 'r', 'w', 'b', 'v', 'a', 'e', 'u', 'p', 'd', 'z', 'x', 'R', 'A', 'U', 'i', 'm', 'q', '/'] {
             assert!(labels.iter().any(|label| label.split_whitespace().any(|word| word == key.to_string())), "{key} is not in the keys help: {labels:?}");
         }
     }
