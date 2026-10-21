@@ -151,6 +151,10 @@ pub(super) fn follow_chip(item: &Item) -> Option<(String, Color)> {
     item.follows.then(|| ("follows main".to_string(), BLUE))
 }
 
+pub(super) fn bypass_chip(item: &Item) -> Option<(String, Color)> {
+    item.bypass.then(|| ("bypass permissions: Claude asks for no permission".to_string(), PEACH))
+}
+
 const LABEL: usize = 8;
 
 pub(super) fn field(label: &str, value: Vec<Span<'static>>) -> Line<'static> {
@@ -281,6 +285,7 @@ fn state_spans(app: &App, item: &Item) -> Vec<Span<'static>> {
     }
     facts.extend(permit_chip(item.permit));
     facts.extend(follow_chip(item));
+    facts.extend(bypass_chip(item));
     let mut spans = Vec::new();
     for (index, (text, color)) in facts.into_iter().enumerate() {
         if index > 0 {
@@ -533,6 +538,23 @@ mod tests {
         assert_eq!((links[0].shown.as_str(), links[0].url.as_str()), ("https://github.com/acme/web/actions/runs/42", "https://github.com/acme/web/actions/runs/42"));
         assert_eq!(row_facts(&item), "CI running: CI");
         assert_eq!(group_color(item.group()), YELLOW);
+    }
+
+    #[test]
+    fn a_task_whose_claude_bypasses_permissions_is_marked_on_its_row_and_named_in_its_panel() {
+        let mut app = test_app(vec![served("search-filters")]);
+        with_detail(&mut app);
+        let (rows, _) = render(&mut app, 170, 50);
+        assert!(!rows.join("\n").contains("bypass"), "{}", rows.join("\n"));
+        app.tasks[0].bypass = true;
+        let (rows, buffer) = render(&mut app, 170, 50);
+        assert!(rows.iter().any(|row| row.contains("search-filters") && row.contains("2 commits · bypass")), "{}", rows.join("\n"));
+        let at = rows.iter().position(|row| row.contains("bypass permissions: Claude asks for no permission")).unwrap_or_else(|| panic!("{}", rows.join("\n")));
+        let column = rows[at].find("bypass permissions").map(|byte| rows[at][..byte].chars().count()).unwrap() as u16;
+        assert_eq!(buffer[(column, at as u16)].fg, PEACH);
+        let mut fresh = crate::status::tests::task(Some("idle"), None, 0);
+        fresh.bypass = true;
+        assert_eq!(row_facts(&fresh), "nothing yet · bypass");
     }
 
     #[test]

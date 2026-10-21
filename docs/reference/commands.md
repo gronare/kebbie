@@ -20,12 +20,14 @@ Start a task in a pooled worktree, in its own herdr Space, with Claude. Running 
 
 In a folder you have trusted in Claude Code, kelpie answers Claude's "Do you trust this folder?" itself. In one you have not, that answer is yours: the prompt waits, and kelpie types it in once you have answered and Claude's input box is empty, while the keeper or an open board runs. If you type a first message yourself before then, kelpie drops the prompt instead of sending it again.
 
+Started in `bypassPermissions`, Claude shows its bypass permissions warning until you accept it once on the machine. kelpie never answers it: the prompt waits the same way until you have. When managed settings disable bypass permissions mode, Claude starts with permission prompts, and `kelpie start` says so.
+
 | Option | Meaning |
 | --- | --- |
 | `--repo <name>` | Start in that repo instead of the current one. Repeat it for one task across repos: one half per repo, the first focused. See [Finding repos](#finding-repos). |
 | `--from <ref>` | Branch off this ref instead of the remote's default branch. |
 | `--backlog <item>` | Tie the task to a backlog item, as `kelpie link` does. |
-| `--mode <mode>` | Claude's permission mode for the task. |
+| `--mode <mode>` | Claude's permission mode for the task, one of Claude Code's: `default`, `acceptEdits`, `plan`, `auto`, `dontAsk` or `bypassPermissions`. Without it, the task starts in [`task.permission_mode`](configuration.md#keys), and without that in Claude Code's own default. |
 | `--no-focus` | Stay where you are. |
 
 ### `kelpie move <name> [file ...]`

@@ -669,9 +669,9 @@ fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Resu
 }
 
 fn restarted_said(label: &str, reasons: &[String], started: &tasks::Started) -> String {
-    match started {
-        tasks::Started::Ready => format!("Restarted {label} with claude --resume, as it ran older code ({}).", reasons.join(", ")),
-        tasks::Started::AwaitsTrust => format!("Restarted {label}, as it ran older code ({}); Claude there asks whether you trust its folder. Answer it there, and it resumes its conversation.", reasons.join(", ")),
+    match started.asks() {
+        None => format!("Restarted {label} with claude --resume, as it ran older code ({}).", reasons.join(", ")),
+        Some(asks) => format!("Restarted {label}, as it ran older code ({}); Claude there asks {asks}. Answer it there, and it resumes its conversation.", reasons.join(", ")),
     }
 }
 
@@ -798,12 +798,12 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             Ok(started) => {
                 memory.active.insert(session.clone(), at);
                 live.remove(&session);
-                if matches!(mode, Mode::Routine { .. }) || started == tasks::Started::AwaitsTrust {
+                if matches!(mode, Mode::Routine { .. }) || started.asks().is_some() {
                     tell_board(&restarted_said(&pane.label, &reasons, &started));
                 }
-                lines.push(match started {
-                    tasks::Started::Ready => line(&Verdict::Restart),
-                    tasks::Started::AwaitsTrust => Line { label: pane.label.clone(), said: "restarted; Claude there asks whether you trust its folder, answer it there".to_string(), stale: true },
+                lines.push(match started.asks() {
+                    None => line(&Verdict::Restart),
+                    Some(asks) => Line { label: pane.label.clone(), said: format!("restarted; Claude there asks {asks}, answer it there"), stale: true },
                 });
             }
             Err(error) => {

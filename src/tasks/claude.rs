@@ -25,8 +25,7 @@ fn refusal(error: &str) -> Refusal {
 
 #[derive(Debug, PartialEq)]
 enum Launched {
-    Ready,
-    AwaitsTrust,
+    Up(Started),
     ShellBack(String),
 }
 
@@ -34,6 +33,19 @@ enum Launched {
 pub enum Started {
     Ready,
     AwaitsTrust,
+    AwaitsBypass,
+    BypassDisabled,
+}
+
+impl Started {
+    // What Claude asks in its Space before it runs; the answer is the user's, so kelpie sends it no key.
+    pub fn asks(&self) -> Option<&'static str> {
+        match self {
+            Started::AwaitsTrust => Some("whether you trust its folder"),
+            Started::AwaitsBypass => Some("you to accept bypass permissions mode"),
+            Started::Ready | Started::BypassDisabled => None,
+        }
+    }
 }
 
 // herdr types Claude's command into the pane's shell, so it is typed only once that shell is idle at its prompt.
@@ -49,8 +61,7 @@ fn start_twice(pane: &str, mut attempt: impl FnMut() -> Result<Launched>) -> Res
     let mut shown = String::new();
     for _ in 0..2 {
         match attempt()? {
-            Launched::Ready => return Ok(Started::Ready),
-            Launched::AwaitsTrust => return Ok(Started::AwaitsTrust),
+            Launched::Up(started) => return Ok(started),
             Launched::ShellBack(line) => shown = line,
         }
     }
@@ -61,7 +72,7 @@ fn type_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<L
     let mut last = String::new();
     for _ in 0..30 {
         match herdr::start_agent(name, "claude", pane, args) {
-            Ok(()) => return Ok(Launched::Ready),
+            Ok(()) => return Ok(Launched::Up(running(&herdr::read_pane(pane).unwrap_or_default()))),
             Err(error) => match refusal(&error) {
                 Refusal::NotYet => last = error,
                 Refusal::Starting => return wait_until_ready(name, pane, trusted),
@@ -163,11 +174,26 @@ fn wait_until_ready(name: &str, pane: &str, trusted: bool) -> Result<Launched> {
         .ok_or_else(|| format!("Claude in pane {pane} never became ready; see what it waits for there"))
 }
 
+// Claude wraps a dialog's lines to the pane's width and draws them inside a box.
+fn flat(screen: &str) -> String {
+    screen.split_whitespace().filter(|word| *word != "│").collect::<Vec<_>>().join(" ")
+}
+
+fn asks_for_bypass(screen: &str) -> bool {
+    let flat = flat(screen);
+    flat.contains("Bypass Permissions mode") && flat.contains("Yes, I accept")
+}
+
+// Managed settings with permissions.disableBypassPermissionsMode start Claude in another mode and say so on its screen.
+fn running(screen: &str) -> Started {
+    if flat(screen).contains("Bypass permissions mode was disabled") { Started::BypassDisabled } else { Started::Ready }
+}
+
 fn yes_selected(screen: &str) -> bool {
     screen.lines().any(|line| line.trim_start().trim_start_matches('│').trim_start().starts_with('❯') && line.contains("Yes, I trust this folder"))
 }
 
-// Claude asks about a folder it has not seen with "No, exit" selected; a prompt sent before it is ready is lost.
+// Claude asks about a folder it has not seen, and about bypass permissions mode until the user accepts it once, with "No, exit" selected; a prompt sent before it is ready is lost.
 fn ready_with(mut look: impl FnMut() -> Result<(bool, String)>, mut ready: impl FnMut() -> bool, mut press: impl FnMut(&str) -> Result<()>, mut pause: impl FnMut(), trusted: bool, tries: usize) -> Result<Option<Launched>> {
     let mut at_shell = 0;
     for _ in 0..tries {
@@ -176,13 +202,16 @@ fn ready_with(mut look: impl FnMut() -> Result<(bool, String)>, mut ready: impl 
         if at_shell >= QUIET_LOOKS {
             return Ok(Some(Launched::ShellBack(last_line(&screen).to_string())));
         }
+        if asks_for_bypass(&screen) {
+            return Ok(Some(Launched::Up(Started::AwaitsBypass)));
+        }
         if screen.contains("trust this folder") {
             if !trusted {
-                return Ok(Some(Launched::AwaitsTrust));
+                return Ok(Some(Launched::Up(Started::AwaitsTrust)));
             }
             press(if yes_selected(&screen) { "enter" } else { "down" })?;
         } else if ready() {
-            return Ok(Some(Launched::Ready));
+            return Ok(Some(Launched::Up(running(&screen))));
         }
         pause();
     }
@@ -267,9 +296,9 @@ mod tests {
             let result = start_twice("w1-2", || { tries += 1; Ok(outcomes.next().unwrap()) });
             (result, tries)
         };
-        assert_eq!(run(vec![Launched::Ready]), (Ok(Started::Ready), 1));
-        assert_eq!(run(vec![Launched::ShellBack("zsh: command not found: laude".to_string()), Launched::Ready]), (Ok(Started::Ready), 2));
-        assert_eq!(run(vec![Launched::AwaitsTrust]), (Ok(Started::AwaitsTrust), 1), "a trust prompt waiting for the user is a start, not a failure");
+        assert_eq!(run(vec![Launched::Up(Started::Ready)]), (Ok(Started::Ready), 1));
+        assert_eq!(run(vec![Launched::ShellBack("zsh: command not found: laude".to_string()), Launched::Up(Started::Ready)]), (Ok(Started::Ready), 2));
+        assert_eq!(run(vec![Launched::Up(Started::AwaitsTrust)]), (Ok(Started::AwaitsTrust), 1), "a trust prompt waiting for the user is a start, not a failure");
         let (result, tries) = run(vec![Launched::ShellBack("❯".to_string()), Launched::ShellBack("❯".to_string())]);
         assert_eq!(tries, 2);
         assert!(result.unwrap_err().starts_with("Claude did not start in pane w1-2: its shell is back at the prompt, showing \"❯\""));
@@ -288,10 +317,26 @@ mod tests {
 
     #[test]
     fn an_untrusted_folder_leaves_the_trust_prompt_to_the_user_and_a_trusted_one_is_answered() {
-        assert_eq!(readied(&[TRUST, TRUST, TRUST], 0, false), (Some(Launched::AwaitsTrust), Vec::new()), "no key reaches a trust prompt the user has not answered for this repo");
-        assert_eq!(readied(&[TRUST, TRUST_YES, "❯ "], 0, true), (Some(Launched::Ready), vec!["down".to_string(), "enter".to_string()]), "Claude Code 2.1.306 focuses No, exit first, inside a box");
-        assert_eq!(readied(&["Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit", "❯ "], 0, true), (Some(Launched::Ready), vec!["enter".to_string()]), "Claude numbers its choices");
-        assert_eq!(readied(&["", "", "❯ "], 2, false), (Some(Launched::Ready), Vec::new()), "a folder Claude does not ask about is ready as before");
+        assert_eq!(readied(&[TRUST, TRUST, TRUST], 0, false), (Some(Launched::Up(Started::AwaitsTrust)), Vec::new()), "no key reaches a trust prompt the user has not answered for this repo");
+        assert_eq!(readied(&[TRUST, TRUST_YES, "❯ "], 0, true), (Some(Launched::Up(Started::Ready)), vec!["down".to_string(), "enter".to_string()]), "Claude Code 2.1.306 focuses No, exit first, inside a box");
+        assert_eq!(readied(&["Do you trust this folder?\n❯ 1. Yes, I trust this folder\n  2. No, exit", "❯ "], 0, true), (Some(Launched::Up(Started::Ready)), vec!["enter".to_string()]), "Claude numbers its choices");
+        assert_eq!(readied(&["", "", "❯ "], 2, false), (Some(Launched::Up(Started::Ready)), Vec::new()), "a folder Claude does not ask about is ready as before");
+    }
+
+    const BYPASS: &str = "╭──────────────────────────────────────────────────────────────╮\n│ WARNING: Claude Code running in Bypass Permissions mode      │\n│                                                              │\n│ In Bypass Permissions mode, Claude Code will not ask for     │\n│ your approval before running potentially dangerous commands. │\n│ This mode should only be used in a sandboxed container/VM    │\n│ that has restricted internet access and can easily be        │\n│ restored if damaged.                                         │\n│                                                              │\n│ By proceeding, you accept all responsibility for actions     │\n│ taken while running in Bypass Permissions mode.              │\n│                                                              │\n│ https://code.claude.com/docs/en/security                     │\n│                                                              │\n│ ❯ No, exit                                                   │\n│   Yes, I accept                                              │\n╰──────────────────────────────────────────────────────────────╯";
+
+    #[test]
+    fn the_bypass_permissions_warning_is_left_to_the_user_even_in_a_trusted_folder_and_a_policy_refusal_is_named() {
+        for trusted in [false, true] {
+            assert_eq!(readied(&[BYPASS, BYPASS], 0, trusted), (Some(Launched::Up(Started::AwaitsBypass)), Vec::new()), "accepting bypass permissions mode is the user's, so no key reaches it");
+        }
+        assert_eq!(readied(&[TRUST_YES, BYPASS], 0, true), (Some(Launched::Up(Started::AwaitsBypass)), vec!["enter".to_string()]), "Claude Code 2.1.306 shows the warning after the trust prompt");
+        assert_eq!(Started::AwaitsBypass.asks(), Some("you to accept bypass permissions mode"));
+        assert_eq!((Started::Ready.asks(), Started::BypassDisabled.asks()), (None, None));
+        let disabled = "╭───╮\n│ > │\n╰───╯\n  ⏵⏵ accept edits on · Bypass permissions mode was disabled by settings";
+        assert_eq!(readied(&[disabled], 0, false), (Some(Launched::Up(Started::BypassDisabled)), Vec::new()), "Claude Code 2.1.306 runs in another mode when managed settings disable bypass");
+        assert_eq!(running("❯ "), Started::Ready);
+        assert_eq!(crate::typing::draft(BYPASS), crate::typing::Draft::Unreadable, "a held prompt waits until the warning is answered");
     }
 
     #[test]

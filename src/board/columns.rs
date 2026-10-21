@@ -86,6 +86,9 @@ pub(super) fn row_facts(item: &Item) -> String {
     if parts.len() == usize::from(absence(item).is_some()) {
         parts.push("nothing yet".to_string());
     }
+    if item.bypass {
+        parts.push("bypass".to_string());
+    }
     parts.join(" · ")
 }
 

@@ -68,6 +68,13 @@ impl AlsoNoticed {
     }
 }
 
+pub const PERMISSION_MODES: [&str; 6] = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
+
+pub fn permission_mode(name: &str) -> Result<&str> {
+    PERMISSION_MODES.iter().find(|mode| **mode == name).map(|_| name)
+        .ok_or(format!("\"{name}\" is not a Claude Code permission mode; use {}", PERMISSION_MODES.map(|mode| format!("\"{mode}\"")).join(", ")))
+}
+
 pub const DEFAULT_SETUP_SKILL: &str = "kelpie:set-up-worktree";
 pub const DEFAULT_RULES_SKILL: &str = "kelpie:work-rules";
 pub const DEFAULT_DEV_URL: &str = "http://localhost:{port}";
@@ -86,6 +93,7 @@ pub struct Worktree {
     pub rules_skill: Option<String>,
     pub test_commands: Option<Vec<String>>,
     pub also_noticed: Option<AlsoNoticed>,
+    pub permission_mode: Option<String>,
     pub review_model: Option<String>,
     pub notify_command: Option<String>,
     pub vault_command: Option<String>,
@@ -148,6 +156,7 @@ pub struct Settings {
     pub rules_skill: Setting<String>,
     pub test_commands: Setting<Vec<String>>,
     pub also_noticed: Setting<AlsoNoticed>,
+    pub permission_mode: Setting<Option<String>>,
     pub review_model: Setting<Option<String>>,
     pub notify_command: Setting<Option<String>>,
     pub vault_command: Setting<Option<String>>,
@@ -383,6 +392,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         rules_skill: None,
         test_commands: None,
         also_noticed: None,
+        permission_mode: None,
         review_model: None,
         notify_command: None,
         vault_command: None,
@@ -394,10 +404,12 @@ fn worktree(table: &Table) -> Result<Worktree> {
 
 fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(task) = subtable(table, "task", "task")? {
-        unknown_keys(task, "task.", &["rules_skill", "test_commands", "also_noticed"])?;
+        unknown_keys(task, "task.", &["rules_skill", "test_commands", "also_noticed", "permission_mode"])?;
         worktree.rules_skill = skill(task, "rules_skill", "task.rules_skill")?;
         worktree.test_commands = task.get("test_commands").map(test_commands).transpose()?;
         worktree.also_noticed = also_noticed(task)?;
+        worktree.permission_mode = text(task, "permission_mode", "task.permission_mode")?
+            .map(|mode| permission_mode(&mode).map(str::to_string).map_err(|error| format!("task.permission_mode: {error}"))).transpose()?;
     }
     Ok(worktree)
 }
@@ -515,6 +527,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
         test_commands: or_default(pick(repo.test_commands.as_ref(), machine.worktree.test_commands.as_ref()), Vec::new()),
         also_noticed: or_default(pick(repo.also_noticed.as_ref(), machine.worktree.also_noticed.as_ref()), AlsoNoticed::default()),
+        permission_mode: optional(pick(repo.permission_mode.as_ref(), machine.worktree.permission_mode.as_ref())),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
@@ -570,7 +583,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, rules_skill, test_commands, also_noticed, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, rules_skill, test_commands, also_noticed, permission_mode, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -616,6 +629,8 @@ pub fn describe(loaded: &Loaded) -> String {
         &format!("Test commands of this repo that kelpie records when a task's Claude runs them, on top of the built-in {}; matched on the command's start, after any cd … && and VAR=value. kelpie evidence, the board, the push dialog and the reviewer show the runs.", quoted(&crate::evidence::DEFAULT_COMMANDS)));
     key("task.also_noticed", format!("{:?}", also_noticed.value.key()), also_noticed.layer,
         "What a task's Claude does with what it notices outside its task (a bug nearby, a stale doc, a refactor): \"backlog\" files it, in the vault's backlog with the vault plugin, else with kelpie backlog add; \"fix\" fixes a small related one in a commit of its own and files the rest; \"ask\" puts each to you with kelpie ask first. Each is listed under Also noticed on the sign-off card, and the reviewer counts an unrelated change under \"backlog\" or \"ask\" as a finding.");
+    key("task.permission_mode", permission_mode.value.as_ref().map_or("none".to_string(), |mode| format!("{mode:?}")), permission_mode.layer,
+        &format!("The permission mode a task's Claude starts in, one of {}; none leaves it to Claude's own default. kelpie start --mode overrides it for one task, and a restarted task keeps the mode it started in. \"bypassPermissions\" runs every tool without asking, for an isolated machine only; a task still never pushes nor approves its own commits.", quoted(&PERMISSION_MODES)));
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
         "The model kelpie review's independent reviewer runs on; none leaves it to Claude's default.");
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
@@ -742,6 +757,24 @@ mod tests {
     }
 
     #[test]
+    fn the_permission_mode_is_claudes_own_default_until_set_and_a_repo_wins_over_the_machine() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).permission_mode, Setting { value: None, layer: Layer::Default });
+        let machine_wide = settings(&Worktree::default(), &machine("[task]\npermission_mode = \"bypassPermissions\"\n"));
+        assert_eq!(machine_wide.permission_mode, Setting { value: Some("bypassPermissions".to_string()), layer: Layer::Machine });
+        let own = settings(&repo("[task]\npermission_mode = \"acceptEdits\"\n"), &machine("[task]\npermission_mode = \"bypassPermissions\"\n"));
+        assert_eq!(own.permission_mode, Setting { value: Some("acceptEdits".to_string()), layer: Layer::Repo });
+        for mode in PERMISSION_MODES {
+            assert_eq!(repo(&format!("[task]\npermission_mode = \"{mode}\"\n")).permission_mode.as_deref(), Some(mode));
+        }
+        let refused = parse_machine("[task]\npermission_mode = \"yolo\"\n", "config.toml").unwrap_err();
+        assert!(refused.contains("task.permission_mode: \"yolo\" is not a Claude Code permission mode; use \"default\", \"acceptEdits\", \"plan\", \"auto\", \"dontAsk\", \"bypassPermissions\""), "{refused}");
+        assert!(parse_repo("[task]\npermission_mode = \"bypasspermissions\"\n", "app.toml").unwrap_err().contains("is not a Claude Code permission mode"), "a mode is spelled as Claude Code spells it");
+        assert!(parse_repo("[task]\npermission_mode = true\n", "app.toml").unwrap_err().contains("task.permission_mode: must be a string"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: own });
+        assert!(shown.contains("task.permission_mode = \"acceptEdits\"  (repo config)") && shown.contains("never pushes nor approves"), "{shown}");
+    }
+
+    #[test]
     fn a_repos_test_commands_win_over_the_machines_and_add_to_the_built_in_ones() {
         assert_eq!(settings(&Worktree::default(), &Machine::default()).test_commands, Setting { value: Vec::new(), layer: Layer::Default });
         let own = settings(&repo("[task]\ntest_commands = [\"bin/test\", \" make check \"]\n"), &machine("[task]\ntest_commands = [\"just test\"]\n"));
@@ -762,7 +795,7 @@ mod tests {
         let refused = parse_repo("[task]\nalso_noticed = \"ignore\"\n", "app.toml").unwrap_err();
         assert!(refused.contains("task.also_noticed: \"ignore\" is not a choice; use \"backlog\", \"fix\" or \"ask\""), "{refused}");
         assert!(parse_machine("[task]\nalso_noticed = true\n", "config.toml").unwrap_err().contains("task.also_noticed: must be a string"));
-        assert!(parse_repo("[task]\nnoticed = \"fix\"\n", "app.toml").unwrap_err().contains("known keys here: rules_skill, test_commands, also_noticed"));
+        assert!(parse_repo("[task]\nnoticed = \"fix\"\n", "app.toml").unwrap_err().contains("known keys here: rules_skill, test_commands, also_noticed, permission_mode"));
         let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: own });
         assert!(shown.contains("task.also_noticed = \"fix\"  (repo config)") && shown.contains("outside its task"), "{shown}");
     }

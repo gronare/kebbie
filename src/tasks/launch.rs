@@ -83,7 +83,29 @@ pub(crate) fn new_session_id() -> Result<String> {
 }
 
 fn session_file(task: &str, repo: &Path) -> Result<PathBuf> {
-    Ok(crate::lead::state_location()?.join("sessions").join(peers::address(task, &name_of(repo))))
+    Ok(session_file_in(&crate::lead::state_location()?, &peers::address(task, &name_of(repo))))
+}
+
+fn session_file_in(state: &Path, address: &str) -> PathBuf {
+    state.join("sessions").join(address)
+}
+
+pub(crate) const BYPASS: &str = "bypassPermissions";
+
+pub fn bypasses(address: &str) -> bool {
+    crate::lead::state_location().is_ok_and(|state| bypasses_in(&state, address))
+}
+
+fn bypasses_in(state: &Path, address: &str) -> bool {
+    std::fs::read_to_string(session_file_in(state, address)).is_ok_and(|text| text.lines().nth(1).map(str::trim) == Some(BYPASS))
+}
+
+fn chosen_mode<'a>(given: Option<&'a str>, recorded: Option<&'a str>, configured: Option<&'a str>) -> Option<&'a str> {
+    given.or(recorded).or(configured)
+}
+
+fn configured_mode(repo: &Path) -> Result<Option<String>> {
+    Ok(config::resolve(Some(repo))?.settings.permission_mode.value)
 }
 
 // The task's Claude session id and permission mode, one per line, so a restart resumes that conversation in the same mode.
@@ -195,6 +217,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
 
 pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     let Start { prompt, focus, from, mode, backlog, note: with_note } = *options;
+    mode.map(config::permission_mode).transpose().map_err(|error| format!("--mode: {error}"))?;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
     let (setup_skill, setup_command, rules_skill) = skills(&repo)?;
@@ -233,7 +256,8 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
         Some(pane) => pane,
         None => herdr::create_tab(&space.workspace_id, &slot.path, "claude")?,
     };
-    let (agent_name, started) = launch(&Launch { note: note.as_deref(), ..place(&slot) }, &claude_pane, Session::New(new_session_id()?))?;
+    let configured = configured_mode(&repo)?;
+    let (agent_name, started) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place(&slot) }, &claude_pane, Session::New(new_session_id()?))?;
     let prompted = match &started {
         Ok(started) => send_prompt(started, prompt, |text| crate::typing::prompt_confirmed(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
             .map_err(|error| format!("Started {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
@@ -311,10 +335,13 @@ fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Resul
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
     let agent_args = claude_args(mode, &settings, &role, &session);
     let started = start_claude(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), trusted_by_user(repo));
-    if let (Ok(_), Session::New(id)) = (&started, &session) {
-        let record = format!("{id}\n{}\n", mode.unwrap_or_default());
-        let file = session_file(task, repo)?;
-        crate::state::write(&file, record)?;
+    if let Ok(started) = &started {
+        let id = match &session {
+            Session::New(id) => Some(id.clone()),
+            Session::Resume(_) => recorded_session(task, repo).0,
+        };
+        let mode = if *started == Started::BypassDisabled { "" } else { mode.unwrap_or_default() };
+        crate::state::write(&session_file(task, repo)?, format!("{}\n{mode}\n", id.unwrap_or_default()))?;
     }
     Ok((agent_name, started))
 }
@@ -343,7 +370,8 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     let (recorded, mode) = recorded_session(task, place.repo);
     let previous = claude_home().and_then(|home| previous_session(place.repo, slot, task, &home, recorded));
     let note = read_start(task, place.repo).and_then(|text| crate::task_note::note_in(&text));
-    let place = Launch { mode: place.mode.or(mode.as_deref()), worktree: place.worktree.clone(), note: note.as_deref(), ..*place };
+    let configured = configured_mode(place.repo)?;
+    let place = Launch { mode: chosen_mode(place.mode, mode.as_deref(), configured.as_deref()), worktree: place.worktree.clone(), note: note.as_deref(), ..*place };
     let session = match previous {
         Some(id) => Session::Resume(id),
         None => Session::New(new_session_id()?),
@@ -371,7 +399,7 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     }
     let started = started?;
     let trust_said = prompted?;
-    let held = started == Started::AwaitsTrust;
+    let held = started.asks().is_some();
     let how = match (resumed, prompt.is_some()) {
         (true, true) if !held => "resuming its last conversation, and sent it the prompt",
         (true, _) => "resuming its last conversation",
@@ -384,14 +412,22 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
 
 // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
 fn send_prompt(started: &Started, prompt: Option<&str>, type_now: impl FnOnce(&str) -> Result<()>, hold: impl FnOnce(&str) -> Result<()>) -> Result<String> {
-    const ASKS: &str = " Claude there asks whether you trust the repo's folder, and that answer is yours";
-    Ok(match (started, prompt) {
-        (Started::Ready, Some(prompt)) => type_now(prompt).map(|()| String::new())?,
-        (Started::Ready, None) => String::new(),
-        (Started::AwaitsTrust, None) => format!("{ASKS}."),
-        (Started::AwaitsTrust, Some(prompt)) => match hold(prompt) {
-            Ok(()) => format!("{ASKS}; once you give it, kelpie types the task's prompt in while the keeper or an open board runs."),
-            Err(error) => format!("{ASKS}; its prompt could not be kept for it ({error}), so paste the prompt there yourself once you have answered."),
+    let asks = match started {
+        Started::AwaitsTrust => " Claude there asks whether you trust the repo's folder, and that answer is yours",
+        Started::AwaitsBypass => " Claude there asks you to accept bypass permissions mode, and that answer is yours",
+        Started::Ready | Started::BypassDisabled => {
+            if let Some(prompt) = prompt {
+                type_now(prompt)?;
+            }
+            let disabled = " Claude's managed settings disable bypass permissions mode (permissions.disableBypassPermissionsMode), so it runs with permission prompts.";
+            return Ok(if *started == Started::BypassDisabled { disabled.to_string() } else { String::new() });
+        }
+    };
+    Ok(match prompt {
+        None => format!("{asks}."),
+        Some(prompt) => match hold(prompt) {
+            Ok(()) => format!("{asks}; once you give it, kelpie types the task's prompt in while the keeper or an open board runs."),
+            Err(error) => format!("{asks}; its prompt could not be kept for it ({error}), so paste the prompt there yourself once you have answered."),
         },
     })
 }
@@ -552,6 +588,64 @@ mod tests {
         assert_eq!(on["env"]["GIT_CONFIG_KEY_0"], "url.kelpie-blocks-push:.pushInsteadOf");
         assert_eq!(on["env"]["GIT_CONFIG_VALUE_0"], "");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 40);
+    }
+
+    #[test]
+    fn a_task_takes_its_mode_from_start_then_its_recorded_session_then_the_config() {
+        assert_eq!(chosen_mode(None, None, None), None, "without any, Claude's own default applies");
+        assert_eq!(chosen_mode(None, None, Some(BYPASS)), Some(BYPASS));
+        assert_eq!(chosen_mode(Some("acceptEdits"), None, Some(BYPASS)), Some("acceptEdits"), "--mode wins over task.permission_mode");
+        assert_eq!(chosen_mode(None, Some("plan"), Some(BYPASS)), Some("plan"), "a restart keeps the mode its conversation started in");
+        assert_eq!(chosen_mode(Some(BYPASS), Some("plan"), None), Some(BYPASS));
+        let source = include_str!("launch.rs");
+        let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        assert!(body("begin").contains("mode: chosen_mode(mode, None, configured.as_deref())") && body("begin").contains("configured_mode(&repo)?"));
+        assert!(body("restart").contains("chosen_mode(place.mode, mode.as_deref(), configured.as_deref())"));
+        assert!(body("begin").find("config::permission_mode").unwrap() < body("begin").find("fetch(").unwrap(), "a mistyped --mode is refused before a worktree is claimed");
+        assert!(body("launch").contains("Started::BypassDisabled { \"\" }"), "a Claude that policy keeps out of bypass is not recorded as bypassing");
+    }
+
+    #[test]
+    fn a_task_started_in_bypass_permissions_still_never_pushes_nor_approves() {
+        let dir = crate::sh::test_dir("task-bypass");
+        let file = crate::lead::write_settings(&dir, "billing@app", &settings("/bin/kelpie", "billing@app", None, None)).unwrap();
+        let args = claude_args(Some(BYPASS), &file, &dir.join("billing@app.md"), &Session::New("0b6a".to_string()));
+        assert_eq!(args[..2], ["--permission-mode", "bypassPermissions"]);
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&args[args.iter().position(|arg| arg == "--settings").unwrap() + 1]).unwrap()).unwrap();
+        let deny: Vec<&str> = written["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        for rule in ["Bash(git push:*)", "Bash(/bin/kelpie approve:*)", "Bash(/bin/kelpie push:*)"] {
+            assert!(deny.contains(&rule), "deny rules hold in every mode, bypassPermissions too: {deny:?}");
+        }
+        assert_eq!(written["env"]["GIT_CONFIG_KEY_0"], "url.kelpie-blocks-push:.pushInsteadOf");
+        let source = include_str!("launch.rs");
+        let prepare = &source[source.find("\nfn prepare(").unwrap()..];
+        assert!(!prepare[..prepare.find("\n}\n").unwrap()].contains("mode"), "a task's settings are the same whatever its mode");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_board_reads_a_bypassing_task_from_the_mode_its_session_recorded() {
+        let state = crate::sh::test_dir("task-bypass-mark");
+        assert!(!bypasses_in(&state, "billing@app"), "no recorded session, no mark");
+        std::fs::create_dir_all(state.join("sessions")).unwrap();
+        for (record, marked) in [("1f0c\nbypassPermissions\n", true), ("1f0c\n\n", false), ("1f0c\nacceptEdits\n", false), ("1f0c\n", false)] {
+            std::fs::write(session_file_in(&state, "billing@app"), record).unwrap();
+            assert_eq!(bypasses_in(&state, "billing@app"), marked, "{record:?}");
+        }
+        assert!(!bypasses_in(&state, "search@app"));
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_policy_that_disables_bypass_is_said_and_the_prompt_still_goes_in() {
+        let typed = std::cell::RefCell::new(Vec::new());
+        let said = send_prompt(&Started::BypassDisabled, Some("Fix the flaky test"), |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |_| panic!("nothing is held for a running Claude")).unwrap();
+        assert_eq!(typed.into_inner(), ["Fix the flaky test"]);
+        assert!(said.contains("disable bypass permissions mode") && said.contains("permissions.disableBypassPermissionsMode"), "{said}");
+        let held = std::cell::RefCell::new(Vec::new());
+        let said = send_prompt(&Started::AwaitsBypass, Some("Fix the flaky test"), |_| panic!("no key reaches the bypass warning"), |text| { held.borrow_mut().push(text.to_string()); Ok(()) }).unwrap();
+        assert_eq!(held.into_inner(), ["Fix the flaky test"]);
+        assert!(said.starts_with(" Claude there asks you to accept bypass permissions mode, and that answer is yours; once you give it"), "{said}");
     }
 
     #[test]

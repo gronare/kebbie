@@ -63,6 +63,7 @@ pub struct Item {
     pub verdict: Option<crate::review::Shown>,
     pub permit: Option<crate::permit::Permit>,
     pub follows: bool,
+    pub bypass: bool,
     pub server: bool,
     pub worker: bool,
     pub url: Option<String>,
@@ -256,6 +257,7 @@ impl Item {
             "review": self.review.map(|(read, total)| json!({ "read": read, "files": total })),
             "verdict": self.verdict.as_ref().map(crate::review::Shown::to_json),
             "follows_main": self.follows,
+            "bypass_permissions": self.bypass,
             "push_permission": self.permit.map(|permit| match permit { crate::permit::Permit::Task => "task", crate::permit::Permit::Repo => "repo, once reviewed" }),
             "report": self.report.as_ref().and_then(|message| Some(json!({
                 "state": message.report.as_ref()?.state, "next": message.report.as_ref()?.next, "summary": message.text, "age": messages::age(message.at),
@@ -395,6 +397,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 verdict: crate::review::shown(&address, &slot.path, &upstream),
                 permit: crate::permit::of(&address, &name_of(repo)),
                 follows: tasks::follows(&address),
+                bypass: tasks::bypasses(&address),
                 server,
                 worker: tokens["worker"].is_string(),
                 url: if server { running_url(repo, &slot.path) } else { None },
@@ -426,6 +429,7 @@ pub fn gather() -> Result<Vec<Item>> {
             verdict: None,
             permit: None,
             follows: false,
+            bypass: false,
             server: false,
             worker: false,
             url: None,
@@ -456,7 +460,7 @@ pub(crate) mod tests {
 
     pub(crate) fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         Item {
-            review: None, verdict: None, permit: None, follows: false, server: false, worker: false, url: None, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
+            review: None, verdict: None, permit: None, follows: false, bypass: false, server: false, worker: false, url: None, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true }),
             report: report.map(|state| Message {

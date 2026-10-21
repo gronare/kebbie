@@ -473,13 +473,15 @@ pub const AWAITS_TRUST: &str = "waits for your answer to Claude's trust prompt i
 fn settle_start(routine: &Routine, dir: &Path, state: &mut State, address: Option<&str>, started: Result<crate::tasks::Begun>, mut tell: impl FnMut(crate::notify::Event, &str, String)) -> Result<String> {
     let to = address.unwrap_or(&routine.id);
     match started {
-        Ok(crate::tasks::Begun { said, started: crate::tasks::Started::Ready }) => Ok(format!("routine {}: {said}", routine.id)),
-        Ok(crate::tasks::Begun { said, started: crate::tasks::Started::AwaitsTrust }) => {
-            state.last_summary = Some(AWAITS_TRUST.to_string());
-            save_state(dir, &routine.id, state)?;
-            tell(crate::notify::Event::NeedsYou, to, format!("routine {} waits for you: Claude in {to} asks whether you trust its folder; answer it there and the run goes on", routine.title));
-            Ok(format!("routine {}: {said}", routine.id))
-        }
+        Ok(crate::tasks::Begun { said, started }) => match started.asks() {
+            None => Ok(format!("routine {}: {said}", routine.id)),
+            Some(asks) => {
+                state.last_summary = Some(AWAITS_TRUST.to_string());
+                save_state(dir, &routine.id, state)?;
+                tell(crate::notify::Event::NeedsYou, to, format!("routine {} waits for you: Claude in {to} asks {asks}; answer it there and the run goes on", routine.title));
+                Ok(format!("routine {}: {said}", routine.id))
+            }
+        },
         Err(error) => {
             state.last_outcome = Some(Outcome::Failed);
             state.last_summary = Some(error.clone());
