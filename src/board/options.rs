@@ -16,6 +16,7 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
     if let Some((now, drop)) = item.and_then(|item| item.start_now_means().zip(item.drop_means())) {
         return vec![
             choice(Act::Go, "Start it now", &format!("{now} (asks first)")),
+            choice(Act::StartAt, "Start at…", &item.and_then(Item::start_at_means).unwrap_or_default()),
             choice(Act::Drop, "Drop the wait", &format!("{drop} (asks first)")),
         ];
     }
@@ -106,6 +107,7 @@ pub(super) fn ongoing_entry(note: &Ongoing) -> Entry {
 pub(super) fn backlog_choices(sources: &[Source]) -> Vec<Choice> {
     let mut choices = vec![
         choice(Act::Go, "Start as task", "a worktree, a Space and Claude with this as its prompt"),
+        choice(Act::StartAt, "Start at…", "the same, at a time you type: it waits under Queued until then"),
         choice(Act::Refresh, "Refresh the backlog", &backlog::refresh_label(sources)),
     ];
     if sources.contains(&Source::Local) {
@@ -245,8 +247,8 @@ mod tests {
     #[test]
     fn the_backlog_column_adds_an_item_only_with_the_local_source() {
         let keys = |sources: &[Source]| backlog_choices(sources).iter().map(|choice| choice.key).collect::<String>();
-        assert_eq!(keys(&[Source::Local]), "gRn");
-        assert_eq!(keys(&[Source::Vault, Source::Linear]), "gR");
+        assert_eq!(keys(&[Source::Local]), "glRn");
+        assert_eq!(keys(&[Source::Vault, Source::Linear]), "glR");
     }
 
     #[test]

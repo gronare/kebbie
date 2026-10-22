@@ -67,6 +67,7 @@ pub struct Queued {
     pub waiting: String,
     pub names: Vec<String>,
     pub base: String,
+    pub at: Option<String>,
     pub backlog: bool,
 }
 
@@ -114,12 +115,12 @@ impl Item {
     }
 
     fn queued_from(shown: tasks::WaitShown) -> Item {
-        let tasks::WaitShown { wait, after, names, waiting, title, base } = shown;
+        let tasks::WaitShown { wait, after, names, waiting, title, base, at } = shown;
         Item {
             review: None, verdict: None, permit: None, follows: false, bypass: false, profile: Some(wait.profile.clone().unwrap_or_else(|| crate::profiles::TASK.to_string())), server: false, worker: false, url: None,
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
-            queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, backlog: wait.backlog.is_some() }),
+            queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
             held_by_draft: None, starting: false,
         }
     }
@@ -322,7 +323,20 @@ impl Item {
 
     pub fn start_now_means(&self) -> Option<String> {
         let queued = self.queued.as_ref()?;
-        Some(format!("from {}, without the changes from {}; its Claude is told what is missing", queued.base, tasks::and_list(&queued.names)))
+        Some(match (queued.names.is_empty(), &queued.at) {
+            (true, Some(at)) => format!("from {} now instead of {at}", queued.base),
+            (true, None) => format!("from {} now", queued.base),
+            (false, _) => format!("from {}, without the changes from {}; its Claude is told what is missing", queued.base, tasks::and_list(&queued.names)),
+        })
+    }
+
+    pub fn start_at_means(&self) -> Option<String> {
+        let queued = self.queued.as_ref()?;
+        let then = if queued.names.is_empty() { "it starts then" } else { "it starts then, once what it waits for is done too" };
+        Some(match &queued.at {
+            Some(at) => format!("now {at}; type another time and {then}"),
+            None => format!("type a time and {then}"),
+        })
     }
 
     pub fn drop_means(&self) -> Option<&'static str> {

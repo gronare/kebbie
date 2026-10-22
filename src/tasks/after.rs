@@ -39,6 +39,7 @@ pub(crate) struct Wait {
     pub blocked: Option<String>,
     pub gone_since: Option<u64>,
     pub why: Option<String>,
+    pub starts_at: Option<u64>,
 }
 
 impl Wait {
@@ -51,7 +52,7 @@ impl Wait {
             "task": self.task, "repo": self.repo,
             "after": self.after.iter().map(|dep| json!({ "address": dep.address, "repo": dep.repo })).collect::<Vec<_>>(),
             "prompt": self.prompt, "mode": self.mode, "profile": self.profile, "backlog": self.backlog, "by": self.by.key(), "at": self.at,
-            "blocked": self.blocked, "gone_since": self.gone_since, "why": self.why,
+            "blocked": self.blocked, "gone_since": self.gone_since, "why": self.why, "starts_at": self.starts_at,
         })
     }
 
@@ -63,12 +64,13 @@ impl Wait {
         };
         let after = value["after"].as_array()?.iter().map(|dep| Some(Dep { address: dep["address"].as_str()?.to_string(), repo: PathBuf::from(dep["repo"].as_str()?) })).collect::<Option<Vec<_>>>()?;
         let text = |key: &str| value[key].as_str().map(str::to_string);
+        let starts_at = value["starts_at"].as_u64();
         Some(Wait {
             task: text("task").filter(|task| slug(task).as_deref() == Ok(task.as_str()))?,
             repo: PathBuf::from(text("repo")?),
-            after: Some(after).filter(|after| !after.is_empty())?,
+            after: Some(after).filter(|after| !after.is_empty() || starts_at.is_some())?,
             prompt: text("prompt").filter(|prompt| !prompt.trim().is_empty())?,
-            mode: text("mode"), profile: text("profile"), backlog: text("backlog"), by, at: value["at"].as_u64()?, blocked: text("blocked"), gone_since: value["gone_since"].as_u64(), why: text("why"),
+            mode: text("mode"), profile: text("profile"), backlog: text("backlog"), by, at: value["at"].as_u64()?, blocked: text("blocked"), gone_since: value["gone_since"].as_u64(), why: text("why"), starts_at,
         })
     }
 }
@@ -299,7 +301,8 @@ pub(crate) fn next(wait: &Wait, facts: &Facts, now: u64) -> Next {
             _ => Next::Missing,
         };
     }
-    if states.iter().all(|(_, state)| *state == DepState::Done) { Next::Start } else { Next::Wait }
+    let due = wait.starts_at.is_none_or(|at| now >= at);
+    if due && states.iter().all(|(_, state)| *state == DepState::Done) { Next::Start } else { Next::Wait }
 }
 
 const SUBJECTS_SHOWN: usize = 20;
@@ -348,7 +351,7 @@ pub(crate) enum Told {
 pub(crate) type Begin<'a> = &'a mut dyn FnMut(&Path, &str, &Start) -> Result<Begun>;
 
 fn launch(state: &Path, wait: &Wait, intro: &str, begin: Begin, tell: &mut dyn FnMut(Told)) -> Result<String> {
-    let prompt = format!("{intro}\n\n{}", wait.prompt);
+    let prompt = if intro.is_empty() { wait.prompt.clone() } else { format!("{intro}\n\n{}", wait.prompt) };
     let options = Start { prompt: Some(&prompt), focus: false, from: None, mode: wait.mode.as_deref(), profile: wait.profile.as_deref(), backlog: wait.backlog.as_deref(), note: true };
     let started = begin(&wait.repo, &wait.task, &options);
     unclaim(state, &wait.address());
@@ -429,7 +432,8 @@ pub(crate) fn tick_in(state: &Path, log: &[Message], now: u64, begin: Begin, tel
                 let names: Vec<&str> = wait.after.iter().map(|dep| dep.address.as_str()).collect();
                 let said = match launch(state, &wait, &intro(&wait, &facts, None), begin, tell) {
                     Ok(said) => {
-                        tell(Told::Started { address: address.clone(), repo: wait.repo.clone(), text: format!("{address} started: {} {} done. {said}", names.join(" and "), if names.len() == 1 { "is" } else { "are" }) });
+                        let why = if names.is_empty() { "its start time came".to_string() } else { format!("{} {} done", names.join(" and "), if names.len() == 1 { "is" } else { "are" }) };
+                        tell(Told::Started { address: address.clone(), repo: wait.repo.clone(), text: format!("{address} started: {why}. {said}") });
                         said
                     }
                     Err(error) => error,
@@ -555,6 +559,7 @@ pub(crate) struct Asked<'a> {
     pub backlog: Option<&'a str>,
     pub title: Option<&'a str>,
     pub why: Option<&'a str>,
+    pub starts_at: Option<u64>,
 }
 
 // Every half is checked before any is written, so a refusal changes nothing.
@@ -566,25 +571,38 @@ pub(crate) fn queue_in(state: &Path, caller: &Caller, repos: &[PathBuf], asked: 
         let me = peers::address(&task, &name_of(repo));
         planned.push((repo, plan(&me, asked.prompt, asked.after, known)?));
     }
-    if planned.iter().all(|(_, plan)| *plan == Plan::Now) {
+    if asked.starts_at.is_none() && planned.iter().all(|(_, plan)| *plan == Plan::Now) {
         return Ok(None);
     }
     let _lock = Lock::take(state, true);
     let mut said = Vec::new();
     for (repo, plan) in planned {
-        let Plan::Queue(after) = plan else { continue };
-        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by, at: now, blocked: None, gone_since: None, why: asked.why.map(str::to_string) };
+        let after = match plan {
+            Plan::Queue(after) => after,
+            Plan::Now if asked.starts_at.is_some() => Vec::new(),
+            Plan::Now => continue,
+        };
+        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by, at: now, blocked: None, gone_since: None, why: asked.why.map(str::to_string), starts_at: asked.starts_at };
         save(state, &wait)?;
         if let Some(title) = asked.title.map(str::to_string).or_else(|| prompt_title(asked.prompt)) {
             crate::status::keep_title(state, &wait.address(), &crate::status::readable(&title, &name_of(repo)));
         }
-        said.push(format!("Queued {}: it starts from the default branch once {} {} done, with no worktree, Space or Claude until then.", wait.address(), names(&wait), if wait.after.len() == 1 { "is" } else { "are" }));
+        said.push(format!("Queued {}: it starts from the default branch {}, with no worktree, Space or Claude until then.", wait.address(), starts_when(&wait, now)));
     }
     Ok(Some(said.join("\n")))
 }
 
 fn names(wait: &Wait) -> String {
     wait.after.iter().map(|dep| dep.address.as_str()).collect::<Vec<_>>().join(" and ")
+}
+
+fn starts_when(wait: &Wait, now: u64) -> String {
+    let at = wait.starts_at.map(|at| crate::when::shown(at, now, &crate::recover::local_offset));
+    match (wait.after.is_empty(), at) {
+        (true, Some(at)) => format!("at {at}"),
+        (false, Some(at)) => format!("once {} {} done, not before {at}", names(wait), if wait.after.len() == 1 { "is" } else { "are" }),
+        (_, None) => format!("once {} {} done", names(wait), if wait.after.len() == 1 { "is" } else { "are" }),
+    }
 }
 
 // None means every task it names is done already, so the caller starts it as usual.
@@ -667,6 +685,7 @@ pub(crate) struct Shown {
     pub waiting: String,
     pub title: Option<String>,
     pub base: String,
+    pub at: Option<String>,
 }
 
 pub(crate) fn shown(state: &Path, items: &[crate::status::Item]) -> Vec<Shown> {
@@ -686,10 +705,12 @@ pub(crate) fn shown(state: &Path, items: &[crate::status::Item]) -> Vec<Shown> {
             let item = items.iter().find(|item| item.is_task() && item.queued.is_none() && peers::address(&item.name, &item.place) == dep.address);
             dep_name(state, dep, &wait, item)
         }).collect();
-        let waiting = waiting_line(&names.iter().cloned().zip(deps.iter().map(|(_, label, dep_state)| (label.clone(), dep_state.clone()))).map(|(name, (label, dep_state))| (name, label, dep_state)).collect::<Vec<_>>(), wait.why.as_deref());
+        let now = messages::now();
+        let at = wait.starts_at.filter(|at| *at > now).map(|at| crate::when::shown(at, now, &crate::recover::local_offset));
+        let waiting = waiting_line(&names.iter().cloned().zip(deps.iter().map(|(_, label, dep_state)| (label.clone(), dep_state.clone()))).map(|(name, (label, dep_state))| (name, label, dep_state)).collect::<Vec<_>>(), wait.why.as_deref(), at.as_deref());
         let base = crate::repo::default_branch(&wait.repo).map_or("the default branch".to_string(), |branch| branch.trim_start_matches("origin/").to_string());
         let title = crate::status::kept_title(state, &wait.address());
-        Shown { after: deps.into_iter().map(|(address, label, _)| (address, label)).collect(), names, waiting, title, base, wait }
+        Shown { after: deps.into_iter().map(|(address, label, _)| (address, label)).collect(), names, waiting, title, base, at, wait }
     }).collect()
 }
 
@@ -701,14 +722,19 @@ fn dep_name(state: &Path, dep: &Dep, wait: &Wait, item: Option<&crate::status::I
     if repo == name_of(&wait.repo) { title } else { format!("{title} in {repo}") }
 }
 
-// Why it waits and what starts it, in the user's words: each task it waits for with that task's state, then what has to happen.
-pub(crate) fn waiting_line(deps: &[(String, String, DepState)], why: Option<&str>) -> String {
+// Why it waits and what starts it, in the user's words: each task it waits for with that task's state, the time it waits for, then what has to happen.
+pub(crate) fn waiting_line(deps: &[(String, String, DepState)], why: Option<&str>, at: Option<&str>) -> String {
     let waits_for = deps.iter().map(|(name, label, _)| format!("{name} ({label})")).collect::<Vec<_>>();
-    let why = why.map_or(String::new(), |why| format!(": {}", why.trim_end_matches('.')));
-    let head = format!("Waits for {}{why}.", and_list(&waits_for));
+    let why = why.map(|why| why.trim_end_matches('.'));
+    let head = match (waits_for.is_empty(), why) {
+        (true, Some(why)) => format!("Waits: {why}. "),
+        (true, None) => String::new(),
+        (false, Some(why)) => format!("Waits for {}: {why}. ", and_list(&waits_for)),
+        (false, None) => format!("Waits for {}. ", and_list(&waits_for)),
+    };
     let one = deps.len() == 1;
     if let Some((name, _, DepState::Ended(how))) = deps.iter().find(|(_, _, dep_state)| matches!(dep_state, DepState::Ended(_))) {
-        return format!("{head} It will not start by itself: {} was {how}.", if one { "it" } else { name });
+        return format!("{head}It will not start by itself: {} was {how}.", if one { "it" } else { name });
     }
     let pending: Vec<String> = deps.iter().filter_map(|(name, _, dep_state)| {
         let name = if one { "it" } else { name.as_str() };
@@ -720,10 +746,12 @@ pub(crate) fn waiting_line(deps: &[(String, String, DepState)], why: Option<&str
             DepState::Done | DepState::Ended(_) => None,
         }
     }).collect();
-    if pending.is_empty() {
-        return format!("{head} Starts in a moment.");
+    match (pending.is_empty(), at) {
+        (true, Some(at)) => format!("{head}Starts {at}."),
+        (true, None) => format!("{head}Starts in a moment."),
+        (false, Some(at)) => format!("{head}Starts by itself once {}, not before {at}.", pending.join(", and ")),
+        (false, None) => format!("{head}Starts by itself once {}.", pending.join(", and ")),
     }
-    format!("{head} Starts by itself once {}.", pending.join(", and "))
 }
 
 pub(crate) fn and_list(names: &[String]) -> String {
@@ -752,8 +780,13 @@ pub fn list(name: Option<&str>) -> Result<String> {
     let state = crate::lead::state_dir()?;
     let items = crate::status::gather().unwrap_or_default();
     let task = name.map(slug).transpose()?;
-    let lines: Vec<String> = shown(&state, &items).into_iter().filter(|shown| task.as_ref().is_none_or(|task| &shown.wait.task == task)).map(|Shown { wait, after, .. }| {
-        let mut line = format!("{}  after {}", wait.address(), after.iter().map(|(address, state)| format!("{address} ({state})")).collect::<Vec<_>>().join(", "));
+    let lines: Vec<String> = shown(&state, &items).into_iter().filter(|shown| task.as_ref().is_none_or(|task| &shown.wait.task == task)).map(|Shown { wait, after, at, .. }| {
+        let mut parts: Vec<String> = Vec::new();
+        if !after.is_empty() {
+            parts.push(format!("after {}", after.iter().map(|(address, state)| format!("{address} ({state})")).collect::<Vec<_>>().join(", ")));
+        }
+        parts.extend(at.map(|at| format!("at {at}")));
+        let mut line = format!("{}  {}", wait.address(), parts.join(", not before "));
         if let Some(blocked) = &wait.blocked {
             line.push_str(&format!("\n  blocked: {blocked}; kelpie after {} --now starts it, --drop drops the wait", wait.task));
         }
@@ -775,7 +808,32 @@ pub fn drop(name: &str) -> Result<String> {
     drop_in(&crate::lead::state_dir()?, &crate::permit::caller(), name)
 }
 
-pub fn after(words: &[String], now_flag: bool, drop_flag: bool) -> Result<String> {
+pub(crate) fn at_in(state: &Path, caller: &Caller, name: &str, at: u64, now: u64) -> Result<String> {
+    queuer(caller)?;
+    let waits = halves(state, name)?;
+    let _lock = Lock::take(state, true);
+    let mut said = Vec::new();
+    for wait in waits {
+        let wait = Wait { starts_at: Some(at), ..wait };
+        save(state, &wait)?;
+        said.push(format!("{} starts from the default branch {}.", wait.address(), starts_when(&wait, now)));
+    }
+    Ok(said.join("\n"))
+}
+
+pub fn at(name: &str, text: &str) -> Result<String> {
+    let now = messages::now();
+    at_in(&crate::lead::state_dir()?, &crate::permit::caller(), name, crate::when::parse(text, now, &crate::recover::local_offset)?, now)
+}
+
+pub fn after(words: &[String], now_flag: bool, drop_flag: bool, at_flag: Option<&str>) -> Result<String> {
+    if let Some(text) = at_flag {
+        return match (words.first(), now_flag || drop_flag) {
+            (_, true) => Err("kelpie after takes one of --now, --drop and --at".to_string()),
+            (Some(name), false) => at(name, text),
+            (None, false) => Err("kelpie after --at needs the queued task's name".to_string()),
+        };
+    }
     match (words.first(), now_flag, drop_flag) {
         (_, true, true) => Err("kelpie after takes --now or --drop, not both".to_string()),
         (Some(name), true, false) => now(name),
@@ -799,7 +857,7 @@ mod tests {
     }
 
     fn wait_for(task: &str, repo: &str, after: &[&str]) -> Wait {
-        Wait { task: task.to_string(), repo: PathBuf::from(format!("/repos/{repo}")), after: after.iter().map(|address| dep(address)).collect(), prompt: "Use the rounding field".to_string(), mode: None, profile: None, backlog: None, by: By::Lead, at: 100, blocked: None, gone_since: None, why: None }
+        Wait { task: task.to_string(), repo: PathBuf::from(format!("/repos/{repo}")), after: after.iter().map(|address| dep(address)).collect(), prompt: "Use the rounding field".to_string(), mode: None, profile: None, backlog: None, by: By::Lead, at: 100, blocked: None, gone_since: None, why: None, starts_at: None }
     }
 
     fn end(address: &str, at: u64, how: &str, landed: Option<&str>) -> Message {
@@ -834,14 +892,46 @@ mod tests {
     }
 
     #[test]
+    fn a_task_can_wait_for_a_time_alone_or_as_well_as_another_task() {
+        let state = crate::sh::test_dir("after-at");
+        let known = known(&["billing@api"], Vec::new(), &[]);
+        let asked = Asked { name: "nightly", prompt: "Run the import", after: &[], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: Some(1_000) };
+        let said = queue_in(&state, &Caller::User, &[PathBuf::from("/repos/web")], &asked, &known, 100).unwrap().unwrap();
+        assert!(said.starts_with("Queued nightly@web: it starts from the default branch at "), "a wait for a time alone queues, with nothing to wait for: {said}");
+        let wait = load(&state, "nightly@web").unwrap();
+        assert_eq!((wait.after.len(), wait.starts_at), (0, Some(1_000)), "read back from its file with no task to wait for");
+        assert_eq!(next(&wait, &facts(&[], &[]), 999), Next::Wait);
+        assert_eq!(next(&wait, &facts(&[], &[]), 1_000), Next::Start);
+        assert!(ticked(&state, &[], 999).0.is_empty(), "the keeper leaves it before its time");
+        let (started, told) = ticked(&state, &[], 1_000);
+        assert_eq!(started.iter().map(|launched| (launched.task.as_str(), launched.prompt.as_str())).collect::<Vec<_>>(), [("nightly", "Run the import")], "it starts at its time with its own prompt");
+        assert!(matches!(told.as_slice(), [Told::Started { text, .. }] if text.starts_with("nightly@web started: its start time came.")));
+        let both = Wait { starts_at: Some(1_000), ..wait_for("web-billing", "web", &["billing@api"]) };
+        assert_eq!(next(&both, &facts(&[end("billing@api", 200, "done", None)], &[]), 500), Next::Wait, "the other task done, the time not yet come");
+        assert_eq!(next(&both, &facts(&[], &["billing@api"]), 2_000), Next::Wait, "the time come, the other task still open");
+        assert_eq!(next(&both, &facts(&[end("billing@api", 200, "done", None)], &[]), 2_000), Next::Start);
+        let one = |dep_state: DepState, at: Option<&str>| waiting_line(&[("Billing".to_string(), "working".to_string(), dep_state)], None, at);
+        assert_eq!(one(DepState::Open, Some("15:00 today")), "Waits for Billing (working). Starts by itself once it is pushed and CI is green, not before 15:00 today.");
+        assert_eq!(one(DepState::Done, Some("15:00 today")), "Waits for Billing (working). Starts 15:00 today.");
+        assert_eq!(waiting_line(&[], None, Some("Fri 24 Oct 09:00")), "Starts Fri 24 Oct 09:00.");
+        assert_eq!(waiting_line(&[], Some("the import runs at night"), Some("02:00 tomorrow")), "Waits: the import runs at night. Starts 02:00 tomorrow.");
+        save(&state, &both).unwrap();
+        assert!(at_in(&state, &Caller::Agent, "web-billing", 5_000, 100).is_err(), "only the user or the lead changes a wait");
+        let moved = at_in(&state, &Caller::User, "web-billing", 5_000, 100).unwrap();
+        assert!(moved.starts_with("web-billing@web starts from the default branch once billing@api is done, not before "), "{moved}");
+        assert_eq!(load(&state, "web-billing@web").unwrap().starts_at, Some(5_000));
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
     fn a_queued_row_says_why_it_waits_and_what_starts_it_in_plain_words() {
-        let one = |state: DepState, why: Option<&str>| waiting_line(&[("Push finishes itself".to_string(), "ready to push".to_string(), state)], why);
+        let one = |state: DepState, why: Option<&str>| waiting_line(&[("Push finishes itself".to_string(), "ready to push".to_string(), state)], why, None);
         assert_eq!(one(DepState::Open, Some("it builds on that change.")), "Waits for Push finishes itself (ready to push): it builds on that change. Starts by itself once it is pushed and CI is green.");
         assert_eq!(one(DepState::Open, None), "Waits for Push finishes itself (ready to push). Starts by itself once it is pushed and CI is green.");
         assert_eq!(one(DepState::CiPending, None), "Waits for Push finishes itself (ready to push). Starts by itself once CI is green on what it pushed.");
         assert_eq!(one(DepState::Ended("dropped".to_string()), None), "Waits for Push finishes itself (ready to push). It will not start by itself: it was dropped.");
         assert_eq!(one(DepState::Done, None), "Waits for Push finishes itself (ready to push). Starts in a moment.");
-        let two = waiting_line(&[("Billing".to_string(), "working".to_string(), DepState::Open), ("Search in web".to_string(), "queued".to_string(), DepState::Queued)], None);
+        let two = waiting_line(&[("Billing".to_string(), "working".to_string(), DepState::Open), ("Search in web".to_string(), "queued".to_string(), DepState::Queued)], None, None);
         assert_eq!(two, "Waits for Billing (working) and Search in web (queued). Starts by itself once Billing is pushed and CI is green, and Search in web is pushed and CI is green.");
         assert!(!two.contains('@'), "tasks by their titles, not their addresses");
     }
@@ -854,7 +944,7 @@ mod tests {
         assert_eq!(crate::status::readable("kelpie — Queued row says what it waits for", "kelpie"), "Queued row says what it waits for", "a vault note's title drops its repo");
         let state = crate::sh::test_dir("after-title");
         let known = known(&["billing@api"], Vec::new(), &[]);
-        let asked = |title| Asked { name: "web-billing", prompt: "use the rounding field. Then bill.", after: &["billing@api"], mode: None, profile: None, backlog: None, title, why: Some("it needs the rounding field") };
+        let asked = |title| Asked { name: "web-billing", prompt: "use the rounding field. Then bill.", after: &["billing@api"], mode: None, profile: None, backlog: None, title, why: Some("it needs the rounding field"), starts_at: None };
         queue_in(&state, &Caller::Lead, &[PathBuf::from("/repos/web")], &asked(None), &known, 100).unwrap().unwrap();
         assert_eq!(crate::status::kept_title(&state, "web-billing@web").as_deref(), Some("Use the rounding field"));
         assert_eq!(load(&state, "web-billing@web").unwrap().why.as_deref(), Some("it needs the rounding field"), "the reason is kept with the wait");
@@ -890,7 +980,7 @@ mod tests {
         assert_ne!(git(&dir, &["rev-parse", &upstream]).unwrap(), landed, "the main checkout has not fetched what billing landed");
         let state = state_of(&dir);
         let address = peers::address("billing", &name_of(&dir));
-        let wait = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: address.clone(), repo: dir.clone() }], prompt: "Search the invoices".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None };
+        let wait = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: address.clone(), repo: dir.clone() }], prompt: "Search the invoices".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None };
         save(&state, &wait).unwrap();
         let mut told = Vec::new();
         tick_in(&state, &[end(&address, 200, "done", Some("abc fourth"))], 210, &mut super::super::launch::begin, &mut |said| told.push(said));
@@ -957,7 +1047,7 @@ mod tests {
         let billing = peers::address("billing", &name_of(&dir));
         let before = slots(&dir).unwrap().len();
         let known = Known { open: vec![Dep { address: billing.clone(), repo: dir.clone() }], waits: Vec::new(), ends: HashMap::new() };
-        let said = queue_in(&state, &Caller::User, std::slice::from_ref(&dir), &Asked { name: "search", prompt: "Search the invoices", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None }, &known, 100).unwrap().unwrap();
+        let said = queue_in(&state, &Caller::User, std::slice::from_ref(&dir), &Asked { name: "search", prompt: "Search the invoices", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None }, &known, 100).unwrap().unwrap();
         assert!(said.contains("no worktree, Space or Claude"), "{said}");
         assert_eq!(slots(&dir).unwrap().len(), before, "no worktree is claimed or made");
         assert!(!crate::repo::branch_exists(&dir, "search"), "no branch either");
@@ -972,7 +1062,7 @@ mod tests {
         let known = known(&[], Vec::new(), &[end("billing@api", 50, "done", None)]);
         assert_eq!(plan("web-billing@web", "Use it", &["billing@api"], &known).unwrap(), Plan::Now);
         assert_eq!(plan("web-billing@web", "Use it", &["billing"], &known).unwrap(), Plan::Now);
-        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None };
+        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None };
         assert_eq!(queue_in(&state, &Caller::Lead, &[PathBuf::from("/repos/web")], &asked, &known, 100).unwrap(), None, "the caller starts it as usual");
         assert!(all(&state).is_empty() && !dir(&state).join("web-billing@web.json").exists());
         fs::remove_dir_all(state).unwrap();
@@ -1070,7 +1160,7 @@ mod tests {
     fn waiting_on(dir: &Path, task: &str) -> (PathBuf, Wait) {
         let state = state_of(dir);
         let address = peers::address(task, &name_of(dir));
-        let wait = Wait { task: "search".to_string(), repo: dir.to_path_buf(), after: vec![Dep { address, repo: dir.to_path_buf() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None };
+        let wait = Wait { task: "search".to_string(), repo: dir.to_path_buf(), after: vec![Dep { address, repo: dir.to_path_buf() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None };
         save(&state, &wait).unwrap();
         (state, wait)
     }
@@ -1257,7 +1347,7 @@ mod tests {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let state = state_of(&dir);
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(CLAIM_HOLDS + 5);
-        let lost = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: "x@y".to_string(), repo: dir.clone() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None };
+        let lost = Wait { task: "search".to_string(), repo: dir.clone(), after: vec![Dep { address: "x@y".to_string(), repo: dir.clone() }], prompt: "Search".to_string(), mode: None, profile: None, backlog: None, by: By::User, at: 100, blocked: None, gone_since: None, why: None, starts_at: None };
         let running = Wait { task: "billing".to_string(), ..lost.clone() };
         for wait in [&lost, &running] {
             crate::state::write(&claimed_file(&state, &wait.address()), wait.to_json().to_string()).unwrap();
@@ -1379,7 +1469,7 @@ mod tests {
         let known = known(&["a@x"], vec![b], &[]);
         let error = plan("a@x", "Do a", &["b"], &known).unwrap_err();
         assert_eq!(error, "a@x cannot wait in a circle: a@x → b@x → a@x");
-        let asked = Asked { name: "a", prompt: "Do a", after: &["b"], mode: None, profile: None, backlog: None, title: None, why: None };
+        let asked = Asked { name: "a", prompt: "Do a", after: &["b"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None };
         assert!(queue_in(&state, &Caller::User, &[PathBuf::from("/repos/x")], &asked, &known, 100).is_err());
         assert_eq!(all(&state).iter().map(Wait::address).collect::<Vec<_>>(), ["b@x"]);
         fs::remove_dir_all(state).unwrap();
@@ -1400,7 +1490,7 @@ mod tests {
         for asked in ["nothing", "billing@web", "search"] {
             assert!(plan("web-billing@web", "Use it", &[asked], &known).unwrap_err().contains("no task, queued task or task done by that name"), "{asked}");
         }
-        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing", "nothing"], mode: None, profile: None, backlog: None, title: None, why: None };
+        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing", "nothing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None };
         assert!(queue_in(&state, &Caller::User, &[PathBuf::from("/repos/web")], &asked, &known, 100).is_err());
         assert!(all(&state).is_empty(), "one unknown name refuses the whole wait");
         fs::remove_dir_all(state).unwrap();
@@ -1421,7 +1511,7 @@ mod tests {
     fn only_the_user_or_the_lead_can_queue_or_change_a_wait() {
         let state = crate::sh::test_dir("after-who");
         let known = known(&["billing@api"], Vec::new(), &[]);
-        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None };
+        let asked = Asked { name: "web-billing", prompt: "Use it", after: &["billing"], mode: None, profile: None, backlog: None, title: None, why: None, starts_at: None };
         for caller in [Caller::Task("billing@api".to_string()), Caller::Agent] {
             assert!(queue_in(&state, &caller, &[PathBuf::from("/repos/web")], &asked, &known, 100).unwrap_err().contains("only the user or the lead"));
             assert!(all(&state).is_empty());

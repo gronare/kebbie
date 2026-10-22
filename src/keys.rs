@@ -41,6 +41,7 @@ pub enum Act {
     Done,
     Reset,
     Drop,
+    StartAt,
     Refresh,
     Away,
     Update,
@@ -84,9 +85,9 @@ const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 
 impl Act {
-    pub const EVERY: [Act; 41] = [
+    pub const EVERY: [Act; 42] = [
         Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
-        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Done, Act::Reset, Act::Drop, Act::Refresh, Act::Away,
+        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Done, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
@@ -119,6 +120,7 @@ impl Act {
             Act::Done => "done",
             Act::Reset => "reset",
             Act::Drop => "drop",
+            Act::StartAt => "start_at",
             Act::Refresh => "refresh",
             Act::Away => "away",
             Act::Update => "update",
@@ -169,6 +171,7 @@ impl Act {
             Act::Done => Default::Char('d'),
             Act::Reset => Default::Char('z'),
             Act::Drop => Default::Char('x'),
+            Act::StartAt => Default::Char('l'),
             Act::Refresh => Default::Char('R'),
             Act::Away => Default::Char('A'),
             Act::Update => Default::Char('U'),
@@ -221,6 +224,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Done, on: &[Work], help: "done: after you pushed elsewhere (asks first)", hint: Hint::No },
     Binding { act: Act::Reset, on: &[Work], help: "reset the task: its work goes, its backlog item returns (asks first)", hint: Hint::No },
     Binding { act: Act::Drop, on: &[Work], help: "drop the task (asks first)", hint: Hint::No },
+    Binding { act: Act::StartAt, on: BOARD, help: "start later: a queued task or a backlog item starts at the time you type (15:00, tomorrow 09:00, fri 09:00, 24 oct 09:00, in 2h)", hint: Hint::No },
     Binding { act: Act::Refresh, on: BOARD, help: "ask the lead to refresh the backlog", hint: Hint::No },
     Binding { act: Act::Away, on: BOARD, help: "away mode on or off: the lead settles how-questions and keeps what-questions for you", hint: Hint::No },
     Binding { act: Act::Update, on: BOARD, help: "update everything to the latest (kelpie update); ↑ at the bottom shows when there is a newer version", hint: Hint::No },
@@ -440,7 +444,7 @@ mod tests {
         assert_eq!(at(Work, KeyCode::Char('q')), Some(Act::Close));
         assert_eq!(at(Work, KeyCode::Esc), Some(Act::Back));
         assert_eq!(at(Work, KeyCode::Char('s')), Some(Act::Card), "s shows the card");
-        assert_eq!(at(Work, KeyCode::Char('l')), None, "l is free on the board");
+        assert_eq!((at(Work, KeyCode::Char('l')), at(Backlog, KeyCode::Char('l')), at(Areas, KeyCode::Char('l'))), (Some(Act::StartAt), Some(Act::StartAt), Some(Act::Log)), "l starts later on the board and is the log on the areas page");
         assert_eq!(at(Areas, KeyCode::Char('b')), Some(Act::AreaRefresh));
         assert_eq!(at(Work, KeyCode::Char('b')), Some(Act::Worker));
         assert_eq!(keys.act(Work, &KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), Some(Act::Quit));

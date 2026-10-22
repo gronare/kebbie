@@ -497,6 +497,12 @@ impl App {
                         self.mode = Mode::Input { purpose: Purpose::BacklogName(entry), label: "Start as task: name".to_string(), buffer };
                     }
                 }
+                Act::StartAt => {
+                    if let Some(entry) = self.selected_entry() {
+                        let buffer = suggested_name(&entry.title);
+                        self.mode = Mode::Input { purpose: Purpose::BacklogLaterName(entry), label: "Start later as task: name".to_string(), buffer };
+                    }
+                }
                 Act::Refresh => self.refresh_backlog(),
                 Act::New => {
                     let label = "Add to the backlog: title (— summary and (area) optional)".to_string();
@@ -511,8 +517,9 @@ impl App {
                     let note = if note.ends_with('.') { note } else { format!("{note}.") };
                     match act {
                         Act::Go => self.mode = Mode::ConfirmQueued { about: format!("{note} Started now, it begins {}.", item.start_now_means().unwrap_or_default()), name: item.name, now: true, nudged: false },
+                        Act::StartAt => self.mode = Mode::Input { purpose: Purpose::StartAt(item.name), label: input::START_AT_LABEL.to_string(), buffer: String::new() },
                         Act::Drop => self.mode = Mode::ConfirmQueued { about: format!("{note} Dropped, {}.", item.drop_means().unwrap_or_default()), name: item.name, now: false, nudged: false },
-                        _ => self.show(Err(format!("{} is queued and has no worktree yet: {go} starts it now, {drop} drops the wait.", item.name))),
+                        _ => self.show(Err(format!("{} is queued and has no worktree yet: {go} starts it now, {} sets when it starts, {drop} drops the wait.", item.name, keys::key(Act::StartAt)))),
                     }
                     return;
                 }

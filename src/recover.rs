@@ -223,7 +223,7 @@ pub fn reset_clock(text: &str) -> Option<Clock> {
     Some(clock)
 }
 
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+pub(crate) fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let (y, m) = if month <= 2 { (year - 1, i64::from(month) + 9) } else { (year, i64::from(month) - 3) };
     let era = y.div_euclid(400);
     let of_era = y - era * 400;
@@ -231,7 +231,7 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     era * 146_097 + of_era * 365 + of_era / 4 - of_era / 100 + of_year - 719_468
 }
 
-fn year_of(days: i64) -> i64 {
+pub(crate) fn year_of(days: i64) -> i64 {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);
     let of_era = shifted.rem_euclid(146_097);
@@ -240,7 +240,7 @@ fn year_of(days: i64) -> i64 {
     year_of_era + era * 400 + i64::from((5 * of_year + 2) / 153 >= 10)
 }
 
-fn weekday(days: i64) -> i64 {
+pub(crate) fn weekday(days: i64) -> i64 {
     (days + 4).rem_euclid(7)
 }
 

@@ -112,7 +112,7 @@ mod tests {
         let mut item = crate::status::tests::task(None, None, 0);
         (item.name, item.git, item.title) = ("web-billing".to_string(), None, Some("Bill in cents".to_string()));
         let waiting = "Waits for Billing totals (ready to push). Starts by itself once it is pushed and CI is green.";
-        item.queued = Some(crate::status::Queued { after: vec![("billing@api".to_string(), "ready to push".to_string())], blocked: None, waiting: waiting.to_string(), names: vec!["Billing totals".to_string()], base: "main".to_string(), backlog: true });
+        item.queued = Some(crate::status::Queued { after: vec![("billing@api".to_string(), "ready to push".to_string())], blocked: None, waiting: waiting.to_string(), names: vec!["Billing totals".to_string()], base: "main".to_string(), at: None, backlog: true });
         let mut app = test_app(vec![item]);
         let (rows, _) = render(&mut app, 200, 30);
         let screen = rows.join("\n");
@@ -121,6 +121,7 @@ mod tests {
         let menu: Vec<_> = crate::board::options::task_choices(app.selected_task().as_ref(), None, None).into_iter().map(|choice| (choice.act, choice.about)).collect();
         assert_eq!(menu, [
             (Some(crate::keys::Act::Go), "from main, without the changes from Billing totals; its Claude is told what is missing (asks first)".to_string()),
+            (Some(crate::keys::Act::StartAt), "type a time and it starts then, once what it waits for is done too".to_string()),
             (Some(crate::keys::Act::Drop), "it never starts, and its backlog item goes back to the backlog (asks first)".to_string()),
         ]);
         app.handle_normal(key(KeyCode::Char('g')));
@@ -136,5 +137,35 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal), "a task's keys a queued row does not offer do nothing");
         app.handle_normal(key(KeyCode::Char('s')));
         assert!(matches!(&app.mode, Mode::Message(text) if text.contains("web-billing is queued and has no worktree yet")), "the card key, offered on every row, says what a queued row takes");
+    }
+
+    #[test]
+    fn l_sets_when_a_queued_task_or_a_backlog_item_starts() {
+        use crate::board::input::{Purpose, START_AT_LABEL};
+        let mut item = crate::status::tests::task(None, None, 0);
+        (item.name, item.git) = ("nightly".to_string(), None);
+        item.queued = Some(crate::status::Queued { after: Vec::new(), blocked: None, waiting: "Starts 02:00 tomorrow.".to_string(), names: Vec::new(), base: "main".to_string(), at: Some("02:00 tomorrow".to_string()), backlog: false });
+        let mut app = test_app(vec![item]);
+        let menu: Vec<_> = crate::board::options::task_choices(app.selected_task().as_ref(), None, None).into_iter().map(|choice| (choice.label, choice.about)).collect();
+        assert_eq!(menu, [
+            ("Start it now".to_string(), "from main now instead of 02:00 tomorrow (asks first)".to_string()),
+            ("Start at…".to_string(), "now 02:00 tomorrow; type another time and it starts then".to_string()),
+            ("Drop the wait".to_string(), "it never starts and leaves the board (asks first)".to_string()),
+        ], "the options box says when it starts");
+        app.handle_normal(key(KeyCode::Char('l')));
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::StartAt(name), label, .. } if name == "nightly" && label == START_AT_LABEL));
+        for character in "soonish".chars() {
+            press(&mut app, key(KeyCode::Char(character)));
+        }
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("\"soonish\" is not a time")), "a time kelpie cannot read is refused on the board");
+        app.mode = Mode::Normal;
+        app.column = crate::board::Column::Backlog;
+        app.backlog.entries = vec![crate::backlog::Entry { source: "vault".to_string(), title: "Nightly import".to_string(), priority: "high".to_string(), area: "web".to_string(), reference: "Projects/nightly.md".to_string(), summary: String::new(), age: String::new() }];
+        app.backlog_selected = 0;
+        app.handle_normal(key(KeyCode::Char('l')));
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogLaterName(entry), buffer, .. } if entry.reference == "Projects/nightly.md" && buffer == "nightly-import"));
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogLaterAt(_, name), label, .. } if name == "nightly-import" && label == START_AT_LABEL), "after its name, the time");
     }
 }

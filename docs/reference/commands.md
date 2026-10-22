@@ -31,6 +31,7 @@ Started in `bypassPermissions`, Claude shows its bypass permissions warning unti
 | `--profile <name>` | Start the task with this [profile](configuration.md#profiles) instead of `task.profile`, or the built-in `task`. A task that already runs keeps the profile it started with unless this names another; restarted with a new one, it gets that profile's model, role and rules, and keeps its recorded permission mode unless `--mode` is given too. A profile that does not load is refused before a worktree is claimed. With `--after`, the queued task starts with it. |
 | `--no-focus` | Stay where you are. |
 | `--after <task[@repo]>` | Queue the task instead of starting it: it starts once that task has ended as done. Repeat it to wait for several. `<task>` alone means every half of that task; `<task>@<repo>` means that half. Needs a prompt, and takes no `--from`. See [`kelpie after`](#kelpie-after-name). |
+| `--at <time>` | Queue the task to start at that local time: `15:00` (its next one), `today 15:00`, `tomorrow 09:00`, `fri 09:00`, `24 oct 09:00`, `2026-10-24 09:00` or `in 2h`. With `--after` too, it starts once both hold. Needs a prompt, and takes no `--from`. |
 | `--why <reason>` | With `--after`: why the task waits, in a few words for the user. The board's Queued row shows it: "Waits for Billing totals (ready to push): it uses the rounding field. Starts by itself once it is pushed and CI is green." |
 
 ### `kelpie after [name]`
@@ -47,6 +48,7 @@ Queueing is refused, and nothing is written, for a name that is already a task o
 | --- | --- |
 | `--now` | Start it now anyway, from the default branch; its prompt says which tasks it waited for were not done. |
 | `--drop` | Drop the wait. Nothing was started; the backlog item it was queued from shows in the Backlog column again. |
+| `--at <time>` | Set or move the time it starts at, in the words `kelpie start --at` takes. |
 
 ### `kelpie move <name> [file ...]`
 

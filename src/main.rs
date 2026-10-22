@@ -51,6 +51,7 @@ mod update_check;
 mod usage;
 mod vault;
 mod vault_cli;
+mod when;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -67,10 +68,13 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   --no-focus keeps you where you are, --after <task[@repo]> (repeatable) queues it
                                   to start from the default branch once each of those tasks ended as done and,
                                   where kelpie watches CI, its CI is green; the user's or the lead's;
+                                  --at <time> queues it to start at that time (15:00, tomorrow 09:00, fri 09:00,
+                                  24 oct 09:00, 2026-10-24 09:00, in 2h), with --after once both hold;
                                   --why <reason> says on its Queued row why it waits)
   kelpie after [name]             the queued tasks: what each waits for, with that task's state; one blocked because
                                   a task it waited for was dropped, reset or is gone waits for you (--now starts it
-                                  anyway and tells its Claude what was not done, --drop drops the wait)
+                                  anyway and tells its Claude what was not done, --drop drops the wait,
+                                  --at <time> sets when it starts)
   kelpie move <name> [file ...]   move work under way in the main checkout into a task: branch <name> if it
                                   exists, else the unpushed commits, plus the given uncommitted files
                                   (--pane <id> moves that herdr pane along, --no-focus stays put)
@@ -344,11 +348,12 @@ fn run(arguments: &Arguments) -> Result<String> {
                 repos.push(cwd);
             }
             let after = arguments.values_of("--after");
-            if !after.is_empty() {
+            let starts_at = arguments.value("--at").map(|text| crate::when::parse(text, messages::now(), &crate::recover::local_offset)).transpose().map_err(|error| format!("--at: {error}"))?;
+            if !after.is_empty() || starts_at.is_some() {
                 if arguments.value("--from").is_some() {
-                    return Err("kelpie start --after starts from the default branch, so it takes no --from".to_string());
+                    return Err("kelpie start --after and --at start from the default branch, so they take no --from".to_string());
                 }
-                if let Some(queued) = tasks::queue(&repos, &tasks::QueueAsked { name, prompt: prompt.unwrap_or_default(), after: &after, mode: arguments.value("--mode"), profile: arguments.value("--profile"), backlog: arguments.value("--backlog"), title: None, why: arguments.value("--why") })? {
+                if let Some(queued) = tasks::queue(&repos, &tasks::QueueAsked { name, prompt: prompt.unwrap_or_default(), after: &after, mode: arguments.value("--mode"), profile: arguments.value("--profile"), backlog: arguments.value("--backlog"), title: None, why: arguments.value("--why"), starts_at })? {
                     return Ok(queued);
                 }
             }
@@ -361,7 +366,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let report = started.iter().map(|result| match result { Ok(text) | Err(text) => text.as_str() }).collect::<Vec<_>>().join("\n");
             if started.iter().any(Result::is_err) { Err(report) } else { Ok(report) }
         }
-        Some("after") => tasks::after_command(&arguments.positionals[1..], arguments.flag("--now"), arguments.flag("--drop")),
+        Some("after") => tasks::after_command(&arguments.positionals[1..], arguments.flag("--now"), arguments.flag("--drop"), arguments.value("--at")),
         Some("move") => {
             let name = name.ok_or("kelpie move needs a task name")?;
             tasks::move_work(&cwd, name, &arguments.positionals[2..], arguments.value("--pane"), !arguments.flag("--no-focus"))

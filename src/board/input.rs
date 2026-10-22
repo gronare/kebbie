@@ -20,6 +20,9 @@ pub(super) enum Purpose {
     TaskPrompt(String),
     Message(String, String),
     BacklogName(Entry),
+    BacklogLaterName(Entry),
+    BacklogLaterAt(Entry, String),
+    StartAt(String),
     BacklogItem,
     BacklogPriority(String),
     Tidy(PathBuf),
@@ -39,8 +42,16 @@ impl App {
     }
 
     fn submit(&mut self, purpose: Purpose, text: String, terminal: Option<&mut DefaultTerminal>) {
+        if matches!(purpose, Purpose::StartAt(_) | Purpose::BacklogLaterAt(..)) && !text.is_empty()
+            && let Err(error) = crate::when::parse(&text, crate::messages::now(), &crate::recover::local_offset) {
+            return self.show(Err(error));
+        }
         match purpose {
-            Purpose::TaskName | Purpose::BacklogName(_) | Purpose::BacklogItem if text.is_empty() => {}
+            Purpose::TaskName | Purpose::BacklogName(_) | Purpose::BacklogLaterName(_) | Purpose::BacklogLaterAt(..) | Purpose::StartAt(_) | Purpose::BacklogItem if text.is_empty() => {}
+            Purpose::StartAt(name) => self.in_background(format!("Setting when {name} starts…"), move || tasks::start_at(&name, &text)),
+            Purpose::BacklogLaterName(entry) => {
+                self.mode = Mode::Input { purpose: Purpose::BacklogLaterAt(entry, text), label: START_AT_LABEL.to_string(), buffer: String::new() };
+            }
             Purpose::BacklogItem => {
                 let label = "Priority: urgent, high, medium or low (empty for none)".to_string();
                 self.mode = Mode::Input { purpose: Purpose::BacklogPriority(text), label, buffer: String::new() };
@@ -52,7 +63,7 @@ impl App {
                 }
                 self.show(result);
             }
-            Purpose::BacklogName(entry) if entry.area.is_empty() => {
+            Purpose::BacklogName(entry) | Purpose::BacklogLaterAt(entry, _) if entry.area.is_empty() => {
                 self.show(Err(format!("\"{}\" names no area, so kelpie cannot tell which repo it is in; add the repo's folder name as (area) at the end of its line.", entry.title)));
             }
             Purpose::TaskName => {
@@ -62,9 +73,14 @@ impl App {
             Purpose::TaskPrompt(name) => {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
-                self.show(start_in_background(&repo, &name, prompt.as_deref(), None));
+                self.show(start_in_background(&repo, &name, prompt.as_deref(), None, None));
             }
-            Purpose::BacklogName(entry) => {
+            Purpose::BacklogName(_) | Purpose::BacklogLaterAt(..) => {
+                let (entry, name, at) = match purpose {
+                    Purpose::BacklogLaterAt(entry, name) => (entry, name, Some(text)),
+                    Purpose::BacklogName(entry) => (entry, text, None),
+                    _ => return,
+                };
                 let prompt = backlog::task_prompt(&entry, &self.sources, crate::vault_cli::known_on());
                 let known = self.repo_named(&entry.area);
                 let located = || match terminal {
@@ -72,7 +88,7 @@ impl App {
                     None => repo::locate(&entry.area),
                 };
                 match known.map_or_else(located, Ok) {
-                    Ok(repo) => self.show(start_in_background(&repo, &text, Some(&prompt), Some(&entry.reference))),
+                    Ok(repo) => self.show(start_in_background(&repo, &name, Some(&prompt), Some(&entry.reference), at.as_deref())),
                     Err(error) => self.show(Err(error)),
                 }
             }
@@ -90,7 +106,9 @@ impl App {
 }
 
 // The board stays where it is while the task's worktree and Claude come up; the task shows under Work once its Space exists.
-fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: Option<&str>) -> Result<String> {
+pub(super) const START_AT_LABEL: &str = "Start at: 15:00, tomorrow 09:00, fri 09:00, 24 oct 09:00 or in 2h";
+
+fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: Option<&str>, at: Option<&str>) -> Result<String> {
     let dir = crate::lead::state_dir()?.join("starts");
     crate::state::private_dir(&dir)?;
     let log = dir.join(format!("{}.log", name.replace('/', "-")));
@@ -100,6 +118,9 @@ fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: O
     command.arg("-C").arg(repo).args(["start", name, "--no-focus"]);
     if let Some(item) = backlog.filter(|item| !item.is_empty()) {
         command.args(["--backlog", item]);
+    }
+    if let Some(at) = at {
+        command.args(["--at", at]);
     }
     if let Some(prompt) = prompt {
         command.arg(prompt);
