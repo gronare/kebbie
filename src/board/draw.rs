@@ -15,7 +15,7 @@ use super::editor::draw_editor;
 use super::header::header;
 use super::inbox::draw_questions;
 use super::input::{draw_filter, draw_input};
-use super::link::link_cells;
+use super::link::{link_cells, link_urls, start_noting, take_noted};
 use super::message_log::{Fold, messages_height, messages_lines};
 use super::{App, Column, Hit, Mode, Page};
 use super::options::draw_options;
@@ -26,6 +26,7 @@ use super::widgets::{MUTED, PEACH, RED, TEXT, modal, render_column, style};
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     app.hits.clear();
     app.links.clear();
+    start_noting();
     let full = frame.area();
     let area = full.inner(Margin { horizontal: 2, vertical: 1 });
     let fold = if app.page == Page::Work { app.fold } else { Fold::Hidden };
@@ -140,6 +141,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         app.hits = modal_hits;
     }
+    link_urls(frame.buffer_mut(), &take_noted());
     for link in &app.links {
         link_cells(frame.buffer_mut(), link);
     }
@@ -165,7 +167,7 @@ mod tests {
         let (backlog_x, _) = find(&rows, "BACKLOG")[0];
         assert!(work_x < urls[0].0 && urls[0].0 < backlog_x, "the address is in the middle column: {screen}");
         let (x, y) = urls[0];
-        assert!(buffer[(x as u16, y as u16)].symbol().starts_with("\x1b]8;;https://wt2.web.test"), "the panel's address is a link");
+        assert_eq!(link_of(&buffer[(x as u16, y as u16)]).map(|link| link.0).as_deref(), Some("https://wt2.web.test"), "the panel's address is a link");
         assert!(screen.contains("search-filters · wt2.web · 2 ahead · 0 behind") && screen.contains("a1f3c2e Wire the price filter"), "{screen}");
         assert!(screen.contains("worker  ○ off · b starts it") && screen.contains("changed app/filters.rb"), "{screen}");
         let row = rows.iter().find(|row| row.contains("▌○ search-filters")).unwrap_or_else(|| panic!("{screen}"));
@@ -202,7 +204,7 @@ mod tests {
         assert_eq!(urls.len(), 1, "{screen}");
         let (url_x, url_y) = urls[0];
         assert!(url_y > row_y && url_x < backlog_x, "the details unfold under the row, in Work: {screen}");
-        assert!(buffer[(url_x as u16, url_y as u16)].symbol().starts_with("\x1b]8;;https://wt2.web.test"));
+        assert_eq!(link_of(&buffer[(url_x as u16, url_y as u16)]).map(|link| link.0).as_deref(), Some("https://wt2.web.test"));
         assert!(!screen.contains("a1f3c2e"), "commits stay in the wide panel: {screen}");
     }
 

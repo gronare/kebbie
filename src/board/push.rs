@@ -146,6 +146,7 @@ pub(super) fn draw_push(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit)> {
     let width = PUSH_WIDTH.min(frame.area().width.saturating_sub(4));
     let inner_width = width.saturating_sub(4);
     let (lines, first_commit) = push_lines(card.as_ref(), tests.as_ref(), commits, *selected, inner_width as usize);
+    super::link::note_lines(&lines);
     let mut starts = Vec::with_capacity(lines.len() + 1);
     let mut rows = 0u16;
     for line in &lines {

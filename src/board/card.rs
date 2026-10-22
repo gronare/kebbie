@@ -120,7 +120,30 @@ pub(super) fn card_parts(text: &str) -> (Vec<Section>, Vec<CardImage>) {
     (sections, images)
 }
 
+fn split_url_word(word: Vec<(String, bool)>, width: usize) -> Vec<Vec<(String, bool)>> {
+    let plain: String = word.iter().map(|(part, _)| part.as_str()).collect();
+    if plain.chars().count() <= width || !plain.contains("://") {
+        return vec![word];
+    }
+    let mut rows: Vec<Vec<(String, bool)>> = vec![Vec::new()];
+    let mut used = 0;
+    for (character, bolded) in word.iter().flat_map(|(part, bolded)| part.chars().map(move |character| (character, *bolded))) {
+        if used == width {
+            rows.push(Vec::new());
+            used = 0;
+        }
+        let row = rows.last_mut().unwrap();
+        match row.last_mut() {
+            Some((part, same)) if *same == bolded => part.push(character),
+            _ => row.push((character.to_string(), bolded)),
+        }
+        used += 1;
+    }
+    rows
+}
+
 pub(super) fn rich_wrap(text: &str, width: usize, max_lines: usize, color: Color) -> Vec<Line<'static>> {
+    super::link::note_urls(text);
     let width = width.max(10);
     let usable = text.matches("**").count() / 2 * 2;
     let mut words: Vec<Vec<(String, bool)>> = Vec::new();
@@ -146,6 +169,7 @@ pub(super) fn rich_wrap(text: &str, width: usize, max_lines: usize, color: Color
     if !word.is_empty() {
         words.push(word);
     }
+    let words = words.into_iter().flat_map(|word| split_url_word(word, width));
     let mut lines: Vec<(Vec<(String, bool)>, usize)> = Vec::new();
     for word in words {
         let count: usize = word.iter().map(|(part, _)| part.chars().count()).sum();
@@ -664,7 +688,7 @@ mod tests {
         assert!(!screen.contains("o opens the image") && !screen.contains("o open"), "no viewer, no o: {screen}");
         assert!(screen.contains("← → image · ↑ ↓ scroll · f fullscreen · p push · esc close"), "{screen}");
         let (rows, buffer) = render(&mut app, 160, 48);
-        assert!(buffer[(x as u16 + 4, y as u16)].symbol().starts_with(&format!("\x1b]8;;file://{}", wide.display())), "the file name is a link to the file: {}", rows.join("\n"));
+        assert_eq!(link_of(&buffer[(x as u16 + 4, y as u16)]).map(|link| link.0), Some(format!("file://{}", wide.display())), "the file name is a link to the file: {}", rows.join("\n"));
         press(&mut app, key(KeyCode::Right));
         let (rows, _, _, tall_rows) = pane(&mut app, (30, 30, 200));
         let (_, header) = find(&rows, "2/2 tall.png  tall")[0];

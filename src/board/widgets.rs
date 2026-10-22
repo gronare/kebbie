@@ -6,6 +6,7 @@ use ratatui::Frame;
 
 use crate::keys::{self, Act};
 use crate::messages;
+use super::link::{note_lines, note_urls};
 
 pub const TEXT: Color = Color::Rgb(0xcd, 0xd6, 0xf4);
 pub const SUBTEXT: Color = Color::Rgb(0xa6, 0xad, 0xc8);
@@ -45,17 +46,18 @@ pub fn plural(count: usize, noun: &str) -> String {
 }
 
 pub fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
+    note_urls(text);
     let width = width.max(10);
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
-    for word in text.split_whitespace() {
+    for word in text.split_whitespace().flat_map(|word| split_url(word, width)) {
         if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > width {
             lines.push(std::mem::take(&mut current));
         }
         if !current.is_empty() {
             current.push(' ');
         }
-        current.push_str(word);
+        current.push_str(&word);
     }
     if !current.is_empty() {
         lines.push(current);
@@ -158,7 +160,17 @@ pub fn card_text(label: &str, text: &str, accent: Color, width: usize, max_lines
     lines.into_iter().map(|line| line.style(Style::new().bg(SURFACE))).collect()
 }
 
+// A URL wider than the row is broken into rows, so all of it shows; every other word stays whole.
+pub fn split_url(word: &str, width: usize) -> Vec<String> {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.len() <= width || !word.contains("://") {
+        return vec![word.to_string()];
+    }
+    chars.chunks(width.max(1)).map(|chunk| chunk.iter().collect()).collect()
+}
+
 pub fn cut(text: &str, width: usize) -> String {
+    note_urls(text);
     if Span::raw(text).width() <= width {
         return text.to_string();
     }
@@ -193,6 +205,7 @@ pub fn hints(keys: &[(&str, &str)]) -> Line<'static> {
 }
 
 pub(super) fn fit(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    note_lines(&[Line::from(spans.clone())]);
     let mut left = width;
     let mut out = Vec::new();
     for span in spans {
@@ -216,6 +229,7 @@ pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
 
 // Sized to the wrapped text, so a long line in a narrow pane cannot push the last line, often the keys, out of the window.
 pub fn modal(frame: &mut Frame, title: String, lines: Vec<Line<'static>>, width: u16) -> Rect {
+    note_lines(&lines);
     let block = modal_block(title);
     let width = width.min(frame.area().width.saturating_sub(4));
     let rows = Paragraph::new(lines.clone()).wrap(Wrap { trim: false }).line_count(width.saturating_sub(4));
@@ -335,6 +349,7 @@ mod tests {
         assert_eq!(wrap("one two three four five six", 9, 2), ["one two", "three fou…"], "the width floor is ten, and the last kept line ends in an ellipsis");
         assert_eq!(wrap("one two three four five six", 12, 2), ["one two", "three four…"]);
         assert_eq!(wrap("supercalifragilistic", 5, 3), ["supercalifragilistic"], "a word is never split");
+        assert_eq!(wrap("see https://x.example/abcdefghij now", 10, 5), ["see", "https://x.", "example/ab", "cdefghij", "now"], "a URL wider than the row is the one word that is");
         assert_eq!(wrap("", 20, 3), Vec::<String>::new());
         assert_eq!(wrap("a  b\n\n c", 20, 3), ["a b c"], "whitespace collapses");
     }

@@ -454,6 +454,7 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
         let changed = question.is_some_and(questions::plan_changed);
         match plan {
             Some(plan) => {
+                super::link::note_lines(&plan.lines);
                 let paragraph = Paragraph::new(plan).wrap(Wrap { trim: false });
                 let last = (paragraph.line_count(text.width) as u16).saturating_sub(text.height);
                 window.scroll = window.scroll.min(last);

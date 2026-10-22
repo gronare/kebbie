@@ -79,6 +79,35 @@ pub(super) fn render(app: &mut App, width: u16, height: u16) -> (Vec<String>, ra
     (rows, buffer)
 }
 
+// The URL a drawn cell links to, and the id that ties its cells into one link.
+pub(super) fn link_of(cell: &ratatui::buffer::Cell) -> Option<(String, String)> {
+    let rest = cell.symbol().strip_prefix("\x1b]8;id=")?;
+    let (id, rest) = rest.split_once(';')?;
+    let (url, _) = rest.split_once("\x1b\\")?;
+    Some((url.to_string(), id.to_string()))
+}
+
+fn shown(cell: &ratatui::buffer::Cell) -> String {
+    let symbol = cell.symbol();
+    symbol.split("\x1b\\").nth(1).map_or(symbol, |inner| inner.split('\x1b').next().unwrap_or(inner)).to_string()
+}
+
+// Fails unless every drawn cell of the URL, on every row it reaches, links the whole URL under one id; a URL cut with … counts when the shown start is linked whole.
+pub(super) fn assert_whole_link(buffer: &ratatui::buffer::Buffer, url: &str, rows: usize, what: &str) {
+    let width = buffer.area.width as usize;
+    let (mut ids, mut linked_rows, mut text) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new(), String::new());
+    for (index, cell) in buffer.content.iter().enumerate() {
+        if let Some((linked, id)) = link_of(cell) && linked == url {
+            ids.insert(id);
+            linked_rows.insert(index / width);
+            text.push_str(&shown(cell));
+        }
+    }
+    let screen: String = (0..buffer.area.height as usize).map(|y| (0..width).map(|x| shown(&buffer.content[y * width + x])).collect::<String>() + "\n").collect();
+    let whole = text == url || text.strip_suffix('…').is_some_and(|start| start.len() >= 10 && url.starts_with(start));
+    assert!(whole && ids.len() == 1 && linked_rows.len() >= rows, "{what}: {url} is linked as {text:?} over {} rows with ids {ids:?}:\n{screen}", linked_rows.len());
+}
+
 pub(super) fn find(rows: &[String], text: &str) -> Vec<(usize, usize)> {
     rows.iter().enumerate().filter_map(|(y, row)| row.find(text).map(|byte| (row[..byte].chars().count(), y))).collect()
 }
