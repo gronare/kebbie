@@ -25,7 +25,7 @@ It does not push, except tasks you gave it permission for.
 
 Every report, message and question passes through kelpie, and the lead gets a copy. The copies do not arrive as chat messages. Each of your prompts to the lead carries the reports and messages it has not seen yet, so its chat stays a conversation with you and its picture stays current.
 
-Questions about what you want are yours. A task asks with `kelpie ask`, and the question waits on the board until you answer it there. Questions about how (method, structure, how to split the work, the order of steps) the lead answers whether or not you are here. The lead can help you decide, but the answer comes from you, and it reaches the task as `[from you]`. Until you answer, kelpie holds every other message to that task, so nothing starts a turn under an open question.
+Questions about what you want are yours: scope, behaviour, a trade-off that is yours, a plan for wide or risky work. A task asks with `kelpie ask`, one question at a time, opening with a plain sentence on what it is doing and with options that each say what you get, and the question waits on the board until you answer it there. Questions about how (method, structure, how to split the work, the order of steps) are not put to you: a task decides them, or asks the lead with `kelpie tell lead`, and the lead answers whether or not you are here. A small, well-defined task builds without asking you to approve a plan. The lead can help you decide, but the answer comes from you, and it reaches the task as `[from you]`. Until you answer, kelpie holds every other message to that task, so nothing starts a turn under an open question.
 
 ## Claude's own prompts in a task
 

@@ -106,12 +106,18 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   working, blocked) and what you should do next, for the board and the lead;
                                   with ready, --card <file> is the sign-off card the push dialog shows above the commits
   kelpie ask --option \"<label>: <meaning>\" … --recommend <n> <question>
-                                  run by a task's Claude to put a question to the user: two to four options, one
-                                  recommended; an option ending in \" +comment\" opens a comment field on the board and
-                                  sends only with your text (--plan vault:<note> or --plan <file> asks to approve a plan
-                                  instead, with its four answers: approve, approve with a comment, ask for changes,
-                                  reject with a comment); it waits on the board, where you answer it, the lead gets a copy, and the answer reaches
-                                  the task as a message from you
+                                  run by a task's Claude to ask you what you want (scope, behaviour, a trade-off that is
+                                  yours); a question of how goes to the lead with kelpie tell lead. The question opens
+                                  with one plain sentence on what the task is doing, then asks; each of the two to four
+                                  options says what you get with it; no flags, commit ids, file names or internal terms
+                                  you did not use. Example: \"This task makes a waiting task easy to read on the board.
+                                  Do you also want to start a task at a time you pick?\" --option \"Yes: you can say
+                                  'start at 18:00' when you queue a task; this task takes longer to reach you\" --option
+                                  \"Not now: a queued task starts once the tasks it waits for are done\"
+                                  An option ending in \" +comment\" opens a comment field and sends only with your text.
+                                  --plan vault:<note> or --plan <file> asks you to approve a plan instead. It waits on
+                                  the board, where you answer it, the lead gets a copy, and the answer reaches the task
+                                  as a message from you
   kelpie answered <task>          a task's question is settled elsewhere (in its Space, or dropped): it leaves the board
   kelpie notify <text>            run notify.command with this text (KELPIE_EVENT=summary): the lead's word to the user
                                   when they are away; tasks that need you or are ready, and questions, notify by themselves

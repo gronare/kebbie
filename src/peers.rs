@@ -397,6 +397,15 @@ mod tests {
     }
 
     #[test]
+    fn the_role_sends_how_to_the_lead_lets_a_small_task_build_and_asks_the_user_in_their_words() {
+        let role = fill(include_str!("../roles/task.md"), &[("kelpie", "/bin/kelpie")]);
+        for needed in ["`/bin/kelpie tell lead \"<question>\"`", "whether or not the user is present", "builds without a plan approval and without questions", "one question at a time", "One plain sentence of context", "by its title, not its branch", "what the user gets with it", "No flags, commit ids, file names or internal terms"] {
+            assert!(role.contains(needed), "{needed}");
+        }
+        assert!(!role.contains("Ask what you need decided before you plan"), "a task no longer asks before every plan");
+    }
+
+    #[test]
     fn the_plan_goes_in_the_vault_note_with_the_vault_and_in_kelpies_state_without_it() {
         use crate::config::Source;
         let plans = Path::new("/state/plans/billing@web.md");
@@ -408,7 +417,7 @@ mod tests {
         assert!(file.contains("to `/state/plans/billing@web.md`, kelpie's place for it outside your worktree") && file.contains("/bin/kelpie ask --plan /state/plans/billing@web.md"), "{file}");
         assert!(!file.contains("vault"), "{file}");
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
-        assert!(role.contains(&format!("2. {file} The user approves it")) && !role.contains("{plan}"), "{role}");
+        assert!(role.contains(&format!("2. A plan to approve: {file} The user approves it")) && !role.contains("{plan}"), "{role}");
     }
 
     #[test]
