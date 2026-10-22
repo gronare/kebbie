@@ -8,6 +8,7 @@ mod board;
 mod ci;
 mod config;
 mod doctor;
+mod docs;
 mod evidence;
 mod fetch;
 mod herdr;
@@ -218,6 +219,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   config.toml, defaults; a symlink with its target) and every key with its value in
                                   effect, the layer it comes from and what it does (--get <key> prints one
                                   machine-wide value, for scripts)
+  kelpie docs [words ...]         where kelpie's docs are on this machine (docs/ in the install's checkout); with
+                                  words, the pages whose title or headings match, each with its path and first
+                                  sentence, best first; without, the docs index by section; never needs the network,
+                                  and without the docs points at kelpie help and the docs online
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
                                   (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)
@@ -527,6 +532,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let name = name.ok_or("kelpie link needs a task name and the item")?;
             tasks::link(&cwd, name, &arguments.positionals[2..].join(" "))
         }
+        Some("docs") => docs::print(&arguments.positionals[1..]),
         Some("profiles") => profiles::print(arguments.flag("--json")),
         Some("config") => match arguments.value("--get") {
             Some(key) => config::get(key),

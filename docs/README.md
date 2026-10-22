@@ -1,6 +1,6 @@
 # kelpie documentation
 
-New to kelpie? Start with the tutorial. Come back to the how-to guides when you have something to get done, to the reference when you need an exact name, and to the explanations when you want to know why.
+New to kelpie? Start with the tutorial. Come back to the how-to guides when you have something to get done, to the reference when you need an exact name, and to the explanations when you want to know why. On a machine with kelpie installed, `kelpie docs <words>` finds the page.
 
 ## Tutorial
 

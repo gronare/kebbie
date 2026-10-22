@@ -103,11 +103,15 @@ pub fn target_triple(os: &str, arch: &str) -> Option<&'static str> {
     }
 }
 
-pub fn releases_url(remote: &str) -> Option<String> {
+pub fn github_repo(remote: &str) -> Option<String> {
     let repo = ["https://github.com/", "git@github.com:", "ssh://git@github.com/"].into_iter().find_map(|prefix| remote.strip_prefix(prefix))?;
     let repo = repo.trim_end_matches('/').trim_end_matches(".git");
     let parts: Vec<&str> = repo.split('/').collect();
-    (parts.len() == 2 && parts.iter().all(|part| !part.is_empty())).then(|| format!("https://github.com/{repo}/releases/download"))
+    (parts.len() == 2 && parts.iter().all(|part| !part.is_empty())).then(|| repo.to_string())
+}
+
+pub fn releases_url(remote: &str) -> Option<String> {
+    github_repo(remote).map(|repo| format!("https://github.com/{repo}/releases/download"))
 }
 
 impl Binaries {

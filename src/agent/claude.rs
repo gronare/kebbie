@@ -705,7 +705,7 @@ mod tests {
             let command = if ["routine", "backlog", "ci", "issue"].contains(&words[0]) { words.join(" ") } else { words[0].to_string() };
             let line = format!("{{kelpie}} {command}");
             let user_only = crate::permit::USER_ONLY.iter().any(|guarded| command == *guarded || command.starts_with(&format!("{guarded} ")));
-            assert!(excluded.iter().any(|pattern| excluded_matches(pattern, &line)) || user_only || command == "done", "a task is told to run {line}, which the sandbox would cut off from kelpie's state");
+            assert!(excluded.iter().any(|pattern| excluded_matches(pattern, &line)) || user_only || ["done", "docs"].contains(&command.as_str()), "a task is told to run {line}, which the sandbox would cut off from kelpie's state");
             seen.push(command);
         }
         for command in ["report", "ask", "tell", "peers", "routine ok", "link", "backlog add"] {

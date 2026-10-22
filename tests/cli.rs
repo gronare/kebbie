@@ -188,6 +188,16 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
 }
 
 #[test]
+fn docs_finds_the_page_in_the_checkout_the_binary_was_built_in() {
+    let lab = Lab::new("docs");
+    let found = lab.run(&["docs", "set", "up", "codex"]);
+    assert!(found.status.success(), "{}", stderr(&found));
+    let docs = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+    assert!(stdout(&found).contains(&docs.join("how-to/run-a-task-with-codex.md").display().to_string()), "{}", stdout(&found));
+    assert!(stdout(&lab.run(&["docs"])).contains("how-to/run-a-task-with-codex.md  Run a task with Codex"));
+}
+
+#[test]
 fn the_user_files_a_kelpie_issue_and_a_task_is_sent_to_the_lead_instead() {
     let lab = Lab::new("issues");
     let refused = lab.run_as("billing@app", &["issue", "add", "--kind", "bug", "--title", "push hid the error", "it said nothing"]);

@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::sh::Result;
 
-// Every kelpie subcommand a task's Claude is told to run (roles/task.md, the parts kelpie fills in, and `config` in the set-up-worktree skill); each reaches kelpie's state or herdr's socket, so it runs outside the sandbox.
+// Every kelpie subcommand a task's Claude is told to run (roles/task.md, the parts kelpie fills in, and `config` in the set-up-worktree skill) that reaches kelpie's state or herdr's socket, so it runs outside the sandbox; `docs` only reads the install's checkout and stays in.
 pub const TASK_COMMANDS: [&str; 8] = ["peers", "tell", "ask", "report", "routine ok", "link", "backlog add", "config"];
 pub const DOMAINS: [&str; 8] = ["crates.io", "static.crates.io", "index.crates.io", "registry.npmjs.org", "github.com", "objects.githubusercontent.com", "pypi.org", "files.pythonhosted.org"];
 pub const WRITES: [&str; 4] = ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache"];
