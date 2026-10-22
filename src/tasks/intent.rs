@@ -228,7 +228,7 @@ mod tests {
     fn report(id: &str, at: u64, state: &str) -> Message {
         Message {
             id: id.to_string(), at, from: "billing@app".to_string(), to: crate::status::LEAD_LABEL.to_string(), text: "tests pass".to_string(), held: false,
-            report: Some(Report { state: state.to_string(), next: "push".to_string() }), ended: false, question: None, about: None, kind: None, landed: None, why: None,
+            report: Some(Report { state: state.to_string(), next: "push".to_string() }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false,
         }
     }
 

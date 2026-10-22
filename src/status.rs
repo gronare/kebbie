@@ -412,10 +412,10 @@ pub fn running_url(repo: &Path, worktree: &Path) -> Option<String> {
 }
 
 // Messages that wait because the task's input box holds the user's own text: the row says what clears the way.
-fn held_by_draft(log: &[Message], address: &str) -> Option<String> {
+fn held_by_draft(log: &[Message], task: &str, address: &str) -> Option<String> {
     let waiting = log.iter().filter(|message| message.held && message.to == address).count();
     let draft = log.iter().any(|message| message.held && message.to == address && message.why.as_deref() == Some(messages::DRAFT_HOLD));
-    draft.then(|| format!("clear the draft in its input box ({} held)", plural(waiting, "message")))
+    draft.then(|| format!("clear the draft in its input box, or kelpie tell --force {task} \"<text>\" ({} held)", plural(waiting, "message")))
 }
 
 pub fn gather() -> Result<Vec<Item>> {
@@ -479,7 +479,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 routine: state.as_deref().and_then(|state| crate::routines::run_of(state, &address)).map(|(id, _)| id),
                 push_waits: state.as_deref().and_then(|state| tasks::pending_push(state, &address)),
                 queued: None,
-                held_by_draft: held_by_draft(&log, &address),
+                held_by_draft: held_by_draft(&log, &task, &address),
                 name: task,
             });
         }
@@ -539,7 +539,7 @@ pub(crate) mod tests {
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
-                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None, kind: None, landed: None, why: None,
+                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false,
             }),
             question: None,
             ci: None,
@@ -746,9 +746,9 @@ pub(crate) mod tests {
             r#"{"id":"m2","at":2,"from":"you","to":"billing@web","text":"b","state":"held","why":"still has earlier messages held"}"#,
             r#"{"id":"m3","at":3,"from":"lead","to":"shop@web","text":"c","state":"held","why":"is waiting for an answer"}"#,
         ].join("\n"));
-        let held = held_by_draft(&log, "billing@web");
-        assert_eq!(held.as_deref(), Some("clear the draft in its input box (2 messages held)"));
-        assert_eq!(held_by_draft(&log, "shop@web"), None, "held for another reason, the row stays as the task reported");
+        let held = held_by_draft(&log, "billing", "billing@web");
+        assert_eq!(held.as_deref(), Some("clear the draft in its input box, or kelpie tell --force billing \"<text>\" (2 messages held)"));
+        assert_eq!(held_by_draft(&log, "shop", "shop@web"), None, "held for another reason, the row stays as the task reported");
         let mut item = task(Some("idle"), Some("blocked"), 0);
         assert!(item.group() == Group::Idle);
         item.held_by_draft = held;
@@ -758,7 +758,7 @@ pub(crate) mod tests {
         assert!(item.group() == Group::Working && item.next_for_you().is_none(), "a turn under way takes it up");
         let delivered = messages::fold(r#"{"id":"m1","at":1,"from":"lead","to":"billing@web","text":"a","state":"held","why":"has a draft in its input box"}
 {"id":"m1","at":2,"state":"delivered"}"#);
-        assert_eq!(held_by_draft(&delivered, "billing@web"), None);
+        assert_eq!(held_by_draft(&delivered, "billing", "billing@web"), None);
     }
 
     #[test]
@@ -827,7 +827,7 @@ pub(crate) mod tests {
         assert_eq!(item.to_json()["push_permission"], "task");
         item.question = Some(Message {
             id: "q".to_string(), at: 0, from: "billing@web".to_string(), to: "you".to_string(), text: "Which?".to_string(), held: false, report: None, ended: false,
-            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, answered: false, waits: true }), about: None, kind: None, landed: None, why: None,
+            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, answered: false, waits: true }), about: None, kind: None, landed: None, why: None, forced: false,
         });
         let shown = item.to_json();
         assert_eq!(shown["question"]["kept_for_user"], true);

@@ -304,12 +304,44 @@ pub fn prompt(target: &str, text: &str, label: &str) -> std::result::Result<(), 
         Ok(Draft::Typed(_)) => return Err(Refused::Draft),
         Ok(Draft::Unreadable) | Err(_) => return Err(Refused::Unreadable),
     }
+    type_and_watch(target, text, label)
+}
+
+fn type_and_watch(target: &str, text: &str, label: &str) -> std::result::Result<(), Refused> {
     let mut typed = type_text(target, text).map_err(Refused::Failed)?;
     typed.label = label.to_string();
     if let Ok(dir) = typed_dir() {
         let _ = crate::state::write(&dir.join(format!("{}.json", crate::messages::new_id("typed"))), typed.to_json().to_string());
     }
     Ok(())
+}
+
+// Ctrl+U deletes one line of the draft per press and Claude keeps it for Ctrl+Y; Ctrl+C would interrupt a turn and Esc leaves the text.
+pub fn clear_draft(read: &mut dyn FnMut() -> Draft, press: &mut dyn FnMut() -> Result<()>) -> std::result::Result<Option<String>, Refused> {
+    let cleared = match read() {
+        Draft::Empty => return Ok(None),
+        Draft::Unreadable => return Err(Refused::Unreadable),
+        Draft::Typed(text) => text,
+    };
+    for _ in 0..=cleared.lines().count() {
+        press().map_err(Refused::Failed)?;
+        match read() {
+            Draft::Empty => return Ok(Some(cleared)),
+            Draft::Unreadable => return Err(Refused::Unreadable),
+            Draft::Typed(_) => {}
+        }
+    }
+    Err(Refused::Failed(format!("its input box still held text after kelpie cleared it line by line; it began: {}", cleared.lines().next().unwrap_or_default())))
+}
+
+// Types even over the user's draft, which it clears first and returns, so the caller can log it; used only when the user or the lead forces a delivery.
+pub fn prompt_forced(target: &str, text: &str, label: &str) -> std::result::Result<Option<String>, Refused> {
+    let (pane, _) = place(target);
+    let mut read = || screen(&pane).map(|screen| draft(&screen)).unwrap_or(Draft::Unreadable);
+    let mut press = || herdr::send_keys(&pane, &["ctrl+u"]);
+    let cleared = clear_draft(&mut read, &mut press)?;
+    type_and_watch(target, text, label)?;
+    Ok(cleared)
 }
 
 #[derive(Debug, PartialEq)]
@@ -422,6 +454,21 @@ mod tests {
         assert_eq!(draft(&boxed("❯ Try \"how does src/board.rs work?\"")), Draft::Typed("Try \"how does src/board.rs work?\"".to_string()), "without styling nothing is taken for a suggestion");
         let source = include_str!("typing.rs");
         assert!(source.contains("\"--source\", \"visible\", \"--format\", \"ansi\""), "the box is read with its styling, or a suggestion reads as typed");
+    }
+
+    #[test]
+    fn a_forced_delivery_clears_the_draft_with_ctrl_u_line_by_line_and_returns_what_it_cleared() {
+        let screens = std::cell::RefCell::new(vec![Draft::Typed("line a\nline b".to_string()), Draft::Typed("line a".to_string()), Draft::Empty].into_iter());
+        let presses = std::cell::Cell::new(0);
+        let cleared = clear_draft(&mut || screens.borrow_mut().next().unwrap(), &mut || { presses.set(presses.get() + 1); Ok(()) });
+        assert_eq!((cleared, presses.get()), (Ok(Some("line a\nline b".to_string())), 2));
+        assert_eq!(clear_draft(&mut || Draft::Empty, &mut || panic!("an empty box is not pressed")), Ok(None));
+        assert_eq!(clear_draft(&mut || Draft::Unreadable, &mut || panic!("a box it cannot see is not pressed")), Err(Refused::Unreadable));
+        let stuck = clear_draft(&mut || Draft::Typed("won't go".to_string()), &mut || Ok(()));
+        assert!(matches!(stuck, Err(Refused::Failed(ref error)) if error.contains("still held text")), "{stuck:?}");
+        let source = include_str!("typing.rs");
+        let forced = &source[source.find("pub fn prompt_forced").unwrap()..];
+        assert!(forced.contains("&[\"ctrl+u\"]") && !forced[..forced.find("\n}\n").unwrap()].contains("ctrl+c"), "Ctrl+C would interrupt Claude's turn");
     }
 
     #[test]

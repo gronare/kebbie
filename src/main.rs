@@ -90,6 +90,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie peers                    who you are and the other task sessions, with what each is doing
   kelpie tell <to> <text>         message another session: a task (every half of it), task@repo, or lead; held
                                   while it waits for an answer, and logged
+  kelpie tell --force <to> <text> yours or the lead's: deliver now, clearing a draft from its input box (logged word
+                                  for word; Ctrl+Y in its pane brings it back), with what is held for it first
+  kelpie release <to>             yours or the lead's: deliver what is held for a session now, as tell --force does
   kelpie report --state <state> --next <step> <summary>
                                   run by a task's Claude at the end of a turn: where it stands (needs-you, ready,
                                   working, blocked) and what you should do next, for the board and the lead;
@@ -378,11 +381,15 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("focus") => lead::focus_toggle().map(|_| String::new()),
         Some("peers") => peers::peers(&cwd),
         Some("tell") => {
-            let to = name.ok_or("kelpie tell needs a recipient: a task, task@repo or lead")?;
-            // Taken as given, since a message can start with "-".
-            let text: Vec<String> = std::env::args().skip_while(|argument| argument != "tell").skip(2).collect();
-            messages::tell(&cwd, to, &text.join(" "))
+            // Taken as given, since a message can start with "-"; only --force right after tell is a flag.
+            let after: Vec<String> = std::env::args().skip_while(|argument| argument != "tell").skip(1).collect();
+            let forced = after.first().is_some_and(|argument| argument == "--force");
+            let after = &after[usize::from(forced)..];
+            let to = after.first().ok_or("kelpie tell needs a recipient: a task, task@repo or lead")?;
+            let text = after[1..].join(" ");
+            if forced { messages::tell_forced(to, Some(&text)) } else { messages::tell(&cwd, to, &text) }
         }
+        Some("release") => messages::tell_forced(name.ok_or("kelpie release needs the task whose held messages go through")?, None),
         Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.positionals[1..].join(" ")),
         Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.positionals[1..].join(" ")),
         Some("notify") => {
