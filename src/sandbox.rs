@@ -373,6 +373,10 @@ pub fn missing(os: &str, arch: &str, on_path: impl Fn(&str) -> bool, seccomp: im
 const SECCOMP: &str = "the seccomp filter";
 
 pub fn missing_here() -> Vec<String> {
+    // Tests never start a real sandbox, so the machine running them counts as able to; the refusal is tested through `missing`.
+    if cfg!(test) {
+        return Vec::new();
+    }
     let path: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
     let mut lacking = missing(std::env::consts::OS, std::env::consts::ARCH, |tool| crate::doctor::which(tool, &path).is_some(), |arch| seccomp_roots().iter().any(|root| root.join("vendor/seccomp").join(arch).join("apply-seccomp").is_file()));
     let claude = crate::doctor::which("claude", &path).and_then(|claude| crate::sh::run(&claude.to_string_lossy(), &["--version"], None).ok());
