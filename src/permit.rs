@@ -368,6 +368,11 @@ mod tests {
     }
 
     #[test]
+    fn a_test_is_the_user_whichever_claude_or_pane_runs_the_suite() {
+        assert_eq!(caller(), Caller::User);
+    }
+
+    #[test]
     fn the_caller_is_read_from_the_claude_kelpie_started_above_it() {
         let lead = "/Users/ada/.local/bin/claude --append-system-prompt-file /state/roles/lead.md --settings /state/roles/lead.settings.json";
         let task = "claude --permission-mode acceptEdits --settings /state/roles/billing@app.settings.json --append-system-prompt-file /state/roles/billing@app.md --session-id 1";

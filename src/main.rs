@@ -42,6 +42,8 @@ mod shell_write;
 mod status;
 mod task_note;
 mod tasks;
+#[cfg(test)]
+mod test_seal;
 mod typing;
 mod update;
 mod update_check;

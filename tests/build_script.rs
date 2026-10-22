@@ -3,6 +3,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../src/test_seal.rs"]
+mod test_seal;
+
 const SCRIPT: &str = include_str!("../scripts/build.sh");
 const PREBUILT: &str = "#!/bin/sh\necho prebuilt\n";
 

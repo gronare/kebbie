@@ -12,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
-      HERDR_BIN_PATH: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -20,9 +19,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: cargo test
-        run: |
-          mkdir -p "$RUNNER_TEMP/state"
-          KELPIE_STATE_DIR="$RUNNER_TEMP/state" cargo test --locked
+        run: cargo test --locked
       - name: cargo clippy
         run: cargo clippy --locked --all-targets -- -D warnings
 

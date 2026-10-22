@@ -3,6 +3,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+#[path = "../src/test_seal.rs"]
+mod test_seal;
+
 const KELPIE: &str = env!("CARGO_BIN_EXE_kelpie");
 
 struct Lab {
@@ -66,15 +69,11 @@ impl Lab {
 
     fn command(&self) -> Command {
         let mut command = Command::new(KELPIE);
-        command.env_clear()
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("HOME", &self.home)
+        command.env("HOME", &self.home)
             .env("KELPIE_STATE_DIR", &self.state)
             .env("KELPIE_CONFIG", &self.config)
             .env("HERDR_BIN_PATH", &self.herdr)
             .env("KELPIE_GH_BIN", self.root.join("gh"))
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null());
         command
     }
@@ -91,7 +90,7 @@ impl Lab {
         fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
         let command = self.command();
         let mut wrapped = Command::new(&claude);
-        wrapped.env_clear().envs(command.get_envs().filter_map(|(key, value)| Some((key, value?)))).stdin(Stdio::null());
+        wrapped.envs(command.get_envs().filter_map(|(key, value)| Some((key, value?)))).stdin(Stdio::null());
         wrapped.arg("--settings").arg(self.state.join(format!("roles/{role}.settings.json"))).arg(KELPIE).args(args).output().unwrap()
     }
 
@@ -123,7 +122,7 @@ impl Lab {
 
 impl Drop for Lab {
     fn drop(&mut self) {
-        let _ = self.run(&["keeper", "--stop"]);
+        test_seal::stop_keepers_under(&self.root);
         let _ = fs::remove_dir_all(&self.root);
     }
 }
@@ -897,6 +896,17 @@ fn one_keeper_starts_detached_shows_its_routines_and_stops() {
     assert!(stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: not running"));
     let log = fs::read_to_string(lab.state.join("keeper.log")).unwrap();
     assert!(log.contains(&format!("started: pid {pid}, kelpie ")) && log.contains("exits: stopped"), "{log}");
+}
+
+#[test]
+fn a_keeper_a_test_leaves_running_is_gone_when_the_test_ends() {
+    let lab = Lab::new("keeper-left");
+    let elsewhere = lab.root.join("another-state");
+    let started = stdout(&lab.command().env("KELPIE_STATE_DIR", &elsewhere).args(["keeper", "--start"]).output().unwrap());
+    let pid = pid_in(&started);
+    assert!(alive(&pid), "{started}");
+    drop(lab);
+    assert!(!alive(&pid), "the keeper outlived the test that started it");
 }
 
 #[test]
