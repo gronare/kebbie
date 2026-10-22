@@ -83,6 +83,8 @@ struct Answer {
     short: String,
     label: String,
     about: String,
+    meaning: String,
+    recommended: bool,
     choice: Option<usize>,
     takes_comment: bool,
 }
@@ -99,10 +101,14 @@ fn answers(message: &Message) -> Vec<Answer> {
             Some(at) => (PLAN_KEYS[at].0, PLAN_KEYS[at].1.to_string()),
             None => (char::from_digit(index as u32 + 1, 10).unwrap_or(' '), label.clone()),
         };
-        let about = if question.is_some_and(|question| question.recommend == index + 1) { format!("recommended · {meaning}") } else { meaning };
-        Answer { key, short, label, about, choice: Some(index), takes_comment: planned.is_some_and(|at| at > 0) }
+        let recommended = question.is_some_and(|question| question.recommend == index + 1);
+        let about = if recommended { format!("recommended · {meaning}") } else { meaning.clone() };
+        Answer { key, short, label, about, meaning, recommended, choice: Some(index), takes_comment: planned.is_some_and(|at| at > 0) }
     }).collect();
-    answers.push(Answer { key: 'w', short: "own words".to_string(), label: OWN_WORDS.to_string(), about: "the comment is the whole answer".to_string(), choice: None, takes_comment: true });
+    answers.push(Answer {
+        key: 'w', short: "own words".to_string(), label: OWN_WORDS.to_string(), about: "the comment is the whole answer".to_string(),
+        meaning: "write the answer yourself".to_string(), recommended: false, choice: None, takes_comment: true,
+    });
     answers
 }
 
@@ -134,6 +140,8 @@ impl App {
         let map = keys::map();
         let count = self.questions.len().max(1);
         let answers = self.questions.get(window.selected).map(answers).unwrap_or_default();
+        let planned = self.questions.get(window.selected).and_then(|message| message.question.as_ref()).is_some_and(|question| question.plan.is_some());
+        let count_answers = answers.len().max(1);
         let busy = window.answering.is_some();
         if window.typing {
             match key.code {
@@ -163,12 +171,14 @@ impl App {
             KeyCode::Char(character) if character == keys::key(Act::Close) => return,
             KeyCode::Tab => window.select(&self.questions, (window.selected + 1) % count),
             KeyCode::BackTab => window.select(&self.questions, (window.selected + count - 1) % count),
+            KeyCode::Up | KeyCode::Char('k') if !planned => window.option = (window.option + count_answers - 1) % count_answers,
+            KeyCode::Down | KeyCode::Char('j') if !planned => window.option = (window.option + 1) % count_answers,
             KeyCode::Up | KeyCode::Char('k') => window.scroll = window.scroll.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => window.scroll = window.scroll.saturating_add(1),
             KeyCode::PageUp => window.scroll = window.scroll.saturating_sub(10),
             KeyCode::PageDown => window.scroll = window.scroll.saturating_add(10),
-            KeyCode::Left => window.option = (window.option + answers.len().max(1) - 1) % answers.len().max(1),
-            KeyCode::Right => window.option = (window.option + 1) % answers.len().max(1),
+            KeyCode::Left if planned => window.option = (window.option + count_answers - 1) % count_answers,
+            KeyCode::Right if planned => window.option = (window.option + 1) % count_answers,
             KeyCode::Enter if !busy => self.choose(&mut window, &answers),
             KeyCode::Char(character) if character == keys::key(Act::Go) => {
                 let workspace = self.questions.get(window.selected).and_then(|message| self.task_of(&message.from)).and_then(|item| item.workspace.clone());
@@ -408,6 +418,10 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
     let question = message.question.as_ref();
     let planned = question.is_some_and(|question| question.plan.is_some());
     let (name, _) = split_address(&message.from);
+    if !planned {
+        draw_ask(frame, window, message, questions.len(), &mut hits);
+        return hits;
+    }
     let full = frame.area();
     let area = centered(full, (full.width * 92 / 100).max(40), (full.height * 84 / 100).max(16));
     frame.render_widget(Clear, area);
@@ -479,6 +493,147 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
     hits
 }
 
+const ASK_WIDTH: u16 = 80;
+const INDENT: usize = 5;
+
+fn ask_keys(typing: bool, options: usize, several: bool, wide: bool) -> String {
+    let map = keys::map();
+    if typing {
+        return format!("{} send · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
+    }
+    let range = if options > 1 { format!("1–{options}") } else { "1".to_string() };
+    let mut keys = vec![format!("{range} answer"), "w own words".to_string()];
+    if wide {
+        keys.push(format!("↑ ↓ {} pick", map.label(Act::Options)));
+    }
+    if several {
+        keys.push(format!("{} next", map.label(Act::Lead)));
+    }
+    if wide {
+        keys.push(format!("{} its Space", map.label(Act::Go)));
+    }
+    keys.push(format!("{} close", map.label(Act::Back)));
+    keys.join(" · ")
+}
+
+struct AskBody {
+    lines: Vec<Line<'static>>,
+    blocks: Vec<(usize, usize)>,
+    field: Option<usize>,
+}
+
+fn ask_body(message: &Message, answers: &[Answer], option: usize, typing: bool, comment_rows: usize, width: usize) -> AskBody {
+    let mut lines = vec![Line::default()];
+    lines.extend(rich_wrap(&message.text, width, usize::MAX, TEXT).into_iter().map(|line| line.style(Style::new().add_modifier(Modifier::BOLD))));
+    lines.push(Line::default());
+    let mut blocks = Vec::new();
+    let mut field = None;
+    for (index, answer) in answers.iter().enumerate() {
+        let own = answer.choice.is_none();
+        if own {
+            lines.push(Line::from(Span::styled("┄".repeat(width), style(FAINT))));
+        }
+        let active = index == option;
+        let start = lines.len();
+        let label = if active { bold(MAUVE) } else { style(TEXT) };
+        let mut head = vec![Span::styled(if active { "▸ " } else { "  " }, style(MAUVE)), Span::styled(answer.key.to_string(), bold(MAUVE)), Span::raw("  "), Span::styled(answer.label.clone(), label)];
+        let used: usize = head.iter().map(Span::width).sum();
+        let recommended = "recommended";
+        let beside = answer.recommended && used + recommended.len() + 2 <= width;
+        if beside {
+            head.push(Span::raw(" ".repeat(width - used - recommended.len())));
+            head.push(Span::styled(recommended, style(GREEN)));
+        }
+        lines.push(Line::from(head));
+        let indent = " ".repeat(INDENT);
+        if typing && own {
+            field = Some(lines.len());
+            lines.extend((0..comment_rows).map(|_| Line::default()));
+        } else {
+            if answer.recommended && !beside {
+                lines.push(Line::from(vec![Span::raw(indent.clone()), Span::styled(recommended, style(GREEN))]));
+            }
+            let color = if own { MUTED } else { SUBTEXT };
+            for line in rich_wrap(&answer.meaning, width.saturating_sub(INDENT + 1), usize::MAX, color) {
+                let mut spans = vec![Span::raw(indent.clone())];
+                spans.extend(line.spans);
+                lines.push(Line::from(spans));
+            }
+        }
+        if active {
+            for line in &mut lines[start..] {
+                line.style = line.style.bg(SURFACE);
+            }
+        }
+        blocks.push((start, lines.len()));
+        if answers.get(index + 1).is_some_and(|next| next.choice.is_some()) {
+            lines.push(Line::default());
+        }
+    }
+    lines.push(Line::default());
+    AskBody { lines, blocks, field }
+}
+
+fn ask_offset(block: (usize, usize), rows: usize, view: usize) -> usize {
+    let (start, end) = block;
+    if rows <= view || end <= view {
+        return 0;
+    }
+    (end - view).min(start)
+}
+
+fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, count: usize, hits: &mut Vec<(Rect, Hit)>) {
+    let full = frame.area();
+    for cell in &mut frame.buffer_mut().content {
+        cell.set_fg(FAINT).set_bg(ratatui::style::Color::Reset);
+        cell.modifier = Modifier::empty();
+    }
+    let width = ASK_WIDTH.min(full.width.saturating_sub(4));
+    let inner_width = width.saturating_sub(4) as usize;
+    let answers = answers(message);
+    window.option = window.option.min(answers.len().saturating_sub(1));
+    let comment_rows = (window.comment.lines().len() + 2).clamp(3, 8);
+    let body = ask_body(message, &answers, window.option, window.typing, comment_rows, inner_width);
+    let area = centered(full, width, body.lines.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let (name, _) = split_address(&message.from);
+    let title = if width >= 70 { format!(" question {}/{count} · ask · {name} ", window.selected + 1) } else { format!(" {}/{count} · {name} ", window.selected + 1) };
+    let age = messages::age(message.at);
+    let age = if age == "now" { " now ".to_string() } else { format!(" {age} ago ") };
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
+        .title(Span::styled(title, bold(MAUVE))).title_top(Line::from(Span::styled(age, style(MUTED))).right_aligned()).style(Style::new().bg(MANTLE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [text, line, foot] = Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let view = text.height as usize;
+    let offset = ask_offset(body.blocks.get(window.option).copied().unwrap_or_default(), body.lines.len(), view);
+    frame.render_widget(Paragraph::new(body.lines[offset.min(body.lines.len())..].to_vec()), text);
+    let visible = |row: usize| (offset..offset + view).contains(&row);
+    for (index, (start, end)) in body.blocks.iter().enumerate() {
+        let first = (*start).max(offset);
+        let last = (*end).min(offset + view);
+        if first < last {
+            hits.push((Rect::new(text.x, text.y + (first - offset) as u16, text.width, (last - first) as u16), Hit::Answer(index)));
+        }
+    }
+    if let Some(at) = body.field.filter(|at| visible(*at)) {
+        let y = text.y + (at - offset) as u16;
+        let rows = (comment_rows as u16).min(text.bottom().saturating_sub(y));
+        let field = Rect::new(text.x + INDENT as u16, y, text.width.saturating_sub(INDENT as u16), rows);
+        window.comment.set_block(Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)));
+        window.comment.set_cursor_style(Style::new().add_modifier(Modifier::REVERSED));
+        frame.render_widget(&window.comment, field);
+    }
+    frame.render_widget(Paragraph::new(rule(line.width as usize)), line);
+    let mut keys = Vec::new();
+    if let Some((ok, notice)) = &window.notice {
+        keys.push(Span::styled(format!("{} {} · ", if *ok { "✓" } else { "!" }, notice.split_whitespace().collect::<Vec<_>>().join(" ")), style(if *ok { GREEN } else { RED })));
+    }
+    let options = answers.iter().filter(|answer| answer.choice.is_some()).count();
+    keys.push(Span::styled(ask_keys(window.typing, options, count > 1, inner_width >= 70), style(MUTED)));
+    frame.render_widget(Paragraph::new(fit(keys, foot.width as usize)), foot);
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -492,7 +647,7 @@ mod tests {
     use crate::report;
     use crate::board::card::card_lines;
     use crate::board::{App, Hit, Mode};
-    use crate::board::widgets::{FAINT, SURFACE, YELLOW};
+    use crate::board::widgets::{FAINT, MANTLE, SURFACE, YELLOW};
 
     fn press(app: &mut App, code: KeyCode) {
         let Mode::Questions(window) = std::mem::replace(&mut app.mode, Mode::Normal) else { panic!("the questions window is open") };
@@ -605,14 +760,14 @@ mod tests {
         let mut app = test_app(Vec::new());
         long_plan(&mut app);
         app.open_questions(Some(0));
-        let (rows, _) = render(&mut app, 60, 30);
-        let screen = rows.join("\n");
+        let screen = render(&mut app, 100, 30).0.join("\n");
         assert!(screen.contains("question 1/2 · ask · billing") && screen.contains("tab next"), "{screen}");
-        assert!(screen.contains("1 Sidekiq") && screen.contains("2 Solid Queue") && screen.contains("w own words") && !screen.contains("PLAN"), "a plain question numbers its options: {screen}");
+        assert!(screen.contains("1  Sidekiq") && screen.contains("2  Solid Queue") && screen.contains("w  In my own words") && !screen.contains("PLAN"), "a plain question lists its options: {screen}");
+        assert!(render(&mut app, 60, 30).0.join("\n").contains("╭ 1/2 · billing "), "a narrow title keeps the count and the task");
         press(&mut app, KeyCode::Tab);
         assert!(render(&mut app, 60, 30).0.join("\n").contains("question 2/2 · plan · payload"));
         press(&mut app, KeyCode::Tab);
-        assert!(render(&mut app, 60, 30).0.join("\n").contains("question 1/2 · ask · billing"), "tab wraps around");
+        assert!(render(&mut app, 100, 30).0.join("\n").contains("question 1/2 · ask · billing"), "tab wraps around");
     }
 
     #[test]
@@ -666,24 +821,124 @@ mod tests {
     }
 
     #[test]
-    fn in_my_own_words_needs_a_comment_and_is_offered_after_the_options() {
+    fn in_my_own_words_comes_last_and_opens_a_field_under_its_row_with_the_options_kept() {
         let mut app = test_app(Vec::new());
         app.questions = three_questions();
         app.open_questions(Some(0));
         let (rows, _) = render(&mut app, 60, 30);
-        let screen = rows.join("\n");
-        let (one, y) = find(&rows, "1 One")[0];
-        let (own, own_y) = find(&rows, "w own words")[0];
-        assert!(y == own_y && own > one && rows[y].contains("2 Two"), "{screen}");
-        assert!(screen.contains("recommended · the second"), "{screen}");
+        let own = row_of(&rows, "w  In my own words");
+        assert!(row_of(&rows, "2  Two") < own && row_of(&rows, "┄┄┄") == own - 1, "{}", rows.join("\n"));
         assert_eq!(app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Answer(_))).count(), 3);
         press(&mut app, KeyCode::Char('w'));
         let (rows, _) = render(&mut app, 60, 30);
-        assert!(rows.join("\n").contains("In my own words · the comment is the whole answer") && rows.join("\n").contains("your answer"));
+        let screen = rows.join("\n");
+        assert!(row_of(&rows, "your answer") > row_of(&rows, "w  In my own words") && screen.contains("1  One") && screen.contains("2  Two"), "{screen}");
+        assert!(screen.contains("esc back to the answers"), "{screen}");
         press(&mut app, KeyCode::Enter);
         let Mode::Questions(window) = &app.mode else { panic!("the window stays open") };
         assert!(window.answering.is_none() && window.typing, "an empty answer in your own words is refused");
         assert!(window.notice.as_ref().is_some_and(|(ok, text)| !ok && text.contains("own words")));
+    }
+
+    const LONG_ASK: &str = r#"{"id":"q9","at":10,"from":"routines@kelpie","to":"lead","text":"The keeper runs the routines when no board is open, and an open board runs them itself, so a routine can start twice when a board opens in the middle of a keeper run. Which side should own the routine schedule from now on?","state":"asked","question":{"options":[{"label":"Keeper only","meaning":"the keeper runs every routine whether a board is open or not; the board shows each routine's last and next run"},{"label":"Board first","meaning":"an open board runs the routines and the keeper stands down while a board answers on its socket"},{"label":"Both, with a lock","meaning":"either side may run a routine, but takes a lock file in the state directory first and the other skips it"},{"label":"Per routine","meaning":"each routine names its owner in its file; a routine without one stays with the keeper as today"}],"recommend":1}}"#;
+
+    fn window_rows(rows: &[String]) -> (usize, usize) {
+        let top = rows.iter().position(|row| row.contains('╭')).expect("a window");
+        let bottom = rows.iter().rposition(|row| row.contains('╰')).expect("a window");
+        (top, bottom)
+    }
+
+    #[test]
+    fn a_plain_question_sizes_its_window_to_its_content_and_shows_every_meaning_in_full() {
+        let mut app = test_app(vec![served("search-filters")]);
+        app.questions = messages::fold(QUESTION);
+        app.open_questions(Some(0));
+        let (rows, buffer) = render(&mut app, 140, 40);
+        let screen = rows.join("\n");
+        let (top, bottom) = window_rows(&rows);
+        assert_eq!(bottom - top + 1, 19, "a short question gets a short window: {screen}");
+        let left = rows[top].chars().position(|character| character == '╭').unwrap();
+        let right = rows[top].chars().position(|character| character == '╮').unwrap();
+        assert_eq!(right - left + 1, 80, "{screen}");
+        assert!(buffer[(left as u16, (top - 1) as u16)].bg != MANTLE && buffer[(left as u16, (bottom + 1) as u16)].bg != MANTLE, "the board shows above and below");
+        for meaning in ["reuse the jobs", "one less service", "no queue at all", "write the answer yourself"] {
+            assert!(screen.contains(meaning), "{meaning}: {screen}");
+        }
+        let recommended = row_of(&rows, "2  Solid Queue");
+        assert!(rows[recommended].contains("recommended") && rows[recommended].contains("▸"), "the recommended answer is marked and selected first: {screen}");
+        let mut app = test_app(Vec::new());
+        app.questions = messages::fold(LONG_ASK);
+        app.open_questions(Some(0));
+        let (rows, _) = render(&mut app, 60, 44);
+        let screen = rows.join("\n");
+        let (top, bottom) = window_rows(&rows);
+        let text = rows[top + 1..bottom].iter().map(|row| row.trim().trim_matches('│')).collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+        let asked = messages::fold(LONG_ASK).remove(0);
+        assert!(text.contains(&asked.text), "the whole question: {screen}");
+        for (_, meaning) in &asked.question.unwrap().options {
+            assert!(text.contains(meaning.as_str()), "{meaning}: {screen}");
+        }
+        assert!(!text.contains('…'), "nothing is cut: {screen}");
+    }
+
+    #[test]
+    fn the_board_behind_a_plain_question_is_dimmed_and_a_plan_keeps_its_window() {
+        let mut app = test_app(vec![served("search-filters")]);
+        long_plan(&mut app);
+        app.open_questions(Some(0));
+        let (rows, buffer) = render(&mut app, 140, 40);
+        let (x, y) = find(&rows, "WORK")[0];
+        let cell = &buffer[(x as u16, y as u16)];
+        assert!(cell.fg == FAINT && !cell.modifier.contains(Modifier::BOLD), "the board behind is drawn faint");
+        app.open_questions(Some(1));
+        let (rows, buffer) = render(&mut app, 140, 40);
+        let (x, y) = find(&rows, "WORK")[0];
+        assert!(buffer[(x as u16, y as u16)].fg != FAINT, "a plan's window leaves the board as it is");
+        let (top, bottom) = window_rows(&rows);
+        assert_eq!(bottom - top + 1, 40 * 84 / 100, "a plan keeps its tall window");
+    }
+
+    #[test]
+    fn up_and_down_move_the_selected_answer_and_left_and_right_do_not() {
+        let mut app = test_app(Vec::new());
+        app.questions = messages::fold(QUESTION);
+        app.open_questions(Some(0));
+        let selected = |app: &mut App, label: &str| {
+            let (rows, buffer) = render(app, 100, 30);
+            let (x, y) = find(&rows, label)[0];
+            rows[y].contains('▸') && buffer[(x as u16, y as u16)].bg == SURFACE && buffer[(x as u16, y as u16 + 1)].bg == SURFACE
+        };
+        assert!(selected(&mut app, "2  Solid Queue"));
+        press(&mut app, KeyCode::Down);
+        assert!(selected(&mut app, "3  Inline") && !selected(&mut app, "2  Solid Queue"), "the block under the label moves with it");
+        press(&mut app, KeyCode::Right);
+        assert!(selected(&mut app, "3  Inline"), "right does nothing in a list");
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Up);
+        assert!(selected(&mut app, "1  Sidekiq"));
+        press(&mut app, KeyCode::Up);
+        assert!(selected(&mut app, "w  In my own words"), "up from the first wraps to in my own words");
+        press(&mut app, KeyCode::Enter);
+        let Mode::Questions(window) = &app.mode else { panic!() };
+        assert!(window.typing, "enter on in my own words opens its field");
+    }
+
+    #[test]
+    fn a_question_taller_than_the_pane_scrolls_to_the_selected_answer_and_keeps_title_and_keys() {
+        let mut app = test_app(Vec::new());
+        app.questions = messages::fold(LONG_ASK);
+        app.open_questions(Some(0));
+        let (rows, _) = render(&mut app, 60, 24);
+        assert!(rows.join("\n").contains("Which side should own"), "the question shows first: {}", rows.join("\n"));
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Down);
+        }
+        let (rows, _) = render(&mut app, 60, 24);
+        let screen = rows.join("\n");
+        assert!(screen.contains("▸ 4  Per routine") && screen.contains("stays with the keeper as"), "{screen}");
+        assert!(screen.contains("1/1 · routines") && screen.contains("1–4 answer · w own words"), "{screen}");
+        let (x, y) = find(&rows, "4  Per routine")[0];
+        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Answer(3)), "the hits follow the scroll");
     }
 
     #[test]
