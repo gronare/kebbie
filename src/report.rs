@@ -148,7 +148,7 @@ pub fn show_in_sidebar(report: &Report) {
     }
 }
 
-// A ready task waits under Needs you until the lead has checked it against the rules skill.
+// A ready task waits under Ready to push, marked, until the lead has checked it against the rules skill.
 fn lead_check(cwd: &Path) -> String {
     match tasks::rules_check(cwd).and_then(|request| request.map(|text| messages::ask_lead(&text)).transpose()) {
         Ok(Some(_)) => " The lead checks your commits against the rules next; it tells you if one needs fixing.".to_string(),

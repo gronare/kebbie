@@ -348,7 +348,8 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     assert_eq!(task["report"]["next"], "push and close");
     assert_eq!(task["git"]["ahead"], 1);
     assert_eq!(task["git"]["approved"], false);
-    assert_eq!(task["group"], "NEEDS YOU", "ready but not approved waits for the lead's rules check");
+    assert_eq!(task["group"], "READY TO PUSH", "ready and waiting only on the lead's rules check is no question for the user");
+    assert!(task["summary"].as_str().unwrap().contains("lead checking rules"), "{}", task["summary"]);
 
     let told = lab.run(&["-C", slot_str, "tell", "lead", "payload renamed to amount"]);
     assert!(told.status.success(), "{}", stderr(&told));

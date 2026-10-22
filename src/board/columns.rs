@@ -83,9 +83,7 @@ pub(super) fn row_facts(item: &Item) -> String {
     if git.behind > 0 {
         parts.push(format!("{} behind", git.behind));
     }
-    if item.unchecked() {
-        parts.push(crate::status::UNCHECKED.to_string());
-    }
+    parts.extend(item.rules_note().map(str::to_string));
     parts.extend(item.review_note());
     if item.permit == Some(Permit::Task) {
         parts.push("lead may push".to_string());

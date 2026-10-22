@@ -13,6 +13,7 @@ use crate::tasks::{self, slots};
 
 pub const LEAD_LABEL: &str = "lead";
 pub const UNCHECKED: &str = "rules not checked by the lead";
+pub const CHECKING: &str = "lead checking rules";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
@@ -128,8 +129,10 @@ impl Item {
         self.committed() && self.git.as_ref().is_some_and(|git| git.approved)
     }
 
-    pub fn unchecked(&self) -> bool {
-        self.git.as_ref().is_some_and(|git| git.ahead > 0 && !git.approved) && self.group() != Group::Working
+    // A task that reported ready has asked the lead for its rules check; one that has not, has not.
+    pub fn rules_note(&self) -> Option<&'static str> {
+        let unchecked = self.git.as_ref().is_some_and(|git| git.ahead > 0 && !git.approved) && self.group() != Group::Working;
+        unchecked.then(|| if self.report_state() == Some("ready") { CHECKING } else { UNCHECKED })
     }
 
     // Sent to review and not passed yet: it waits under To review, and push waits with it.
@@ -208,7 +211,7 @@ impl Item {
             (_, Some("needs-you"), _) => Group::NeedsYou,
             (_, Some("blocked"), _) => Group::Idle,
             _ if self.awaiting_review() => Group::ToReview,
-            (_, Some("ready"), _) => if self.pushable() { Group::ReadyToPush } else { Group::NeedsYou },
+            (_, Some("ready"), _) => if self.committed() { Group::ReadyToPush } else { Group::NeedsYou },
             (Some("done"), _, _) => Group::NeedsYou,
             _ => if self.pushable() { Group::ReadyToPush } else { Group::Idle },
         }
@@ -271,7 +274,7 @@ impl Item {
 
     fn work(&self, git: &Git) -> String {
         if self.group() == Group::ReadyToPush {
-            let review = self.review_note().map(|note| format!(" · {note}")).unwrap_or_default();
+            let review: String = self.rules_note().map(str::to_string).into_iter().chain(self.review_note()).map(|note| format!(" · {note}")).collect();
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
             return format!("{} · ready to push{behind}{review}", plural(git.ahead, "commit"));
         }
@@ -288,9 +291,7 @@ impl Item {
         if git.behind > 0 {
             parts.push(format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")));
         }
-        if self.unchecked() {
-            parts.push(UNCHECKED.to_string());
-        }
+        parts.extend(self.rules_note().map(str::to_string));
         parts.extend(self.review_note());
         if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
     }
@@ -587,14 +588,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_task_the_lead_has_not_approved_is_not_ready_to_push() {
+    fn a_ready_task_waiting_only_on_the_lead_shows_under_ready_to_push_marked() {
         let mut ready = task(Some("idle"), Some("ready"), 2);
         ready.git.as_mut().unwrap().approved = false;
-        assert!(ready.group() == Group::NeedsYou);
-        assert!(ready.summary().contains("rules not checked by the lead"), "{}", ready.summary());
+        assert!(ready.group() == Group::ReadyToPush, "a finished task waiting only on the lead is no question for the user");
+        assert_eq!(ready.summary(), "2 commits · ready to push · lead checking rules");
         let mut quiet = task(Some("idle"), None, 2);
         quiet.git.as_mut().unwrap().approved = false;
         assert!(quiet.group() == Group::Idle);
+        assert!(quiet.summary().contains(UNCHECKED), "a task that never reported ready never asked the lead: {}", quiet.summary());
+        let mut empty = task(Some("idle"), Some("ready"), 0);
+        empty.git.as_mut().unwrap().approved = false;
+        assert!(empty.group() == Group::NeedsYou, "ready with nothing committed is no push");
         let mut working = task(Some("working"), Some("ready"), 2);
         working.git.as_mut().unwrap().approved = false;
         assert!(!working.summary().contains("rules not checked"), "{}", working.summary());
@@ -608,7 +613,7 @@ pub(crate) mod tests {
         behind.git.as_mut().unwrap().behind = 3;
         assert!(behind.group() == Group::ReadyToPush, "push rebases first, so behind is information only");
         assert_eq!(behind.summary(), "2 commits · ready to push · 3 behind main");
-        assert!(!behind.unchecked());
+        assert!(behind.rules_note().is_none());
         let mut quiet = task(Some("idle"), None, 2);
         quiet.git.as_mut().unwrap().behind = 3;
         assert!(quiet.group() == Group::ReadyToPush);
@@ -653,8 +658,8 @@ pub(crate) mod tests {
         let mut item = task(Some("idle"), Some("ready"), 2);
         item.verdict = Some(in_review(true, 0, false, false));
         item.git.as_mut().unwrap().approved = false;
-        assert!(item.group() == Group::NeedsYou, "the reviewer's pass does not stand in for the lead's rules check");
-        assert!(item.summary().contains(UNCHECKED) && item.summary().contains("reviewed"), "{}", item.summary());
+        assert!(item.group() == Group::ReadyToPush, "passed review, waiting only on the lead");
+        assert_eq!(item.summary(), "2 commits · ready to push · lead checking rules · reviewed", "the reviewer's pass does not stand in for the lead's rules check");
         let mut working = task(Some("working"), Some("ready"), 2);
         working.verdict = Some(in_review(false, 1, false, false));
         assert!(working.group() == Group::Working);
