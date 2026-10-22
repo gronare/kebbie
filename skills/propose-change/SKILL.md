@@ -1,13 +1,13 @@
 ---
 name: propose-change
-description: Propose saving a kelpie issue when kelpie itself cost something in this session (an error, a workaround, the user's frustration, a missing capability), and save, list or send kelpie issues on the user's word. Use when kelpie misbehaved or lacked something, when the user asks to report a problem with kelpie or to wish for a change in it, or when a task tells the lead that kelpie got in its way.
+description: Propose saving a kelpie issue when kelpie itself cost something in this session (an error, a workaround, the user's frustration, a missing capability), and save or list kelpie issues on the user's word. Use when kelpie misbehaved or lacked something, when the user asks to report a problem with kelpie or to wish for a change in it, or when a task tells the lead that kelpie got in its way.
 ---
 
 # Propose a change to kelpie
 
 `kelpie` is `${KELPIE_BIN:-$HOME/.local/share/kelpie/current/target/release/kelpie}`.
 
-kelpie issues are problems and wishes about kelpie itself, kept on this machine so they survive the session that found them: after `kelpie update` the lead learns which ones the new commits may fix, and the user can send one to kelpie's developers on GitHub. A proposal costs the user a moment, so it has to be worth one.
+kelpie issues are problems and wishes about kelpie itself, kept on this machine so they survive the session that found them: after `kelpie update` the lead learns which ones the new commits may fix. Logging one with `kelpie issue add` is the whole job: never run or suggest `kelpie issue send`. A proposal costs the user a moment, so it has to be worth one.
 
 ## When to propose
 
@@ -42,7 +42,7 @@ Done when `kelpie issues` lists it. Tell the user its id in one line.
 
 ## Send on the user's ask
 
-Only when the user asks to send one: run `kelpie issue send <id>`. It prints the text, opens a prefilled GitHub issue in the browser, and the user reads it and presses Submit themselves. Nothing reaches GitHub without that. Point them at the text before they submit, so they check it for anything about their project.
+Sending is the user's step: kelpie refuses `kelpie issue send` to the lead and tasks. When the user asks how, tell them to run `kelpie issue send <id>` themselves. It prints the text, opens a prefilled GitHub issue in the browser, and the user reads it and presses Submit themselves. Nothing reaches GitHub without that. Point them at the text before they submit, so they check it for anything about their project.
 
 ## After an update
 

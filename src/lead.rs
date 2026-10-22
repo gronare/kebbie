@@ -552,6 +552,14 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_logs_kelpie_issues_here_and_never_files_them_on_github() {
+        let role = role_text(include_str!("../roles/lead.md"), &[Source::Local], false);
+        for needed in ["A problem or wish about kelpie is logged with `kelpie issue add`, and that is the whole job", "Never run or suggest `kelpie issue send`: sending one to GitHub is the user's step"] {
+            assert!(role.contains(needed), "{needed}");
+        }
+    }
+
+    #[test]
     fn the_lead_role_mentions_linear_only_when_it_is_a_source() {
         let template = include_str!("../roles/lead.md");
         assert!(!role_text(template, &[Source::Vault], false).contains("Linear"));

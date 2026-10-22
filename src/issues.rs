@@ -154,7 +154,7 @@ pub fn add_in(dir: &Path, caller: &Caller, filing: &Filing, built: &str, now: u6
         body: filing.body.trim().to_string(),
     };
     save(dir, &issue)?;
-    Ok(format!("Filed kelpie issue {} ({}): {}\nkelpie issue show {0} shows it; kelpie issue send {0} opens it on GitHub for you to submit.", issue.id, issue.kind, issue.title))
+    Ok(format!("Filed kelpie issue {} ({}): {} · kelpie issue show {0} shows it", issue.id, issue.kind, issue.title))
 }
 
 pub fn list_in(dir: &Path, all: bool, as_json: bool) -> String {
@@ -261,7 +261,9 @@ pub fn os() -> String {
 }
 
 pub fn send_in(dir: &Path, caller: &Caller, id: &str, opener: Option<&str>, open: &dyn Fn(&str, &str) -> Result<()>, now: u64) -> Result<String> {
-    may_write(caller, "Sending a kelpie issue")?;
+    if *caller != Caller::User {
+        return Err("Sending a kelpie issue to GitHub is the user's step; it stays logged here".to_string());
+    }
     let mut issue = find(dir, id)?;
     let os = os();
     let url = send_url(&issue, &os);
@@ -422,7 +424,7 @@ mod tests {
         let issues = load(&dir);
         assert_eq!(issues.len(), 1);
         let issue = &issues[0];
-        assert!(added.contains(&issue.id), "{added}");
+        assert_eq!(added, format!("Filed kelpie issue {} (bug): kelpie push hid \"git\"'s error · kelpie issue show {0} shows it", issue.id));
         assert_eq!(issue.id.len(), 6);
         assert_eq!((issue.title.as_str(), issue.kind.as_str(), issue.status.as_str(), issue.commit.as_str(), issue.by.as_str()), ("kelpie push hid \"git\"'s error", "bug", "open", "869bc49", "lead"));
         assert_eq!(issue.version, env!("CARGO_PKG_VERSION"));
@@ -531,9 +533,15 @@ mod tests {
         assert!(printed.contains("the text") && printed.contains(&url) && printed.contains("public") && printed.contains("press Submit yourself"), "{printed}");
         assert_eq!(opened.borrow().as_slice(), [("open".to_string(), url)]);
         assert_eq!(load(&dir)[0].sent.as_deref(), Some(today(NOW).as_str()));
+        assert!(!fs::read_to_string(dir.join(format!("{id}.md"))).unwrap().is_empty() && load(&dir)[0].is_open(), "sending leaves the issue logged here");
         let unopened = send_in(&dir, &Caller::User, &id, None, &|_: &str, _: &str| panic!("no opener, no browser"), NOW).unwrap();
         assert!(unopened.contains("Open the URL above"), "{unopened}");
-        assert!(send_in(&dir, &Caller::Task("a@b".to_string()), &id, None, &open, NOW).is_err());
+        let before = load(&dir);
+        for caller in [Caller::Lead, Caller::Task("a@b".to_string())] {
+            let refused = send_in(&dir, &caller, &id, Some("open"), &|_: &str, _: &str| panic!("nothing opens for {caller:?}"), NOW + 86_400).unwrap_err();
+            assert_eq!(refused, "Sending a kelpie issue to GitHub is the user's step; it stays logged here");
+        }
+        assert_eq!(load(&dir), before, "a refused send leaves the issue as it was");
     }
 
     fn git(dir: &Path, args: &[&str]) -> String {

@@ -39,6 +39,8 @@ With `gh` installed and logged in, the update also finds the issues you sent on 
 
 ## Send it to GitHub
 
+This is yours alone. kelpie refuses `kelpie issue send` to the lead and tasks: the lead logs issues with `kelpie issue add`, and a task tells the lead.
+
 ```bash
 kelpie issue send <id>
 ```

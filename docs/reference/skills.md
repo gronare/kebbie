@@ -8,7 +8,7 @@ The Claude Code plugin `kelpie@kelpie` ships these skills. You run the ones mark
 | `kelpie:work-rules` | A task's Claude when it commits, the lead when it checks, `tidy`, the reviewer | Commit rules: a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to you. The default `task.rules_skill`. |
 | `kelpie:review` | The reviewer started by `kelpie review` | Reviews a task's branch independently and gives a verdict with located findings. |
 | `kelpie:configure` | Claude, when you ask it to configure kelpie | Changes a setting in config.toml or a repo config, sets a machine up, or adopts a team's linked setup, and checks each change with `kelpie doctor`. |
-| `kelpie:propose-change` | The lead, when kelpie cost something; a task's Claude, to tell the lead | Proposes saving a [kelpie issue](commands.md#kelpie-issues) at most once a turn, saves it on your yes with a text about kelpie alone, and sends it to GitHub only when you ask. |
+| `kelpie:propose-change` | The lead, when kelpie cost something; a task's Claude, to tell the lead | Proposes saving a [kelpie issue](commands.md#kelpie-issues) at most once a turn, saves it on your yes with a text about kelpie alone, and never files one on GitHub: `kelpie issue send` is yours to run. |
 | `kelpie:review-split` | `/kelpie:review-split [base or what to review]` | Opens the [review split](review-split.md). |
 | `kelpie:history-split` | `/kelpie:history-split` | Opens `tig` in a split next to the pane. |
 | `kelpie:move-to-worktree` | `/kelpie:move-to-worktree <task name>` | Moves this session's work in progress out of the main checkout into its own worktree and Space, and continues there. |

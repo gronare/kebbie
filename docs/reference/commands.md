@@ -269,12 +269,12 @@ Problems and wishes about kelpie itself, saved on this machine, one file each un
 | Command | What it does |
 | --- | --- |
 | `kelpie issues [--json] [--all]` | The open issues (`open` and `retry`): id, kind, status, the version and commit they were filed on, and the GitHub issue when linked. `--all` lists every status. |
-| `kelpie issue add --kind bug\|wish --title <title> [<text>\|-]` | Save an issue. The text comes from the argument, or from stdin with `-`: what happened, what you expected, how to reproduce. kelpie records its version, commit, the date and who filed it. Yours or the lead's; a task is told to tell the lead instead. |
+| `kelpie issue add --kind bug\|wish --title <title> [<text>\|-]` | Save an issue. The text comes from the argument, or from stdin with `-`: what happened, what you expected, how to reproduce. kelpie records its version, commit, the date and who filed it, and answers `Filed kelpie issue <id> (<kind>): <title> · kelpie issue show <id> shows it`. Yours or the lead's; a task is told to tell the lead instead. |
 | `kelpie issue show <id>` | Print one issue with its text. |
 | `kelpie issue close <id> fixed\|wontfix\|duplicate` | Close it. |
 | `kelpie issue retry <id>` | Mark it worth retrying, typically after an update that may have fixed it. |
 | `kelpie issue link <id> <number\|url>` | Tie it to its issue in kelpie's GitHub repo. |
-| `kelpie issue send <id>` | Print the text and a prefilled new-issue URL on GitHub, and open it in the browser (`open` on macOS, `xdg-open` on Linux with a display; over SSH only the URL). The body adds the kind, version, commit and OS, and a `kelpie-issue: <id>` line; a text that would make the URL longer than GitHub accepts is shortened, and says so. Nothing is sent until you press Submit. |
+| `kelpie issue send <id>` | Print the text and a prefilled new-issue URL on GitHub, and open it in the browser (`open` on macOS, `xdg-open` on Linux with a display; over SSH only the URL). The body adds the kind, version, commit and OS, and a `kelpie-issue: <id>` line; a text that would make the URL longer than GitHub accepts is shortened, and says so. Nothing is sent until you press Submit. Yours alone: kelpie refuses it to the lead and tasks, and the lead logs issues with `kelpie issue add`. |
 
 After `kelpie update`, when `gh` is installed and logged in, kelpie searches kelpie's GitHub repo for each unlinked issue's `kelpie-issue:` line and links what it finds, and an issue closed on GitHub becomes `retry`. Without `gh` this step is skipped. Then the lead gets one message: the open issues filed on older code than the update installed, with the commit subjects since, to judge which are likely fixed.
 
