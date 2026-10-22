@@ -23,7 +23,11 @@ pub fn same_code(path: &Path, upstream: &str, one: &str, other: &str) -> bool {
 
 // One line per commit, of its message and its added or removed lines without line numbers or context, so a clean rebase keeps each line and commits upstream absorbs below the task's own only drop lines.
 pub(super) fn fingerprint(path: &Path, upstream: &str) -> Result<String> {
-    let range = format!("{upstream}..HEAD");
+    fingerprint_at(path, upstream, "HEAD")
+}
+
+pub(crate) fn fingerprint_at(path: &Path, upstream: &str, rev: &str) -> Result<String> {
+    let range = format!("{upstream}..{rev}");
     let log = git(path, &["log", "--reverse", "-p", "-U0", "--no-color", "--no-ext-diff", "--format=%x00%B%x01", &range])?;
     let commits: Vec<String> = log.split('\0').skip(1).map(|commit| {
         let (message, changes) = commit.split_once('\u{1}').unwrap_or((commit, ""));
@@ -65,11 +69,11 @@ pub(super) fn approval_file(state: &Path, address: &str) -> PathBuf {
     state.join("approved").join(address)
 }
 
-pub(super) fn record_approval(state: &Path, address: &str, fingerprint: &str) -> Result<()> {
+pub(crate) fn record_approval(state: &Path, address: &str, fingerprint: &str) -> Result<()> {
     crate::state::write(&approval_file(state, address), fingerprint)
 }
 
-pub(super) fn approval_holds(state: &Path, address: &str, fingerprint: &str) -> bool {
+pub(crate) fn approval_holds(state: &Path, address: &str, fingerprint: &str) -> bool {
     std::fs::read_to_string(approval_file(state, address)).is_ok_and(|stored| covers(&stored, fingerprint))
 }
 
@@ -83,7 +87,7 @@ pub(super) fn forget_approval(task: &str, repo: &Path) {
     }
 }
 
-// The lead's word that the task's commits hold to the rules skill, until a commit changes.
+// The lead's or the user's word that the task's commits hold to the rules skill, until a commit changes; the reviewer gives it on its own when a task reports ready.
 pub fn approve(cwd: &Path, name: Option<&str>) -> Result<String> {
     approve_as(&crate::permit::caller(), cwd, name)
 }
@@ -106,7 +110,7 @@ fn approve_as(caller: &crate::permit::Caller, cwd: &Path, name: Option<&str>) ->
     Ok(format!("Approved {address}'s commits against the rules; a new or changed commit takes the approval back."))
 }
 
-// What the lead is asked when a task reports ready, or None when there is nothing new for it to check.
+// What the lead is asked when the reviewer gave no rules verdict, or None when there is nothing new for it to check.
 pub fn rules_check(cwd: &Path) -> Result<Option<String>> {
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, None, cwd)?;
@@ -137,7 +141,7 @@ pub fn rules_check_subject(text: &str) -> Option<&str> {
     text.split_once(": ").map(|(subject, _)| subject)
 }
 
-// A task still waits for the lead's rules check while it has commits and no approval matches them.
+// A task still waits for a rules check while it has commits and no approval matches them.
 pub fn awaits_check(address: &str) -> bool {
     let Some((task, repo)) = address.split_once('@') else { return false };
     let Some(repo) = checkout_named(repo) else { return false };

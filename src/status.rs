@@ -13,8 +13,9 @@ use crate::sh::Result;
 use crate::tasks::{self, slots};
 
 pub const LEAD_LABEL: &str = "lead";
-pub const UNCHECKED: &str = "rules not checked by the lead";
+pub const UNCHECKED: &str = "rules not checked";
 pub const CHECKING: &str = "lead checking rules";
+pub const REVIEWER_CHECKING: &str = "reviewer checking rules";
 pub const STAGED: &str = "on local main · waiting for your push";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -78,6 +79,7 @@ pub struct Queued {
 pub struct Item {
     pub review: Option<(usize, usize)>,
     pub verdict: Option<crate::review::Shown>,
+    pub rules: Option<crate::rules_check::Shown>,
     pub permit: Option<crate::permit::Permit>,
     pub follows: bool,
     pub bypass: bool,
@@ -138,7 +140,7 @@ impl Item {
     fn queued_from(shown: tasks::WaitShown) -> Item {
         let tasks::WaitShown { wait, after, names, waiting, title, base, at } = shown;
         Item {
-            review: None, verdict: None, permit: None, follows: false, bypass: false, profile: Some(wait.profile.clone().unwrap_or_else(|| crate::profiles::TASK.to_string())), server: false, worker: false, url: None,
+            review: None, verdict: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(wait.profile.clone().unwrap_or_else(|| crate::profiles::TASK.to_string())), server: false, worker: false, url: None,
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
@@ -155,10 +157,19 @@ impl Item {
         self.committed() && self.git.as_ref().is_some_and(|git| git.approved)
     }
 
-    // A task that reported ready has asked the lead for its rules check; one that has not, has not.
-    pub fn rules_note(&self) -> Option<&'static str> {
+    // A task that reported ready has its rules checked by the reviewer, or by the lead once kelpie asked it; one that has not, has not.
+    pub fn rules_note(&self) -> Option<String> {
         let unchecked = self.git.as_ref().is_some_and(|git| git.ahead > 0 && !git.approved) && self.group() != Group::Working && self.push_waits.is_none();
-        unchecked.then(|| if self.report_state() == Some("ready") { CHECKING } else { UNCHECKED })
+        if !unchecked {
+            return None;
+        }
+        Some(match &self.rules {
+            Some(crate::rules_check::Shown::Checking) => REVIEWER_CHECKING.to_string(),
+            Some(crate::rules_check::Shown::Broken(1)) => "rules: 1 break".to_string(),
+            Some(crate::rules_check::Shown::Broken(count)) => format!("rules: {count} breaks"),
+            Some(crate::rules_check::Shown::Lead) => CHECKING.to_string(),
+            None => UNCHECKED.to_string(),
+        })
     }
 
     // Sent to review and not passed yet: it waits under To review, and push waits with it.
@@ -230,7 +241,7 @@ impl Item {
         let what = match pending.work {
             _ if self.reported_since(pending.at, "ready") && self.git.as_ref().is_some_and(|git| git.approved) && stalled => "ready for a while, but kelpie has not seen its Claude take the request; push again",
             _ if self.reported_since(pending.at, "ready") && self.git.as_ref().is_some_and(|git| git.approved) => "kelpie pushes it now",
-            _ if self.reported_since(pending.at, "ready") => "the lead checks the new commits",
+            _ if self.reported_since(pending.at, "ready") => "the new commits' rules are checked",
             tasks::PushWork::Turn | tasks::PushWork::Tests => "its Claude runs the tests",
             tasks::PushWork::Conflict => "its Claude resolves the conflict",
             tasks::PushWork::Ci => "its Claude fixes the red CI",
@@ -451,7 +462,7 @@ impl Item {
             return format!("{} · {STAGED}", plural(git.ahead, "commit"));
         }
         if self.group() == Group::ReadyToPush {
-            let review: String = self.rules_note().map(str::to_string).into_iter().chain(self.review_note()).map(|note| format!(" · {note}")).collect();
+            let review: String = self.rules_note().into_iter().chain(self.review_note()).map(|note| format!(" · {note}")).collect();
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
             let turn = if self.turn_under_way() { " · its Claude is taking a turn" } else { "" };
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
@@ -470,7 +481,7 @@ impl Item {
         if git.behind > 0 {
             parts.push(format!("{} behind {}", git.behind, git.upstream.trim_start_matches("origin/")));
         }
-        parts.extend(self.rules_note().map(str::to_string));
+        parts.extend(self.rules_note());
         parts.extend(self.review_note());
         if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
     }
@@ -740,6 +751,7 @@ pub fn gather() -> Result<Vec<Item>> {
             let mut item = Item {
                 review: review_progress(&slot.path, &upstream),
                 verdict: crate::review::shown(&address, &slot.path, &upstream),
+                rules: state.as_deref().and_then(|state| crate::rules_check::shown(state, &address, &slot.path, &upstream)),
                 permit: crate::permit::of(&address, &name_of(repo)),
                 follows: tasks::follows(&address),
                 bypass: tasks::bypasses(&address),
@@ -796,6 +808,7 @@ pub fn gather() -> Result<Vec<Item>> {
         items.push(Item {
             review: None,
             verdict: None,
+            rules: None,
             permit: None,
             follows: false,
             bypass: false,
@@ -840,7 +853,7 @@ pub(crate) mod tests {
 
     pub(crate) fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         let mut item = Item {
-            review: None, verdict: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::TASK.to_string()), server: false, worker: false, url: None, name: "billing".to_string(), title: None, place: "web".to_string(), repo: None, path: None, workspace: None,
+            review: None, verdict: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::TASK.to_string()), server: false, worker: false, url: None, name: "billing".to_string(), title: None, place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, head: None }),
             report: report.map(|state| Message {
@@ -948,6 +961,7 @@ pub(crate) mod tests {
     fn a_ready_task_waiting_only_on_the_lead_shows_under_ready_to_push_marked() {
         let mut ready = task(Some("idle"), Some("ready"), 2);
         ready.git.as_mut().unwrap().approved = false;
+        ready.rules = Some(crate::rules_check::Shown::Lead);
         assert!(ready.group() == Group::ReadyToPush, "a finished task waiting only on the lead is no question for the user");
         assert_eq!(ready.summary(), "2 commits · ready to push · lead checking rules");
         let mut quiet = task(Some("idle"), None, 2);
@@ -959,7 +973,7 @@ pub(crate) mod tests {
         assert!(empty.group() == Group::NeedsYou, "ready with nothing committed is no push");
         let mut working = task(Some("working"), Some("ready"), 2);
         working.git.as_mut().unwrap().approved = false;
-        assert!(!working.summary().contains("rules not checked"), "{}", working.summary());
+        assert!(!working.summary().contains(CHECKING), "the lead checks only once it was asked: {}", working.summary());
         let approved = task(Some("idle"), Some("ready"), 2);
         assert!(approved.group() == Group::ReadyToPush && !approved.summary().contains("rules not checked"));
     }
@@ -1013,12 +1027,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn reviewed_and_approved_are_separate_facts() {
+    fn a_reviewers_pass_is_the_rules_check_and_its_findings_wait_under_to_review() {
         let mut item = task(Some("idle"), Some("ready"), 2);
         item.verdict = Some(in_review(true, 0, false, false));
-        item.git.as_mut().unwrap().approved = false;
-        assert!(item.group() == Group::ReadyToPush, "passed review, waiting only on the lead");
-        assert_eq!(item.summary(), "2 commits · ready to push · lead checking rules · reviewed", "the reviewer's pass does not stand in for the lead's rules check");
+        assert!(item.group() == Group::ReadyToPush);
+        assert_eq!(item.summary(), "2 commits · ready to push · reviewed", "the pass recorded the approval, so no rules check waits");
         let mut working = task(Some("working"), Some("ready"), 2);
         working.verdict = Some(in_review(false, 1, false, false));
         assert!(working.group() == Group::ToReview, "a turn is the row's icon, not its group");
@@ -1028,6 +1041,25 @@ pub(crate) mod tests {
         let mut pushed = task(Some("idle"), Some("ready"), 0);
         pushed.verdict = Some(in_review(false, 1, true, false));
         assert!(!pushed.awaiting_review(), "nothing left to push, nothing left to review");
+    }
+
+    #[test]
+    fn a_ready_task_shows_the_reviewer_checking_its_rules_then_the_breaks_it_found() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.git.as_mut().unwrap().approved = false;
+        item.rules = Some(crate::rules_check::Shown::Checking);
+        assert!(item.group() == Group::ReadyToPush, "the check is no question for the user");
+        assert_eq!(item.summary(), "2 commits · ready to push · reviewer checking rules");
+        item.rules = Some(crate::rules_check::Shown::Broken(2));
+        assert_eq!(item.summary(), "2 commits · ready to push · rules: 2 breaks");
+        item.rules = Some(crate::rules_check::Shown::Broken(1));
+        assert!(item.summary().ends_with("rules: 1 break"));
+        item.rules = Some(crate::rules_check::Shown::Lead);
+        assert!(item.summary().ends_with(CHECKING), "the lead asked after the reviewer gave no verdict");
+        item.rules = None;
+        assert!(item.summary().ends_with(UNCHECKED), "the lead checks only once it was asked: {}", item.summary());
+        item.git.as_mut().unwrap().approved = true;
+        assert_eq!(item.summary(), "2 commits · ready to push", "an approved row stays quiet");
     }
 
     fn watched(state: crate::ci::State, close: bool) -> crate::ci::Watch {
@@ -1157,6 +1189,7 @@ pub(crate) mod tests {
     fn a_ready_task_the_lead_has_not_approved_stays_ready_through_any_turn() {
         let mut item = task(Some("idle"), Some("ready"), 2);
         item.git.as_mut().unwrap().approved = false;
+        item.rules = Some(crate::rules_check::Shown::Lead);
         item.git.as_mut().unwrap().head = Some("abc".to_string());
         item.report.as_mut().unwrap().report.as_mut().unwrap().head = Some("abc".to_string());
         assert_eq!(item.group(), Group::ReadyToPush);
@@ -1389,7 +1422,7 @@ pub(crate) mod tests {
         item.agent.as_mut().unwrap().status = "idle".to_string();
         report(&mut item, "ready");
         item.git.as_mut().unwrap().approved = false;
-        assert_eq!((item.group(), item.push_note().unwrap()), (Group::ReadyToPush, "pushing for you · the lead checks the new commits".to_string()));
+        assert_eq!((item.group(), item.push_note().unwrap()), (Group::ReadyToPush, "pushing for you · the new commits' rules are checked".to_string()));
         assert_eq!(item.rules_note(), None, "the push note says it");
         item.git.as_mut().unwrap().approved = true;
         assert_eq!(item.push_note_at(20 + PUSH_STALLS_AFTER).unwrap(), "pushing for you · kelpie pushes it now");

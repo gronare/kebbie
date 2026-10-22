@@ -387,10 +387,22 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     assert_eq!(stdout(&again), "", "and only once");
 
     std::thread::sleep(std::time::Duration::from_millis(1100));
-    let report = lab.run(&["-C", slot_str, "report", "--state", "ready", "--next", "push and close", "refunds done"]);
+    let unformed = lab.run(&["-C", slot_str, "report", "--state", "ready", "--next", "push and close", "refunds done"]);
+    assert!(!unformed.status.success() && stderr(&unformed).contains("Not reported ready") && stderr(&unformed).contains("Add refunds: no body"), "a commit without a body is refused: {}", stderr(&unformed));
+    git(&slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]);
+    let task_bin = lab.root.join("task-bin");
+    fs::create_dir_all(&task_bin).unwrap();
+    let fake = task_bin.join("claude");
+    fs::write(&fake, format!("#!/bin/sh\necho \"$@\" > {}\ncat > /dev/null\necho 'verdict: ok'\n", lab.root.join("reviewer.args").display())).unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let report = lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(["-C", slot_str, "report", "--state", "ready", "--next", "push and close", "refunds done"]).output().unwrap();
     assert!(report.status.success(), "{}", stderr(&report));
     assert!(stdout(&report).starts_with("Reported to the lead and the board as billing@app."), "{}", stdout(&report));
-    assert!(stdout(&report).contains("The lead checks your commits against the rules next"), "{}", stdout(&report));
+    assert!(stdout(&report).contains("The reviewer checks your commits against the rules in the background"), "{}", stdout(&report));
+    assert!(lab.state.join("rules/billing@app.wanted").exists(), "the report only asks; the keeper starts the reviewer");
+    let forged = lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(["-C", slot_str, "review", "--run", "--rules"]).output().unwrap();
+    assert!(!forged.status.success() && stderr(&forged).contains("approves nothing"), "a reviewer the task starts with a fake claude on its PATH: {}", stderr(&forged));
+    assert!(!lab.root.join("reviewer.args").exists(), "the fake claude never ran");
     let reported = lab.run_with_stdin(&["hook"], &format!(r#"{{"hook_event_name":"Stop","cwd":"{slot_str}","stop_hook_active":false}}"#));
     assert_eq!(stdout(&reported), "", "a turn with a report stops freely");
 
@@ -399,15 +411,15 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     assert_eq!(task["report"]["state"], "ready");
     assert_eq!(task["report"]["next"], "push and close");
     assert_eq!(task["git"]["ahead"], 1);
-    assert_eq!(task["git"]["approved"], false);
-    assert_eq!(task["group"], "READY TO PUSH", "ready and waiting only on the lead's rules check is no question for the user");
-    assert!(task["summary"].as_str().unwrap().contains("lead checking rules"), "{}", task["summary"]);
+    assert_eq!(task["git"]["approved"], false, "a fake claude on the task's PATH approves nothing");
+    assert_eq!(task["group"], "READY TO PUSH");
+    assert!(task["summary"].as_str().unwrap().contains("reviewer checking rules"), "{}", task["summary"]);
 
     let told = lab.run(&["-C", slot_str, "tell", "lead", "payload renamed to amount"]);
     assert!(told.status.success(), "{}", stderr(&told));
     assert_eq!(stdout(&told), "Told lead.");
     let prompts: Vec<Vec<String>> = lab.herdr_calls().into_iter().filter(|call| call[..2] == ["agent", "prompt"]).collect();
-    assert!(prompts.iter().any(|call| call[2] == "p_lead" && call[3].contains("billing@app is ready at") && call[3].contains("kelpie -C") && call[3].contains("approve billing")), "the lead is asked to check the rules: {prompts:?}");
+    assert!(!prompts.iter().any(|call| call[2] == "p_lead" && call[3].contains("billing@app") && call[3].contains("rules")), "the lead hears nothing of a rules check under way: {prompts:?}");
     assert!(prompts.iter().any(|call| call[2] == "p_lead" && call[3] == "[from billing@app] payload renamed to amount"), "{prompts:?}");
     assert!(lab.herdr_calls().iter().all(|call| ["workspace list", "agent list", "agent prompt", "workspace get", "pane read"].contains(&call[..2].join(" ").as_str())), "nothing but reads and prompts reach herdr: {:?}", lab.herdr_calls());
 
@@ -912,7 +924,7 @@ fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_under_th
     let failure = told.iter().find(|text| text.contains("CI failed for")).unwrap_or_else(|| panic!("the task hears it: {told:?}"));
     assert!(failure.contains("CI · test") && failure.contains("line 41") && failure.contains("line 100") && !failure.contains("line 40"), "{failure}");
     assert!(failure.contains("kelpie pushes it for the user once the lead has checked it"), "the fix is part of the user's push: {failure}");
-    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("CI failed for billing@app") && text.contains("kelpie approve")), "{:?}", prompts_to(&lab, "p_lead"));
+    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("CI failed for billing@app") && text.contains("the reviewer checks the fix")), "{:?}", prompts_to(&lab, "p_lead"));
     let task = task_json(&lab);
     assert_eq!((task["group"].as_str(), task["push_waits"].as_str()), (Some("READY TO PUSH"), Some("user")), "the push is under way, not the user's to act on: {task}");
     assert_eq!(task["summary"], "pushing for you · its Claude fixes the red CI", "{task}");

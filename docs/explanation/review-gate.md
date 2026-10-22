@@ -2,13 +2,13 @@
 
 kelpie has two kinds of review, and they answer different questions. The review split is you reading the change. The reviewer gate is a second Claude reading it, with a verdict that holds the push until it passes.
 
-## Two checks that are always separate
+## Two checks, one reviewer
 
-Every ready task gets the lead's rules check: the lead reads the task's commits against your rules skill and runs `kelpie approve`, or tells the task what to fix. That check is about how the work is shaped.
+Every ready task gets a rules check, which is about how the work is shaped. kelpie first checks each commit's form itself: with `kelpie:work-rules`, a ready report is refused while a commit lacks a subject, a blank line and a body. Then the keeper (or the board while the keeper is off) starts the reviewer from its own environment, never the task's, with a brief of the rules alone: it reads each commit against your rules skill, and in a repo with `docs.required` against the docs too. A pass is the task's rules approval, and the lead hears nothing. A break goes to the task with the commit and the rule, and to the lead as one line. When the reviewer gives no verdict (it fails, or has no answer within 15 minutes), the lead is asked to check the rules instead. Each code is checked once: a ready report on code the reviewer found breaks in gets those findings back, one on code it gave no verdict on goes to the lead, and commits that change while the check runs get one more run.
 
 The reviewer is about whether the code is right. A task you send to review (`v` on the board, or `kelpie review`) waits under To review until a separate Claude has read it and given `verdict: ok` on the code its HEAD makes. Until then the board offers no push for it.
 
-A task in review shows under Ready to push only with both: the lead's approval and the reviewer's pass.
+A full review reads the rules too, so its pass is the task's rules approval and no separate rules check runs while a task is in review. A task in review shows under Ready to push once the reviewer has passed its current code.
 
 ## Why a separate Claude
 
@@ -38,7 +38,7 @@ The reviewer gets the latest runs in its brief, each marked as run on the code u
 
 ## When it is worth it
 
-Most tasks go straight to push after the lead's check. The reviewer costs a full Claude run and some waiting, so send the tasks where a second reading pays: money, data, migrations, security, concurrency and wide refactors.
+Most tasks go straight to push after the rules check. The reviewer costs a full Claude run and some waiting, so send the tasks where a second reading pays: money, data, migrations, security, concurrency and wide refactors.
 
 You can always take a task back out with `v` again or `kelpie review --withdraw`. Only you can withdraw: the gate is there for the times you asked for it, and neither the lead nor a task can talk its way past it.
 

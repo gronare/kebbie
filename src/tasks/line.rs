@@ -293,7 +293,7 @@ mod tests {
         commit(&slot.path, "e", "a fix while testing");
         complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed.len(), 1, "changed commits are never pushed on the old commits' word");
-        assert!(load(&state, &address).is_some(), "the push stays under way while the lead checks the fix");
+        assert!(load(&state, &address).is_some(), "the push stays under way while the fix is checked");
         crate::tasks::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
         complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed, [By::Lead, By::User], "the lead's approval of the fix lets the user's push go out");

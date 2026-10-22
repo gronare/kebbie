@@ -347,6 +347,7 @@ mod tests {
     fn a_ready_task_the_lead_has_not_approved_still_offers_push_and_close() {
         let mut unchecked = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         unchecked.git.as_mut().unwrap().approved = false;
+        unchecked.rules = Some(crate::rules_check::Shown::Lead);
         assert!(unchecked.group() == crate::status::Group::ReadyToPush);
         assert!(task_choices(Some(&unchecked), None, None).iter().any(|choice| choice.key == 'p'));
         assert_eq!(row_facts(&unchecked), "1 commit · lead checking rules");

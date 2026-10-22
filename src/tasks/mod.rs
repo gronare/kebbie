@@ -16,7 +16,9 @@ mod started;
 pub(crate) mod test_support;
 
 pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, after as after_command, at as start_at, drop as drop_wait, now as start_now, queue, refuse_queued_name, Shown as WaitShown, shown as waits_shown, tick as after_tick};
-pub(crate) use approval::{approve, approved, awaits_check, rules_check, rules_check_subject, rules_check_task, same_code};
+#[cfg(test)]
+pub(crate) use approval::approval_holds;
+pub(crate) use approval::{approve, approved, awaits_check, fingerprint_at, record_approval, rules_check, rules_check_subject, rules_check_task, same_code};
 pub(crate) use crate::agent::{Started, wait_for_prompt};
 pub(crate) use finish::{FORCE, done, drop, drop_routine_ok, reset};
 pub(crate) use follow::{follow, follows, tick as follow_tick, toggle as toggle_follow};
@@ -173,7 +175,13 @@ mod tests {
         assert_eq!(phase(), Some(Phase::NeedsYou(Why::Unreported)), "the inbox's raw content from the lead or kelpie moves nothing");
         prompt("go on");
         assert_eq!(phase(), Some(Phase::Working), "the user's own prompt does");
+        let refused = crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, "refunds done").unwrap_err();
+        assert!(refused.contains("Not reported ready") && refused.contains("fourth: no body"), "a commit without a body is refused before kelpie hears the report: {refused}");
+        assert_eq!(phase(), Some(Phase::Working), "the refused report moves nothing");
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]).unwrap();
         crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, "refunds done").unwrap();
+        assert_eq!(crate::rules_check::shown_in(&state, &address, |_| true), Some(crate::rules_check::Shown::Checking), "the ready report asks for the rules check");
+        assert!(crate::rules_check::SPAWNED.with(|spawned| spawned.borrow().is_empty()), "and starts nothing from the task's own process");
         assert_eq!(phase(), Some(Phase::Ready { head: Some(git(&slot.path, &["rev-parse", "HEAD"]).unwrap()) }));
         prompt(&crate::messages::delivered("kelpie", "kelpie was updated"));
         assert!(matches!(phase(), Some(Phase::Ready { .. })), "an update notice leaves it ready");

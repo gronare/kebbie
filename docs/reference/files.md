@@ -32,7 +32,8 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `evidence/<task>@<repo>.jsonl` | The task's last 20 recorded test runs, one JSON object per line. See [`kelpie evidence`](commands.md#kelpie-evidence-name---json). |
 | `plans/` | Plans put to you with `kelpie ask --plan <file>`. |
 | `push-permits/` | Push permissions you gave the lead, per task and per repo. |
-| `approved/` | The lead's rules approvals. |
+| `approved/` | The rules approvals: the reviewer's pass or `kelpie approve`. |
+| `rules/` | The reviewer's rules checks, per `<task>@<repo>`: `.wanted` a ready report waiting for the keeper, `.again` one that came in during a check, `.run` the keeper's record of the run it started, `.running` the check under way, `.md` the last verdict, `.failed` the code it gave no verdict on, `.lead` the code the lead was asked about, `.log` its output. |
 | `prompts/` | Per task, the id of the prompt on its Claude's screen that the lead was last told about. |
 | `push-intents/` | One file per push that waits for its task's Claude to test the files the default branch changed under it: who asked (you or the lead), the commits it holds for, and which commits to push. |
 | `after/` | One file per queued task, `<task>@<repo>.json`: its repo, the tasks it waits for by address and repo, its prompt, mode and backlog item, who queued it (you or the lead), when, and, once it waits for you, why. A file that does not read as one is removed unread. The keeper renames a file away before it starts the task, so a board and a keeper never start it twice. |

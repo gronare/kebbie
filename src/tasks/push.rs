@@ -140,7 +140,7 @@ pub(super) fn conflict_prompt(why: &str, upstream: &str) -> String {
          involved, and continue until the rebase is finished. When a conflict is a choice of intent rather than mechanics, both sides wanting \
          different behaviour from the same code, do not pick one: ask the user with kelpie ask, with the options and your recommendation, and \
          resolve it by their answer. Do not push. Then report ready, saying in a few lines what conflicted and how you resolved it. When a \
-         push started this, kelpie pushes the resolved commits as soon as the lead has checked them; report needs-you only when a test stays red."
+         push started this, kelpie pushes the resolved commits as soon as their rules are checked; report needs-you only when a test stays red."
     )
 }
 
@@ -435,9 +435,9 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
                     .you("Push again; if this repeats, rebase it yourself in its worktree.").detail("task", &task).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
             }
             crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushHanded);
-            tell_lead(&format!("{} pushed {address}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, check the resolved commits against the rules (kelpie approve): kelpie pushes them for {} then. The task keeps the head of its repo's push line meanwhile, for up to {} minutes.", capitalized(pusher), by.word(), super::line::CEILING / 60), Some("push"));
+            tell_lead(&format!("{} pushed {address}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kelpie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line meanwhile, for up to {} minutes.", capitalized(pusher), by.word(), super::line::CEILING / 60), Some("push"));
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: it conflicts with {}", main_of(&upstream)))
-                .next(format!("Its Claude resolves the conflict, the lead checks the result, then kelpie pushes it{}.", for_whom(pusher))).detail("task", &task).to_string()));
+                .next(format!("Its Claude resolves the conflict, the reviewer checks the result against the rules, then kelpie pushes it{}.", for_whom(pusher))).detail("task", &task).to_string()));
         }
         Updated::Overlap(touched) => {
             let files: Vec<&str> = touched.iter().map(|touched| touched.file.as_str()).collect();
@@ -588,7 +588,7 @@ fn capitalized(text: &str) -> String {
     characters.next().map(|first| first.to_uppercase().chain(characters).collect()).unwrap_or_default()
 }
 
-// Who may push this task now: the user always, the lead only with the user's permission and its own rules check, a task or any other Claude never.
+// Who may push this task now: the user always, the lead only with the user's permission and a rules approval, a task or any other Claude never.
 struct Pusher {
     caller: crate::permit::Caller,
     permit: Option<crate::permit::Permit>,
@@ -604,7 +604,7 @@ impl Pusher {
             Caller::Lead => {
                 crate::permit::lead_may_push(self.permit, self.reviewed)?;
                 if !self.approved {
-                    return Err("its commits have no rules approval of yours that matches them: check them and run kelpie approve first".to_string());
+                    return Err("its commits have no rules approval that matches them: wait for the reviewer's rules check, or check them and run kelpie approve".to_string());
                 }
                 Ok("the lead")
             }

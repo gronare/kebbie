@@ -77,7 +77,7 @@ Working on kelpie
 
 - [How kelpie fits together](explanation/architecture.md): the binary, the two plugins and the optional vault.
 - [Trunk-based by design](explanation/trunk-based.md): why tasks land on the default branch with no pull request.
-- [The review gate](explanation/review-gate.md): the lead's check, the read-only reviewer and what keeps a pass.
+- [The review gate](explanation/review-gate.md): the rules check, the read-only reviewer and what keeps a pass.
 - [The worktree pool](explanation/worktree-pool.md): why worktrees are kept and reused.
 - [The lead and away mode](explanation/lead-and-away-mode.md): what the lead holds and where it stops.
 - [Routines](explanation/routines.md): scheduled checks that report, plan or fix.

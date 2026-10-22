@@ -710,7 +710,7 @@ pub fn describe(loaded: &Loaded) -> String {
     key("worktree.clean_on_release", quoted(&cleaned), clean_on_release.layer,
         "Build output kelpie removes from a worktree when it goes back to the pool (done, drop, reset, a landed task closing), so the pool's disk use stays bounded; folders inside the worktree, each removed only when git ignores it and tracks nothing in it, and \"target\" only where the worktree has a Cargo.toml. [] keeps everything.");
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
-        "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the lead checks a finished task against it, tidy reshapes commits by it.");
+        "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the reviewer checks a ready task against it, tidy reshapes commits by it.");
     let own: Vec<&str> = test_commands.value.iter().map(String::as_str).collect();
     key("task.test_commands", quoted(&own), test_commands.layer,
         &format!("Test commands of this repo that kelpie records when a task's Claude runs them, on top of the built-in {}; matched on the command's start, after any cd … && and VAR=value. kelpie evidence, the board, the push dialog and the reviewer show the runs.", quoted(&crate::evidence::DEFAULT_COMMANDS)));

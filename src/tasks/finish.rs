@@ -109,6 +109,7 @@ pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::v
     crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
     super::follow::forget(&peers::address(task_of(&slot), &name_of(&repo)));
     crate::review::forget(task_of(&slot), &repo);
+    crate::rules_check::forget(task_of(&slot), &repo);
     crate::report::forget_card(task_of(&slot), &repo);
     crate::evidence::forget(task_of(&slot), &repo);
     super::after::settle_ci(&state, &address);
@@ -272,6 +273,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
     crate::permit::forget(&peers::address(task, &name_of(&repo)));
     super::follow::forget(&peers::address(task, &name_of(&repo)));
     crate::review::forget(task, &repo);
+    crate::rules_check::forget(task, &repo);
     crate::report::forget_card(task, &repo);
     crate::evidence::forget(task, &repo);
     if let Ok(state) = state_dir() {

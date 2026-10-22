@@ -19,7 +19,7 @@ The Areas page needs the vault.
 
 ## What still holds
 
-- The lead's rules approval must match the commits it pushes.
+- A rules approval, the reviewer's or the lead's, must match the commits it pushes, and the lead reads the diff itself before its push.
 - A ready task without a permission waits for you under Ready to push.
 - After every push the lead is told which commits landed.
 - Tasks never push, whatever the permission.

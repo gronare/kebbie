@@ -12,7 +12,7 @@ Hold a risky task's push until an independent, read-only Claude has passed its c
 
 2. Wait for the verdict. The row shows `reviewed` on a pass or `review: N findings`. The lead passes the findings that matter to the task, which fixes them and reports ready. kelpie then reviews the changed code again.
 
-3. Once the reviewer has passed the current code and the lead has approved the commits, the task shows under Ready to push. Press `p`.
+3. Once the reviewer has passed the current code, the task shows under Ready to push: the pass is its rules approval too. Press `p`.
 
 ## Pick the reviewer's model
 

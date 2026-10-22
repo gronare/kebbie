@@ -93,10 +93,10 @@ How far the task is behind the default branch does not matter. The rebase at its
 | Rebase | What happens |
 | --- | --- |
 | Clean, and the new upstream commits changed none of the task's files | kelpie pushes. |
-| Clean, but the new upstream commits changed files the task changes too | Nothing is pushed yet. kelpie hands the task to its Claude with the files and the commits that touched them, to run their tests and report ready. When it reports ready with the same commits, kelpie pushes for whoever asked: you, or the lead under its permission, with the same checks. When its commits changed, the lead checks them again and the push is asked for again. |
-| Conflict | kelpie aborts the rebase and hands it to the task's Claude, which resolves it, asks you when the conflict is a choice between two behaviours, and reports ready. The resolved commits need the lead's check before the next push. |
+| Clean, but the new upstream commits changed files the task changes too | Nothing is pushed yet. kelpie hands the task to its Claude with the files and the commits that touched them, to run their tests and report ready. When it reports ready with the same commits, kelpie pushes for whoever asked: you, or the lead under its permission, with the same checks. When its commits changed, their rules are checked again and the push is asked for again. |
+| Conflict | kelpie aborts the rebase and hands it to the task's Claude, which resolves it, asks you when the conflict is a choice between two behaviours, and reports ready. The resolved commits need a rules check before the next push. |
 
-While its Claude runs the tests or resolves the conflict, the task keeps the head of the line and the pushes behind it wait. It leaves the line for Needs you, marked `out of the push line: <why>`, when its Claude reports needs-you, or when 30 minutes pass without a ready report (or, after one, without the lead's approval of the changed commits); the next push in line goes on then.
+While its Claude runs the tests or resolves the conflict, the task keeps the head of the line and the pushes behind it wait. It leaves the line for Needs you, marked `out of the push line: <why>`, when its Claude reports needs-you, or when 30 minutes pass without a ready report (or, after one, without a rules approval of the changed commits); the next push in line goes on then.
 
 When origin is on GitHub and `gh` is logged in, the task stays open under CI running instead, and closes as `done` once every workflow run for the pushed commit is green. See `kelpie ci`. Otherwise the push result ends with `CI not watched:` and the reason.
 
@@ -135,7 +135,7 @@ A watch runs while a board is open: every 30 seconds the board asks `gh run list
 | No runs yet | kelpie waits up to 3 minutes for runs to appear, then treats the commit as green. |
 | Running | The task waits under CI running. |
 | Every run passed, skipped or neutral | After at least a minute since the push, the task closes as `done`: its note is closed when the vault is on, and the lead hears what landed. |
-| A run failed | The failure is named by workflow, job and the step that failed: `CI failed: <workflow> · <job> · <step>`. Its Claude gets that and the last 60 lines of its log, and the lead gets a line. The watch stops. After a push of the whole task, the fix is part of that push: the task stays under Ready to push as `pushing for you · its Claude fixes the red CI`, and once its Claude reports ready and the lead approves the fix, kelpie pushes it for whoever gave the push, and watches it the same way. It moves to Needs you only when its Claude reports needs-you. After a push with `--through`, the task moves to Needs you with `CI failed: <workflow> · <job> · <step>`. |
+| A run failed | The failure is named by workflow, job and the step that failed: `CI failed: <workflow> · <job> · <step>`. Its Claude gets that and the last 60 lines of its log, and the lead gets a line. The watch stops. After a push of the whole task, the fix is part of that push: the task stays under Ready to push as `pushing for you · its Claude fixes the red CI`, and once its Claude reports ready and the reviewer passes the fix against the rules, kelpie pushes it for whoever gave the push, and watches it the same way. It moves to Needs you only when its Claude reports needs-you. After a push with `--through`, the task moves to Needs you with `CI failed: <workflow> · <job> · <step>`. |
 
 A task with `--through` that fixes the failure pushes again as usual, and the new push is watched. `done` closes a task whatever CI says. A push with `--through` is watched too and leaves the task where it is.
 
@@ -206,7 +206,7 @@ kelpie records a run from the hooks it gives the task's Claude, after every Bash
 
 ### `kelpie approve <name>`
 
-The lead's word that a task's commits hold to the rules skill. Until a commit changes, the board shows the task ready to push. Tasks cannot run it.
+Your word or the lead's that a task's commits hold to the rules skill, the override for the reviewer's rules check, which gives the same approval by itself when a task reports ready. Until a commit changes, the board shows the task ready to push. Tasks cannot run it.
 
 ## Seeing what is going on
 
@@ -253,7 +253,7 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 
 | Command | What it does |
 | --- | --- |
-| `kelpie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. `<state>` is `needs-you`, `ready`, `working` or `blocked`. With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task. A routine's task also lists its findings on a card with `needs-you`. |
+| `kelpie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. `<state>` is `needs-you`, `ready`, `working` or `blocked`. With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task. A routine's task also lists its findings on a card with `needs-you`. With `kelpie:work-rules` as the rules skill, `ready` is refused while a commit lacks a subject, a blank line and a body. After a ready report the keeper starts the reviewer, which checks the commits against the rules skill: a pass approves them, a break goes to the task and a line to the lead, and no verdict within 15 minutes leaves the check to the lead. A ready report on code already checked gets the stored findings back, or goes to the lead after no verdict, without a new run. |
 | `kelpie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. Refused outside a routine's task, from anyone but that task's Claude, and while the task has changes or commits. |
 | `kelpie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. A question about how goes to the lead instead. The question opens with one plain sentence on what the task is doing, and each of the two to four options says what you get with it, one recommended, without flags, commit ids, file names or internal terms you did not use. `--plan <file>` or `--plan vault:<note>` asks you to approve a plan instead. |
 | `kelpie answered <task>` | The task's question was settled elsewhere, dropped, or sent back to be asked again; it leaves the board, and a `kelpie tell` to that task is no longer held. |

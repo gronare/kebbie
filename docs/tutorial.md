@@ -148,7 +148,7 @@ The board now lists `greet` under **Working**. Claude first makes its worktree r
 
 When Claude ends its turn it reports where it stands. The row moves to another group, and a `you:` line under it says what you should do next. Select the row with `↑` `↓` and the row opens with the task's report.
 
-The lead checks the task's commits against the rules skill. Once it approves them, `greet` moves to **Ready to push**. If you pick it up before the lead has looked, it waits under **Needs you** marked "rules not checked by the lead"; you can push from there too.
+When the task reports ready, kelpie checks that each commit has a subject, a blank line and a body, and a read-only reviewer checks the commits against the rules skill in the background, marked `reviewer checking rules`. Once it passes them, the mark goes and `greet` shows under **Ready to push**. If you pick it up before the check is done, you can push from there too.
 
 ## 9. Push it
 

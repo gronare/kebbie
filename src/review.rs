@@ -166,7 +166,11 @@ pub fn forget(task: &str, repo: &Path) {
     }
 }
 
+// A reviewer still running is stopped first, so no verdict lands for a task that is gone.
 pub fn forget_in(state: &Path, address: &str) {
+    if let Some(pid) = running_pid(state, address) {
+        stop_group(&pid);
+    }
     for file in [verdict_file(state, address), running_file(state, address), log_file(state, address)] {
         let _ = fs::remove_file(file);
     }
@@ -196,10 +200,14 @@ pub fn withdraw_in(state: &Path, address: &str) -> bool {
     let running = running_pid(state, address);
     let in_review = verdict_file(state, address).exists() || running.is_some();
     if let Some(pid) = running {
-        let _ = Command::new("kill").args(["-s", "TERM", "--", &format!("-{pid}")]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        stop_group(&pid);
     }
     forget_in(state, address);
     in_review
+}
+
+pub(crate) fn stop_group(pid: &str) {
+    let _ = Command::new("kill").args(["-s", "TERM", "--", &format!("-{pid}")]).stdout(Stdio::null()).stderr(Stdio::null()).status();
 }
 
 // Starts the reviewer as a process of its own, so neither the board nor the caller waits for it.
@@ -264,34 +272,102 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     let said = tasks::transcript(repo, slot).and_then(|(agent, file)| Some(agent.user_messages(&fs::read_to_string(file).ok()?))).unwrap_or_default();
     let file = verdict_file(state, address);
     let kelpie = install_root()?;
+    let rules = &settings.rules_skill.value;
+    let rules_file = self::rules_file(rules, &slot.path, &kelpie);
+    let tests = crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha);
+    let docs = if settings.docs_required.value { Some(docs_brief(&slot.path, &upstream, &sha, &kelpie.join(KEEP_DOCS))?) } else { None };
+    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value, docs: docs.as_deref() });
+    let answer = ask_reviewer(&Ask { address, worktree: &slot.path, settings: &settings, rules_file: rules_file.as_deref(), docs: docs.is_some(), input: &input, timeout: None, role: "review", program: None, group_file: None })?;
+    let recorded = record(&answer, &sha).ok_or_else(|| no_verdict(&answer))?;
+    let verdict = save(state, address, &recorded, rules_file.is_some(), || tasks::fingerprint_at(&slot.path, &upstream, &sha))?;
+    Ok(format!("{address} reviewed at {}: {} — {}", &sha[..7.min(sha.len())], verdict.summary(), file.display()))
+}
+
+// A pass of a review that read the rules skill is the rules check too, kept as the approval's fingerprint, so the task is not checked twice.
+fn save(state: &Path, address: &str, recorded: &str, read_rules: bool, fingerprint: impl FnOnce() -> Result<String>) -> Result<Verdict> {
+    let verdict = parse_verdict(recorded).ok_or("the recorded verdict does not parse")?;
+    crate::state::write(&verdict_file(state, address), recorded)?;
+    if verdict.ok && read_rules {
+        tasks::record_approval(state, address, &fingerprint()?)?;
+    }
+    Ok(verdict)
+}
+
+pub(crate) fn rules_file(rules: &str, worktree: &Path, kelpie: &Path) -> Option<PathBuf> {
+    crate::agent::claude::home().and_then(|home| skill_file(rules, worktree, &home, kelpie))
+}
+
+pub(crate) fn no_verdict(answer: &str) -> String {
+    format!("the reviewer's answer has no verdict line; it ended: {}", answer.trim().chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect::<String>())
+}
+
+pub(crate) struct Ask<'a> {
+    pub address: &'a str,
+    pub worktree: &'a Path,
+    pub settings: &'a config::Settings,
+    pub rules_file: Option<&'a Path>,
+    pub docs: bool,
+    pub input: &'a str,
+    pub timeout: Option<std::time::Duration>,
+    pub role: &'a str,
+    pub program: Option<&'a Path>,
+    pub group_file: Option<&'a Path>,
+}
+
+// The reviewer's answer to a brief, from the read-only Claude kelpie:review sets up; past the timeout it is stopped and gives none.
+pub(crate) fn ask_reviewer(ask: &Ask) -> Result<String> {
+    let Ask { address, worktree, settings, rules_file, docs, input, timeout, role, program: bin, group_file } = *ask;
+    let kelpie = install_root()?;
     let profile = reviewer_profile(&crate::profiles::load(crate::profiles::REVIEWER)?, settings.review_model.value.as_deref());
     let agent = profile.agent;
-    let rules = &settings.rules_skill.value;
-    let rules_file = crate::agent::claude::home().and_then(|home| skill_file(rules, &slot.path, &home, &kelpie));
-    let tests = crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha);
-    let keep_docs = kelpie.join(KEEP_DOCS);
-    let docs = if settings.docs_required.value { Some(docs_brief(&slot.path, &upstream, &sha, &keep_docs)?) } else { None };
-    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value, docs: docs.as_deref() });
     if settings.sandbox.value {
         crate::sandbox::refusal(&crate::sandbox::missing_here())?;
     }
-    let guard = write_settings(&roles_dir()?, &format!("{address}.review"), &agent.reviewer_settings(&peers::kelpie_command()?, settings.sandbox.value))?;
-    let prompt = reviewer_prompt(&kelpie.join("skills/review/SKILL.md"), &profile, &roles_dir()?.join(format!("{address}.review.md")))?;
-    let (program, args) = agent.reviewer_command(&Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: &guard, prompt: &prompt, rules: rules_file.as_deref().and_then(Path::parent), docs: docs.as_ref().and(keep_docs.parent()) });
-    let mut child = Command::new(program).args(&args).current_dir(&slot.path)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .spawn().map_err(|error| format!("{program}: {error}"))?;
+    let keep_docs = kelpie.join(KEEP_DOCS);
+    let guard = write_settings(&roles_dir()?, &format!("{address}.{role}"), &agent.reviewer_settings(&peers::kelpie_command()?, settings.sandbox.value))?;
+    let prompt = reviewer_prompt(&kelpie.join("skills/review/SKILL.md"), &profile, &roles_dir()?.join(format!("{address}.{role}.md")))?;
+    let (program, args) = agent.reviewer_command(&Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: &guard, prompt: &prompt, rules: rules_file.and_then(Path::parent), docs: if docs { keep_docs.parent() } else { None } });
+    let mut command = Command::new(bin.map_or(Path::new(program), |bin| bin));
+    command.args(&args).current_dir(worktree).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if group_file.is_some() {
+        command.process_group(0);
+    }
+    let mut child = command.spawn().map_err(|error| format!("{program}: {error}"))?;
+    if let Some(file) = group_file {
+        crate::state::write(file, child.id().to_string())?;
+    }
     use std::io::Write;
     child.stdin.take().ok_or(format!("{program} has no stdin"))?.write_all(input.as_bytes()).map_err(|error| error.to_string())?;
-    let output = child.wait_with_output().map_err(|error| error.to_string())?;
-    let answer = String::from_utf8_lossy(&output.stdout).to_string();
+    let output = match timeout {
+        None => child.wait_with_output().map_err(|error| error.to_string())?,
+        Some(limit) => wait_within(child, limit).map_err(|error| format!("{program} {error}"))?,
+    };
     if !output.status.success() {
         return Err(format!("{program} stopped with {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim()));
     }
-    let recorded = record(&answer, &sha).ok_or_else(|| format!("the reviewer's answer has no verdict line; it ended: {}", answer.trim().chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect::<String>()))?;
-    let verdict = parse_verdict(&recorded).ok_or("the recorded verdict does not parse")?;
-    crate::state::write(&file, &recorded)?;
-    Ok(format!("{address} reviewed at {}: {} — {}", &sha[..7.min(sha.len())], verdict.summary(), file.display()))
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+// Reads the child's output as it comes, so a full pipe never stalls it, and stops its whole process group at the limit.
+pub(crate) fn wait_within(mut child: std::process::Child, limit: std::time::Duration) -> std::result::Result<std::process::Output, String> {
+    use std::io::Read;
+    let drain = |pipe: Option<Box<dyn Read + Send>>| std::thread::spawn(move || { let mut bytes = Vec::new(); if let Some(mut pipe) = pipe { let _ = pipe.read_to_end(&mut bytes); } bytes });
+    let stdout = drain(child.stdout.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|pipe| Box::new(pipe) as Box<dyn Read + Send>));
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = Command::new("kill").args(["-s", "TERM", "--", &format!("-{}", child.id())]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("gave no answer within {} minutes and was stopped", limit.as_secs() / 60));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    Ok(std::process::Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
 }
 
 // review.model, from the repo or machine config, is the reviewer profile's model by another name and wins over its file.
@@ -562,6 +638,21 @@ mod tests {
 
     fn shown_as(ok: Option<bool>, stale: bool, running: bool) -> Shown {
         Shown { verdict: ok.map(|ok| Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok) * 2 }), stale, running, file: PathBuf::new() }
+    }
+
+    #[test]
+    fn a_reviewers_pass_is_the_rules_check_and_its_findings_approve_nothing() {
+        let state = crate::sh::test_dir("review-approves");
+        let fingerprint = || Ok("f1\nf2".to_string());
+        save(&state, "billing@app", &record("verdict: changes\n- a.rs:1 — wrong\n", "abc").unwrap(), true, fingerprint).unwrap();
+        assert!(!tasks::approval_holds(&state, "billing@app", "f1\nf2"), "findings leave the rules unchecked");
+        save(&state, "billing@app", &record("verdict: ok\n", "abc").unwrap(), false, fingerprint).unwrap();
+        assert!(!tasks::approval_holds(&state, "billing@app", "f1\nf2"), "a pass without the rules skill's file read no rules");
+        let verdict = save(&state, "billing@app", &record("verdict: ok\n", "abc").unwrap(), true, fingerprint).unwrap();
+        assert!(verdict.ok && tasks::approval_holds(&state, "billing@app", "f1\nf2"), "the reviewer's pass stands in for the lead's rules check");
+        assert!(!tasks::approval_holds(&state, "billing@app", "f1\nf2\nf3"), "until a new commit");
+        assert!(verdict_file(&state, "billing@app").is_file());
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

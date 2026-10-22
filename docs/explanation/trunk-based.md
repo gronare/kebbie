@@ -21,14 +21,14 @@ The result on the default branch is a straight line of commits, each written to 
 A pull request does three jobs: it shows you the change, it gets a second opinion, and it gates the merge. kelpie does each of them where you already are.
 
 - **Seeing the change.** The review split shows the task's diff next to its Claude, and your comments go straight into Claude's input. The push window shows the sign-off card and every commit message before anything is pushed.
-- **A second opinion.** The lead checks every ready task's commits against your rules skill. For risky work, the reviewer gate adds an independent, read-only Claude that must pass the current code. See [The review gate](review-gate.md).
+- **A second opinion.** A read-only reviewer checks every ready task's commits against your rules skill. For risky work, the reviewer gate adds an independent, read-only Claude that must pass the current code. See [The review gate](review-gate.md).
 - **The gate.** Tasks cannot push. You push, or the lead pushes a task you gave it permission for. See [The trust boundary](trust-boundary.md).
 
 The gate is the push itself, so nothing waits on a web page.
 
 ## Commits matter more
 
-Without a merge to group them, each commit on the default branch is read on its own. That is why kelpie leaves commit style to a skill (`task.rules_skill`) that the task follows, the lead checks, and `kelpie tidy` and the push window's edit and squash keys help you fix. The default, `kelpie:work-rules`, asks for one logical change per commit with a body that says why. Replace it with your own team's rules.
+Without a merge to group them, each commit on the default branch is read on its own. That is why kelpie leaves commit style to a skill (`task.rules_skill`) that the task follows, the reviewer checks, and `kelpie tidy` and the push window's edit and squash keys help you fix. The default, `kelpie:work-rules`, asks for one logical change per commit with a body that says why. Replace it with your own team's rules.
 
 ## CI after the push
 

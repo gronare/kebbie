@@ -36,6 +36,7 @@ mod repo;
 mod report;
 mod restart;
 mod review;
+mod rules_check;
 mod routes;
 mod routine_file;
 mod routine_page;
@@ -111,7 +112,11 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie report --state <state> --next <step> <summary>
                                   run by a task's Claude at the end of a turn: where it stands (needs-you, ready,
                                   working, blocked) and what you should do next, for the board and the lead;
-                                  with ready, --card <file> is the sign-off card the push dialog shows above the commits
+                                  with ready, --card <file> is the sign-off card the push dialog shows above the commits;
+                                  ready is refused while a commit lacks a subject, a blank line and a body (with
+                                  kelpie:work-rules), and the keeper then starts a read-only reviewer that checks the
+                                  commits against the rules skill: a pass approves them, a break goes to the task and a
+                                  line to the lead, no verdict in 15 minutes leaves the check to the lead
   kelpie ask --option \"<label>: <meaning>\" … --recommend <n> <question>
                                   run by a task's Claude to ask you what you want (scope, behaviour, a trade-off that is
                                   yours); a question of how goes to the lead with kelpie tell lead. The question opens
@@ -157,13 +162,15 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
   kelpie review [name]            send the task to review: a separate, read-only Claude reviews its commits in the
                                   background, by the skill kelpie:review and the rules skill; the task waits under To
-                                  review, and push with it, until a verdict ok on its current code (--withdraw
+                                  review, and push with it, until a verdict ok on its current code, which is its
+                                  rules approval too, so no separate rules check runs (--withdraw
                                   takes it out of review, yours only: the reviewer stops, its verdict goes, push is
                                   offered again)
   kelpie evidence [name] [--json] the test runs kelpie recorded for the task, newest first: the command, its result, the
                                   commit it ran on and whether the code changed since (task.test_commands adds commands)
-  kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
-                                  changes, the board shows it ready to push
+  kelpie approve <name>           yours or the lead's word that a task's commits hold to the rules skill, an override:
+                                  the reviewer gives it by itself when a task reports ready; until a commit changes,
+                                  the board shows it ready to push
   kelpie push [name]              put the task in its repo's push line; at the head, fetch, rebase it onto origin's
                                   default branch and push it, then close it as done (once CI is green, when kelpie
                                   watches it; see kelpie ci); one push per repo at a time, in the order they were
@@ -518,6 +525,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("stage") => tasks::stage(&cwd, name, true),
         Some("unstage") => tasks::unstage(&cwd, name),
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
+        Some("review") if arguments.flag("--run") && arguments.flag("--rules") => rules_check::run(&cwd),
         Some("review") if arguments.flag("--run") => review::run(&cwd),
         Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),
         Some("review") => review::request(&cwd, name),

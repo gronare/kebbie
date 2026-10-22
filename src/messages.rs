@@ -665,6 +665,11 @@ pub fn notify_lead(text: &str) -> Result<()> {
     send("kelpie", &lead, text, &sessions).map(|_| ())
 }
 
+// kelpie's own word to a task, typed in as any message is.
+pub fn tell_from_kelpie(recipients: &[&Session], text: &str, sessions: &[Session]) -> Result<()> {
+    send("kelpie", recipients, text, sessions).map(|_| ())
+}
+
 // kelpie's word to the lead that must not be lost: with no lead session yet, it waits in the log and reaches the lead once one runs.
 pub fn tell_lead(text: &str, kind: Option<&str>) -> Result<()> {
     let sessions = peers::sessions().unwrap_or_default();

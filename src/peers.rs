@@ -181,7 +181,7 @@ fn prepare_line(agent: crate::agent::Agent, setup_skill: &str, command: Option<&
 }
 
 fn rules_line(rules_skill: &str) -> String {
-    format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, the lead checks your commits against it.")
+    format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, kelpie refuses a commit without a subject, a blank line and a body, and a read-only reviewer checks your commits against it.")
 }
 
 // Codex has no kelpie skill, so its line names the docs and not the skill.

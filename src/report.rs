@@ -37,6 +37,9 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     report.head = crate::repo::git(cwd, &["rev-parse", "HEAD"]).ok();
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kelpie report runs in a task's worktree")?;
     card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
+    if report.state == "ready" {
+        crate::rules_check::refuse_unformed(cwd)?;
+    }
     let card = card.map(|file| cwd.join(file));
     let text = card.as_deref().map(read_card).transpose()?;
     messages::log_report(&me, &report, &summary)?;
@@ -57,7 +60,7 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
         let text = if event == crate::notify::Event::Ready { format!("{me} is ready: {summary}") } else { format!("{me} needs you: {}", report.next) };
         crate::notify::send(cwd, &crate::notify::Notice::from(event, &me, text));
     }
-    let check = if report.state == "ready" { lead_check(cwd) + &review_again(cwd) } else { String::new() };
+    let check = if report.state == "ready" { review_again(cwd) + &rules_check(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
 }
 
@@ -156,12 +159,16 @@ pub fn show_in_sidebar(report: &Report) {
     }
 }
 
-// A ready task waits under Ready to push, marked, until the lead has checked it against the rules skill.
-fn lead_check(cwd: &Path) -> String {
-    match tasks::rules_check(cwd).and_then(|request| request.map(|text| messages::ask_lead(&text)).transpose()) {
-        Ok(Some(_)) => " The lead checks your commits against the rules next; it tells you if one needs fixing.".to_string(),
-        Ok(None) => String::new(),
-        Err(error) => format!(" The lead could not be asked to check the rules: {error}."),
+// A ready task waits under Ready to push, marked, until the reviewer has checked it against the rules skill, or the lead when the reviewer gives no verdict.
+fn rules_check(cwd: &Path) -> String {
+    use crate::rules_check::Started;
+    match crate::rules_check::start(cwd) {
+        Ok(Started::Queued) => " The reviewer checks your commits against the rules in the background; kelpie tells you if one needs fixing.".to_string(),
+        Ok(Started::Retold(findings)) => format!(" The rules check already found these on this code; fix each, then report ready again:\n{findings}"),
+        Ok(Started::ByReview) => " Your reviewer's verdict covers the rules too.".to_string(),
+        Ok(Started::Lead) => " The lead checks your commits against the rules next; it tells you if one needs fixing.".to_string(),
+        Ok(Started::Nothing) => String::new(),
+        Err(error) => format!(" The rules check could not be started: {error}."),
     }
 }
 

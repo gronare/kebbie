@@ -1,6 +1,6 @@
 ---
 name: work-rules
-description: kelpie's default commit rules for a task's branch: a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to the user. Use when kelpie's task role names it, when you commit or reshape commits, and when the lead checks a ready task's commits.
+description: kelpie's default commit rules for a task's branch: a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to the user. Use when kelpie's task role names it, when you commit or reshape commits, and when a ready task's commits are checked.
 ---
 
 # Work rules
@@ -24,4 +24,4 @@ were about to start in. It now names each repo with free ones.
 
 ## Checking a branch
 
-The lead checks a ready task with `git -C <worktree> log -p <default branch>..HEAD`. Judge every commit on rules 1 and 2, and on rule 3 by any file it carries that belongs to another change; the check is done when each commit has a verdict on each. A break goes back to the task with `kelpie tell <task> "<commit>: <rule>, <what to fix>"`. When every commit holds, run `kelpie -C <repo> approve <task>`.
+A ready task's branch is checked with `git -C <worktree> log -p <default branch>..HEAD`: by the reviewer kelpie runs when the task reports ready, or by the lead when the reviewer gives no verdict. Judge every commit on rules 1 and 2, and on rule 3 by any file it carries that belongs to another change; the check is done when each commit has a verdict on each. Each break names the commit, the rule by its number and what to fix. The lead sends a break back with `kelpie tell <task> "<commit>: <rule>, <what to fix>"`, and when every commit holds, runs `kelpie -C <repo> approve <task>`.

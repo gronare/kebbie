@@ -24,7 +24,7 @@ Every `warn` and `fail` comes with its fix. What it checks: [Requirements](../re
 | `kelpie update` refuses on the `release` channel | The install root has uncommitted changes or is not on a release tag. Move your work elsewhere, or run `kelpie update --stable` on a clean checkout. |
 | `kelpie lead --restart` refuses | The lead is working or waiting on a question. Run it once the lead is idle. |
 | The lead cannot push a task | You have not given it push permission for that task (`a`), or under a repo-wide permission the reviewer has not passed the current code. The task waits for you under Ready to push. |
-| `kelpie push` or `kelpie land` reports a conflict | kelpie aborted its rebase and handed it to the task's Claude, which resolves it and reports back. The lead checks the resolved commits before the next push. |
+| `kelpie push` or `kelpie land` reports a conflict | kelpie aborted its rebase and handed it to the task's Claude, which resolves it and reports back. The reviewer checks the resolved commits against the rules before the next push. |
 | A push says the task's Claude runs tests first | The default branch changed files the task changes too. kelpie pushes once the task reports ready with the same commits. You can push it yourself before then. |
 | A rebase is refused and names files hidden from `git status` | Those files are marked skip-worktree or assume-unchanged and have local changes git will not overwrite. Unhide them with `git update-index --no-skip-worktree <file>` or `--no-assume-unchanged`, then commit or stash them. |
 | A task with an approval stays out of Ready to push, marked `N uncommitted files` | Tracked files have changes that are not committed. Commit or discard them; untracked files do not count. |

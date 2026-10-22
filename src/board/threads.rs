@@ -147,6 +147,7 @@ pub(super) fn spawn_routine_runner(overlay: bool) {
                 && let Ok(state) = crate::lead::state_dir()
             {
                 crate::tasks::after_tick(&state);
+                crate::rules_check::tick(&state);
                 if ran.is_none_or(|at: Instant| at.elapsed() >= Duration::from_secs(crate::routines::EVERY)) {
                     ran = Some(Instant::now());
                     crate::routines::tick(&state);

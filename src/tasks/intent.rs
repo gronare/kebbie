@@ -206,7 +206,7 @@ pub(super) fn forget_left(state: &Path, address: &str) {
     let _ = std::fs::remove_file(left_file(state, address));
 }
 
-// The pushed commits are on the default branch, so the push waits for a fix the lead checks: no commit of the task's is approved by the push itself.
+// The pushed commits are on the default branch, so the push waits for a fix whose rules are checked: no commit of the task's is approved by the push itself.
 pub(crate) fn after_red_ci(state: &Path, repo: &Path, address: &str, by: By) -> Result<()> {
     let task = address.split('@').next().unwrap_or(address).to_string();
     let log = messages::load();

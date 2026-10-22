@@ -514,7 +514,7 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     let text = match pushing {
         _ if !open => format!("CI failed for {} ({}): {what}. Its task has ended, so nobody was handed the log; fix it in a new task. {}", watch.address, watch.short(), run.url),
         Some(who) => format!(
-            "CI failed for {} ({}): {what}. kelpie sent its Claude the failing log, and it fixes it as part of the push {who} gave: when it reports ready, check the fix against the rules (kelpie approve) and kelpie pushes it for {who}. It stays under Ready to push meanwhile. {}",
+            "CI failed for {} ({}): {what}. kelpie sent its Claude the failing log, and it fixes it as part of the push {who} gave: when it reports ready, the reviewer checks the fix against the rules and kelpie pushes it for {who}; you hear only of a break, or when the reviewer gives no verdict. It stays under Ready to push meanwhile. {}",
             watch.address, watch.short(), run.url
         ),
         None => format!("CI failed for {} ({}): {what}. kelpie sent the task the failing log; it stays open under Needs you. {}", watch.address, watch.short(), run.url),
