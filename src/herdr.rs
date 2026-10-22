@@ -162,6 +162,15 @@ pub fn send_keys(pane_id: &str, keys: &[&str]) -> Result<()> {
     call(&args).map(|_| ())
 }
 
+// send-text writes its bytes straight into the pane, so the markers make the app there take them as one paste, as a drop on it would.
+pub fn paste(pane_id: &str, text: &str) -> Result<()> {
+    call(&["pane", "send-text", pane_id, &bracketed(text)]).map(|_| ())
+}
+
+fn bracketed(text: &str) -> String {
+    format!("\x1b[200~{}\x1b[201~", text.replace("\x1b[201~", ""))
+}
+
 pub fn tabs_in(workspace_id: &str) -> Result<Vec<Value>> {
     Ok(call(&["tab", "list", "--workspace", workspace_id])?["tabs"].as_array().cloned().unwrap_or_default())
 }
@@ -244,6 +253,13 @@ mod tests {
         let panes = serde_json::json!([{ "pane_id": "w1:p1", "focused": false }, { "pane_id": "w3:p2", "focused": true }]);
         assert_eq!(focused_in(&panes).as_deref(), Some("w3:p2"));
         assert_eq!(focused_in(&serde_json::json!([{ "pane_id": "w1:p1", "focused": false }])), None);
+    }
+
+    #[test]
+    fn a_paste_reaches_the_pane_framed_as_one_bracketed_paste_that_cannot_end_early() {
+        let dropped = r"/var/folders/T/Screenshot\ 2026-10-22\ at\ 10.02.13.png";
+        assert_eq!(bracketed(dropped), format!("\x1b[200~{dropped}\x1b[201~"));
+        assert_eq!(bracketed("a\x1b[201~b"), "\x1b[200~ab\x1b[201~", "an end marker inside the text would end the paste and type the rest as keys");
     }
 
     #[test]

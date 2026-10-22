@@ -261,6 +261,12 @@ impl Page {
         matches!(self.mode, Mode::Normal)
     }
 
+    // True when the wizard is on a step with a text field to take the pasted text.
+    pub fn paste(&mut self, text: &str) -> bool {
+        let Mode::Wizard(wizard) = &mut self.mode else { return false };
+        wizard.paste(text)
+    }
+
     pub fn is_idle(&self) -> bool {
         matches!(self.mode, Mode::Normal | Mode::Message(_) | Mode::Help)
     }

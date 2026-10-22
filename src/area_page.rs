@@ -244,6 +244,13 @@ impl Page {
         matches!(self.mode, Mode::Normal)
     }
 
+    // True when a text field is open to take the pasted text.
+    pub fn paste(&mut self, text: &str) -> bool {
+        let Mode::Input { buffer, .. } = &mut self.mode else { return false };
+        buffer.push_str(text);
+        true
+    }
+
     pub fn is_idle(&self) -> bool {
         matches!(self.mode, Mode::Normal | Mode::Message { .. } | Mode::Help | Mode::Log { .. })
     }
@@ -967,6 +974,15 @@ mod tests {
 
     fn area(key: &str, stem: &str) -> Area {
         Area { key: key.to_string(), stem: stem.to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new() }
+    }
+
+    #[test]
+    fn a_paste_lands_in_an_open_text_field_and_nowhere_else() {
+        let mut page = Page::new(Vec::new());
+        assert!(!page.paste("x"), "no text field open, nothing taken");
+        page.mode = Mode::Input { purpose: Purpose::TaskName("a".to_string()), label: String::new(), buffer: "fix-".to_string() };
+        assert!(page.paste("/var/x.png"));
+        assert!(matches!(&page.mode, Mode::Input { buffer, .. } if buffer == "fix-/var/x.png"));
     }
 
     #[test]

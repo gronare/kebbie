@@ -460,6 +460,17 @@ pub fn focus_toggle() -> Result<()> {
     }
 }
 
+// A paste the board passes on lands in the chat and the focus follows it there, showing a hidden chat again.
+pub fn paste_into_chat(text: &str) -> Result<()> {
+    let Lead { board, chat, places, .. } = lead_panes()?;
+    herdr::paste(&chat, text)?;
+    match (places.zoomed, places.focused.as_deref() == Some(chat.as_str())) {
+        (true, _) => herdr::zoom(&chat, false),
+        (false, true) => Ok(()),
+        (false, false) => herdr::focus_beside(&board, "right"),
+    }
+}
+
 pub fn toggle_chat() -> Result<String> {
     let Lead { board, places, .. } = lead_panes()?;
     if places.chat_hidden() {

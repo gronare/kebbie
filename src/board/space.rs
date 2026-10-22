@@ -100,7 +100,7 @@ fn open_review_pane(workspace: &str) -> Option<String> {
 }
 
 // herdr focuses a pane only by its neighbour, so the pane is reached from whichever side has one.
-fn focus_pane(pane: &str) -> Result<()> {
+pub(super) fn focus_pane(pane: &str) -> Result<()> {
     if herdr::focused_pane()?.as_deref() == Some(pane) {
         return Ok(());
     }

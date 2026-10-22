@@ -208,6 +208,19 @@ impl Wizard {
         Step::Stay
     }
 
+    // True when the step has a text field to take the pasted text.
+    pub fn paste(&mut self, text: &str) -> bool {
+        if self.step == 1 {
+            self.filter.push_str(text);
+            self.repo_index = 0;
+            return true;
+        }
+        if self.step == STEPS {
+            return false;
+        }
+        self.buffer().map(|buffer| buffer.push_str(text)).is_some()
+    }
+
     // True when the choice was already the selected one, which a click takes as ⏎.
     pub fn choose(&mut self, index: usize) -> bool {
         let chosen = match self.step {
@@ -377,6 +390,19 @@ mod tests {
 
     fn screen(wizard: &Wizard) -> String {
         wizard.view(1_792_391_400, 0, 60).0.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn a_paste_lands_in_the_steps_text_field_and_the_steps_without_one_turn_it_down() {
+        let mut wizard = Wizard::new("", "07:00", 0, "", repos(), Vec::new(), PathBuf::from("/c/config.toml"));
+        assert!(wizard.paste("Check CI"));
+        assert_eq!(wizard.prompt, "Check CI");
+        enter(&mut wizard);
+        assert!(wizard.paste("green") && wizard.filter == "green", "the repo step's filter takes it");
+        wizard.step = 3;
+        assert!(!wizard.paste("x"), "the mode step has no text field");
+        wizard.step = STEPS;
+        assert!(!wizard.paste("y"), "the check has no text field, and a pasted y must not add the routine");
     }
 
     #[test]

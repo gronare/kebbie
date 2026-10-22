@@ -27,7 +27,7 @@ pub(super) struct QuestionWindow {
     pub(super) option: usize,
     pub(super) scroll: u16,
     pub(super) typing: bool,
-    comment: TextArea<'static>,
+    pub(super) comment: TextArea<'static>,
     notice: Option<(bool, String)>,
     answering: Option<(String, Receiver<Result<String>>)>,
 }
@@ -584,6 +584,20 @@ mod tests {
         let (rows, _) = render(&mut app, 60, 30);
         let screen = rows.join("\n");
         assert!(matches!(app.mode, Mode::Questions(_)) && screen.contains("a approve") && !screen.contains("comment (optional)"), "esc goes back to the answers: {screen}");
+    }
+
+    #[test]
+    fn a_paste_goes_into_the_comment_box_and_never_answers_the_question() {
+        let mut app = test_app(Vec::new());
+        long_plan(&mut app);
+        app.open_questions(Some(1));
+        assert!(app.take_paste("a".to_string()).is_some(), "with the box closed the paste is passed on, not taken as the answer a");
+        let Mode::Questions(window) = &app.mode else { panic!() };
+        assert!(window.answering.is_none() && !window.typing);
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.take_paste("see /var/x.png".to_string()), None);
+        let Mode::Questions(window) = &app.mode else { panic!() };
+        assert!(window.answering.is_none() && window.comment() == "see /var/x.png");
     }
 
     #[test]

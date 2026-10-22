@@ -26,7 +26,7 @@ pub(super) enum Purpose {
 }
 
 impl App {
-    fn set_filter(&mut self, text: String) {
+    pub(super) fn set_filter(&mut self, text: String) {
         let column = self.column;
         self.filter = Some((column, text));
         let length = match column { Column::Work => self.tasks.len(), Column::Backlog => self.backlog_len() };

@@ -12,6 +12,7 @@ mod link;
 mod message_log;
 mod mouse;
 mod options;
+mod paste;
 mod push;
 mod space;
 mod status_bar;
@@ -814,6 +815,7 @@ pub fn run(overlay: bool) -> Result<String> {
                 match event::read().map_err(|error| error.to_string())? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => app.handle(key, &mut terminal),
                     Event::Mouse(mouse) => app.mouse(mouse, &mut terminal),
+                    Event::Paste(text) => app.paste(text),
                     _ => {}
                 }
             }
