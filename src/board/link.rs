@@ -265,7 +265,7 @@ mod tests {
         item.report.as_mut().unwrap().text = format!("pushed; CI is running at {LONG} now");
         let mut app = test_app(vec![item]);
         with_detail(&mut app);
-        for (width, rows) in [(170, 2), (84, 2), (60, 1)] {
+        for (width, rows) in [(170, 2), (84, 1), (60, 1)] {
             let (_, buffer) = render(&mut app, width, 50);
             assert_whole_link(&buffer, LONG, rows, &format!("the report at {width} columns"));
         }
@@ -287,12 +287,13 @@ mod tests {
         }
         let mut item = served("search-filters");
         let pull = "https://github.com/gronare/kelpie/pull/123/files?diff=split&w=1";
+        item.report.as_mut().unwrap().report.as_mut().unwrap().state = "needs-you".to_string();
         item.report.as_mut().unwrap().report.as_mut().unwrap().next = format!("{pull} then push and close");
         let mut app = test_app(vec![item]);
         with_detail(&mut app);
-        for width in [170, 60] {
+        for (width, rows) in [(170, 1), (60, 2)] {
             let (_, buffer) = render(&mut app, width, 50);
-            assert_whole_link(&buffer, pull, 1, &format!("the you line at {width} columns"));
+            assert_whole_link(&buffer, pull, rows, &format!("the you line at {width} columns"));
         }
     }
 

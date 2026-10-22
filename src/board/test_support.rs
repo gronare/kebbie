@@ -92,20 +92,25 @@ fn shown(cell: &ratatui::buffer::Cell) -> String {
     symbol.split("\x1b\\").nth(1).map_or(symbol, |inner| inner.split('\x1b').next().unwrap_or(inner)).to_string()
 }
 
-// Fails unless every drawn cell of the URL, on every row it reaches, links the whole URL under one id; a URL cut with … counts when the shown start is linked whole.
+// Fails unless every drawn copy of the URL links the whole URL under one id on every row it reaches, and the longest copy spans `rows` rows; a copy cut with … counts when its shown start is linked whole.
 pub(super) fn assert_whole_link(buffer: &ratatui::buffer::Buffer, url: &str, rows: usize, what: &str) {
     let width = buffer.area.width as usize;
-    let (mut ids, mut linked_rows, mut text) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new(), String::new());
+    let mut ids = std::collections::BTreeSet::new();
+    let (mut copies, mut text, mut copy_rows) = (Vec::new(), String::new(), std::collections::BTreeSet::new());
     for (index, cell) in buffer.content.iter().enumerate() {
         if let Some((linked, id)) = link_of(cell) && linked == url {
             ids.insert(id);
-            linked_rows.insert(index / width);
+            copy_rows.insert(index / width);
             text.push_str(&shown(cell));
+            if text == url || text.ends_with('…') {
+                copies.push((std::mem::take(&mut text), std::mem::take(&mut copy_rows).len()));
+            }
         }
     }
     let screen: String = (0..buffer.area.height as usize).map(|y| (0..width).map(|x| shown(&buffer.content[y * width + x])).collect::<String>() + "\n").collect();
-    let whole = text == url || text.strip_suffix('…').is_some_and(|start| start.len() >= 10 && url.starts_with(start));
-    assert!(whole && ids.len() == 1 && linked_rows.len() >= rows, "{what}: {url} is linked as {text:?} over {} rows with ids {ids:?}:\n{screen}", linked_rows.len());
+    let whole = |copy: &str| copy == url || copy.strip_suffix('…').is_some_and(|start| start.len() >= 10 && url.starts_with(start));
+    let spans = copies.iter().map(|(_, rows)| *rows).max().unwrap_or(0);
+    assert!(!copies.is_empty() && text.is_empty() && copies.iter().all(|(copy, _)| whole(copy)) && ids.len() == 1 && spans >= rows, "{what}: {url} is linked as {copies:?} with {text:?} left over and ids {ids:?}:\n{screen}");
 }
 
 pub(super) fn find(rows: &[String], text: &str) -> Vec<(usize, usize)> {
