@@ -90,6 +90,15 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
     choices
 }
 
+// A staged task can always be taken off; one goes on only in a repo that stages, once it is ready and out of review.
+pub(super) fn stage_choice(item: &Item, stages: bool) -> Option<Choice> {
+    if item.staged {
+        return Some(choice(Act::Stage, "Take off local main", "its commits leave the main checkout's main, the other staged tasks stay; nothing is pushed and its branch keeps them"));
+    }
+    let ready = item.git.as_ref().is_some_and(|git| git.ahead > 0) && !busy(item) && !item.awaiting_review() && item.ci.is_none();
+    (stages && ready).then(|| choice(Act::Stage, "Put on local main to try it", "its commits go on the main checkout's main, unpushed, after any staged before it; it closes once you push main"))
+}
+
 fn trunk(git: &crate::status::Git) -> &str {
     git.upstream.trim_start_matches("origin/")
 }
@@ -133,6 +142,10 @@ impl App {
                 let settings = item.and_then(settings_of);
                 let command = |process: Process| settings.as_ref().and_then(|settings| process.command(settings));
                 let mut choices = task_choices(item, command(Process::Server).as_deref(), command(Process::Worker).as_deref());
+                if let Some(staging) = item.and_then(|item| stage_choice(item, settings.as_ref().is_some_and(|settings| settings.stage_on_main.value))) {
+                    let after = choices.iter().position(|choice| choice.act == Some(Act::Push)).map_or(choices.len(), |at| at + 1);
+                    choices.insert(after, staging);
+                }
                 if item.is_some_and(|item| self.question_of(item).is_some()) {
                     choices.insert(0, choice(Act::Card, "Answer its question", "the questions window, at this task's question"));
                 } else if item.is_some_and(|item| self.card_of(item).is_some()) {
@@ -300,6 +313,20 @@ mod tests {
         assert!(item.group() == crate::status::Group::ReadyToPush && busy(&item));
         item.agent.as_mut().unwrap().status = "idle".to_string();
         assert!(!busy(&item));
+    }
+
+    #[test]
+    fn a_ready_task_goes_on_local_main_only_where_the_repo_stages_and_a_staged_one_comes_off() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
+        assert!(stage_choice(&item, false).is_none(), "a repo without worktree.stage_on_main offers nothing");
+        let on = stage_choice(&item, true).unwrap();
+        assert_eq!((on.key, on.label.as_str()), ('M', "Put on local main to try it"));
+        item.agent.as_mut().unwrap().status = "working".to_string();
+        assert!(stage_choice(&item, true).is_none(), "not while its Claude works");
+        item.agent.as_mut().unwrap().status = "idle".to_string();
+        item.staged = true;
+        assert_eq!(stage_choice(&item, false).unwrap().label, "Take off local main", "a staged task comes off whatever the setting says now");
+        assert!(shown(crate::keys::map(), Ctx::Work, false).iter().any(|(key, wide)| key == "M" && wide.contains("local main")), "the keys window lists it under PUSH");
     }
 
     #[test]

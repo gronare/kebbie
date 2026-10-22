@@ -15,6 +15,7 @@ use crate::tasks::{self, slots};
 pub const LEAD_LABEL: &str = "lead";
 pub const UNCHECKED: &str = "rules not checked by the lead";
 pub const CHECKING: &str = "lead checking rules";
+pub const STAGED: &str = "on local main · waiting for your push";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
@@ -105,6 +106,7 @@ pub struct Item {
     pub ci_outside: Option<String>,
     pub ci_dismissed: Vec<Value>,
     pub push_left: Option<String>,
+    pub staged: bool,
 }
 
 impl Item {
@@ -140,7 +142,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), push_left: None,
+            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), push_left: None, staged: false,
         }
     }
 
@@ -186,6 +188,7 @@ impl Item {
             Phase::NeedsYou(Why::Failed) => Some("kelpie could not finish its push or close it; the lead has why".to_string()),
             Phase::NeedsYou(Why::Unreadable) => Some(format!("gh has not read its CI for {} minutes", crate::ci::UNREADABLE_AFTER / 60)),
             Phase::NeedsYou(Why::LeftLine) => Some(self.left_note()),
+            Phase::NeedsYou(Why::NotStaged) => Some(format!("kelpie could not put it on local main again within {} minutes; stage it once the main checkout is clear", tasks::STAGE_WAIT / 60)),
             _ => None,
         }
     }
@@ -276,7 +279,7 @@ impl Item {
             Phase::Idle => Group::Idle,
             Phase::NeedsYou(_) | Phase::CiRed { .. } => Group::NeedsYou,
             Phase::Ready { .. } if self.awaiting_review() => Group::ToReview,
-            Phase::Ready { .. } | Phase::Pushing { .. } => Group::ReadyToPush,
+            Phase::Ready { .. } | Phase::Staged { .. } | Phase::Pushing { .. } => Group::ReadyToPush,
             Phase::CiRunning { .. } => Group::CiRunning,
         }
     }
@@ -444,6 +447,9 @@ impl Item {
         if let (Group::ReadyToPush, Some(note)) = (self.group(), self.push_note()) {
             return if git.ahead == 0 { note } else { format!("{} · {note}", plural(git.ahead, "commit")) };
         }
+        if self.group() == Group::ReadyToPush && self.staged {
+            return format!("{} · {STAGED}", plural(git.ahead, "commit"));
+        }
         if self.group() == Group::ReadyToPush {
             let review: String = self.rules_note().map(str::to_string).into_iter().chain(self.review_note()).map(|note| format!(" · {note}")).collect();
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
@@ -451,7 +457,7 @@ impl Item {
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
             return format!("{} · ready to push{dirty}{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.phase_note().into_iter().chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
+        let mut parts: Vec<String> = self.staged.then(|| STAGED.to_string()).into_iter().chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -470,6 +476,12 @@ impl Item {
     }
 
     pub fn to_json(&self) -> Value {
+        let mut shown = self.shown_json();
+        shown["staged"] = json!(self.staged);
+        shown
+    }
+
+    fn shown_json(&self) -> Value {
         json!({
             "name": self.name,
             "title": self.title.as_deref().unwrap_or(&self.name),
@@ -753,6 +765,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 ci_outside: state.as_deref().and_then(|state| tasks::ci_outside_reason(state, &address)),
                 ci_dismissed: state.as_deref().map(|state| tasks::ci_dismissed(state, &address)).unwrap_or_default(),
                 push_left: state.as_deref().and_then(|state| tasks::push_left(state, &address)),
+                staged: state.as_deref().is_some_and(|state| tasks::staged(state, repo, &address)),
                 phase: None,
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
@@ -811,6 +824,7 @@ pub fn gather() -> Result<Vec<Item>> {
             ci_outside: None,
             ci_dismissed: Vec::new(),
             push_left: None,
+            staged: false,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -845,6 +859,7 @@ pub(crate) mod tests {
             ci_outside: None,
             ci_dismissed: Vec::new(),
             push_left: None,
+            staged: false,
         };
         rederive(&mut item);
         item
@@ -1550,6 +1565,21 @@ pub(crate) mod tests {
         item.title = Some("Refund mails".to_string());
         assert_eq!((item.titled(), item.to_json()["title"].as_str(), item.to_json()["name"].as_str()), ("Refund mails".to_string(), Some("Refund mails"), Some("billing")));
         let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_staged_task_waits_under_ready_to_push_saying_it_is_on_local_main() {
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        in_phase(&mut item, Phase::Staged { head: Some("abc".to_string()) });
+        item.staged = true;
+        assert_eq!(item.group(), Group::ReadyToPush);
+        assert_eq!(item.summary(), "2 commits · on local main · waiting for your push");
+        let shown = item.to_json();
+        assert_eq!((shown["staged"].as_bool(), shown["phase"]["name"].as_str()), (Some(true), Some("staged")));
+        in_phase(&mut item, Phase::Working);
+        assert_eq!(item.summary(), "on local main · waiting for your push · 2 commits", "still on main while its Claude works again");
+        item.staged = false;
+        assert_eq!(item.to_json()["staged"].as_bool(), Some(false));
     }
 
     #[test]

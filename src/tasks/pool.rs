@@ -168,6 +168,11 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     let local = upstream.trim_start_matches("origin/");
     let current = git(&repo, &["branch", "--show-current"])?;
     let existing = branch_exists(&repo, &task);
+    let staged = super::stage::load(&state_dir()?, &repo);
+    if !existing && !staged.is_empty() {
+        let tasks: Vec<String> = staged.into_iter().map(|entry| entry.task).collect();
+        return Err(format!("{} on local {local}, and kelpie move would take their commits along; push {local}, or take them off with kelpie unstage, first", super::and_list(&tasks).to_string() + if tasks.len() == 1 { " is staged" } else { " are staged" }));
+    }
     if !existing && current != local {
         return Err(format!("The main checkout is on {current}, not {local}; to move that work, use its branch name: kelpie move {current}"));
     }

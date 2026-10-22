@@ -38,6 +38,7 @@ pub enum Act {
     Follow,
     Tidy,
     Push,
+    Stage,
     Done,
     DismissCi,
     Reset,
@@ -87,9 +88,9 @@ const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 
 impl Act {
-    pub const EVERY: [Act; 43] = [
+    pub const EVERY: [Act; 44] = [
         Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
-        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Done, Act::DismissCi, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
+        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
@@ -119,6 +120,7 @@ impl Act {
             Act::Follow => "follow",
             Act::Tidy => "tidy",
             Act::Push => "push",
+            Act::Stage => "stage",
             Act::Done => "done",
             Act::DismissCi => "dismiss_ci",
             Act::Reset => "reset",
@@ -171,6 +173,7 @@ impl Act {
             Act::Follow => Default::Char('u'),
             Act::Tidy => Default::Char('t'),
             Act::Push => Default::Char('p'),
+            Act::Stage => Default::Char('M'),
             Act::Done => Default::Char('d'),
             Act::DismissCi => Default::Char('C'),
             Act::Reset => Default::Char('z'),
@@ -225,6 +228,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Follow, on: &[Work], help: "keep the task rebased on main: the keeper rebases it when main moves, while its Claude is idle and its files are committed; or switch that off", hint: Hint::No },
     Binding { act: Act::Tidy, on: &[Work], help: "tidy commits: its Claude reshapes them by the rules skill", hint: Hint::No },
     Binding { act: Act::Push, on: &[Work, Card], help: "push: its card and commits, all or the first few; joins its repo's push line, or leaves it when already in", hint: Hint::No },
+    Binding { act: Act::Stage, on: &[Work], help: "put a ready task's commits on local main, unpushed, to try them from the main checkout (repos with worktree.stage_on_main); on a staged task, take them off again", hint: Hint::No },
     Binding { act: Act::Done, on: &[Work], help: "done: after you pushed elsewhere (asks first)", hint: Hint::No },
     Binding { act: Act::DismissCi, on: &[Work], help: "dismiss the red CI of a pushed task when the failure is not the code's: kept on record, and the task closes once its commits are on main (asks first)", hint: Hint::No },
     Binding { act: Act::Reset, on: &[Work], help: "reset the task: its work goes, its backlog item returns (asks first)", hint: Hint::No },

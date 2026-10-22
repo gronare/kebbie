@@ -613,7 +613,13 @@ impl App {
                             self.show(Notice::new(Tone::NotNow, "No sign-off card yet").next("Its Claude writes one when it reports ready.").ok());
                         }
                     },
-                    Act::Tidy | Act::Push | Act::Done | Act::SendReview | Act::Rebase if busy(&item) => {
+                    Act::Stage if item.staged => {
+                        if let Some(path) = item.path.clone() {
+                            self.about("stage", &item.name);
+                            self.in_background(format!("Taking {} off local main…", item.name), move || tasks::unstage(&path, None));
+                        }
+                    }
+                    Act::Tidy | Act::Push | Act::Stage | Act::Done | Act::SendReview | Act::Rebase if busy(&item) => {
                         self.about(act_kind(act), &item.name);
                         self.show(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports.").ok());
                     }
@@ -630,6 +636,12 @@ impl App {
                     Act::Push if item.awaiting_review() => {
                         self.about("push", &item.name);
                         self.show(Notice::new(Tone::NotNow, "Not yet: it is in review").next("Push opens once its reviewer passes its commits.").ok());
+                    }
+                    Act::Stage => {
+                        if let Some(path) = item.path.clone() {
+                            self.about("stage", &item.name);
+                            self.in_background(format!("Putting {} on local main…", item.name), move || tasks::stage(&path, None, false));
+                        }
                     }
                     Act::Tidy => {
                         if let Some(path) = item.path.clone() {
@@ -938,6 +950,7 @@ fn act_kind(act: Act) -> &'static str {
     match act {
         Act::Tidy => "tidy",
         Act::Push => "push",
+        Act::Stage => "stage",
         Act::Done => "done",
         Act::SendReview => "review",
         Act::Rebase => "rebase",

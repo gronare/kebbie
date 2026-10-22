@@ -17,19 +17,39 @@ pub(super) type Read<'a> = &'a dyn Fn(&Intent, &Slot) -> Option<String>;
 pub(super) type Push<'a> = &'a mut dyn FnMut(&Intent, &Slot) -> Result<Sent>;
 
 // Held while one driver works a repo's line, so the keeper, a board and kelpie push never send two pushes of one repo at once.
-pub(super) struct Turnstile(std::fs::File);
+pub(super) struct Turnstile(std::fs::File, std::path::PathBuf);
+
+thread_local! {
+    static HELD: std::cell::RefCell<Vec<std::path::PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 
 impl Turnstile {
+    fn lock_of(state: &Path, repo: &Path) -> std::path::PathBuf {
+        state.join("push-line").join(format!("{}.lock", name_of(repo)))
+    }
+
     pub(super) fn try_take(state: &Path, repo: &Path) -> Option<Turnstile> {
-        let file = crate::state::append_to(&state.join("push-line").join(format!("{}.lock", name_of(repo)))).ok()?;
+        let lock = Self::lock_of(state, repo);
+        let file = crate::state::append_to(&lock).ok()?;
         // SAFETY: flock on a descriptor this File owns.
-        (unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(Turnstile(file))
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return None;
+        }
+        HELD.with(|held| held.borrow_mut().push(lock.clone()));
+        Some(Turnstile(file, lock))
+    }
+
+    // Whether this thread already holds the repo's turnstile, as a push turn does while it closes its task.
+    pub(super) fn held_here(state: &Path, repo: &Path) -> bool {
+        let lock = Self::lock_of(state, repo);
+        HELD.with(|held| held.borrow().contains(&lock))
     }
 }
 
 impl Drop for Turnstile {
     // A child forked by another thread holds a copy of the descriptor until it execs; unlocking releases the lock for every copy at once.
     fn drop(&mut self) {
+        HELD.with(|held| held.borrow_mut().retain(|lock| *lock != self.1));
         // SAFETY: unlocks the descriptor this value owns.
         unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
     }

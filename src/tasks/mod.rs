@@ -10,6 +10,7 @@ mod line;
 mod pool;
 mod push;
 mod red_ci;
+mod stage;
 mod started;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -27,6 +28,7 @@ pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outsid
 pub(crate) use launch::{Begun, Session, Start, begin, bypasses, latest_transcript, new_session_id, profile_of, record_session, start, task_at, task_role, task_role_now, task_tmp, transcript};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of};
 pub(crate) use push::{after_ci, cancel as cancel_push, land, place_in_line, push, rebase, tidy};
+pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
 
 use std::path::Path;
@@ -75,16 +77,37 @@ fn fetch(repo: &Path) -> Result<()> {
     crate::fetch::shared(repo, || git(repo, &["fetch", "--quiet", "origin"]).map(|_| ()))
 }
 
+// Outside a push turn, main is rewritten only under the repo's turnstile; while another holds it, main is left for the next push to follow.
 fn fast_forward_main(repo: &Path, upstream: &str) -> Result<String> {
+    let Ok(state) = crate::lead::state_dir() else { return follow_upstream(repo, upstream, &[]) };
+    let staged = stage::load(&state, repo);
+    if staged.is_empty() || line::Turnstile::held_here(&state, repo) {
+        return follow_upstream(repo, upstream, &staged);
+    }
+    match line::Turnstile::try_take(&state, repo) {
+        Some(_turnstile) => follow_upstream(repo, upstream, &staged),
+        None => Ok(format!("{} left as is: kelpie is pushing in it now", name_of(repo))),
+    }
+}
+
+// The checkout's housekeeping after a push or a close never fails what went before it; what went wrong goes into the line it returns.
+fn follow_upstream(repo: &Path, upstream: &str, staged: &[stage::Entry]) -> Result<String> {
+    Ok(following(repo, upstream, staged).unwrap_or_else(|error| format!("{} left as is: {error}", name_of(repo))))
+}
+
+fn following(repo: &Path, upstream: &str, staged: &[stage::Entry]) -> Result<String> {
     let local = upstream.trim_start_matches("origin/");
     let name = name_of(repo);
     if git(repo, &["branch", "--show-current"])? != local {
         return Ok(format!("{name} left as is (not on {local})"));
     }
-    Ok(match git_writing(repo, &["merge", "--quiet", "--ff-only", upstream]) {
-        Ok(_) => format!("{name} fast-forwarded to {local}"),
-        Err(_) => format!("{name} could not fast-forward to {local}"),
-    })
+    if git_writing(repo, &["merge", "--quiet", "--ff-only", upstream]).is_ok() {
+        return Ok(format!("{name} fast-forwarded to {local}"));
+    }
+    if staged.is_empty() {
+        return Ok(format!("{name} could not fast-forward to {local}"));
+    }
+    stage::follow_staged(repo, upstream, staged)
 }
 
 #[cfg(test)]

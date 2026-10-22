@@ -15,7 +15,7 @@ pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 pub const KEYS: [&str; 12] = ["about", "for", "agent", "model", "effort", "role", "skills", "permission_mode", "deny", "allow", "claude", "sandbox"];
 const SANDBOX_KEYS: [&str; 4] = ["enabled", "allowed_domains", "allow_write", "excluded_commands"];
 const REVIEWER_KEYS: [&str; 6] = ["about", "for", "agent", "model", "effort", "role"];
-const GUARDED: [&str; 6] = ["push", "approve", "choose", "away", "decide", "after"];
+const GUARDED: [&str; 8] = ["push", "stage", "unstage", "approve", "choose", "away", "decide", "after"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile {
@@ -416,7 +416,7 @@ mod tests {
         }
         let dir = folder("profile-allow", &[("x.toml", "allow = [\"Bash(npm test:*)\", \"Bash(kelpie push:*)\"]\n")]);
         let refused = load_in(&dir, "x").unwrap_err();
-        assert!(refused.contains("x.toml: allow: \"Bash(kelpie push:*)\" would let the task run kelpie push, approve, choose, away, decide, after"), "{refused}");
+        assert!(refused.contains("x.toml: allow: \"Bash(kelpie push:*)\" would let the task run kelpie push, stage, unstage, approve, choose, away, decide, after"), "{refused}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

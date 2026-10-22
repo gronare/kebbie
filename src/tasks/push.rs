@@ -14,7 +14,7 @@ use crate::sh::Result;
 use super::approval::{approved, fingerprint, record_approval, same_code};
 use super::intent::{self, By, Intent, Through, Work};
 use super::finish::{close_task, note_ready};
-use super::{fast_forward_main, fetch};
+use super::{fetch, follow_upstream};
 use super::pool::{Slot, find_task, task_of};
 use super::started::started_file;
 
@@ -229,15 +229,19 @@ fn through_sha(path: &Path, upstream: &str, through: Through) -> Result<String> 
 }
 
 fn authorize(caller: &Caller, repo: &Path, slot: &Slot, upstream: &str, through: Through) -> Result<&'static str> {
+    authorize_as(caller, repo, slot, upstream, through, "Not pushed")
+}
+
+pub(super) fn authorize_as(caller: &Caller, repo: &Path, slot: &Slot, upstream: &str, through: Through, refused: &str) -> Result<&'static str> {
     let task = task_of(slot);
     let address = peers::address(task, &name_of(repo));
     let head = git(&slot.path, &["rev-parse", "HEAD"])?;
     let sha = through_sha(&slot.path, upstream, through)?;
     let shown = crate::review::shown(&address, &slot.path, upstream);
     let covered = |reviewed: &str| same_code(&slot.path, upstream, reviewed, &head) || same_code(&slot.path, upstream, reviewed, &sha);
-    crate::review::gate(shown.as_ref(), covered).map_err(|why| Notice::new(Tone::NotNow, format!("Not pushed: {why}")).detail("task", task).to_string())?;
+    crate::review::gate(shown.as_ref(), covered).map_err(|why| Notice::new(Tone::NotNow, format!("{refused}: {why}")).detail("task", task).to_string())?;
     let check = Pusher { caller: caller.clone(), permit: crate::permit::of(&address, &name_of(repo)), reviewed: shown.as_ref().is_some_and(|shown| !shown.pending()), approved: approved(&slot.path, upstream, &address) };
-    check.allowed().map_err(|why| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(&check.caller))).detail("task", task).detail("why", why).to_string())
+    check.allowed().map_err(|why| Notice::new(Tone::Failed, format!("{refused}: {} may not push it", crate::permit::describe(&check.caller))).detail("task", task).detail("why", why).to_string())
 }
 
 fn nothing_to_push<T>(task: &str) -> Result<T> {
@@ -306,6 +310,7 @@ pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, thro
         return nothing_to_push(&task);
     }
     committed(&slot.path, &task)?;
+    super::stage::refuse_push(state, repo, &address, &task)?;
     if rebase_in_progress(&slot.path) {
         return Notice::new(Tone::NotNow, "Not pushed: a rebase is under way in its worktree").next("Push it once the rebase is finished.").detail("task", &task).err();
     }
@@ -411,6 +416,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
         return nothing_to_push(&task);
     }
     committed(&slot.path, &task)?;
+    super::stage::refuse_push(state, repo, &address, &task)?;
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
     fetch(repo)?;
@@ -500,7 +506,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
                 eprintln!("Could not tell the lead about the push: {error}");
             }
             let notice = Notice::new(Tone::Done, headline(false)).next("CI runs now; kelpie closes the task when it is green.").detail("task", &task).detail("commit", short).detail("log", &logged);
-            return Ok(notice.detail("checkout", fast_forward_main(repo, upstream)?).to_string());
+            return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
         }
         let ready = note_ready(vault.as_ref(), state, &address, &task);
         if let Err(waits) = &ready {
@@ -543,7 +549,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
         eprintln!("Could not tell {address} about the push: {error}");
     }
     let after = if clean && rest == 0 { "It stays open, as you chose, with everything on main; close it from its options when you are done.".to_string() } else if clean { format!("It stays open with {} on top.", plural(rest, "commit")) } else { format!("It stays open; its Claude rebases the rest onto {main}.") };
-    Ok(said(Notice::new(Tone::Done, headline(true)).next(after)).detail("checkout", fast_forward_main(repo, upstream)?).to_string())
+    Ok(said(Notice::new(Tone::Done, headline(true)).next(after)).detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string())
 }
 
 fn tell_lead(text: &str, kind: Option<&str>) {

@@ -20,4 +20,6 @@ Run kelpie from your own checkout while you change it.
    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HERDR_BIN_PATH=false KELPIE_STATE_DIR=$(mktemp -d) cargo test
    ```
 
+To try a task's commits in the kelpie you run before pushing them, turn on `stage_on_main` for the repo and stage the task: see [Try a task before pushing](try-a-task-before-pushing.md).
+
 To try your commits on a machine that follows a channel instead, see [Try unreleased code](try-unreleased-code.md).

@@ -174,6 +174,14 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   of its branch on top of what was pushed); the user's step, or the lead's for a task the
                                   user gave push permission on the board (a), or in a repo they did on the Areas page (a)
                                   once its reviewer passed its current code; the lead is told what landed
+  kelpie stage [name]             put a ready task's commits on the main checkout's local default branch, unpushed, to
+                                  try them there (repos with worktree.stage_on_main only); several go on in the order
+                                  staged, a conflict goes to its Claude and leaves main as it was; the task stays open
+                                  until main is pushed and its commits are on origin, and never goes through the push
+                                  line meanwhile; in kelpie's own install root on the main channel, kelpie rebuilds;
+                                  the user's step, or the lead's with the permission it would push the task with
+  kelpie unstage [name]           take a staged task's commits off local main again, keeping the others staged and its
+                                  branch as it is
   kelpie ci [--json]              the CI watches: after a full push to a GitHub origin, with gh logged in, the task stays
                                   open under CI running until every workflow run for the pushed commit is green, then
                                   closes as done; a failed run moves it to Needs you and its Claude gets the failing
@@ -266,7 +274,7 @@ With the vault plugin installed, enabled and configured, the vault holds each ta
 the repo's log line from the commit subjects, done waits for the note's solution and decisions and then closes
 it, and reset puts it back in the backlog. Without the plugin none of this runs.
 
-Without a name, land, follow, review, evidence, push, done, drop and reset act on the task whose worktree you are in.
+Without a name, land, follow, review, evidence, push, stage, unstage, done, drop and reset act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>. kelpie --version (or kelpie version) prints the version and the commit and
 date it was built from.";
 
@@ -488,6 +496,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("follow") => tasks::follow(&cwd, &arguments.positionals[1..]),
         Some("push") if arguments.flag("--cancel") => tasks::cancel_push(&cwd, name),
         Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
+        Some("stage") => tasks::stage(&cwd, name, true),
+        Some("unstage") => tasks::unstage(&cwd, name),
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
         Some("review") if arguments.flag("--run") => review::run(&cwd),
         Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),

@@ -117,6 +117,26 @@ fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Reques
     }
 }
 
+// kelpie run from the main checkout it was built in, on the main channel, rebuilds from what that checkout now holds; the board and keeper restart onto the new binary.
+pub fn rebuild_staged(repo: &Path, announce: bool) -> Option<String> {
+    let root = update_check::install_root()?;
+    let state = lead::state_dir().ok()?;
+    if !same_folder(&root, repo) {
+        return None;
+    }
+    let channel = config::channel().ok()?;
+    if let Some(running) = release::read_override(&state) {
+        return Some(format!("not rebuilt: kelpie is {}; kelpie update --stable goes back to building this checkout", running.describe(channel)));
+    }
+    if channel != Channel::Main {
+        return Some(format!("not rebuilt: kelpie follows the {} channel, which installs release binaries", channel.key()));
+    }
+    if announce {
+        eprintln!("building kelpie from local main…");
+    }
+    Some(build(&root, Channel::Main, false).unwrap_or_else(|error| format!("the build failed: {error}")))
+}
+
 pub const BUILD_SCRIPT: &str = "scripts/build.sh";
 const ORIGIN_FILE: &str = "target/release/kelpie.origin";
 

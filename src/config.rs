@@ -90,6 +90,7 @@ pub struct Worktree {
     pub dev_worker: Option<String>,
     pub dev_url: Option<String>,
     pub dev_route: Option<bool>,
+    pub stage_on_main: Option<bool>,
     pub rules_skill: Option<String>,
     pub test_commands: Option<Vec<String>>,
     pub also_noticed: Option<AlsoNoticed>,
@@ -156,6 +157,7 @@ pub struct Settings {
     pub dev_worker: Setting<Option<String>>,
     pub dev_url: Setting<Option<String>>,
     pub dev_route: Setting<bool>,
+    pub stage_on_main: Setting<bool>,
     pub rules_skill: Setting<String>,
     pub test_commands: Setting<Vec<String>>,
     pub also_noticed: Setting<AlsoNoticed>,
@@ -387,7 +389,7 @@ fn enabled_in(table: &Table, name: &str) -> Result<Option<bool>> {
 
 fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
-    unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "server_name", "worker_name", "clean_on_release"])?;
+    unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"])?;
     Ok(Worktree {
         setup_skill: skill(worktree, "setup_skill", "worktree.setup_skill")?,
         setup_command: text(worktree, "setup_command", "worktree.setup_command")?,
@@ -395,6 +397,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         dev_worker: text(worktree, "dev_worker", "worktree.dev_worker")?,
         dev_url: template(worktree, "dev_url", "worktree.dev_url")?,
         dev_route: worktree.get("dev_route").map(|value| value.as_bool().ok_or("worktree.dev_route: must be true or false")).transpose()?,
+        stage_on_main: worktree.get("stage_on_main").map(|value| value.as_bool().ok_or("worktree.stage_on_main: must be true or false")).transpose()?,
         rules_skill: None,
         test_commands: None,
         also_noticed: None,
@@ -500,6 +503,9 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     if worktree.dev_route.is_some() {
         return Err(fail(format!("worktree.dev_route: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }
+    if worktree.stage_on_main.is_some() {
+        return Err(fail(format!("worktree.stage_on_main: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
+    }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
     Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, worktree })
 }
@@ -548,6 +554,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         dev_url: or_default(pick(repo.dev_url.as_ref(), machine.worktree.dev_url.as_ref())
             .map(|setting| Setting { value: Some(setting.value).filter(|url| !url.is_empty()), layer: setting.layer }), Some(DEFAULT_DEV_URL.to_string())),
         dev_route: or_default(pick(repo.dev_route.as_ref(), None), false),
+        stage_on_main: or_default(pick(repo.stage_on_main.as_ref(), None), false),
         rules_skill: or_default(pick(repo.rules_skill.as_ref(), machine.worktree.rules_skill.as_ref()), DEFAULT_RULES_SKILL.to_string()),
         test_commands: or_default(pick(repo.test_commands.as_ref(), machine.worktree.test_commands.as_ref()), Vec::new()),
         also_noticed: or_default(pick(repo.also_noticed.as_ref(), machine.worktree.also_noticed.as_ref()), AlsoNoticed::default()),
@@ -610,7 +617,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, keeper, recover } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, keeper, recover } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -645,6 +652,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "The running dev server's address, shown on the board as a link: {worktree} (the worktree's folder), {repo}, {number} (its pool number) and {port} (its port) are filled in; a worktree without what it names gets no link, and \"\" turns the link off.");
     key("worktree.dev_route", dev_route.value.to_string(), dev_route.layer,
         "Whether kelpie routes writes a Caddy site for each of this repo's worktrees, at the host its dev_url names, proxied to the worktree's port; for a dev server on a remote machine opened in your laptop's browser. Off unless the repo turns it on; repo config only.");
+    key("worktree.stage_on_main", stage_on_main.value.to_string(), stage_on_main.layer,
+        "Whether kelpie stage may put a ready task's commits on this repo's local default branch, unpushed, so you can try them from the main checkout before you push main; for a repo you run from its main checkout, such as kelpie's own. Off unless the repo turns it on; repo config only.");
     key("worktree.server_name", format!("{:?}", server_name.value), server_name.layer,
         &format!("The name of the tab the board's {server_key} starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; config.toml only."));
     key("worktree.worker_name", format!("{:?}", worker_name.value), worker_name.layer,
@@ -966,14 +975,14 @@ mod tests {
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
         assert!(error("[board.backlog]\nsources = [\"vault\", \"vault\"]\n").contains("listed twice"));
         assert!(error("[repos.app]\nsetup = [\"x\"]\n").contains("repos: unknown key"));
-        assert!(error("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, server_name, worker_name"));
+        assert!(error("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name"));
         assert!(error("[worktree]\ndev_server = [\"bin/dev\"]\n").contains("worktree.dev_server: must be a string"));
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
         assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board.backlog] sources in "));
         assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, routines");
-        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, server_name, worker_name, clean_on_release");
+        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release");
     }
 
     #[test]
@@ -1152,6 +1161,17 @@ mod tests {
         assert!(parse_repo("[worktree]\ndev_route = \"yes\"\n", "app.toml").unwrap_err().contains("worktree.dev_route: must be true or false"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
         assert!(shown.contains("worktree.dev_route = false  (default)"), "{shown}");
+    }
+
+    #[test]
+    fn stage_on_main_is_off_until_a_repo_config_turns_it_on_and_config_toml_cannot() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).stage_on_main, Setting { value: false, layer: Layer::Default });
+        assert_eq!(settings(&repo("[worktree]\nstage_on_main = true\n"), &Machine::default()).stage_on_main, Setting { value: true, layer: Layer::Repo });
+        let refused = parse_machine("[worktree]\nstage_on_main = true\n", "config.toml").unwrap_err();
+        assert!(refused.starts_with("config.toml: worktree.stage_on_main: each repo opts in on its own, so it lives in its repo config"), "{refused}");
+        assert!(parse_repo("[worktree]\nstage_on_main = 1\n", "app.toml").unwrap_err().contains("worktree.stage_on_main: must be true or false"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
+        assert!(shown.contains("worktree.stage_on_main = false  (default)"), "{shown}");
     }
 
     #[test]

@@ -10,7 +10,7 @@
 | `-h`, `--help`, `help` | Print the usage. |
 | `--version`, `version` | Print the version and the commit and date the binary was built from, such as `kelpie 0.24.0 (db8963f 2026-10-21)`. Many commits share a version number, so the commit says whether a fix is in. A build outside git prints the version alone. |
 
-Without a name, `land`, `review`, `push`, `done`, `drop` and `reset` act on the task whose worktree you are in.
+Without a name, `land`, `review`, `push`, `stage`, `unstage`, `done`, `drop` and `reset` act on the task whose worktree you are in.
 
 ## Tasks
 
@@ -103,6 +103,25 @@ When origin is on GitHub and `gh` is logged in, the task stays open under CI run
 | --- | --- |
 | `--through <sha>` | Push the commits up to and including `<sha>` and keep the task open, also when `<sha>` is its last commit. The rest of the branch is rebased on top of what was pushed. A task kept open stays open until you close it (`done`, or Done in its options). |
 | `--cancel` | Take the task out of the push line before it goes out; nothing of it is pushed, and it waits under Ready to push. The lead can take back only its own pushes. It does not apply while kelpie is pushing the task that moment, nor to a fix for red CI after a push, whose commits are on the default branch already: fix the CI or dismiss it (`kelpie ci dismiss`). `p` on a task in the line does the same on the board. A task mid-rebase does not join the line; a head found mid-rebase waits for the rebase to finish. |
+
+### `kelpie stage [name]`
+
+Put a ready task's commits on the main checkout's local default branch, to try them in the real tool before anything is pushed; `M` on the board does the same. Only in a repo whose config sets `worktree.stage_on_main = true`; elsewhere it refuses and names the file to set it in. Only you may run it, or the lead with the permission it would push the task with. Nothing is pushed.
+
+kelpie fetches, brings local main up to origin's default branch (fast-forward, or a rebase of what is already staged), then cherry-picks the task's commits onto it, in order. Several tasks can be staged; each goes on top of the ones before it, in the order you stage them. The task stays open, under Ready to push, its row marked `on local main · waiting for your push`, and `kelpie status --json` says `"staged": true`. A task in the push line leaves it.
+
+| Outcome | What happens |
+| --- | --- |
+| Clean | Its commits are on local main. In kelpie's own install root on the main channel, kelpie rebuilds with `scripts/build.sh`, and the board and keeper restart onto the new binary. |
+| Conflict | Main is left exactly as it was. The task's Claude gets the conflict as with a push: rebase onto local main, resolve, run the tests, report ready. When it reports ready, kelpie stages it again for whoever asked; a needs-you report drops that. |
+
+The main checkout must be on the default branch with no uncommitted changes to tracked files, and no rebase, merge or cherry-pick under way. Staging a task again replaces its commits with the branch's current ones. kelpie never rewrites commits of your own: when local main holds commits that are neither on origin nor a staged task's, `stage` and `unstage` refuse, and after another task's push main is left as it is, with `local main has your own commits a1b2c3d; push or move them, then stage again`. In kelpie's own install root, `kelpie stage` prints `building kelpie from local main…` before the build starts. A merge or an empty commit on local main counts as your own. `drop` and `reset` take a staged task off main first, and refuse with `kelpie unstage <task> first` when they cannot; `kelpie move` refuses while tasks are staged. A task stays staged only while one of its copies is on local main ahead of origin, so once main is pushed a task whose branch moved on goes through the push line again.
+
+A staged task never goes through the push line: `kelpie push` refuses it with `it is on local main; push main`. Push main yourself, with `git push` or `p` on the Areas page, and everything staged goes out together; the keeper then closes each task once its commits are on origin, as with any task that landed outside kelpie's push (see [`kelpie done`](#kelpie-done-name)). While local main is ahead, the push line, the rules approval and the landed check all compare against origin's default branch, and a push of another task rebases what is staged onto it.
+
+### `kelpie unstage [name]`
+
+Take a staged task's commits off local main again, by patch, so they are found after main was rebased; the tasks staged after it stay, in their order. Its branch keeps the commits, and it waits under Ready to push. When a task staged after it builds on its commits, main is left as it was and kelpie says which tasks to take off first. On a staged task, `M` on the board does the same.
 
 ### `kelpie ci [--json]`
 

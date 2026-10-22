@@ -114,7 +114,7 @@ fn go() -> Result<String> {
 
 // Each of the user's prompts carries what sessions told each other since the lead last looked; the lead pushes only through kelpie push, which checks the user's permission.
 fn settings(kelpie: &str) -> String {
-    let allow = ["peers", "tell", "release", "answered", "messages", "status", "areas", "approve", "review", "land", "push", "decide", "defer", "notify", "issues", "issue"].map(|command| format!("Bash({kelpie} {command}:*)"));
+    let allow = ["peers", "tell", "release", "answered", "messages", "status", "areas", "approve", "review", "land", "push", "stage", "unstage", "decide", "defer", "notify", "issues", "issue"].map(|command| format!("Bash({kelpie} {command}:*)"));
     let settings = json!({
         "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kelpie)) }] }] },
         "permissions": { "allow": allow },

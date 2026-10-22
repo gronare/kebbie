@@ -237,6 +237,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
         return Notice::new(Tone::You, format!("Not dropped: it has {} and {} not on {main}", plural(changed, "uncommitted change"), plural(ahead, "commit")))
             .you(format!("Drop it with {FORCE} to discard them.")).detail("task", task).err();
     }
+    let taken_off = super::stage::take_off_before_discard(&state_dir()?, &crate::permit::caller(), &repo, &slot)?;
     let workspace = herdr::workspace_for(&slot.path)?;
     if force {
         git_writing(&slot.path, &["reset", "--quiet", "--hard"])?;
@@ -264,6 +265,9 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
     forget_held_prompt(&peers::address(task, &name_of(&repo)));
     end_life(task, &repo, how, None, kind);
     let mut dropped = Notice::new(Tone::Done, "Dropped").next(format!("{} is free for the next task.", name_of(&slot.path)));
+    if taken_off.is_some() {
+        dropped = dropped.detail("main", "its commits were taken off local main first");
+    }
     for note in said {
         dropped = dropped.detail("note", note);
     }
@@ -296,6 +300,7 @@ pub(super) fn forget_address(state: &Path, address: &str) {
     crate::phase::forget(state, address);
     crate::task_note::forget(state, address);
     super::landed::forget(state, address);
+    super::stage::forget(state, address);
     crate::status::forget_title(state, address);
 }
 
