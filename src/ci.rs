@@ -460,7 +460,7 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     let what = format!("{} · {job}", run.title());
     watch.state = State::Failed { at: now, what: what.clone(), url: run.url.clone() };
     let _ = save(state, watch);
-    if let Err(error) = messages::notify(&watch.address, &task_message(watch, run, &job, &log_tail(&log, LOG_LINES))) {
+    if let Err(error) = messages::hand_to(&watch.address, &task_message(watch, run, &job, &log_tail(&log, LOG_LINES))) {
         eprintln!("Could not tell {} that CI failed: {error}", watch.address);
     }
     let text = format!("CI failed for {} ({}): {what}. kelpie sent the task the failing log; it stays open under Needs you. {}", watch.address, watch.short(), run.url);

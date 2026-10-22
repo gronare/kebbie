@@ -331,9 +331,10 @@ fn flush_held(sessions: &[Session]) -> Result<usize> {
     flush_held_in(&state_dir()?, sessions, &mut crate::typing::prompt, &heard, &rules_check_wanted)
 }
 
-// A rules check is wanted while its task still waits for one and the lead has not taken the request since it was first typed.
+// A rules check is wanted while its task still waits for one, a hand-over always; either only while its Claude has not taken it since it was first typed.
 fn rules_check_wanted(message: &Message, session: &Session) -> bool {
-    crate::tasks::rules_check_task(&message.text).is_some_and(crate::tasks::awaits_check)
+    let rules = message.kind.as_deref() == Some(RULES_KIND);
+    (!rules || crate::tasks::rules_check_task(&message.text).is_some_and(crate::tasks::awaits_check))
         && !session.pane.as_deref().is_some_and(|pane| crate::typing::taken_by(pane, &typed_form(message), message.at * 1000))
 }
 
@@ -351,11 +352,12 @@ fn typed_by_user_since(transcript: &str, since: u64) -> bool {
 
 type Wanted<'a> = &'a dyn Fn(&Message, &Session) -> bool;
 
-// A rules check waits out the lead's turn, and goes when a newer one for the same task, an approval or the lead's own reading made it moot.
-fn rules_check_waits(dir: &Path, message: &Message, messages: &[Message], session: &Session, wanted: Wanted) -> Result<bool> {
+// A rules check or a hand-over waits out its Claude's turn, and goes when its Claude took it after all, or for a rules check when a newer one for the same task or an approval made it moot.
+fn sent_again_waits(dir: &Path, message: &Message, messages: &[Message], session: &Session, wanted: Wanted) -> Result<bool> {
     let task = crate::tasks::rules_check_task(&message.text);
     let after = messages.iter().position(|other| other.id == message.id).map_or(messages.len(), |at| at + 1);
-    let newer = messages[after..].iter().any(|other| other.to == message.to && other.kind.as_deref() == Some(RULES_KIND) && crate::tasks::rules_check_task(&other.text) == task);
+    let rules = message.kind.as_deref() == Some(RULES_KIND);
+    let newer = rules && messages[after..].iter().any(|other| other.to == message.to && other.kind.as_deref() == Some(RULES_KIND) && crate::tasks::rules_check_task(&other.text) == task);
     if newer || !wanted(message, session) {
         append_in(dir, &json!({ "id": message.id, "at": now(), "state": "dropped" }), ROTATE_BYTES)?;
         return Ok(true);
@@ -385,7 +387,7 @@ fn flush_held_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &
             note_why(dir, message, why)?;
             continue;
         }
-        if message.kind.as_deref() == Some(RULES_KIND) && rules_check_waits(dir, message, &messages, session, wanted)? {
+        if SENT_AGAIN.contains(&message.kind.as_deref().unwrap_or_default()) && sent_again_waits(dir, message, &messages, session, wanted)? {
             continue;
         }
         let prompt = message.kind.as_deref() == Some(PROMPT_KIND);
@@ -420,6 +422,9 @@ fn note_why(dir: &Path, message: &Message, why: &str) -> Result<()> {
 
 pub const PROMPT_KIND: &str = "prompt";
 pub const RULES_KIND: &str = "rules-check";
+pub const HAND_KIND: &str = "hand-over";
+// kelpie's own requests that a Claude did not take are typed again; a tell between sessions is only reported.
+const SENT_AGAIN: [&str; 2] = [RULES_KIND, HAND_KIND];
 pub const BUSY_HOLD: &str = "did not take it mid-turn; it goes again when the turn ends";
 
 // A rules check Claude did not take is held again, so the next flush retypes it once the lead is free; other messages are only reported.
@@ -431,7 +436,7 @@ pub fn hold_again(to: &str, typed: &str) -> Result<bool> {
 
 fn hold_again_in(dir: &Path, to: &str, typed: &str) -> Result<bool> {
     let messages = load_in(dir);
-    let Some(message) = messages.iter().rev().find(|message| message.to == to && !message.held && message.kind.as_deref() == Some(RULES_KIND) && typed_form(message) == typed) else { return Ok(false) };
+    let Some(message) = messages.iter().rev().find(|message| message.to == to && !message.held && SENT_AGAIN.contains(&message.kind.as_deref().unwrap_or_default()) && typed_form(message) == typed) else { return Ok(false) };
     append_in(dir, &json!({ "id": message.id, "at": now(), "state": "held", "why": BUSY_HOLD }), ROTATE_BYTES)?;
     Ok(true)
 }
@@ -608,7 +613,7 @@ pub fn tell_lead(text: &str, kind: Option<&str>) -> Result<()> {
     send_locked("kelpie", &[lead], text, &sessions, None, kind).map(|_| ())
 }
 
-// kelpie's word to a task that must reach it: held while its box holds the user's draft or it waits for an answer, and kept for a session that is not running yet.
+// kelpie's word to a task that must reach it: held while its box holds the user's draft or it waits for an answer, kept for a session that is not running yet, and typed again when its Claude did not take it.
 pub fn hand_to(to: &str, text: &str) -> Result<()> {
     let sessions = peers::sessions().unwrap_or_default();
     let _lock = Lock::take(true)?;
@@ -617,8 +622,8 @@ pub fn hand_to(to: &str, text: &str) -> Result<()> {
 
 fn hand_to_in(dir: &Path, to: &str, text: &str, sessions: &[Session], type_into: TypeInto) -> Result<()> {
     match sessions.iter().find(|session| session.address == to) {
-        Some(session) => send_locked_in(dir, "kelpie", &[session], text, sessions, None, None, type_into).map(|_| ()),
-        None => append_in(dir, &json!({ "id": new_id("held"), "at": now(), "from": "kelpie", "to": to, "text": text, "state": "held" }), ROTATE_BYTES),
+        Some(session) => send_locked_in(dir, "kelpie", &[session], text, sessions, None, Some(HAND_KIND), type_into).map(|_| ()),
+        None => append_in(dir, &json!({ "id": new_id("held"), "at": now(), "from": "kelpie", "to": to, "text": text, "state": "held", "kind": HAND_KIND }), ROTATE_BYTES),
     }
 }
 
@@ -951,6 +956,25 @@ mod tests {
         use crate::permit::Caller;
         assert_eq!((forcer(&Caller::User), forcer(&Caller::Lead)), (Ok(USER_LABEL), Ok(LEAD_LABEL)));
         assert!(forcer(&Caller::Task("shop@web".to_string())).is_err() && forcer(&Caller::Agent).is_err(), "a task never clears what the user typed");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_hand_over_its_claude_did_not_take_is_typed_again_once_its_turn_ends_unless_it_took_it_after_all() {
+        let dir = state("hand-again");
+        let task = |status: &str| Session { address: "billing@web".to_string(), task: Some("billing".to_string()), pane: Some("p_1".to_string()), status: Some(status.to_string()) };
+        let typed = std::cell::RefCell::new(Vec::new());
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        hand_to_in(&dir, "billing@web", "CI failed: fix it", &[task("idle")], &mut type_into).unwrap();
+        let sent = typed.borrow()[0].clone();
+        assert!(!load_in(&dir)[0].held, "typed, so logged delivered");
+        assert!(hold_again_in(&dir, "billing@web", &sent).unwrap(), "not taken within 40 s: held again, never left as delivered");
+        assert_eq!(flush_held_in(&dir, &[task("working")], &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 0, "typed mid-turn it would sit in the box again");
+        assert_eq!(flush_held_in(&dir, &[task("idle")], &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 1);
+        assert_eq!(typed.borrow().as_slice(), [sent.clone(), sent.clone()]);
+        assert!(hold_again_in(&dir, "billing@web", &sent).unwrap());
+        assert_eq!(flush_held_in(&dir, &[task("idle")], &mut type_into, &|_, _| false, &|_, _| false).unwrap(), 0, "its transcript shows it took it after all");
+        assert_eq!((typed.borrow().len(), load_in(&dir)[0].held), (2, false));
         fs::remove_dir_all(&dir).unwrap();
     }
 

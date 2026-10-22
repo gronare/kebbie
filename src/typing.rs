@@ -187,7 +187,7 @@ pub fn taken_in(transcript: &str, text: &str, since_ms: u64) -> bool {
     })
 }
 
-// Claude records a prompt submitted while its turn runs as an enqueue without the text, and takes it only when the turn ends; with kelpie's text gone from the box, that enqueue is kelpie's.
+// Claude records a prompt submitted while its turn runs as an enqueue without the text, and takes it only when the turn ends; with kelpie's text gone from the box, that enqueue is kelpie's. An enqueue with another text (a task notification) is not.
 fn taken(transcript: Option<&str>, shown: &Draft, text: &str, since_ms: u64) -> bool {
     let left_box = match shown {
         Draft::Empty => true,
@@ -202,7 +202,8 @@ fn taken(transcript: Option<&str>, shown: &Draft, text: &str, since_ms: u64) -> 
 
 fn queued_since(transcript: &str, since_ms: u64) -> bool {
     transcript.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).any(|record| {
-        record["type"] == "queue-operation" && record["operation"] == "enqueue" && record["timestamp"].as_str().and_then(iso_millis).is_some_and(|at| at + 2000 >= since_ms)
+        let textless = record["content"].as_str().is_none_or(|content| content.trim().is_empty());
+        record["type"] == "queue-operation" && record["operation"] == "enqueue" && textless && record["timestamp"].as_str().and_then(iso_millis).is_some_and(|at| at + 2000 >= since_ms)
     })
 }
 
@@ -542,7 +543,9 @@ mod tests {
         assert!(!taken(Some(&queued_for_the_turns_end), &Draft::Unreadable, answer, typed_at));
         assert!(!taken(Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at + 60_000), "an enqueue from before kelpie typed is not its");
         assert!(taken(None, &Draft::Empty, answer, typed_at) && !taken(None, &Draft::Typed(answer.to_string()), answer, typed_at), "without a transcript, an empty box is the sign");
-        let old_queue = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-20T11:00:00.000Z", "content": "[from lead] rebase onto main please" }).to_string();
+        let notification = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-22T08:39:48.500Z", "content": "<task-notification>\n<task-type>artifact-auto-react</task-type>" }).to_string();
+        assert!(!taken(Some(&notification), &Draft::Empty, answer, typed_at), "a notification Claude queued after kelpie typed is not kelpie's text: the CI log seen logged delivered and never taken");
+                let old_queue = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-20T11:00:00.000Z", "content": "[from lead] rebase onto main please" }).to_string();
         assert!(!taken_in(&old_queue, "[from lead] rebase onto main please", at));
     }
 }
