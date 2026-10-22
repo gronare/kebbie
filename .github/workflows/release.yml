@@ -31,7 +31,8 @@ jobs:
       HERDR_BIN_PATH: "false"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: cargo test
         run: |
@@ -53,9 +54,10 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install the toolchain rust-toolchain.toml pins, with the target
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
       - name: cargo build --release
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: The binary starts
