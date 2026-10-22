@@ -301,15 +301,22 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
     let was_approved = approved(&slot.path, upstream, &address);
     let pushed = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
     let note = started_file(&task, repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| crate::task_note::items(&text).into_iter().next());
-    let count = push_prefix(&slot.path, upstream, &sha, state).map_err(|error| format!("Pushing {task} failed: {error}"))?;
+    let target = upstream.trim_start_matches("origin/").to_string();
+    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: None };
+    let before = crate::ci::load(state, &address);
+    let watch = crate::ci::begin(state, repo, &address, &sha, !keep_open, told_ci);
+    let count = push_prefix(&slot.path, upstream, &sha, state).map_err(|error| {
+        crate::ci::put_back(state, &address, before);
+        format!("Pushing {task} failed: {error}")
+    })?;
     let vault = crate::vault_cli::detect();
     let log = vault.as_ref().map(|cli| crate::task_note::log_push(cli, &slot.path, &task, &pushed));
     let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
-    let target = upstream.trim_start_matches("origin/").to_string();
     let landed = |closed: bool, waits: bool| Landed { pusher, address: &address, target: &target, commits: &pushed, closed, note: note.as_deref(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), waits };
     let short = &sha[..7.min(sha.len())];
-    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))) };
-    let watch = crate::ci::begin(state, repo, &address, &sha, !keep_open, told_ci);
+    if matches!(watch, crate::ci::Begin::Watching) {
+        crate::ci::arm(state, &address, log.as_ref().map(|log| matches!(log, Ok(Some(_)))));
+    }
     let ci = match &watch {
         crate::ci::Begin::Watching => format!(" kelpie watches CI for {short}."),
         crate::ci::Begin::NotWatched(reason) => format!(" CI not watched: {reason}."),

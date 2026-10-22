@@ -12,6 +12,7 @@ use crate::sh::Result;
 pub const POLL: Duration = Duration::from_secs(30);
 pub const APPEAR_SECONDS: u64 = 180;
 pub const SETTLE_SECONDS: u64 = 60;
+pub const PUSHING_SECONDS: u64 = 300;
 pub const LOG_LINES: usize = 60;
 pub const GH_VAR: &str = "KELPIE_GH_BIN";
 const PASSED: [&str; 3] = ["success", "skipped", "neutral"];
@@ -269,6 +270,36 @@ pub fn load(state: &Path, address: &str) -> Option<Watch> {
 
 pub fn forget(state: &Path, address: &str) {
     let _ = fs::remove_file(file(state, address));
+    let _ = fs::remove_file(pushing_file(state, address));
+}
+
+fn pushing_file(state: &Path, address: &str) -> PathBuf {
+    dir(state).join(format!(".{address}.pushing"))
+}
+
+// A watch written before its push is left alone by the rounds until the push is done, so nothing reads or rewrites it halfway; a pusher that died leaves it to them after PUSHING_SECONDS.
+fn pushing(state: &Path, address: &str, now: u64) -> bool {
+    fs::read_to_string(pushing_file(state, address)).ok().and_then(|text| text.trim().parse::<u64>().ok()).is_some_and(|at| now.saturating_sub(at) < PUSHING_SECONDS)
+}
+
+// A push that failed leaves the watch as it was before it.
+pub fn put_back(state: &Path, address: &str, before: Option<Watch>) {
+    forget(state, address);
+    if let Some(watch) = before {
+        let _ = save(state, &watch);
+    }
+}
+
+fn mark_pushing(state: &Path, address: &str, at: u64) -> Result<()> {
+    crate::state::write(&pushing_file(state, address), at.to_string())
+}
+
+// The push went out: the watch counts from now and carries whether kelpie wrote the log line.
+pub fn arm(state: &Path, address: &str, logged: Option<bool>) {
+    if let Some(watch) = load(state, address) {
+        let _ = save(state, &Watch { started_at: messages::now(), pushed: Pushed { logged, ..watch.pushed.clone() }, ..watch });
+    }
+    let _ = fs::remove_file(pushing_file(state, address));
 }
 
 pub fn keep_watching(state: &Path, address: &str) {
@@ -310,6 +341,9 @@ pub fn begin(state: &Path, repo: &Path, address: &str, sha: &str, close: bool, p
     };
     let task = address.split('@').next().unwrap_or(address).to_string();
     let watch = Watch { address: address.to_string(), task, repo: repo.to_path_buf(), slug, sha: sha.to_string(), started_at: messages::now(), checked_at: None, close, runs: Vec::new(), state: State::Running, error: None, pushed };
+    if let Err(error) = mark_pushing(state, address, watch.started_at) {
+        return Begin::NotWatched(format!("its record could not be saved ({error})"));
+    }
     match save(state, &watch) {
         Ok(()) => Begin::Watching,
         Err(error) => Begin::NotWatched(format!("its record could not be saved ({error})")),
@@ -357,7 +391,7 @@ pub fn tick(state: &Path) -> Vec<Event> {
 pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
     let Some(_lock) = Lock::take(state) else { return Vec::new() };
     let mut events = Vec::new();
-    for mut watch in all(state).into_iter().filter(Watch::running) {
+    for mut watch in all(state).into_iter().filter(|watch| watch.running() && !pushing(state, &watch.address, now)) {
         if watch.close && crate::tasks::find_task(&watch.repo, Some(&watch.task), &watch.repo).is_err() {
             forget(state, &watch.address);
             continue;
@@ -387,8 +421,8 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
     events
 }
 
+// The watch goes only once the task is closed, so the task never shows between CI running and gone.
 fn green(state: &Path, watch: &Watch, none_ran: bool) -> Event {
-    forget(state, &watch.address);
     let what = if none_ran { format!("No CI ran for {}", watch.short()) } else { format!("CI is green for {}", watch.short()) };
     let text = if watch.close {
         match crate::tasks::after_ci(&watch.repo, &watch.task, &watch.address, &watch.pushed) {
@@ -402,6 +436,7 @@ fn green(state: &Path, watch: &Watch, none_ran: bool) -> Event {
         }
         text
     };
+    forget(state, &watch.address);
     notify::send(&watch.repo, &Notice::from(NotifyEvent::CiGreen, &watch.address, format!("{}: {text}", watch.address)));
     Event { address: watch.address.clone(), kind: Kind::Green, text }
 }
@@ -557,5 +592,40 @@ mod tests {
         drop(held);
         assert!(Lock::take(&state).is_some());
         fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_watch_written_before_its_push_waits_for_the_push_and_a_failed_push_puts_the_old_one_back() {
+        let state = crate::sh::test_dir("ci-pushing");
+        let failed = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "1111111".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, error: None, pushed: Pushed::default() };
+        save(&state, &failed).unwrap();
+        let before = load(&state, "billing@app");
+        let next = Watch { sha: "2222222".to_string(), started_at: messages::now(), state: State::Running, ..failed.clone() };
+        mark_pushing(&state, "billing@app", next.started_at).unwrap();
+        save(&state, &next).unwrap();
+        assert!(tick_with(&state, "false", messages::now()).is_empty());
+        assert_eq!(load(&state, "billing@app").unwrap().checked_at, None, "no round reads a watch while its push is under way");
+        assert!(!pushing(&state, "billing@app", next.started_at + PUSHING_SECONDS), "a pusher that died hands the watch to the rounds");
+        put_back(&state, "billing@app", before);
+        assert_eq!(load(&state, "billing@app"), Some(failed.clone()), "a push that failed leaves the failed run's watch in place");
+        mark_pushing(&state, "billing@app", next.started_at).unwrap();
+        save(&state, &next).unwrap();
+        arm(&state, "billing@app", Some(true));
+        let armed = load(&state, "billing@app").unwrap();
+        assert_eq!((armed.pushed.logged, armed.state.clone()), (Some(true), State::Running));
+        tick_with(&state, "false", messages::now());
+        assert!(load(&state, "billing@app").unwrap().checked_at.is_some(), "once armed, the rounds poll it");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_push_writes_the_watch_before_it_pushes_and_green_closes_the_task_before_the_watch_goes() {
+        let push = include_str!("tasks/push.rs");
+        let deliver = &push[push.find("\nfn deliver(").unwrap()..];
+        assert!(deliver.find("crate::ci::begin(").unwrap() < deliver.find("push_prefix(").unwrap(), "between the push and the watch a task is neither pushable nor CI running");
+        let source = include_str!("ci.rs");
+        let green = &source[source.find("\nfn green(").unwrap()..];
+        let green = &green[..green.find("\n}\n").unwrap()];
+        assert!(green.find("after_ci(").unwrap() < green.find("forget(").unwrap(), "a watch forgotten before the close leaves the task under Needs you until it is gone");
     }
 }
