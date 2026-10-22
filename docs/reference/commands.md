@@ -31,6 +31,7 @@ Started in `bypassPermissions`, Claude shows its bypass permissions warning unti
 | `--profile <name>` | Start the task with this [profile](configuration.md#profiles) instead of `task.profile`, or the built-in `task`. A task that already runs keeps the profile it started with unless this names another; restarted with a new one, it gets that profile's model, role and rules, and keeps its recorded permission mode unless `--mode` is given too. A profile that does not load is refused before a worktree is claimed. With `--after`, the queued task starts with it. |
 | `--no-focus` | Stay where you are. |
 | `--after <task[@repo]>` | Queue the task instead of starting it: it starts once that task has ended as done. Repeat it to wait for several. `<task>` alone means every half of that task; `<task>@<repo>` means that half. Needs a prompt, and takes no `--from`. See [`kelpie after`](#kelpie-after-name). |
+| `--why <reason>` | With `--after`: why the task waits, in a few words for the user. The board's Queued row shows it: "Waits for Billing totals (ready to push): it uses the rounding field. Starts by itself once it is pushed and CI is green." |
 
 ### `kelpie after [name]`
 

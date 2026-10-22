@@ -55,6 +55,9 @@ fn status_icon(item: &Item) -> Span<'static> {
 
 // A task can outlive its Space or its Claude; kelpie start brings them back.
 pub(super) fn absence(item: &Item) -> Option<&'static str> {
+    if item.queued.is_some() {
+        return None;
+    }
     match (&item.workspace, &item.agent) {
         (None, None) => Some("no Space"),
         (Some(_), None) => Some("no Claude"),
@@ -63,8 +66,8 @@ pub(super) fn absence(item: &Item) -> Option<&'static str> {
 }
 
 pub(super) fn row_facts(item: &Item) -> String {
-    if let Some(note) = item.queued_note() {
-        return note;
+    if item.queued.is_some() {
+        return String::new();
     }
     let Some(git) = &item.git else { return String::new() };
     let mut parts: Vec<String> = absence(item).map(str::to_string).into_iter().collect();
@@ -129,9 +132,9 @@ fn wrapped_row(icon: Span<'static>, name: &str, facts: &str, width: usize) -> Ve
 }
 
 // What the task wants of the user, under its row, whole.
-fn wanted_lines(wanted: &str, highlighted: bool, width: usize) -> Vec<Line<'static>> {
+fn wanted_lines(wanted: &str, color: Color, highlighted: bool, width: usize) -> Vec<Line<'static>> {
     wrap(wanted, width.saturating_sub(4), 8).into_iter().map(|text| {
-        let line = Line::from(vec![Span::raw("   "), Span::styled(text, style(PEACH))]);
+        let line = Line::from(vec![Span::raw("   "), Span::styled(text, style(color))]);
         if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
     }).collect()
 }
@@ -185,7 +188,9 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         }
         lines.push(line);
         if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()) {
-            lines.extend(wanted_lines(&wanted, selected && open && unfold, width));
+            lines.extend(wanted_lines(&wanted, PEACH, selected && open && unfold, width));
+        } else if let Some(waiting) = item.waiting() {
+            lines.extend(wanted_lines(waiting, MUTED, selected && open && unfold, width));
         }
         if selected && open && unfold {
             let (detail, links) = unfolded_lines(app, item, width.saturating_sub(4));

@@ -39,7 +39,7 @@ No line means no test run is recorded. The wide panel shows the same line.
 | Ready to push | Reported ready, approved by the lead, passed by the reviewer when sent to review, with no uncommitted changes to tracked files. How far it is behind the default branch does not matter. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. The row names the runs, and the open task links each run's page. See [`kelpie ci`](commands.md#kelpie-ci---json). |
 | Waiting for work | Idle, or blocked on something outside you. |
-| Queued | Waiting to start after other tasks, with no worktree, Space or Claude. The row, marked `⧗`, names each task it waits for with that task's state: `after billing@api: ci running`. It starts by itself once each of them has ended as done. When one of them is dropped, reset or gone, the row moves to Needs you with the reason instead. See [`kelpie after`](commands.md#kelpie-after-name). |
+| Queued | Waiting to start after other tasks, with no worktree, Space or Claude. The row, marked `⧗`, carries a title from its backlog item or the first sentence of its prompt, which it keeps once started until Claude names the session. Its second line, whole, says why it waits and what starts it: `Waits for Billing totals (ready to push): it uses the rounding field. Starts by itself once it is pushed and CI is green.` The reason is the one given with `kelpie start --why`. It starts by itself once each of them has ended as done. When one of them is dropped, reset or gone, the row moves to Needs you with the reason instead. See [`kelpie after`](commands.md#kelpie-after-name). |
 
 Between turns, the task's last report decides its group. A CI watch, or kelpie resuming the task after an API error, decides it until the task reports again.
 
@@ -69,7 +69,7 @@ Between turns, the task's last report decides its group. A CI watch, or kelpie r
 | `q` | Close the current view, like `esc`. At the top, close the popup; on the full board it says that `ctrl+c` twice quits. |
 | `ctrl+c` | Twice within 2 seconds quits the board. The first press says so. |
 
-On a queued row, `⏎` offers two things, each asking first: `g` starts it now, before what it waits for is done, and `x` drops the wait.
+On a queued row, `⏎` offers two things, each asking first: `g` starts it now from the default branch, without the changes of what it waits for, its Claude told what is missing; `x` drops the wait, so it never starts and its backlog item goes back to the backlog.
 
 A question that asks first, as reset, drop and done do, takes `y` to go ahead and `n` or `esc` to cancel. Any other key keeps the question and says "press y or n".
 

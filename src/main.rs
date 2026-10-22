@@ -66,7 +66,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   --profile <name> starts it with that profile instead of task.profile or task,
                                   --no-focus keeps you where you are, --after <task[@repo]> (repeatable) queues it
                                   to start from the default branch once each of those tasks ended as done and,
-                                  where kelpie watches CI, its CI is green; the user's or the lead's)
+                                  where kelpie watches CI, its CI is green; the user's or the lead's;
+                                  --why <reason> says on its Queued row why it waits)
   kelpie after [name]             the queued tasks: what each waits for, with that task's state; one blocked because
                                   a task it waited for was dropped, reset or is gone waits for you (--now starts it
                                   anyway and tells its Claude what was not done, --drop drops the wait)
@@ -243,7 +244,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--profile"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--profile", "--why"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -347,7 +348,7 @@ fn run(arguments: &Arguments) -> Result<String> {
                 if arguments.value("--from").is_some() {
                     return Err("kelpie start --after starts from the default branch, so it takes no --from".to_string());
                 }
-                if let Some(queued) = tasks::queue(&repos, name, prompt.unwrap_or_default(), &after, arguments.value("--mode"), arguments.value("--profile"), arguments.value("--backlog"))? {
+                if let Some(queued) = tasks::queue(&repos, &tasks::QueueAsked { name, prompt: prompt.unwrap_or_default(), after: &after, mode: arguments.value("--mode"), profile: arguments.value("--profile"), backlog: arguments.value("--backlog"), title: None, why: arguments.value("--why") })? {
                     return Ok(queued);
                 }
             }

@@ -134,6 +134,10 @@ impl Index {
         self.db.query_row("SELECT mtime FROM notes WHERE key = ?1", [key], |row| row.get::<_, f64>(0)).ok()
     }
 
+    pub fn title_of(&self, key: &str) -> Option<String> {
+        self.db.query_row("SELECT title FROM notes WHERE key = ?1", [key], |row| row.get::<_, String>(0)).ok().filter(|title| !title.trim().is_empty())
+    }
+
     pub fn status_of(&self, key: &str) -> Option<String> {
         self.db.query_row("SELECT status FROM notes WHERE key = ?1", [key], |row| row.get::<_, String>(0)).ok()
     }

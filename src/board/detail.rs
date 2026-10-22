@@ -300,7 +300,8 @@ pub(super) fn unfolded_lines(app: &mut App, item: &Item, width: usize) -> (Vec<L
     let mut links = Vec::new();
     let branch = if detail.branch.is_empty() { item.name.clone() } else { detail.branch.clone() };
     let place = item.path.as_deref().map(|path| format!(" · {}", name_of(path))).unwrap_or_default();
-    lines.push(field("branch", vec![Span::styled(format!("{branch}{place}"), style(SUBTEXT))]));
+    let made = item.queued.as_ref().map_or(String::new(), |queued| format!(", made from {} when it starts", queued.base));
+    lines.push(field("branch", vec![Span::styled(format!("{branch}{place}{made}"), style(SUBTEXT))]));
     if let Some((line, link)) = server_line(item, detail.dev_server, &detail.server_name, width) {
         lines.push(line);
         links.extend(link);
@@ -396,7 +397,11 @@ pub(super) fn panel_lines(app: &mut App, item: &Item, width: usize) -> (Vec<Line
         lines.push(Line::from(state));
     }
     lines.push(Line::default());
-    if let Some(asked) = asked_question(item) {
+    if let Some(note) = item.queued_note() {
+        lines.extend(wrapped_field("waits", &note, if item.waiting().is_some() { TEXT } else { PEACH }, width, 6));
+        let (now, drop) = (item.start_now_means().unwrap_or_default(), item.drop_means().unwrap_or_default());
+        lines.extend(wrapped_field("options", &format!("{} starts it now: {now}. {} drops the wait: {drop}.", keys::key(Act::Go), keys::key(Act::Drop)), MUTED, width, 6));
+    } else if let Some(asked) = asked_question(item) {
         lines.push(field("asks", vec![Span::styled(question_summary(asked, width.saturating_sub(LABEL)), style(PEACH))]));
     } else if let Some((label, text, color)) = report_text(app, item, width) {
         lines.extend(wrapped_field(&label, &text, color, width, 6));

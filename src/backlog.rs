@@ -233,6 +233,16 @@ pub fn task_prompt(entry: &Entry, sources: &[Source], vault: bool) -> String {
     }
 }
 
+// The title of a backlog item by its reference, from the lead's snapshot or the vault index, whatever its status now.
+pub fn title_of(item: &str) -> Option<String> {
+    if let Some(title) = local_title(item) {
+        return Some(title.to_string());
+    }
+    let value: Value = file().ok().and_then(|path| fs::read_to_string(path).ok()).and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
+    let cached = value["entries"].as_array().into_iter().flatten().filter_map(entry).find(|entry| entry.reference == item).map(|entry| entry.title);
+    cached.or_else(|| crate::vault::Index::open().ok()?.title_of(item))
+}
+
 fn local_title(item: &str) -> Option<&str> {
     item.strip_prefix(crate::backlog_file::PREFIX)
 }

@@ -64,6 +64,10 @@ pub const ANSWER_IN_SPACE: &str = "answer Claude's prompt in its Space or throug
 pub struct Queued {
     pub after: Vec<(String, String)>,
     pub blocked: Option<String>,
+    pub waiting: String,
+    pub names: Vec<String>,
+    pub base: String,
+    pub backlog: bool,
 }
 
 #[derive(Clone)]
@@ -109,12 +113,13 @@ impl Item {
         }
     }
 
-    fn queued_from(wait: &tasks::Wait, after: Vec<(String, String)>) -> Item {
+    fn queued_from(shown: tasks::WaitShown) -> Item {
+        let tasks::WaitShown { wait, after, names, waiting, title, base } = shown;
         Item {
             review: None, verdict: None, permit: None, follows: false, bypass: false, profile: Some(wait.profile.clone().unwrap_or_else(|| crate::profiles::TASK.to_string())), server: false, worker: false, url: None,
-            name: wait.task.clone(), title: None, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
+            name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
-            queued: Some(Queued { after, blocked: wait.blocked.clone() }),
+            queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, backlog: wait.backlog.is_some() }),
             held_by_draft: None, starting: false,
         }
     }
@@ -285,7 +290,7 @@ impl Item {
             return None;
         }
         if let Some(queued) = &self.queued {
-            return queued.blocked.as_ref().map(|_| "start it anyway or drop the wait".to_string());
+            return queued.blocked.as_ref().map(|blocked| format!("{blocked}: start it anyway or drop the wait"));
         }
         if self.agent.as_ref().is_some_and(|agent| agent.status == "blocked") {
             return Some(format!("answer Claude's prompt · {go} goes there"));
@@ -306,8 +311,23 @@ impl Item {
         let queued = self.queued.as_ref()?;
         Some(match &queued.blocked {
             Some(blocked) => blocked.clone(),
-            None => format!("after {}", queued.after.iter().map(|(address, state)| format!("{address}: {state}")).collect::<Vec<_>>().join(" · ")),
+            None => queued.waiting.clone(),
         })
+    }
+
+    // What waits on a queued row's second line; a blocked one says it under Needs you.
+    pub fn waiting(&self) -> Option<&str> {
+        self.queued.as_ref().filter(|queued| queued.blocked.is_none()).map(|queued| queued.waiting.as_str())
+    }
+
+    pub fn start_now_means(&self) -> Option<String> {
+        let queued = self.queued.as_ref()?;
+        Some(format!("from {}, without the changes from {}; its Claude is told what is missing", queued.base, tasks::and_list(&queued.names)))
+    }
+
+    pub fn drop_means(&self) -> Option<&'static str> {
+        let queued = self.queued.as_ref()?;
+        Some(if queued.backlog { "it never starts, and its backlog item goes back to the backlog" } else { "it never starts and leaves the board" })
     }
 
     pub fn summary(&self) -> String {
@@ -361,6 +381,7 @@ impl Item {
             "kind": if self.queued.is_some() { "queued" } else if self.is_task() { "task" } else { "session" },
             "after": self.queued.as_ref().map(|queued| queued.after.iter().map(|(address, state)| json!({ "address": address, "state": state })).collect::<Vec<_>>()),
             "blocked": self.queued.as_ref().and_then(|queued| queued.blocked.clone()),
+            "waiting": self.waiting(),
             "group": self.group().title(),
             "summary": self.summary(),
             "repo": self.repo,
@@ -420,11 +441,25 @@ fn review_progress(path: &Path, upstream: &str) -> Option<(usize, usize)> {
 
 const TITLES: &str = "titles";
 
+pub(crate) fn kept_title(state: &Path, address: &str) -> Option<String> {
+    fs::read_to_string(state.join(TITLES).join(address)).ok().map(|kept| kept.trim().to_string()).filter(|kept| !kept.is_empty())
+}
+
+pub(crate) fn keep_title(state: &Path, address: &str, title: &str) {
+    if !title.trim().is_empty() {
+        let _ = fs::create_dir_all(state.join(TITLES)).and_then(|_| fs::write(state.join(TITLES).join(address), title.trim()));
+    }
+}
+
+pub(crate) fn forget_title(state: &Path, address: &str) {
+    let _ = fs::remove_file(state.join(TITLES).join(address));
+}
+
 // Claude names its session after the first prompt; kept per task so the title outlives the session. A default title, or none yet, shows the task's name.
-fn title_of(state: &Path, address: &str, seen: Option<&str>, repo: &str, task: &str, folder: &str) -> Option<String> {
+pub(crate) fn title_of(state: &Path, address: &str, seen: Option<&str>, repo: &str, task: &str, folder: &str) -> Option<String> {
     let file = state.join(TITLES).join(address);
     let seen = seen.map(|title| readable(title, repo)).filter(|title| !title.is_empty() && !["Claude", "Claude Code", task, folder].iter().any(|default| title.eq_ignore_ascii_case(default)));
-    let kept = fs::read_to_string(&file).ok().map(|kept| kept.trim().to_string()).filter(|kept| !kept.is_empty());
+    let kept = kept_title(state, address);
     if let Some(seen) = seen {
         if kept.as_deref() != Some(seen.as_str()) {
             let _ = fs::create_dir_all(state.join(TITLES)).and_then(|_| fs::write(&file, &seen));
@@ -439,7 +474,7 @@ pub fn readable(title: &str, repo: &str) -> String {
     let title = title.trim_start_matches(|character: char| !character.is_alphanumeric()).trim();
     let rest = title.split_once(char::is_whitespace)
         .filter(|(first, _)| first.trim_end_matches([':', ',']).eq_ignore_ascii_case(repo))
-        .map_or(title, |(_, rest)| rest.trim_start_matches(['-', ':', '·', ' ']));
+        .map_or(title, |(_, rest)| rest.trim_start_matches(['-', '—', '–', ':', '·', ' ']));
     let mut characters = rest.chars();
     characters.next().map(|first| first.to_uppercase().chain(characters).collect()).unwrap_or_default()
 }
@@ -594,7 +629,7 @@ pub fn gather() -> Result<Vec<Item>> {
         }
     }
     if let Some(state) = state.as_deref() {
-        let queued: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(|(wait, after)| Item::queued_from(&wait, after)).collect();
+        let queued: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(Item::queued_from).collect();
         items.extend(queued);
     }
     for agent in &agents {
@@ -1059,7 +1094,7 @@ pub(crate) mod tests {
         billing.place = "api".to_string();
         billing.ci = Some(watched(crate::ci::State::Running, true));
         let mut items = vec![billing];
-        let shown: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(|(wait, after)| Item::queued_from(&wait, after)).collect();
+        let shown: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(Item::queued_from).collect();
         items.extend(shown);
         items
     }
@@ -1071,7 +1106,8 @@ pub(crate) mod tests {
         let item = &items[1];
         assert!(item.is_task() && item.group() == Group::Queued && Group::Queued.title() == "QUEUED");
         assert!(Group::Idle < Group::Queued, "queued tasks come last among the tasks");
-        assert_eq!(item.summary(), "after billing@api: ci running");
+        assert_eq!(item.summary(), "Waits for billing in api (ci running). Starts by itself once it is pushed and CI is green.");
+        assert_eq!(item.to_json()["waiting"], json!(item.summary()), "kelpie status --json says it in the same words");
         assert_eq!(item.next_for_you(), None);
         let shown = item.to_json();
         assert_eq!((shown["kind"].clone(), shown["group"].clone(), shown["after"][0]["address"].clone(), shown["after"][0]["state"].clone()), (json!("queued"), json!("QUEUED"), json!("billing@api"), json!("ci running")));

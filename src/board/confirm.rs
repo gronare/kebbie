@@ -68,7 +68,7 @@ pub(super) fn draw_done(frame: &mut Frame, name: &str, nudged: bool) {
 }
 
 pub(super) fn draw_queued(frame: &mut Frame, name: &str, about: &str, now: bool, nudged: bool) {
-    let (title, question) = if now { ("start now", "Start it now, before what it waits for is done?") } else { ("drop the wait", "Drop the wait? Nothing was started.") };
+    let (title, question) = if now { ("start now", "Start it now?") } else { ("drop the wait", "Drop the wait?") };
     modal(frame, title.to_string(), confirm_lines(name, Some(about), question, nudged), 72);
 }
 
@@ -110,18 +110,23 @@ mod tests {
     #[test]
     fn a_queued_task_starts_now_on_enter_and_drops_its_wait_on_the_drop_key_after_asking() {
         let mut item = crate::status::tests::task(None, None, 0);
-        (item.name, item.git) = ("web-billing".to_string(), None);
-        item.queued = Some(crate::status::Queued { after: vec![("billing@api".to_string(), "ci running".to_string())], blocked: None });
+        (item.name, item.git, item.title) = ("web-billing".to_string(), None, Some("Bill in cents".to_string()));
+        let waiting = "Waits for Billing totals (ready to push). Starts by itself once it is pushed and CI is green.";
+        item.queued = Some(crate::status::Queued { after: vec![("billing@api".to_string(), "ready to push".to_string())], blocked: None, waiting: waiting.to_string(), names: vec!["Billing totals".to_string()], base: "main".to_string(), backlog: true });
         let mut app = test_app(vec![item]);
-        let (rows, _) = render(&mut app, 100, 30);
+        let (rows, _) = render(&mut app, 200, 30);
         let screen = rows.join("\n");
-        assert!(screen.contains("QUEUED") && screen.contains("⧗ web-billing") && screen.contains("after billing@api: ci running"), "{screen}");
-        let menu: Vec<_> = crate::board::options::task_choices(app.selected_task().as_ref(), None, None).into_iter().map(|choice| choice.act).collect();
-        assert_eq!(menu, [Some(crate::keys::Act::Go), Some(crate::keys::Act::Drop)], "its options are start now and drop the wait");
+        assert!(screen.contains("QUEUED") && screen.contains("⧗ Bill in cents") && !screen.contains("billing@api"), "the row has its title and names the other task by its own: {screen}");
+        assert!(screen.contains("   Waits for Billing totals (ready to push). Starts by itself") && screen.contains("   once it is pushed and CI is green.") && !screen.contains('…'), "the wait is said whole under the row, wrapped, never cut: {screen}");
+        let menu: Vec<_> = crate::board::options::task_choices(app.selected_task().as_ref(), None, None).into_iter().map(|choice| (choice.act, choice.about)).collect();
+        assert_eq!(menu, [
+            (Some(crate::keys::Act::Go), "from main, without the changes from Billing totals; its Claude is told what is missing (asks first)".to_string()),
+            (Some(crate::keys::Act::Drop), "it never starts, and its backlog item goes back to the backlog (asks first)".to_string()),
+        ]);
         app.handle_normal(key(KeyCode::Char('g')));
-        assert!(matches!(&app.mode, Mode::ConfirmQueued { now: true, nudged: false, name, .. } if name == "web-billing"), "go asks before it starts the task early");
-        let (rows, _) = render(&mut app, 100, 30);
-        assert!(rows.join("\n").contains("Start it now, before what it waits for is done?"));
+        assert!(matches!(&app.mode, Mode::ConfirmQueued { now: true, nudged: false, name, about } if name == "web-billing" && about.starts_with("Waits for Billing totals (ready to push). Starts") && about.ends_with("Started now, it begins from main, without the changes from Billing totals; its Claude is told what is missing.")), "go asks before it starts the task early");
+        let (rows, _) = render(&mut app, 200, 30);
+        assert!(rows.join("\n").contains("Start it now?"));
         press(&mut app, key(KeyCode::Char('n')));
         assert!(matches!(app.mode, Mode::Normal));
         app.handle_normal(key(KeyCode::Char('x')));

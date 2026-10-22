@@ -508,9 +508,10 @@ impl App {
                 let Some(item) = self.selected_task() else { return };
                 if let Some(note) = item.queued_note() {
                     let (go, drop) = (keys::key(Act::Go), keys::key(Act::Drop));
+                    let note = if note.ends_with('.') { note } else { format!("{note}.") };
                     match act {
-                        Act::Go => self.mode = Mode::ConfirmQueued { name: item.name, about: note, now: true, nudged: false },
-                        Act::Drop => self.mode = Mode::ConfirmQueued { name: item.name, about: note, now: false, nudged: false },
+                        Act::Go => self.mode = Mode::ConfirmQueued { about: format!("{note} Started now, it begins {}.", item.start_now_means().unwrap_or_default()), name: item.name, now: true, nudged: false },
+                        Act::Drop => self.mode = Mode::ConfirmQueued { about: format!("{note} Dropped, {}.", item.drop_means().unwrap_or_default()), name: item.name, now: false, nudged: false },
                         _ => self.show(Err(format!("{} is queued and has no worktree yet: {go} starts it now, {drop} drops the wait.", item.name))),
                     }
                     return;
