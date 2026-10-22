@@ -6,6 +6,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::area_page;
+use crate::keys::{self, Ctx};
 use crate::messages;
 use super::card::{draw_card, draw_fullscreen};
 use super::columns::{backlog_lines, work_lines};
@@ -22,7 +23,8 @@ use super::message_log::{Fold, messages_height, messages_lines};
 use super::{App, Column, Hit, Mode, Page};
 use super::options::draw_options;
 use super::push::draw_push;
-use super::status_bar::{help_lines, hint_hits, hint_lines, status_line};
+use super::keys_window;
+use super::status_bar::{hint_hits, hint_lines, status_line};
 use super::widgets::{MUTED, PEACH, RED, TEXT, modal, render_column, style};
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
@@ -118,8 +120,10 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),
         Mode::Card { .. } => modal_hits = draw_card(frame, app),
         Mode::Fullscreen { .. } => draw_fullscreen(frame, app),
-        Mode::Help => {
-            modal(frame, "keys".to_string(), help_lines(app.lead_chat.is_some()), 72);
+        Mode::Help(scroll) => {
+            let mut scroll = *scroll;
+            keys_window::draw(frame, keys::map(), Ctx::Work, app.lead_chat.is_some(), keys_window::update_hint(&app.updates).as_deref(), &mut scroll);
+            app.mode = Mode::Help(scroll);
         }
         Mode::Message(text) => match Notice::parse(text) {
             Some(notice) => draw_notice(frame, &notice, app.shown.as_ref()),

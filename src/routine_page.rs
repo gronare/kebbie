@@ -11,6 +11,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
+use crate::board::keys_window;
 use crate::board::widgets::{BLUE, Choice, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SURFACE, TEXT, YELLOW, bold, choice, column_title, cut, menu_lines, modal, render_column, style, wrap};
 use crate::keys::{self, Act, Ctx};
 use crate::peers;
@@ -73,7 +74,7 @@ enum Mode {
     ConfirmDelete { id: String, nudged: bool },
     Working { label: String, result: Receiver<Result<String>> },
     Message(String),
-    Help,
+    Help(keys_window::Scroll),
 }
 
 struct Gathered {
@@ -268,7 +269,7 @@ impl Page {
     }
 
     pub fn is_idle(&self) -> bool {
-        matches!(self.mode, Mode::Normal | Mode::Message(_) | Mode::Help)
+        matches!(self.mode, Mode::Normal | Mode::Message(_) | Mode::Help(_))
     }
 
     fn now(&self) -> (u64, i64) {
@@ -473,7 +474,12 @@ impl Page {
                 _ => self.mode = Mode::ConfirmDelete { id, nudged: true },
             },
             working @ Mode::Working { .. } => self.mode = working,
-            Mode::Message(_) | Mode::Help => {}
+            Mode::Message(_) => {}
+            Mode::Help(scroll) => {
+                if let Some(scroll) = scroll.key(&key) {
+                    self.mode = Mode::Help(scroll);
+                }
+            }
         }
         Effect::Handled
     }
@@ -509,7 +515,7 @@ impl Page {
                 (Some(Act::Move), _) => self.template = (self.template + 1).min(TEMPLATES.len() - 1),
                 (Some(Act::Options), _) => self.start_wizard(Some(&TEMPLATES[self.template])),
                 (Some(Act::New), _) => self.start_wizard(None),
-                (Some(Act::Help), _) => self.mode = Mode::Help,
+                (Some(Act::Help), _) => self.mode = Mode::Help(Default::default()),
                 _ => return Effect::Unhandled,
             }
             return Effect::Handled;
@@ -524,7 +530,7 @@ impl Page {
             Some(Act::Options) => self.focus = Focus::Detail,
             Some(Act::Back) if self.narrow_detail() => self.focus = Focus::List,
             Some(Act::New) => self.start_wizard(None),
-            Some(Act::Help) => self.mode = Mode::Help,
+            Some(Act::Help) => self.mode = Mode::Help(Default::default()),
             Some(act @ (Act::Go | Act::Edit | Act::Pause | Act::Card | Act::Delete)) => return self.act(Some(act)),
             _ => return Effect::Unhandled,
         }
@@ -602,7 +608,7 @@ impl Page {
                         None => Effect::Handled,
                     }
                 }
-                (None, Mode::Options(_) | Mode::Message(_) | Mode::Help) => {
+                (None, Mode::Options(_) | Mode::Message(_) | Mode::Help(_)) => {
                     self.mode = Mode::Normal;
                     Effect::Handled
                 }
@@ -817,9 +823,10 @@ impl Page {
                 lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
                 modal(frame, "kelpie".to_string(), lines, 96);
             }
-            Mode::Help => {
-                let lines = keys::map().help(&[Ctx::Routines], false).into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect();
-                modal(frame, "keys".to_string(), lines, 76);
+            Mode::Help(scroll) => {
+                let mut scroll = *scroll;
+                keys_window::draw(frame, keys::map(), Ctx::Routines, false, None, &mut scroll);
+                self.mode = Mode::Help(scroll);
             }
         }
         self.hits = modal_hits;

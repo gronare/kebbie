@@ -72,7 +72,7 @@ impl App {
             Some(Act::Move) => self.message_back = self.message_back.saturating_sub(1),
             Some(Act::Back | Act::Close) => self.in_messages = false,
             Some(Act::Messages) => self.press_m(),
-            Some(Act::Help) => self.mode = Mode::Help,
+            Some(Act::Help) => self.mode = Mode::Help(Default::default()),
             Some(Act::Inbox) => self.open_questions(None),
             Some(Act::Options) => {
                 if let Some(text) = self.selected_message().map(|message| format!("{} {} → {}\n\n{}", clock(message.at), message.from, message.to, message.text)) {

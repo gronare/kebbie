@@ -64,7 +64,7 @@ kelpie keeps one phase per task, and only what changes it writes it: its start, 
 | `R` | Ask the lead to refresh the backlog. |
 | `A` | Away mode on or off. |
 | `U` | Run `kelpie update`. |
-| `?` | Every key. |
+| `?` | The keys window: every key on the page you are on, one short line each, grouped by what you want to do, under the title `keys · work`, `keys · areas` or `keys · routines`. From 110 columns it is two columns; narrower, up to three keys a row, scrolling with `↑` `↓` and `pgup` `pgdn` when it does not fit. A moved key shows as you set it, and `↑` and the version beside `U` when there is a newer one. Any other key closes it. |
 | `esc` | One step back: close a window, a menu or the filter. At the top, close the board when it is a popup; on the full board it does nothing. |
 | `q` | Close the current view, like `esc`. At the top, close the popup; on the full board it says that `ctrl+c` twice quits. |
 | `ctrl+c` | Twice within 2 seconds quits the board. The first press says so. |

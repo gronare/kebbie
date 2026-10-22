@@ -6,7 +6,7 @@ use crate::keys::{self, Act, Ctx};
 use crate::usage::Usage;
 use crate::keys::Hints;
 use super::Hit;
-use super::widgets::{FAINT, GREEN, MAUVE, MUTED, RED, SUBTEXT, TEXT, YELLOW, style};
+use super::widgets::{FAINT, GREEN, MUTED, RED, SUBTEXT, YELLOW, style};
 
 fn status_hints(keys: &Hints) -> Line<'static> {
     Line::from(Span::styled(keys.iter().map(|(key, label, _)| format!("{key} {label}")).collect::<Vec<_>>().join(" · "), style(MUTED)))
@@ -138,10 +138,6 @@ pub(super) fn status_line(full: Line<'static>, short: Line<'static>, updates: &[
         }
     }
     short
-}
-
-pub(super) fn help_lines(lead: bool) -> Vec<Line<'static>> {
-    keys::map().help(&[Ctx::Work, Ctx::Backlog, Ctx::Card], lead).into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect()
 }
 
 #[cfg(test)]

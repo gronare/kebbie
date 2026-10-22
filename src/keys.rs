@@ -76,6 +76,7 @@ pub enum Hint {
 pub struct Binding {
     pub act: Act,
     pub on: &'static [Ctx],
+    #[cfg_attr(not(test), allow(dead_code))]
     pub help: &'static str,
     pub hint: Hint,
 }
@@ -345,7 +346,7 @@ impl Keys {
         TABLE.iter().filter(|row| row.on.contains(&ctx) && row.act != Act::Quit).map(|row| row.act).find(|act| self.codes(*act).contains(&key.code))
     }
 
-
+    #[cfg(test)]
     pub fn help(&self, page: &[Ctx], lead: bool) -> Vec<(String, &'static str)> {
         TABLE.iter().filter(|row| row.on.iter().any(|ctx| page.contains(ctx)) && (lead || !LEAD_ONLY.contains(&row.act))).map(|row| (self.label(row.act), row.help)).collect()
     }

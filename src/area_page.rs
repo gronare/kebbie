@@ -13,6 +13,7 @@ use ratatui::text::{Line, Span};
 use crate::actions::{self, Action, Answers, Step, Work};
 use crate::areas::{self, Area, Areas};
 use crate::backlog;
+use crate::board::keys_window;
 use crate::board::terminal;
 use crate::board::widgets::{
     self, BLUE, Choice, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, choice, column_title,
@@ -113,7 +114,7 @@ enum Mode {
     Working { label: String, result: Receiver<After> },
     Message { text: String, next: Option<Next> },
     Log { stem: String, scroll: usize },
-    Help,
+    Help(keys_window::Scroll),
 }
 
 pub struct Page {
@@ -252,7 +253,7 @@ impl Page {
     }
 
     pub fn is_idle(&self) -> bool {
-        matches!(self.mode, Mode::Normal | Mode::Message { .. } | Mode::Help | Mode::Log { .. })
+        matches!(self.mode, Mode::Normal | Mode::Message { .. } | Mode::Help(_) | Mode::Log { .. })
     }
 
     pub fn summary(&self) -> String {
@@ -380,7 +381,11 @@ impl Page {
                     _ => self.mode = Mode::Options(index),
                 }
             }
-            Mode::Help => {}
+            Mode::Help(scroll) => {
+                if let Some(scroll) = scroll.key(&key) {
+                    self.mode = Mode::Help(scroll);
+                }
+            }
             Mode::Message { next, .. } => {
                 if key.code == KeyCode::Char('n')
                     && let Some(next) = next
@@ -464,7 +469,7 @@ impl Page {
                 }
             }
             KeyCode::Enter => self.mode = Mode::Options(0),
-            KeyCode::Char(character) if character == keys::key(Act::Help) => self.mode = Mode::Help,
+            KeyCode::Char(character) if character == keys::key(Act::Help) => self.mode = Mode::Help(Default::default()),
             KeyCode::Char(character) if choices.iter().any(|choice| choice.key == character) => return self.act(character),
             _ => return Effect::Unhandled,
         }
@@ -696,7 +701,7 @@ impl Page {
                         None => Effect::Handled,
                     }
                 }
-                (None, Mode::Options(_) | Mode::Message { .. } | Mode::Help | Mode::Log { .. }) => {
+                (None, Mode::Options(_) | Mode::Message { .. } | Mode::Help(_) | Mode::Log { .. }) => {
                     self.mode = Mode::Normal;
                     Effect::Handled
                 }
@@ -866,11 +871,10 @@ impl Page {
                     }
                 }
             }
-            Mode::Help => {
-                let mut keys = keys::map().help(&[Ctx::Areas], false);
-                keys.push(("A–Z".to_string(), "the repo's own actions, from its repo config (kelpie config shows where)"));
-                let lines = keys.into_iter().map(|(key, text)| Line::from(vec![Span::styled(format!("{key:<9}"), style(MAUVE)), Span::styled(text.to_string(), style(TEXT))])).collect();
-                modal(frame, "keys".to_string(), lines, 76);
+            Mode::Help(scroll) => {
+                let mut scroll = *scroll;
+                keys_window::draw(frame, keys::map(), Ctx::Areas, false, None, &mut scroll);
+                self.mode = Mode::Help(scroll);
             }
             Mode::Message { text, next } => {
                 let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();

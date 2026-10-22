@@ -98,7 +98,7 @@ impl App {
                     (Some(Hit::CardImage(index)), Mode::Card { image, .. }) => *image = index,
                     (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
                     (Some(Hit::Answer(index)), Mode::Questions(window)) => window.click(&self.questions, index),
-                    (None, Mode::Options(_) | Mode::Message(_) | Mode::Help) => self.mode = Mode::Normal,
+                    (None, Mode::Options(_) | Mode::Message(_) | Mode::Help(_)) => self.mode = Mode::Normal,
                     _ => {}
                 }
                 None

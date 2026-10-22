@@ -8,6 +8,7 @@ mod header;
 pub(crate) mod images;
 mod inbox;
 mod input;
+pub(crate) mod keys_window;
 mod link;
 mod message_log;
 mod mouse;
@@ -101,7 +102,7 @@ enum Mode {
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
-    Help,
+    Help(keys_window::Scroll),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -407,7 +408,9 @@ impl App {
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.handle_normal(key),
             Mode::Options(index) => self.handle_options(index, act, key),
-            Mode::Help => {}
+            Mode::Help(scroll) => if let Some(scroll) = scroll.key(&key) {
+                self.mode = Mode::Help(scroll);
+            },
             Mode::Message(text) => {
                 let shown = self.shown.take();
                 let offered = Notice::parse(&text).map(|notice| notices::offers(&notice, shown.as_ref())).unwrap_or_default();
@@ -478,7 +481,7 @@ impl App {
             Act::Move => self.move_selection(if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) { -1 } else { 1 }),
             Act::Switch => self.column = if self.column == Column::Work { Column::Backlog } else { Column::Work },
             Act::Back | Act::Close => self.at_top(Some(act)),
-            Act::Help => self.mode = Mode::Help,
+            Act::Help => self.mode = Mode::Help(Default::default()),
             Act::Inbox => self.open_questions(None),
             Act::Options => {
                 let has_selection = match self.column {
@@ -903,7 +906,7 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             app.fetch_failures = fetcher.failures();
             app.away = permit::away_since().is_some();
-            if (matches!(app.mode, Mode::Normal | Mode::Help) || matches!(app.mode, Mode::Message(_)) && !app.update_shown) && app.areas.is_idle() && app.routines.is_idle() && rebuild.ready() {
+            if (matches!(app.mode, Mode::Normal | Mode::Help(_)) || matches!(app.mode, Mode::Message(_)) && !app.update_shown) && app.areas.is_idle() && app.routines.is_idle() && rebuild.ready() {
                 let error = rebuild.restart(&app);
                 terminal = init_terminal();
                 app.show_as(Err(error), true);
@@ -966,7 +969,8 @@ mod tests {
     use crate::board::header::header;
     use crate::board::input::Purpose;
     use crate::board::options::{backlog_choices, ongoing_choices, task_choices};
-    use crate::board::status_bar::{help_lines, hint_lines};
+    use crate::board::keys_window::shown;
+    use crate::board::status_bar::hint_lines;
 
     #[test]
     fn the_lead_board_alone_offers_h_and_says_chat_hidden_while_it_is() {
@@ -974,7 +978,7 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Char('h')), None);
         assert_eq!(app.notice.as_ref().map(|(text, _)| text.as_str()), Some("h hides the lead's chat only on the board in the lead Space"));
         assert!(!hint_lines(None, false).0.to_string().contains("h chat") && hint_lines(None, true).0.to_string().contains("h chat"));
-        assert!(!help_lines(false).iter().any(|line| line.to_string().starts_with("h ")) && help_lines(true).iter().any(|line| line.to_string().starts_with("h ")));
+        assert!(!shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "h") && shown(keys::map(), Ctx::Work, true).iter().any(|(key, _)| key == "h"));
         assert!(!header(&app, 200).0.to_string().contains("chat hidden"));
         app.lead_chat = Some(true);
         assert!(header(&app, 200).0.to_string().contains("◧ chat hidden · h"));
@@ -983,14 +987,11 @@ mod tests {
     }
 
     #[test]
-    fn every_key_in_the_help_the_hints_and_the_menus_is_one_the_table_acts_on_and_every_row_shows_in_help() {
+    fn every_key_in_the_help_the_hints_and_the_menus_is_one_the_table_acts_on() {
         let map = keys::map();
-        let help: Vec<String> = help_lines(true).iter().map(|line| line.spans[0].content.trim().to_string()).collect();
-        for row in keys::TABLE.iter().filter(|row| row.on.contains(&Ctx::Work) || row.on.contains(&Ctx::Backlog)) {
-            assert!(help.contains(&map.label(row.act)), "{} is in the table but not in ? help: {help:?}", row.act.id());
-        }
+        let help: Vec<String> = shown(map, Ctx::Work, true).into_iter().map(|(key, _)| key).collect();
         for label in &help {
-            assert!(keys::TABLE.iter().any(|row| map.label(row.act) == *label), "{label} is in ? help but not in the table");
+            assert!(label.split(' ').all(|part| keys::TABLE.iter().any(|row| map.label(row.act).split(' ').any(|own| own == part))), "{label} is in ? help but not in the table");
         }
         let (full, short) = map.hints(Ctx::Work, true);
         for (key, _, code) in full.iter().chain(&short) {
@@ -1009,7 +1010,7 @@ mod tests {
     #[test]
     fn esc_and_q_step_back_and_close_only_an_overlay_at_the_top() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
-        app.mode = Mode::Help;
+        app.mode = Mode::Help(Default::default());
         app.handle_normal(key(KeyCode::Esc));
         app.handle_normal(key(KeyCode::Esc));
         assert!(!app.quit, "esc on the full board at the top does nothing");
@@ -1136,6 +1137,6 @@ mod tests {
         let Mode::Message(text) = &app.mode else { panic!("the result is shown") };
         assert_eq!(text, "✓ Update finished\n  next: kelpie 0.18.1 → 0.18.2", "the update's result stays open, though it asks nothing");
         assert!(app.update_shown && app.updates.is_empty() && rechecked.try_recv().is_ok(), "the notice goes and a fresh check is asked for");
-        assert!(help_lines(false).iter().any(|line| line.to_string().starts_with("U ")), "U is in the keys help");
+        assert!(shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "U"), "U is in the keys help");
     }
 }

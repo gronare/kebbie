@@ -250,7 +250,8 @@ mod tests {
     use crate::board::columns::row_facts;
     use crate::board::detail::permit_chip;
     use crate::board::{Hit, Mode};
-    use crate::board::status_bar::help_lines;
+    use crate::board::keys_window::shown;
+    use crate::keys::Ctx;
     use crate::board::widgets::{GREEN, TEAL};
 
     #[test]
@@ -527,8 +528,8 @@ mod tests {
         assert_eq!(menu_group(Some(Act::Drop)), "END IT");
         assert_eq!(menu_group(Some(Act::Push)), "BRANCH");
         assert_eq!(menu_group(Some(Act::Permit)), "BRANCH");
-        let help = help_lines(false);
-        let labels: Vec<&str> = help.iter().map(|line| line.spans[0].content.trim()).collect();
+        let help = shown(crate::keys::map(), Ctx::Work, false);
+        let labels: Vec<&str> = help.iter().map(|(key, _)| key.as_str()).collect();
         for key in ['n', 'g', 'c', 'r', 'w', 'b', 'v', 'a', 'e', 'u', 'p', 'd', 'z', 'x', 'R', 'A', 'U', 'i', 'm', 'q', '/'] {
             assert!(labels.iter().any(|label| label.split_whitespace().any(|word| word == key.to_string())), "{key} is not in the keys help: {labels:?}");
         }
