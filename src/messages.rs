@@ -39,13 +39,14 @@ pub struct Message {
     pub forced: bool,
 }
 
-// A question a task put to the user through kelpie: its options as (label, meaning), the recommended one (1-based), the plan to read (a file, or vault:<note>), and whether the lead kept it for the user while they were away.
+// A question a task put to the user through kelpie: its options as (label, meaning), the recommended one (1-based), the plan to read (a file, or vault:<note>), the options (0-based) that take the user's comment, and whether the lead kept it for the user while they were away.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Question {
     pub options: Vec<(String, String)>,
     pub recommend: usize,
     pub plan: Option<String>,
     pub plan_at: Option<i64>,
+    pub comment: Vec<usize>,
     pub answered: bool,
     pub waits: bool,
 }
@@ -88,10 +89,16 @@ pub fn now() -> u64 {
 
 fn question_from(record: &Value) -> Option<Question> {
     let question = record.get("question")?;
-    let options = question["options"].as_array()?.iter()
+    let listed = question["options"].as_array()?;
+    let options = listed.iter()
         .map(|option| (option["label"].as_str().unwrap_or_default().to_string(), option["meaning"].as_str().unwrap_or_default().to_string()))
         .collect();
-    Some(Question { options, recommend: question["recommend"].as_u64().unwrap_or(1) as usize, plan: question["plan"].as_str().map(str::to_string), plan_at: question["plan_at_ms"].as_i64().or_else(|| question["plan_at"].as_f64().map(questions::millis)), answered: false, waits: false })
+    let plan = question["plan"].as_str().map(str::to_string);
+    let marked = listed.iter().enumerate().filter(|(_, option)| option["comment"].as_bool() == Some(true)).map(|(index, _)| index).collect();
+    // A plan asked before options carried their comment mark still takes one on its three commented answers.
+    let old_plan = plan.is_some() && listed.iter().all(|option| option.get("comment").is_none());
+    let comment = if old_plan { questions::PLAN_COMMENT.to_vec() } else { marked };
+    Some(Question { options, recommend: question["recommend"].as_u64().unwrap_or(1) as usize, plan, plan_at: question["plan_at_ms"].as_i64().or_else(|| question["plan_at"].as_f64().map(questions::millis)), comment, answered: false, waits: false })
 }
 
 // The log is append-only: a message line, and later lines with only its id and its new state (delivered, answered, kept for the user).
@@ -1069,7 +1076,7 @@ mod tests {
     fn a_question_folds_with_its_options_and_its_answer() {
         let question = r#"{"id":"q1","at":10,"from":"billing@web","to":"you","text":"Which queue?","state":"asked","question":{"options":[{"label":"A","meaning":"one"},{"label":"B","meaning":"two"}],"recommend":1,"plan":"vault:Projects/billing.md"}}"#;
         let asked = fold(question);
-        assert_eq!(asked[0].question, Some(Question { options: vec![("A".to_string(), "one".to_string()), ("B".to_string(), "two".to_string())], recommend: 1, plan: Some("vault:Projects/billing.md".to_string()), plan_at: None, answered: false, waits: false }));
+        assert_eq!(asked[0].question, Some(Question { options: vec![("A".to_string(), "one".to_string()), ("B".to_string(), "two".to_string())], recommend: 1, plan: Some("vault:Projects/billing.md".to_string()), plan_at: None, comment: questions::PLAN_COMMENT.to_vec(), answered: false, waits: false }));
         assert_eq!(addressee(&asked[0]), "you · asks");
         let kept = fold(&format!("{question}\n{{\"id\":\"q1\",\"at\":11,\"state\":\"waits\"}}"));
         assert!(kept[0].question.as_ref().unwrap().waits && !kept[0].held);

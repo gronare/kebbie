@@ -498,6 +498,7 @@ fn ask(label: &str, session: &str, cwd: &Path) -> Result<String> {
         text: text.clone(),
         options: vec![("Yes".to_string(), "restart it now, resuming its conversation".to_string()), ("No".to_string(), "keep it until its background work is done, then restart it when idle".to_string())],
         recommend: 2,
+        comment: Vec::new(),
     };
     let id = messages::new_id("restart");
     let mut record = questions::record(&id, messages::now(), FROM, &asked, None, None);

@@ -73,6 +73,21 @@ impl QuestionWindow {
         }
     }
 
+    // A click selects an answer, and opens the comment field of one that takes a comment; it never sends.
+    pub(super) fn click(&mut self, questions: &[Message], index: usize) {
+        self.option = index;
+        let answers = questions.get(self.selected).map(answers).unwrap_or_default();
+        self.typing = false;
+        if let Some(answer) = answers.get(index).filter(|answer| answer.takes_comment) {
+            self.open_comment(answer);
+        }
+    }
+
+    fn open_comment(&mut self, answer: &Answer) {
+        self.comment.set_placeholder_text(if answer.choice.is_none() { "your answer" } else { "your comment" });
+        self.typing = true;
+    }
+
     fn comment(&self) -> String {
         self.comment.lines().join("\n").trim().to_string()
     }
@@ -103,7 +118,8 @@ fn answers(message: &Message) -> Vec<Answer> {
         };
         let recommended = question.is_some_and(|question| question.recommend == index + 1);
         let about = if recommended { format!("recommended · {meaning}") } else { meaning.clone() };
-        Answer { key, short, label, about, meaning, recommended, choice: Some(index), takes_comment: planned.is_some_and(|at| at > 0) }
+        let takes_comment = question.is_some_and(|question| question.comment.contains(&index));
+        Answer { key, short, label, about, meaning, recommended, choice: Some(index), takes_comment }
     }).collect();
     answers.push(Answer {
         key: 'w', short: "own words".to_string(), label: OWN_WORDS.to_string(), about: "the comment is the whole answer".to_string(),
@@ -206,8 +222,7 @@ impl App {
     fn choose(&mut self, window: &mut QuestionWindow, answers: &[Answer]) {
         let Some(answer) = answers.get(window.option) else { return };
         if answer.takes_comment {
-            window.comment.set_placeholder_text(if answer.choice.is_none() { "your answer" } else { "comment (optional)" });
-            window.typing = true;
+            window.open_comment(answer);
         } else {
             self.send(window, answers);
         }
@@ -216,9 +231,10 @@ impl App {
     fn send(&mut self, window: &mut QuestionWindow, answers: &[Answer]) {
         let (Some(message), Some(answer)) = (self.questions.get(window.selected), answers.get(window.option)) else { return };
         let comment = if answer.takes_comment { window.comment() } else { String::new() };
-        if answer.choice.is_none() && comment.is_empty() {
+        if answer.takes_comment && comment.is_empty() {
             window.typing = true;
-            window.notice = Some((false, "In your own words: write the answer in the comment field first.".to_string()));
+            let missing = if answer.choice.is_none() { "In your own words: write the answer in the comment field first.".to_string() } else { format!("{}: write your comment first.", answer.label) };
+            window.notice = Some((false, missing));
             return;
         }
         let (sender, result) = mpsc::channel();
@@ -726,7 +742,7 @@ mod tests {
         press(&mut app, KeyCode::Char('c'));
         let (rows, _) = render(&mut app, 60, 30);
         let screen = rows.join("\n");
-        assert!(screen.contains("Approve with a comment · build it, taking") && screen.contains("comment (optional)"), "{screen}");
+        assert!(screen.contains("Approve with a comment · build it, taking") && screen.contains("your comment"), "{screen}");
         assert!(!screen.contains("a approve") && screen.contains("esc back to the answers"), "{screen}");
         let plan_after = rows.iter().filter(|row| row.contains("plan step")).count();
         assert_eq!(plan_before - plan_after, 2, "the plan gives up only the box's rows: {screen}");
@@ -739,7 +755,7 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         let (rows, _) = render(&mut app, 60, 30);
         let screen = rows.join("\n");
-        assert!(matches!(app.mode, Mode::Questions(_)) && screen.contains("a approve") && !screen.contains("comment (optional)"), "esc goes back to the answers: {screen}");
+        assert!(matches!(app.mode, Mode::Questions(_)) && screen.contains("a approve") && !screen.contains("your comment"), "esc goes back to the answers: {screen}");
     }
 
     #[test]
@@ -963,5 +979,98 @@ mod tests {
         assert!(shown.contains("▣ ../../etc/passwd"), "an image is shown by its path, read by the user before anything opens it: {shown}");
         terminal.draw(|frame| frame.render_widget(Paragraph::new(lines.clone()), frame.area())).unwrap();
         no_escape_reaches_the_terminal(terminal.backend().buffer(), "a card");
+    }
+
+    const CHANGES: &str = r#"{"id":"q3","at":30,"from":"search-filters@PLACE","to":"you","text":"Approve the mock?","state":"asked","question":{"options":[{"label":"Approve","meaning":"build it","comment":false},{"label":"Approve with changes","meaning":"build it, taking your comment in","comment":true}],"recommend":1}}"#;
+
+    fn typing(app: &App) -> (bool, bool, Option<String>) {
+        let Mode::Questions(window) = &app.mode else { panic!("the questions window is open") };
+        (window.typing, window.answering.is_some(), window.notice.as_ref().map(|(_, text)| text.clone()))
+    }
+
+    fn with_changes(app: &mut App) {
+        let place = app.tasks.first().map(|item| item.place.clone()).unwrap_or_default();
+        app.questions = messages::fold(&CHANGES.replace("PLACE", &place));
+    }
+
+    #[test]
+    fn an_option_marked_for_a_comment_opens_the_field_on_its_digit_and_sends_only_with_text() {
+        let mut app = test_app(Vec::new());
+        with_changes(&mut app);
+        app.open_questions(Some(0));
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(typing(&app), (true, false, None), "the digit opens the field instead of sending");
+        assert!(render(&mut app, 100, 30).0.join("\n").contains("your comment"));
+        press(&mut app, KeyCode::Enter);
+        let (open, sent, notice) = typing(&app);
+        assert!(open && !sent && notice.is_some_and(|notice| notice.contains("Approve with changes: write your comment first")), "empty text asks again");
+        press(&mut app, KeyCode::Esc);
+        assert!(!typing(&app).0, "esc goes back to the answers");
+        press(&mut app, KeyCode::Enter);
+        let (open, sent, _) = typing(&app);
+        assert!(open && !sent, "enter on the selected marked option opens the field again");
+        for character in "smaller".chars() {
+            press(&mut app, KeyCode::Char(character));
+        }
+        press(&mut app, KeyCode::Enter);
+        assert!(typing(&app).1, "with text it sends");
+    }
+
+    #[test]
+    fn an_option_without_the_mark_still_sends_on_its_digit() {
+        let mut app = test_app(Vec::new());
+        with_changes(&mut app);
+        app.open_questions(Some(0));
+        press(&mut app, KeyCode::Char('1'));
+        let (open, sent, _) = typing(&app);
+        assert!(!open && sent, "a plain option answers at once");
+    }
+
+    #[test]
+    fn a_click_on_a_marked_option_opens_its_field_and_a_click_on_a_plain_one_only_selects_it() {
+        let mut app = test_app(Vec::new());
+        with_changes(&mut app);
+        app.open_questions(Some(0));
+        let (rows, _) = render(&mut app, 100, 30);
+        let (x, y) = find(&rows, "Approve with changes")[0];
+        click(&mut app, x as u16 + 1, y as u16);
+        assert_eq!(typing(&app), (true, false, None));
+        press(&mut app, KeyCode::Esc);
+        let (rows, _) = render(&mut app, 100, 30);
+        let (x, y) = find(&rows, "1  Approve")[0];
+        click(&mut app, x as u16 + 3, y as u16);
+        let Mode::Questions(window) = &app.mode else { panic!() };
+        assert_eq!((window.option, window.typing, window.answering.is_some()), (0, false, false), "a click never sends");
+    }
+
+    #[test]
+    fn the_cards_s_and_the_enter_menu_reach_the_same_comment_field() {
+        let mut app = crate::board::test_support::carded(false);
+        with_changes(&mut app);
+        render(&mut app, 112, 40);
+        app.handle_normal(KeyEvent::from(KeyCode::Char('s')));
+        assert!(matches!(app.mode, Mode::Questions(_)), "s opens the question");
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(typing(&app), (true, false, None), "from the card's s");
+        app.mode = Mode::Normal;
+        app.handle_normal(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Options(0)) && app.choices()[0].label == "Answer its question");
+        app.handle_options(0, Some(crate::keys::Act::Options), KeyEvent::from(KeyCode::Enter));
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(typing(&app), (true, false, None), "from the enter menu");
+    }
+
+    #[test]
+    fn a_plans_commented_answers_need_their_comment_too() {
+        let mut app = test_app(Vec::new());
+        long_plan(&mut app);
+        app.open_questions(Some(1));
+        press(&mut app, KeyCode::Char('r'));
+        press(&mut app, KeyCode::Enter);
+        let (open, sent, notice) = typing(&app);
+        assert!(open && !sent && notice.is_some_and(|notice| notice.starts_with("Ask for changes")), "a plan asked before the mark existed still needs the text");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('a'));
+        assert!(typing(&app).1, "approve sends at once");
     }
 }

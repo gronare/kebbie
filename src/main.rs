@@ -102,8 +102,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   with ready, --card <file> is the sign-off card the push dialog shows above the commits
   kelpie ask --option \"<label>: <meaning>\" … --recommend <n> <question>
                                   run by a task's Claude to put a question to the user: two to four options, one
-                                  recommended (--plan vault:<note> or --plan <file> asks to approve a plan instead); it
-                                  waits on the board, where you answer it, the lead gets a copy, and the answer reaches
+                                  recommended; an option ending in \" +comment\" opens a comment field on the board and
+                                  sends only with your text (--plan vault:<note> or --plan <file> asks to approve a plan
+                                  instead, with its four answers: approve, approve with a comment, ask for changes,
+                                  reject with a comment); it waits on the board, where you answer it, the lead gets a copy, and the answer reaches
                                   the task as a message from you
   kelpie answered <task>          a task's question is settled elsewhere (in its Space, or dropped): it leaves the board
   kelpie notify <text>            run notify.command with this text (KELPIE_EVENT=summary): the lead's word to the user

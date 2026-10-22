@@ -34,8 +34,8 @@ That was at your start; `{kelpie} peers` prints the list now. A task with the sa
 
 When you need the user (a decision, a choice between approaches, a plan to approve), ask through kelpie: the question waits for them on the kelpie board, they answer it there, and the lead gets a copy.
 
-1. Ask what you need decided before you plan, one question per `{kelpie} ask --option "<label>: <what it means>" --option "<label>: <what it means>" --recommend <n> "<question>"`: two to four options, each a short label and what choosing it means, and the number of the one you recommend.
-2. {plan} The user approves it, approves it with a comment, asks for changes or rejects it with a comment; code waits for the approval.
+1. Ask what you need decided before you plan, one question per `{kelpie} ask --option "<label>: <what it means>" --option "<label>: <what it means>" --recommend <n> "<question>"`: two to four options, each a short label and what choosing it means, and the number of the one you recommend. End an option with ` +comment` when choosing it means the user writes something ("Approve with changes: build it, taking your comment in +comment", "Tell me the changes: in your own words +comment"): the board then opens a comment field for it and sends only with their text.
+2. {plan} The user approves it, approves it with a comment, asks for changes or rejects it with a comment; code waits for the approval. A mock or a design to approve goes the same way: put its link in the plan and ask with `--plan`, so the user gets the same four answers and a comment field with them.
 3. `{kelpie} ask` is your report for the turn. End the turn with the question in one line as your last words. The answer arrives as `[from you] <answer>`: the option the user picked with their comment, or their own words in place of any option.
 
 ## What you notice outside your task

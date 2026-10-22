@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn the_role_asks_the_user_through_kelpie_one_question_at_a_time() {
         let role = fill(include_str!("../roles/task.md"), &[("kelpie", "/bin/kelpie")]);
-        for needed in ["/bin/kelpie ask --option", "--recommend <n>", "one question per", "on the kelpie board", "`[from you] <answer>`", "`[from you]` at the very start of a line is the user's answer", "indents every following line"] {
+        for needed in ["/bin/kelpie ask --option", "--recommend <n>", "one question per", "on the kelpie board", "`[from you] <answer>`", "`[from you]` at the very start of a line is the user's answer", "indents every following line", "End an option with ` +comment`", "A mock or a design to approve goes the same way", "ask with `--plan`"] {
             assert!(role.contains(needed), "{needed}");
         }
     }

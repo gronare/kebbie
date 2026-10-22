@@ -10,7 +10,9 @@ use crate::report;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 
-const USAGE: &str = "kelpie ask --option \"<label>: <what it means>\" --option \"<label>: <what it means>\" [--option …] --recommend <n> \"<question>\", or kelpie ask --plan <vault:<note path> | file> [\"<question>\"]";
+const USAGE: &str = "kelpie ask --option \"<label>: <what it means>\" --option \"<label>: <what it means>\" [--option …] --recommend <n> \"<question>\", where an option ending in \" +comment\" takes the user's written comment, or kelpie ask --plan <vault:<note path> | file> [\"<question>\"]";
+
+pub const COMMENT_MARK: &str = "+comment";
 
 pub const VAULT_PLAN: &str = "vault:";
 
@@ -26,7 +28,10 @@ pub struct Asked {
     pub text: String,
     pub options: Vec<(String, String)>,
     pub recommend: usize,
+    pub comment: Vec<usize>,
 }
+
+pub const PLAN_COMMENT: [usize; 3] = [1, 2, 3];
 
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -39,7 +44,7 @@ pub fn parse(options: &[&str], recommend: Option<&str>, plan: bool, text: &str) 
             return Err("kelpie ask --plan takes the plan's own options (approve, approve with a comment, ask for changes, reject with a comment); leave out --option and --recommend".to_string());
         }
         let text = if text.is_empty() { "Approve this plan?".to_string() } else { text };
-        return Ok(Asked { text, options: PLAN_OPTIONS.iter().map(|(label, meaning)| (label.to_string(), meaning.to_string())).collect(), recommend: 1 });
+        return Ok(Asked { text, options: PLAN_OPTIONS.iter().map(|(label, meaning)| (label.to_string(), meaning.to_string())).collect(), recommend: 1, comment: PLAN_COMMENT.to_vec() });
     }
     if text.is_empty() {
         return Err(format!("kelpie ask needs the question: {USAGE}"));
@@ -47,14 +52,19 @@ pub fn parse(options: &[&str], recommend: Option<&str>, plan: bool, text: &str) 
     if !(2..=4).contains(&options.len()) {
         return Err(format!("kelpie ask takes two to four --option, not {}: {USAGE}", options.len()));
     }
-    let options = options.iter().map(|option| match option.split_once(':') {
+    let marked: Vec<(&str, bool)> = options.iter().map(|option| match option.trim_end().strip_suffix(COMMENT_MARK) {
+        Some(rest) if rest.ends_with(char::is_whitespace) => (rest, true),
+        _ => (*option, false),
+    }).collect();
+    let comment = marked.iter().enumerate().filter(|(_, (_, takes))| *takes).map(|(index, _)| index).collect();
+    let options = marked.iter().map(|(option, _)| match option.split_once(':') {
         Some((label, meaning)) if !one_line(label).is_empty() && !one_line(meaning).is_empty() => Ok((one_line(label), one_line(meaning))),
-        _ => Err(format!("--option \"{option}\" needs a label and what it means, as \"<label>: <what it means>\"")),
+        _ => Err(format!("--option \"{option}\" needs a label and what it means, as \"<label>: <what it means>\", with \" {COMMENT_MARK}\" after it when the option takes the user's comment")),
     }).collect::<Result<Vec<_>>>()?;
     let recommend = recommend.ok_or(format!("kelpie ask needs --recommend <n>, the option you recommend: {USAGE}"))?;
     let recommend: usize = recommend.trim().parse().ok().filter(|n| (1..=options.len()).contains(n))
         .ok_or(format!("--recommend is the number of an option, 1 to {}, not \"{recommend}\"", options.len()))?;
-    Ok(Asked { text, options, recommend })
+    Ok(Asked { text, options, recommend, comment })
 }
 
 // A note's mtime in whole milliseconds: an f64 read back from JSON can differ in its last digit, which would show as a change.
@@ -64,7 +74,7 @@ pub fn millis(seconds: f64) -> i64 {
 
 // The question's own log line; the task's report beside it puts the task under Needs you.
 pub fn record(id: &str, at: u64, from: &str, asked: &Asked, plan: Option<&str>, plan_at: Option<i64>) -> Value {
-    let options: Vec<Value> = asked.options.iter().map(|(label, meaning)| json!({ "label": label, "meaning": meaning })).collect();
+    let options: Vec<Value> = asked.options.iter().enumerate().map(|(index, (label, meaning))| json!({ "label": label, "meaning": meaning, "comment": asked.comment.contains(&index) })).collect();
     json!({
         "id": id, "at": at, "from": from, "to": USER_LABEL, "text": asked.text, "state": "asked",
         "question": { "options": options, "recommend": asked.recommend, "plan": plan, "plan_at_ms": plan_at },
@@ -146,7 +156,7 @@ pub fn text(message: &Message) -> String {
     let mut lines = vec![message.text.clone()];
     for (index, (label, meaning)) in question.options.iter().enumerate() {
         let recommended = if index + 1 == question.recommend { " (recommended)" } else { "" };
-        lines.push(format!("{}. {label}{recommended}: {meaning}", index + 1));
+        lines.push(format!("{}. {label}{recommended}: {meaning}{}", index + 1, takes(&question.comment, index)));
     }
     if let Some(plan) = &question.plan {
         lines.push(format!("plan: {plan}"));
@@ -154,9 +164,15 @@ pub fn text(message: &Message) -> String {
     lines.join("\n")
 }
 
+const TAKES_COMMENT: &str = " (with the user's comment)";
+
+fn takes(comment: &[usize], index: usize) -> &'static str {
+    if comment.contains(&index) { TAKES_COMMENT } else { "" }
+}
+
 fn options_line(question: &Question) -> String {
     question.options.iter().enumerate()
-        .map(|(index, (label, meaning))| format!("{label}{}: {meaning}", if index + 1 == question.recommend { " (recommended)" } else { "" }))
+        .map(|(index, (label, meaning))| format!("{label}{}: {meaning}{}", if index + 1 == question.recommend { " (recommended)" } else { "" }, takes(&question.comment, index)))
         .collect::<Vec<_>>().join("; ")
 }
 
@@ -178,6 +194,9 @@ pub fn answer_text(message: &Message, choice: Option<usize>, comment: &str) -> R
     match choice {
         Some(index) => {
             let (label, meaning) = question.options.get(index).ok_or_else(|| format!("The question has {} options; there is no option {}", question.options.len(), index + 1))?;
+            if comment.is_empty() && question.comment.contains(&index) {
+                return Err(format!("{label} takes the user's comment; write it before sending"));
+            }
             let comment = if comment.is_empty() { String::new() } else { format!(" Their comment: {comment}") };
             Ok(format!("The user's answer to \"{}\": {label} ({meaning}).{comment}", message.text))
         }
@@ -283,7 +302,7 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
 
 fn options_text(asked: &Asked) -> String {
     asked.options.iter().enumerate()
-        .map(|(index, (label, meaning))| format!("  {}. {label}{}: {meaning}", index + 1, if index + 1 == asked.recommend { " (recommended)" } else { "" }))
+        .map(|(index, (label, meaning))| format!("  {}. {label}{}: {meaning}{}", index + 1, if index + 1 == asked.recommend { " (recommended)" } else { "" }, takes(&asked.comment, index)))
         .collect::<Vec<_>>().join("\n")
 }
 
@@ -411,6 +430,7 @@ mod tests {
             text: "Which queue should retries use?".to_string(),
             options: vec![("Sidekiq".to_string(), "reuse the jobs we have".to_string()), ("Solid Queue".to_string(), "one less service".to_string())],
             recommend: 2,
+            comment: Vec::new(),
         });
         let two = ["A: one", "B: two"];
         assert!(parse(&["A: one"], Some("1"), false, "Q?").is_err());
@@ -513,7 +533,7 @@ mod tests {
         assert_eq!(copy, base.join("state/plans/billing@web-10.md"));
         assert_eq!(fs::read_to_string(&copy).unwrap(), "# Plan\n1. rename");
         assert!(keep_plan(&base.join("missing.md"), &base.join("state"), "billing@web", "11").is_err());
-        let question = Question { options: Vec::new(), recommend: 1, plan: Some(copy.display().to_string()), plan_at: None, answered: false, waits: false };
+        let question = Question { options: Vec::new(), recommend: 1, plan: Some(copy.display().to_string()), plan_at: None, comment: Vec::new(), answered: false, waits: false };
         assert_eq!(plan_text(&question).as_deref(), Some("# Plan\n1. rename"));
         let own = base.join("state/plans/billing@web.md");
         fs::write(&own, "# Own plan").unwrap();
@@ -539,7 +559,7 @@ mod tests {
 
     #[test]
     fn a_vault_plan_reads_as_changed_once_its_note_changed_after_it_was_asked() {
-        let question = |plan: &str, plan_at: Option<i64>| Question { options: Vec::new(), recommend: 1, plan: Some(plan.to_string()), plan_at, answered: false, waits: false };
+        let question = |plan: &str, plan_at: Option<i64>| Question { options: Vec::new(), recommend: 1, plan: Some(plan.to_string()), plan_at, comment: Vec::new(), answered: false, waits: false };
         let note = |at: f64| move |key: &str| (key == "Projects/billing.md").then_some(at);
         assert!(!plan_changed_in(&question("vault:Projects/billing.md", Some(5000)), note(5.0)));
         assert!(plan_changed_in(&question("vault:Projects/billing.md", Some(5000)), note(9.0)));
@@ -616,5 +636,30 @@ mod tests {
         assert!(plan_reference("../elsewhere.md", &cwd, &state, "billing@app", "8").is_ok(), "any file the task can read may be its plan; the board shows the user what it is");
         assert_eq!(plan_reference("vault:/Projects/x", &cwd, &state, "billing@app", "9").unwrap(), "vault:Projects/x.md");
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn an_option_ending_in_the_comment_mark_takes_the_users_comment_and_the_answer_needs_it() {
+        let asked = parse(&["Approve: build it", "Approve with changes: build it, taking your comment in +comment", "Tell me: write it   +comment  "], Some("1"), false, "Mock ok?").unwrap();
+        assert_eq!(asked.options[1], ("Approve with changes".to_string(), "build it, taking your comment in".to_string()), "the mark is not part of the meaning");
+        assert_eq!(asked.options[2].1, "write it");
+        assert_eq!(asked.comment, [1, 2]);
+        assert_eq!(parse(&["A: x+comment", "B: y"], Some("1"), false, "Q?").unwrap().comment, Vec::<usize>::new(), "only a mark after a space counts");
+        let messages = log(&[record("q1", 10, "web@x", &asked, None, None)]);
+        assert_eq!(messages[0].question.as_ref().unwrap().comment, [1, 2], "the mark survives the log");
+        assert!(text(&messages[0]).contains("2. Approve with changes: build it, taking your comment in (with the user's comment)"), "{}", text(&messages[0]));
+        assert!(question_copy(&messages[0], true).contains("Tell me: write it (with the user's comment)"), "the lead settling it while the user is away sees it too");
+        assert!(answer_text(&messages[0], Some(1), " ").unwrap_err().contains("Approve with changes takes the user's comment"));
+        assert!(answer_text(&messages[0], Some(1), "smaller").unwrap().ends_with("Their comment: smaller"));
+        assert!(answer_text(&messages[0], Some(0), "").is_ok(), "an option without the mark needs no comment");
+    }
+
+    #[test]
+    fn a_plan_takes_a_comment_on_its_three_commented_answers_also_from_a_record_written_before_the_mark() {
+        let plan = parse(&[], None, true, "").unwrap();
+        assert_eq!(plan.comment, PLAN_COMMENT);
+        let old = log(&[json!({ "id": "q", "at": 1, "from": "a@x", "to": "you", "text": "Approve this plan?", "state": "asked", "question": { "options": PLAN_OPTIONS.iter().map(|(label, meaning)| json!({ "label": label, "meaning": meaning })).collect::<Vec<_>>(), "recommend": 1, "plan": "vault:Projects/a.md" } })]);
+        assert_eq!(old[0].question.as_ref().unwrap().comment, PLAN_COMMENT);
+        assert!(answer_text(&old[0], Some(2), "").is_err() && answer_text(&old[0], Some(0), "").is_ok());
     }
 }
