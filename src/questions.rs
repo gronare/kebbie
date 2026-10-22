@@ -203,7 +203,9 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
     let _lock = Lock::take(true)?;
     let messages = messages::load();
     let open = open_now(&messages);
-    let message = open.iter().copied().find(|question| question.id == id).ok_or("That question no longer waits for an answer")?;
+    let Some(message) = open.iter().copied().find(|question| question.id == id) else {
+        return answer_late(&messages, id, choice, comment, &sessions);
+    };
     if message.kind.as_deref() == Some(crate::restart::QUESTION_KIND) {
         let session = message.about.clone().ok_or("That restart question names no session")?;
         let yes = choice == Some(0);
@@ -225,6 +227,30 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
     };
     messages::copy_to_lead_locked(&answer_copy(message, choice, comment), None, &sessions)?;
     Ok(format!("Answered {}'s question. {told}", message.from))
+}
+
+const CLOSED_BEFORE: &str = "(The question had already closed when the user answered it on the board, since a new turn started in your pane; act on it if it still applies.)";
+
+// A task's question nobody has answered yet, though it no longer waits on the board; a restart question's answer means nothing once it has closed.
+fn closed_unanswered<'a>(messages: &'a [Message], id: &str) -> Option<&'a Message> {
+    messages.iter().find(|message| message.id == id && message.question.as_ref().is_some_and(|question| !question.answered))
+        .filter(|message| message.kind.as_deref() != Some(crate::restart::QUESTION_KIND))
+}
+
+// The caller holds the lock. A turn that starts in the task's pane closes its question, so an answer given on the board a moment later is delivered as the user's word rather than lost.
+fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &str, sessions: &[peers::Session]) -> Result<String> {
+    let message = closed_unanswered(messages, id).ok_or("That question no longer waits for an answer")?;
+    let text = format!("{} {CLOSED_BEFORE}", answer_text(message, choice, comment)?);
+    let told = match sessions.iter().find(|session| session.address == message.from) {
+        Some(task) => messages::send_locked(USER_LABEL, &[task], &text, sessions, None, Some("answer"))?.join(" "),
+        None => {
+            messages::hold_for(USER_LABEL, &message.from, &text, None, Some("answer"))?;
+            format!("{} has no session now; held, and delivered when it runs.", message.from)
+        }
+    };
+    messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
+    messages::copy_to_lead_locked(&answer_copy(message, choice, comment), None, sessions)?;
+    Ok(format!("Answered {}'s question, which had closed when a turn started in its pane; your answer goes to it as a message. {told}", message.from))
 }
 
 pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&str>, text: &str) -> Result<String> {
@@ -357,6 +383,26 @@ mod tests {
 
     fn state(id: &str, state: &str) -> Value {
         json!({ "id": id, "at": 50, "state": state })
+    }
+
+    #[test]
+    fn an_answer_given_on_the_board_after_a_new_turn_closed_the_question_still_reaches_the_task() {
+        let log = [
+            r#"{"id":"q1","at":10,"from":"billing@web","to":"you","text":"Probe?","state":"asked","question":{"options":[{"label":"Yes","meaning":"run it"},{"label":"No","meaning":"skip"}],"recommend":1}}"#,
+            r#"{"id":"q2","at":11,"from":"shop@web","to":"you","text":"Which?","state":"asked","question":{"options":[["A","a"],["B","b"]],"recommend":1}}"#,
+            r#"{"id":"q2","at":12,"state":"answered"}"#,
+            r#"{"id":"q3","at":13,"from":"kelpie","to":"you","text":"Restart?","state":"asked","kind":"restart","question":{"options":[["Yes","y"],["No","n"]],"recommend":1}}"#,
+        ].join("\n");
+        let messages = fold(&log);
+        assert!(open(&messages, |task| (task == "billing@web").then_some(20)).iter().all(|question| question.id != "q1"), "a new turn in the pane closed it");
+        let late = closed_unanswered(&messages, "q1").unwrap();
+        assert_eq!(format!("{} {CLOSED_BEFORE}", answer_text(late, Some(0), "").unwrap()), "The user's answer to \"Probe?\": Yes (run it). (The question had already closed when the user answered it on the board, since a new turn started in your pane; act on it if it still applies.)");
+        assert!(closed_unanswered(&messages, "q2").is_none(), "answered once on the board, a second answer is refused");
+        assert!(closed_unanswered(&messages, "nope").is_none());
+        assert!(closed_unanswered(&messages, "q3").is_none(), "a restart question's late yes would restart nothing it still means");
+        let source = include_str!("questions.rs");
+        let answer = &source[source.find("pub fn answer(").unwrap()..source.find("pub const CLOSED_BEFORE").or_else(|| source.find("const CLOSED_BEFORE")).unwrap()];
+        assert!(answer.contains("else {\n        return answer_late("), "a question no longer open goes to answer_late instead of an error that drops the answer");
     }
 
     #[test]
