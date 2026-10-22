@@ -249,7 +249,7 @@ pub(crate) fn settings(kelpie: &str, address: &str, gate: Option<&str>, tmp: Opt
     }
     json!({
         "env": env,
-        "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)"), format!("Bash({kelpie} choose:*)"), format!("Bash({kelpie} after:*)"), "Bash(herdr pane send-keys:*)".to_string(), "Bash(herdr pane send-text:*)".to_string(), "Bash(herdr pane run:*)".to_string(), "Bash(herdr agent send-keys:*)".to_string(), "Bash(herdr agent prompt:*)".to_string()], "allow": allow },
+        "permissions": { "deny": ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)"), format!("Bash({kelpie} choose:*)"), format!("Bash({kelpie} after:*)"), format!("Bash({kelpie} ci dismiss:*)"), "Bash(herdr pane send-keys:*)".to_string(), "Bash(herdr pane send-text:*)".to_string(), "Bash(herdr pane run:*)".to_string(), "Bash(herdr agent send-keys:*)".to_string(), "Bash(herdr agent prompt:*)".to_string()], "allow": allow },
         "hooks": hooks,
     }).to_string()
 }

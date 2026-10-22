@@ -174,6 +174,13 @@ pub fn failed_job(text: &str) -> Option<(String, Option<u64>)> {
     Some((job["name"].as_str().unwrap_or("a job").to_string(), job["databaseId"].as_u64()))
 }
 
+pub fn failed_step(text: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    let failed = |item: &&Value| item["status"] == "completed" && !PASSED.contains(&item["conclusion"].as_str().unwrap_or_default());
+    let job = value["jobs"].as_array()?.iter().find(failed)?;
+    job["steps"].as_array()?.iter().find(failed)?["name"].as_str().map(str::to_string)
+}
+
 // gh prints each line as job, step and text separated by tabs; the text alone is kept, without escapes a terminal would act on.
 pub fn log_tail(log: &str, count: usize) -> String {
     let lines: Vec<String> = log.lines().map(|line| {
@@ -278,7 +285,7 @@ fn pushing_file(state: &Path, address: &str) -> PathBuf {
 }
 
 // A watch written before its push is left alone by the rounds until the push is done, so nothing reads or rewrites it halfway; a pusher that died leaves it to them after PUSHING_SECONDS.
-fn pushing(state: &Path, address: &str, now: u64) -> bool {
+pub(crate) fn pushing(state: &Path, address: &str, now: u64) -> bool {
     fs::read_to_string(pushing_file(state, address)).ok().and_then(|text| text.trim().parse::<u64>().ok()).is_some_and(|at| now.saturating_sub(at) < PUSHING_SECONDS)
 }
 
@@ -332,6 +339,7 @@ pub enum Begin {
 }
 
 pub fn begin(state: &Path, repo: &Path, address: &str, sha: &str, close: bool, pushed: Pushed) -> Begin {
+    let _ = mark_pushing(state, address, messages::now());
     if !crate::config::resolve(Some(repo)).map(|loaded| loaded.settings.ci_watch.value).unwrap_or(true) {
         return Begin::Off;
     }
@@ -458,7 +466,7 @@ pub fn task_message(watch: &Watch, run: &Run, job: &str, tail: &str, pushing: Op
         None => "Find the cause, fix it with a new commit and report ready; the next push is watched the same way.".to_string(),
     };
     format!(
-        "CI failed for {} on {}: {} · {job} ({}). {log}\n{then}",
+        "CI failed for {} on {}: {} · {job} ({}). {log}\n{then}\nWhen the failure is outside the code (a deploy window, infrastructure, secrets, a flake), change nothing: say so with kelpie ci outside \"<what failed>\" and report needs-you. Only the user can dismiss a red CI.",
         watch.short(), if watch.pushed.target.is_empty() { "the default branch" } else { &watch.pushed.target }, run.title(), run.url
     )
 }
@@ -471,13 +479,14 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
         Some(job_id) => crate::sh::run(gh, &["run", "view", "-R", &watch.slug, "--job", &job_id.to_string(), "--log-failed"], Some(&watch.repo)),
         None => crate::sh::run(gh, &["run", "view", &id, "-R", &watch.slug, "--log-failed"], Some(&watch.repo)),
     }.unwrap_or_default();
-    let what = format!("{} · {job}", run.title());
+    let step = jobs.as_deref().and_then(failed_step).map(|step| format!(" · {step}")).unwrap_or_default();
+    let what = format!("{} · {job}{step}", run.title());
     watch.state = State::Failed { at: now, what: what.clone(), url: run.url.clone() };
     let _ = save(state, watch);
     let by = crate::tasks::PushBy::of_word(&watch.pushed.pusher).filter(|_| watch.close);
     let who = by.map(crate::tasks::PushBy::word);
     let open = task_open(watch, &messages::load());
-    let handed = open && match messages::hand_to(&watch.address, &task_message(watch, run, &job, &log_tail(&log, LOG_LINES), who)) {
+    let handed = open && match messages::hand_to(&watch.address, &task_message(watch, run, &format!("{job}{step}"), &log_tail(&log, LOG_LINES), who)) {
         Ok(()) => true,
         Err(error) => {
             eprintln!("Could not tell {} that CI failed: {error}", watch.address);
@@ -605,6 +614,13 @@ mod tests {
         assert!(task_message(&watch, &run("completed", "failure"), "test", "", None).contains("gh showed no log"));
         let pushing = task_message(&watch, &run("completed", "failure"), "test", &tail, Some("the user"));
         assert!(pushing.contains("kelpie pushes it for the user once the lead has checked it") && pushing.contains("do not push") && pushing.contains("needs-you only when you cannot fix it"), "{pushing}");
+    }
+
+    #[test]
+    fn the_failure_names_the_failed_step_of_the_failed_job() {
+        let jobs = r#"{"jobs":[{"name":"lint","status":"completed","conclusion":"success","steps":[{"name":"Lint","status":"completed","conclusion":"success"}]},{"name":"release","status":"completed","conclusion":"failure","databaseId":8,"steps":[{"name":"Build","status":"completed","conclusion":"success"},{"name":"Deploy","status":"completed","conclusion":"failure"},{"name":"Notify","status":"completed","conclusion":"skipped"}]}]}"#;
+        assert_eq!(failed_step(jobs).as_deref(), Some("Deploy"));
+        assert_eq!(failed_step(r#"{"jobs":[{"name":"x","status":"completed","conclusion":"failure"}]}"#), None, "gh without steps names the job alone");
     }
 
     #[test]

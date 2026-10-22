@@ -70,11 +70,15 @@ pub fn done(cwd: &Path, name: Option<&str>) -> Result<String> {
 
 // Done waits for the task's note to have its solution and decisions: Err is the refusal, the task told what to write; a vault that does not answer lets done go on, and Ok says so as a detail.
 pub(super) fn note_ready(vault: Option<&crate::vault_cli::Cli>, state: &Path, address: &str, task: &str) -> Result<Option<String>> {
+    note_waits(vault, state, address, task, true)
+}
+
+pub(super) fn note_waits(vault: Option<&crate::vault_cli::Cli>, state: &Path, address: &str, task: &str, tell: bool) -> Result<Option<String>> {
     let (Some(cli), Some(note)) = (vault, crate::task_note::linked(state, address)) else { return Ok(None) };
     match crate::task_note::waits(cli, &note, task) {
         Ok(None) => Ok(None),
         Ok(Some((user, told))) => {
-            if let Err(error) = messages::notify(address, &told) {
+            if tell && let Err(error) = messages::notify(address, &told) {
                 eprintln!("Could not tell {address} what its note lacks: {error}");
             }
             Err(user)
@@ -85,6 +89,7 @@ pub(super) fn note_ready(vault: Option<&crate::vault_cli::Cli>, state: &Path, ad
 
 pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::vault_cli::Cli>, said: Option<String>, landed: Option<&str>) -> Result<Notice> {
     let repo = main_checkout(cwd)?;
+    let _closing = Closing::take(&state_dir()?, &peers::address(task_of(&find_task(&repo, name, cwd)?), &name_of(&repo)))?;
     let slot = find_task(&repo, name, cwd)?;
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
@@ -118,6 +123,9 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
     let task = task_of(slot);
     if !is_clean(&slot.path)? {
         return Notice::new(Tone::You, "Not closed: it has uncommitted changes").you("Commit them in its Space, or drop the task.").detail("task", task).err();
+    }
+    if stashed(&slot.path, task) {
+        return Notice::new(Tone::You, "Not closed: it has a stash").you("Apply and commit it in its Space, or drop it there with git stash drop.").detail("task", task).err();
     }
     let missing = missing_from(&slot.path, upstream)?;
     if !missing.is_empty() {
@@ -158,8 +166,35 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
     Ok(closed.detail("checkout", fast_forward_main(repo, upstream)?))
 }
 
+// Stashes are shared by every worktree of the repo; git names the branch each was made on.
+pub(super) fn stashed(path: &Path, branch: &str) -> bool {
+    git(path, &["stash", "list", "--format=%gs"]).unwrap_or_default().lines().any(|line| line.starts_with(&format!("WIP on {branch}:")) || line.starts_with(&format!("On {branch}:")))
+}
+
+// The task is looked up again once this is held: a close that won the race has freed it already.
+pub(super) struct Closing(std::fs::File);
+
+impl Closing {
+    pub(super) fn take(state: &Path, address: &str) -> Result<Closing> {
+        let file = crate::state::append_to(&state.join("closing").join(format!("{address}.lock"))).map_err(|error| error.to_string())?;
+        // SAFETY: flock on a descriptor this File owns.
+        if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Notice::new(Tone::NotNow, "It is being closed already").detail("task", address).err();
+        }
+        Ok(Closing(file))
+    }
+}
+
+impl Drop for Closing {
+    // A child forked by another thread holds a copy of the descriptor until it execs; unlocking releases the lock for every copy at once.
+    fn drop(&mut self) {
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.0), libc::LOCK_UN) };
+    }
+}
+
 // The branch's commits whose change upstream lacks, as "sha subject"; empty when every change landed, however it was cherry-picked or squashed.
-fn missing_from(path: &Path, upstream: &str) -> Result<Vec<String>> {
+pub(super) fn missing_from(path: &Path, upstream: &str) -> Result<Vec<String>> {
     let unmatched: Vec<String> = git(path, &["cherry", "-v", "--abbrev", upstream, "HEAD"])?.lines()
         .filter_map(|line| line.strip_prefix("+ ")).map(str::to_string).collect();
     if unmatched.is_empty() {
@@ -188,6 +223,7 @@ pub fn drop_routine_ok(cwd: &Path) -> Result<String> {
 
 fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<&str>) -> Result<Notice> {
     let repo = main_checkout(cwd)?;
+    let _closing = Closing::take(&state_dir()?, &peers::address(task_of(&find_task(&repo, name, cwd)?), &name_of(&repo)))?;
     let slot = find_task(&repo, name, cwd)?;
     let task = task_of(&slot);
     let upstream = default_branch(&repo)?;
@@ -246,6 +282,7 @@ fn dropped_notes(vault: Option<&crate::vault_cli::Cli>, state: &Path, task: &str
 
 fn forget_address(state: &Path, address: &str) {
     crate::task_note::forget(state, address);
+    super::landed::forget(state, address);
     crate::status::forget_title(state, address);
 }
 

@@ -33,8 +33,8 @@ No line means no test run is recorded. The wide panel shows the same line.
 
 | Group | Contains |
 | --- | --- |
-| Needs you | A question on screen; a task that asked for you; a task whose CI failed after a push of only some of its commits, marked `CI failed: <workflow> · <job>`; a push under way whose Claude reported needs-you; a task an API error stopped that kelpie will not resume, marked `stopped by <reason>: <Claude Code's words>`; a task Claude finished that you have not looked at; a ready task whose commits the lead has not approved, marked "rules not checked by the lead". Open questions first. |
-| Working | Claude is mid-turn, or kelpie resumes it after an API error: `retrying after overload (2/4, next 21:14)`, `out of allowance until 17:00`, then `resumed after …` until Claude answers. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task). |
+| Needs you | A question on screen; a task that asked for you; a task whose commits are on the default branch that kelpie does not close by itself, marked `landed on main · d closes it` beside a question, or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kelpie done`](commands.md#kelpie-done-name)); a task whose CI failed after a push of only some of its commits, marked `CI failed: <workflow> · <job> · <step>`, and `its Claude says outside the code: <reason>` once its Claude has said so (`C` dismisses it); a push under way whose Claude reported needs-you; a task an API error stopped that kelpie will not resume, marked `stopped by <reason>: <Claude Code's words>`; a task Claude finished that you have not looked at; a ready task whose commits the lead has not approved, marked "rules not checked by the lead". Open questions first. |
+| Working | Claude is mid-turn, marked `landed on main · kelpie closes it after this turn` when its commits are on the default branch already, or kelpie resumes it after an API error: `retrying after overload (2/4, next 21:14)`, `out of allowance until 17:00`, then `resumed after …` until Claude answers. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task). |
 | To review | Sent to the reviewer, waiting for a pass on its current code. |
 | Ready to push | Reported ready, approved by the lead, passed by the reviewer when sent to review, with no uncommitted changes to tracked files. How far it is behind the default branch does not matter. A push under way stays here while its Claude works for it, marked `pushing for you · <what it waits for>`: the tests for files the default branch changed under it, a conflict, or a fix for CI that failed after the push. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. The row names the runs, and the open task links each run's page. See [`kelpie ci`](commands.md#kelpie-ci---json). |
@@ -89,7 +89,8 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `e` | Rebase onto the default branch now, in the background, without pushing; the result shows when it is done. A conflict goes to its Claude, as with [`kelpie land`](commands.md#kelpie-land-name). | It is behind the default branch and Claude is not mid-turn. |
 | `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn. |
 | `p` | Push: open the push window; `y` or `p` there rebases onto the default branch and pushes. | Claude is not mid-turn and it is not waiting for the reviewer. |
-| `d` | Done: close a task you already pushed elsewhere and free its worktree, also one under CI running or with failed CI you choose to leave. Asks first. | Claude is not mid-turn. |
+| `C` | Dismiss the red CI of a pushed task whose failure is not the code's: kept on record with the reason its Claude gave, and the task closes once its commits are on main. Asks first. Yours alone. | The task's CI failed. |
+| `d` | Done: close a task you already pushed elsewhere and free its worktree, also one under CI running or with failed CI you choose to leave. Asks first. The keeper closes a landed task by itself; `d` is for the ones it leaves to you. | Claude is not mid-turn. |
 | `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task. |
 | `u` | Keep it rebased on main, or switch that off; `●` marks it on. When main moves, the keeper rebases it, never pushes it. See [`kelpie follow`](commands.md#kelpie-follow-name-onoff). Off by default; `done`, `drop` and `reset` switch it off. | It is a task. |
 | `z` | Reset: its work goes, its backlog item returns. Asks first. | Always. |
@@ -263,7 +264,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `done`, `reset`, `drop`, `refresh`, `away`, `update`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `done`, `dismiss_ci`, `reset`, `drop`, `refresh`, `away`, `update`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

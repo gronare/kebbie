@@ -95,7 +95,7 @@ When origin is on GitHub and `gh` is logged in, the task stays open under CI run
 
 | Option | Meaning |
 | --- | --- |
-| `--through <sha>` | Push the commits up to and including `<sha>` and keep the task open. The rest of the branch is rebased on top of what was pushed. |
+| `--through <sha>` | Push the commits up to and including `<sha>` and keep the task open, also when `<sha>` is its last commit. The rest of the branch is rebased on top of what was pushed. A task kept open stays open until you close it (`done`, or Done in its options). |
 
 ### `kelpie ci [--json]`
 
@@ -108,17 +108,44 @@ A watch runs while a board is open: every 30 seconds the board asks `gh run list
 | No runs yet | kelpie waits up to 3 minutes for runs to appear, then treats the commit as green. |
 | Running | The task waits under CI running. |
 | Every run passed, skipped or neutral | After at least a minute since the push, the task closes as `done`: its note is closed when the vault is on, and the lead hears what landed. |
-| A run failed | Its Claude gets the job's name and the last 60 lines of its log, and the lead gets a line. The watch stops. After a push of the whole task, the fix is part of that push: the task stays under Ready to push as `pushing for you · its Claude fixes the red CI`, and once its Claude reports ready and the lead approves the fix, kelpie pushes it for whoever gave the push, and watches it the same way. It moves to Needs you only when its Claude reports needs-you. After a push with `--through`, the task moves to Needs you with `CI failed: <workflow> · <job>`. |
+| A run failed | The failure is named by workflow, job and the step that failed: `CI failed: <workflow> · <job> · <step>`. Its Claude gets that and the last 60 lines of its log, and the lead gets a line. The watch stops. After a push of the whole task, the fix is part of that push: the task stays under Ready to push as `pushing for you · its Claude fixes the red CI`, and once its Claude reports ready and the lead approves the fix, kelpie pushes it for whoever gave the push, and watches it the same way. It moves to Needs you only when its Claude reports needs-you. After a push with `--through`, the task moves to Needs you with `CI failed: <workflow> · <job> · <step>`. |
 
 A task with `--through` that fixes the failure pushes again as usual, and the new push is watched. `done` closes a task whatever CI says. A push with `--through` is watched too and leaves the task where it is.
+
+A red run that is not the code's (a push outside the deploy window, infrastructure, secrets, a flake) stops counting in two ways:
+
+- A later push to the default branch that carries the task's commits passes every workflow that failed on it: the red is superseded, and a task whose commits are on the default branch closes (see [`kelpie done`](#kelpie-done-name)).
+- You dismiss it (below).
 
 ### `kelpie ci tick`
 
 One round of checks for every running watch, as the board runs it, and what came of it.
 
+### `kelpie ci outside "<reason>"`
+
+Run by a task's Claude once it has read the failing log and found the failure outside the code. The row and `kelpie status --json` (`ci_outside`) carry the reason, and the lead hears it. It waives nothing: the red stands until a later push is green or you dismiss it.
+
+### `kelpie ci dismiss <task> [--why <reason>]`
+
+Yours alone, also `C` on the board: no Claude, the lead included, can run it. The failed run is kept on record with the reason (`--why`, else the one its Claude gave), shown in `kelpie status --json` as `ci_dismissed`; the watch and any push waiting for a fix are dropped, and a task queued after it only for that red waits again. The task then closes once its commits are on the default branch.
+
 ### `kelpie done [name]`
 
-Close a task once every change on its branch is on the default branch, pushed as is, cherry-picked or squashed: closes its Space, deletes the branch, frees the worktree, and fast-forwards a clean main checkout. Otherwise it names the missing commits.
+Close a task once every change on its branch is on the default branch, pushed as is, cherry-picked or squashed, and it has no uncommitted changes or stash: closes its Space, deletes the branch, frees the worktree, and fast-forwards a clean main checkout. Otherwise it names the missing commits.
+
+You rarely need it. Every minute the keeper closes a task whose commits reached the default branch some other way than kelpie's push of that task: pushed with git, cherry-picked or rebased with conflict resolutions, squashed, or carried by another task's push. A task counts as landed when its branch made a commit of its own and every change it made is on the default branch, by patch or because merging it into the default branch changes nothing. A task with no commit of its own, one that only followed main or only cherry-picked commits from elsewhere, never counts. A task rebased onto main after its work landed still counts, by the commits it made. Just before it closes a task, the keeper asks herdr again and leaves the task if its Claude has started a turn. The keeper closes it as `done` does, and the lead hears one line, when:
+
+- herdr shows its Claude idle: not mid-turn, no prompt on screen; a Claude herdr cannot find leaves the task as it is;
+- no question of its waits for you, and it has not reported needs-you since its last turn began;
+- its worktree has no uncommitted changes, no untracked files and no stash made on its branch;
+- no push of kelpie's is under way for it and no CI watch of its runs;
+- CI did not fail on what it pushed, the red was superseded by a later push, or you dismissed it. A superseded red also sets a task queued after it going again when that red was all that blocked it.
+
+When one of these does not hold, the row says so in place: `landed on main · kelpie closes it after this turn` beside a turn, which closes once the turn ends; under Needs you, `landed on main · d closes it` beside a question, and `landed on main, but its worktree has uncommitted changes or a stash` when there are, which are never discarded. A task pushed with keep it open (`p` in the push dialog, or `--through`) stays open until you close it, whatever lands later, and shows no landed line.
+
+### `kelpie done --landed`
+
+One round of that check over every open task, as the keeper runs it every minute, and what came of it.
 
 ### `kelpie drop [name] [--force]`
 

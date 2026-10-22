@@ -39,6 +39,7 @@ pub enum Act {
     Tidy,
     Push,
     Done,
+    DismissCi,
     Reset,
     Drop,
     StartAt,
@@ -85,9 +86,9 @@ const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 
 impl Act {
-    pub const EVERY: [Act; 42] = [
+    pub const EVERY: [Act; 43] = [
         Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
-        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Done, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
+        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Done, Act::DismissCi, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
@@ -118,6 +119,7 @@ impl Act {
             Act::Tidy => "tidy",
             Act::Push => "push",
             Act::Done => "done",
+            Act::DismissCi => "dismiss_ci",
             Act::Reset => "reset",
             Act::Drop => "drop",
             Act::StartAt => "start_at",
@@ -169,6 +171,7 @@ impl Act {
             Act::Tidy => Default::Char('t'),
             Act::Push => Default::Char('p'),
             Act::Done => Default::Char('d'),
+            Act::DismissCi => Default::Char('C'),
             Act::Reset => Default::Char('z'),
             Act::Drop => Default::Char('x'),
             Act::StartAt => Default::Char('l'),
@@ -222,6 +225,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Tidy, on: &[Work], help: "tidy commits: its Claude reshapes them by the rules skill", hint: Hint::No },
     Binding { act: Act::Push, on: &[Work, Card], help: "push: its card and commits, all or the first few; rebases first", hint: Hint::No },
     Binding { act: Act::Done, on: &[Work], help: "done: after you pushed elsewhere (asks first)", hint: Hint::No },
+    Binding { act: Act::DismissCi, on: &[Work], help: "dismiss the red CI of a pushed task when the failure is not the code's: kept on record, and the task closes once its commits are on main (asks first)", hint: Hint::No },
     Binding { act: Act::Reset, on: &[Work], help: "reset the task: its work goes, its backlog item returns (asks first)", hint: Hint::No },
     Binding { act: Act::Drop, on: &[Work], help: "drop the task (asks first)", hint: Hint::No },
     Binding { act: Act::StartAt, on: BOARD, help: "start later: a queued task or a backlog item starts at the time you type (15:00, tomorrow 09:00, fri 09:00, 24 oct 09:00, in 2h)", hint: Hint::No },

@@ -92,6 +92,7 @@ enum Mode {
     ConfirmDrop { path: PathBuf, name: String, force: bool, nudged: bool },
     ConfirmReset { path: PathBuf, name: String, nudged: bool },
     ConfirmDone { path: PathBuf, name: String, nudged: bool },
+    ConfirmDismiss { path: PathBuf, name: String, nudged: bool },
     ConfirmQueued { name: String, about: String, now: bool, nudged: bool },
     Filter { buffer: String },
     Card { path: PathBuf, name: String, scroll: u16, image: usize },
@@ -418,6 +419,7 @@ impl App {
             Mode::Questions(window) => self.handle_questions(window, key),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
             Mode::ConfirmDone { path, name, .. } => self.confirm_done(path, name, key, cancels),
+            Mode::ConfirmDismiss { path, name, .. } => self.confirm_dismiss(path, name, key, cancels),
             Mode::ConfirmQueued { name, about, now, .. } => self.confirm_queued(name, about, now, key, cancels),
             Mode::ConfirmDrop { path, name, force, .. } => self.confirm_drop(path, name, force, key, cancels),
             Mode::Card { path, name, scroll, image } => self.handle_card(path, name, scroll, image, key),
@@ -644,6 +646,11 @@ impl App {
                         if let Some(path) = &item.path {
                             self.about("review", &item.name);
                             self.show(if item.awaiting_review() { crate::review::withdraw(path, None) } else { crate::review::request(path, None) });
+                        }
+                    }
+                    Act::DismissCi if item.ci.as_ref().is_some_and(|ci| !ci.running()) => {
+                        if let Some(path) = item.path.clone() {
+                            self.mode = Mode::ConfirmDismiss { path, name: item.name, nudged: false };
                         }
                     }
                     Act::Reset => {

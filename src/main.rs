@@ -171,6 +171,11 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   closes as done; a failed run moves it to Needs you and its Claude gets the failing
                                   job's log ([ci] watch = false turns it off); the board checks every 30 seconds
   kelpie ci tick                  one round of checks for every running watch, as the board does
+  kelpie ci outside \"<reason>\"    run by a task's Claude: its red CI is outside the code (deploy window, infra,
+                                  secrets, a flake); the row says so, nothing is waived
+  kelpie ci dismiss <task> [--why <reason>]
+                                  yours alone (C on the board): keep the failed run on record with the reason, drop the
+                                  watch and the push waiting for a fix; the task closes once its commits are on main
   kelpie routines [--json]        the scheduled routines from config.toml and the repo configs ([[routines]]), each with
                                   its schedule, repo, mode, next run and last outcome (ok, findings, failed, running);
                                   the keeper starts each due one as a task (--no-focus), never while its last run's
@@ -183,7 +188,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie routine run <id>         start a routine's run now, by the same rules
   kelpie routine ok <summary>     run by a routine's task when all is well: records the run as ok and closes the task,
                                   which must have no changes and no commits
-  kelpie done [name]              after pushing: close the task and free its worktree
+  kelpie done [name]              after pushing: close the task and free its worktree; the keeper does it by itself every
+                                  minute once a task's commits are on the default branch, unless its Claude is mid-turn or
+                                  asking, its worktree has changes or a stash, its CI is red, or you pushed it and kept it open
+  kelpie done --landed            one round of that check, as the keeper runs it every minute
   kelpie drop [name] [--force]    throw a task away; --force discards uncommitted work and unpushed commits
   kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
                                   the backlog item it was started from back in the Backlog column
@@ -460,7 +468,9 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("evidence") => evidence::print(&cwd, name, arguments.flag("--json")),
         Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kelpie approve needs a task name")?)),
         Some("ci") if name == Some("tick") => ci::tick_cli(),
-        Some("ci") if name.is_some() => Err("kelpie ci knows tick: kelpie ci [--json] or kelpie ci tick".to_string()),
+        Some("ci") if name == Some("dismiss") => tasks::dismiss_ci(&cwd, arguments.positional(2), arguments.value("--why")),
+        Some("ci") if name == Some("outside") => tasks::ci_outside(&arguments.positionals[2..].join(" ")),
+        Some("ci") if name.is_some() => Err("kelpie ci knows tick, outside and dismiss: kelpie ci [--json], kelpie ci tick, kelpie ci outside \"<reason>\" or kelpie ci dismiss <task> [--why <reason>]".to_string()),
         Some("ci") => Ok(ci::list(&lead::state_dir()?, arguments.flag("--json"))),
         Some("routines") if name == Some("tick") => routines::tick_cli(),
         Some("routines") if name.is_some() => Err("kelpie routines knows tick: kelpie routines [--json] or kelpie routines tick".to_string()),
@@ -472,6 +482,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             mode: arguments.value("--mode"), push: arguments.flag("--push"), paused: arguments.flag("--paused"), prompt: &arguments.positionals[2..].join(" "),
         }),
         Some("routine") => Err("kelpie routine knows add, run <id> and ok <summary>".to_string()),
+        Some("done") if arguments.flag("--landed") => tasks::landed_tick_cli(),
         Some("done") => tasks::done(&cwd, name),
         Some("drop") => tasks::drop(&cwd, name, arguments.flag("--force")),
         Some("reset") => tasks::reset(&cwd, name),

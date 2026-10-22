@@ -204,9 +204,8 @@ fn chosen(slot: &Slot, upstream: &str, through: Option<&str>, keep_open: bool) -
         return nothing_to_push(task_of(slot));
     }
     let Some(rev) = through else { return Ok(Through::All) };
-    let head = git(&slot.path, &["rev-parse", "HEAD"])?;
     let sha = pushable_through(&slot.path, upstream, rev, keep_open)?;
-    if !stays_open(keep_open, &sha, &head) {
+    if !keep_open {
         return Ok(Through::All);
     }
     let count = git(&slot.path, &["rev-list", "--count", &format!("{upstream}..{sha}")])?.parse::<usize>().map_err(|error| error.to_string())?;
@@ -346,6 +345,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
             return Notice::new(Tone::Failed, "Not pushed: git refused the push").detail("task", &task).detail("error", error).err();
         }
     };
+    super::landed::keep_open(state, &address, keep_open);
     let vault = crate::vault_cli::detect();
     let log = vault.as_ref().map(|cli| crate::task_note::log_push(cli, &slot.path, &task, &pushed));
     let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
@@ -401,7 +401,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
     if let Err(error) = messages::notify(&address, &told) {
         eprintln!("Could not tell {address} about the push: {error}");
     }
-    let after = if clean { format!("It stays open with {} on top.", plural(rest, "commit")) } else { format!("It stays open; its Claude rebases the rest onto {main}.") };
+    let after = if clean && rest == 0 { "It stays open, as you chose, with everything on main; close it from its options when you are done.".to_string() } else if clean { format!("It stays open with {} on top.", plural(rest, "commit")) } else { format!("It stays open; its Claude rebases the rest onto {main}.") };
     Ok(said(Notice::new(Tone::Done, headline(true)).next(after)).detail("checkout", fast_forward_main(repo, upstream)?).to_string())
 }
 
@@ -522,11 +522,6 @@ fn rebase_rest(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: 
         record_approval(state, address, &fingerprint(&slot.path, upstream)?)?;
     }
     Ok(Rest::Rebased { clean, rest })
-}
-
-// A push through the last commit leaves nothing to keep the task open for, so it closes like a full push.
-fn stays_open(keep_open: bool, sha: &str, head: &str) -> bool {
-    keep_open && sha != head
 }
 
 // One of the task's commits not yet on upstream; a full push names HEAD, so a commit that arrived after the dialog opened is never pushed unseen.
@@ -673,10 +668,13 @@ mod tests {
     }
 
     #[test]
-    fn a_push_through_the_last_commit_closes_the_task_like_a_full_push() {
-        assert!(!stays_open(true, "abc", "abc"), "p on the last commit, or --through HEAD, leaves no commit to keep open for");
-        assert!(stays_open(true, "abc", "def"));
-        assert!(!stays_open(false, "abc", "def"));
+    fn a_push_kept_open_stays_open_even_through_the_last_commit_and_a_plain_push_closes() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let head = commit(&slot.path, "e", "fifth");
+        assert_eq!(chosen(&slot, &upstream, Some(&head), true).unwrap(), Through::First { count: 2, of: 2 }, "p on the last commit keeps it open, as the user chose");
+        assert_eq!(chosen(&slot, &upstream, Some(&head), false).unwrap(), Through::All, "y pushes all and closes");
+        assert_eq!(chosen(&slot, &upstream, None, false).unwrap(), Through::All);
+        cleanup(dir, origin, &slot);
     }
 
     // A file both main and the task change, apart, so the rebase is clean but the files overlap.
@@ -906,6 +904,55 @@ mod tests {
         assert_ne!(rebased, fourth);
         assert_eq!(git(&slot.path, &["log", "-1", "--format=%s", &rebased]).unwrap(), "fourth");
         assert!(through_sha(&slot.path, &upstream, Through::First { count: 1, of: 3 }).unwrap_err().contains("Open push again"));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_task_pushed_with_keep_open_stays_open_when_the_rest_lands_elsewhere_and_asks_nothing() {
+        use crate::tasks::landed::{Seen, Verdict, World, pass, verdict};
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        commit(&slot.path, "e", "fifth");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, "the user", &state).unwrap();
+        let fifth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        git(&dir, &["merge", "--quiet", "--ff-only", &upstream]).unwrap();
+        pick(&dir, &fifth);
+        git(&dir, &["push", "--quiet", "origin", "HEAD"]).unwrap();
+        git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+        let repos = [dir.clone()];
+        let world = World { repos: &repos, workspaces: &[], agents: &[], log: &[], gh: "false", began: 0, fresh: None };
+        let told = std::cell::Cell::new(0);
+        pass(&state, &world, &mut |_, _, _| panic!("a task kept open is never closed by the round"), &mut |_| told.set(told.get() + 1));
+        assert!(branch_exists(&dir, "billing") && told.get() == 0);
+        assert_eq!(crate::tasks::landed_mark(&state, &address, &slot.path), None, "no landed line asks the user to close it");
+        let idle = Seen { status: Some("idle".to_string()), question: false };
+        crate::tasks::landed::keep_open(&state, &address, false);
+        crate::ci::forget(&state, &address);
+        assert_eq!(verdict(&state, &slot, &address, &upstream, &idle, &mut |_| false).unwrap(), Verdict::Close, "it is the keep-open choice alone that holds it");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_task_whose_every_commit_was_pushed_kept_open_stays_open_with_no_line_and_done_still_closes_it() {
+        use crate::tasks::landed::{World, pass};
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        commit(&slot.path, "e", "fifth");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        let said = deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, "the user", &state).unwrap();
+        assert!(said.contains("It stays open, as you chose, with everything on main"), "{said}");
+        assert!(branch_exists(&dir, "billing"));
+        assert_eq!(ahead_behind(&slot.path, &upstream).unwrap().0, 0, "everything is on main");
+        crate::ci::forget(&state, &address);
+        let repos = [dir.clone()];
+        let workspaces = [serde_json::json!({ "workspace_id": "w1", "worktree": { "checkout_path": slot.path.to_string_lossy() } })];
+        let agents = [serde_json::json!({ "workspace_id": "w1", "agent_status": "idle" })];
+        let world = World { repos: &repos, workspaces: &workspaces, agents: &agents, log: &[], gh: "false", began: 0, fresh: None };
+        pass(&state, &world, &mut |_, _, _| panic!("a task kept open is never closed by the round"), &mut |_| panic!("nothing to tell"));
+        assert_eq!(crate::tasks::landed_mark(&state, &address, &slot.path), None, "no landed line");
+        crate::tasks::finish::finish(&dir, &slot, &upstream, &state, None).unwrap();
+        assert!(!branch_exists(&dir, "billing"), "done closes it when the user chooses");
         cleanup(dir, origin, &slot);
     }
 

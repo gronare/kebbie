@@ -163,7 +163,7 @@ pub(super) fn server_line(item: &Item, configured: bool, name: &str, width: usiz
 fn ci_lines(item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
     let Some(ci) = &item.ci else { return (Vec::new(), Vec::new()) };
     let (mark, color) = if ci.running() { ("◐ ", YELLOW) } else { ("● ", PEACH) };
-    let mut lines = vec![field("ci", vec![Span::styled(mark, style(color)), Span::styled(ci.note(), style(TEXT))])];
+    let mut lines = vec![field("ci", vec![Span::styled(mark, style(color)), Span::styled(item.ci_note().unwrap_or_else(|| ci.note()), style(TEXT))])];
     let mut links = Vec::new();
     for (title, url) in ci_urls(item).into_iter().take(4) {
         let title = cut(&title, 16);

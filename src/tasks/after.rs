@@ -294,7 +294,7 @@ pub(crate) fn next(wait: &Wait, facts: &Facts, now: u64) -> Next {
         return Next::Blocked(format!("{address} was {how}, so {} did not start", wait.task));
     }
     if let Some((address, _)) = states.iter().find(|(_, state)| *state == DepState::CiFailed) {
-        return Next::Blocked(format!("{address} landed with red CI, so {} did not start", wait.task));
+        return Next::Blocked(red_ci(address, &wait.task));
     }
     if let Some((address, _)) = states.iter().find(|(_, state)| *state == DepState::Gone) {
         return match wait.gone_since {
@@ -304,6 +304,15 @@ pub(crate) fn next(wait: &Wait, facts: &Facts, now: u64) -> Next {
     }
     let due = wait.starts_at.is_none_or(|at| now >= at);
     if due && states.iter().all(|(_, state)| *state == DepState::Done) { Next::Start } else { Next::Wait }
+}
+
+fn red_ci(address: &str, task: &str) -> String {
+    format!("{address} landed with red CI, so {task} did not start")
+}
+
+pub(super) fn red_ci_superseded(state: &Path, address: &str) -> Vec<String> {
+    all(state).into_iter().filter(|wait| wait.blocked.as_deref() == Some(red_ci(address, &wait.task).as_str()))
+        .filter_map(|wait| save(state, &Wait { blocked: None, ..wait.clone() }).ok().map(|_| wait.address())).collect()
 }
 
 const SUBJECTS_SHOWN: usize = 20;

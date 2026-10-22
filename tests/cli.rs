@@ -874,6 +874,91 @@ fn with_ci_watch_off_the_push_closes_the_task_as_before_and_never_asks_gh() {
     assert_eq!(stdout(&lab.run(&["ci"])), "No CI watches.");
 }
 
+#[test]
+fn a_task_whose_commits_landed_outside_kelpie_waits_out_its_turn_and_its_changes_then_closes_in_the_keepers_round() {
+    let lab = Lab::new("landed");
+    let (app, slot) = lab.task_fixture();
+    let app = app.to_str().unwrap();
+    git(&slot, &["push", "--quiet", "origin", "HEAD:main"]);
+    let agents = lab.root.join("answers/agent-list.json");
+    let idle = fs::read_to_string(&agents).unwrap();
+    fs::write(&agents, idle.replacen("\"agent_status\":\"idle\"", "\"agent_status\":\"working\"", 1)).unwrap();
+    let round = lab.run(&["-C", app, "done", "--landed"]);
+    assert!(round.status.success(), "{}", stderr(&round));
+    let task = task_json(&lab);
+    assert_eq!((task["group"].as_str(), task["landed"].as_str()), (Some("WORKING"), Some("landed on main · kelpie closes it after this turn")), "{task}");
+    fs::write(&agents, &idle).unwrap();
+    fs::write(slot.join("b"), "half done").unwrap();
+    lab.run(&["-C", app, "done", "--landed"]);
+    let task = task_json(&lab);
+    assert_eq!(task["group"], "NEEDS YOU", "{task}");
+    assert!(task["landed"].as_str().unwrap().contains("uncommitted changes"), "{task}");
+    assert_eq!(git(&slot, &["branch", "--show-current"]), "billing", "never closed over uncommitted work");
+    assert!(prompts_to(&lab, "p_lead").is_empty(), "nothing closed, nothing told");
+    git(&slot, &["checkout", "--", "b"]);
+    let closed = lab.run(&["-C", app, "done", "--landed"]);
+    assert!(stdout(&closed).contains("billing@app landed on main outside kelpie's push, so kelpie closed it as done."), "{}\n{}", stdout(&closed), stderr(&closed));
+    assert!(git(Path::new(app), &["branch", "--list", "billing"]).is_empty(), "closed as done");
+    assert!(lab.herdr_calls().iter().any(|call| call[..2] == ["workspace", "close"]), "its Space closes as done closes it");
+    let told = prompts_to(&lab, "p_lead");
+    assert_eq!(told.iter().filter(|text| text.contains("kelpie closed it as done")).count(), 1, "{told:?}");
+    assert_eq!(stdout(&lab.run(&["-C", app, "done", "--landed"])), "No open task has landed.", "a second round finds nothing to close");
+}
+
+fn red_after_push(lab: &Lab, app: &Path) {
+    on_github(lab, app);
+    fake_gh(lab, &run_json("completed", "failure"));
+    fs::write(lab.root.join("gh-answers/jobs.json"), r#"{"jobs":[{"name":"release","status":"completed","conclusion":"failure","databaseId":8,"steps":[{"name":"Build","status":"completed","conclusion":"success"},{"name":"Deploy","status":"completed","conclusion":"failure"}]}]}"#).unwrap();
+    fs::write(lab.root.join("gh-answers/log.txt"), "release\tDeploy\toutside the deploy window\n").unwrap();
+    landed_and_pushed(lab, app);
+    let ticked = lab.run(&["ci", "tick"]);
+    assert!(stdout(&ticked).contains("CI · release · Deploy"), "{}\n{}", stdout(&ticked), stderr(&ticked));
+    assert_eq!(task_json(lab)["ci"]["failure"], "CI · release · Deploy", "{}", task_json(lab));
+}
+
+#[test]
+fn a_red_ci_its_claude_calls_outside_the_code_is_dismissed_by_the_user_alone_and_the_landed_task_then_closes() {
+    let lab = Lab::new("ci-dismiss");
+    let (app, slot) = lab.task_fixture();
+    red_after_push(&lab, &app);
+    let app_dir = app.to_str().unwrap();
+    let said = lab.run_as("billing@app", &["-C", slot.to_str().unwrap(), "ci", "outside", "pushed outside the deploy window"]);
+    assert!(said.status.success(), "{}", stderr(&said));
+    let task = task_json(&lab);
+    assert_eq!(task["ci_outside"], "pushed outside the deploy window", "{task}");
+    for role in ["billing@app", "lead"] {
+        let refused = lab.run_as(role, &["-C", app_dir, "ci", "dismiss", "billing"]);
+        assert!(!refused.status.success() && stderr(&refused).contains("the user's call"), "{role}: {}", stderr(&refused));
+    }
+    assert!(lab.run(&["-C", app_dir, "done", "--landed"]).status.success());
+    assert_eq!(git(&slot, &["branch", "--show-current"]), "billing", "red and not dismissed: it stays");
+    let dismissed = run_as_user(&lab, &["-C", app_dir, "ci", "dismiss", "billing"]);
+    assert!(dismissed.status.success() && stdout(&dismissed).contains("Dismissed the red CI"), "{}", stderr(&dismissed));
+    let task = task_json(&lab);
+    assert_eq!(task["ci_dismissed"][0]["why"], "pushed outside the deploy window", "{task}");
+    assert!(task["ci"].is_null(), "{task}");
+    let closed = lab.run(&["-C", app_dir, "done", "--landed"]);
+    assert!(stdout(&closed).contains("kelpie closed it as done"), "{}\n{}", stdout(&closed), stderr(&closed));
+    assert!(git(&app, &["branch", "--list", "billing"]).is_empty());
+}
+
+#[test]
+fn a_red_deploy_closes_by_itself_once_a_later_push_deploys_green() {
+    let lab = Lab::new("ci-superseded");
+    let (app, slot) = lab.task_fixture();
+    red_after_push(&lab, &app);
+    git(&app, &["merge", "--quiet", "--ff-only", "origin/main"]);
+    commit(&app, "later", "a later change");
+    git(&app, &["push", "--quiet", "origin", "main"]);
+    let later = git(&app, &["rev-parse", "HEAD"]);
+    fs::write(lab.root.join("gh-answers/run-list.json"), format!(r#"[{{"databaseId":43,"name":"CI","status":"completed","conclusion":"success","workflowName":"CI","url":"u","headSha":"{later}","event":"push"}}]"#)).unwrap();
+    let closed = lab.run(&["-C", app.to_str().unwrap(), "done", "--landed"]);
+    assert!(stdout(&closed).contains("kelpie closed it as done"), "{}\n{}", stdout(&closed), stderr(&closed));
+    assert!(git(&app, &["branch", "--list", "billing"]).is_empty());
+    assert!(gh_calls(&lab).iter().any(|call| call.starts_with("run list -R acme/app --branch main --event push")), "{:?}", gh_calls(&lab));
+    let _ = slot;
+}
+
 fn alive(pid: &str) -> bool {
     Command::new("kill").args(["-0", pid]).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
 }

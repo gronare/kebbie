@@ -566,7 +566,7 @@ mod tests {
         assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie, "billing@app", None, None)).unwrap());
-        assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)", format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)"), format!("Bash({kelpie} choose:*)"), format!("Bash({kelpie} after:*)"), "Bash(herdr pane send-keys:*)", "Bash(herdr pane send-text:*)", "Bash(herdr pane run:*)", "Bash(herdr agent send-keys:*)", "Bash(herdr agent prompt:*)"]), "a task never pushes, approves its own commits, answers a Claude's prompt nor types into a pane");
+        assert_eq!(written["permissions"]["deny"], json!(["Bash(git push:*)", format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)"), format!("Bash({kelpie} choose:*)"), format!("Bash({kelpie} after:*)"), format!("Bash({kelpie} ci dismiss:*)"), "Bash(herdr pane send-keys:*)", "Bash(herdr pane send-text:*)", "Bash(herdr pane run:*)", "Bash(herdr agent send-keys:*)", "Bash(herdr agent prompt:*)"]), "a task never pushes, approves its own commits, answers a Claude's prompt nor types into a pane");
         assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} ask:*)"))), "a task asks the user without a permission prompt");
         std::fs::remove_dir_all(dir).unwrap();
@@ -648,7 +648,7 @@ mod tests {
     fn a_tasks_settings_deny_push_and_approve_in_every_spelling_claude_code_matches() {
         let on: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", Some("billing@app"), None)).unwrap();
         let deny: Vec<&str> = on["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        assert_eq!(deny, ["Bash(git push:*)", "Bash(/bin/kelpie approve:*)", "Bash(/bin/kelpie push:*)", "Bash(/bin/kelpie choose:*)", "Bash(/bin/kelpie after:*)", "Bash(herdr pane send-keys:*)", "Bash(herdr pane send-text:*)", "Bash(herdr pane run:*)", "Bash(herdr agent send-keys:*)", "Bash(herdr agent prompt:*)"]);
+        assert_eq!(deny, ["Bash(git push:*)", "Bash(/bin/kelpie approve:*)", "Bash(/bin/kelpie push:*)", "Bash(/bin/kelpie choose:*)", "Bash(/bin/kelpie after:*)", "Bash(/bin/kelpie ci dismiss:*)", "Bash(herdr pane send-keys:*)", "Bash(herdr pane send-text:*)", "Bash(herdr pane run:*)", "Bash(herdr agent send-keys:*)", "Bash(herdr agent prompt:*)"]);
         let allow: Vec<&str> = on["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(!allow.iter().any(|rule| rule.contains("push") || rule.contains("approve") || rule.contains("decide") || rule.contains("away")), "{allow:?}");
         assert_eq!(on["env"]["GIT_CONFIG_KEY_0"], "url.kelpie-blocks-push:.pushInsteadOf");

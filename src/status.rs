@@ -100,6 +100,9 @@ pub struct Item {
     pub queued: Option<Queued>,
     pub held_by_draft: Option<String>,
     pub starting: bool,
+    pub landed: Option<tasks::LandedUnsure>,
+    pub ci_outside: Option<String>,
+    pub ci_dismissed: Vec<Value>,
 }
 
 impl Item {
@@ -122,7 +125,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, starting: false,
+            held_by_draft: None, starting: false, landed: None, ci_outside: None, ci_dismissed: Vec::new(),
         }
     }
 
@@ -187,7 +190,11 @@ impl Item {
     }
 
     pub fn ci_note(&self) -> Option<String> {
-        self.ci.as_ref().map(crate::ci::Watch::note)
+        let note = self.ci.as_ref().map(crate::ci::Watch::note)?;
+        Some(match &self.ci_outside {
+            Some(reason) => format!("{note} · its Claude says outside the code: {reason}"),
+            None => note,
+        })
     }
 
     fn recovering(&self) -> Option<&crate::recover::Record> {
@@ -261,7 +268,9 @@ impl Item {
             (Some("blocked"), _, _) => Group::NeedsYou,
             (_, _, Some(Group::CiRunning)) if self.ci_holds() => Group::CiRunning,
             (Some("working"), Some("ready"), None) if self.turn_leaves_it_ready() => Group::ReadyToPush,
-            (Some("working"), _, _) | (_, Some("working"), _) => Group::Working,
+            (Some("working"), _, _) => Group::Working,
+            _ if self.landed.is_some_and(tasks::LandedUnsure::waits_for_you) => Group::NeedsYou,
+            (_, Some("working"), _) => Group::Working,
             (_, _, Some(group)) => group,
             _ if self.held_by_draft.is_some() => Group::NeedsYou,
             _ if self.starting => Group::Working,
@@ -317,6 +326,9 @@ impl Item {
         if self.agent.as_ref().is_some_and(|agent| agent.status == "blocked") {
             return Some(format!("answer Claude's prompt · {go} goes there"));
         }
+        if let Some(landed) = self.landed_note() {
+            return Some(landed);
+        }
         if self.ci_group().is_some() || self.recover_group().is_some() {
             return None;
         }
@@ -327,6 +339,11 @@ impl Item {
             return Some(if question.plan.is_some() { "approve the plan".to_string() } else { format!("answer a question · {}", plural(question.options.len(), "option")) });
         }
         self.report.as_ref()?.next_for_you().map(str::to_string)
+    }
+
+    pub fn landed_note(&self) -> Option<String> {
+        let main = self.git.as_ref()?.upstream.trim_start_matches("origin/");
+        self.landed.map(|why| why.said(main, crate::keys::key(crate::keys::Act::Done)))
     }
 
     pub fn queued_note(&self) -> Option<String> {
@@ -390,7 +407,7 @@ impl Item {
             let turn = if self.turn_under_way() { " · its Claude is taking a turn" } else { "" };
             return format!("{} · ready to push{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.ci_note().into_iter().chain(self.recover_note()).chain(self.push_note()).collect();
+        let mut parts: Vec<String> = self.ci_note().into_iter().chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -443,6 +460,9 @@ impl Item {
             "recover": self.recover.as_ref().map(|record| { let mut shown = record.to_json(); shown["note"] = json!(record.note()); shown }),
             "routine": self.routine,
             "push_waits": self.push_waits.map(|pending| pending.by.key()),
+            "landed": self.landed_note(),
+            "ci_outside": self.ci_outside,
+            "ci_dismissed": self.ci_dismissed,
             "server": self.server,
             "url": self.url,
             "worker": self.worker,
@@ -660,6 +680,9 @@ pub fn gather() -> Result<Vec<Item>> {
                 push_waits: state.as_deref().and_then(|state| tasks::pending_push(state, &address)),
                 queued: None,
                 held_by_draft: held_by_draft(&log, &task, &address),
+                landed: state.as_deref().and_then(|state| tasks::landed_mark(state, &address, &slot.path)),
+                ci_outside: state.as_deref().and_then(|state| tasks::ci_outside_reason(state, &address)),
+                ci_dismissed: state.as_deref().map(|state| tasks::ci_dismissed(state, &address)).unwrap_or_default(),
                 starting: state.as_deref().is_some_and(|state| starting(tasks::prompted_at(state, &address), crate::report::turn_started(&address), messages::now())),
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
@@ -704,6 +727,9 @@ pub fn gather() -> Result<Vec<Item>> {
             queued: None,
             held_by_draft: None,
             starting: false,
+            landed: None,
+            ci_outside: None,
+            ci_dismissed: Vec::new(),
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -733,6 +759,9 @@ pub(crate) mod tests {
             queued: None,
             held_by_draft: None,
             starting: false,
+            landed: None,
+            ci_outside: None,
+            ci_dismissed: Vec::new(),
         }
     }
 

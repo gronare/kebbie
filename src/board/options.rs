@@ -59,7 +59,14 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
         if !item.is_some_and(Item::awaiting_review) {
             choices.push(choice(Act::Push, "Push", "its card and commits: push them all and close, or the first few and keep it open; rebases first"));
         }
-        choices.push(choice(Act::Done, "Done", "already pushed elsewhere: close it and free the worktree"));
+        choices.push(match item.and_then(|item| item.git.as_ref()) {
+            Some(git) if item.is_some_and(|item| item.landed.is_some()) => choice(Act::Done, "Done", &format!("its commits landed on {}: close it and free the worktree", trunk(git))),
+            Some(git) if git.ahead == 0 && git.uncommitted == 0 => choice(Act::Done, "Done", &format!("close it: everything is on {}, and the worktree is freed", trunk(git))),
+            _ => choice(Act::Done, "Done", "already pushed elsewhere: close it and free the worktree"),
+        });
+    }
+    if item.and_then(|item| item.ci.as_ref()).is_some_and(|ci| !ci.running()) {
+        choices.push(choice(Act::DismissCi, "Dismiss the red CI", "the failure is not the code's (a deploy window, infra, a flake): kept on record, and the task closes once its commits are on main (asks first)"));
     }
     if item.is_some_and(Item::is_task) {
         choices.push(if item.is_some_and(|item| item.permit == Some(Permit::Task)) {
@@ -249,6 +256,13 @@ mod tests {
         let keys = |sources: &[Source]| backlog_choices(sources).iter().map(|choice| choice.key).collect::<String>();
         assert_eq!(keys(&[Source::Local]), "glRn");
         assert_eq!(keys(&[Source::Vault, Source::Linear]), "glR");
+    }
+
+    #[test]
+    fn done_on_a_task_with_nothing_left_says_everything_is_on_main() {
+        let done = |item: &Item| task_choices(Some(item), None, None).into_iter().find(|choice| choice.act == Some(Act::Done)).unwrap().about;
+        assert_eq!(done(&crate::status::tests::task(Some("idle"), None, 0)), "close it: everything is on main, and the worktree is freed", "a task kept open after its last push");
+        assert_eq!(done(&crate::status::tests::task(Some("idle"), None, 2)), "already pushed elsewhere: close it and free the worktree");
     }
 
     #[test]

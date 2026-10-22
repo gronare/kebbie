@@ -42,6 +42,17 @@ impl App {
         }
     }
 
+    pub(super) fn confirm_dismiss(&mut self, path: PathBuf, name: String, key: KeyEvent, cancels: bool) {
+        match key.code {
+            KeyCode::Char('y') => {
+                self.about("ci", &name);
+                self.in_background(format!("Dismissing the red CI of {name}…"), move || tasks::dismiss_ci(&path, Some(&name), None));
+            }
+            _ if cancels => {}
+            _ => self.mode = Mode::ConfirmDismiss { path, name, nudged: true },
+        }
+    }
+
     pub(super) fn confirm_queued(&mut self, name: String, about: String, now: bool, key: KeyEvent, cancels: bool) {
         match key.code {
             KeyCode::Char('y') if now => {
@@ -83,6 +94,10 @@ pub(super) fn draw_done(frame: &mut Frame, name: &str, nudged: bool) {
     modal(frame, "done".to_string(), confirm_lines(name, Some("Its commits are on the default branch already: its worktree is freed and its Space closes."), "Close this task as done?", nudged), 72);
 }
 
+pub(super) fn draw_dismiss(frame: &mut Frame, name: &str, nudged: bool) {
+    modal(frame, "dismiss the red CI".to_string(), confirm_lines(name, Some("Its failed run is kept on record with the reason its Claude gave, the push waiting for a fix is dropped, and the task closes once its commits are on main."), "Dismiss the red CI?", nudged), 72);
+}
+
 pub(super) fn draw_queued(frame: &mut Frame, name: &str, about: &str, now: bool, nudged: bool) {
     let (title, question) = if now { ("start now", "Start it now?") } else { ("drop the wait", "Drop the wait?") };
     modal(frame, title.to_string(), confirm_lines(name, Some(about), question, nudged), 72);
@@ -101,6 +116,28 @@ mod tests {
 
     use crate::board::test_support::*;
     use crate::board::Mode;
+
+    #[test]
+    fn dismissing_a_red_ci_is_offered_only_on_a_red_ci_and_asks_first() {
+        let mut item = crate::status::tests::task(Some("idle"), None, 1);
+        item.path = Some(PathBuf::from("/nowhere/wt1.app"));
+        let mut green = test_app(vec![item.clone()]);
+        green.handle_normal(key(KeyCode::Char('C')));
+        assert!(matches!(green.mode, Mode::Normal), "no red CI, nothing to dismiss");
+        assert!(!crate::board::options::task_choices(Some(&item), None, None).iter().any(|choice| choice.act == Some(crate::keys::Act::DismissCi)));
+        item.ci = Some(crate::ci::Watch {
+            address: "billing@web".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
+            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, pushed: crate::ci::Pushed::default(),
+        });
+        assert!(crate::board::options::task_choices(Some(&item), None, None).iter().any(|choice| choice.act == Some(crate::keys::Act::DismissCi) && choice.label == "Dismiss the red CI"));
+        let mut app = test_app(vec![item]);
+        app.handle_normal(key(KeyCode::Char('C')));
+        assert!(matches!(app.mode, Mode::ConfirmDismiss { nudged: false, .. }), "C asks before it dismisses");
+        let (rows, _) = render(&mut app, 100, 30);
+        assert!(rows.join("\n").contains("Dismiss the red CI?"));
+        press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
 
     #[test]
     fn done_asks_first_and_a_confirmation_takes_only_y_n_or_esc() {

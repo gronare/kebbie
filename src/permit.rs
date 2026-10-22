@@ -275,8 +275,11 @@ pub fn processes(table: &str) -> Vec<(u32, u32, String)> {
 }
 
 // A ps that fails or answers nothing reads as an agent: no proof of the user is no permission.
+// By its path in a release, so a ps first on a task's PATH cannot pass its Claude off as the user; test builds read the sealed ps on PATH.
+const PS: &str = if cfg!(debug_assertions) { "ps" } else { "/bin/ps" };
+
 pub fn caller() -> Caller {
-    match crate::sh::run("ps", &["-A", "-o", "pid=,ppid=,args="], None) {
+    match crate::sh::run(PS, &["-A", "-o", "pid=,ppid=,args="], None) {
         Ok(table) => caller_in(&processes(&table), std::process::id()),
         Err(_) => Caller::Agent,
     }
