@@ -21,7 +21,7 @@ Follow tagged releases, or every push to kelpie's default branch.
    kelpie update --check
    ```
 
-   It shows the installed version against the channel's latest.
+   It shows the installed binary's version and commit against the channel's latest, such as `kelpie  0.24.0 installed (e70d5d5), 0.25.0 available`.
 
 ## Switching to `release` from a checkout on a branch
 

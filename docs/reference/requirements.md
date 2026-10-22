@@ -10,7 +10,7 @@ kelpie runs on macOS and Linux, inside herdr 0.9.0 or later.
 | `herdr` 0.9.0+ | everything | `brew install herdr` | `curl -fsSL https://herdr.dev/install.sh \| sh` |
 | `claude` (Claude Code) | everything | `curl -fsSL https://claude.ai/install.sh \| bash` | the same |
 | `jq` | the sidebar sync and the review hook | `brew install jq` | `sudo apt install jq` |
-| `cargo` | building kelpie on the `main` channel, from `kelpie update --from`, or where no prebuilt binary fits | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | the same |
+| `cargo` | building kelpie on the `main` channel or from `kelpie update --from`; without rustup, `rustc` must be at least the `rust-version` in `Cargo.toml` | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | the same |
 | `fzf` 0.71+ | the review split's file list | `brew install fzf` | `git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf && ~/.fzf/install` |
 | `nvim` 0.10+ | the review split's diffs | `brew install neovim` | a [release](https://github.com/neovim/neovim/releases) |
 | `curl` | downloading a release's prebuilt binary, and the review list reloading on change | `brew install curl` | `sudo apt install curl` |

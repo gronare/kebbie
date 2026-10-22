@@ -68,7 +68,7 @@ pub fn tools(min_herdr: &str) -> Vec<Tool> {
         tool("nvim", false, "the review split's diffs", Some("0.10.0"), "brew install neovim", "brew install neovim, or a release from https://github.com/neovim/neovim/releases (distro packages are often older than 0.10)"),
         tool("tig", false, "the history split", None, "brew install tig", "sudo apt install tig"),
         tool("curl", false, "downloading a release's prebuilt binary, and the review list reloading when files change", None, "brew install curl", "sudo apt install curl"),
-        tool("cargo", false, "building kelpie where no prebuilt binary fits", None, "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
+        tool("cargo", false, "building kelpie on the main channel and with kelpie update --from", None, "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
     ]
 }
 
@@ -159,7 +159,7 @@ pub fn cargo(tool: &Tool, found: Option<&Path>, channel: crate::config::Channel,
     let downloaded = matches!(origin, Some(crate::update::Origin::Downloaded { .. }));
     match found {
         None if downloaded && channel == crate::config::Channel::Release => ok("cargo", "not on PATH, not needed: each release installs its prebuilt binary"),
-        None => warn("cargo", "not on PATH; needed for the main channel, kelpie update --from, and a machine no prebuilt binary fits", both(tool.mac, tool.linux)),
+        None => warn("cargo", "not on PATH; needed for the main channel and kelpie update --from", both(tool.mac, tool.linux)),
         Some(found) => self::tool(tool, Some(found), None),
     }
 }
@@ -528,7 +528,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(status_line(&claude_settings));
     checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
     checks.push(kelpie_on_path(&env.home, &env.path));
-    let places = crate::update_check::Places { root: plugin.as_ref().map(|plugin| plugin.root.clone()), claude_dir: env.claude_dir.clone(), channel };
+    let places = crate::update_check::Places::new(plugin.as_ref().map(|plugin| plugin.root.clone()), env.claude_dir.clone(), channel);
     checks.push(updates(&env.kelpie_state, channel, &crate::update_check::installed(&places)));
     let keeper_on = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.keeper).unwrap_or(true);
     checks.push(keeper(keeper_on, crate::keeper::holder(&env.kelpie_state).as_ref(), crate::messages::now()));

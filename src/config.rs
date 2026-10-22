@@ -648,7 +648,7 @@ pub fn describe(loaded: &Loaded) -> String {
     key("ci.watch", ci_watch.value.to_string(), ci_watch.layer,
         "Whether kelpie watches GitHub Actions after a push and keeps the task open under CI running until every run for the pushed commit is green; a failed run moves the task to Needs you and its Claude gets the failing job's log. Needs origin on GitHub and gh logged in; false closes the task right after the push. A repo config can turn it off for one repo.");
     key("update.channel", format!("{:?}", channel.value.key()), channel.layer,
-        "What kelpie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin; \"main\", origin's default branch as it is pushed. kelpie update --from <branch or path> runs other code until kelpie update --stable; config.toml only.");
+        "What kelpie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin whose release binary is published; \"main\", origin's default branch as it is pushed. kelpie update --from <branch or path> runs other code until kelpie update --stable; config.toml only.");
     key("restart.auto", auto_restart.value.to_string(), auto_restart.layer,
         "Whether kelpie restarts Claude sessions that run an older Claude Code, plugin, MCP config or kelpie than is installed, each with claude --resume in its own pane, keeping its flags; kelpie update restarts the idle ones at once. false restarts nothing on its own: the board still marks stale sessions, and kelpie restart restarts them when you want; config.toml only.");
     key("restart.idle_minutes", idle_minutes.value.to_string(), idle_minutes.layer,

@@ -124,21 +124,44 @@ fn a_release_tag_installs_the_published_binary_without_cargo_and_keeps_it_while_
 }
 
 #[test]
-fn a_download_that_fails_its_checksum_is_not_used_and_not_retried_for_ten_minutes() {
+fn a_download_that_fails_its_checksum_is_not_used_and_nothing_is_built() {
     let lab = Lab::new("checksum");
+    lab.fake_cargo();
     lab.publish(PREBUILT, Some(&format!("{}  kelpie-1.2.3-{}.tar.gz\n", "0".repeat(64), triple())));
     let refused = lab.build(None);
-    assert!(!refused.status.success(), "no cargo to fall back on");
+    assert!(!refused.status.success());
     let said = stderr(&refused);
-    assert!(said.contains("does not match SHA256SUMS") && said.contains("the download failed") && said.contains("sh.rustup.rs") && said.contains("herdr plugin install --ref"), "{said}");
-    assert_eq!(lab.binary(), "", "nothing is placed");
-    assert!(lab.root.join("target/kelpie-download.failed").exists());
+    assert!(said.contains("does not match SHA256SUMS") && said.contains("the release binary of kelpie 1.2.3 was not installed"), "{said}");
+    assert_eq!((lab.binary().as_str(), lab.cargo_runs()), ("", 0), "nothing is placed and a release tag is never built");
     lab.publish(PREBUILT, None);
+    let fixed = lab.build(None);
+    assert!(fixed.status.success(), "the next try downloads again: {}", stderr(&fixed));
+    assert_eq!(lab.binary(), PREBUILT);
+}
+
+#[test]
+fn herdrs_own_build_of_an_unpublished_tag_stops_unless_the_machine_follows_main() {
+    let lab = Lab::new("herdr-draft");
     lab.fake_cargo();
-    let built = lab.build(None);
-    assert!(built.status.success(), "{}", stderr(&built));
-    assert!(stderr(&built).contains("a download failed less than 10 minutes ago"), "{}", stderr(&built));
-    assert_eq!((lab.binary().as_str(), lab.cargo_runs(), lab.origin_file()), ("#!/bin/sh\necho built\n", 1, String::new()));
+    let draft = lab.build(None);
+    assert!(!draft.status.success() && stderr(&draft).contains("kelpie 1.2.3 is not published yet; try again in a while"), "{}", stderr(&draft));
+    assert_eq!(lab.cargo_runs(), 0, "herdr plugin install --ref of a draft tag is not built from source");
+    let config = lab.dir.join("home/.config/kelpie/config.toml");
+    fs::create_dir_all(config.parent().unwrap()).unwrap();
+    for (written, runs) in [("[board]\nchannel = \"release\"\n\n[update]\nchannel = \"main\"  # follow pushes\n", 1), ("[update] # this machine\nchannel = 'main'\n", 2)] {
+        fs::write(&config, written).unwrap();
+        let _ = fs::remove_file(lab.root.join("target/release/kelpie"));
+        let main = lab.build(None);
+        assert!(main.status.success() && stderr(&main).contains("the main channel and --from build from source"), "{written}: {}", stderr(&main));
+        assert_eq!(lab.cargo_runs(), runs, "a machine on main builds the tag from source: {written}");
+    }
+    fs::write(&config, "[update]\nchannel = \"release\"\n").unwrap();
+    let _ = fs::remove_file(lab.root.join("target/release/kelpie"));
+    let home = lab.dir.join("home");
+    let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", lab.bin.display());
+    let no_github = Command::new("sh").arg("scripts/build.sh").current_dir(&lab.root).env_clear().env("PATH", path).env("HOME", &home).output().unwrap();
+    assert!(!no_github.status.success() && stderr(&no_github).contains("kelpie 1.2.3 is a release, which installs only its published binary, and origin is not on GitHub"), "{}", stderr(&no_github));
+    assert_eq!(lab.cargo_runs(), 2, "a release tag with no binary to fetch is not built either");
 }
 
 #[test]
@@ -147,16 +170,67 @@ fn a_commit_past_the_tag_or_the_main_channel_builds_from_source() {
     lab.publish(PREBUILT, None);
     lab.fake_cargo();
     let main = lab.build(Some("main"));
-    assert!(main.status.success() && stderr(&main).contains("the main channel builds from source"), "{}", stderr(&main));
+    assert!(main.status.success() && stderr(&main).contains("the main channel and --from build from source"), "{}", stderr(&main));
     assert_eq!(lab.cargo_runs(), 1);
     fs::write(lab.origin.join("src/main.rs"), "fn main() { println!(); }\n").unwrap();
     git(&lab.origin, &["commit", "--quiet", "-am", "after the release"]);
     lab.herdr_checkout("main");
-    let past = lab.build(Some("release"));
+    let refused = lab.build(Some("release"));
+    assert!(!refused.status.success() && stderr(&refused).contains("the release channel installs only published binaries, and the checkout is not at v1.2.3"), "{}", stderr(&refused));
+    assert_eq!(lab.cargo_runs(), 1, "the release channel never builds");
+    let past = lab.build(None);
     assert!(past.status.success() && stderr(&past).contains("the checkout is not at v1.2.3"), "{}", stderr(&past));
     assert_eq!((lab.cargo_runs(), lab.binary().as_str()), (2, "#!/bin/sh\necho built\n"));
     fs::remove_file(lab.bin.join("cargo")).unwrap();
     fs::write(lab.root.join("src/main.rs"), "fn main() { println!(\"edited\"); }\n").unwrap();
     let missing = lab.build(None);
     assert!(!missing.status.success() && stderr(&missing).contains("cargo is not installed"), "{}", stderr(&missing));
+}
+
+#[test]
+fn the_release_channel_waits_for_an_unpublished_release_and_never_builds_it() {
+    let lab = Lab::new("unpublished");
+    lab.fake_cargo();
+    for attempt in 0..2 {
+        let draft = lab.build(Some("release"));
+        assert!(!draft.status.success(), "attempt {attempt}");
+        let said = stderr(&draft);
+        assert!(said.contains("kelpie 1.2.3 is not published yet; try again in a while") && !said.contains("building from source"), "attempt {attempt}: {said}");
+    }
+    assert_eq!((lab.cargo_runs(), lab.binary().as_str()), (0, ""), "a draft release is never built from source");
+    lab.publish(PREBUILT, None);
+    let published = lab.build(Some("release"));
+    assert!(published.status.success(), "a failed download does not hold the next try back: {}", stderr(&published));
+    assert_eq!(lab.binary(), PREBUILT);
+}
+
+#[test]
+fn a_source_build_without_rustup_refuses_a_rustc_older_than_the_workspace_needs() {
+    let lab = Lab::new("toolchain");
+    fs::write(lab.origin.join("Cargo.toml"), "[package]\nname = \"kelpie\"\nversion = \"1.2.4\"\nrust-version = \"1.90\"\n").unwrap();
+    git(&lab.origin, &["commit", "--quiet", "-am", "kelpie 1.2.4"]);
+    lab.herdr_checkout("main");
+    lab.fake_cargo();
+    executable(&lab.bin.join("rustc"), "#!/bin/sh\necho 'rustc 1.89.0 (29483883e 2025-08-04)'\n");
+    let old = lab.build(Some("main"));
+    assert!(!old.status.success() && stderr(&old).contains("Rust 1.89 is too old to build kelpie (it needs 1.90): install rustup, or switch to the release channel"), "{}", stderr(&old));
+    assert_eq!(lab.cargo_runs(), 0, "cargo never starts on a toolchain it cannot build with");
+    executable(&lab.bin.join("rustup"), "#!/bin/sh\n");
+    let managed = lab.build(Some("main"));
+    assert!(managed.status.success(), "rustup installs the pinned toolchain itself: {}", stderr(&managed));
+    fs::remove_file(lab.bin.join("rustup")).unwrap();
+    executable(&lab.bin.join("rustc"), "#!/bin/sh\necho 'rustc 1.90.0-nightly (abc 2025-09-01)'\n");
+    fs::write(lab.root.join("src/main.rs"), "fn main() { println!(\"again\"); }\n").unwrap();
+    let new_enough = lab.build(Some("main"));
+    assert!(new_enough.status.success(), "{}", stderr(&new_enough));
+    assert_eq!(lab.cargo_runs(), 2);
+}
+
+#[test]
+fn the_workspace_declares_the_rust_version_it_needs() {
+    let manifest: toml::Table = toml::from_str(include_str!("../Cargo.toml")).unwrap();
+    let needed = manifest["package"]["rust-version"].as_str().expect("Cargo.toml names rust-version, which scripts/build.sh checks without rustup");
+    let pinned: toml::Table = toml::from_str(include_str!("../rust-toolchain.toml")).unwrap();
+    let number = |version: &str| version.split('.').map(|part| part.parse::<u64>().unwrap()).collect::<Vec<_>>();
+    assert!(number(needed) <= number(pinned["toolchain"]["channel"].as_str().unwrap()), "the pinned toolchain builds what rust-version promises");
 }

@@ -16,7 +16,7 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<String
     let root = plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).map(PathBuf::from);
     let channel = config::channel()?;
     let state = lead::state_dir()?;
-    let places = Places { root: root.clone(), claude_dir: claude_dir.to_path_buf(), channel };
+    let places = Places::new(root.clone(), claude_dir.to_path_buf(), channel);
     let before = update_check::installed(&places);
     let mut lines = vec![herdr_plugin(&plugin, &state, channel, request, visible)?];
     lines.extend(finish_on_new_binary(claude_dir, root.as_deref()));
@@ -73,16 +73,21 @@ fn finish_in(claude_dir: &Path, state: &Path) -> Result<Vec<String>> {
 }
 
 pub fn check(claude_dir: &Path) -> String {
-    let places = Places { root: update_check::install_root(), claude_dir: claude_dir.to_path_buf(), channel: config::channel().unwrap_or_default() };
+    let places = Places::new(update_check::install_root(), claude_dir.to_path_buf(), config::channel().unwrap_or_default());
     let running = lead::state_location().ok().and_then(|state| release::read_override(&state)).map(|running| running.describe(places.channel));
     format!("channel {}\n\n{}", places.channel.key(), update_check::render(&update_check::check(&places), running.as_deref()))
 }
 
 fn versions(before: &[Component], after: &[Component]) -> Vec<String> {
     after.iter().map(|now| {
-        let was = before.iter().find(|was| was.name == now.name).and_then(|was| was.installed.clone());
+        let earlier = before.iter().find(|was| was.name == now.name);
+        let was = earlier.and_then(|was| was.installed.clone());
+        let built = (earlier.and_then(|was| was.built.as_ref()), now.built.as_ref());
         match (was, &now.installed) {
-            (Some(was), Some(now_version)) if &was == now_version => format!("{} {was}, already latest", now.label()),
+            (Some(was), Some(now_version)) if &was == now_version => match built {
+                (Some(old), Some(new)) if old != new => format!("{} {was} rebuilt, {old} → {new}", now.label()),
+                _ => format!("{} {was}, already latest", now.label()),
+            },
             (Some(was), Some(now_version)) => format!("{} {was} → {now_version}", now.label()),
             (None, Some(now_version)) => format!("{} → {now_version}", now.label()),
             (_, None) => format!("{}: version unknown", now.label()),
@@ -103,12 +108,12 @@ fn step(program: &str, args: &[&str], cwd: Option<&Path>, visible: bool) -> Resu
 
 fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Request, visible: bool) -> Result<String> {
     let root = PathBuf::from(plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).ok_or("herdr names no folder kelpie is installed in")?);
-    match release::install(&root, state, channel, request, plugin["source"]["kind"] != "local")? {
+    match release::install(&root, state, channel, request, plugin["source"]["kind"] != "local", &release::Binaries::of(&root))? {
         Plan::Herdr => {
             step("env", &["KELPIE_CHANNEL=main", &herdr::bin(), "plugin", "update", "--yes", "kelpie"], None, visible)?;
             Ok("herdr plugin: updated from GitHub and rebuilt".to_string())
         }
-        Plan::Done(line) => Ok(format!("herdr plugin: {line}; {}", build(&root, channel, visible)?)),
+        Plan::Done(line) => Ok(format!("herdr plugin: {line}; {}", build(&root, build_mode(channel, release::read_override(state).is_some()), visible)?)),
     }
 }
 
@@ -142,6 +147,11 @@ pub fn binary_origin(root: &Path) -> Option<Origin> {
         }
     });
     Some(downloaded.unwrap_or(Origin::Built))
+}
+
+// A branch or checkout installed with --from has no release binary, so it builds from source as the main channel does.
+fn build_mode(channel: Channel, overridden: bool) -> Channel {
+    if overridden { Channel::Main } else { channel }
 }
 
 // An install root checked out at a commit from before the build script has only cargo.
@@ -246,6 +256,13 @@ mod tests {
     }
 
     #[test]
+    fn a_checkout_installed_with_from_builds_from_source_even_on_the_release_channel() {
+        assert_eq!(build_mode(Channel::Release, false), Channel::Release);
+        assert_eq!(build_mode(Channel::Release, true), Channel::Main);
+        assert_eq!(build_mode(Channel::Main, false), Channel::Main);
+    }
+
+    #[test]
     fn update_skips_the_vault_plugin_when_it_is_not_installed() {
         let dir = scratch("no-vault");
         let (claude, log) = fake_claude(&dir);
@@ -304,12 +321,15 @@ mod tests {
 
     #[test]
     fn update_lists_each_component_before_and_after() {
-        let component = |name: &str, installed: Option<&str>| Component { name: name.to_string(), installed: installed.map(str::to_string), latest: None, error: None };
+        let component = |name: &str, installed: Option<&str>| Component { name: name.to_string(), installed: installed.map(str::to_string), ..Component::default() };
         let before = [component("kelpie", Some("0.18.1")), component("vault", Some("0.2.16")), component("notes-vault-mcp", Some("0.6.0"))];
         let after = [component("kelpie", Some("0.18.2")), component("vault", Some("0.2.16")), component("notes-vault-mcp", Some("0.6.1"))];
         assert_eq!(versions(&before, &after), ["kelpie 0.18.1 → 0.18.2", "vault plugin 0.2.16, already latest", "notes-vault-mcp 0.6.0 → 0.6.1"]);
         assert_eq!(versions(&before[..1], &after[..2]), ["kelpie 0.18.1 → 0.18.2", "vault plugin → 0.2.16"]);
         assert_eq!(versions(&[], &[component("kelpie", None)]), ["kelpie: version unknown"]);
+        let built = |sha: &str| Component { built: Some(sha.to_string()), ..component("kelpie", Some("0.25.0")) };
+        assert_eq!(versions(&[built("e70d5d5")], &[built("1234567")]), ["kelpie 0.25.0 rebuilt, e70d5d5 → 1234567"], "a rebuild within one version names both commits");
+        assert_eq!(versions(&[built("e70d5d5")], &[built("e70d5d5")]), ["kelpie 0.25.0, already latest"]);
     }
 
 

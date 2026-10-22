@@ -1,14 +1,21 @@
 #!/bin/sh
-# Puts the kelpie binary at target/release/kelpie: the release's prebuilt one when this checkout is a vX.Y.Z tag, else cargo build --release.
+# Puts the kelpie binary at target/release/kelpie: the release's prebuilt one when this checkout is a vX.Y.Z tag, else cargo build --release; a release tag and KELPIE_CHANNEL=release never build.
 set -u
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 binary="$root/target/release/kelpie"
 origin_file="$binary.origin"
-failed="$root/target/kelpie-download.failed"
 PATH="${PATH:+$PATH:}$HOME/.cargo/bin"
 export PATH
 
 say() { printf 'kelpie build: %s\n' "$*" >&2; }
+
+# herdr runs this without KELPIE_CHANNEL, so the machine config names the channel then.
+configured_channel() {
+  config=${KELPIE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/kelpie/config.toml}
+  [ -f "$config" ] || return 0
+  awk '/^[[:space:]]*\[/ { section = $0; sub(/#.*/, "", section); gsub(/[[:space:]]/, "", section) } section == "[update]" && /^[[:space:]]*channel[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); quote = substr($0, 1, 1); if (quote != "\"" && quote != "\047") exit; $0 = substr($0, 2); sub(quote ".*", ""); print; exit }' "$config"
+}
+channel=${KELPIE_CHANNEL:-$(configured_channel)}
 
 fresh() {
   [ -x "$binary" ] || return 1
@@ -51,16 +58,16 @@ sha256() { { sha256sum "$1" || shasum -a 256 "$1"; } 2>/dev/null | cut -d ' ' -f
 
 check_download() {
   reason=""
-  if [ "${KELPIE_CHANNEL:-}" = main ]; then reason="the main channel builds from source"; return; fi
+  if [ "$channel" = main ]; then reason="the main channel and --from build from source"; return; fi
   version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -n 1)
   tag="v$version"
   printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { reason="version $version is not a release"; return; }
   head=$(git -C "$root" rev-parse HEAD 2>/dev/null) || { reason="$root is not a git checkout"; return; }
   at=$(tag_commit "$tag") || { reason="origin has no tag $tag"; return; }
   [ "$at" = "$head" ] || { reason="the checkout is not at $tag"; return; }
+  at_tag=yes
   target=$(triple) || { reason="no prebuilt binary is made for $(uname -s) $(uname -m)"; return; }
   base=$(releases) || { reason="origin is not on GitHub"; return; }
-  if [ -n "$(find "$failed" -mmin -10 2>/dev/null)" ]; then reason="a download failed less than 10 minutes ago"; return; fi
   command -v curl >/dev/null 2>&1 || reason="curl is not installed"
 }
 
@@ -72,6 +79,7 @@ download() {
   say "downloading $asset from $base/$tag"
   if ! curl -fsSL --connect-timeout 10 --max-time 300 -o "$work/$asset" "$base/$tag/$asset" || ! curl -fsSL --connect-timeout 10 --max-time 60 -o "$work/SHA256SUMS" "$base/$tag/SHA256SUMS"; then
     say "could not download $asset (no network, or $tag is not published with it yet)"
+    unpublished=yes
     return 1
   fi
   want=$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1 }' "$work/SHA256SUMS")
@@ -89,22 +97,55 @@ download() {
   say "installed the prebuilt kelpie $tag for $target"
 }
 
+older() {
+  awk -v have="$1" -v need="$2" 'BEGIN { split(have, h, "."); split(need, n, "."); for (i = 1; i <= 3; i++) { if (h[i] + 0 < n[i] + 0) exit 0; if (h[i] + 0 > n[i] + 0) exit 1 } exit 1 }'
+}
+
+# Without rustup nothing installs the toolchain rust-toolchain.toml pins, so an older rustc would fail deep in cargo.
+check_toolchain() {
+  command -v rustup >/dev/null 2>&1 && return 0
+  need=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -n 1)
+  have=$(rustc --version 2>/dev/null | awk '{ print $2 }')
+  [ -n "$need" ] && [ -n "$have" ] || return 0
+  older "${have%%-*}" "$need" || return 0
+  short=$(printf '%s\n' "$have" | cut -d . -f 1-2)
+  say "Rust $short is too old to build kelpie (it needs $need): install rustup, or switch to the release channel"
+  return 1
+}
+
 fresh && exit 0
 
+unpublished=no
+at_tag=no
 check_download
 if [ -z "$reason" ]; then
-  if download; then
-    rm -f "$failed"
-    exit 0
+  download && exit 0
+  if [ "$unpublished" = yes ]; then
+    say "kelpie $version is not published yet; try again in a while"
+  else
+    say "the release binary of kelpie $version was not installed; try again in a while"
   fi
-  mkdir -p "$root/target" && : > "$failed"
-  reason="the download failed"
+  exit 1
+fi
+
+if [ "$at_tag" = yes ]; then
+  say "kelpie $version is a release, which installs only its published binary, and $reason; [update] channel = \"main\" in the machine config builds from source"
+  exit 1
+fi
+
+if [ "${KELPIE_CHANNEL:-}" = release ]; then
+  case "$reason" in
+    "origin has no tag"*) say "kelpie ${version:-?} is not published yet; try again in a while" ;;
+    *) say "the release channel installs only published binaries, and $reason; [update] channel = \"main\" in the machine config builds from source" ;;
+  esac
+  exit 1
 fi
 
 if ! command -v cargo >/dev/null 2>&1; then
   say "no prebuilt binary fits ($reason), and cargo is not installed to build one. Install Rust (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh) and run this again, or install a published release: herdr plugin install --ref vX.Y.Z gronare/kelpie"
   exit 1
 fi
+check_toolchain || exit 1
 say "building from source: $reason"
 rm -f "$origin_file"
 (cd "$root" && cargo build --release "$@")

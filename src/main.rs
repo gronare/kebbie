@@ -233,14 +233,17 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   without your Submit (kelpie update looks the issues up with gh and asks the lead
                                   which ones the new commits likely fix)
   kelpie update                   update everything to this machine's channel ([update] channel: release, the
-                                  highest vX.Y.Z tag, or main, origin's default branch): the herdr plugin (rebuilt),
-                                  the Claude Code plugin, the vault plugin when installed; list each version before →
-                                  after, and restart each Claude session that is idle and not the pane you are in
-                                  with claude --resume (the rest follow when idle; [restart] auto = false restarts none);
+                                  highest vX.Y.Z tag whose release binary is published, or main, origin's default
+                                  branch): the herdr plugin (the release's binary; built from source only on main and
+                                  with --from), the Claude Code plugin, the vault plugin when installed; list each
+                                  version before → after, and restart each Claude session that is idle and not the
+                                  pane you are in with claude --resume (the rest follow when idle; [restart] auto =
+                                  false restarts none);
                                   every other running session gets a message, held while it is mid-turn, with what
                                   changed for it since it started: new or changed role text, skills and commands
-                                  (--check changes nothing: fetches and shows installed against the channel's latest;
-                                  the keeper checks every 6 hours and the board shows ↑ when there is a newer one, U updates;
+                                  (--check changes nothing: fetches and shows the installed binary's version and
+                                  commit against the channel's latest; the keeper checks every 6 hours and the
+                                  board shows ↑ when there is a newer one, U updates;
                                   --from <branch or path> installs that branch on origin or that checkout's commits
                                   until --stable returns to the channel)
 

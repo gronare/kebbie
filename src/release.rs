@@ -79,14 +79,83 @@ pub fn release_version(tag: &str) -> Option<(u64, u64, u64)> {
     parts.next().is_none().then_some(version)
 }
 
-pub fn highest(tags: &[&str]) -> Option<String> {
-    tags.iter().filter_map(|tag| Some((release_version(tag)?, *tag))).max().map(|(_, tag)| tag.to_string())
+const PROBED: usize = 3;
+
+pub fn not_published(tag: &str) -> String {
+    format!("kelpie {} is not published yet; try again in a while", tag.trim_start_matches('v'))
 }
 
-pub fn latest_tag(root: &Path) -> Result<String> {
+// Where the release binaries are downloaded from, the same place scripts/build.sh downloads them from.
+#[derive(Clone, Debug)]
+pub struct Binaries {
+    pub base: Option<String>,
+    pub target: Option<&'static str>,
+    pub curl: PathBuf,
+}
+
+pub fn target_triple(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
+        ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
+        ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
+        _ => None,
+    }
+}
+
+pub fn releases_url(remote: &str) -> Option<String> {
+    let repo = ["https://github.com/", "git@github.com:", "ssh://git@github.com/"].into_iter().find_map(|prefix| remote.strip_prefix(prefix))?;
+    let repo = repo.trim_end_matches('/').trim_end_matches(".git");
+    let parts: Vec<&str> = repo.split('/').collect();
+    (parts.len() == 2 && parts.iter().all(|part| !part.is_empty())).then(|| format!("https://github.com/{repo}/releases/download"))
+}
+
+impl Binaries {
+    pub fn of(root: &Path) -> Self {
+        let base = std::env::var("KELPIE_RELEASES_URL").ok().filter(|url| !url.is_empty())
+            .map(|url| url.trim_end_matches('/').to_string())
+            .or_else(|| git(root, &["remote", "get-url", "origin"]).ok().as_deref().and_then(releases_url));
+        Self { base, target: target_triple(std::env::consts::OS, std::env::consts::ARCH), curl: PathBuf::from("curl") }
+    }
+
+    // A draft release serves 404 for its assets, and so does GitHub's CDN for a moment after publishing, so both read as not yet; curl's exit code cannot tell, as over HTTP/2 a 404 exits 56.
+    pub fn available(&self, tag: &str) -> Result<bool> {
+        let base = self.base.as_deref().ok_or("origin is not on GitHub, so it has no release binaries; [update] channel = \"main\" builds from source")?;
+        let target = self.target.ok_or_else(|| format!("no prebuilt kelpie is made for {} {}; [update] channel = \"main\" builds from source", std::env::consts::OS, std::env::consts::ARCH))?;
+        let url = format!("{base}/{tag}/kelpie-{}-{target}.tar.gz", tag.trim_start_matches('v'));
+        let output = std::process::Command::new(&self.curl).args(["-sL", "-r", "0-0", "-o", "/dev/null", "-w", "%{http_code}", "--connect-timeout", "10", "--max-time", "30", &url])
+            .stdin(std::process::Stdio::null()).output().map_err(|error| format!("curl: {error}"))?;
+        match String::from_utf8_lossy(&output.stdout).trim() {
+            code if code.len() == 3 && code.starts_with('2') => Ok(true),
+            "404" | "410" => Ok(false),
+            code => Err(format!("could not reach {base} (HTTP status {})", if code.is_empty() { "none" } else { code })),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Latest {
+    pub tag: Option<String>,
+    pub unpublished: Option<String>,
+}
+
+// The release channel's latest is the highest tag whose binary for this machine downloads; a higher tag without one is named, never installed.
+pub fn latest_published(root: &Path, binaries: &Binaries) -> Result<Latest> {
     git(root, &["fetch", "--quiet", "--tags", "--force", "origin"])?;
     let tags = git(root, &["tag", "--list", "v*"])?;
-    highest(&tags.lines().collect::<Vec<_>>()).ok_or_else(|| "origin has no vX.Y.Z release tag yet".to_string())
+    let mut releases: Vec<_> = tags.lines().filter_map(|tag| Some((release_version(tag)?, tag))).collect();
+    if releases.is_empty() {
+        return Err("origin has no vX.Y.Z release tag yet".to_string());
+    }
+    releases.sort();
+    let mut unpublished = None;
+    for (_, tag) in releases.iter().rev().take(PROBED) {
+        if binaries.available(tag)? {
+            return Ok(Latest { tag: Some(tag.to_string()), unpublished });
+        }
+        unpublished.get_or_insert_with(|| tag.to_string());
+    }
+    Ok(Latest { tag: None, unpublished })
 }
 
 enum Head {
@@ -166,12 +235,14 @@ fn install_override(root: &Path, state: &Path, source: Source, channel: Channel)
     Ok(format!("{}; kelpie update --stable returns to it", found.describe(channel)))
 }
 
-fn release(root: &Path, stable: bool) -> Result<String> {
+fn release(root: &Path, stable: bool, binaries: &Binaries) -> Result<String> {
     clean(root, "the release channel checks out tags there, so it must not be a checkout you work in")?;
-    let tag = latest_tag(root)?;
+    let latest = latest_published(root, binaries)?;
+    let pending = latest.unpublished.as_deref().map(|tag| format!("; {}", not_published(tag))).unwrap_or_default();
+    let tag = latest.tag.ok_or_else(|| pending.trim_start_matches("; ").to_string())?;
     let target = sha_of(root, &tag)?;
     let (place, expected) = match head(root)? {
-        Head::Detached(sha) if sha == target => return Ok(format!("at {tag}, the latest release")),
+        Head::Detached(sha) if sha == target => return Ok(format!("at {tag}, the latest release{pending}")),
         Head::Detached(sha) => (format!("detached at {}", short(&sha)), at_release(root)),
         Head::Branch(branch) => (format!("on branch {branch}"), false),
     };
@@ -179,7 +250,7 @@ fn release(root: &Path, stable: bool) -> Result<String> {
         return Err(format!("{} is {place}, not on a release tag. The release channel checks out tags there, so it must not be a checkout you develop in. kelpie update --stable moves it to {tag} (a branch keeps its commits), or set [update] channel = \"main\" in the machine config.", root.display()));
     }
     checkout(root, &target)?;
-    Ok(format!("checked out {tag}"))
+    Ok(format!("checked out {tag}{pending}"))
 }
 
 fn default_branch(root: &Path) -> Result<String> {
@@ -222,7 +293,7 @@ pub enum Plan {
 }
 
 // The git half of kelpie update: what the install root holds afterwards. Herdr means the main channel's GitHub install, which herdr updates itself.
-pub fn install(root: &Path, state: &Path, channel: Channel, request: &Request, herdr_installed: bool) -> Result<Plan> {
+pub fn install(root: &Path, state: &Path, channel: Channel, request: &Request, herdr_installed: bool, binaries: &Binaries) -> Result<Plan> {
     let active = read_override(state);
     match (request, active) {
         (Request::From(from), _) => install_override(root, state, source_of(from, root)?, channel).map(Plan::Done),
@@ -230,7 +301,7 @@ pub fn install(root: &Path, state: &Path, channel: Channel, request: &Request, h
         (request, _) => {
             let stable = *request == Request::Stable;
             let line = match channel {
-                Channel::Release => release(root, stable)?,
+                Channel::Release => release(root, stable, binaries)?,
                 Channel::Main if stable => back_to_main(root)?,
                 Channel::Main if herdr_installed => return Ok(Plan::Herdr),
                 Channel::Main => pull(root),
@@ -241,6 +312,15 @@ pub fn install(root: &Path, state: &Path, channel: Channel, request: &Request, h
             Ok(Plan::Done(line))
         }
     }
+}
+
+#[cfg(test)]
+pub fn fake_curl(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let curl = dir.join("fake-curl");
+    std::fs::write(&curl, "#!/bin/sh\nfor url; do :; done\ncase \"$url\" in file://*) [ -f \"${url#file://}\" ] && printf 206 || printf 404 ;; *) printf 000; exit 7 ;; esac\n").unwrap();
+    std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+    curl
 }
 
 #[cfg(test)]
@@ -273,6 +353,16 @@ mod tests {
         origin: PathBuf,
         root: PathBuf,
         state: PathBuf,
+        releases: PathBuf,
+        binaries: Binaries,
+    }
+
+    impl Fixture {
+        fn publish(&self, tag: &str) {
+            let release = self.releases.join(tag);
+            std::fs::create_dir_all(&release).unwrap();
+            std::fs::write(release.join(format!("kelpie-{}-{}.tar.gz", tag.trim_start_matches('v'), self.binaries.target.unwrap())), "binary").unwrap();
+        }
     }
 
     fn fixture(name: &str) -> Fixture {
@@ -283,7 +373,11 @@ mod tests {
         release_commit(&origin, "0.20.9");
         run_git(&origin, &["tag", "v0.20.9"]);
         run_git(&dir, &["clone", "--quiet", origin.to_str().unwrap(), "root"]);
-        Fixture { origin, root: dir.join("root"), state: dir.join("state") }
+        let releases = dir.join("releases");
+        let binaries = Binaries { base: Some(format!("file://{}", releases.display())), target: target_triple(std::env::consts::OS, std::env::consts::ARCH), curl: fake_curl(&dir) };
+        let fixture = Fixture { origin, root: dir.join("root"), state: dir.join("state"), releases, binaries };
+        fixture.publish("v0.20.9");
+        fixture
     }
 
     fn version_in(root: &Path) -> String {
@@ -304,9 +398,7 @@ mod tests {
         for bad in ["0.20.1", "v0.20", "v0.20.1.1", "v0.20.1-rc1", "v0.x.1", "v.1.2", "nightly", "v", "v1..2"] {
             assert_eq!(release_version(bad), None, "{bad}");
         }
-        assert_eq!(highest(&["v0.20.9", "v0.20.10", "v0.3.0", "nightly", "v9.0.0-rc1", "v1.0"]).as_deref(), Some("v0.20.10"));
-        assert_eq!(highest(&["v0.21.0", "v0.20.99"]).as_deref(), Some("v0.21.0"));
-        assert_eq!(highest(&["nightly"]), None);
+        assert!(release_version("v0.20.10") > release_version("v0.20.9") && release_version("v0.21.0") > release_version("v0.20.99"));
     }
 
     #[test]
@@ -314,27 +406,85 @@ mod tests {
         let fixture = fixture("highest");
         let ten = release_commit(&fixture.origin, "0.20.10");
         run_git(&fixture.origin, &["tag", "v0.20.10"]);
+        fixture.publish("v0.20.10");
         release_commit(&fixture.origin, "0.21.0-pre");
         run_git(&fixture.origin, &["tag", "v0.21.0-rc1"]);
         release_commit(&fixture.origin, "0.22.0-dev");
-        assert!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Stable, false)).contains("checked out v0.20.10"));
+        assert!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Stable, false, &fixture.binaries)).contains("checked out v0.20.10"));
         assert_eq!(run_git(&fixture.root, &["rev-parse", "HEAD"]), ten);
         assert_eq!(version_in(&fixture.root), "0.20.10");
-        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false)), "at v0.20.10, the latest release");
+        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false, &fixture.binaries)), "at v0.20.10, the latest release");
         let eleven = release_commit(&fixture.origin, "0.20.11");
         run_git(&fixture.origin, &["tag", "v0.20.11"]);
-        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false)), "checked out v0.20.11", "from one release tag to the next needs no --stable");
+        fixture.publish("v0.20.11");
+        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false, &fixture.binaries)), "checked out v0.20.11", "from one release tag to the next needs no --stable");
         assert_eq!(run_git(&fixture.root, &["rev-parse", "HEAD"]), eleven);
+    }
+
+    #[test]
+    fn the_release_channel_never_checks_out_a_tag_whose_binary_is_not_published() {
+        let fixture = fixture("draft");
+        let nine = run_git(&fixture.root, &["rev-parse", "HEAD"]);
+        run_git(&fixture.root, &["checkout", "--quiet", "--detach", "v0.20.9"]);
+        release_commit(&fixture.origin, "0.25.0");
+        run_git(&fixture.origin, &["tag", "v0.25.0"]);
+        assert_eq!(latest_published(&fixture.root, &fixture.binaries), Ok(Latest { tag: Some("v0.20.9".to_string()), unpublished: Some("v0.25.0".to_string()) }));
+        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false, &fixture.binaries)), "at v0.20.9, the latest release; kelpie 0.25.0 is not published yet; try again in a while");
+        assert_eq!(run_git(&fixture.root, &["rev-parse", "HEAD"]), nine, "a draft release stays where it is");
+        let other = Binaries { target: Some("riscv64-unknown-none"), ..fixture.binaries.clone() };
+        assert_eq!(latest_published(&fixture.root, &other), Ok(Latest { tag: None, unpublished: Some("v0.25.0".to_string()) }));
+        assert_eq!(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false, &other).err().as_deref(), Some("kelpie 0.25.0 is not published yet; try again in a while"), "with no binary for this machine at all nothing moves");
+        fixture.publish("v0.25.0");
+        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false, &fixture.binaries)), "checked out v0.25.0");
+        let offline = Binaries { base: Some("http://127.0.0.1:9".to_string()), ..fixture.binaries.clone() };
+        assert_eq!(latest_published(&fixture.root, &offline).err().as_deref(), Some("could not reach http://127.0.0.1:9 (HTTP status 000)"), "no network is an error, never a missing release");
+        let no_github = Binaries { base: None, ..fixture.binaries.clone() };
+        assert!(latest_published(&fixture.root, &no_github).err().is_some_and(|error| error.contains("origin is not on GitHub")));
+    }
+
+    #[test]
+    fn a_release_is_published_by_its_http_status_not_by_curls_exit_code() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("curl-status");
+        let answer = |said: &str, exit: u8| {
+            let curl = dir.join("curl");
+            std::fs::write(&curl, format!("#!/bin/sh\nprintf '{said}'\nexit {exit}\n")).unwrap();
+            std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Binaries { base: Some("https://github.com/gronare/kelpie/releases/download".to_string()), target: Some("aarch64-apple-darwin"), curl }.available("v0.25.0")
+        };
+        assert_eq!(answer("206", 0), Ok(true));
+        assert_eq!(answer("200", 0), Ok(true));
+        assert_eq!(answer("404", 56), Ok(false), "macOS curl over HTTP/2 exits 56 on a draft's 404");
+        assert_eq!(answer("404", 22), Ok(false));
+        assert_eq!(answer("410", 0), Ok(false));
+        assert_eq!(answer("000", 6), Err("could not reach https://github.com/gronare/kelpie/releases/download (HTTP status 000)".to_string()));
+        assert_eq!(answer("503", 0), Err("could not reach https://github.com/gronare/kelpie/releases/download (HTTP status 503)".to_string()));
+    }
+
+    #[test]
+    fn the_binaries_come_from_the_github_origins_releases() {
+        assert_eq!(releases_url("https://github.com/gronare/kelpie.git").as_deref(), Some("https://github.com/gronare/kelpie/releases/download"));
+        assert_eq!(releases_url("git@github.com:gronare/kelpie.git").as_deref(), Some("https://github.com/gronare/kelpie/releases/download"));
+        assert_eq!(releases_url("ssh://git@github.com/gronare/kelpie").as_deref(), Some("https://github.com/gronare/kelpie/releases/download"));
+        assert_eq!(releases_url("/Users/me/kelpie"), None);
+        assert_eq!(releases_url("https://gitlab.com/gronare/kelpie.git"), None);
+        assert_eq!(target_triple("macos", "aarch64"), Some("aarch64-apple-darwin"));
+        assert_eq!(target_triple("linux", "x86_64"), Some("x86_64-unknown-linux-gnu"));
+        assert_eq!(target_triple("freebsd", "x86_64"), None);
+        let workflow = include_str!("../.github/workflows/release.yml");
+        for target in ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+            assert!(workflow.contains(&format!("target: {target}")), "the release workflow builds no {target}");
+        }
     }
 
     #[test]
     fn the_release_channel_refuses_a_development_checkout() {
         let fixture = fixture("refuse");
-        let refused = install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false).err().unwrap();
+        let refused = install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false, &fixture.binaries).err().unwrap();
         assert!(refused.contains("is on branch main, not on a release tag") && refused.contains("kelpie update --stable moves it to v0.20.9") && refused.contains("channel = \"main\""), "{refused}");
         assert_eq!(run_git(&fixture.root, &["symbolic-ref", "--short", "HEAD"]), "main", "nothing moved");
         std::fs::write(fixture.root.join("work.rs"), "unsaved").unwrap();
-        let dirty = install(&fixture.root, &fixture.state, Channel::Release, &Request::Stable, false).err().unwrap();
+        let dirty = install(&fixture.root, &fixture.state, Channel::Release, &Request::Stable, false, &fixture.binaries).err().unwrap();
         assert!(dirty.contains("has uncommitted changes, so kelpie update leaves it as it is"), "{dirty}");
         assert_eq!(std::fs::read_to_string(fixture.root.join("work.rs")).unwrap(), "unsaved");
         std::fs::remove_file(fixture.root.join("work.rs")).unwrap();
@@ -342,7 +492,7 @@ mod tests {
         std::fs::write(fixture.root.join("x"), "x").unwrap();
         run_git(&fixture.root, &["add", "x"]);
         run_git(&fixture.root, &["commit", "--quiet", "-m", "local"]);
-        let off_tag = install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false).err().unwrap();
+        let off_tag = install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false, &fixture.binaries).err().unwrap();
         assert!(off_tag.contains("is detached at") && off_tag.contains("not on a release tag"), "{off_tag}");
     }
 
@@ -350,11 +500,11 @@ mod tests {
     fn the_main_channel_fast_forwards_the_default_branch() {
         let fixture = fixture("main");
         let next = release_commit(&fixture.origin, "0.21.0");
-        assert!(done(install(&fixture.root, &fixture.state, Channel::Main, &Request::Channel, false)).starts_with("pulled to"));
+        assert!(done(install(&fixture.root, &fixture.state, Channel::Main, &Request::Channel, false, &fixture.binaries)).starts_with("pulled to"));
         assert_eq!(run_git(&fixture.root, &["rev-parse", "HEAD"]), next);
-        assert!(matches!(install(&fixture.root, &fixture.state, Channel::Main, &Request::Channel, true).unwrap(), Plan::Herdr), "a GitHub install on main is herdr's to update, as before");
+        assert!(matches!(install(&fixture.root, &fixture.state, Channel::Main, &Request::Channel, true, &fixture.binaries).unwrap(), Plan::Herdr), "a GitHub install on main is herdr's to update, as before");
         std::fs::write(fixture.root.join("work.rs"), "unsaved").unwrap();
-        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Main, &Request::Channel, false)), "uncommitted changes in the linked checkout, not pulled");
+        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Main, &Request::Channel, false, &fixture.binaries)), "uncommitted changes in the linked checkout, not pulled");
     }
 
     #[test]
@@ -363,19 +513,19 @@ mod tests {
         run_git(&fixture.origin, &["checkout", "--quiet", "-b", "try-this"]);
         let tip = release_commit(&fixture.origin, "0.21.0-try");
         run_git(&fixture.origin, &["checkout", "--quiet", "main"]);
-        let line = done(install(&fixture.root, &fixture.state, Channel::Release, &Request::From("try-this".to_string()), false));
+        let line = done(install(&fixture.root, &fixture.state, Channel::Release, &Request::From("try-this".to_string()), false, &fixture.binaries));
         assert_eq!(line, format!("running try-this @ {}, not the release channel; kelpie update --stable returns to it", &tip[..7]));
         assert_eq!(run_git(&fixture.root, &["rev-parse", "HEAD"]), tip);
         assert_eq!(read_override(&fixture.state), Some(Override { source: Source::Branch("try-this".to_string()), sha: tip.clone() }));
         run_git(&fixture.origin, &["checkout", "--quiet", "try-this"]);
         let newer = release_commit(&fixture.origin, "0.21.0-try2");
         run_git(&fixture.origin, &["checkout", "--quiet", "main"]);
-        assert!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false)).ends_with("(refreshed)"), "a plain update keeps the override and fetches its branch again");
+        assert!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false, &fixture.binaries)).ends_with("(refreshed)"), "a plain update keeps the override and fetches its branch again");
         assert_eq!(run_git(&fixture.root, &["rev-parse", "HEAD"]), newer);
-        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Stable, false)), "checked out v0.20.9");
+        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Stable, false, &fixture.binaries)), "checked out v0.20.9");
         assert_eq!(read_override(&fixture.state), None);
         assert_eq!(version_in(&fixture.root), "0.20.9");
-        let missing = install(&fixture.root, &fixture.state, Channel::Release, &Request::From("no-such-branch".to_string()), false).err().unwrap();
+        let missing = install(&fixture.root, &fixture.state, Channel::Release, &Request::From("no-such-branch".to_string()), false, &fixture.binaries).err().unwrap();
         assert_eq!(missing, "origin has no branch no-such-branch");
         assert_eq!(read_override(&fixture.state), None, "a failed --from records nothing");
     }
@@ -387,15 +537,15 @@ mod tests {
         run_git(fixture.origin.parent().unwrap(), &["clone", "--quiet", fixture.origin.to_str().unwrap(), "dev"]);
         let mine = release_commit(&dev, "0.21.0-mine");
         let from = Request::From(dev.to_string_lossy().to_string());
-        assert!(done(install(&fixture.root, &fixture.state, Channel::Release, &from, false)).starts_with(&format!("running {} @ {}", dev.display(), &mine[..7])));
+        assert!(done(install(&fixture.root, &fixture.state, Channel::Release, &from, false, &fixture.binaries)).starts_with(&format!("running {} @ {}", dev.display(), &mine[..7])));
         assert_eq!(run_git(&fixture.root, &["rev-parse", "HEAD"]), mine, "a commit that exists only in the other checkout");
         assert_eq!(read_override(&fixture.state), Some(Override { source: Source::Path(dev.clone()), sha: mine }));
         std::fs::write(dev.join("half.rs"), "half").unwrap();
-        let refused = install(&fixture.root, &fixture.state, Channel::Release, &from, false).err().unwrap();
+        let refused = install(&fixture.root, &fixture.state, Channel::Release, &from, false, &fixture.binaries).err().unwrap();
         assert!(refused.contains("has uncommitted changes") && refused.contains("only commits are installed"), "{refused}");
-        let itself = install(&fixture.root, &fixture.state, Channel::Release, &Request::From(fixture.root.to_string_lossy().to_string()), false).err().unwrap();
+        let itself = install(&fixture.root, &fixture.state, Channel::Release, &Request::From(fixture.root.to_string_lossy().to_string()), false, &fixture.binaries).err().unwrap();
         assert!(itself.contains("is the install root itself"), "{itself}");
-        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Main, &Request::Stable, false)), format!("on main at {}", &run_git(&fixture.origin, &["rev-parse", "HEAD"])[..7]), "--stable on main returns to the default branch");
+        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Main, &Request::Stable, false, &fixture.binaries)), format!("on main at {}", &run_git(&fixture.origin, &["rev-parse", "HEAD"])[..7]), "--stable on main returns to the default branch");
         assert_eq!(read_override(&fixture.state), None);
     }
 
@@ -403,10 +553,10 @@ mod tests {
     fn a_ref_that_starts_with_a_dash_is_refused_before_git_sees_it() {
         let fixture = fixture("dash");
         for reference in ["--upload-pack=touch /tmp/pwned", "-b", "--"] {
-            let refused = install(&fixture.root, &fixture.state, Channel::Release, &Request::From(reference.to_string()), false).err().unwrap();
+            let refused = install(&fixture.root, &fixture.state, Channel::Release, &Request::From(reference.to_string()), false, &fixture.binaries).err().unwrap();
             assert_eq!(refused, format!("kelpie update --from {reference}: a branch or path cannot start with -"));
         }
-        assert!(install(&fixture.root, &fixture.state, Channel::Release, &Request::From("a..b".to_string()), false).err().unwrap().contains("not a directory, nor a branch name"));
+        assert!(install(&fixture.root, &fixture.state, Channel::Release, &Request::From("a..b".to_string()), false, &fixture.binaries).err().unwrap().contains("not a directory, nor a branch name"));
         assert_eq!(read_override(&fixture.state), None);
     }
 

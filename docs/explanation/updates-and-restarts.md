@@ -16,18 +16,22 @@ herdr's install and `kelpie update` both put the binary in place with `scripts/b
 2. When the checkout is exactly at the `vX.Y.Z` tag of its version and the machine is not on the `main` channel, the script downloads `kelpie-<version>-<target>.tar.gz` from that tag's published GitHub Release, checks it against the release's `SHA256SUMS`, and renames it into place. Releases are built for macOS on Apple silicon and Intel, and for Linux on x86_64 and arm64 (glibc).
 3. Otherwise it runs `cargo build --release`.
 
-A download that fails is not tried again for 10 minutes; meanwhile the script builds with `cargo`, or, without it, stops with what to install. A machine on the release channel therefore updates without Rust, while the `main` channel, `kelpie update --from` and an unpublished release build from source. `kelpie doctor` shows on its `plugin binary` line whether the binary was downloaded, and for which tag, or built, and its `cargo` line says whether this machine needs Rust.
+A release tag is never built from source: when its download fails, the script stops with `kelpie <version> is not published yet; try again in a while` and leaves the binary it has, whether `kelpie update` or herdr's own install (`herdr plugin install --ref vX.Y.Z`) ran it. The next run tries the download again. A release tag with no binary to fetch, on another platform, from an origin that is not on GitHub or without `curl`, stops too and says why. On the release channel `kelpie update` builds nothing at all. Only the `main` channel, `kelpie update --from` and a checkout that is not at a release tag build from source. herdr's install runs the script without kelpie's channel, so the script reads it from the `[update]` table of the machine config (`channel = "main"` on its own line; a dotted `update.channel` key or an inline table is not read there).
+
+Before it builds, the script checks the Rust toolchain. With rustup, the first `cargo` installs the version `rust-toolchain.toml` pins. Without rustup, a `rustc` older than the `rust-version` in `Cargo.toml` stops the build with `Rust 1.89 is too old to build kelpie (it needs 1.90): install rustup, or switch to the release channel`, before `cargo` starts. `kelpie doctor` shows on its `plugin binary` line whether the binary was downloaded, and for which tag, or built, and its `cargo` line says whether this machine needs Rust.
 
 ## Channels
 
 Each machine follows one channel:
 
-- **`release`**, the default, installs the highest `vX.Y.Z` tag on origin. The install root is checked out detached at that tag. Only tags of exactly `v` and three numbers count, so `v1.4` and `v1.4.0-rc1` are never offered.
+- **`release`**, the default, installs the highest `vX.Y.Z` tag on origin whose GitHub Release is published with a binary for this machine. The install root is checked out detached at that tag. A tag whose release is still a draft, or whose binary GitHub does not serve yet, is never offered: `kelpie update` stays on the published release and says `kelpie <version> is not published yet; try again in a while`. Only tags of exactly `v` and three numbers count, so `v1.4` and `v1.4.0-rc1` are never offered.
 - **`main`** follows origin's default branch as it is pushed.
 
 Because the release channel checks out tags in the install root, it refuses to touch an install root with uncommitted changes or one that sits on a branch. Develop in another checkout and try its commits with `kelpie update --from <path>`.
 
 The keeper checks for updates every 6 hours, and the board shows `↑ kelpie <version> · U updates` when the channel has something newer. On a release machine the notice names the new tag, never what main carries.
+
+The installed version is the one the binary itself reports, with the commit it was built from, not the version in the checkout's files. A checkout that moved ahead without a rebuild shows as `0.24.0 installed (e70d5d5), 0.25.0 in the checkout: rebuild`, the board offers the update, and `U` rebuilds it.
 
 ## Overrides
 

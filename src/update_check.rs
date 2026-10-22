@@ -8,6 +8,7 @@ use crate::sh::Result;
 
 pub const FILE: &str = "update-check.json";
 pub const EVERY: u64 = 6 * 60 * 60;
+pub const PENDING_EVERY: u64 = 15 * 60;
 pub const KELPIE: &str = "kelpie";
 pub const VAULT: &str = "vault";
 pub const PIN: &str = "notes-vault-mcp";
@@ -16,7 +17,10 @@ pub const PIN: &str = "notes-vault-mcp";
 pub struct Component {
     pub name: String,
     pub installed: Option<String>,
+    pub built: Option<String>,
+    pub checkout: Option<String>,
     pub latest: Option<String>,
+    pub unpublished: Option<String>,
     pub error: Option<String>,
 }
 
@@ -25,8 +29,26 @@ impl Component {
         Self { name: name.to_string(), installed, ..Self::default() }
     }
 
+    fn ahead_of_installed(&self, version: Option<&String>) -> bool {
+        matches!((&self.installed, version), (Some(installed), Some(version)) if newer(version, installed))
+    }
+
+    // A release checkout on a tag whose binary is not published yet has nothing to rebuild from.
+    pub fn rebuild(&self) -> bool {
+        let beyond_published = self.unpublished.is_some() && self.checkout.as_ref().is_some_and(|checkout| self.latest.as_ref().is_none_or(|latest| newer(checkout, latest)));
+        self.ahead_of_installed(self.checkout.as_ref()) && !beyond_published
+    }
+
+    fn latest_ahead(&self) -> bool {
+        self.ahead_of_installed(self.latest.as_ref()) && !(self.rebuild() && self.checkout.as_ref().zip(self.latest.as_ref()).is_some_and(|(checkout, latest)| !newer(latest, checkout)))
+    }
+
     pub fn newer(&self) -> bool {
-        matches!((&self.installed, &self.latest), (Some(installed), Some(latest)) if newer(latest, installed))
+        self.rebuild() || self.ahead_of_installed(self.latest.as_ref())
+    }
+
+    pub fn target(&self) -> Option<&String> {
+        if self.latest_ahead() { self.latest.as_ref() } else if self.rebuild() { self.checkout.as_ref() } else { None }
     }
 
     pub fn label(&self) -> &str {
@@ -34,12 +56,12 @@ impl Component {
     }
 
     fn to_json(&self) -> Value {
-        json!({ "name": self.name, "installed": self.installed, "latest": self.latest, "error": self.error })
+        json!({ "name": self.name, "installed": self.installed, "latest": self.latest, "unpublished": self.unpublished, "error": self.error })
     }
 
     fn from_json(value: &Value) -> Option<Self> {
         let text = |key: &str| value[key].as_str().map(str::to_string);
-        Some(Self { name: text("name")?, installed: text("installed"), latest: text("latest"), error: text("error") })
+        Some(Self { name: text("name")?, installed: text("installed"), latest: text("latest"), unpublished: text("unpublished"), error: text("error"), ..Self::default() })
     }
 }
 
@@ -57,11 +79,16 @@ pub struct Places {
     pub root: Option<PathBuf>,
     pub claude_dir: PathBuf,
     pub channel: Channel,
+    pub binaries: Option<crate::release::Binaries>,
 }
 
 impl Places {
+    pub fn new(root: Option<PathBuf>, claude_dir: PathBuf, channel: Channel) -> Self {
+        Self { root, claude_dir, channel, binaries: None }
+    }
+
     pub fn current() -> Self {
-        Self { root: install_root(), claude_dir: crate::agent::claude::home().unwrap_or_default(), channel: crate::config::channel().unwrap_or_default() }
+        Self::new(install_root(), crate::agent::claude::home().unwrap_or_default(), crate::config::channel().unwrap_or_default())
     }
 }
 
@@ -99,8 +126,28 @@ fn read_json(path: &Path) -> Option<Value> {
     std::fs::read_to_string(path).ok().and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
+pub fn parse_binary_version(text: &str) -> Option<(String, Option<String>)> {
+    let rest = text.lines().next()?.trim().strip_prefix("kelpie ")?;
+    let (version, built) = rest.split_once(' ').map_or((rest, None), |(version, built)| (version, Some(built)));
+    crate::doctor::version(version)?;
+    let sha = built.and_then(|built| built.trim_start_matches('(').split([' ', ')']).next()).filter(|sha| !sha.is_empty() && sha.chars().all(|character| character.is_ascii_hexdigit()));
+    Some((version.to_string(), sha.map(str::to_string)))
+}
+
+pub fn binary_version(binary: &Path) -> Option<(String, Option<String>)> {
+    let output = Command::new(binary).arg("--version").stdin(Stdio::null()).stderr(Stdio::null()).output().ok().filter(|output| output.status.success())?;
+    parse_binary_version(&String::from_utf8_lossy(&output.stdout))
+}
+
+// What runs is the binary, so a checkout moved ahead without a rebuild shows as the binary's version with the checkout's beside it.
+fn installed_kelpie(root: Option<&Path>) -> Component {
+    let Some(root) = root else { return Component::new(KELPIE, None) };
+    let (installed, built) = binary_version(&root.join("target/release/kelpie")).map_or((None, None), |(version, built)| (Some(version), built));
+    Component { built, checkout: kelpie_version(|file| std::fs::read_to_string(root.join(file)).ok()), ..Component::new(KELPIE, installed) }
+}
+
 pub fn installed(places: &Places) -> Vec<Component> {
-    let mut components = vec![Component::new(KELPIE, places.root.as_deref().and_then(|root| kelpie_version(|file| std::fs::read_to_string(root.join(file)).ok())))];
+    let mut components = vec![installed_kelpie(places.root.as_deref())];
     if let Some((_, version, root)) = crate::vault_cli::installed(&places.claude_dir) {
         components.push(Component::new(VAULT, Some(version)));
         components.push(Component::new(PIN, pin(&crate::vault_cli::hooks_of(&root))));
@@ -136,13 +183,14 @@ fn show(dir: &Path, reference: &str, file: &str) -> Option<String> {
     git(dir, &["show", &format!("{reference}:{file}")]).ok()
 }
 
-// The release channel's latest is the tag itself, so the notice names it and nothing pushed after it.
-fn latest_kelpie(root: &Path, channel: Channel) -> Result<String> {
+// The release channel's latest is a tag whose binary is published, so the notice names it and nothing pushed after it.
+fn latest_kelpie(root: &Path, channel: Channel, binaries: Option<&crate::release::Binaries>) -> Result<(Option<String>, Option<String>)> {
     if channel == Channel::Release {
-        return crate::release::latest_tag(root);
+        let latest = crate::release::latest_published(root, &binaries.cloned().unwrap_or_else(|| crate::release::Binaries::of(root)))?;
+        return Ok((latest.tag, latest.unpublished));
     }
     let head = fetched_default(root)?;
-    kelpie_version(|file| show(root, &head, file)).ok_or_else(|| format!("no version on {head}"))
+    kelpie_version(|file| show(root, &head, file)).map(|version| (Some(version), None)).ok_or_else(|| format!("no version on {head}"))
 }
 
 fn marketplace_dir(claude_dir: &Path, name: &str) -> PathBuf {
@@ -166,8 +214,9 @@ fn latest_vault(claude_dir: &Path, id: &str) -> Result<(String, Option<String>)>
 pub fn check(places: &Places) -> Vec<Component> {
     let mut components = installed(places);
     let kelpie = &mut components[0];
-    match places.root.as_deref().ok_or_else(|| "cannot tell where kelpie is installed".to_string()).and_then(|root| latest_kelpie(root, places.channel)) {
-        Ok(latest) => kelpie.latest = Some(latest),
+    match places.root.as_deref().ok_or_else(|| "cannot tell where kelpie is installed".to_string()).and_then(|root| latest_kelpie(root, places.channel, places.binaries.as_ref())) {
+        Ok((Some(latest), unpublished)) => (kelpie.latest, kelpie.unpublished) = (Some(latest), unpublished),
+        Ok((None, unpublished)) => (kelpie.error, kelpie.unpublished) = (Some(crate::release::not_published(unpublished.as_deref().unwrap_or_default())), unpublished),
         Err(error) => kelpie.error = Some(error),
     }
     if let Some((id, _, _)) = crate::vault_cli::installed(&places.claude_dir) {
@@ -184,16 +233,7 @@ pub fn check(places: &Places) -> Vec<Component> {
 
 pub fn render(components: &[Component], running: Option<&str>) -> String {
     let width = components.iter().map(|component| component.label().len()).max().unwrap_or(0);
-    let mut lines: Vec<String> = components.iter().map(|component| {
-        let installed = component.installed.as_deref().unwrap_or("?");
-        let state = match (&component.latest, &component.error) {
-            (Some(latest), _) if component.newer() => format!("{installed} installed, {latest} available"),
-            (Some(_), _) => format!("{installed} installed, the latest"),
-            (None, Some(error)) => format!("{installed} installed, latest unknown: {error}"),
-            (None, None) => format!("{installed} installed, latest unknown"),
-        };
-        format!("{:<width$}  {state}", component.label())
-    }).collect();
+    let mut lines: Vec<String> = components.iter().map(|component| format!("{:<width$}  {}", component.label(), state(component))).collect();
     if let Some(running) = running {
         lines.push(String::new());
         lines.push(format!("kelpie is {running}; kelpie update --stable returns to it."));
@@ -203,6 +243,29 @@ pub fn render(components: &[Component], running: Option<&str>) -> String {
         lines.push("kelpie update brings everything to the latest.".to_string());
     }
     lines.join("\n")
+}
+
+fn state(component: &Component) -> String {
+    let installed = component.installed.as_deref().unwrap_or("?");
+    let mut parts = vec![match &component.built {
+        Some(built) => format!("{installed} installed ({built})"),
+        None => format!("{installed} installed"),
+    }];
+    if component.rebuild() {
+        parts.push(format!("{} in the checkout: rebuild", component.checkout.as_deref().unwrap_or_default()));
+    }
+    match (&component.latest, &component.error) {
+        (Some(latest), _) if component.latest_ahead() => parts.push(format!("{latest} available")),
+        (Some(_), _) if component.rebuild() => {}
+        (Some(_), _) => parts.push("the latest".to_string()),
+        (None, Some(error)) => parts.push(format!("latest unknown: {error}")),
+        (None, None) => parts.push("latest unknown".to_string()),
+    }
+    let mut text = parts.join(", ");
+    if let Some(unpublished) = component.unpublished.as_ref().filter(|unpublished| component.latest.is_some() && component.installed.as_ref().is_none_or(|installed| newer(unpublished, installed))) {
+        text.push_str(&format!("; {}", crate::release::not_published(unpublished)));
+    }
+    text
 }
 
 pub struct Cache {
@@ -235,6 +298,8 @@ fn with_installed(mut components: Vec<Component>, now: &[Component]) -> Vec<Comp
     for component in &mut components {
         if let Some(found) = now.iter().find(|found| found.name == component.name) {
             component.installed = found.installed.clone();
+            component.built = found.built.clone();
+            component.checkout = found.checkout.clone();
         }
     }
     components.retain(|component| now.iter().any(|found| found.name == component.name));
@@ -246,11 +311,16 @@ pub fn cached(state: &Path, channel: Channel, installed: &[Component]) -> Vec<Co
     read_cache(state).filter(|cache| cache.channel.as_deref() == Some(channel.key())).map(|cache| with_installed(cache.components, installed)).unwrap_or_default()
 }
 
+// A release that is tagged but not yet published is usually published within minutes, so it is looked for again sooner.
+fn every(components: &[Component]) -> u64 {
+    if components.iter().any(|component| component.unpublished.is_some()) { PENDING_EVERY } else { EVERY }
+}
+
 // The claim is written before the fetch, so other boards starting meanwhile do not fetch too.
 // A check made for the other channel compared against the wrong latest, so it counts as none.
 pub fn current(state: &Path, now: u64, channel: Channel, installed: Vec<Component>, fetch: impl FnOnce() -> Vec<Component>) -> Vec<Component> {
     let cache = read_cache(state).filter(|cache| cache.channel.as_deref() == Some(channel.key()));
-    if let Some(cache) = cache.as_ref().filter(|cache| now.saturating_sub(cache.checked_at) < EVERY) {
+    if let Some(cache) = cache.as_ref().filter(|cache| now.saturating_sub(cache.checked_at) < every(&cache.components)) {
         return with_installed(cache.components.clone(), &installed);
     }
     write_cache(state, now, channel, &cache.map(|cache| cache.components).unwrap_or_default());
@@ -261,8 +331,8 @@ pub fn current(state: &Path, now: u64, channel: Channel, installed: Vec<Componen
 
 pub fn notice(components: &[Component], running: Option<&crate::release::Override>) -> Vec<(String, String)> {
     let running = running.map(|found| ("running".to_string(), format!("{}, not the channel", found.name())));
-    running.into_iter().chain(components.iter().filter(|component| component.name != PIN && component.newer())
-        .filter_map(|component| Some((component.name.clone(), component.latest.clone()?)))).collect()
+    running.into_iter().chain(components.iter().filter(|component| component.name != PIN)
+        .filter_map(|component| Some((component.name.clone(), component.target()?.clone())))).collect()
 }
 
 pub fn doctor_line(state: &Path, channel: Channel, installed: &[Component]) -> (bool, String) {
@@ -275,8 +345,7 @@ pub fn doctor_line(state: &Path, channel: Channel, installed: &[Component]) -> (
         "now" => "just now".to_string(),
         age => format!("{age} ago"),
     };
-    let newer: Vec<String> = components.iter().filter(|component| component.newer())
-        .map(|component| format!("{} {} → {}", component.label(), component.installed.as_deref().unwrap_or("?"), component.latest.as_deref().unwrap_or("?"))).collect();
+    let newer: Vec<String> = components.iter().filter_map(|component| Some(format!("{} {} → {}", component.label(), component.installed.as_deref()?, component.target()?))).collect();
     if !newer.is_empty() {
         return (false, format!("{} (checked {age}); kelpie update", newer.join(", ")));
     }
@@ -335,13 +404,22 @@ mod tests {
         commit_all(repo, &format!("vault {version}"));
     }
 
+    fn fake_binary(root: &Path, said: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let binary = root.join("target/release/kelpie");
+        write(&binary, &format!("#!/bin/sh\n[ \"$1\" = --version ] && echo '{said}'\n"));
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     fn fake_install(dir: &Path, with_vault: bool) -> Places {
         let origin = dir.join("kelpie-origin");
         std::fs::create_dir_all(&origin).unwrap();
         run_git(&origin, &["init", "--quiet", "-b", "main"]);
+        write(&origin.join(".gitignore"), "target/\n");
         write(&origin.join(".claude-plugin/plugin.json"), r#"{"name":"kelpie","version":"0.18.1"}"#);
         commit_all(&origin, "kelpie 0.18.1");
         run_git(dir, &["clone", "--quiet", origin.to_str().unwrap(), "root"]);
+        fake_binary(&dir.join("root"), "kelpie 0.18.1 (abc1234 2026-10-01)");
         write(&origin.join(".claude-plugin/plugin.json"), r#"{"name":"kelpie","version":"0.18.10"}"#);
         commit_all(&origin, "kelpie 0.18.10");
         let claude_dir = dir.join("claude");
@@ -360,7 +438,8 @@ mod tests {
             write(&claude_dir.join("plugins/installed_plugins.json"), &json!({ "plugins": { "vault@gronare": [{ "installPath": install, "version": "0.2.16" }] } }).to_string());
             write(&claude_dir.join("plugins/known_marketplaces.json"), &json!({ "gronare": { "installLocation": clone } }).to_string());
         }
-        Places { root: Some(dir.join("root")), claude_dir, channel: Channel::Main }
+        let binaries = crate::release::Binaries { base: Some(format!("file://{}", dir.join("releases").display())), target: crate::release::target_triple(std::env::consts::OS, std::env::consts::ARCH), curl: crate::release::fake_curl(dir) };
+        Places { binaries: Some(binaries), ..Places::new(Some(dir.join("root")), claude_dir, Channel::Main) }
     }
 
     #[test]
@@ -374,7 +453,7 @@ mod tests {
         let shown: Vec<(&str, Option<&str>, Option<&str>)> = components.iter().map(|component| (component.name.as_str(), component.installed.as_deref(), component.latest.as_deref())).collect();
         assert_eq!(shown, [("kelpie", Some("0.18.1"), Some("0.18.10")), ("vault", Some("0.2.16"), Some("0.2.17")), ("notes-vault-mcp", Some("0.6.0"), Some("0.6.1"))]);
         let text = render(&components, None);
-        assert!(text.contains("kelpie           0.18.1 installed, 0.18.10 available"), "{text}");
+        assert!(text.contains("kelpie           0.18.1 installed (abc1234), 0.18.10 available"), "{text}");
         assert!(text.contains("vault plugin     0.2.16 installed, 0.2.17 available"), "{text}");
         assert!(text.contains("notes-vault-mcp  0.6.0 installed, 0.6.1 available"), "{text}");
         assert!(text.ends_with("kelpie update brings everything to the latest."), "{text}");
@@ -388,21 +467,25 @@ mod tests {
         let dir = scratch("alone");
         let places = fake_install(&dir, false);
         run_git(places.root.as_deref().unwrap(), &["pull", "--quiet", "--ff-only"]);
+        let moved = check(&places);
+        assert_eq!(render(&moved, None), "kelpie  0.18.1 installed (abc1234), 0.18.10 in the checkout: rebuild\n\nkelpie update brings everything to the latest.", "a checkout moved ahead without a rebuild is the binary's version, not the files'");
+        assert_eq!(notice(&moved, None), [("kelpie".to_string(), "0.18.10".to_string())], "so the board offers the update that rebuilds it");
+        fake_binary(places.root.as_deref().unwrap(), "kelpie 0.18.10 (def5678 2026-10-02)");
         let components = check(&places);
         assert_eq!(components.len(), 1);
-        assert_eq!(render(&components, None), "kelpie  0.18.10 installed, the latest");
+        assert_eq!(render(&components, None), "kelpie  0.18.10 installed (def5678), the latest");
         run_git(places.root.as_deref().unwrap(), &["remote", "set-url", "origin", dir.join("missing").to_str().unwrap()]);
         let components = check(&places);
         assert!(components[0].latest.is_none() && components[0].error.is_some(), "{components:?}");
         assert!(notice(&components, None).is_empty(), "a failed check shows nothing");
-        assert!(render(&components, None).starts_with("kelpie  0.18.10 installed, latest unknown: git fetch"), "{}", render(&components, None));
+        assert!(render(&components, None).starts_with("kelpie  0.18.10 installed (def5678), latest unknown: git fetch"), "{}", render(&components, None));
     }
 
     #[test]
     fn the_cache_fetches_at_most_every_six_hours_and_rereads_what_is_installed() {
         let state = scratch("cache");
         let fetched = std::cell::Cell::new(0);
-        let component = |installed: &str, latest: &str| Component { name: KELPIE.to_string(), installed: Some(installed.to_string()), latest: Some(latest.to_string()), error: None };
+        let component = |installed: &str, latest: &str| Component { name: KELPIE.to_string(), installed: Some(installed.to_string()), latest: Some(latest.to_string()), ..Component::default() };
         let fetch = || { fetched.set(fetched.get() + 1); vec![component("0.18.1", "0.18.2")] };
         let start = 1_000_000;
         let installed = || vec![Component::new(KELPIE, Some("0.18.1".to_string()))];
@@ -439,12 +522,59 @@ mod tests {
         run_git(&origin, &["tag", "nightly"]);
         write(&origin.join(".claude-plugin/plugin.json"), r#"{"name":"kelpie","version":"0.19.0"}"#);
         commit_all(&origin, "kelpie 0.19.0 on main, not released");
+        let draft = check(&places);
+        assert_eq!((draft[0].latest.as_deref(), draft[0].error.as_deref()), (None, Some("kelpie 0.18.2 is not published yet; try again in a while")), "a tag whose release binary is not downloadable is never offered");
+        assert!(notice(&draft, None).is_empty());
+        publish(&dir, "v0.18.2");
         let components = check(&places);
         assert_eq!((components[0].installed.as_deref(), components[0].latest.as_deref()), (Some("0.18.1"), Some("v0.18.2")));
         assert_eq!(notice(&components, None), [("kelpie".to_string(), "v0.18.2".to_string())], "the tag, never what main carries");
-        assert!(render(&components, None).starts_with("kelpie  0.18.1 installed, v0.18.2 available"), "{}", render(&components, None));
+        assert!(render(&components, None).starts_with("kelpie  0.18.1 installed (abc1234), v0.18.2 available"), "{}", render(&components, None));
+        run_git(&origin, &["tag", "v0.18.3"]);
+        let pending = check(&places);
+        assert_eq!(notice(&pending, None), [("kelpie".to_string(), "v0.18.2".to_string())], "a newer draft leaves the published release on offer");
+        assert!(render(&pending, None).starts_with("kelpie  0.18.1 installed (abc1234), v0.18.2 available; kelpie 0.18.3 is not published yet; try again in a while"), "{}", render(&pending, None));
         places.channel = Channel::Main;
         assert_eq!(check(&places)[0].latest.as_deref(), Some("0.19.0"), "main compares against origin's default branch");
+    }
+
+    fn publish(dir: &Path, tag: &str) {
+        let target = crate::release::target_triple(std::env::consts::OS, std::env::consts::ARCH).unwrap();
+        write(&dir.join("releases").join(tag).join(format!("kelpie-{}-{target}.tar.gz", tag.trim_start_matches('v'))), "binary");
+    }
+
+    #[test]
+    fn a_release_checkout_on_an_unpublished_tag_offers_no_rebuild() {
+        let on_draft = Component { name: KELPIE.to_string(), installed: Some("0.24.0".to_string()), built: Some("e70d5d5".to_string()), checkout: Some("0.25.0".to_string()), latest: Some("v0.24.0".to_string()), unpublished: Some("v0.25.0".to_string()), error: None };
+        assert!(!on_draft.newer() && notice(std::slice::from_ref(&on_draft), None).is_empty(), "never ↑ kelpie 0.25.0 while 0.25.0 is a draft");
+        assert_eq!(render(std::slice::from_ref(&on_draft), None), "kelpie  0.24.0 installed (e70d5d5), the latest; kelpie 0.25.0 is not published yet; try again in a while");
+        let nothing_published = Component { latest: None, error: Some(crate::release::not_published("v0.25.0")), ..on_draft.clone() };
+        assert!(notice(&[nothing_published], None).is_empty());
+        let main = Component { latest: Some("0.25.0".to_string()), unpublished: None, ..on_draft };
+        assert_eq!(notice(&[main], None), [("kelpie".to_string(), "0.25.0".to_string())], "a main checkout ahead of its binary is rebuilt");
+    }
+
+    #[test]
+    fn an_unpublished_release_is_looked_for_again_after_fifteen_minutes() {
+        let state = scratch("pending");
+        let fetched = std::cell::Cell::new(0);
+        let pending = Component { name: KELPIE.to_string(), latest: Some("v0.24.0".to_string()), unpublished: Some("v0.25.0".to_string()), ..Component::default() };
+        let fetch = || { fetched.set(fetched.get() + 1); vec![pending.clone()] };
+        current(&state, 1_000, Channel::Release, Vec::new(), fetch);
+        current(&state, 1_000 + PENDING_EVERY - 1, Channel::Release, Vec::new(), fetch);
+        assert_eq!(fetched.get(), 1);
+        current(&state, 1_000 + PENDING_EVERY, Channel::Release, Vec::new(), fetch);
+        assert_eq!(fetched.get(), 2, "not six hours while a tagged release waits to be published");
+    }
+
+    #[test]
+    fn the_installed_version_is_what_the_binary_says() {
+        assert_eq!(parse_binary_version("kelpie 0.24.0 (e70d5d5 2026-10-20)\n"), Some(("0.24.0".to_string(), Some("e70d5d5".to_string()))));
+        assert_eq!(parse_binary_version("kelpie 0.24.0\n"), Some(("0.24.0".to_string(), None)), "a build outside git names no commit");
+        assert_eq!(parse_binary_version("usage: kelpie <command>"), None);
+        assert_eq!(parse_binary_version(""), None);
+        let own = std::env::current_exe().unwrap();
+        assert!(binary_version(&own.with_file_name("no-such-binary")).is_none());
     }
 
     #[test]
@@ -452,7 +582,7 @@ mod tests {
         let state = scratch("override");
         std::fs::write(state.join(crate::release::OVERRIDE_FILE), r#"{"branch":"try-this","sha":"abcdef0123"}"#).unwrap();
         let running = crate::release::read_override(&state).unwrap();
-        let kelpie = Component { name: KELPIE.to_string(), installed: Some("0.20.0".to_string()), latest: Some("v0.20.0".to_string()), error: None };
+        let kelpie = Component { name: KELPIE.to_string(), installed: Some("0.20.0".to_string()), latest: Some("v0.20.0".to_string()), ..Component::default() };
         let text = render(std::slice::from_ref(&kelpie), Some(&running.describe(Channel::Release)));
         assert!(text.contains("kelpie is running try-this @ abcdef0, not the release channel; kelpie update --stable returns to it."), "{text}");
         assert_eq!(notice(&[kelpie], Some(&running)), [("running".to_string(), "try-this, not the channel".to_string())]);
@@ -473,7 +603,7 @@ mod tests {
         let state = scratch("doctor");
         let installed = vec![Component::new(KELPIE, Some("0.18.1".to_string())), Component::new(VAULT, Some("0.2.17".to_string()))];
         assert!(doctor_line(&state, Channel::Main, &installed).1.starts_with("not checked yet"));
-        let latest = |name: &str, version: &str| Component { name: name.to_string(), installed: None, latest: Some(version.to_string()), error: None };
+        let latest = |name: &str, version: &str| Component { name: name.to_string(), installed: None, latest: Some(version.to_string()), ..Component::default() };
         write_cache(&state, crate::messages::now(), Channel::Main, &[latest(KELPIE, "0.18.2"), latest(VAULT, "0.2.17")]);
         assert_eq!(doctor_line(&state, Channel::Main, &installed), (false, "kelpie 0.18.1 → 0.18.2 (checked just now); kelpie update".to_string()));
         write_cache(&state, crate::messages::now(), Channel::Main, &[latest(KELPIE, "0.18.1"), latest(VAULT, "0.2.17")]);
