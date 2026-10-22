@@ -66,6 +66,7 @@ fn finish_in(claude_dir: &Path, state: &Path) -> Result<Vec<String>> {
     update_check::forget(state);
     crate::restart::mark_updated(state, crate::restart::now())?;
     lines.extend(crate::restart::report(&crate::restart::run(crate::restart::Mode::Update, &mut crate::restart::Memory::default(), None)?));
+    lines.extend(crate::known::announce().unwrap_or_else(|error| vec![format!("telling the sessions what changed failed: {error}")]));
     lines.push(lead::renew_board().unwrap_or_else(|error| error));
     lines.extend(crate::issues::after_update(state, root.as_deref()));
     Ok(lines)

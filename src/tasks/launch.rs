@@ -293,7 +293,7 @@ fn skills(repo: &Path) -> Result<(String, Option<String>, String)> {
 }
 
 // Every Claude kelpie starts or resumes for a task runs with these two files, written afresh: a session without them never reports.
-fn prepare(place: &Launch) -> Result<(PathBuf, PathBuf)> {
+fn prepare(place: &Launch, resumed: bool) -> Result<(PathBuf, PathBuf)> {
     let Launch { repo, task, profile, setup_skill, setup_command, rules_skill, ref worktree, vault, note, .. } = *place;
     crate::push_block::warn_if_off(crate::push_block::install(worktree, &state_dir()?)?);
     let address = peers::address(task, &name_of(repo));
@@ -303,7 +303,8 @@ fn prepare(place: &Launch) -> Result<(PathBuf, PathBuf)> {
     let written = profile.agent.task_settings(&peers::kelpie_command()?, &address, note.map(|_| address.as_str()), Some(&tmp), profile);
     let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &written)?;
     let added = profiles::role_section(profile)?;
-    let role = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added })?;
+    let (role, text) = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added })?;
+    crate::known::began(&address, &text, resumed);
     Ok((settings, role))
 }
 
@@ -328,13 +329,24 @@ pub(crate) fn task_role(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
         }
     }
     let place = Launch { repo: &repo, task: &task, mode: None, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault, note: note.as_deref() };
-    prepare(&place).map(Some)
+    prepare(&place, true).map(Some)
+}
+
+// The task's role as kelpie gives it now, written to its role file alone: the file, and the role without its peer list.
+pub(crate) fn task_role_now(cwd: &Path) -> Result<Option<(PathBuf, String)>> {
+    let Some((repo, slot)) = task_at(cwd) else { return Ok(None) };
+    let task = slot.task.clone().unwrap_or_default();
+    let (setup_skill, setup_command, rules_skill) = skills(&repo)?;
+    let note = read_start(&task, &repo).and_then(|text| crate::task_note::note_in(&text)).filter(|_| crate::vault_cli::detect().is_some());
+    let (profile, _) = task_profile(&repo, None, recorded_session(&task, &repo).profile.as_deref())?;
+    let added = profiles::role_section(&profile)?;
+    peers::role_file(&task, &peers::Place { repo: &repo, worktree: &slot.path, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, note: note.as_deref(), profile: &added }).map(Some)
 }
 
 // Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
 fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<Started>)> {
     let Launch { repo, task, mode, profile, .. } = *place;
-    let (settings, role) = prepare(place)?;
+    let (settings, role) = prepare(place, matches!(session, Session::Resume(_)))?;
     if let Err(error) = messages::drop_held_prompts(&peers::address(task, &name_of(repo))) {
         eprintln!("Could not drop a prompt still held for {task} from an earlier start: {error}");
     }

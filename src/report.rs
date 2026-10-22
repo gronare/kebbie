@@ -211,7 +211,7 @@ pub fn hook(input: &str) -> String {
     match input["hook_event_name"].as_str() {
         Some("UserPromptSubmit") => {
             let _ = crate::state::write(&turn, messages::now().to_string());
-            String::new()
+            crate::known::stale_for(&me).unwrap_or_default()
         }
         Some("Stop") => {
             let turn_started = fs::read_to_string(turn).ok().and_then(|at| at.trim().parse().ok());

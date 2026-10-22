@@ -14,6 +14,7 @@ mod herdr;
 mod issues;
 mod keeper;
 mod keys;
+mod known;
 mod lead;
 mod login_env;
 mod menu;
@@ -212,7 +213,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   highest vX.Y.Z tag, or main, origin's default branch): the herdr plugin (rebuilt),
                                   the Claude Code plugin, the vault plugin when installed; list each version before →
                                   after, and restart each Claude session that is idle and not the pane you are in
-                                  with claude --resume (the rest follow when idle; [restart] auto = false restarts none)
+                                  with claude --resume (the rest follow when idle; [restart] auto = false restarts none);
+                                  every other running session gets a message, held while it is mid-turn, with what
+                                  changed for it since it started: new or changed role text, skills and commands
                                   (--check changes nothing: fetches and shows installed against the channel's latest;
                                   the keeper checks every 6 hours and the board shows ↑ when there is a newer one, U updates;
                                   --from <branch or path> installs that branch on origin or that checkout's commits

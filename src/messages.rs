@@ -738,7 +738,8 @@ fn print_lines(messages: &[Message]) -> String {
 
 // The lead's copy: what sessions told each other since it last looked, and their latest reports, given to it with each of the user's prompts.
 pub fn unread_for_lead() -> Result<String> {
-    unread_in(&state_dir()?)
+    let unread = unread_in(&state_dir()?)?;
+    Ok(crate::known::stale_for(LEAD_LABEL).into_iter().chain((!unread.is_empty()).then_some(unread)).collect::<Vec<_>>().join("\n\n"))
 }
 
 // How many of the messages the lead has seen, by the id of the last one; a mark that names no message in the log counts all as seen, so the lead is never flooded with history.

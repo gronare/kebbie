@@ -211,6 +211,26 @@ fn the_task_hooks_are_quiet_outside_a_task_and_a_report_needs_a_tasks_worktree()
 }
 
 #[test]
+fn a_session_sees_in_its_prompt_hook_that_it_runs_an_older_kelpie_than_is_installed() {
+    let lab = Lab::new("stale");
+    let (_, slot) = lab.task_fixture();
+    let slot_str = slot.to_str().unwrap();
+    let prompt = format!(r#"{{"hook_event_name":"UserPromptSubmit","cwd":"{slot_str}"}}"#);
+    let roles = lab.state.join("roles");
+    fs::create_dir_all(&roles).unwrap();
+    let old = r#"{"started":"kelpie 0.0.1","known":{"kelpie":"kelpie 0.0.1","role":"","skills":{},"commands":{}}}"#;
+    fs::write(roles.join("billing@app.known.json"), old).unwrap();
+    fs::write(roles.join("lead.known.json"), old).unwrap();
+    let task = stdout(&lab.run_with_stdin(&["hook"], &prompt));
+    assert!(task.starts_with("kelpie: you started on kelpie 0.0.1; kelpie ") && task.contains("is installed. What changed for you reaches you as a message from kelpie"), "{task}");
+    let lead = stdout(&lab.run(&["messages", "--unread"]));
+    assert!(lead.starts_with("kelpie: you started on kelpie 0.0.1;"), "{lead}");
+    let current = String::from_utf8(lab.run(&["--version"]).stdout).unwrap().trim().to_string();
+    fs::write(roles.join("billing@app.known.json"), format!(r#"{{"started":"{current}","known":{{"kelpie":"{current}","role":"","skills":{{}},"commands":{{}}}}}}"#)).unwrap();
+    assert_eq!(stdout(&lab.run_with_stdin(&["hook"], &prompt)), "", "a session on the installed kelpie hears nothing");
+}
+
+#[test]
 fn a_kelpie_toml_inside_the_repo_has_no_effect() {
     let lab = Lab::new("repo-file-ignored");
     let (app, slot) = lab.task_fixture();

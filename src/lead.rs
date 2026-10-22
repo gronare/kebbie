@@ -171,13 +171,13 @@ pub fn role_text(template: &str, sources: &[Source], vault: bool) -> String {
     template.replace("{finding}", &finding).replace("{backlog}", &backlog).replace("{intake}", &intake).replace("{vault_work}", &vault_work).replace("{after_push}", &after_push)
 }
 
-// roles/lead.md filled in for the configured backlog sources, written to the state dir for --append-system-prompt-file.
-fn role_file() -> Result<PathBuf> {
+// roles/lead.md filled in for the configured backlog sources, written to the state dir for --append-system-prompt-file; returns the file and its text.
+pub fn role_file() -> Result<(PathBuf, String)> {
     let template = fs::read_to_string(install_root()?.join("roles/lead.md")).map_err(|error| format!("roles/lead.md: {error}"))?;
     let role = role_text(&template, &config::sources()?, crate::vault_cli::detect().is_some());
     let file = roles_dir()?.join("lead.md");
-    crate::state::write(&file, role)?;
-    Ok(file)
+    crate::state::write(&file, &role)?;
+    Ok((file, role))
 }
 
 fn chat_args(role: &Path, settings: &Path, session: &Session) -> Vec<String> {
@@ -202,7 +202,8 @@ fn cd_line(dir: &Path) -> String {
 
 // herdr's agent start has no cwd and runs Claude where the pane's shell is, and herdr's restore uses the pane's last cwd, so the shell goes to the lead's folder first.
 fn start_chat(pane: &str, session: Session) -> Result<()> {
-    let role = role_file()?;
+    let (role, text) = role_file()?;
+    crate::known::began(LEAD_LABEL, &text, matches!(session, Session::Resume(_)));
     let settings = write_settings(&roles_dir()?, LEAD_LABEL, &settings(&peers::kelpie_command()?))?;
     let args = chat_args(&role, &settings, &session);
     tasks::wait_for_prompt(pane)?;

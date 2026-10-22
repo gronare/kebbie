@@ -229,14 +229,24 @@ pub fn noticed_section(choice: AlsoNoticed, vault: bool, kelpie: &str) -> String
     }
 }
 
-// roles/task.md filled in for this task, its profile's section after it, written to the state dir for --append-system-prompt-file.
-pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
+// roles/task.md filled in for this task, its profile's section after it, written to the state dir for --append-system-prompt-file; returns the file and the role without its peer list, which changes on its own.
+pub fn role_file(task: &str, place: &Place) -> Result<(PathBuf, String)> {
     let template = fs::read_to_string(install_root()?.join("roles/task.md")).map_err(|error| format!("roles/task.md: {error}"))?;
+    let me = address(task, &name_of(place.repo));
+    let listed = list(Some(&me), &sessions()?);
+    let values = role_values(task, place, listed.split_once('\n').map(|(_, rest)| rest).unwrap_or_default())?;
+    let pairs: Vec<(&str, &str)> = values.iter().map(|(name, value)| (*name, value.as_str())).collect();
+    let file = crate::lead::roles_dir()?.join(format!("{me}.md"));
+    write_role(&file, &template, &pairs, place.profile)?;
+    let quiet = role_values(task, place, "")?;
+    let quiet: Vec<(&str, &str)> = quiet.iter().map(|(name, value)| (*name, value.as_str())).collect();
+    Ok((file, fill(&template, &quiet) + place.profile))
+}
+
+fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static str, String)>> {
     let repo = name_of(place.repo);
     let me = address(task, &repo);
-    let sessions = sessions()?;
-    let listed = list(Some(&me), &sessions);
-    let peers = listed.split_once('\n').map(|(_, rest)| rest).unwrap_or_default().to_string();
+    let peers = peers.to_string();
     let kelpie = kelpie_command()?;
     let plans = crate::lead::state_dir()?.join("plans").join(format!("{me}.md"));
     let plan = plan_step(&crate::config::sources().unwrap_or_default(), place.note, &kelpie, task, &plans);
@@ -245,10 +255,7 @@ pub fn role_file(task: &str, place: &Place) -> Result<PathBuf> {
     let noticed = noticed_section(also_noticed, crate::vault_cli::detect().is_some(), &kelpie);
     let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("kelpie", kelpie), ("peers", peers), ("plan", plan), ("vault", vault)];
     values.extend(worktree_values(place)?);
-    let pairs: Vec<(&str, &str)> = values.iter().map(|(name, value)| (*name, value.as_str())).collect();
-    let file = crate::lead::roles_dir()?.join(format!("{me}.md"));
-    write_role(&file, &template, &pairs, place.profile)?;
-    Ok(file)
+    Ok(values)
 }
 
 pub fn write_role(file: &Path, template: &str, pairs: &[(&str, &str)], profile: &str) -> Result<()> {
