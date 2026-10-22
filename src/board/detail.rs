@@ -304,7 +304,7 @@ pub(super) fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool
     if let Some(path) = &item.path {
         where_.push(name_of(path));
     }
-    if !detail.branch.is_empty() && detail.branch != item.name {
+    if !detail.branch.is_empty() && (detail.branch != item.name || item.title.is_some()) {
         where_.push(detail.branch.clone());
     }
     if let Some(git) = &item.git {

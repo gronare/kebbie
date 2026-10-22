@@ -82,6 +82,7 @@ pub struct Item {
     pub worker: bool,
     pub url: Option<String>,
     pub name: String,
+    pub title: Option<String>,
     pub place: String,
     pub repo: Option<PathBuf>,
     pub path: Option<PathBuf>,
@@ -104,16 +105,17 @@ impl Item {
     }
 
     pub fn titled(&self) -> String {
+        let shown = self.title.as_deref().unwrap_or(&self.name);
         match self.profile.as_deref() {
-            Some(profile) if profile != crate::profiles::TASK => format!("{} · {profile}", self.name),
-            _ => self.name.clone(),
+            Some(profile) if profile != crate::profiles::TASK => format!("{shown} · {profile}"),
+            _ => shown.to_string(),
         }
     }
 
     fn queued_from(wait: &tasks::Wait, after: Vec<(String, String)>) -> Item {
         Item {
             review: None, verdict: None, permit: None, follows: false, bypass: false, profile: Some(wait.profile.clone().unwrap_or_else(|| crate::profiles::TASK.to_string())), server: false, worker: false, url: None,
-            name: wait.task.clone(), place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
+            name: wait.task.clone(), title: None, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone() }),
             held_by_draft: None,
@@ -299,6 +301,7 @@ impl Item {
     pub fn to_json(&self) -> Value {
         json!({
             "name": self.name,
+            "title": self.title.as_deref().unwrap_or(&self.name),
             "place": self.place,
             "kind": if self.queued.is_some() { "queued" } else if self.is_task() { "task" } else { "session" },
             "after": self.queued.as_ref().map(|queued| queued.after.iter().map(|(address, state)| json!({ "address": address, "state": state })).collect::<Vec<_>>()),
@@ -358,6 +361,32 @@ fn review_progress(path: &Path, upstream: &str) -> Option<(usize, usize)> {
         .filter(|(file, hash)| marks.lines().any(|line| line == format!("{file}\t{hash}")))
         .count();
     Some((read, files.len()))
+}
+
+const TITLES: &str = "titles";
+
+// Claude names its session after the first prompt; kept per task so the title outlives the session. A default title, or none yet, shows the task's name.
+fn title_of(state: &Path, address: &str, seen: Option<&str>, repo: &str, task: &str, folder: &str) -> Option<String> {
+    let file = state.join(TITLES).join(address);
+    let seen = seen.map(|title| readable(title, repo)).filter(|title| !title.is_empty() && !["Claude", "Claude Code", task, folder].iter().any(|default| title.eq_ignore_ascii_case(default)));
+    let kept = fs::read_to_string(&file).ok().map(|kept| kept.trim().to_string()).filter(|kept| !kept.is_empty());
+    if let Some(seen) = seen {
+        if kept.as_deref() != Some(seen.as_str()) {
+            let _ = fs::create_dir_all(state.join(TITLES)).and_then(|_| fs::write(&file, &seen));
+        }
+        return Some(seen);
+    }
+    kept
+}
+
+// Every task in a repo is about that repo, so a title that opens with its name drops it.
+pub fn readable(title: &str, repo: &str) -> String {
+    let title = title.trim_start_matches(|character: char| !character.is_alphanumeric()).trim();
+    let rest = title.split_once(char::is_whitespace)
+        .filter(|(first, _)| first.trim_end_matches([':', ',']).eq_ignore_ascii_case(repo))
+        .map_or(title, |(_, rest)| rest.trim_start_matches(['-', ':', '·', ' ']));
+    let mut characters = rest.chars();
+    characters.next().map(|first| first.to_uppercase().chain(characters).collect()).unwrap_or_default()
 }
 
 // The task's own commits start where it left the default branch, local or remote, whichever is newer; local commits not pushed yet are not the task's.
@@ -463,6 +492,7 @@ pub fn gather() -> Result<Vec<Item>> {
             let agent = workspace.as_ref()
                 .and_then(|id| agents.iter().find(|agent| agent["workspace_id"].as_str() == Some(id.as_str())))
                 .map(agent_from);
+            let agent_title = agent.as_ref().map(|agent| agent.title.clone());
             let (_, behind) = ahead_behind(&slot.path, &upstream)?;
             let ahead = own_commits(&slot.path, &upstream)?;
             let changed = changed_count(&slot.path)?;
@@ -495,6 +525,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 push_waits: state.as_deref().and_then(|state| tasks::pending_push(state, &address)),
                 queued: None,
                 held_by_draft: held_by_draft(&log, &task, &address),
+                title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
             });
         }
@@ -521,6 +552,7 @@ pub fn gather() -> Result<Vec<Item>> {
             worker: false,
             url: None,
             name: agent.title.clone(),
+            title: None,
             place: label,
             repo: None,
             path: None,
@@ -549,7 +581,7 @@ pub(crate) mod tests {
 
     pub(crate) fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         Item {
-            review: None, verdict: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::TASK.to_string()), server: false, worker: false, url: None, name: "billing".to_string(), place: "web".to_string(), repo: None, path: None, workspace: None,
+            review: None, verdict: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::TASK.to_string()), server: false, worker: false, url: None, name: "billing".to_string(), title: None, place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None }),
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true }),
             report: report.map(|state| Message {
@@ -894,6 +926,23 @@ pub(crate) mod tests {
         assert_eq!(item.next_for_you(), Some("start it anyway or drop the wait"));
         assert_eq!(item.to_json()["blocked"], json!("billing@api was dropped, so web-billing did not start"));
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_task_shows_claudes_session_title_without_the_repo_word_and_keeps_it_when_claude_is_gone() {
+        assert_eq!(readable("Kelpie board task rows", "kelpie"), "Board task rows");
+        assert_eq!(readable("✳ kelpie: wrapped CI links", "kelpie"), "Wrapped CI links");
+        assert_eq!(readable("Kelpies everywhere", "kelpie"), "Kelpies everywhere");
+        let state = crate::sh::test_dir("titles");
+        assert_eq!(title_of(&state, "rows@kelpie", Some("Claude Code"), "kelpie", "rows", "wt4.kelpie"), None, "Claude has not named the session yet");
+        assert_eq!(title_of(&state, "rows@kelpie", Some("wt4.kelpie"), "kelpie", "rows", "wt4.kelpie"), None, "the terminal's folder is no title");
+        assert_eq!(title_of(&state, "rows@kelpie", Some("Kelpie board task rows"), "kelpie", "rows", "wt4.kelpie").as_deref(), Some("Board task rows"));
+        assert_eq!(title_of(&state, "rows@kelpie", None, "kelpie", "rows", "wt4.kelpie").as_deref(), Some("Board task rows"), "kept for when its Claude is not running");
+        let mut item = task(Some("idle"), None, 0);
+        assert_eq!(item.titled(), "billing");
+        item.title = Some("Refund mails".to_string());
+        assert_eq!((item.titled(), item.to_json()["title"].as_str(), item.to_json()["name"].as_str()), ("Refund mails".to_string(), Some("Refund mails"), Some("billing")));
+        let _ = std::fs::remove_dir_all(state);
     }
 
     #[test]
