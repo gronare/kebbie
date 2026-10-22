@@ -84,6 +84,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `s` | Show the sign-off card. | It has a card and no open question. |
 | `w` | Start or stop the dev server. | `worktree.dev_server` is set. |
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
+| `1`–`9` | Open one of its links in the browser, listed under LINKS by what each is: the running dev server, each CI run, a mock, a pull request or another address its report or card names, and its vault note, which opens in Obsidian. The highlighted link's whole address shows on the description line. Where the board has no browser, as over ssh, it says the address instead. | It has that link. |
 | `v` | Send to review; on a task in review, withdraw it. | It has commits and Claude is not mid-turn. |
 | `e` | Rebase onto the default branch now, in the background, without pushing; the result shows when it is done. A conflict goes to its Claude, as with [`kelpie land`](commands.md#kelpie-land-name). | It is behind the default branch and Claude is not mid-turn. |
 | `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn. |

@@ -27,10 +27,11 @@ pub struct Choice {
     pub act: Option<Act>,
     pub label: String,
     pub about: String,
+    pub link: Option<String>,
 }
 
 pub fn choice(act: Act, label: &str, about: &str) -> Choice {
-    Choice { key: keys::key(act), act: Some(act), label: label.to_string(), about: about.to_string() }
+    Choice { key: keys::key(act), act: Some(act), label: label.to_string(), about: about.to_string(), link: None }
 }
 
 pub fn style(color: Color) -> Style {

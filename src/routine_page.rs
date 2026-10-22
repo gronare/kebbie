@@ -358,7 +358,7 @@ impl Page {
         let file = file.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
         let mut choices = Vec::new();
         if self.open_task(state).is_some() {
-            choices.push(Choice { key: '⏎', act: None, label: "Go to its task".to_string(), about: "select the run's task on the Work page".to_string() });
+            choices.push(Choice { key: '⏎', act: None, label: "Go to its task".to_string(), about: "select the run's task on the Work page".to_string(), link: None });
         }
         if state.last_start.is_some() {
             choices.push(choice(Act::Card, "Show the report", "its task's sign-off card, or the run's outcome and summary"));

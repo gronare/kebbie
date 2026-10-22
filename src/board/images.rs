@@ -223,9 +223,9 @@ impl App {
         self.open_file(file);
     }
 
-    pub(super) fn open_file(&mut self, file: &Path) {
+    pub(super) fn open_file(&mut self, file: impl AsRef<std::ffi::OsStr>) {
         let Some(viewer) = self.viewer else { return };
-        match Command::new(viewer).arg(file).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+        match Command::new(viewer).arg(file.as_ref()).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(mut child) => {
                 thread::spawn(move || child.wait());
             }

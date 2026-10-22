@@ -8,6 +8,7 @@ use crate::keys::Act;
 use crate::permit::Permit;
 use crate::status::{Group, Item};
 use super::{App, Column, Hit, Mode, Ongoing};
+use super::detail::task_links;
 use super::space::{Process, settings_of};
 use super::widgets::{Choice, choice, menu_lines, modal, options_lines};
 
@@ -127,6 +128,10 @@ impl App {
                     let after = choices.iter().position(|choice| choice.act == Some(Act::Review)).map_or(choices.len(), |at| at + 1);
                     choices.insert(after, choice(Act::Card, "Show the card", "its sign-off card with its images; p goes on to push"));
                 }
+                if let Some(item) = item {
+                    let after = choices.iter().rposition(|choice| matches!(menu_group(choice.act), "SESSION" | "DEV")).map_or(0, |at| at + 1);
+                    choices.splice(after..after, link_choices(task_links(self, item)));
+                }
                 choices
             }
             Column::Backlog if self.backlog_selected < self.ongoing.len() => ongoing_choices(&self.ongoing[self.backlog_selected]),
@@ -135,8 +140,14 @@ impl App {
     }
 }
 
+// Keys 1 to 9, one per link, so a task opens at most nine of its links from here.
+pub(super) fn link_choices(links: Vec<(String, String)>) -> Vec<Choice> {
+    links.into_iter().zip('1'..='9').map(|((label, url), key)| Choice { key, act: None, label, about: url.clone(), link: Some(url) }).collect()
+}
+
 fn menu_group(act: Option<Act>) -> &'static str {
     match act {
+        None => "LINKS",
         Some(Act::Inbox | Act::Go | Act::Chat | Act::Review | Act::Card) => "SESSION",
         Some(Act::Server | Act::Worker) => "DEV",
         Some(Act::Reset | Act::Drop) => "END IT",
@@ -149,20 +160,29 @@ impl App {
         let choices = self.choices();
         let count = choices.len();
         let typed = match key.code {
-            KeyCode::Char(character) => choices.iter().find(|choice| choice.key == character).and_then(|choice| choice.act),
+            KeyCode::Char(character) => choices.iter().find(|choice| choice.key == character),
             _ => None,
         };
         match (typed, act) {
-            (Some(chosen), _) => self.act(chosen),
+            (Some(chosen), _) => self.run_choice(chosen),
             (None, Some(Act::Move)) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.mode = Mode::Options(index.saturating_sub(1)),
             (None, Some(Act::Move)) => self.mode = Mode::Options((index + 1).min(count.saturating_sub(1))),
             (None, Some(Act::Options)) => {
-                if let Some(chosen) = choices.get(index).and_then(|choice| choice.act) {
-                    self.act(chosen);
+                if let Some(chosen) = choices.get(index) {
+                    self.run_choice(chosen);
                 }
             }
             (None, Some(Act::Back | Act::Close)) => {}
             _ => self.mode = Mode::Options(index),
+        }
+    }
+
+    pub(super) fn run_choice(&mut self, chosen: &Choice) {
+        match (&chosen.link, chosen.act) {
+            (Some(url), _) if self.viewer.is_none() => self.say(format!("No browser where the board runs; the address: {url}")),
+            (Some(url), _) => self.open_file(url),
+            (None, Some(act)) => self.act(act),
+            (None, None) => {}
         }
     }
 }
@@ -380,6 +400,85 @@ mod tests {
             assert!(rows[rect.y as usize].contains(label.as_str()), "the hit for {label} is on its line");
         }
         assert_eq!(app.hits.len(), app.choices().len());
+    }
+
+    fn linked_app() -> App {
+        let mut item = served("search-filters");
+        item.place = "web".to_string();
+        let run = |id: u64, name: &str| crate::ci::Run { id, name: name.to_string(), workflow: name.to_string(), status: "completed".to_string(), conclusion: "failure".to_string(), url: format!("https://github.com/acme/web/actions/runs/{id}") };
+        item.ci = Some(crate::ci::Watch {
+            address: "search-filters@web".to_string(), task: "search-filters".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
+            started_at: 0, checked_at: None, close: true, runs: vec![run(42, "CI"), run(43, "Lint")], state: crate::ci::State::Running, error: None, pushed: crate::ci::Pushed::default(),
+        });
+        let long = format!("https://claude.ai/artifact/{}", "a1b2c3d4".repeat(12));
+        item.report.as_mut().unwrap().text = format!("mock at {long} and the PR https://github.com/acme/web/pull/7, also https://docs.example.org/guide");
+        let mut app = test_app(vec![item]);
+        with_detail(&mut app);
+        app.ongoing = vec![Ongoing { key: "Projects/search filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()) }];
+        app
+    }
+
+    #[test]
+    fn the_task_menu_lists_each_link_by_what_it_is_with_its_full_address() {
+        let app = linked_app();
+        let links: Vec<(char, String, String)> = app.choices().into_iter().filter(|choice| choice.link.is_some()).map(|choice| (choice.key, choice.label, choice.about)).collect();
+        let long = format!("https://claude.ai/artifact/{}", "a1b2c3d4".repeat(12));
+        assert_eq!(links, [
+            ('1', "Open the dev server".to_string(), "https://wt2.web.test".to_string()),
+            ('2', "Open the CI run CI".to_string(), "https://github.com/acme/web/actions/runs/42".to_string()),
+            ('3', "Open the CI run Lint".to_string(), "https://github.com/acme/web/actions/runs/43".to_string()),
+            ('4', "Open the mock".to_string(), long),
+            ('5', "Open the pull request".to_string(), "https://github.com/acme/web/pull/7".to_string()),
+            ('6', "Open docs.example.org".to_string(), "https://docs.example.org/guide".to_string()),
+            ('7', "Open the note".to_string(), "obsidian://open?file=Projects%2Fsearch%20filters.md".to_string()),
+        ]);
+        let groups: Vec<&str> = app.choices().iter().map(|choice| menu_group(choice.act)).collect();
+        let first = groups.iter().position(|group| *group == "LINKS").unwrap();
+        assert_eq!((groups[first - 1], groups[first + 7]), ("SESSION", "BRANCH"), "LINKS follows the session and dev choices, before BRANCH: {groups:?}");
+    }
+
+    #[test]
+    fn a_link_the_row_cuts_is_shown_whole_in_the_menu() {
+        let mut app = linked_app();
+        let at = app.choices().iter().position(|choice| choice.label == "Open the mock").unwrap();
+        app.mode = Mode::Options(at);
+        let (rows, _) = render(&mut app, 96, 50);
+        let screen: String = rows.iter().map(|row| row.trim_matches(|character: char| character == ' ' || character == '│')).collect();
+        assert!(screen.contains(&format!("https://claude.ai/artifact/{}", "a1b2c3d4".repeat(12))), "the whole address on the description line: {}", rows.join("\n"));
+        assert!(rows.join("\n").contains("LINKS"));
+    }
+
+    #[test]
+    fn a_link_key_opens_its_address_and_without_a_browser_says_it() {
+        let dir = std::env::temp_dir().join(format!("kelpie-menu-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let opener = dir.join("open");
+        let opened = dir.join("opened");
+        std::fs::write(&opener, format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", opened.display())).unwrap();
+        std::fs::set_permissions(&opener, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let mut app = linked_app();
+        app.viewer = Some(Box::leak(opener.display().to_string().into_boxed_str()));
+        app.mode = Mode::Options(0);
+        press(&mut app, key(KeyCode::Char('7')));
+        assert!(matches!(app.mode, Mode::Normal));
+        let read = (0..100).find_map(|_| std::fs::read_to_string(&opened).ok().filter(|text| !text.is_empty()).or_else(|| { std::thread::sleep(std::time::Duration::from_millis(20)); None }));
+        assert_eq!(read.as_deref(), Some("obsidian://open?file=Projects%2Fsearch%20filters.md"));
+        app.viewer = None;
+        app.mode = Mode::Options(0);
+        press(&mut app, key(KeyCode::Char('5')));
+        assert!(app.notice.as_ref().is_some_and(|(text, _)| text.ends_with("https://github.com/acme/web/pull/7")), "over ssh the address is said instead");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn links_are_labelled_by_what_they_are() {
+        use crate::board::detail::link_label;
+        assert_eq!(link_label("https://github.com/acme/web/actions/runs/9"), "Open the CI run");
+        assert_eq!(link_label("https://github.com/acme/web/pull/7"), "Open the pull request");
+        assert_eq!(link_label("https://claude.ai/code/artifact/42"), "Open the mock");
+        assert_eq!(link_label("https://acme.dev/mocks/checkout.html"), "Open the mock");
+        assert_eq!(link_label("http://localhost:3002/admin"), "Open the dev server");
+        assert_eq!(link_label("https://staging.acme.dev/x"), "Open staging.acme.dev");
     }
 
     #[test]

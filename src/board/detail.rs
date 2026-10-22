@@ -165,18 +165,23 @@ fn ci_lines(item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
     let (mark, color) = if ci.running() { ("◐ ", YELLOW) } else { ("● ", PEACH) };
     let mut lines = vec![field("ci", vec![Span::styled(mark, style(color)), Span::styled(ci.note(), style(TEXT))])];
     let mut links = Vec::new();
-    let failed_url = match &ci.state { crate::ci::State::Failed { url, .. } => Some(url.clone()), crate::ci::State::Running => None };
-    let mut urls: Vec<(String, String)> = ci.runs.iter().map(|run| (run.title().to_string(), run.url.clone())).collect();
-    if urls.is_empty() && let Some(url) = failed_url {
-        urls.push(("run".to_string(), url));
-    }
-    for (title, url) in urls.into_iter().filter(|(_, url)| !url.is_empty()).take(4) {
+    for (title, url) in ci_urls(item).into_iter().take(4) {
         let title = cut(&title, 16);
         let shown = cut(&url, width.saturating_sub(LABEL + title.chars().count() + 2).max(2));
         lines.push(field("", vec![Span::styled(title, style(MUTED)), Span::raw("  "), Span::styled(shown.clone(), style(TEAL))]));
         links.push(Link { shown, url });
     }
     (lines, links)
+}
+
+// Each CI run's title and address, or the failed run's when CI named no runs.
+fn ci_urls(item: &Item) -> Vec<(String, String)> {
+    let Some(ci) = &item.ci else { return Vec::new() };
+    let mut urls: Vec<(String, String)> = ci.runs.iter().map(|run| (run.title().to_string(), run.url.clone())).collect();
+    if urls.is_empty() && let crate::ci::State::Failed { url, .. } = &ci.state {
+        urls.push(("run".to_string(), url.clone()));
+    }
+    urls.into_iter().filter(|(_, url)| !url.is_empty()).collect()
 }
 
 // The task's latest recorded test run: green on the code as it is, yellow on older code, red when it failed.
@@ -313,6 +318,57 @@ pub(super) fn unfolded_lines(app: &mut App, item: &Item, width: usize) -> (Vec<L
         lines.push(field("note", vec![Span::styled(format!("vault: {note}"), style(TEAL))]));
     }
     (lines, links)
+}
+
+// Every address the task's row links, all of them and in full, by what each is; the note opens in Obsidian.
+pub(super) fn task_links(app: &App, item: &Item) -> Vec<(String, String)> {
+    let mut links: Vec<(String, String)> = Vec::new();
+    if item.server && let Some(url) = &item.url {
+        links.push(("Open the dev server".to_string(), url.clone()));
+    }
+    let runs = ci_urls(item);
+    let single = runs.len() == 1;
+    links.extend(runs.into_iter().map(|(title, url)| (if single { "Open the CI run".to_string() } else { format!("Open the CI run {}", cut(&title, 24)) }, url)));
+    let card = item.path.as_ref().and_then(|path| app.details.get(path)).and_then(|detail| detail.card.as_ref().map(|(card, _)| card));
+    links.extend(named_urls(item, card).into_iter().map(|url| (link_label(&url), url)));
+    links.extend(note_of(app, item).map(|note| ("Open the note".to_string(), obsidian_url(&note))));
+    let mut seen: Vec<String> = Vec::new();
+    for (label, _) in &mut links {
+        let count = seen.iter().filter(|other| *other == label).count();
+        seen.push(label.clone());
+        if count > 0 {
+            *label = format!("{label} {}", count + 1);
+        }
+    }
+    links
+}
+
+pub(super) fn link_label(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let named = if rest.contains("/actions/runs/") {
+        "the CI run"
+    } else if host.ends_with("github.com") && rest.contains("/pull/") {
+        "the pull request"
+    } else if rest.contains("/artifact/") || rest.to_lowercase().contains("mock") {
+        "the mock"
+    } else if host.starts_with("localhost") || host.starts_with("127.0.0.1") {
+        "the dev server"
+    } else {
+        return format!("Open {}", cut(host, 30));
+    };
+    format!("Open {named}")
+}
+
+pub(super) fn obsidian_url(note: &str) -> String {
+    let mut url = String::from("obsidian://open?file=");
+    for byte in note.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => url.push(byte as char),
+            _ => url.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    url
 }
 
 pub(super) fn panel_lines(app: &mut App, item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<ImageAt>) {

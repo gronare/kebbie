@@ -89,9 +89,9 @@ impl App {
                         return Some(KeyEvent::from(code));
                     }
                     (Some(Hit::Choice(index)), Mode::Options(_)) => {
-                        if let Some(act) = self.choices().get(index).and_then(|choice| choice.act) {
+                        if let Some(chosen) = self.choices().get(index).filter(|choice| choice.act.is_some() || choice.link.is_some()) {
                             self.mode = Mode::Normal;
-                            self.act(act);
+                            self.run_choice(chosen);
                         }
                     }
                     (Some(Hit::Commit(index)), Mode::ConfirmPush { selected, .. }) => *selected = index,

@@ -341,10 +341,10 @@ impl Page {
         choices.push(choice(Act::AreaRefresh, "Refresh its backlog", &refresh));
         choices.push(choice(Act::Log, "Show its log", "the vault log, newest first"));
         if let Some(git) = area.git.as_ref().filter(|git| git.ahead > 0) {
-            choices.push(Choice { key: keys::key(Act::Push), act: Some(Act::Push), label: format!("Push {}", git.branch), about: format!("{} on {} to push: shows them, asks first", plural(git.ahead, "commit"), git.branch) });
+            choices.push(Choice { key: keys::key(Act::Push), act: Some(Act::Push), label: format!("Push {}", git.branch), about: format!("{} on {} to push: shows them, asks first", plural(git.ahead, "commit"), git.branch), link: None });
         }
         for action in &area.actions {
-            choices.push(Choice { key: action.key, act: None, label: action.title.clone(), about: action.about.clone() });
+            choices.push(Choice { key: action.key, act: None, label: action.title.clone(), about: action.about.clone(), link: None });
         }
         choices
     }
