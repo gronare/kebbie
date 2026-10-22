@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn the_lead_gets_copies_of_the_questions_the_user_answers_on_the_board() {
         let role = include_str!("../roles/lead.md");
-        for needed in ["answers them on the board", "copy", "kelpie answered <task>", "kelpie decide <task>", "a task or a subagent"] {
+        for needed in ["answers them on the board", "copy", "kelpie answered <task>", "kelpie decide <task>", "a task or a subagent", "you answer it yourself with `kelpie tell <task> \"<answer>\"`, whether or not the user is present", "also while the user is here"] {
             assert!(role.contains(needed), "{needed}");
         }
         assert!(!role.contains("AskUserQuestion tool (while") && !role.contains("The plan to read"), "the lead never relays a question");

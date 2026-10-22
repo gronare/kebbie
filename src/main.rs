@@ -115,8 +115,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie answered <task>          a task's question is settled elsewhere (in its Space, or dropped): it leaves the board
   kelpie notify <text>            run notify.command with this text (KELPIE_EVENT=summary): the lead's word to the user
                                   when they are away; tasks that need you or are ready, and questions, notify by themselves
-  kelpie decide <task> <answer>   the lead's own answer to a task's question, only while the user is away and only on
-                                  how, not what; it closes the question on the board and is recorded for the user's return
+  kelpie decide <task> <answer>   the lead's own answer to a task's question about how, not what, whether or not you
+                                  are here; it closes the question on the board and is recorded for your return when away
   kelpie choose <task> <n> --prompt <id>
                                   answer the prompt a task's Claude shows in its own pane (a permission or trust question)
                                   with option <n>, as kelpie told the lead; refused when that prompt is no longer on its

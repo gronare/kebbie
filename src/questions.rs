@@ -176,14 +176,14 @@ fn options_line(question: &Question) -> String {
         .collect::<Vec<_>>().join("; ")
 }
 
-// The lead's copy of a new question: while the user is away it settles a method question itself, so the copy says how.
+// The lead's copy of a new question: it settles a method question itself, and while the user is away keeps one of intent for them.
 pub fn question_copy(message: &Message, away: bool) -> String {
     let Some(question) = &message.question else { return message.text.clone() };
     let plan = question.plan.as_ref().map(|plan| format!(" The plan: {plan}.")).unwrap_or_default();
     let then = if away {
         format!(" The user is away: settle a question of method with kelpie decide {from} \"<answer>\", and keep one of intent for them with kelpie defer {from}.", from = message.from)
     } else {
-        " The user answers it on the board.".to_string()
+        format!(" A question of method you settle with kelpie decide {from} \"<answer>\"; one of intent the user answers on the board.", from = message.from)
     };
     format!("{} asks the user: {} Options: {}.{plan}{then}", message.from, message.text, options_line(question))
 }
@@ -339,14 +339,13 @@ fn answered_as(caller: &crate::permit::Caller, to: &str) -> Result<String> {
     Ok(format!("Marked the question from {} answered; it leaves the board.", from.join(", ")))
 }
 
-// The lead settles a question on its own only while the user is away.
-fn lead_while_away() -> Result<()> {
-    match crate::permit::caller() {
-        crate::permit::Caller::Lead => {}
-        other => return Err(format!("only the lead settles a question while the user is away; {} cannot", crate::permit::describe(&other))),
+// The lead answers a question of method itself whether or not the user is here; keeping a question for the user's return needs them away.
+fn lead_settles(caller: &crate::permit::Caller, away: bool, keep: bool) -> Result<()> {
+    if !matches!(caller, crate::permit::Caller::Lead) {
+        return Err(format!("only the lead settles a question of method or keeps one for the user; {} cannot", crate::permit::describe(caller)));
     }
-    if crate::permit::away_since().is_none() {
-        return Err("The user is here: they answer the question on the board.".to_string());
+    if keep && !away {
+        return Err("The user is here: the question already waits for them on the board.".to_string());
     }
     Ok(())
 }
@@ -361,25 +360,27 @@ fn open_from(open: &[&Message], to: &str) -> Result<Message> {
     }
 }
 
-// A how-question the lead answers itself while the user is away: the answer goes to the task as the lead's call, closes the question on the board, and is recorded for the user's return.
+// A how-question the lead answers itself: the answer goes to the task as the lead's call, closes the question on the board, and is recorded, for the user's return when they are away.
 pub fn decide(to: &str, answer: &str) -> Result<String> {
     if answer.trim().is_empty() {
         return Err("kelpie decide needs the answer: kelpie decide <task> \"<answer>\"".to_string());
     }
-    lead_while_away()?;
+    let away = crate::permit::away_since().is_some();
+    lead_settles(&crate::permit::caller(), away, false)?;
     let sessions = peers::sessions()?;
     let _lock = Lock::take(true)?;
     let messages = messages::load();
     let question = open_from(&open_now(&messages), to)?;
     let task = sessions.iter().find(|session| session.address == question.from).ok_or_else(|| format!("{} has no session to answer", question.from))?;
-    let text = format!("The user is away, so this is the lead's call on your question, not theirs: {}", answer.trim());
+    let text = format!("Your question is about how to build it, so this is the lead's call, not the user's: {}", answer.trim());
     let report = messages::send_locked(LEAD_LABEL, &[task], &text, &sessions, Some(&question.id), Some("decision"))?;
-    Ok(format!("{} Recorded as your call for the user's return.", report.join(" ")))
+    let recorded = if away { "Recorded as your call for the user's return." } else { "Recorded as your call; it left the board." };
+    Ok(format!("{} {recorded}", report.join(" ")))
 }
 
 // A what-question the lead keeps for the user while they are away; it stays on the board, and their return brief lists it first.
 pub fn defer(to: &str) -> Result<String> {
-    lead_while_away()?;
+    lead_settles(&crate::permit::caller(), crate::permit::away_since().is_some(), true)?;
     let _lock = Lock::take(true)?;
     let messages = messages::load();
     let question = open_from(&open_now(&messages), to)?;
@@ -467,13 +468,26 @@ mod tests {
     }
 
     #[test]
-    fn the_leads_copy_of_a_question_says_how_to_settle_it_only_while_the_user_is_away() {
+    fn the_leads_copy_of_a_question_says_it_settles_one_of_method_and_keeps_one_of_intent_only_while_the_user_is_away() {
         let messages = log(&[record("q1", 10, "billing@web", &asked(), Some("vault:Projects/billing.md"), Some(5000))]);
         let here = question_copy(&messages[0], false);
         assert!(here.starts_with("billing@web asks the user: Which queue should retries use? Options: Sidekiq: reuse the jobs we have; Solid Queue (recommended): one less service."), "{here}");
-        assert!(here.contains("The plan: vault:Projects/billing.md.") && here.ends_with("The user answers it on the board."), "{here}");
+        assert!(here.contains("The plan: vault:Projects/billing.md.") && here.contains("kelpie decide billing@web \"<answer>\"") && here.ends_with("the user answers on the board."), "{here}");
+        assert!(!here.contains("kelpie defer"), "{here}");
         let away = question_copy(&messages[0], true);
         assert!(away.contains("kelpie decide billing@web \"<answer>\"") && away.contains("kelpie defer billing@web"), "{away}");
+    }
+
+    #[test]
+    fn the_lead_settles_a_question_of_method_while_the_user_is_here_and_keeps_one_only_while_they_are_away() {
+        use crate::permit::Caller;
+        assert!(lead_settles(&Caller::Lead, false, false).is_ok(), "the lead decides a how-question with the user present");
+        assert!(lead_settles(&Caller::Lead, true, false).is_ok());
+        assert!(lead_settles(&Caller::Lead, false, true).unwrap_err().contains("The user is here"));
+        assert!(lead_settles(&Caller::Lead, true, true).is_ok());
+        for caller in [Caller::User, Caller::Task("billing@web".to_string()), Caller::Agent] {
+            assert!(lead_settles(&caller, true, false).unwrap_err().contains("only the lead settles"));
+        }
     }
 
     #[test]

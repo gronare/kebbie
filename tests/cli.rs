@@ -392,7 +392,7 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     assert_eq!(task["question"]["text"], "Which queue?");
     assert_eq!(task["question"]["recommend"], 2);
     let unread = stdout(&lab.run(&["messages", "--unread"]));
-    assert!(unread.contains("billing@app asks the user: Which queue?") && unread.contains("The user answers it on the board."), "{unread}");
+    assert!(unread.contains("billing@app asks the user: Which queue?") && unread.contains("one of intent the user answers on the board."), "{unread}");
     assert_eq!(stdout(&lab.run(&["messages", "--unread"])), "", "the lead sees each message once");
 
     let stranger = lab.run_as("search@app", &["answered", "billing"]);

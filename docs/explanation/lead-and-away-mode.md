@@ -25,7 +25,7 @@ It does not push, except tasks you gave it permission for.
 
 Every report, message and question passes through kelpie, and the lead gets a copy. The copies do not arrive as chat messages. Each of your prompts to the lead carries the reports and messages it has not seen yet, so its chat stays a conversation with you and its picture stays current.
 
-Questions are different: they are yours. A task asks with `kelpie ask`, and the question waits on the board until you answer it there. The lead can help you decide, but the answer comes from you, and it reaches the task as `[from you]`. Until you answer, kelpie holds every other message to that task, so nothing starts a turn under an open question.
+Questions about what you want are yours. A task asks with `kelpie ask`, and the question waits on the board until you answer it there. Questions about how (method, structure, how to split the work, the order of steps) the lead answers whether or not you are here. The lead can help you decide, but the answer comes from you, and it reaches the task as `[from you]`. Until you answer, kelpie holds every other message to that task, so nothing starts a turn under an open question.
 
 ## Claude's own prompts in a task
 
@@ -41,7 +41,7 @@ Some work should continue while you are gone. Away mode lets the lead keep tasks
 
 The line it draws is between **how** and **what**:
 
-- A question about method, such as which library, which structure or what order, the lead settles with `kelpie decide`. kelpie passes the answer to the task as the lead's call and records it.
+- A question about method, such as which library, which structure or what order, the lead settles as it does while you are here: with `kelpie decide` when it is on the board. kelpie passes the answer to the task as the lead's call and records it for your summary.
 - A question about intent, such as scope, behaviour, a trade-off that is yours or a plan to approve, the lead keeps for you with `kelpie defer`.
 - The lead pushes only what your push permissions allow.
 
