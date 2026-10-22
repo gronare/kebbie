@@ -88,6 +88,7 @@ pub(super) struct Intent {
     pub through: Through,
     pub at: u64,
     pub seen: Option<String>,
+    pub hand: Option<String>,
 }
 
 impl Intent {
@@ -99,7 +100,7 @@ impl Intent {
         json!({
             "by": self.by.key(), "work": self.work.key(),
             "address": self.address, "repo": self.repo, "task": self.task, "fingerprint": self.fingerprint,
-            "through": through, "at": self.at, "seen": self.seen,
+            "through": through, "at": self.at, "seen": self.seen, "hand": self.hand,
         })
     }
 
@@ -128,6 +129,7 @@ impl Intent {
             through,
             at: value["at"].as_u64()?,
             seen: value["seen"].as_str().map(str::to_string),
+            hand: value["hand"].as_str().map(str::to_string),
         })
     }
 }
@@ -164,8 +166,31 @@ pub(crate) fn pending(state: &Path, address: &str) -> Option<Pending> {
 // The pushed commits are on the default branch, so the push waits for a fix the lead checks: no commit of the task's is approved by the push itself.
 pub(crate) fn after_red_ci(state: &Path, repo: &Path, address: &str, by: By) -> Result<()> {
     let task = address.split('@').next().unwrap_or(address).to_string();
-    let seen = messages::latest_reports(&messages::load()).get(address).map(|report| report.id.clone());
-    save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen })
+    let log = messages::load();
+    let seen = messages::latest_reports(&log).get(address).map(|report| report.id.clone());
+    save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen, hand: last_hand_over(&log, address) })
+}
+
+fn last_hand_over(log: &[Message], address: &str) -> Option<String> {
+    log.iter().rev().find(|message| message.to == address && message.kind.as_deref() == Some(messages::HAND_KIND)).map(|message| message.id.clone())
+}
+
+pub(super) fn note_hand_over(state: &Path, address: &str) -> Result<()> {
+    let Some(mut intent) = load(state, address) else { return Ok(()) };
+    intent.hand = last_hand_over(&messages::load(), address);
+    save(state, &intent)
+}
+
+// A ready report answers the hand-over only when the task's Claude read it before reporting; without a transcript to tell, a report after the hand-over went out does.
+fn answers_hand_over(intent: &Intent, report: &Message, log: &[Message], transcript: Option<&str>) -> bool {
+    let Some(hand) = intent.hand.as_ref().and_then(|id| log.iter().find(|message| &message.id == id)) else { return true };
+    if hand.held {
+        return false;
+    }
+    match transcript {
+        Some(transcript) => crate::typing::read_at(transcript, &messages::typed_form(hand), hand.at * 1000).is_some_and(|read| report.at * 1000 > read),
+        None => report.at > hand.at,
+    }
 }
 
 pub(super) fn forget(state: &Path, address: &str) {
@@ -221,17 +246,24 @@ pub(super) fn next(intent: &Intent, report: Option<&Message>, slot: Option<&Slot
 }
 
 pub fn complete(state: &Path) -> Vec<String> {
-    complete_in(state, &messages::load(), |intent, slot| super::push::push_task(&intent.by.caller(), &intent.repo, slot, intent.through))
+    let sessions = crate::peers::sessions().unwrap_or_default();
+    let read = |intent: &Intent, slot: &Slot| {
+        let pane = sessions.iter().find(|session| session.address == intent.address).and_then(|session| session.pane.clone());
+        let file = pane.and_then(|pane| crate::typing::transcript_of(&pane)).or_else(|| super::launch::transcript(&intent.repo, slot).map(|(_, file)| file))?;
+        std::fs::read_to_string(file).ok()
+    };
+    complete_in(state, &messages::load(), read, |intent, slot| super::push::push_task(&intent.by.caller(), &intent.repo, slot, intent.through))
 }
 
-pub(super) fn complete_in(state: &Path, log: &[Message], mut push: impl FnMut(&Intent, &Slot) -> Result<String>) -> Vec<String> {
+pub(super) fn complete_in(state: &Path, log: &[Message], read: impl Fn(&Intent, &Slot) -> Option<String>, mut push: impl FnMut(&Intent, &Slot) -> Result<String>) -> Vec<String> {
     let reports = messages::latest_reports(log);
     let mut notes = Vec::new();
     for intent in all(state) {
         let slot = find_task(&intent.repo, Some(&intent.task), &intent.repo).ok();
         let current = slot.as_ref().and_then(|slot| default_branch(&intent.repo).and_then(|upstream| fingerprint(&slot.path, &upstream)).ok());
         let approved = current.as_deref().is_some_and(|current| approval_holds(state, &intent.address, current));
-        match next(&intent, reports.get(&intent.address), slot.as_ref(), current.as_deref(), approved) {
+        let report = reports.get(&intent.address).filter(|report| slot.as_ref().is_none_or(|slot| answers_hand_over(&intent, report, log, read(&intent, slot).as_deref())));
+        match next(&intent, report, slot.as_ref(), current.as_deref(), approved) {
             Next::Wait => {}
             Next::Drop(why) => {
                 forget(state, &intent.address);
@@ -274,12 +306,12 @@ mod tests {
     fn report(id: &str, at: u64, state: &str) -> Message {
         Message {
             id: id.to_string(), at, from: "billing@app".to_string(), to: crate::status::LEAD_LABEL.to_string(), text: "tests pass".to_string(), held: false,
-            report: Some(Report { state: state.to_string(), next: "push".to_string() }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false,
+            report: Some(Report { state: state.to_string(), next: "push".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false,
         }
     }
 
     fn intent(by: By, repo: &Path, fingerprint: &str) -> Intent {
-        Intent { by, work: Work::Tests, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()) }
+        Intent { by, work: Work::Tests, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()), hand: None }
     }
 
     #[test]
@@ -330,6 +362,32 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_push_completes_only_on_a_ready_report_written_after_its_claude_read_the_hand_over() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let current = fingerprint(&slot.path, &upstream).unwrap();
+        let address = format!("billing@{}", crate::repo::name_of(&dir));
+        let hand = |held: bool| { let mut message = report("h1", 150, "ready"); (message.from, message.to, message.text, message.report, message.held, message.kind) = ("kelpie".to_string(), address.clone(), "run the tests".to_string(), None, held, Some(messages::HAND_KIND.to_string())); message };
+        let ready = |at: u64| { let mut message = report("r1", at, "ready"); message.from = address.clone(); message };
+        let read_at = |seconds: u64| json!({ "type": "user", "timestamp": format!("1970-01-01T00:{:02}:{:02}.000Z", seconds / 60, seconds % 60), "message": { "content": "[from kelpie] run the tests" } }).to_string();
+        let pushes = |log: Vec<Message>, transcript: Option<String>| {
+            save(&state, &Intent { hand: Some("h1".to_string()), ..intent(By::User, &dir, &current) }).unwrap();
+            let mut pushed = false;
+            complete_in(&state, &log, |_, _| transcript.clone(), |_, _| { pushed = true; Ok(String::new()) });
+            forget(&state, &address);
+            pushed
+        };
+        assert!(!pushes(vec![hand(true), ready(200)], None), "the hand-over is still held behind a draft: the report is from an earlier turn");
+        assert!(!pushes(vec![hand(false), ready(200)], Some(String::new())), "typed, but its Claude has not read it yet, as when the forced report after a notice comes first");
+        assert!(!pushes(vec![hand(false), ready(200)], Some(read_at(201))), "read after that report");
+        assert!(pushes(vec![hand(false), ready(200)], Some(read_at(160))), "read, then the tests, then ready");
+        assert!(pushes(vec![hand(false), ready(200)], None), "no transcript to tell: a report after the hand-over went out answers it");
+        assert!(!pushes(vec![hand(false), ready(140)], None), "and one before it does not");
+        assert!(pushes(vec![ready(200)], None), "a hand-over the log no longer has holds nothing up");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
     fn a_red_ci_after_a_push_waits_as_that_push_and_sends_only_a_fix_the_lead_approved() {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let state = state_of(&dir);
@@ -358,28 +416,28 @@ mod tests {
         let ready = |id: &str| { let mut message = report(id, 200, "ready"); message.from = address.clone(); vec![message] };
         save(&state, &intent(By::Lead, &dir, &current)).unwrap();
         let mut pushed = Vec::new();
-        complete_in(&state, &[], |intent, _| { pushed.push(intent.by); Ok(String::new()) });
+        complete_in(&state, &[], |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
         assert!(pushed.is_empty() && load(&state, &address).is_some(), "no report yet: it waits");
-        complete_in(&state, &ready("r1"), |intent, _| { pushed.push(intent.by); Ok(String::new()) });
+        complete_in(&state, &ready("r1"), |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
         assert_eq!(pushed, [By::Lead], "pushed as the lead that asked, under its own checks");
         assert!(load(&state, &address).is_none());
-        complete_in(&state, &ready("r1"), |intent, _| { pushed.push(intent.by); Ok(String::new()) });
+        complete_in(&state, &ready("r1"), |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
         assert_eq!(pushed.len(), 1, "an intent pushes once");
         save(&state, &intent(By::User, &dir, &current)).unwrap();
         commit(&slot.path, "e", "a fix while testing");
-        complete_in(&state, &ready("r2"), |intent, _| { pushed.push(intent.by); Ok(String::new()) });
+        complete_in(&state, &ready("r2"), |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
         assert_eq!(pushed.len(), 1, "changed commits are never pushed on the old commits' word");
         assert!(load(&state, &address).is_some(), "the push stays under way while the lead checks the fix");
         super::super::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
-        complete_in(&state, &ready("r2"), |intent, _| { pushed.push(intent.by); Ok(String::new()) });
+        complete_in(&state, &ready("r2"), |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
         assert_eq!(pushed, [By::Lead, By::User], "the lead's approval of the fix lets the user's push go out");
         assert!(load(&state, &address).is_none());
         let current = fingerprint(&slot.path, &upstream).unwrap();
         save(&state, &intent(By::User, &dir, &current)).unwrap();
         let rejected = "Pushing billing failed: ! [rejected]        4333c9f -> main (non-fast-forward)";
-        let notes = complete_in(&state, &ready("r3"), |_, _| Err(rejected.to_string()));
+        let notes = complete_in(&state, &ready("r3"), |_, _| None, |_, _| Err(rejected.to_string()));
         assert!(load(&state, &address).is_some() && notes[0].contains("tries again"), "a push main kept outrunning waits for the next round, never dropped: {notes:?}");
-        complete_in(&state, &ready("r3"), |_, _| Err("the reviewer has not passed it".to_string()));
+        complete_in(&state, &ready("r3"), |_, _| None, |_, _| Err("the reviewer has not passed it".to_string()));
         assert!(load(&state, &address).is_none(), "any other failure goes to the lead");
         cleanup(dir, origin, &slot);
     }
@@ -394,12 +452,12 @@ mod tests {
         assert!(crate::repo::rebase_in_progress(&slot.path));
         assert_eq!(find_task(&dir, Some("billing"), &dir).map(|found| found.path).ok(), Some(slot.path.clone()), "the rebasing worktree is still the task's");
         let mut pushed = 0;
-        let notes = complete_in(&state, &[], |_, _| { pushed += 1; Ok(String::new()) });
+        let notes = complete_in(&state, &[], |_, _| None, |_, _| { pushed += 1; Ok(String::new()) });
         assert!(notes.is_empty() && load(&state, &address).is_some(), "the push waits through the rebase: {notes:?}");
         git(&slot.path, &["rebase", "--continue"]).unwrap();
         let mut ready = report("r1", 200, "ready");
         ready.from = address.clone();
-        complete_in(&state, &[ready], |_, _| { pushed += 1; Ok(String::new()) });
+        complete_in(&state, &[ready], |_, _| None, |_, _| { pushed += 1; Ok(String::new()) });
         assert_eq!(pushed, 1, "the task's ready report sends the push");
         assert!(load(&state, &address).is_none());
         cleanup(dir, origin, &slot);

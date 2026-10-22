@@ -250,8 +250,8 @@ fn forget_address(state: &Path, address: &str) {
 }
 
 fn forget_held_prompt(address: &str) {
-    if let Err(error) = messages::drop_held_prompts(address) {
-        eprintln!("Could not drop the prompt still held for {address}: {error}");
+    if let Err(error) = messages::drop_held_for_ended(address) {
+        eprintln!("Could not drop what kelpie still held for {address}: {error}");
     }
 }
 

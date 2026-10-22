@@ -29,11 +29,12 @@ pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str)
     if summary.is_empty() {
         return Err(format!("kelpie report needs a one-line summary: {USAGE}"));
     }
-    Ok((Report { state: state.to_string(), next: next.split_whitespace().collect::<Vec<_>>().join(" ") }, summary))
+    Ok((Report { state: state.to_string(), next: next.split_whitespace().collect::<Vec<_>>().join(" "), head: None }, summary))
 }
 
 pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, summary: &str) -> Result<String> {
-    let (report, summary) = parse(state, next, card.is_some(), summary)?;
+    let (mut report, summary) = parse(state, next, card.is_some(), summary)?;
+    report.head = crate::repo::git(cwd, &["rev-parse", "HEAD"]).ok();
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kelpie report runs in a task's worktree")?;
     card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
     let card = card.map(|file| cwd.join(file));
@@ -233,7 +234,7 @@ mod tests {
     #[test]
     fn a_report_needs_a_known_state_a_next_step_and_a_summary() {
         let (report, summary) = parse(Some("needs-you"), Some(" answer:  which queue? "), false, "plan  written,\nwaiting").unwrap();
-        assert_eq!(report, Report { state: "needs-you".to_string(), next: "answer: which queue?".to_string() });
+        assert_eq!(report, Report { state: "needs-you".to_string(), next: "answer: which queue?".to_string(), head: None });
         assert_eq!(summary, "plan written, waiting");
         assert!(parse(None, Some("nothing"), false, "x").is_err());
         assert!(parse(Some("done"), Some("nothing"), false, "x").is_err());
@@ -305,7 +306,7 @@ mod tests {
 
     #[test]
     fn herdr_shows_the_next_step_and_the_state() {
-        let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string() };
+        let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string(), head: None };
         assert_eq!(metadata_args(&report("needs-you", "answer: which queue?"))[4..], [
             "--token", "next=answer: which queue?", "--state-label", "idle=needs you", "--state-label", "done=needs you",
         ]);

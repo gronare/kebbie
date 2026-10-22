@@ -37,10 +37,11 @@ pub(super) fn fingerprint(path: &Path, upstream: &str) -> Result<String> {
     Ok(commits.join("\n"))
 }
 
-// An approval covers the branch while every commit on it now is one the lead checked: a commit that reached the default branch is no longer the task's to check.
+// An approval covers the branch while its commits are the ones the lead checked, less the first few the default branch took in; a commit dropped from the middle or the end changes what goes out.
 pub(super) fn covers(approved: &str, current: &str) -> bool {
     let approved: Vec<&str> = approved.lines().map(str::trim).collect();
-    !current.trim().is_empty() && current.lines().all(|commit| approved.contains(&commit.trim()))
+    let current: Vec<&str> = current.lines().map(str::trim).collect();
+    !current.is_empty() && approved.ends_with(&current)
 }
 
 // FNV-1a: stable across Rust versions, unlike DefaultHasher, so an approval survives a kelpie upgrade.
@@ -191,6 +192,8 @@ mod tests {
         assert!(approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "the task's own commit is unchanged; only its range shrank");
         commit(&slot.path, "f", "sixth");
         assert!(!approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "a commit the lead never saw takes the approval back");
+        assert!(covers("a\nb\nc", "b\nc") && covers("a\nb\nc", "a\nb\nc"), "the default branch took in the first ones");
+        assert!(!covers("a\nb\nc", "a\nc") && !covers("a\nb\nc", "a\nb") && !covers("a\nb\nc", "c\nb"), "a commit dropped from the middle or the end, or the order changed, is not what the lead checked");
         std::fs::remove_dir_all(state).unwrap();
         cleanup(dir, origin, &slot);
     }

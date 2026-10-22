@@ -294,13 +294,13 @@ fn prepare(caller: &Caller, repo: &Path, slot: &Slot, through: Through, hand_ove
     fetch(repo)?;
     let recorded = fingerprint(&slot.path, &upstream)?;
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
-    let record = |work: Work, fingerprint: String| intent::save(&state, &Intent { by, work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone() });
+    let record = |work: Work, fingerprint: String| intent::save(&state, &Intent { by, work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone(), hand: None });
     match update(&slot.path, &upstream)? {
         Updated::Clean => {}
         Updated::Conflict => {
             record(Work::Conflict, recorded)?;
             let why = format!("{} asked kelpie to push this task", capitalized(pusher));
-            if let Err(cannot) = hand_over(slot, &conflict_prompt(&why, &upstream)) {
+            if let Err(cannot) = hand_over(slot, &conflict_prompt(&why, &upstream)).and_then(|_| intent::note_hand_over(&state, &address)) {
                 intent::forget(&state, &address);
                 return Notice::new(Tone::Failed, format!("Not pushed: it conflicts with {}, and kelpie could not pass the rebase to its Claude", main_of(&upstream)))
                     .you("Push again; if this repeats, rebase it yourself in its worktree.").detail("task", &task).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
@@ -312,7 +312,7 @@ fn prepare(caller: &Caller, repo: &Path, slot: &Slot, through: Through, hand_ove
         Updated::Overlap(touched) => {
             let files: Vec<&str> = touched.iter().map(|touched| touched.file.as_str()).collect();
             record(Work::Tests, fingerprint(&slot.path, &upstream)?)?;
-            if let Err(cannot) = hand_over(slot, &overlap_prompt(by, &upstream, &touched)) {
+            if let Err(cannot) = hand_over(slot, &overlap_prompt(by, &upstream, &touched)).and_then(|_| intent::note_hand_over(&state, &address)) {
                 intent::forget(&state, &address);
                 return Notice::new(Tone::Failed, format!("Not pushed: {} changed the same files, and kelpie could not pass their tests to its Claude", main_of(&upstream)))
                     .you("Run the tests for those files in its worktree, then push again.").detail("task", &task).detail("files", files.join(" · "))
@@ -389,9 +389,9 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
         });
     }
     tell_lead_pushed(&landed(false, false));
-    let (clean, rest) = match keep_going(state, repo, slot, upstream, &address, was_approved)? {
+    let (clean, rest) = match keep_going(state, repo, slot, upstream, &address, was_approved) {
         Rest::Rebased { clean, rest } => (clean, rest),
-        Rest::NotFetched(error) => return Ok(said(Notice::new(Tone::You, headline(true))).next(format!("Fetching afterwards failed, so the rest is not rebased onto {main} yet."))
+        Rest::NotRebased(error) => return Ok(said(Notice::new(Tone::You, headline(true))).next(format!("The rest could not be rebased onto {main} afterwards."))
             .you(format!("Rebase the rest (kelpie land {task}).")).detail("error", error).to_string()),
     };
     let told = format!(
@@ -504,15 +504,18 @@ fn tell_lead_pushed(landed: &Landed) {
 #[derive(Debug, PartialEq)]
 enum Rest {
     Rebased { clean: bool, rest: usize },
-    NotFetched(String),
+    NotRebased(String),
 }
 
-// After a push that keeps the task open: the rest of its branch goes on top of the new default branch, an approval of the whole branch holds for the rest, and the card, written for what was pushed, goes.
-fn keep_going(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, was_approved: bool) -> Result<Rest> {
+// The pushed commits landed whatever happens here, so nothing in it fails the push.
+fn keep_going(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, was_approved: bool) -> Rest {
     crate::report::forget_card_in(state, address);
-    if let Err(error) = fetch(repo) {
-        return Ok(Rest::NotFetched(error));
-    }
+    rebase_rest(state, repo, slot, upstream, address, was_approved).unwrap_or_else(Rest::NotRebased)
+}
+
+// The rest of the branch goes on top of the new default branch, and an approval of the whole branch holds for the rest.
+fn rebase_rest(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, was_approved: bool) -> Result<Rest> {
+    fetch(repo)?;
     let clean = rebase_or_hand_over(slot, upstream, "kelpie pushed this task's first commits")?;
     let rest = ahead_behind(&slot.path, upstream)?.0;
     if clean && was_approved && rest > 0 {
@@ -621,7 +624,7 @@ mod tests {
         assert_eq!(push_prefix(&slot.path, &upstream, &fourth, &state).unwrap(), 1);
         let branch = upstream.trim_start_matches("origin/");
         assert_eq!(git(&origin, &["rev-parse", branch]).unwrap(), fourth, "origin has the first commit");
-        assert_eq!(keep_going(&state, &dir, &slot, &upstream, "billing@app", true).unwrap(), Rest::Rebased { clean: true, rest: 1 });
+        assert_eq!(keep_going(&state, &dir, &slot, &upstream, "billing@app", true), Rest::Rebased { clean: true, rest: 1 });
         assert!(branch_exists(&dir, "billing"), "the task stays open");
         assert_eq!(git(&slot.path, &["branch", "--show-current"]).unwrap(), "billing");
         assert!(slots(&dir).unwrap().iter().any(|busy| busy.path == slot.path && !busy.free), "its worktree stays the task's");
@@ -629,7 +632,7 @@ mod tests {
         assert_eq!(git(&slot.path, &["log", "--format=%s", &format!("{upstream}..HEAD")]).unwrap(), "fifth", "no pushed commit twice");
         assert!(approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "an approval of the whole branch holds for the rest");
         assert!(crate::report::card_in(&state, "billing@app").is_none(), "the card was for what was pushed");
-        assert!(matches!(keep_going(&state.join("other"), &dir, &slot, &upstream, "billing@app", false).unwrap(), Rest::Rebased { rest: 1, .. }));
+        assert!(matches!(keep_going(&state.join("other"), &dir, &slot, &upstream, "billing@app", false), Rest::Rebased { rest: 1, .. }));
         assert!(!approval_file(&state.join("other"), "billing@app").exists(), "no approval is made up for a branch the lead never approved");
         std::fs::remove_dir_all(state).unwrap();
         cleanup(dir, origin, &slot);
@@ -645,10 +648,27 @@ mod tests {
         crate::report::save_card(&state, "billing@app", &fourth, "Refunds on the billing page.").unwrap();
         push_prefix(&slot.path, &upstream, &fourth, &state).unwrap();
         git(&dir, &["remote", "set-url", "origin", &dir.with_extension("gone").to_string_lossy()]).unwrap();
-        assert!(matches!(keep_going(&state, &dir, &slot, &upstream, "billing@app", true).unwrap(), Rest::NotFetched(_)), "the commits are on origin, so the push is no failure");
+        assert!(matches!(keep_going(&state, &dir, &slot, &upstream, "billing@app", true), Rest::NotRebased(_)), "the commits are on origin, so the push is no failure");
         assert!(crate::report::card_in(&state, "billing@app").is_none(), "the card was for what was pushed");
         git(&dir, &["remote", "set-url", "origin", &origin.to_string_lossy()]).unwrap();
         std::fs::remove_dir_all(state).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_partial_push_that_landed_is_reported_even_when_the_rebase_after_it_refuses() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        commit(&slot.path, "e", "fifth");
+        let state = dir.with_extension("state");
+        let _ = std::fs::remove_dir_all(&state);
+        push_prefix(&slot.path, &upstream, &fourth, &state).unwrap();
+        git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+        git(&dir, &["merge", "--quiet", "--ff-only", &upstream]).unwrap();
+        upstream_commit(&dir, "x", "x", "main moved");
+        std::fs::write(slot.path.join("e"), "a change git would lose").unwrap();
+        assert!(matches!(keep_going(&state, &dir, &slot, &upstream, "billing@app", true), Rest::NotRebased(error) if error.contains("rebase")), "the commits are on origin, so a refused rebase is no failure");
+        let _ = std::fs::remove_dir_all(state);
         cleanup(dir, origin, &slot);
     }
 

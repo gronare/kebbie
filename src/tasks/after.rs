@@ -823,11 +823,15 @@ pub(crate) fn at_in(state: &Path, caller: &Caller, name: &str, at: u64, now: u64
     let waits = halves(state, name)?;
     let _lock = Lock::take(state, true);
     let mut said = Vec::new();
+    let waived: Vec<Wait> = waits.iter().filter(|wait| wait.blocked.is_some()).cloned().collect();
     for wait in waits {
-        let wait = Wait { starts_at: Some(at), ..wait };
+        // A time set on a blocked wait waives the tasks it waited for, as --now does; kept, they would block it again.
+        let after = if wait.blocked.is_some() { Vec::new() } else { wait.after.clone() };
+        let wait = Wait { starts_at: Some(at), blocked: None, after, ..wait };
         save(state, &wait)?;
         said.push(format!("{} starts from the default branch {}.", wait.address(), starts_when(&wait, now)));
     }
+    release_watches(state, &waived);
     Ok(said.join("\n"))
 }
 
@@ -930,6 +934,11 @@ mod tests {
         let moved = at_in(&state, &Caller::User, "web-billing", 5_000, 100).unwrap();
         assert!(moved.starts_with("web-billing@web starts from the default branch once billing@api is done, not before "), "{moved}");
         assert_eq!(load(&state, "web-billing@web").unwrap().starts_at, Some(5_000));
+        save(&state, &Wait { blocked: Some("billing@api was dropped, so web-billing did not start".to_string()), ..wait_for("web-billing", "web", &["billing@api"]) }).unwrap();
+        assert!(at_in(&state, &Caller::User, "web-billing", 5_000, 100).unwrap().contains("starts from the default branch"));
+        let dropped = facts(&[end("billing@api", 200, "dropped", None)], &[]);
+        assert_eq!(next(&load(&state, "web-billing@web").unwrap(), &dropped, 4_999), Next::Wait, "not before its time, and not blocked again by the dropped task");
+        assert_eq!(next(&load(&state, "web-billing@web").unwrap(), &dropped, 5_000), Next::Start, "a time the user set on a blocked wait starts it then");
         fs::remove_dir_all(state).unwrap();
     }
 
@@ -1199,7 +1208,7 @@ mod tests {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let (state, wait) = waiting_on(&dir, "billing");
         let address = peers::address("billing", &name_of(&dir));
-        super::super::intent::save(&state, &super::super::intent::Intent { by: By::User, work: super::super::intent::Work::Tests, address: address.clone(), repo: dir.clone(), task: "billing".to_string(), fingerprint: "abc".to_string(), through: super::super::intent::Through::All, at: 90, seen: None }).unwrap();
+        super::super::intent::save(&state, &super::super::intent::Intent { by: By::User, work: super::super::intent::Work::Tests, address: address.clone(), repo: dir.clone(), task: "billing".to_string(), fingerprint: "abc".to_string(), through: super::super::intent::Through::All, at: 90, seen: None, hand: None }).unwrap();
         assert_eq!(Facts::read(&state, &[], std::slice::from_ref(&wait)).state(&address, 100), DepState::Open);
         untouched(&state, &wait);
         cleanup(dir, origin, &slot);

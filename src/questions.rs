@@ -319,7 +319,7 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
     let at = messages::now();
     let plan = plan.map(|plan| plan_reference(plan, cwd, &state_dir()?, &me, &messages::new_id("plan"))).transpose()?;
     let next = if plan.is_some() { format!("read and approve the plan: {}", asked.text) } else { format!("answer: {}", asked.text) };
-    let report = Report { state: "needs-you".to_string(), next };
+    let report = Report { state: "needs-you".to_string(), next, head: None };
     messages::log_report(&me, &report, &format!("asked the user: {}", asked.text))?;
     report::show_in_sidebar(&report);
     let id = messages::new_id("question");

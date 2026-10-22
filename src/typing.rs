@@ -168,22 +168,28 @@ pub fn iso_millis(stamp: &str) -> Option<u64> {
 
 // Claude took the prompt when its transcript has it, after it was typed, as the user's message, or as a message queued while it worked: enqueued at once, absorbed only when the running tool returns.
 pub fn taken_in(transcript: &str, text: &str, since_ms: u64) -> bool {
+    normalized(text).is_empty() || said_at(transcript, text, since_ms, true).is_some()
+}
+
+// When Claude read the text, as the user's message or a queued one it absorbed; an enqueue alone is not read yet.
+pub fn read_at(transcript: &str, text: &str, since_ms: u64) -> Option<u64> {
+    said_at(transcript, text, since_ms, false)
+}
+
+fn said_at(transcript: &str, text: &str, since_ms: u64, enqueued: bool) -> Option<u64> {
     let wanted: String = normalized(text).chars().take(200).collect();
-    if wanted.is_empty() {
-        return true;
-    }
-    transcript.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).any(|record| {
-        let recent = record["timestamp"].as_str().and_then(iso_millis).is_some_and(|at| at + 2000 >= since_ms);
+    transcript.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).find_map(|record| {
+        let at = record["timestamp"].as_str().and_then(iso_millis).filter(|at| at + 2000 >= since_ms)?;
         let said = if record["type"] == "user" {
             content_text(&record["message"]["content"])
         } else if record["type"] == "attachment" && record["attachment"]["type"] == "queued_command" {
             content_text(&record["attachment"]["prompt"])
-        } else if record["type"] == "queue-operation" && record["operation"] == "enqueue" {
+        } else if enqueued && record["type"] == "queue-operation" && record["operation"] == "enqueue" {
             content_text(&record["content"])
         } else {
-            return false;
+            return None;
         };
-        recent && normalized(&said).contains(&wanted)
+        normalized(&said).contains(&wanted).then_some(at)
     })
 }
 
@@ -252,6 +258,10 @@ fn place(target: &str) -> (String, Option<PathBuf>) {
     let cwd = agent["cwd"].as_str().map(Path::new);
     let transcript = session.zip(crate::agent::claude::home()).and_then(|(session, home)| crate::restart::transcript(&home, cwd, session));
     (pane, transcript)
+}
+
+pub fn transcript_of(target: &str) -> Option<PathBuf> {
+    place(target).1
 }
 
 // Whether the Claude in this pane has taken the text since it was typed, by its transcript; false when there is none to read.
@@ -534,6 +544,9 @@ mod tests {
         assert!(taken_in(&enqueued, "[from lead] rebase onto main please", at), "Claude queued it mid-turn; it is absorbed only when the running tool returns, often after 40 s");
         let dequeued = json!({ "type": "queue-operation", "operation": "remove", "timestamp": "2026-10-20T12:00:01.000Z", "content": "[from lead] rebase onto main please" }).to_string();
         assert!(!taken_in(&dequeued, "[from lead] rebase onto main please", at));
+        assert_eq!(read_at(&enqueued, "[from lead] rebase onto main please", at), None, "queued is not read yet");
+        assert_eq!(read_at(&format!("{enqueued}\n{queued}"), "[from lead] rebase onto main please", at), Some(at + 4000), "read when Claude absorbed it");
+        assert_eq!(read_at(&user, "[from lead] rebase onto main please", at), Some(at + 3100));
         let typed_at = iso_millis("2026-10-22T08:39:47.300Z").unwrap();
         let queued_for_the_turns_end = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-22T08:39:47.581Z", "sessionId": "s" }).to_string();
         let answer = "[from you] The user's answer to \"Treat Claude's dim suggestion as an empty box\": Approve";

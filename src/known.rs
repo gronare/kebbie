@@ -197,7 +197,7 @@ fn save_in(dir: &Path, address: &str, record: &Record) -> Result<()> {
 
 // kelpie started or resumed a session with this role; a resumed one is told, once it is free, what its new role brings.
 pub fn began(address: &str, role: &str, resumed: bool) {
-    let done = crate::lead::roles_dir().and_then(|dir| began_in(&dir, address, &snapshot(role), resumed, &mut |text| messages::hold_for(FROM, address, text, None, None)));
+    let done = crate::lead::roles_dir().and_then(|dir| began_in(&dir, address, &snapshot(role), resumed, &mut |text| messages::hold_for(FROM, address, text, None, Some(messages::NOTICE_KIND))));
     if let Err(error) = done {
         eprintln!("Could not record which kelpie {address} runs: {error}");
     }
@@ -233,7 +233,7 @@ pub fn announce() -> Result<Vec<String>> {
         Ok(Some((file, snapshot(&role))))
     }, &mut |session, text| {
         let _lock = Lock::take(true)?;
-        messages::send_locked(FROM, &[session], text, &sessions, None, None)
+        messages::notice_locked(session, text, &sessions)
     })
 }
 

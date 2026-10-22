@@ -58,6 +58,7 @@ pub const USER_LABEL: &str = "you";
 pub struct Report {
     pub state: String,
     pub next: String,
+    pub head: Option<String>,
 }
 
 impl Message {
@@ -119,6 +120,7 @@ pub fn fold(log: &str) -> Vec<Message> {
                 report: record["report"]["state"].as_str().map(|state| Report {
                     state: state.to_string(),
                     next: record["report"]["next"].as_str().unwrap_or_default().to_string(),
+                    head: record["report"]["head"].as_str().map(str::to_string),
                 }),
                 question: question_from(&record),
                 about: record["about"].as_str().map(str::to_string),
@@ -248,11 +250,27 @@ pub fn indented(text: &str) -> String {
     text.split('\n').collect::<Vec<_>>().join("\n  ")
 }
 
-fn typed_form(message: &Message) -> String {
+pub(crate) fn typed_form(message: &Message) -> String {
     if message.kind.as_deref() == Some(PROMPT_KIND) { message.text.clone() } else { delivered(&message.from, &message.text) }
 }
 
 pub const DRAFT_HOLD: &str = "has a draft in its input box";
+pub const EARLIER_TYPING: &str = "is still taking the messages kelpie typed for it just now";
+const TYPED_FOR: u64 = 10;
+
+fn typed_file(dir: &Path, address: &str) -> PathBuf {
+    dir.join("typed").join(address)
+}
+
+fn note_typed(dir: &Path, address: &str) {
+    let _ = fs::create_dir_all(dir.join("typed")).and_then(|_| fs::write(typed_file(dir, address), now().to_string()));
+}
+
+// The box seen as a draft right after kelpie typed into it, in this pass or a recent one, holds kelpie's own text.
+fn kelpies_own<'a>(dir: &Path, address: &str, why: &'a str) -> &'a str {
+    let recent = fs::read_to_string(typed_file(dir, address)).ok().and_then(|at| at.trim().parse::<u64>().ok()).is_some_and(|at| now().saturating_sub(at) <= TYPED_FOR);
+    if why == DRAFT_HOLD && recent { EARLIER_TYPING } else { why }
+}
 
 type TypeInto<'a> = &'a mut dyn FnMut(&str, &str, &str) -> std::result::Result<(), crate::typing::Refused>;
 
@@ -370,6 +388,11 @@ fn sent_again_waits(dir: &Path, message: &Message, messages: &[Message], session
 }
 
 fn flush_held_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &dyn Fn(&str, u64) -> bool, wanted: Wanted) -> Result<usize> {
+    flush_typing_in(dir, sessions, type_into, heard, wanted).map(|(delivered, _)| delivered)
+}
+
+// What it delivered, and the sessions it typed into: their boxes hold kelpie's own text for a moment.
+fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &dyn Fn(&str, u64) -> bool, wanted: Wanted) -> Result<(usize, HashSet<String>)> {
     let messages = load_in(dir);
     let open = questions::open_now(&messages);
     let mut delivered = 0;
@@ -398,6 +421,7 @@ fn flush_held_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &
         }
         match deliver(session, &typed_form(message), type_into) {
             Ok(()) => {
+                note_typed(dir, &session.address);
                 append_in(dir, &json!({ "id": message.id, "at": now(), "state": "delivered" }), ROTATE_BYTES)?;
                 if prompt {
                     crate::routines::trust_answered_in(dir, &message.to);
@@ -405,11 +429,11 @@ fn flush_held_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &
                 typed_into.insert(session.address.clone());
                 delivered += 1;
             }
-            Err(why) if !typed_into.contains(&session.address) => note_why(dir, message, why)?,
+            Err(why) if !typed_into.contains(&session.address) => note_why(dir, message, kelpies_own(dir, &session.address, why))?,
             Err(_) => {}
         }
     }
-    Ok(delivered)
+    Ok((delivered, typed_into))
 }
 
 // A held message keeps the latest reason it waits, written only when it changes, so the board can say why.
@@ -421,6 +445,7 @@ fn note_why(dir: &Path, message: &Message, why: &str) -> Result<()> {
 }
 
 pub const PROMPT_KIND: &str = "prompt";
+pub const NOTICE_KIND: &str = "notice";
 pub const RULES_KIND: &str = "rules-check";
 pub const HAND_KIND: &str = "hand-over";
 // kelpie's own requests that a Claude did not take are typed again; a tell between sessions is only reported.
@@ -462,6 +487,24 @@ fn drop_held_prompts_in(dir: &Path, to: &str) -> Result<()> {
     Ok(())
 }
 
+// A task's life ended: what kelpie still held for it, its prompt, hand-overs and the lead's rules check of it, would reach a later task by the same name.
+pub fn drop_held_for_ended(address: &str) -> Result<()> {
+    drop_held_for_ended_in(&state_dir()?, address)
+}
+
+fn drop_held_for_ended_in(dir: &Path, address: &str) -> Result<()> {
+    let _lock = if holds(dir) { None } else { Lock::take_in(dir, true)? };
+    let kelpies = |message: &Message| match message.kind.as_deref() {
+        Some(PROMPT_KIND | HAND_KIND | NOTICE_KIND) => message.to == address,
+        Some(RULES_KIND) => crate::tasks::rules_check_task(&message.text) == Some(address),
+        _ => false,
+    };
+    for message in load_in(dir).iter().filter(|message| message.held && kelpies(message)) {
+        append_in(dir, &json!({ "id": message.id, "at": now(), "state": "dropped" }), ROTATE_BYTES)?;
+    }
+    Ok(())
+}
+
 // Held messages to sessions that are free again; the board runs this every few seconds, and so does `kelpie messages`.
 pub fn flush() -> Result<usize> {
     if !load().iter().any(|message| message.held) {
@@ -483,7 +526,7 @@ pub fn send_locked(from: &str, recipients: &[&Session], text: &str, sessions: &[
 
 #[allow(clippy::too_many_arguments)]
 fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], text: &str, sessions: &[Session], about: Option<&str>, kind: Option<&str>, type_into: TypeInto) -> Result<Vec<String>> {
-    flush_held_in(dir, sessions, type_into, &heard, &rules_check_wanted)?;
+    let (_, typed_into) = flush_typing_in(dir, sessions, type_into, &heard, &rules_check_wanted)?;
     let mut report = Vec::new();
     for (index, session) in recipients.iter().enumerate() {
         let messages = load_in(dir);
@@ -494,7 +537,14 @@ fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], text: &str, s
         let outcome = match question_hold(about, question.map(|question| question.id.as_str())) {
             Some(reason) => Err(reason),
             None if earlier_held && !answering => Err("still has earlier messages held"),
-            None => deliver(session, &delivered(from, text), type_into),
+            None => match deliver(session, &delivered(from, text), type_into) {
+                Err(DRAFT_HOLD) if typed_into.contains(&session.address) => Err(EARLIER_TYPING),
+                Ok(()) => {
+                    note_typed(dir, &session.address);
+                    Ok(())
+                }
+                Err(why) => Err(kelpies_own(dir, &session.address, why)),
+            },
         };
         let id = new_id(&index.to_string());
         let mut record = json!({ "id": id, "at": now(), "from": from, "to": session.address, "text": text, "state": if outcome.is_ok() { "delivered" } else { "held" } });
@@ -613,6 +663,15 @@ pub fn tell_lead(text: &str, kind: Option<&str>) -> Result<()> {
     send_locked("kelpie", &[lead], text, &sessions, None, kind).map(|_| ())
 }
 
+// kelpie's word about itself (an update, a resume): held behind a draft like any message, but the draft stays the user's own business.
+pub fn notice_locked(session: &Session, text: &str, sessions: &[Session]) -> Result<Vec<String>> {
+    notice_locked_in(&state_dir()?, session, text, sessions, &mut crate::typing::prompt)
+}
+
+fn notice_locked_in(dir: &Path, session: &Session, text: &str, sessions: &[Session], type_into: TypeInto) -> Result<Vec<String>> {
+    send_locked_in(dir, "kelpie", &[session], text, sessions, None, Some(NOTICE_KIND), type_into)
+}
+
 // kelpie's word to a task that must reach it: held while its box holds the user's draft or it waits for an answer, kept for a session that is not running yet, and typed again when its Claude did not take it.
 pub fn hand_to(to: &str, text: &str) -> Result<()> {
     let sessions = peers::sessions().unwrap_or_default();
@@ -670,7 +729,7 @@ pub fn ask_lead(text: &str) -> Result<String> {
 // A report goes to the lead through the log only: typed into its chat, every turn of every task would start a turn of the lead.
 pub fn log_report(from: &str, report: &Report, text: &str) -> Result<()> {
     let id = new_id("report");
-    append(&json!({ "id": id, "at": now(), "from": from, "to": LEAD_LABEL, "text": text, "state": "logged", "report": { "state": report.state, "next": report.next } }))
+    append(&json!({ "id": id, "at": now(), "from": from, "to": LEAD_LABEL, "text": text, "state": "logged", "report": { "state": report.state, "next": report.next, "head": report.head } }))
 }
 
 // The end of a task's life, so a later task by the same name does not inherit its reports; landed is the "sha subject" lines a done task put on the default branch.
@@ -1055,7 +1114,7 @@ mod tests {
             r#"{"id":"3","at":30,"from":"search@api","to":"lead","text":"rebase on main","state":"delivered"}"#,
         ].join("\n");
         let messages = fold(&log);
-        assert_eq!(messages[1].report, Some(Report { state: "needs-you".to_string(), next: "approve the plan: keep the branch field?".to_string() }));
+        assert_eq!(messages[1].report, Some(Report { state: "needs-you".to_string(), next: "approve the plan: keep the branch field?".to_string(), head: None }));
         assert!(!messages[1].held);
         assert_eq!(messages[0].next_for_you(), None);
         assert_eq!(messages[1].next_for_you(), Some("approve the plan: keep the branch field?"));
@@ -1069,7 +1128,7 @@ mod tests {
 
     #[test]
     fn the_lead_is_copied_on_reports_to_it() {
-        let report = Some(Report { state: "ready".to_string(), next: "push and close".to_string() });
+        let report = Some(Report { state: "ready".to_string(), next: "push and close".to_string(), head: None });
         let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false }];
         assert_eq!(copies_for_lead(&messages, 0).len(), 1);
         assert_eq!(report_line(&messages[0]), "- a@x (ready): done — you: push and close");
@@ -1523,6 +1582,62 @@ mod tests {
         let rewrite = lead.lines().find(|line| line.contains("cannot read on the first pass")).unwrap();
         let (answered, tell) = (rewrite.find("`kelpie answered <task>`").expect(rewrite), rewrite.find("`kelpie tell <task>`").expect(rewrite));
         assert!(answered < tell, "the lead closes the question before it tells the task: {rewrite}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn kelpies_own_text_just_typed_into_the_box_is_not_taken_for_the_users_draft() {
+        let dir = state("earlier-typing");
+        write_log(&dir, &[told("m1", 1, "kelpie", "billing@web", "held")]);
+        let typed = std::cell::RefCell::new(Vec::new());
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); if typed.borrow().len() == 1 { Ok(()) } else { Err(crate::typing::Refused::Draft) } };
+        let task = session(Some("w1:p1"), Some("idle"));
+        let said = send_locked_in(&dir, LEAD_LABEL, &[&task], "and then", std::slice::from_ref(&task), None, None, &mut type_into).unwrap();
+        assert_eq!(typed.borrow().len(), 2, "the held one first, then the new one");
+        let held = load_in(&dir).into_iter().find(|message| message.text == "and then").unwrap();
+        assert_eq!((held.held, held.why.as_deref()), (true, Some(EARLIER_TYPING)), "{said:?}");
+        assert!(crate::status::held_by_draft(&load_in(&dir), "billing", "billing@web").is_none(), "the board does not ask the user to clear kelpie's own text");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn kelpies_text_typed_in_an_earlier_pass_is_not_the_users_draft_for_a_few_seconds() {
+        let dir = state("earlier-pass");
+        let task = session(Some("w1:p1"), Some("idle"));
+        send_locked_in(&dir, LEAD_LABEL, &[&task], "first", std::slice::from_ref(&task), None, None, &mut |_, _, _| Ok(())).unwrap();
+        send_locked_in(&dir, LEAD_LABEL, &[&task], "second", std::slice::from_ref(&task), None, None, &mut |_, _, _| Err(crate::typing::Refused::Draft)).unwrap();
+        assert_eq!(load_in(&dir)[1].why.as_deref(), Some(EARLIER_TYPING), "the box still holds the first");
+        fs::write(typed_file(&dir, "billing@web"), (now() - TYPED_FOR - 1).to_string()).unwrap();
+        flush_held_in(&dir, std::slice::from_ref(&task), &mut |_, _, _| Err(crate::typing::Refused::Draft), &|_, _| false, &|_, _| true).unwrap();
+        assert_eq!(load_in(&dir)[1].why.as_deref(), Some(DRAFT_HOLD), "later, text in the box is the user's");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn kelpies_notice_behind_a_draft_waits_as_a_notice() {
+        let dir = state("notice");
+        let task = session(Some("w1:p1"), Some("idle"));
+        notice_locked_in(&dir, &task, "kelpie was updated", std::slice::from_ref(&task), &mut |_, _, _| Err(crate::typing::Refused::Draft)).unwrap();
+        let held = &load_in(&dir)[0];
+        assert_eq!((held.held, held.kind.as_deref()), (true, Some(NOTICE_KIND)));
+        assert!(crate::status::held_by_draft(&load_in(&dir), "billing", "billing@web").is_none(), "an update notice never puts the task under Needs you");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_tasks_end_drops_what_kelpie_held_for_it_so_a_later_task_by_that_name_never_gets_it() {
+        let dir = state("ended");
+        write_log(&dir, &[
+            told("m1", 1, "lead", "billing@app", "held"),
+            json!({ "id": "h1", "at": 2, "from": "kelpie", "to": "billing@app", "text": "CI failed for abc", "state": "held", "kind": HAND_KIND }),
+            json!({ "id": "r1", "at": 3, "from": "kelpie", "to": LEAD_LABEL, "text": "billing@app is ready at abc: check its commits", "state": "held", "kind": RULES_KIND }),
+            json!({ "id": "h2", "at": 4, "from": "kelpie", "to": "search@app", "text": "run the tests", "state": "held", "kind": HAND_KIND }),
+            json!({ "id": "n1", "at": 5, "from": "kelpie", "to": "billing@app", "text": "kelpie was updated", "state": "held", "kind": NOTICE_KIND }),
+        ]);
+        hold_prompt_in(&dir, "billing@app", "Fix the flaky test").unwrap();
+        drop_held_for_ended_in(&dir, "billing@app").unwrap();
+        let held: Vec<String> = load_in(&dir).into_iter().filter(|message| message.held).map(|message| message.id).collect();
+        assert_eq!(held, ["m1", "h2"], "the lead's own tell and another task's hand-over stay");
         fs::remove_dir_all(&dir).unwrap();
     }
 

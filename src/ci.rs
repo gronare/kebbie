@@ -441,6 +441,12 @@ fn green(state: &Path, watch: &Watch, none_ran: bool) -> Event {
     Event { address: watch.address.clone(), kind: Kind::Green, text }
 }
 
+// The task that pushed is still the one under its address: a later task by the same name never gets an ended one's red CI.
+fn task_open(watch: &Watch, log: &[messages::Message]) -> bool {
+    crate::tasks::find_task(&watch.repo, Some(&watch.task), &watch.repo).is_ok()
+        && !log.iter().any(|message| message.ended && message.to == watch.address && message.at >= watch.started_at)
+}
+
 // `pushing` names who pushed when kelpie pushes the fix under that same push.
 pub fn task_message(watch: &Watch, run: &Run, job: &str, tail: &str, pushing: Option<&str>) -> String {
     let log = if tail.trim().is_empty() { "gh showed no log for it.".to_string() } else { format!("The last lines of its log:\n{tail}") };
@@ -470,12 +476,17 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     let _ = save(state, watch);
     let by = crate::tasks::PushBy::of_word(&watch.pushed.pusher).filter(|_| watch.close);
     let who = by.map(crate::tasks::PushBy::word);
-    let handed = messages::hand_to(&watch.address, &task_message(watch, run, &job, &log_tail(&log, LOG_LINES), who));
-    if let Err(error) = &handed {
-        eprintln!("Could not tell {} that CI failed: {error}", watch.address);
-    }
-    let pushing = by.filter(|by| handed.is_ok() && crate::tasks::after_red_ci(state, &watch.repo, &watch.address, *by).is_ok()).map(crate::tasks::PushBy::word);
+    let open = task_open(watch, &messages::load());
+    let handed = open && match messages::hand_to(&watch.address, &task_message(watch, run, &job, &log_tail(&log, LOG_LINES), who)) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("Could not tell {} that CI failed: {error}", watch.address);
+            false
+        }
+    };
+    let pushing = by.filter(|by| handed && crate::tasks::after_red_ci(state, &watch.repo, &watch.address, *by).is_ok()).map(crate::tasks::PushBy::word);
     let text = match pushing {
+        _ if !open => format!("CI failed for {} ({}): {what}. Its task has ended, so nobody was handed the log; fix it in a new task. {}", watch.address, watch.short(), run.url),
         Some(who) => format!(
             "CI failed for {} ({}): {what}. kelpie sent its Claude the failing log, and it fixes it as part of the push {who} gave: when it reports ready, check the fix against the rules (kelpie approve) and kelpie pushes it for {who}. It stays under Ready to push meanwhile. {}",
             watch.address, watch.short(), run.url
@@ -602,6 +613,26 @@ mod tests {
         assert_eq!(runs, [Run { id: 42, name: "CI".to_string(), workflow: "Build".to_string(), status: "in_progress".to_string(), conclusion: String::new(), url: "https://x/42".to_string() }]);
         assert_eq!(runs[0].title(), "Build");
         assert!(parse_runs("gh: not found").is_err());
+    }
+
+    #[test]
+    fn red_ci_goes_to_the_task_only_while_the_task_that_pushed_is_still_open() {
+        let dir = std::env::temp_dir().join(format!("kelpie-ci-open-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        crate::repo::git(&dir, &["init", "--quiet"]).unwrap();
+        crate::repo::git(&dir, &["-c", "user.name=Ada", "-c", "user.email=a@x", "commit", "--quiet", "--allow-empty", "-m", "first"]).unwrap();
+        let watch = |task: &str| Watch { address: format!("{task}@app"), task: task.to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abc".to_string(), started_at: 100, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, pushed: Pushed::default() };
+        assert!(!task_open(&watch("billing"), &[]), "a task that is gone gets nothing, so no later task by its name inherits it");
+        let worktree = crate::repo::slot_path(&dir, 1);
+        let _ = fs::remove_dir_all(&worktree);
+        crate::repo::git(&dir, &["worktree", "add", "--quiet", "-b", "billing", &worktree.to_string_lossy(), "HEAD"]).unwrap();
+        assert!(task_open(&watch("billing"), &[]));
+        let ended = |at: u64| messages::fold(&format!(r#"{{"id":"e","at":{at},"from":"kelpie","to":"billing@app","text":"billing ended (done)","state":"ended"}}"#));
+        assert!(!task_open(&watch("billing"), &ended(150)), "the task that pushed ended; this billing is a later one");
+        assert!(task_open(&watch("billing"), &ended(50)), "an earlier billing's end says nothing about this one");
+        crate::repo::git(&dir, &["worktree", "remove", "--force", &worktree.to_string_lossy()]).unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
