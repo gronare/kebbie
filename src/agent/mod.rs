@@ -58,7 +58,7 @@ impl Agent {
 
     pub fn task_settings(self, kelpie: &str, address: &str, gate: Option<&str>, tmp: Option<&Path>, profile: &Profile) -> String {
         match self {
-            Agent::Claude => claude::with_profile(&claude::settings(kelpie, address, gate, tmp), profile),
+            Agent::Claude => claude::with_profile(&crate::inbox::with_inbox(&claude::settings(kelpie, address, gate, tmp), kelpie, address), profile),
         }
     }
 

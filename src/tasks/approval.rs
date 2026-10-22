@@ -131,6 +131,12 @@ pub fn rules_check_task(text: &str) -> Option<&str> {
     text.split_once(READY_AT).map(|(address, _)| address).filter(|address| !address.contains(char::is_whitespace))
 }
 
+// What a rules check asks about, its task and sha: "billing@app is ready at a1b2c3d".
+pub fn rules_check_subject(text: &str) -> Option<&str> {
+    rules_check_task(text)?;
+    text.split_once(": ").map(|(subject, _)| subject)
+}
+
 // A task still waits for the lead's rules check while it has commits and no approval matches them.
 pub fn awaits_check(address: &str) -> bool {
     let Some((task, repo)) = address.split_once('@') else { return false };

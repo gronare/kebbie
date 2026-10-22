@@ -286,9 +286,9 @@ pub struct Role {
 }
 
 const VAULT_WORK: &str = "- **The vault**: keep it current: started tasks and what each push landed in the repo log, the user's decisions in the task's note. New work goes in the backlog as under Taking in ideas.";
-const AFTER_PUSH: &str = "- `[from kelpie] <who> pushed <task>: <n> commits to <branch> (<sha> <subject>; …)` follows every push, the user's or yours. Write the repo's log line in the vault with `log_append`: what landed, with those shas. When the task is done, close its note (`close`, with `merged_into` when the area note took it in) or append to it what landed.";
+const AFTER_PUSH: &str = "- `<who> pushed <task>: <n> commits to <branch> (<sha> <subject>; …)` comes among kelpie's notices after every push, the user's or yours. Write the repo's log line in the vault with `log_append`: what landed, with those shas. When the task is done, close its note (`close`, with `merged_into` when the area note took it in) or append to it what landed.";
 const KEPT_VAULT_WORK: &str = "- **The vault**: kelpie keeps each task's note: it opens one when the task starts (or claims the backlog note named with `--backlog`), the task writes its Problem before its first change and its solution and decisions as it goes, kelpie writes the repo's log line after each push and closes the note at done. Your part is the area notes and the user's decisions that reach beyond one task. New work goes in the backlog as under Taking in ideas.";
-const KEPT_AFTER_PUSH: &str = "- `[from kelpie] <who> pushed <task>: <n> commits to <branch> (<sha> <subject>; …)` follows every push, the user's or yours; kelpie has written the repo's log line from those commits. Update the area note with what the push changed in it.";
+const KEPT_AFTER_PUSH: &str = "- `<who> pushed <task>: <n> commits to <branch> (<sha> <subject>; …)` comes among kelpie's notices after every push, the user's or yours; kelpie has written the repo's log line from those commits.";
 const KEPT_TASKS: &str = "Every task kelpie starts has its own note in the vault: kelpie opens it at the start, or claims the backlog note named with `--backlog`, and the task writes it from your prompt. Done waits until the note has its solution and decisions, kelpie then closes it, and a reset puts it back in the backlog.";
 
 fn local_role() -> String {
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn with_the_vault_on_kelpie_keeps_the_notes_and_the_log_so_the_lead_does_not() {
         let on = role_texts(&[Source::Vault], true);
-        assert!(!on.after_push.contains("log_append") && on.after_push.contains("kelpie has written the repo's log line") && on.after_push.contains("area note"), "{}", on.after_push);
+        assert!(!on.after_push.contains("log_append") && on.after_push.contains("kelpie has written the repo's log line") && !on.after_push.contains("area note"), "kelpie logs each push; no area-note chore rides on it: {}", on.after_push);
         assert!(on.vault_work.contains("kelpie keeps each task's note") && !on.vault_work.contains("repo log, the user's"), "{}", on.vault_work);
         assert!(!on.intake.contains("plain task") && on.intake.contains("Every task kelpie starts has its own note in the vault") && !on.intake.contains("status `active`"), "{}", on.intake);
         let off = role_texts(&[Source::Vault], false);

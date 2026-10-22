@@ -114,6 +114,8 @@ fn screen(pane: &str) -> Result<String> {
 
 const ENTER_AT: [u64; 3] = [5, 10, 20];
 const GIVE_UP: u64 = 40;
+// Claude reads an inbox message only once the running tool returns, so a long test run must not count as a drop.
+const INBOX_GIVE_UP: u64 = 600;
 
 #[derive(Debug, PartialEq)]
 pub enum Step {
@@ -125,12 +127,17 @@ pub enum Step {
 
 // After a prompt is typed: Enter again at 5, 10 and 20 seconds while Claude has not taken it, never the text again, and after 40 seconds it is not delivered.
 pub fn step(elapsed: Duration, presses: usize, taken: bool) -> Step {
+    step_with(elapsed, presses, taken, false)
+}
+
+// A message given to Claude Code's inbox is only waited for: there is no Enter to press, and Claude takes it between tool calls.
+pub fn step_with(elapsed: Duration, presses: usize, taken: bool, inbox: bool) -> Step {
     let seconds = elapsed.as_secs();
     if taken {
         Step::Taken
-    } else if seconds >= GIVE_UP {
+    } else if seconds >= if inbox { INBOX_GIVE_UP } else { GIVE_UP } {
         Step::GiveUp
-    } else if ENTER_AT.get(presses).is_some_and(|at| seconds >= *at) {
+    } else if !inbox && ENTER_AT.get(presses).is_some_and(|at| seconds >= *at) {
         Step::Enter
     } else {
         Step::Wait
@@ -221,7 +228,7 @@ fn holds(box_text: &str, text: &str) -> bool {
     shown.contains("[Pasted text") || (shown_start.chars().count() >= 10 && (shown_start.starts_with(&start) || start.starts_with(&shown_start)))
 }
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_millis() as u64).unwrap_or(0)
 }
 
@@ -232,11 +239,16 @@ pub struct Typed {
     pub text: String,
     pub at_ms: u64,
     pub presses: usize,
+    pub inbox: bool,
 }
 
 impl Typed {
     fn to_json(&self) -> Value {
-        json!({ "target": self.target, "label": self.label, "text": self.text, "at_ms": self.at_ms, "presses": self.presses })
+        json!({ "target": self.target, "label": self.label, "text": self.text, "at_ms": self.at_ms, "presses": self.presses, "inbox": self.inbox })
+    }
+
+    pub fn from_json_text(text: &str) -> Option<Typed> {
+        Typed::from_json(&serde_json::from_str(text).ok()?)
     }
 
     fn from_json(value: &Value) -> Option<Typed> {
@@ -246,6 +258,7 @@ impl Typed {
             text: value["text"].as_str()?.to_string(),
             at_ms: value["at_ms"].as_u64()?,
             presses: value["presses"].as_u64().unwrap_or(0) as usize,
+            inbox: value["inbox"] == true,
         })
     }
 }
@@ -279,8 +292,11 @@ pub enum Outcome {
 
 pub fn advance(typed: &mut Typed) -> Outcome {
     let (pane, transcript) = place(&typed.target);
-    let shown = screen(&pane).map(|screen| draft(&screen)).unwrap_or(Draft::Unreadable);
     let transcript = transcript.and_then(|file| std::fs::read_to_string(file).ok());
+    if typed.inbox {
+        return advance_inbox(typed, transcript.as_deref(), now_ms());
+    }
+    let shown = screen(&pane).map(|screen| draft(&screen)).unwrap_or(Draft::Unreadable);
     let taken = taken(transcript.as_deref(), &shown, &typed.text, typed.at_ms);
     let elapsed = Duration::from_millis(now_ms().saturating_sub(typed.at_ms));
     match step(elapsed, typed.presses, taken) {
@@ -297,7 +313,19 @@ pub fn advance(typed: &mut Typed) -> Outcome {
     }
 }
 
+pub fn advance_inbox(typed: &Typed, transcript: Option<&str>, now_ms: u64) -> Outcome {
+    let taken = transcript.is_some_and(|transcript| taken_in(transcript, &typed.text, typed.at_ms));
+    match step_with(Duration::from_millis(now_ms.saturating_sub(typed.at_ms)), typed.presses, taken, true) {
+        Step::Taken => Outcome::Taken,
+        Step::GiveUp => Outcome::NotDelivered,
+        Step::Wait | Step::Enter => Outcome::Waiting,
+    }
+}
+
 pub fn not_delivered(typed: &Typed) -> String {
+    if typed.inbox {
+        return format!("Not delivered to {}: Claude Code's inbox took it, but its conversation does not show it after {} minutes; the session may hold or drop messages from other sessions (crossSessionInbound). It began: {}", typed.label, INBOX_GIVE_UP / 60, normalized(&typed.text).chars().take(120).collect::<String>());
+    }
     format!("Not delivered to {}: Claude did not take what kelpie typed into its input box within {GIVE_UP} s; it may still sit there. It began: {}", typed.label, normalized(&typed.text).chars().take(120).collect::<String>())
 }
 
@@ -310,7 +338,21 @@ fn typed_dir() -> Result<PathBuf> {
 fn type_text(target: &str, text: &str) -> Result<Typed> {
     let at_ms = now_ms();
     herdr::prompt_agent(target, text)?;
-    Ok(Typed { target: target.to_string(), label: String::new(), text: text.to_string(), at_ms, presses: 0 })
+    Ok(Typed { target: target.to_string(), label: String::new(), text: text.to_string(), at_ms, presses: 0, inbox: false })
+}
+
+// The board's check follows a message given to a session's inbox the same way, by its transcript alone.
+pub fn watch_inbox_in(dir: &Path, target: &str, text: &str, label: &str, at_ms: u64) -> Result<()> {
+    let typed = Typed { target: target.to_string(), label: label.to_string(), text: text.to_string(), at_ms, presses: 0, inbox: true };
+    crate::state::write(&dir.join("typed").join(format!("{}.json", crate::messages::new_id("inbox"))), typed.to_json().to_string())
+}
+
+// Whether the board still waits to see this text taken by the session at this label.
+pub fn watching_in(dir: &Path, label: &str, text: &str) -> bool {
+    std::fs::read_dir(dir.join("typed")).into_iter().flatten().flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "json"))
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok().and_then(|text| Typed::from_json_text(&text)))
+        .any(|typed| typed.label == label && typed.text == text)
 }
 
 // Types into a running conversation only when its input box is empty, so the user's draft is never typed over; the board then checks that Claude took it.

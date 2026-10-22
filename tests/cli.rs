@@ -74,6 +74,8 @@ impl Lab {
             .env("KELPIE_CONFIG", &self.config)
             .env("HERDR_BIN_PATH", &self.herdr)
             .env("KELPIE_GH_BIN", self.root.join("gh"))
+            .env_remove("CLAUDE_CODE_MESSAGING_SOCKET")
+            .env_remove("CLAUDE_CODE_MESSAGING_TOKEN")
             .stdin(Stdio::null());
         command
     }
@@ -418,6 +420,49 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     let withdrawn = lab.run(&["-C", app_str, "review", "--withdraw", "billing"]);
     let said = format!("{}{}", stdout(&withdrawn), stderr(&withdrawn));
     assert!(said.contains("Withdrawn from review") || said.contains("is the user's call"), "{said}");
+}
+
+#[test]
+fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_even_behind_a_draft() {
+    use std::io::{Read, Write};
+    let lab = Lab::new("inbox");
+    let (_, slot) = lab.task_fixture();
+    lab.screen("❯ half a thought of my own");
+    let agents = lab.root.join("answers/agent-list.json");
+    fs::write(&agents, fs::read_to_string(&agents).unwrap().replace(r#""pane_id":"p_lead""#, r#""pane_id":"p_lead","agent_session":{"value":"s-1"}"#)).unwrap();
+    let lead_dir = lab.state.join("lead");
+    fs::create_dir_all(&lead_dir).unwrap();
+    let start = |cwd: &Path| format!(r#"{{"session_id":"s-1","hook_event_name":"SessionStart","source":"startup","cwd":"{}"}}"#, cwd.display());
+    let socket = PathBuf::from(format!("/tmp/kelpie-cli-{}.sock", std::process::id()));
+    let _ = fs::remove_file(&socket);
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let mut hook = lab.command().env("CLAUDE_CODE_MESSAGING_SOCKET", &socket).env("CLAUDE_CODE_MESSAGING_TOKEN", "tok-9")
+        .args(["hook", "inbox", "lead"]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    hook.stdin.take().unwrap().write_all(start(&slot).as_bytes()).unwrap();
+    assert!(hook.wait_with_output().unwrap().status.success());
+    assert!(!lab.state.join("inbox/lead.json").exists(), "a session in a task's worktree cannot record the lead's inbox");
+    let mut hook = lab.command().env("CLAUDE_CODE_MESSAGING_SOCKET", &socket).env("CLAUDE_CODE_MESSAGING_TOKEN", "tok-9")
+        .args(["hook", "inbox", "lead"]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    hook.stdin.take().unwrap().write_all(start(&lead_dir).as_bytes()).unwrap();
+    assert!(hook.wait_with_output().unwrap().status.success());
+    let reader = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut got = String::new();
+        stream.read_to_string(&mut got).unwrap();
+        got
+    });
+    let told = lab.run(&["-C", slot.to_str().unwrap(), "tell", "lead", "payload renamed"]);
+    assert!(stdout(&told).contains("Told lead."), "{}\n{}", stdout(&told), stderr(&told));
+    assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok-9\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[from billing@app] payload renamed\"},\"from\":\"kelpie\"}\n");
+    let _ = fs::remove_file(&socket);
+    assert!(!lab.herdr_calls().iter().any(|call| call[..2] == ["agent", "prompt"]), "nothing is typed, so the user's draft stays as it is");
+    assert!(fs::read_to_string(lab.state.join("messages.jsonl")).unwrap().contains("\"via\":\"inbox\""));
+    let mut gone = lab.command().args(["hook", "inbox", "lead"]).stdin(Stdio::piped()).spawn().unwrap();
+    gone.stdin.take().unwrap().write_all(start(&lead_dir).as_bytes()).unwrap();
+    assert!(gone.wait().unwrap().success());
+    lab.screen("❯ ");
+    lab.run(&["-C", slot.to_str().unwrap(), "tell", "lead", "and typed without an inbox"]);
+    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text == "[from billing@app] and typed without an inbox"), "a session that started without a socket is typed into: {:?}", prompts_to(&lab, "p_lead"));
 }
 
 #[test]
@@ -791,7 +836,9 @@ fn after_a_push_the_task_waits_under_ci_running_and_closes_as_done_once_ci_is_gr
     assert_eq!(git(&slot, &["branch", "--show-current"]), "billing", "the worktree stays the task's");
     let watches: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["ci", "--json"]))).unwrap();
     assert_eq!((watches[0]["address"].as_str(), watches[0]["sha"].as_str(), watches[0]["slug"].as_str(), watches[0]["state"].as_str()), (Some("billing@app"), Some(sha.as_str()), Some("acme/app"), Some("running")));
-    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("kelpie watches CI for")), "{:?}", prompts_to(&lab, "p_lead"));
+    assert!(!prompts_to(&lab, "p_lead").iter().any(|text| text.contains("kelpie watches CI for")), "a push is a notice, not a turn of the lead's: {:?}", prompts_to(&lab, "p_lead"));
+    let digest = stdout(&lab.run(&["messages", "--unread"]));
+    assert!(digest.contains("kelpie's notices since you last looked") && digest.contains("kelpie watches CI for"), "the lead reads it with the user's next prompt: {digest}");
     assert_eq!(task_json(&lab)["group"], "CI RUNNING");
 
     fs::write(lab.root.join("gh-answers/run-list.json"), run_json("in_progress", "")).unwrap();
@@ -811,7 +858,8 @@ fn after_a_push_the_task_waits_under_ci_running_and_closes_as_done_once_ci_is_gr
     assert!(stdout(&green).contains("CI is green for") && stdout(&green).contains("Closed: its work is on main"), "{}\n{}", stdout(&green), stderr(&green));
     assert!(git(&app, &["branch", "--list", "billing"]).is_empty(), "the task closed as done");
     assert_eq!(stdout(&lab.run(&["ci", "--json"])), "[]");
-    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("pushed billing@app") && text.contains("The task is done and closed")), "{:?}", prompts_to(&lab, "p_lead"));
+    let told = prompts_to(&lab, "p_lead");
+    assert!(told.len() == 1 && told[0].contains("pushed billing@app") && told[0].contains("Write the repo's log line"), "without the vault the lead writes the log line, so that notice comes live: {told:?}");
     assert!(lab.herdr_calls().iter().any(|call| call[..2] == ["workspace", "close"]), "its Space closes as done closes it");
 }
 
@@ -901,7 +949,9 @@ fn a_task_whose_commits_landed_outside_kelpie_waits_out_its_turn_and_its_changes
     assert!(git(Path::new(app), &["branch", "--list", "billing"]).is_empty(), "closed as done");
     assert!(lab.herdr_calls().iter().any(|call| call[..2] == ["workspace", "close"]), "its Space closes as done closes it");
     let told = prompts_to(&lab, "p_lead");
-    assert_eq!(told.iter().filter(|text| text.contains("kelpie closed it as done")).count(), 1, "{told:?}");
+    assert!(!told.iter().any(|text| text.contains("kelpie closed it as done")), "a close is a notice, not a turn of the lead's: {told:?}");
+    let digest = stdout(&lab.run(&["messages", "--unread"]));
+    assert_eq!(digest.matches("kelpie closed it as done").count(), 1, "{digest}");
     assert_eq!(stdout(&lab.run(&["-C", app, "done", "--landed"])), "No open task has landed.", "a second round finds nothing to close");
 }
 

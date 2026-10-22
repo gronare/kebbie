@@ -749,7 +749,7 @@ pub(crate) mod tests {
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, head: None }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
-                report: Some(Report { state: state.to_string(), next: "nothing".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false,
+                report: Some(Report { state: state.to_string(), next: "nothing".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
             }),
             question: None,
             ci: None,
@@ -1201,7 +1201,7 @@ pub(crate) mod tests {
         assert_eq!(item.to_json()["push_permission"], "task");
         item.question = Some(Message {
             id: "q".to_string(), at: 0, from: "billing@web".to_string(), to: "you".to_string(), text: "Which?".to_string(), held: false, report: None, ended: false,
-            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, comment: Vec::new(), answered: false, waits: true }), about: None, kind: None, landed: None, why: None, forced: false,
+            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, comment: Vec::new(), answered: false, waits: true }), about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
         });
         let shown = item.to_json();
         assert_eq!(shown["question"]["kept_for_user"], true);

@@ -576,11 +576,11 @@ fn apply(state: &Path, task: &Task, old: Option<&Record>, act: Act) {
         }
         Act::Send(mut record) => {
             let text = resume_text(&record);
-            if crate::typing::prompt(&task.pane, &messages::delivered("kelpie", &text), &task.address).is_ok() {
+            if let Ok(via) = crate::inbox::prompt(&task.pane, &messages::delivered("kelpie", &text), &task.address) {
                 record.attempts += 1;
                 record.sent_for = Some(record.error_id.clone());
                 if let Ok(_lock) = messages::Lock::take(true) {
-                    let _ = messages::append(&json!({ "id": messages::new_id("recover"), "at": messages::now(), "from": "kelpie", "to": task.address, "text": text, "state": "delivered", "kind": "recover" }));
+                    let _ = messages::append(&json!({ "id": messages::new_id("recover"), "at": messages::now(), "from": "kelpie", "to": task.address, "text": text, "state": "delivered", "kind": "recover", "via": via.word() }));
                 }
             }
             if old != Some(&record) {

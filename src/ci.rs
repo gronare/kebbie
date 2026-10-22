@@ -439,7 +439,7 @@ fn green(state: &Path, watch: &Watch, none_ran: bool) -> Event {
         }
     } else {
         let text = format!("{what}, the commits pushed from {}.", watch.address);
-        if let Err(error) = messages::notify_lead(&text) {
+        if let Err(error) = messages::log_for_lead(&text, Some("ci")) {
             eprintln!("Could not tell the lead: {error}");
         }
         text

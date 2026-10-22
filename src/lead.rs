@@ -115,14 +115,15 @@ fn go() -> Result<String> {
 // Each of the user's prompts carries what sessions told each other since the lead last looked; the lead pushes only through kelpie push, which checks the user's permission.
 fn settings(kelpie: &str) -> String {
     let allow = ["peers", "tell", "release", "answered", "messages", "status", "areas", "approve", "review", "land", "push", "decide", "defer", "notify", "issues", "issue"].map(|command| format!("Bash({kelpie} {command}:*)"));
-    json!({
+    let settings = json!({
         "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("{} messages --unread", crate::sh::quote(kelpie)) }] }] },
         "permissions": { "allow": allow },
-    }).to_string()
+    });
+    crate::inbox::with_inbox(&settings.to_string(), kelpie, LEAD_LABEL)
 }
 
 // Claude Code never remembers trust for the home directory, so the lead gets a directory of its own.
-fn lead_dir() -> Result<PathBuf> {
+pub(crate) fn lead_dir() -> Result<PathBuf> {
     let dir = std::env::var("KELPIE_LEAD_DIR").map(PathBuf::from).or_else(|_| state_dir().map(|dir| dir.join("lead")))?;
     fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     Ok(dir)
@@ -626,7 +627,7 @@ mod tests {
         }
         assert!(!role.contains("Nobody pushes without the user: not you"), "the lead pushes under the user's permission");
         let kept = role_text(include_str!("../roles/lead.md"), &[Source::Vault], true);
-        assert!(!kept.contains("log_append") && kept.contains("kelpie has written the repo's log line") && kept.contains("Update the area note"), "with the vault on kelpie logs each push, so the lead does not log it twice");
+        assert!(!kept.contains("log_append") && kept.contains("kelpie has written the repo's log line") && !kept.contains("Update the area note with what the push changed"), "with the vault on kelpie logs each push, so the lead does not log it twice");
         assert!(!kept.contains("{vault_work}") && !kept.contains("{after_push}") && !kept.contains("plain task"));
     }
 
@@ -678,6 +679,8 @@ mod tests {
         let written: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie)).unwrap());
         assert_eq!(written["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], format!("'{kelpie}' messages --unread"));
+        assert_eq!(written["hooks"]["SessionStart"][0]["hooks"][0]["command"], format!("'{kelpie}' hook inbox 'lead'"), "the lead's inbox is recorded as it starts");
+        assert_eq!(written["crossSessionInbound"], "accept");
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} answered:*)"))));
         assert!(written["permissions"]["deny"].is_null() && written["env"].is_null(), "the lead may push on the user's word, outside kelpie push too");
         assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} push:*)"))));

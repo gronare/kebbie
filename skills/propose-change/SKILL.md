@@ -46,4 +46,4 @@ Only when the user asks to send one: run `kelpie issue send <id>`. It prints the
 
 ## After an update
 
-`[from kelpie] kelpie was updated to …` lists the open issues filed on older code and the commits since. Judge from the subjects which issues are likely fixed and tell the user which to retry. On their word, `kelpie issue retry <id>` marks one worth retrying, and `kelpie issue close <id> fixed|wontfix|duplicate` closes one they confirm.
+kelpie's notice `kelpie was updated to …` lists the open issues filed on older code and the commits since. Judge from the subjects which issues are likely fixed and tell the user which to retry. On their word, `kelpie issue retry <id>` marks one worth retrying, and `kelpie issue close <id> fixed|wontfix|duplicate` closes one they confirm.

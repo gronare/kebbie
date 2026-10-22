@@ -402,7 +402,7 @@ pub fn tick(state: &Path) -> Vec<String> {
     };
     let world = World { repos: &repos, workspaces: &workspaces, agents: &agents, log: &log, gh: &crate::ci::gh(), began: messages::now(), fresh: Some(&fresh) };
     pass(state, &world, &mut close_for_real, &mut |text| {
-        if let Err(error) = messages::tell_lead(text, Some("landed")) {
+        if let Err(error) = messages::log_for_lead(text, Some("landed")) {
             eprintln!("Could not tell the lead: {error}");
         }
     })
@@ -688,7 +688,7 @@ mod tests {
         let address = peers::address("billing", &name_of(&dir));
         let report = |state: &str| Message {
             id: "r1".to_string(), at: messages::now(), from: address.clone(), to: crate::status::LEAD_LABEL.to_string(), text: "pick one".to_string(), held: false,
-            report: Some(crate::messages::Report { state: state.to_string(), next: "choose the wording".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false,
+            report: Some(crate::messages::Report { state: state.to_string(), next: "choose the wording".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
         };
         let repos = [dir.clone()];
         let seen = herdr(&slot, "idle");

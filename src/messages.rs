@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use crate::board::widgets::{FAINT, MAUVE, MUTED, PEACH, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, style};
 use crate::lead::state_dir;
+use crate::inbox::Via;
 use crate::peers::{self, Session};
 use crate::questions;
 use crate::sh::Result;
@@ -37,6 +38,7 @@ pub struct Message {
     pub landed: Option<String>,
     pub why: Option<String>,
     pub forced: bool,
+    pub fyi: bool,
 }
 
 // A question a task put to the user through kelpie: its options as (label, meaning), the recommended one (1-based), the plan to read (a file, or vault:<note>), the options (0-based) that take the user's comment, and whether the lead kept it for the user while they were away.
@@ -128,6 +130,7 @@ pub fn fold(log: &str) -> Vec<Message> {
                 landed: record["landed"].as_str().map(str::to_string),
                 why: record["why"].as_str().filter(|_| held).map(str::to_string),
                 forced: record["forced"] == true,
+                fyi: record["fyi"] == true,
             }),
             None => {
                 let Some(message) = messages.iter_mut().find(|message| message.id == id) else { continue };
@@ -200,7 +203,7 @@ fn live_ids(messages: &[Message], away: Option<u64>, lead_mark: Option<&str>) ->
     let ends: HashMap<&str, &str> = messages.iter().filter(|message| message.ended).map(|message| (message.to.as_str(), message.id.as_str())).collect();
     live.extend(ends.into_values().map(str::to_string));
     if lead_mark.is_some() {
-        live.extend(copies_for_lead(messages, seen_count(messages, lead_mark)).into_iter().filter(|message| is_told(message) || is_copy(message)).map(|message| message.id.clone()));
+        live.extend(copies_for_lead(messages, seen_count(messages, lead_mark)).into_iter().filter(|message| is_told(message) || is_copy(message) || message.fyi).map(|message| message.id.clone()));
     }
     live.extend(messages.iter().filter(|message| message.kind.is_some() && away.is_some_and(|since| message.at >= since)).map(|message| message.id.clone()));
     live
@@ -272,15 +275,15 @@ fn kelpies_own<'a>(dir: &Path, address: &str, why: &'a str) -> &'a str {
     if why == DRAFT_HOLD && recent { EARLIER_TYPING } else { why }
 }
 
-type TypeInto<'a> = &'a mut dyn FnMut(&str, &str, &str) -> std::result::Result<(), crate::typing::Refused>;
+type TypeInto<'a> = &'a mut dyn FnMut(&str, &str, &str) -> std::result::Result<Via, crate::typing::Refused>;
 
-fn deliver(session: &Session, text: &str, type_into: TypeInto) -> std::result::Result<(), &'static str> {
+fn deliver(session: &Session, text: &str, type_into: TypeInto) -> std::result::Result<Via, &'static str> {
     if let Some(reason) = hold_reason(session) {
         return Err(reason);
     }
     let pane = session.pane.as_deref().unwrap_or_default();
     match type_into(pane, text, &session.address) {
-        Ok(()) => Ok(()),
+        Ok(via) => Ok(via),
         Err(crate::typing::Refused::Draft) => Err(DRAFT_HOLD),
         Err(crate::typing::Refused::Unreadable) => Err("shows no input box to type into"),
         Err(crate::typing::Refused::Failed(error)) if error.contains("agent_blocked") => Err("is waiting for an answer"),
@@ -346,7 +349,7 @@ fn stale(message: &Message, open: &[&Message]) -> bool {
 }
 
 fn flush_held(sessions: &[Session]) -> Result<usize> {
-    flush_held_in(&state_dir()?, sessions, &mut crate::typing::prompt, &heard, &rules_check_wanted)
+    flush_held_in(&state_dir()?, sessions, &mut crate::inbox::prompt, &heard, &rules_check_wanted)
 }
 
 // A rules check is wanted while its task still waits for one, a hand-over always; either only while its Claude has not taken it since it was first typed.
@@ -369,9 +372,14 @@ fn typed_by_user_since(transcript: &str, since: u64) -> bool {
 }
 
 type Wanted<'a> = &'a dyn Fn(&Message, &Session) -> bool;
+type Live<'a> = &'a dyn Fn(&Session) -> bool;
+
+fn inbox_live(dir: &Path) -> impl Fn(&Session) -> bool + '_ {
+    move |session: &Session| session.pane.as_deref().is_some_and(|pane| crate::inbox::live_in(dir, pane, &session.address, &crate::inbox::herdr_session))
+}
 
 // A rules check or a hand-over waits out its Claude's turn, and goes when its Claude took it after all, or for a rules check when a newer one for the same task or an approval made it moot.
-fn sent_again_waits(dir: &Path, message: &Message, messages: &[Message], session: &Session, wanted: Wanted) -> Result<bool> {
+fn sent_again_waits(dir: &Path, message: &Message, messages: &[Message], session: &Session, wanted: Wanted, live: Live) -> Result<bool> {
     let task = crate::tasks::rules_check_task(&message.text);
     let after = messages.iter().position(|other| other.id == message.id).map_or(messages.len(), |at| at + 1);
     let rules = message.kind.as_deref() == Some(RULES_KIND);
@@ -380,7 +388,7 @@ fn sent_again_waits(dir: &Path, message: &Message, messages: &[Message], session
         append_in(dir, &json!({ "id": message.id, "at": now(), "state": "dropped" }), ROTATE_BYTES)?;
         return Ok(true);
     }
-    if session.status.as_deref() == Some("working") {
+    if session.status.as_deref() == Some("working") && !live(session) {
         note_why(dir, message, BUSY_HOLD)?;
         return Ok(true);
     }
@@ -388,11 +396,11 @@ fn sent_again_waits(dir: &Path, message: &Message, messages: &[Message], session
 }
 
 fn flush_held_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &dyn Fn(&str, u64) -> bool, wanted: Wanted) -> Result<usize> {
-    flush_typing_in(dir, sessions, type_into, heard, wanted).map(|(delivered, _)| delivered)
+    flush_typing_in(dir, sessions, type_into, heard, wanted, &inbox_live(dir)).map(|(delivered, _)| delivered)
 }
 
 // What it delivered, and the sessions it typed into: their boxes hold kelpie's own text for a moment.
-fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &dyn Fn(&str, u64) -> bool, wanted: Wanted) -> Result<(usize, HashSet<String>)> {
+fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard: &dyn Fn(&str, u64) -> bool, wanted: Wanted, live: Live) -> Result<(usize, HashSet<String>)> {
     let messages = load_in(dir);
     let open = questions::open_now(&messages);
     let mut delivered = 0;
@@ -410,7 +418,7 @@ fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard:
             note_why(dir, message, why)?;
             continue;
         }
-        if SENT_AGAIN.contains(&message.kind.as_deref().unwrap_or_default()) && sent_again_waits(dir, message, &messages, session, wanted)? {
+        if SENT_AGAIN.contains(&message.kind.as_deref().unwrap_or_default()) && sent_again_waits(dir, message, &messages, session, wanted, live)? {
             continue;
         }
         let prompt = message.kind.as_deref() == Some(PROMPT_KIND);
@@ -420,13 +428,15 @@ fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard:
             continue;
         }
         match deliver(session, &typed_form(message), type_into) {
-            Ok(()) => {
-                note_typed(dir, &session.address);
-                append_in(dir, &json!({ "id": message.id, "at": now(), "state": "delivered" }), ROTATE_BYTES)?;
+            Ok(via) => {
+                if via != Via::Inbox {
+                    note_typed(dir, &session.address);
+                    typed_into.insert(session.address.clone());
+                }
+                append_in(dir, &json!({ "id": message.id, "at": now(), "state": "delivered", "via": via.word() }), ROTATE_BYTES)?;
                 if prompt {
                     crate::routines::trust_answered_in(dir, &message.to);
                 }
-                typed_into.insert(session.address.clone());
                 delivered += 1;
             }
             Err(why) if !typed_into.contains(&session.address) => note_why(dir, message, kelpies_own(dir, &session.address, why))?,
@@ -521,12 +531,12 @@ fn send(from: &str, recipients: &[&Session], text: &str, sessions: &[Session]) -
 
 // The caller holds the lock. A message about the recipient's open question is the answer to it: it goes ahead of what is held for the recipient, and closes the question.
 pub fn send_locked(from: &str, recipients: &[&Session], text: &str, sessions: &[Session], about: Option<&str>, kind: Option<&str>) -> Result<Vec<String>> {
-    send_locked_in(&state_dir()?, from, recipients, text, sessions, about, kind, &mut crate::typing::prompt)
+    send_locked_in(&state_dir()?, from, recipients, text, sessions, about, kind, &mut crate::inbox::prompt)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], text: &str, sessions: &[Session], about: Option<&str>, kind: Option<&str>, type_into: TypeInto) -> Result<Vec<String>> {
-    let (_, typed_into) = flush_typing_in(dir, sessions, type_into, &heard, &rules_check_wanted)?;
+    let (_, typed_into) = flush_typing_in(dir, sessions, type_into, &heard, &rules_check_wanted, &inbox_live(dir))?;
     let mut report = Vec::new();
     for (index, session) in recipients.iter().enumerate() {
         let messages = load_in(dir);
@@ -539,17 +549,20 @@ fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], text: &str, s
             None if earlier_held && !answering => Err("still has earlier messages held"),
             None => match deliver(session, &delivered(from, text), type_into) {
                 Err(DRAFT_HOLD) if typed_into.contains(&session.address) => Err(EARLIER_TYPING),
-                Ok(()) => {
-                    note_typed(dir, &session.address);
-                    Ok(())
+                Ok(via) => {
+                    if via != Via::Inbox {
+                        note_typed(dir, &session.address);
+                    }
+                    Ok(via)
                 }
                 Err(why) => Err(kelpies_own(dir, &session.address, why)),
             },
         };
         let id = new_id(&index.to_string());
         let mut record = json!({ "id": id, "at": now(), "from": from, "to": session.address, "text": text, "state": if outcome.is_ok() { "delivered" } else { "held" } });
-        if let Err(why) = outcome {
-            record["why"] = json!(why);
+        match outcome {
+            Ok(via) => record["via"] = json!(via.word()),
+            Err(why) => record["why"] = json!(why),
         }
         if let Some(about) = about {
             record["about"] = json!(about);
@@ -562,7 +575,7 @@ fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], text: &str, s
             append_in(dir, &json!({ "id": question.id, "at": now(), "state": "answered" }), ROTATE_BYTES)?;
         }
         report.push(match outcome {
-            Ok(()) => format!("Told {}.", session.address),
+            Ok(_) => format!("Told {}.", session.address),
             Err(reason) => format!("{} {reason}; held, and delivered when it is free.", session.address),
         });
     }
@@ -663,20 +676,41 @@ pub fn tell_lead(text: &str, kind: Option<&str>) -> Result<()> {
     send_locked("kelpie", &[lead], text, &sessions, None, kind).map(|_| ())
 }
 
-// kelpie's word about itself (an update, a resume): held behind a draft like any message, but the draft stays the user's own business.
+// kelpie's word about itself (an update, a resume): held behind a draft like any message, but the draft stays the user's own business; the lead reads it with the user's next prompt.
 pub fn notice_locked(session: &Session, text: &str, sessions: &[Session]) -> Result<Vec<String>> {
-    notice_locked_in(&state_dir()?, session, text, sessions, &mut crate::typing::prompt)
+    notice_locked_in(&state_dir()?, session, text, sessions, &mut crate::inbox::prompt)
 }
 
 fn notice_locked_in(dir: &Path, session: &Session, text: &str, sessions: &[Session], type_into: TypeInto) -> Result<Vec<String>> {
+    if session.address == LEAD_LABEL && crate::permit::away_since_in(dir).is_none() {
+        log_for_lead_in(dir, text, Some(NOTICE_KIND))?;
+        return Ok(vec![format!("Logged for {LEAD_LABEL}.")]);
+    }
     send_locked_in(dir, "kelpie", &[session], text, sessions, None, Some(NOTICE_KIND), type_into)
+}
+
+// kelpie's word to the lead that needs no turn of its own (a push, a close, a start): on the board, and in the lead's digest with the user's next prompt.
+pub fn log_for_lead(text: &str, kind: Option<&str>) -> Result<()> {
+    fyi_or_live_in(&state_dir()?, text, kind, &mut tell_lead)
+}
+
+// While the user is away the lead answers for them and writes their summary, so it hears kelpie's notices live.
+fn fyi_or_live_in(dir: &Path, text: &str, kind: Option<&str>, live: &mut dyn FnMut(&str, Option<&str>) -> Result<()>) -> Result<()> {
+    if crate::permit::away_since_in(dir).is_some() {
+        return live(text, kind);
+    }
+    log_for_lead_in(dir, text, kind)
+}
+
+fn log_for_lead_in(dir: &Path, text: &str, kind: Option<&str>) -> Result<()> {
+    append_in(dir, &json!({ "id": new_id("fyi"), "at": now(), "from": "kelpie", "to": LEAD_LABEL, "text": text, "state": "logged", "kind": kind, "fyi": true }), ROTATE_BYTES)
 }
 
 // kelpie's word to a task that must reach it: held while its box holds the user's draft or it waits for an answer, kept for a session that is not running yet, and typed again when its Claude did not take it.
 pub fn hand_to(to: &str, text: &str) -> Result<()> {
     let sessions = peers::sessions().unwrap_or_default();
     let _lock = Lock::take(true)?;
-    hand_to_in(&state_dir()?, to, text, &sessions, &mut crate::typing::prompt)
+    hand_to_in(&state_dir()?, to, text, &sessions, &mut crate::inbox::prompt)
 }
 
 fn hand_to_in(dir: &Path, to: &str, text: &str, sessions: &[Session], type_into: TypeInto) -> Result<()> {
@@ -718,12 +752,23 @@ pub fn announce(task: &str, repo: &str) -> Result<()> {
     send("kelpie", &halves, &format!("{me} has started: the same task, in {repo}. Keep it informed of changes it depends on."), &sessions).map(|_| ())
 }
 
-// From kelpie itself, held like any message while the lead waits for an answer.
+// From kelpie itself, held like any message while the lead waits for an answer; the lead is asked once about a task at a sha.
 pub fn ask_lead(text: &str) -> Result<String> {
     let sessions = peers::sessions()?;
-    let lead = sessions.iter().find(|session| session.address == LEAD_LABEL).ok_or("no lead session to check the rules")?;
     let _lock = Lock::take(true)?;
-    Ok(send_locked("kelpie", &[lead], text, &sessions, None, Some(RULES_KIND))?.join("\n"))
+    ask_lead_in(&state_dir()?, text, &sessions, &mut crate::inbox::prompt, &|message, lead| lead.pane.as_deref().is_some_and(|pane| crate::typing::taken_by(pane, &typed_form(message), message.at * 1000)))
+}
+
+// A check the lead lost (dropped at its inbox, or typed and never taken) is no longer pending, so it is asked again.
+fn ask_lead_in(dir: &Path, text: &str, sessions: &[Session], type_into: TypeInto, taken: &dyn Fn(&Message, &Session) -> bool) -> Result<String> {
+    let lead = sessions.iter().find(|session| session.address == LEAD_LABEL).ok_or("no lead session to check the rules")?;
+    let subject = crate::tasks::rules_check_subject(text);
+    let pending = |message: &Message| message.held || crate::typing::watching_in(dir, LEAD_LABEL, &typed_form(message)) || taken(message, lead);
+    let asked = load_in(dir).into_iter().any(|message| message.to == LEAD_LABEL && message.kind.as_deref() == Some(RULES_KIND) && subject.is_some() && crate::tasks::rules_check_subject(&message.text) == subject && pending(&message));
+    if asked {
+        return Ok(format!("The lead already has this rules check ({}).", subject.unwrap_or_default()));
+    }
+    Ok(send_locked_in(dir, "kelpie", &[lead], text, sessions, None, Some(RULES_KIND), type_into)?.join("\n"))
 }
 
 // A report goes to the lead through the log only: typed into its chat, every turn of every task would start a turn of the lead.
@@ -830,7 +875,11 @@ fn unread_in(dir: &Path) -> Result<String> {
     let copies = copies_for_lead(&messages, seen);
     let told: Vec<&Message> = copies.iter().copied().filter(|message| is_told(message)).collect();
     let board: Vec<String> = copies.iter().filter(|message| is_copy(message)).map(|message| format!("- {}", indented(&message.text))).collect();
+    let notices: Vec<String> = copies.iter().filter(|message| message.fyi).map(|message| format!("- {}", indented(&message.text))).collect();
     let mut sections = Vec::new();
+    if !notices.is_empty() {
+        sections.push(format!("kelpie's notices since you last looked (pushes, closes, starts, updates; nothing to answer):\n{}", notices.join("\n")));
+    }
     if !board.is_empty() {
         sections.push(format!("Questions on the board since you last looked (the user answers them there; these are your copies):\n{}", board.join("\n")));
     }
@@ -852,7 +901,7 @@ fn unread_in(dir: &Path) -> Result<String> {
 
 // What sessions said to each other: not a report, a task's end marker, a question, an answer from the board, the lead's copy of one, or a task's own prompt waiting to be typed.
 fn is_told(message: &Message) -> bool {
-    message.report.is_none() && !message.ended && message.question.is_none() && !is_copy(message) && !matches!(message.kind.as_deref(), Some("answer" | PROMPT_KIND))
+    message.report.is_none() && !message.ended && message.question.is_none() && !is_copy(message) && !message.fyi && !matches!(message.kind.as_deref(), Some("answer" | PROMPT_KIND))
 }
 
 fn is_copy(message: &Message) -> bool {
@@ -864,10 +913,10 @@ pub fn report_line(message: &Message) -> String {
     format!("- {} ({state}): {} — you: {}", message.from, message.text, message.next_for_you().unwrap_or("nothing"))
 }
 
-// Messages to or from the lead are already in its chat; reports and the board's copies to it are not.
+// Messages to or from the lead are already in its chat; reports, the board's copies and kelpie's notices to it are not.
 fn copies_for_lead(messages: &[Message], seen: usize) -> Vec<&Message> {
     messages.iter().skip(seen.min(messages.len()))
-        .filter(|message| message.report.is_some() || is_copy(message) || (message.from != LEAD_LABEL && message.to != LEAD_LABEL)).collect()
+        .filter(|message| message.report.is_some() || is_copy(message) || message.fyi || (message.from != LEAD_LABEL && message.to != LEAD_LABEL)).collect()
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -973,7 +1022,7 @@ mod tests {
     fn a_held_message_keeps_why_it_waits_written_once_per_change_and_the_log_shows_it() {
         let dir = state("why");
         write_log(&dir, &[told("m1", 1, "lead", "billing@web", "held"), told("m2", 2, "lead", "billing@web", "held")]);
-        let refusals = std::cell::RefCell::new(vec![Err(crate::typing::Refused::Draft), Err(crate::typing::Refused::Draft), Err(crate::typing::Refused::Draft), Err(crate::typing::Refused::Draft), Ok(()), Err(crate::typing::Refused::Draft)].into_iter());
+        let refusals = std::cell::RefCell::new(vec![Err(crate::typing::Refused::Draft), Err(crate::typing::Refused::Draft), Err(crate::typing::Refused::Draft), Err(crate::typing::Refused::Draft), Ok(Via::Typed), Err(crate::typing::Refused::Draft)].into_iter());
         let mut type_into = |_: &str, _: &str, _: &str| refusals.borrow_mut().next().unwrap();
         let idle = session(Some("w1:p1"), Some("idle"));
         flush_held_in(&dir, std::slice::from_ref(&idle), &mut type_into, &|_, _| false, &|_, _| true).unwrap();
@@ -1023,7 +1072,7 @@ mod tests {
         let dir = state("hand-again");
         let task = |status: &str| Session { address: "billing@web".to_string(), task: Some("billing".to_string()), pane: Some("p_1".to_string()), status: Some(status.to_string()) };
         let typed = std::cell::RefCell::new(Vec::new());
-        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
         hand_to_in(&dir, "billing@web", "CI failed: fix it", &[task("idle")], &mut type_into).unwrap();
         let sent = typed.borrow()[0].clone();
         assert!(!load_in(&dir)[0].held, "typed, so logged delivered");
@@ -1047,7 +1096,7 @@ mod tests {
         assert!(messages.iter().all(|message| message.held && message.from == "kelpie"), "never dropped: {messages:?}");
         assert_eq!(messages[0].why.as_deref(), Some(DRAFT_HOLD));
         let typed = std::cell::RefCell::new(Vec::new());
-        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
         assert_eq!(flush_held_in(&dir, std::slice::from_ref(&idle), &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 1);
         assert_eq!(typed.borrow().as_slice(), ["[from kelpie] run the tests"]);
         assert!(!load_in(&dir)[0].held && load_in(&dir)[1].held, "the other waits for its own session");
@@ -1098,7 +1147,7 @@ mod tests {
 
     #[test]
     fn the_lead_is_copied_on_new_messages_between_others() {
-        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false, report: None, ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false };
+        let message = |id: &str, from: &str, to: &str| Message { id: id.to_string(), at: 0, from: from.to_string(), to: to.to_string(), text: String::new(), held: false, report: None, ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false };
         let messages = [message("1", "a@x", "b@x"), message("2", "a@x", "lead"), message("3", "lead", "b@x"), message("4", "b@x", "a@x")];
         let ids = |seen| copies_for_lead(&messages, seen).iter().map(|message| message.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(0), ["1", "4"]);
@@ -1129,7 +1178,7 @@ mod tests {
     #[test]
     fn the_lead_is_copied_on_reports_to_it() {
         let report = Some(Report { state: "ready".to_string(), next: "push and close".to_string(), head: None });
-        let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false }];
+        let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false }];
         assert_eq!(copies_for_lead(&messages, 0).len(), 1);
         assert_eq!(report_line(&messages[0]), "- a@x (ready): done — you: push and close");
     }
@@ -1208,7 +1257,7 @@ mod tests {
         let screens = std::cell::RefCell::new(vec![trust, drafted, empty.clone(), empty].into_iter());
         let typed = std::cell::RefCell::new(Vec::new());
         let mut type_into = |pane: &str, text: &str, label: &str| match crate::typing::draft(&screens.borrow_mut().next().unwrap_or_default()) {
-            crate::typing::Draft::Empty => { typed.borrow_mut().push((pane.to_string(), text.to_string(), label.to_string())); Ok(()) }
+            crate::typing::Draft::Empty => { typed.borrow_mut().push((pane.to_string(), text.to_string(), label.to_string())); Ok(Via::Typed) }
             crate::typing::Draft::Typed(_) => Err(crate::typing::Refused::Draft),
             crate::typing::Draft::Unreadable => Err(crate::typing::Refused::Unreadable),
         };
@@ -1240,7 +1289,7 @@ mod tests {
         let dir = state("heard-prompt");
         hold_prompt_in(&dir, "billing@app", "Fix the flaky test").unwrap();
         let typed = std::cell::RefCell::new(Vec::new());
-        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
         let session = Session { address: "billing@app".to_string(), task: Some("billing".to_string()), pane: Some("p_1".to_string()), status: Some("idle".to_string()) };
         assert_eq!(flush_held_in(&dir, &[session], &mut type_into, &|address, _| address == "billing@app", &|_, _| true).unwrap(), 0);
         assert!(typed.into_inner().is_empty(), "a second copy of the prompt would start a second turn");
@@ -1266,7 +1315,7 @@ mod tests {
         write_log(&dir, &[told("m1", 1, "lead", "billing@app", "held")]);
         hold_prompt_in(&dir, "billing@app", "Fix the flaky test").unwrap();
         let typed = std::cell::RefCell::new(Vec::new());
-        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
         let heard = |_: &str, _: u64| typed.borrow().iter().any(|text: &String| text.starts_with("[from "));
         let session = Session { address: "billing@app".to_string(), task: Some("billing".to_string()), pane: Some("p_1".to_string()), status: Some("idle".to_string()) };
         assert_eq!(flush_held_in(&dir, &[session], &mut type_into, &heard, &|_, _| true).unwrap(), 2, "the tell landing in the transcript first would have dropped the prompt");
@@ -1287,7 +1336,7 @@ mod tests {
         assert!(!hold_again_in(&dir, LEAD_LABEL, &delivered("billing@app", "text of m1")).unwrap(), "only a rules check is sent twice; a tell is reported, not retyped");
         assert!(hold_again_in(&dir, LEAD_LABEL, &sent).unwrap());
         let typed = std::cell::RefCell::new(Vec::new());
-        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
         let lead = |status: &str| Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("p_lead".to_string()), status: Some(status.to_string()) };
         assert_eq!(flush_held_in(&dir, &[lead("working")], &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 0, "typed mid-turn it would sit in the box again");
         assert_eq!(load_in(&dir)[0].why.as_deref(), Some(BUSY_HOLD));
@@ -1304,7 +1353,7 @@ mod tests {
         rules_check(&dir, "r2", "search@app", "held");
         rules_check(&dir, "r3", "billing@app", "held");
         let typed = std::cell::RefCell::new(Vec::new());
-        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
         let lead = Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("p_lead".to_string()), status: Some("idle".to_string()) };
         let wanted = |message: &Message, _: &Session| !message.text.starts_with("search@app");
         assert_eq!(flush_held_in(&dir, &[lead], &mut type_into, &|_, _| false, &wanted).unwrap(), 1);
@@ -1571,7 +1620,7 @@ mod tests {
         let dir = state("rewrite");
         write_log(&dir, &[question("q1", 2, "billing@web")]);
         let typed = std::cell::RefCell::new(Vec::new());
-        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
         let task = session(Some("w1:p1"), Some("idle"));
         let held = send_locked_in(&dir, LEAD_LABEL, &[&task], "ask it again", std::slice::from_ref(&task), None, None, &mut type_into).unwrap();
         assert!(held[0].contains("waits for the user's answer to its question") && typed.borrow().is_empty(), "{held:?}");
@@ -1590,7 +1639,7 @@ mod tests {
         let dir = state("earlier-typing");
         write_log(&dir, &[told("m1", 1, "kelpie", "billing@web", "held")]);
         let typed = std::cell::RefCell::new(Vec::new());
-        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); if typed.borrow().len() == 1 { Ok(()) } else { Err(crate::typing::Refused::Draft) } };
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); if typed.borrow().len() == 1 { Ok(Via::Typed) } else { Err(crate::typing::Refused::Draft) } };
         let task = session(Some("w1:p1"), Some("idle"));
         let said = send_locked_in(&dir, LEAD_LABEL, &[&task], "and then", std::slice::from_ref(&task), None, None, &mut type_into).unwrap();
         assert_eq!(typed.borrow().len(), 2, "the held one first, then the new one");
@@ -1604,7 +1653,7 @@ mod tests {
     fn kelpies_text_typed_in_an_earlier_pass_is_not_the_users_draft_for_a_few_seconds() {
         let dir = state("earlier-pass");
         let task = session(Some("w1:p1"), Some("idle"));
-        send_locked_in(&dir, LEAD_LABEL, &[&task], "first", std::slice::from_ref(&task), None, None, &mut |_, _, _| Ok(())).unwrap();
+        send_locked_in(&dir, LEAD_LABEL, &[&task], "first", std::slice::from_ref(&task), None, None, &mut |_, _, _| Ok(Via::Typed)).unwrap();
         send_locked_in(&dir, LEAD_LABEL, &[&task], "second", std::slice::from_ref(&task), None, None, &mut |_, _, _| Err(crate::typing::Refused::Draft)).unwrap();
         assert_eq!(load_in(&dir)[1].why.as_deref(), Some(EARLIER_TYPING), "the box still holds the first");
         fs::write(typed_file(&dir, "billing@web"), (now() - TYPED_FOR - 1).to_string()).unwrap();
@@ -1657,6 +1706,147 @@ mod tests {
         assert_eq!(ids(&after), ["a1"], "the user's held answer survives the rotation: {:?}", ids(&after));
         assert_eq!(fs::read_to_string(dir.join(LEAD_MARK)).unwrap(), "a1", "the mark moves to the last kept message before the one it named");
         assert_eq!(unread_in(&dir).unwrap(), "", "and the lead sees nothing again");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn listen(dir: &Path, address: &str) -> std::thread::JoinHandle<String> {
+        let socket = crate::inbox::tests::short_socket();
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        crate::inbox::record_in(dir, address, Some(&socket.to_string_lossy()), Some("tok"), Some("s-1")).unwrap();
+        std::thread::spawn(move || loop {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut got = String::new();
+            stream.read_to_string(&mut got).unwrap();
+            if !got.is_empty() {
+                let _ = fs::remove_file(socket);
+                return got;
+            }
+        })
+    }
+
+    fn s1(_: &str) -> Option<String> {
+        Some("s-1".to_string())
+    }
+
+    #[test]
+    fn a_session_with_an_inbox_gets_the_message_there_past_a_draft_and_mid_turn_and_the_log_says_how() {
+        let dir = state("inbox-deliver");
+        let reader = listen(&dir, "billing@web");
+        let working = session(Some("w1:p1"), Some("working"));
+        let mut type_into = |pane: &str, text: &str, address: &str| crate::inbox::prompt_in(&dir, pane, text, address, &s1, &mut |_, _, _| Err(crate::typing::Refused::Draft));
+        let said = send_locked_in(&dir, LEAD_LABEL, &[&working], "rebase on main", std::slice::from_ref(&working), None, None, &mut type_into).unwrap();
+        assert_eq!(said, ["Told billing@web."]);
+        assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[from lead] rebase on main\"},\"from\":\"kelpie\"}\n");
+        let log = fs::read_to_string(log_in(&dir)).unwrap();
+        assert!(log.contains("\"via\":\"inbox\"") && !load_in(&dir)[0].held, "{log}");
+        assert!(!typed_file(&dir, "billing@web").exists(), "nothing sits in its input box");
+        let shop = Session { address: "shop@web".to_string(), task: Some("shop".to_string()), pane: Some("w1:p2".to_string()), status: Some("idle".to_string()) };
+        let mut typed = |_: &str, _: &str, _: &str| Ok(Via::Typed);
+        send_locked_in(&dir, LEAD_LABEL, &[&shop], "hi", std::slice::from_ref(&shop), None, None, &mut typed).unwrap();
+        assert!(fs::read_to_string(log_in(&dir)).unwrap().contains("\"via\":\"typed\""), "a typed delivery says so too");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_held_rules_check_goes_to_a_working_lead_whose_inbox_is_live_and_waits_its_turn_otherwise() {
+        let dir = state("inbox-busy");
+        let lead = Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("w0:p1".to_string()), status: Some("working".to_string()) };
+        write_log(&dir, &[json!({ "id": "r1", "at": 1, "from": "kelpie", "to": LEAD_LABEL, "text": "billing@web is ready at a1b2c3d: check it", "state": "held", "kind": RULES_KIND })]);
+        let live = |session: &Session| crate::inbox::live_in(&dir, session.pane.as_deref().unwrap(), &session.address, &s1);
+        crate::inbox::record_in(&dir, LEAD_LABEL, Some(&crate::inbox::tests::short_socket().to_string_lossy()), None, Some("s-1")).unwrap();
+        let mut typed = |_: &str, _: &str, _: &str| -> std::result::Result<Via, crate::typing::Refused> { panic!("nothing is typed mid-turn") };
+        assert_eq!(flush_typing_in(&dir, std::slice::from_ref(&lead), &mut typed, &|_, _| false, &|_, _| true, &live).unwrap().0, 0, "a recorded inbox nobody listens on is no reason to go mid-turn");
+        assert_eq!(load_in(&dir)[0].why.as_deref(), Some(BUSY_HOLD));
+        let reader = listen(&dir, LEAD_LABEL);
+        let mut type_into = |pane: &str, text: &str, address: &str| crate::inbox::prompt_in(&dir, pane, text, address, &s1, &mut |_, _, _| panic!("the inbox takes it"));
+        assert_eq!(flush_typing_in(&dir, std::slice::from_ref(&lead), &mut type_into, &|_, _| false, &|_, _| true, &live).unwrap().0, 1);
+        assert!(reader.join().unwrap().contains("[from kelpie] billing@web is ready at a1b2c3d"));
+        assert!(!load_in(&dir)[0].held);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_rules_check_the_inbox_took_but_the_transcript_never_shows_is_held_again() {
+        let dir = state("inbox-lost");
+        let lead = Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("w0:p1".to_string()), status: Some("idle".to_string()) };
+        let reader = listen(&dir, LEAD_LABEL);
+        let check = "billing@web is ready at a1b2c3d: check it";
+        let mut type_into = |pane: &str, text: &str, address: &str| crate::inbox::prompt_in(&dir, pane, text, address, &s1, &mut |_, _, _| panic!("the inbox takes it"));
+        ask_lead_in(&dir, check, std::slice::from_ref(&lead), &mut type_into, &|_, _| false).unwrap();
+        reader.join().unwrap();
+        let file = fs::read_dir(dir.join("typed")).unwrap().flatten().map(|entry| entry.path()).find(|path| path.extension().is_some_and(|extension| extension == "json")).unwrap();
+        let typed = crate::typing::Typed::from_json_text(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(typed.inbox && typed.label == LEAD_LABEL && typed.text == format!("[from kelpie] {check}"));
+        let wrapped = json!({ "type": "user", "isMeta": true, "origin": { "kind": "peer" }, "timestamp": "2099-01-01T00:00:00.000Z", "message": { "role": "user", "content": format!("<cross-session-message from=\"kelpie\">[from kelpie] {check}</cross-session-message>") } }).to_string();
+        assert_eq!(crate::typing::advance_inbox(&typed, Some(&wrapped), typed.at_ms + 1000), crate::typing::Outcome::Taken, "Claude Code records a peer message wrapped in <cross-session-message>; its body counts");
+        assert!(crate::agent::Agent::Claude.user_messages(&wrapped).is_empty(), "and it is never the user's own words");
+        assert_eq!(crate::typing::advance_inbox(&typed, Some(""), typed.at_ms + 60_000), crate::typing::Outcome::Waiting, "a long tool run is waited out");
+        assert_eq!(crate::typing::advance_inbox(&typed, Some(""), typed.at_ms + 600_000), crate::typing::Outcome::NotDelivered);
+        let again = ask_lead_in(&dir, check, std::slice::from_ref(&lead), &mut |_, _, _| panic!("still watched, not asked twice"), &|_, _| false).unwrap();
+        assert!(again.contains("already has this rules check"), "{again}");
+        fs::remove_file(&file).unwrap();
+        assert!(hold_again_in(&dir, LEAD_LABEL, &typed.text).unwrap(), "given up: the check is held again and goes once more");
+        assert!(load_in(&dir)[0].held);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn kelpies_notices_reach_the_lead_only_in_its_digest_and_on_the_board_never_typed() {
+        let dir = state("fyi");
+        let mut live = |_: &str, _: Option<&str>| -> Result<()> { panic!("not live while the user is here") };
+        fyi_or_live_in(&dir, "The user pushed billing@app: 1 commit to main (a1b2c3d Add refunds).", Some("push"), &mut live).unwrap();
+        let lead = Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("w0:p1".to_string()), status: Some("idle".to_string()) };
+        notice_locked_in(&dir, &lead, "kelpie was updated to 0.26.0", std::slice::from_ref(&lead), &mut |_, _, _| panic!("a notice is not typed into the lead")).unwrap();
+        assert_eq!(flush_held_in(&dir, std::slice::from_ref(&lead), &mut |_, _, _| panic!("nothing held"), &|_, _| false, &|_, _| true).unwrap(), 0);
+        let messages = load_in(&dir);
+        assert!(messages.iter().all(|message| message.fyi && !message.held && message.from == "kelpie" && message.to == LEAD_LABEL), "{messages:?}");
+        assert_eq!(messages[0].kind.as_deref(), Some("push"), "the away summary still finds the push");
+        assert_eq!(shown_in_log(messages.clone()).len(), 2, "the board's log shows them");
+        let digest = unread_in(&dir).unwrap();
+        assert!(digest.starts_with("kelpie's notices since you last looked") && digest.contains("- The user pushed billing@app") && digest.contains("- kelpie was updated to 0.26.0"), "{digest}");
+        assert!(!digest.contains("Messages between sessions"), "a notice is not a message between sessions: {digest}");
+        assert_eq!(unread_in(&dir).unwrap(), "", "once seen, gone from the digest");
+        let task = session(Some("w1:p1"), Some("idle"));
+        let typed = std::cell::RefCell::new(Vec::new());
+        notice_locked_in(&dir, &task, "kelpie was updated", std::slice::from_ref(&task), &mut |_, text, _| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) }).unwrap();
+        assert_eq!(typed.borrow().as_slice(), ["[from kelpie] kelpie was updated"], "a task still gets kelpie's notice live");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn while_the_user_is_away_the_lead_hears_kelpies_notices_live() {
+        let dir = state("fyi-away");
+        crate::permit::set_away_in(&dir, true, 100).unwrap();
+        let told = std::cell::RefCell::new(Vec::new());
+        fyi_or_live_in(&dir, "The user pushed billing@app", Some("push"), &mut |text, kind| { told.borrow_mut().push((text.to_string(), kind.map(str::to_string))); Ok(()) }).unwrap();
+        assert_eq!(told.borrow().as_slice(), [("The user pushed billing@app".to_string(), Some("push".to_string()))], "it tells the user through kelpie notify, so it must hear it now");
+        let lead = Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("w0:p1".to_string()), status: Some("idle".to_string()) };
+        let typed = std::cell::RefCell::new(Vec::new());
+        notice_locked_in(&dir, &lead, "kelpie was updated", std::slice::from_ref(&lead), &mut |_, text, _| { typed.borrow_mut().push(text.to_string()); Ok(Via::Inbox) }).unwrap();
+        assert_eq!(typed.borrow().as_slice(), ["[from kelpie] kelpie was updated"]);
+        assert!(!load_in(&dir).iter().any(|message| message.fyi));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_lead_is_asked_to_check_a_task_at_a_sha_once_while_that_check_is_pending() {
+        let dir = state("rules-once");
+        let lead = Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("w0:p1".to_string()), status: Some("idle".to_string()) };
+        let typed = std::cell::RefCell::new(Vec::new());
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) };
+        let check = |sha: &str| format!("billing@web is ready at {sha}: check its commits against `rules` (git -C /w log -p origin/main..HEAD).");
+        ask_lead_in(&dir, &check("a1b2c3d"), std::slice::from_ref(&lead), &mut type_into, &|_, _| true).unwrap();
+        let again = ask_lead_in(&dir, &check("a1b2c3d"), std::slice::from_ref(&lead), &mut type_into, &|_, _| true).unwrap();
+        assert!(again.contains("already has this rules check (billing@web is ready at a1b2c3d)"), "{again}");
+        ask_lead_in(&dir, &check("e4f5a6b"), std::slice::from_ref(&lead), &mut type_into, &|_, _| true).unwrap();
+        assert_eq!(typed.borrow().len(), 2, "{:?}", typed.borrow());
+        assert!(typed.borrow()[1].contains("ready at e4f5a6b"), "a new sha is a new check");
+        ask_lead_in(&dir, &check("e4f5a6b"), std::slice::from_ref(&lead), &mut type_into, &|_, _| false).unwrap();
+        assert_eq!(typed.borrow().len(), 3, "a check delivered but never taken was lost, so it is asked again");
+        let held = Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("w0:p1".to_string()), status: Some("blocked".to_string()) };
+        ask_lead_in(&dir, &check("0a0b0c0"), std::slice::from_ref(&held), &mut type_into, &|_, _| false).unwrap();
+        ask_lead_in(&dir, &check("0a0b0c0"), std::slice::from_ref(&held), &mut type_into, &|_, _| false).unwrap();
+        assert_eq!(load_in(&dir).iter().filter(|message| message.text.contains("0a0b0c0")).count(), 1, "a check still held is not queued twice");
         fs::remove_dir_all(&dir).unwrap();
     }
 }

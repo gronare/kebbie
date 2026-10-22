@@ -44,7 +44,7 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
         }
     }
     notice.push_str(" Drop any review or recommendation about it.");
-    if let Err(error) = messages::notify_lead(&notice) {
+    if let Err(error) = messages::log_for_lead(&notice, None) {
         eprintln!("Could not tell the lead: {error}");
     }
     shown.ok()
@@ -137,7 +137,7 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
     forget_address(state, &address);
     let mut said = Vec::new();
     for item in forget_start_in(state, task, repo).map(|text| crate::task_note::items(&text)).unwrap_or_default() {
-        let notice = match vault.filter(|_| crate::vault_cli::is_note(&item)) {
+        let told = match vault.filter(|_| crate::vault_cli::is_note(&item)) {
             Some(_) if crate::task_note::held_elsewhere(state, task, &address, &item) => {
                 said.push(format!("{item} stays open for the task's other halves"));
                 continue;
@@ -145,16 +145,16 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
             Some(cli) => match crate::task_note::close(cli, &item) {
                 Ok(path) => {
                     said.push(format!("closed ({path})"));
-                    format!("{task} is done and its commits are on the default branch; kelpie closed its note {item}. Update the area note when the task changed what it describes.")
+                    messages::log_for_lead(&format!("{task} is done and its commits are on the default branch; kelpie closed its note {item}."), None)
                 }
                 Err(error) => {
                     said.push(format!("{item} could not be closed ({error})"));
-                    format!("{task} is done and its commits are on the default branch, but kelpie could not close its note {item} ({error}): close it with the vault tools.")
+                    messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but kelpie could not close its note {item} ({error}): close it with the vault tools."))
                 }
             },
-            None => crate::backlog::done_notice(task, &item),
+            None => messages::notify_lead(&crate::backlog::done_notice(task, &item)),
         };
-        if let Err(error) = messages::notify_lead(&notice) {
+        if let Err(error) = told {
             eprintln!("Could not tell the lead: {error}");
         }
     }

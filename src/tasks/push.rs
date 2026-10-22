@@ -363,7 +363,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
     let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged);
     if !keep_open {
         if matches!(watch, crate::ci::Begin::Watching) {
-            if let Err(error) = messages::notify_lead(&format!("{} pushed {address}: {} to {target}. kelpie watches CI for {short} and closes the task once every run is green; you hear what landed then.", capitalized(pusher), plural(count, "commit"))) {
+            if let Err(error) = messages::log_for_lead(&format!("{} pushed {address}: {} to {target}. kelpie watches CI for {short} and closes the task once every run is green; you hear what landed then.", capitalized(pusher), plural(count, "commit")), None) {
                 eprintln!("Could not tell the lead about the push: {error}");
             }
             let notice = Notice::new(Tone::Done, headline(false)).next("CI runs now; kelpie closes the task when it is green.").detail("task", &task).detail("commit", short).detail("log", &logged);
@@ -481,8 +481,8 @@ fn pushed_notice(landed: &Landed) -> String {
         (false, false) => " The task stays open with the rest of its branch.",
     });
     match logged {
-        Some(true) => return text + " kelpie wrote the repo's log line in the vault from these commits; update the area note with what changed.",
-        Some(false) => return text + " kelpie could not write the repo's log line: write it in the vault with what landed and these shas, and update the area note with what changed.",
+        Some(true) => return text + " kelpie wrote the repo's log line in the vault from these commits.",
+        Some(false) => return text + " kelpie could not write the repo's log line: write it in the vault with what landed and these shas.",
         None => {}
     }
     text.push_str(" Write the repo's log line in the vault with what landed and these shas");
@@ -495,8 +495,10 @@ fn pushed_notice(landed: &Landed) -> String {
     text
 }
 
+// Only a push kelpie logged itself leaves the lead nothing to do now; without that, the notice asks it to write the log line.
 fn tell_lead_pushed(landed: &Landed) {
-    if let Err(error) = messages::tell_lead(&pushed_notice(landed), Some("push")) {
+    let told = if landed.logged != Some(true) { messages::tell_lead(&pushed_notice(landed), Some("push")) } else { messages::log_for_lead(&pushed_notice(landed), Some("push")) };
+    if let Err(error) = told {
         eprintln!("Could not tell the lead about the push: {error}");
     }
 }
@@ -583,11 +585,26 @@ mod tests {
     fn with_the_vault_on_the_lead_hears_kelpie_logged_the_push_and_is_not_asked_to_log_it() {
         let commits = "a1b2c3d Add refunds";
         let kept = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(true), waits: false });
-        assert!(kept.contains("kelpie wrote the repo's log line") && kept.contains("update the area note") && !kept.contains("Write the repo's log line"), "{kept}");
+        assert!(kept.contains("kelpie wrote the repo's log line") && !kept.contains("Write the repo's log line"), "{kept}");
+        assert!(!kept.contains("area note") && !failed_text(commits).contains("area note"), "kelpie logs the push itself; the notice carries no chore for the lead's area note: {kept}");
         let waits = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: false, note: Some("Projects/billing.md"), logged: Some(true), waits: true });
         assert!(waits.contains("stays open until its note has its solution and decisions"), "{waits}");
         let failed = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(false), waits: false });
         assert!(failed.contains("kelpie could not write the repo's log line: write it in the vault with what landed and these shas") && !failed.contains("kelpie wrote"), "a log append that failed leaves the line to the lead: {failed}");
+    }
+
+    fn failed_text(commits: &str) -> String {
+        pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: None, logged: Some(false), waits: false })
+    }
+
+    #[test]
+    fn a_push_notice_reaches_the_lead_live_only_when_kelpie_could_not_write_the_log_line() {
+        let source = include_str!("push.rs");
+        let tell = &source[source.find("fn tell_lead_pushed").unwrap()..];
+        let tell = &tell[..tell.find("\n}\n").unwrap()];
+        assert!(tell.contains("landed.logged != Some(true) { messages::tell_lead(") && tell.contains("messages::log_for_lead(&pushed_notice(landed), Some(\"push\"))"), "{tell}");
+        let deliver = &source[source.find("\nfn deliver(").unwrap()..];
+        assert!(deliver[..deliver.find("\n}\n").unwrap()].contains("messages::log_for_lead(&format!(\"{} pushed {address}: {} to {target}. kelpie watches CI"), "the push under CI watch is a notice for the digest, not a turn of the lead's");
     }
 
     #[test]

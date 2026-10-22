@@ -11,6 +11,7 @@ mod doctor;
 mod evidence;
 mod fetch;
 mod herdr;
+mod inbox;
 mod issues;
 mod keeper;
 mod keys;
@@ -445,6 +446,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             }
             if name == Some("evidence") {
                 return Ok(arguments.positional(2).map(|address| evidence::hook(address, &input)).unwrap_or_default());
+            }
+            if name == Some("inbox") {
+                return Ok(arguments.positional(2).map(|address| inbox::hook(address, &input)).unwrap_or_default());
             }
             if name == Some("gate") {
                 return Ok(arguments.positional(2).map(|address| task_note::hook(address, &input)).unwrap_or_default());

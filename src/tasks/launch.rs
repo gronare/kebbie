@@ -332,7 +332,7 @@ pub(crate) fn task_role(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
     if let Some(why) = fell_back {
         let said = format!("{} restarts as the built-in task: {why}.", peers::address(&task, &name_of(&repo)));
         eprintln!("{said}");
-        if let Err(error) = messages::notify_lead(&said) {
+        if let Err(error) = messages::log_for_lead(&said, None) {
             eprintln!("Could not tell the lead: {error}");
         }
     }
@@ -754,7 +754,7 @@ mod tests {
         assert!(body("launch").contains("profile: Some(profile.name.clone())") && body("launch").contains("record_text(&record)"), "every start records the profile it ran with");
         assert!(body("begin").contains("recorded_session(&task, &repo).profile") && body("begin").find("task_profile(").unwrap() < body("begin").find("fetch(").unwrap(), "a running task keeps its profile, and a missing one is refused before a worktree is claimed");
         assert!(body("task_role").contains("recorded_session(&task, &repo).profile"), "kelpie restart writes the role and settings of the profile the task started with");
-        assert!(body("begin").contains("detail(\"careful\", why)") && body("task_role").contains("messages::notify_lead(&said)"), "a recorded profile that no longer loads is said where the restart reports, and the restart goes on");
+        assert!(body("begin").contains("detail(\"careful\", why)") && body("task_role").contains("messages::log_for_lead(&said, None)"), "a recorded profile that no longer loads is said where the restart reports, and the restart goes on");
     }
 
     #[test]
@@ -764,9 +764,10 @@ mod tests {
             name: "designer".to_string(), model: Some("opus".to_string()), effort: Some("high".to_string()), permission_mode: Some("acceptEdits".to_string()),
             deny: vec!["Bash(rm -rf:*)".to_string()], allow: vec!["Bash(npx playwright:*)".to_string()], plugins: vec!["design@claude-plugins".to_string()], ..task.clone()
         };
-        let plain: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", Some("billing@app"), None)).unwrap();
+        let plain: Value = serde_json::from_str(&crate::inbox::with_inbox(&settings("/bin/kelpie", "billing@app", Some("billing@app"), None), "/bin/kelpie", "billing@app")).unwrap();
         let ours: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kelpie", "billing@app", Some("billing@app"), None, &task)).unwrap();
         assert_eq!(ours, plain, "the built-in task's settings are kelpie's own, nothing added");
+        assert_eq!((&ours["crossSessionInbound"], &ours["hooks"]["SessionStart"][0]["hooks"][0]["command"]), (&json!("accept"), &json!("'/bin/kelpie' hook inbox 'billing@app'")), "a task takes kelpie's messages in its inbox, whatever its permission mode");
         let written: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kelpie", "billing@app", Some("billing@app"), None, &designer)).unwrap();
         let deny = written["permissions"]["deny"].as_array().unwrap();
         let kelpies = plain["permissions"]["deny"].as_array().unwrap();

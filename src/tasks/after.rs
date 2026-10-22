@@ -456,12 +456,13 @@ pub(crate) fn tick_in(state: &Path, log: &[Message], now: u64, begin: Begin, tel
 }
 
 fn tell_for_real(told: Told) {
-    let (notice, text) = match told {
-        Told::Started { address, repo, text } => (crate::permit::away_since().map(|_| (crate::notify::Event::Summary, address, repo)), text),
-        Told::Blocked { address, repo, text } => (Some((crate::notify::Event::NeedsYou, address, repo)), text),
-        Told::Dropped { text } => (None, text),
+    let (notice, text, live) = match told {
+        Told::Started { address, repo, text } => (crate::permit::away_since().map(|_| (crate::notify::Event::Summary, address, repo)), text, false),
+        Told::Blocked { address, repo, text } => (Some((crate::notify::Event::NeedsYou, address, repo)), text, true),
+        Told::Dropped { text } => (None, text, true),
     };
-    if let Err(error) = messages::tell_lead(&text, Some("after")) {
+    let told = if live { messages::tell_lead(&text, Some("after")) } else { messages::log_for_lead(&text, Some("after")) };
+    if let Err(error) = told {
         eprintln!("Could not tell the lead: {error}");
     }
     if let Some((event, address, repo)) = notice {
@@ -885,7 +886,7 @@ mod tests {
 
     fn end(address: &str, at: u64, how: &str, landed: Option<&str>) -> Message {
         let task = address.split('@').next().unwrap();
-        Message { id: format!("end-{address}-{at}"), at, from: "kelpie".to_string(), to: address.to_string(), text: format!("{task} ended ({how})"), held: false, report: None, ended: true, question: None, about: None, kind: None, landed: landed.map(str::to_string), why: None, forced: false }
+        Message { id: format!("end-{address}-{at}"), at, from: "kelpie".to_string(), to: address.to_string(), text: format!("{task} ended ({how})"), held: false, report: None, ended: true, question: None, about: None, kind: None, landed: landed.map(str::to_string), why: None, forced: false, fyi: false }
     }
 
     fn facts(ends: &[Message], open: &[&str]) -> Facts {
@@ -1104,7 +1105,9 @@ mod tests {
         assert!(matches!(told.as_slice(), [Told::Started { address, text, .. }] if address == "web-billing@web" && text.starts_with("web-billing@web started: billing@api is done.")));
         let source = include_str!("after.rs");
         let real = &source[source.find("\nfn tell_for_real(").unwrap()..];
-        assert!(real[..real.find("\n}\n").unwrap()].contains("messages::tell_lead(&text, Some(\"after\"))"), "the lead hears it through the log, held when it has no session");
+        let real = &real[..real.find("\n}\n").unwrap()];
+        assert!(real.contains("messages::tell_lead(&text, Some(\"after\"))"), "a blocked or dropped chain reaches the lead through the log, held when it has no session");
+        assert!(real.contains("Told::Started { address, repo, text } => (crate::permit::away_since().map(|_| (crate::notify::Event::Summary, address, repo)), text, false)") && real.contains("messages::log_for_lead(&text, Some(\"after\"))"), "a start is a notice for the lead's digest, not a turn");
         fs::remove_dir_all(state).unwrap();
     }
 
@@ -1344,7 +1347,7 @@ mod tests {
         assert_eq!((first.len(), second.len()), (1, 0));
         let source = include_str!("after.rs");
         let real = &source[source.find("\nfn tell_for_real(").unwrap()..];
-        assert!(real[..real.find("\n}\n").unwrap()].contains("Told::Blocked { address, repo, text } => (Some((crate::notify::Event::NeedsYou, address, repo)), text)"), "the user hears it as needs-you");
+        assert!(real[..real.find("\n}\n").unwrap()].contains("Told::Blocked { address, repo, text } => (Some((crate::notify::Event::NeedsYou, address, repo)), text, true)"), "the user hears it as needs-you, and the lead live");
         fs::remove_dir_all(state).unwrap();
     }
 
