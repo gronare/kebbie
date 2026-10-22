@@ -178,14 +178,26 @@ fn spawn(invocation: &Invocation) -> Result<()> {
 }
 
 pub fn run_with_timeout(program: &str, args: &[String], timeout: Duration) -> std::result::Result<(), String> {
-    let mut child = Command::new(program).args(args)
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped())
-        .process_group(0)
+    let mut command = Command::new(program);
+    command.args(args).stdout(Stdio::null());
+    timed(command, program, timeout).map(|_| ())
+}
+
+// Its stdout, read on a thread of its own so a full pipe never holds the child past the timeout.
+pub fn output_with_timeout(program: &str, args: &[&str], cwd: &Path, timeout: Duration) -> std::result::Result<String, String> {
+    let mut command = Command::new(program);
+    command.args(args).current_dir(cwd).stdout(Stdio::piped());
+    timed(command, program, timeout)
+}
+
+fn timed(mut command: Command, program: &str, timeout: Duration) -> std::result::Result<String, String> {
+    let mut child = command.stdin(Stdio::null()).stderr(Stdio::piped()).process_group(0)
         .spawn().map_err(|error| format!("{program}: {error}"))?;
+    let reader = child.stdout.take().map(|mut pipe| std::thread::spawn(move || { let mut out = String::new(); let _ = std::io::Read::read_to_string(&mut pipe, &mut out); out }));
     let started = Instant::now();
     loop {
         match child.try_wait().map_err(|error| error.to_string())? {
-            Some(status) if status.success() => return Ok(()),
+            Some(status) if status.success() => return Ok(reader.and_then(|reader| reader.join().ok()).unwrap_or_default()),
             Some(status) => {
                 let mut stderr = String::new();
                 if let Some(mut pipe) = child.stderr.take() {

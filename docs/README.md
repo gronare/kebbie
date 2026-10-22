@@ -33,6 +33,7 @@ Repos and worktrees
 - [Run a task's dev server](how-to/run-dev-servers.md): `w`, `b` and the link on the board.
 - [Open dev servers from a remote machine](how-to/open-dev-servers-from-a-remote-machine.md): one host per worktree through Caddy, opt-in per repo.
 - [Use your own commit rules](how-to/use-your-own-commit-rules.md): replace the rules skill.
+- [Keep docs in step with changes](how-to/keep-docs-in-step.md): the reviewer fails a change to what users see that documents nothing.
 - [Decide what a task does with what it notices](how-to/decide-what-a-task-does-with-what-it-notices.md): file it, fix it or ask you.
 - [Let tasks run without permission prompts](how-to/let-tasks-run-without-prompts.md): bypass permissions mode, on an isolated machine.
 - [Give tasks a profile](how-to/give-tasks-a-profile.md): a model, role, skills and permissions for one kind of work.

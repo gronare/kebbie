@@ -21,6 +21,16 @@ Hold a risky task's push until an independent, read-only Claude has passed its c
 model = "opus"
 ```
 
+## Hold changes that leave the docs behind
+
+In a repo with `docs.required`, the reviewer also checks the docs. When the commits touch no README or `docs/` file and change what a user sees or does, the verdict is `changes` with a finding such as:
+
+```
+- src/peers.rs:88 — documents nothing for the new `--json` option of `kelpie peers`; update docs/reference/commands.md (keep-docs).
+```
+
+See [Keep docs in step with changes](keep-docs-in-step.md).
+
 ## Read the verdict
 
 The full verdict is `verdicts/<task>@<repo>.md` in the state directory: `ok` or `changes`, the sha it reviewed, and findings with `file:line`, bugs first.

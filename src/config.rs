@@ -104,6 +104,7 @@ pub struct Worktree {
     pub worker_name: Option<String>,
     pub ci_watch: Option<bool>,
     pub clean_on_release: Option<Vec<String>>,
+    pub docs_required: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -174,6 +175,7 @@ pub struct Settings {
     pub auto_restart: Setting<bool>,
     pub ci_watch: Setting<bool>,
     pub clean_on_release: Setting<Vec<String>>,
+    pub docs_required: Setting<bool>,
     pub keeper: Setting<bool>,
     pub recover: Setting<bool>,
 }
@@ -411,6 +413,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         worker_name: text(worktree, "worker_name", "worktree.worker_name")?,
         ci_watch: None,
         clean_on_release: worktree.get("clean_on_release").map(clean_on_release).transpose()?,
+        docs_required: None,
     })
 }
 
@@ -487,8 +490,16 @@ fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     Ok(worktree)
 }
 
+fn with_docs(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
+    if let Some(docs) = subtable(table, "docs", "docs")? {
+        unknown_keys(docs, "docs.", &["required"])?;
+        worktree.docs_required = docs.get("required").map(|value| value.as_bool().ok_or("docs.required: must be true or false")).transpose()?;
+    }
+    Ok(worktree)
+}
+
 fn layers(table: &Table) -> Result<Worktree> {
-    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree)).and_then(|worktree| with_vault(table, worktree)).and_then(|worktree| with_ci(table, worktree))
+    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree)).and_then(|worktree| with_vault(table, worktree)).and_then(|worktree| with_ci(table, worktree)).and_then(|worktree| with_docs(table, worktree))
 }
 
 fn table(text: &str, source: &str) -> Result<Table> {
@@ -498,6 +509,9 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
+    if table.contains_key("docs") {
+        return Err(fail(format!("docs.required: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
+    }
     unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "keys", "ci", "routines"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     if worktree.dev_route.is_some() {
@@ -521,7 +535,7 @@ pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
     }
-    unknown_keys(&table, "", &["actions", "worktree", "task", "review", "ci", "routines"]).map_err(fail)?;
+    unknown_keys(&table, "", &["actions", "worktree", "task", "review", "ci", "docs", "routines"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     let repo = Path::new(source).file_stem().map(|stem| stem.to_string_lossy().to_string());
     crate::routines::parse_list(&table, repo.as_deref(), source).map_err(fail)?;
@@ -571,6 +585,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         auto_restart: or_default(pick(None, machine.restart.auto.as_ref()), true),
         ci_watch: or_default(pick(repo.ci_watch.as_ref(), machine.worktree.ci_watch.as_ref()), true),
         clean_on_release: or_default(pick(repo.clean_on_release.as_ref(), machine.worktree.clean_on_release.as_ref()), vec!["target".to_string()]),
+        docs_required: or_default(pick(repo.docs_required.as_ref(), None), false),
         keeper: or_default(pick(None, machine.keeper.as_ref()), true),
         recover: or_default(pick(None, machine.recover.as_ref()), true),
     }
@@ -617,7 +632,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, keeper, recover } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -682,6 +697,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; config.toml only.");
     key("ci.watch", ci_watch.value.to_string(), ci_watch.layer,
         "Whether kelpie watches GitHub Actions after a push and keeps the task open under CI running until every run for the pushed commit is green; a failed run moves the task to Needs you and its Claude gets the failing job's log. Needs origin on GitHub and gh logged in; false closes the task right after the push. A repo config can turn it off for one repo.");
+    key("docs.required", docs_required.value.to_string(), docs_required.layer,
+        "Whether this repo's docs must keep in step with its code: a task's Claude updates the README and docs/ when its change alters what a user sees or does, by the skill kelpie:keep-docs, and the reviewer fails a branch that changes such behaviour and leaves it undescribed in the README or docs/. Off unless the repo turns it on; repo config only. kelpie doctor suggests it for a public GitHub repo.");
     key("update.channel", format!("{:?}", channel.value.key()), channel.layer,
         "What kelpie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin whose release binary is published; \"main\", origin's default branch as it is pushed. kelpie update --from <branch or path> runs other code until kelpie update --stable; config.toml only.");
     key("restart.auto", auto_restart.value.to_string(), auto_restart.layer,
@@ -981,7 +998,7 @@ mod tests {
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
         assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board.backlog] sources in "));
-        assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, routines");
+        assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, docs, routines");
         assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release");
     }
 
@@ -1172,6 +1189,18 @@ mod tests {
         assert!(parse_repo("[worktree]\nstage_on_main = 1\n", "app.toml").unwrap_err().contains("worktree.stage_on_main: must be true or false"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
         assert!(shown.contains("worktree.stage_on_main = false  (default)"), "{shown}");
+    }
+
+    #[test]
+    fn docs_required_is_off_until_a_repo_config_turns_it_on_and_config_toml_cannot() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).docs_required, Setting { value: false, layer: Layer::Default });
+        assert_eq!(settings(&repo("[docs]\nrequired = true\n"), &Machine::default()).docs_required, Setting { value: true, layer: Layer::Repo });
+        let refused = parse_machine("[docs]\nrequired = true\n", "config.toml").unwrap_err();
+        assert!(refused.starts_with("config.toml: docs.required: each repo opts in on its own, so it lives in its repo config"), "{refused}");
+        assert!(parse_repo("[docs]\nrequired = \"yes\"\n", "app.toml").unwrap_err().contains("docs.required: must be true or false"));
+        assert!(parse_repo("[docs]\nrequire = true\n", "app.toml").unwrap_err().contains("docs.require: unknown key; known keys here: required"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&repo("[docs]\nrequired = true\n"), &Machine::default()) });
+        assert!(shown.contains("docs.required = true  (repo config)"), "{shown}");
     }
 
     #[test]

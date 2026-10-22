@@ -16,6 +16,8 @@ The task's own Claude has written the change and believes in it. The lead has th
 
 So the reviewer is given what a colleague would want and nothing more: the [`kelpie:review`](../../skills/review/SKILL.md) skill as its instructions, the commits against the default branch, the task's prompt and later messages so it knows what was asked, your rules skill, and the repo's `task.also_noticed`. That setting draws the task's scope: under `"backlog"` and `"ask"` a change the task did not need is a finding, and under `"fix"` a small fix in a commit of its own is not. It runs with none of your own settings, hooks or plugins.
 
+In a repo with `docs.required`, the reviewer also reads the commits for what a user sees or does, and fails a branch that changes it without a word in the README or `docs/`. kelpie hands it the docs the commits change, so it judges whether they describe the change rather than whether some doc moved. Judging what counts as user-visible is left to the reviewer rather than to a list of paths, since a flag, a notice text or a config key can live in any file.
+
 ## Why read-only
 
 A reviewer that can edit will fix what it finds, and then nobody has reviewed the fix. kelpie limits it to reading: Read, Grep, Glob and the shell for `git log`, `git diff` and `git show` alone, in `dontAsk` mode, with a hook that refuses every other command.

@@ -377,6 +377,30 @@ pub fn push_block(repo: &Path) -> Check {
     }
 }
 
+pub const GH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+// No gh, no GitHub remote, no login or a slow network is no answer, never a failure.
+pub fn visibility(gh: Option<&Path>, repo: &Path, timeout: std::time::Duration) -> Option<String> {
+    let answer = crate::notify::output_with_timeout(&gh?.to_string_lossy(), &["repo", "view", "--json", "visibility", "--jq", ".visibility"], repo, timeout).ok()?;
+    Some(answer.trim().to_ascii_lowercase()).filter(|answer| !answer.is_empty())
+}
+
+// KELPIE_GH_BIN as CI watching reads it, else gh on the doctor's PATH.
+fn gh_on(path: &[PathBuf]) -> Option<PathBuf> {
+    let gh = crate::ci::gh();
+    if gh.contains('/') { Some(PathBuf::from(gh)) } else { which(&gh, path) }
+}
+
+pub fn docs(required: &Setting<bool>, visibility: impl FnOnce() -> Option<String>, repo_config: &Path) -> Option<Check> {
+    if required.value {
+        return Some(ok("docs", format!("docs.required is on ({}): the reviewer fails a branch that changes what a user sees or does and documents nothing", required.layer.label())));
+    }
+    (visibility().as_deref() == Some("public")).then(|| {
+        ok("docs", "this repo is public on GitHub and docs.required is off, so nothing holds a change that leaves its README and docs/ behind")
+            .with(one(format!("to turn it on, add [docs] required = true to {}", repo_config.display())))
+    })
+}
+
 pub fn backlog(sources: &[Source], vault_index: impl Fn() -> Result<PathBuf, String>, local_file: &Path) -> Vec<Check> {
     if sources.is_empty() {
         return vec![ok("backlog", "no source configured; set [board.backlog] sources to fill the board's Backlog tab")];
@@ -594,6 +618,9 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let settings = config::settings(&own, &machine);
     checks.push(setup_skill(&settings.setup_skill, installed.as_ref(), &claude_settings));
     checks.extend(env.repo.as_deref().and_then(|repo| setup_command(&settings.setup_command, repo)));
+    if let (Some(repo), Some(file)) = (env.repo.as_deref(), env.repo_config.as_deref()) {
+        checks.extend(docs(&settings.docs_required, || visibility(gh_on(&env.path).as_deref(), repo, GH_TIMEOUT), file));
+    }
     checks.push(notify(&settings.notify_command));
     checks.push(sandbox(&settings.sandbox, &crate::sandbox::missing_here()));
     let plugin = crate::vault_cli::plugin(&env.claude_dir);
@@ -1007,6 +1034,43 @@ mod tests {
         assert_eq!(stood_in.level, Level::Ok, "KELPIE_VAULT_BIN stands in for a missing plugin, as detect() lets it: {stood_in:?}");
         assert!(stood_in.fact.contains("KELPIE_VAULT_BIN=/tmp/fake-vault") && stood_in.fact.contains("each task gets a note"), "{stood_in:?}");
         assert!(vault(&Plugin::Missing, Some("/tmp/fake-vault"), Some(Err("no such file".to_string()))).fact.contains("the vault command failed"));
+    }
+
+    #[test]
+    fn doctor_suggests_docs_required_for_a_public_github_repo_and_never_fails_without_gh() {
+        let dir = scratch("docs");
+        let (repo, file) = (dir.join("app"), dir.join("repos/app.toml"));
+        std::fs::create_dir_all(&repo).unwrap();
+        let gh = dir.join("gh");
+        std::fs::write(&gh, "#!/bin/sh\n[ \"$*\" = \"repo view --json visibility --jq .visibility\" ] && echo PUBLIC\n").unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(visibility(Some(&gh), &repo, GH_TIMEOUT).as_deref(), Some("public"));
+        assert_eq!(visibility(None, &repo, GH_TIMEOUT), None, "without gh there is no answer");
+        let slow = dir.join("gh-slow");
+        std::fs::write(&slow, "#!/bin/sh\nsleep 30\necho PUBLIC\n").unwrap();
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(visibility(Some(&slow), &repo, std::time::Duration::from_millis(200)), None, "a gh that hangs is no answer");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "and doctor does not wait for it");
+        if std::env::var(crate::ci::GH_VAR).is_err() {
+            assert_eq!(gh_on(std::slice::from_ref(&dir)), Some(gh.clone()), "gh is found on the doctor's PATH");
+        }
+        let failing = dir.join("gh-failing");
+        std::fs::write(&failing, "#!/bin/sh\necho 'no git remotes found' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(visibility(Some(&failing), &repo, GH_TIMEOUT), None, "a repo gh cannot read is no answer");
+        let off = Setting { value: false, layer: config::Layer::Default };
+        let suggested = docs(&off, || visibility(Some(&gh), &repo, GH_TIMEOUT), &file).unwrap();
+        assert_eq!(suggested.level, Level::Ok, "a suggestion, not a warning");
+        assert!(suggested.fact.contains("public on GitHub") && suggested.fix == [format!("to turn it on, add [docs] required = true to {}", file.display())], "{suggested:?}");
+        assert_eq!(docs(&off, || Some("private".to_string()), &file), None);
+        assert_eq!(docs(&off, || None, &file), None);
+        let on = Setting { value: true, layer: config::Layer::Repo };
+        let asked = std::cell::Cell::new(false);
+        let check = docs(&on, || { asked.set(true); None }, &file).unwrap();
+        assert!(check.fact.contains("docs.required is on (repo config)") && check.fix.is_empty(), "{check:?}");
+        assert!(!asked.get(), "gh is not asked when there is nothing to suggest");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -8,7 +8,7 @@ kelpie reads each key from the first layer that sets it:
 
 | Layer | File | Holds |
 | --- | --- | --- |
-| Repo config | `~/.config/kelpie/repos/<repo>.toml` | `[worktree]`, `[task]`, `[review]`, `[[actions]]` and `[[routines]]` for one repo. `<repo>` is the main checkout's folder name, so every worktree of `~/code/app` reads `repos/app.toml`. |
+| Repo config | `~/.config/kelpie/repos/<repo>.toml` | `[worktree]`, `[task]`, `[review]`, `[docs]`, `[[actions]]` and `[[routines]]` for one repo. `<repo>` is the main checkout's folder name, so every worktree of `~/code/app` reads `repos/app.toml`. |
 | Machine config | `~/.config/kelpie/config.toml` | Every key. |
 | Defaults | built in | Every key. |
 
@@ -45,6 +45,7 @@ Rules:
 | `task.profile` | string | none | either | The [profile](#profiles) a task starts with when `kelpie start` names none with `--profile`. Unset, tasks start with the built-in `task`. A restarted task keeps the profile it started with. See [Give tasks a profile](../how-to/give-tasks-a-profile.md). |
 | `task.sandbox` | boolean | `true` | either | Whether a task's and the reviewer's shell commands run in Claude Code's sandbox, strict: no retry outside it, and no start without it. A task's shell then writes only in its worktree, its temp folder, the package caches (`~/.cargo/registry`, `~/.cargo/git`, `~/.npm`, `~/.cache`) and the repo's shared `.git` folder except its hooks, config and the other pooled worktrees' git dirs, reaches only crates.io, static.crates.io, index.crates.io, registry.npmjs.org, github.com, objects.githubusercontent.com, pypi.org and files.pythonhosted.org, and no Unix socket; on macOS it may listen on local ports for a dev server. kelpie's own task commands (`peers`, `tell`, `ask`, `report`, `routine ok`, `link`, `backlog add`, `config`) run outside it. On Linux it needs bubblewrap, socat and the seccomp filter (`npm install -g @anthropic-ai/sandbox-runtime`); without them kelpie refuses to start a task or a review and names what to install. `false` runs them unsandboxed, where a task's shell can pass as you to kelpie's user-only commands; `kelpie doctor`, a task's start and the board's Areas page say so. A profile's `[sandbox] enabled` wins over it. See [The trust boundary](../explanation/trust-boundary.md#the-sandbox). |
 | `task.permission_mode` | `"default"`, `"acceptEdits"`, `"plan"`, `"auto"`, `"dontAsk"` or `"bypassPermissions"` | none | either | The [permission mode](https://code.claude.com/docs/en/permission-modes) a task's Claude starts in. Unset, Claude Code's own default applies. `kelpie start --mode` and then the task's profile's `permission_mode` override it, and a restarted task keeps the mode it started in. Any other value is refused when the config loads. `"bypassPermissions"` runs every tool without asking; Claude Code recommends it only for an isolated container or VM. A task still never pushes nor approves its own commits in it, since kelpie's deny rules and the worktree's push block hold in every mode. See [Let tasks run without permission prompts](../how-to/let-tasks-run-without-prompts.md). |
+| `docs.required` | boolean | `false` | repo config only | Whether this repo's docs keep in step with its code. A task's Claude updates the README and `docs/` when its change alters what a user sees or does, by the [`kelpie:keep-docs`](skills.md) skill, and the reviewer fails a branch that changes such behaviour and leaves it undescribed in the README or `docs/`. `kelpie doctor` suggests it for a repo that is public on GitHub. See [Keep docs in step with changes](../how-to/keep-docs-in-step.md). |
 | `review.model` | string | none | either | The model the reviewer runs on: the `reviewer` profile's `model` by another name, and ahead of it when both are set. Unset leaves it to that profile, and then to Claude's default. |
 | `notify.command` | string | none | config.toml only | The shell command kelpie runs when something needs you. See [Notify command](#notify-command). Unset sends nothing. |
 | `vault.command` | string | none | config.toml only | The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments. Unset runs the vault plugin's pinned command from its hooks. Used only while the vault plugin is installed and enabled. |
@@ -273,6 +274,9 @@ test_commands = ["script/test"]
 
 [ci]
 watch = false
+
+[docs]
+required = true
 ```
 
 ## Claude Code plugin option

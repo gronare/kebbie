@@ -31,6 +31,7 @@ pub struct Reviewer<'a> {
     pub settings: &'a Path,
     pub prompt: &'a Path,
     pub rules: Option<&'a Path>,
+    pub docs: Option<&'a Path>,
 }
 
 impl Agent {

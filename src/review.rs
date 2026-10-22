@@ -269,13 +269,15 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     let rules = &settings.rules_skill.value;
     let rules_file = crate::agent::claude::home().and_then(|home| skill_file(rules, &slot.path, &home, &kelpie));
     let tests = crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha);
-    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value });
+    let keep_docs = kelpie.join(KEEP_DOCS);
+    let docs = if settings.docs_required.value { Some(docs_brief(&slot.path, &upstream, &sha, &keep_docs)?) } else { None };
+    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value, docs: docs.as_deref() });
     if settings.sandbox.value {
         crate::sandbox::refusal(&crate::sandbox::missing_here())?;
     }
     let guard = write_settings(&roles_dir()?, &format!("{address}.review"), &agent.reviewer_settings(&peers::kelpie_command()?, settings.sandbox.value))?;
     let prompt = reviewer_prompt(&kelpie.join("skills/review/SKILL.md"), &profile, &roles_dir()?.join(format!("{address}.review.md")))?;
-    let (program, args) = agent.reviewer_command(&Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: &guard, prompt: &prompt, rules: rules_file.as_deref().and_then(Path::parent) });
+    let (program, args) = agent.reviewer_command(&Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: &guard, prompt: &prompt, rules: rules_file.as_deref().and_then(Path::parent), docs: docs.as_ref().and(keep_docs.parent()) });
     let mut child = Command::new(program).args(&args).current_dir(&slot.path)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|error| format!("{program}: {error}"))?;
@@ -394,10 +396,12 @@ struct Brief<'a> {
     said: &'a [String],
     tests: &'a str,
     also_noticed: config::AlsoNoticed,
+    docs: Option<&'a str>,
 }
 
 fn brief(brief: &Brief) -> String {
-    let Brief { address, worktree, upstream, sha, commits, rules, rules_file, said, tests, also_noticed } = *brief;
+    let Brief { address, worktree, upstream, sha, commits, rules, rules_file, said, tests, also_noticed, docs } = *brief;
+    let docs = docs.map_or(String::new(), |docs| format!("{docs}\n\n"));
     let rules = match rules_file {
         Some(file) => format!("The rules skill in effect is `{rules}`, at {}: read it, and the files beside it that it points to, and check every commit against each of its rules.", file.display()),
         None => format!("The rules skill in effect is `{rules}`, but kelpie found no file for it: say so on the line after the verdict line, and review without it."),
@@ -408,10 +412,50 @@ fn brief(brief: &Brief) -> String {
          {rules}\n\n\
          {}\n\n\
          {tests}\n\n\
+         {docs}\
          {}\n\
          Your last message is the verdict, starting with its verdict line; kelpie saves it and tells the lead.",
         worktree.display(), scope(also_noticed), conversation(said)
     )
+}
+
+const DOCS_INDEX: &str = "docs/README.md";
+const KEEP_DOCS: &str = "skills/keep-docs/SKILL.md";
+const MANIFESTS: [&str; 9] = ["Cargo.toml", "package.json", "pyproject.toml", "setup.py", "go.mod", "composer.json", "mix.exs", "pom.xml", "build.gradle"];
+
+// The root README, anything under docs/, and the README of a package in a workspace; a fixture's or a demo's README is not the product's docs.
+pub fn is_doc(path: &str, worktree: &Path) -> bool {
+    let file = Path::new(path);
+    if path.starts_with("docs/") {
+        return true;
+    }
+    if !file.file_stem().is_some_and(|stem| stem.eq_ignore_ascii_case("readme")) {
+        return false;
+    }
+    match file.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        None => true,
+        Some(dir) => MANIFESTS.iter().any(|manifest| worktree.join(dir).join(manifest).is_file()),
+    }
+}
+
+// The docs check for a repo with docs.required, from the branch's own diff and the worktree's docs index.
+pub fn docs_brief(worktree: &Path, upstream: &str, sha: &str, keep_docs: &Path) -> Result<String> {
+    let changed = git(worktree, &["diff", "--name-only", &format!("{upstream}...{sha}")])?;
+    let touched: Vec<&str> = changed.lines().filter(|path| is_doc(path, worktree)).collect();
+    let index = Some(DOCS_INDEX).filter(|index| worktree.join(index).is_file());
+    Ok(docs_check(&touched, index, keep_docs))
+}
+
+// No doc touched is the cheap case: every surface change is a finding; touched docs go to the reviewer to judge whether they cover it.
+pub fn docs_check(touched: &[&str], index: Option<&str>, keep_docs: &Path) -> String {
+    let finding = "`<file:line> — documents nothing for <what changed>; update <suggested page> (keep-docs).`";
+    let docs = if touched.is_empty() {
+        format!("these commits change no README or docs/ file, so each surface change is a finding {finding}")
+    } else {
+        format!("these commits change {}; each surface change they leave undescribed is a finding {finding}", touched.iter().map(|path| format!("`{path}`")).collect::<Vec<_>>().join(", "))
+    };
+    let pages = index.map_or("The repo has no docs/README.md, so its README is the documentation.".to_string(), |index| format!("The docs index is `{index}`: pick the page from it."));
+    format!("This repo sets `docs.required`. Do the Docs step by the keep-docs skill at {}: {docs} {pages}", keep_docs.display())
 }
 
 fn scope(also_noticed: config::AlsoNoticed) -> String {
@@ -430,7 +474,7 @@ mod tests {
 
     #[test]
     fn the_reviewer_has_only_reading_tools_and_git_log_diff_show_on_the_shell() {
-        let reviewer = Reviewer { model: None, effort: None, settings: Path::new("/state/roles/billing@app.review.settings.json"), prompt: Path::new("/kelpie/skills/review/SKILL.md"), rules: None };
+        let reviewer = Reviewer { model: None, effort: None, settings: Path::new("/state/roles/billing@app.review.settings.json"), prompt: Path::new("/kelpie/skills/review/SKILL.md"), rules: None, docs: None };
         let args = claude_args(&reviewer);
         let after = |flag: &str| args[args.iter().position(|arg| arg == flag).unwrap() + 1].clone();
         assert_eq!(args[0], "-p");
@@ -623,7 +667,7 @@ mod tests {
         let transcript = lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\nnot json\n";
         let said = user_messages(&transcript);
         assert_eq!(said, ["Add refunds to the billing page.", "Refunds only within 30 days."]);
-        let mut shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kelpie:work-rules", rules_file: Some(Path::new("/kelpie/skills/work-rules/SKILL.md")), said: &said, tests: "- ✓ cargo test · 3 passed · at abc123 · `cargo test`", also_noticed: config::AlsoNoticed::Backlog };
+        let mut shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kelpie:work-rules", rules_file: Some(Path::new("/kelpie/skills/work-rules/SKILL.md")), said: &said, tests: "- ✓ cargo test · 3 passed · at abc123 · `cargo test`", also_noticed: config::AlsoNoticed::Backlog, docs: None };
         let text = brief(&shape);
         assert!(text.contains("origin/main..abc123:\nabc123 Add refunds"), "{text}");
         assert!(text.contains("`kelpie:work-rules`, at /kelpie/skills/work-rules/SKILL.md: read it"), "{text}");
@@ -641,6 +685,65 @@ mod tests {
         let kept = conversation(&many);
         assert!(kept.contains("older ones left out") && kept.contains("19xx") && !kept.contains("\n0xx"), "the newest later messages are kept");
         assert!(kept.find("15xx").unwrap() < kept.find("19xx").unwrap(), "in the order they were said");
+    }
+
+    #[test]
+    fn the_brief_carries_the_docs_check_only_when_kelpie_passes_one() {
+        let said = ["Add a --json flag to kelpie peers.".to_string()];
+        let mut shape = Brief { address: "peers@kelpie", worktree: Path::new("/src/wt1.kelpie"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add --json", rules: "kelpie:work-rules", rules_file: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None };
+        assert!(!brief(&shape).contains("docs.required"), "a repo without docs.required gets no docs check");
+        let skill = Path::new("/kelpie/skills/keep-docs/SKILL.md");
+        let check = docs_check(&[], Some("docs/README.md"), skill);
+        assert!(check.contains("by the keep-docs skill at /kelpie/skills/keep-docs/SKILL.md: these commits change no README or docs/ file"), "{check}");
+        assert!(check.contains("documents nothing for <what changed>; update <suggested page> (keep-docs)") && check.contains("The docs index is `docs/README.md`"), "{check}");
+        let covered = docs_check(&["docs/reference/commands.md"], None, skill);
+        assert!(covered.contains("these commits change `docs/reference/commands.md`; each surface change they leave undescribed is a finding") && covered.contains("its README is the documentation"), "touched docs go to the reviewer to judge: {covered}");
+        shape.docs = Some(&check);
+        assert!(brief(&shape).contains(&format!("{check}\n\nThe prompt the task was started with")), "the check sits before the conversation");
+    }
+
+    #[test]
+    fn only_the_products_own_readmes_and_docs_count_as_docs() {
+        let dir = crate::sh::test_dir("is-doc");
+        fs::create_dir_all(dir.join("crates/core")).unwrap();
+        fs::write(dir.join("crates/core/Cargo.toml"), "").unwrap();
+        for doc in ["README.md", "Readme.txt", "README", "docs/how-to/new.md", "docs/assets/demo.gif", "crates/core/README.md"] {
+            assert!(is_doc(doc, &dir), "{doc}");
+        }
+        for not in ["tests/fixtures/README.md", "demo/README.md", "src/docs.rs", "src/readme_check.rs", "mydocs/a.md", "crates/README.md"] {
+            assert!(!is_doc(not, &dir), "{not}");
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_docs_check_reads_the_branchs_own_diff_and_the_worktrees_index() {
+        let dir = crate::sh::test_dir("docs-brief");
+        let sh = |args: &[&str]| crate::sh::run("git", args, Some(&dir)).unwrap();
+        sh(&["init", "-q", "-b", "main"]);
+        sh(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"]);
+        let base = sh(&["rev-parse", "HEAD"]);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/peers.rs"), "fn json() {}\n").unwrap();
+        fs::create_dir_all(dir.join("tests/fixtures")).unwrap();
+        fs::write(dir.join("tests/fixtures/README.md"), "fixture\n").unwrap();
+        sh(&["add", "src/peers.rs", "tests/fixtures/README.md"]);
+        sh(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "Add --json"]);
+        let head = sh(&["rev-parse", "HEAD"]);
+        let skill = Path::new("/kelpie/skills/keep-docs/SKILL.md");
+        let none = docs_brief(&dir, &base, &head, skill).unwrap();
+        assert!(none.contains("change no README or docs/ file") && none.contains("its README is the documentation"), "a fixture's README is no doc, and without docs/README.md the README is the docs: {none}");
+        fs::create_dir_all(dir.join("docs/reference")).unwrap();
+        fs::write(dir.join("docs/README.md"), "# docs\n").unwrap();
+        fs::write(dir.join("docs/reference/commands.md"), "--json\n").unwrap();
+        sh(&["add", "docs"]);
+        sh(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "Document --json"]);
+        let documented = sh(&["rev-parse", "HEAD"]);
+        let touched = docs_brief(&dir, &base, &documented, skill).unwrap();
+        assert!(touched.contains("change `docs/README.md`, `docs/reference/commands.md`;") && touched.contains("The docs index is `docs/README.md`"), "{touched}");
+        assert!(docs_brief(&dir, &head, &documented, skill).unwrap().contains("change `docs/README.md`"), "the range starts at upstream: {touched}");
+        assert!(docs_brief(&dir, "no-such-ref", &head, skill).is_err(), "a diff git cannot make stops the review rather than passing it");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -672,6 +775,9 @@ mod tests {
         assert!(skill.starts_with("---\nname: review\n"), "{skill}");
         assert!(skill.contains("verdict: ok") && skill.contains("verdict: changes"));
         assert!(skill.contains("4. **Scope.**") && skill.contains("`task.also_noticed`"), "the reviewer checks scope by the task's setting: {skill}");
+        assert!(skill.contains("7. **Docs.** Only when your brief has a docs check"), "the brief's docs check names a step the skill has: {skill}");
+        let keep_docs = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/keep-docs/SKILL.md")).unwrap();
+        assert!(keep_docs.starts_with("---\nname: keep-docs\n"), "the skill the role and the finding name ships: {keep_docs}");
     }
 
     #[test]
@@ -788,7 +894,7 @@ mod tests {
         assert_eq!(reviewer_prompt(&skill, &built_in, &combined).unwrap(), skill, "without a role of its own the reviewer reads the review skill itself");
         assert!(!combined.exists());
         let plain = reviewer_profile(&built_in, None);
-        let (program, args) = crate::agent::Agent::Claude.reviewer_command(&Reviewer { model: plain.model.as_deref(), effort: plain.effort.as_deref(), settings: Path::new("/s/review.settings.json"), prompt: &skill, rules: None });
+        let (program, args) = crate::agent::Agent::Claude.reviewer_command(&Reviewer { model: plain.model.as_deref(), effort: plain.effort.as_deref(), settings: Path::new("/s/review.settings.json"), prompt: &skill, rules: None, docs: None });
         let skill_arg = skill.to_string_lossy().to_string();
         assert_eq!(program, "claude");
         assert_eq!(args, ["-p", "--setting-sources", "", "--output-format", "text", "--no-session-persistence", "--strict-mcp-config", "--permission-mode", "dontAsk", "--tools", "Read,Grep,Glob,Bash", "--allowedTools", "Read", "Grep", "Glob", "Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "--settings", "/s/review.settings.json", "--append-system-prompt-file", skill_arg.as_str()]);
@@ -796,7 +902,7 @@ mod tests {
         let filed = crate::profiles::Profile { model: Some("sonnet".to_string()), effort: Some("max".to_string()), ..built_in.clone() };
         assert_eq!(reviewer_profile(&filed, None).model.as_deref(), Some("sonnet"));
         assert_eq!(reviewer_profile(&filed, Some("opus")).model.as_deref(), Some("opus"), "review.model, set per repo, wins over the profile file");
-        let (_, args) = crate::agent::Agent::Claude.reviewer_command(&Reviewer { model: Some("opus"), effort: Some("max"), settings: Path::new("/s.json"), prompt: &skill, rules: None });
+        let (_, args) = crate::agent::Agent::Claude.reviewer_command(&Reviewer { model: Some("opus"), effort: Some("max"), settings: Path::new("/s.json"), prompt: &skill, rules: None, docs: None });
         assert_eq!(args[args.len() - 4..], ["--model", "opus", "--effort", "max"]);
         fs::write(dir.join("strict.md"), "Count every unwrap as a finding.\n").unwrap();
         let strict = crate::profiles::Profile { role: Some(dir.join("strict.md")), ..built_in };

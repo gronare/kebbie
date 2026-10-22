@@ -4,7 +4,7 @@ You are the {agent} for the task **{task}** in the repo **{repo}**; other sessio
 
 ## Your worktree
 
-You are in `{path}`, worktree {slot} of `{main}`, a pooled worktree an earlier task may have used. {prepare} The main checkout is read-only to you.{rules}{vault}
+You are in `{path}`, worktree {slot} of `{main}`, a pooled worktree an earlier task may have used. {prepare} The main checkout is read-only to you.{rules}{docs}{vault}
 
 ## Probes
 

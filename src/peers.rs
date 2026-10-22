@@ -184,6 +184,15 @@ fn rules_line(rules_skill: &str) -> String {
     format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, the lead checks your commits against it.")
 }
 
+// Codex has no kelpie skill, so its line names the docs and not the skill.
+pub fn docs_line(agent: crate::agent::Agent, required: bool) -> String {
+    match (required, agent) {
+        (false, _) => String::new(),
+        (true, crate::agent::Agent::Claude) => "\n\nThis repo keeps its docs in step with its code (`docs.required`): when your change alters what a user sees or does, run the skill `kelpie:keep-docs` and update the docs in this task. The reviewer fails a branch that changes such behaviour and documents nothing.".to_string(),
+        (true, _) => "\n\nThis repo keeps its docs in step with its code (`docs.required`): when your change alters what a user sees or does, update the page that describes it in this task, found from the index in docs/README.md, or the README when there is none. The reviewer fails a branch that changes such behaviour and documents nothing.".to_string(),
+    }
+}
+
 // The plan step of roles/task.md: the task's note when kelpie keeps one, else with the vault as a backlog source a note there, else a plan file outside the worktree (plan_file); never a file in the worktree, where it would land in the repo.
 pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, kelpie: &str, task: &str, plans: &Path) -> String {
     if let Some(note) = note {
@@ -264,9 +273,10 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let plans = plan_file(place.sandboxed, &me, || crate::tasks::task_tmp(place.worktree), crate::lead::state_dir)?;
     let plan = plan_step(&crate::config::sources().unwrap_or_default(), place.note, &kelpie, task, &plans);
     let vault = vault_section(place.note, &kelpie);
-    let also_noticed = crate::config::resolve(Some(place.repo))?.settings.also_noticed.value;
-    let noticed = noticed_section(also_noticed, crate::vault_cli::detect().is_some(), &kelpie);
-    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("kelpie", kelpie), ("peers", peers), ("plan", plan), ("vault", vault)];
+    let settings = crate::config::resolve(Some(place.repo))?.settings;
+    let noticed = noticed_section(settings.also_noticed.value, crate::vault_cli::detect().is_some(), &kelpie);
+    let docs = docs_line(place.agent, settings.docs_required.value);
+    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("kelpie", kelpie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs)];
     values.extend(worktree_values(place)?);
     Ok(values)
 }
@@ -405,6 +415,21 @@ mod tests {
             assert!(role.contains(&format!("Then run the skill `{skill}` and follow it for the rest of this task")), "{role}");
             assert!(!role.contains("{rules}"));
         }
+    }
+
+    #[test]
+    fn the_docs_line_reaches_the_role_only_in_a_repo_that_requires_docs() {
+        use crate::agent::Agent;
+        use crate::config::{Machine, Worktree, parse_repo, settings};
+        let template = include_str!("../roles/task.md");
+        let role = |own: &Worktree, agent: Agent| fill(template, &[("rules", ""), ("vault", ""), ("docs", &docs_line(agent, settings(own, &Machine::default()).docs_required.value))]);
+        let on = parse_repo("[docs]\nrequired = true\n", "kelpie.toml").unwrap();
+        let claude = role(&on, Agent::Claude);
+        assert!(claude.contains("read-only to you.\n\nThis repo keeps its docs in step with its code (`docs.required`)") && claude.contains("run the skill `kelpie:keep-docs`"), "{claude}");
+        let codex = role(&on, Agent::Codex);
+        assert!(codex.contains("`docs.required`") && !codex.contains("kelpie:keep-docs"), "a skill Codex cannot run is not named: {codex}");
+        let off = role(&Worktree::default(), Agent::Claude);
+        assert!(!off.contains("docs.required") && !off.contains("keep-docs") && !off.contains("{docs}"), "{off}");
     }
 
     #[test]

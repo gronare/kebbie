@@ -45,6 +45,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `state dir` | The state directories. |
 | `config`, `repo config` | config.toml and every file in the repos folder parse, with no unknown or misplaced keys and no broken links. |
 | `push block` | Inside a repo: whether its task worktrees get the push block. |
+| `docs` | Inside a repo: whether `docs.required` is on, and a suggestion to turn it on when `gh` says the repo is public on GitHub. Without `gh` or a GitHub remote the line is left out. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
 | `notify` | Whether `notify.command` is set. It is never run. |
 | `sandbox` | Whether tasks run in the sandbox: on and ready, on with what is missing on Linux (a `fail`, since tasks then do not start), or off with `task.sandbox = false` (a `warn` that says a task's shell can pass as you). |

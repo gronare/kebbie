@@ -20,6 +20,16 @@ Run kelpie from your own checkout while you change it.
    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HERDR_BIN_PATH=false KELPIE_STATE_DIR=$(mktemp -d) cargo test
    ```
 
+4. Hold your tasks in kelpie to its docs. kelpie's documentation is part of the product, so turn on `docs.required` for the checkout, named after its folder:
+
+   ```toml
+   # ~/.config/kelpie/repos/kelpie.toml
+   [docs]
+   required = true
+   ```
+
+   A task that changes a command, a key or a notice then updates its page under `docs/`, and the reviewer holds one that does not. See [Keep docs in step with changes](keep-docs-in-step.md).
+
 To try a task's commits in the kelpie you run before pushing them, turn on `stage_on_main` for the repo and stage the task: see [Try a task before pushing](try-a-task-before-pushing.md).
 
 To try your commits on a machine that follows a channel instead, see [Try unreleased code](try-unreleased-code.md).
