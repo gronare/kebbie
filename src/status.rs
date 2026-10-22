@@ -212,6 +212,15 @@ impl Item {
         Some(if self.held_by_draft.is_some() || self.reported_since(pending.at, "needs-you") { Group::NeedsYou } else { Group::ReadyToPush })
     }
 
+    // A turn that has not touched the approved commits, such as reading a notice, leaves a finished task where it is; an edit, a new commit or a new report moves it.
+    fn turn_leaves_it_ready(&self) -> bool {
+        self.pushable() && !self.awaiting_review() && self.held_by_draft.is_none()
+    }
+
+    pub fn turn_under_way(&self) -> bool {
+        self.agent.as_ref().is_some_and(|agent| agent.status == "working")
+    }
+
     // Between turns the task's own report says what it needs; herdr's "done" only says nobody has looked yet.
     pub fn group(&self) -> Group {
         if let Some(queued) = &self.queued {
@@ -223,6 +232,7 @@ impl Item {
         }
         match (status, self.report_state(), self.ci_group().or_else(|| self.recover_group())) {
             (Some("blocked"), _, _) => Group::NeedsYou,
+            (Some("working"), Some("ready"), None) if self.turn_leaves_it_ready() => Group::ReadyToPush,
             (Some("working"), _, _) | (_, Some("working"), _) => Group::Working,
             (_, _, Some(group)) => group,
             _ if self.held_by_draft.is_some() => Group::NeedsYou,
@@ -320,7 +330,8 @@ impl Item {
         if self.group() == Group::ReadyToPush {
             let review: String = self.rules_note().map(str::to_string).into_iter().chain(self.review_note()).map(|note| format!(" · {note}")).collect();
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
-            return format!("{} · ready to push{behind}{review}", plural(git.ahead, "commit"));
+            let turn = if self.turn_under_way() { " · its Claude is taking a turn" } else { "" };
+            return format!("{} · ready to push{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
         let mut parts: Vec<String> = self.ci_note().into_iter().chain(self.recover_note()).chain(self.push_note()).collect();
         if git.ahead > 0 {
@@ -766,6 +777,73 @@ pub(crate) mod tests {
         }
     }
 
+    fn at(item: &mut Item, status: Option<&str>) -> Group {
+        item.agent = status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None });
+        item.group()
+    }
+
+    fn reported(item: &mut Item, state: &str, when: u64) {
+        let message = item.report.get_or_insert_with(|| task(None, Some(state), 0).report.unwrap());
+        message.at = when;
+        message.report.as_mut().unwrap().state = state.to_string();
+    }
+
+    // herdr shows a restarting Claude as gone, then unknown, then idle; none of those is news for the user.
+    const RESTARTING: [Option<&str>; 3] = [None, Some("unknown"), Some("idle")];
+
+    #[test]
+    fn each_transition_lands_in_its_group_without_a_stop_on_the_way() {
+        let mut item = task(Some("working"), None, 0);
+        item.git.as_mut().unwrap().approved = false;
+        assert_eq!(item.group(), Group::Working, "start");
+        reported(&mut item, "working", 10);
+        assert_eq!(at(&mut item, Some("idle")), Group::Working, "a working report between turns");
+        reported(&mut item, "needs-you", 20);
+        assert_eq!(at(&mut item, Some("idle")), Group::NeedsYou, "a question");
+        assert_eq!(at(&mut item, Some("working")), Group::Working, "the answer starts a turn");
+        item.git.as_mut().unwrap().ahead = 2;
+        reported(&mut item, "ready", 30);
+        assert_eq!(at(&mut item, Some("idle")), Group::ReadyToPush, "ready, the lead checking its rules");
+        item.git.as_mut().unwrap().approved = true;
+        assert_eq!(item.group(), Group::ReadyToPush, "approved");
+        assert_eq!(at(&mut item, Some("working")), Group::ReadyToPush, "a notice it reads, such as an update's, leaves it ready");
+        assert!(item.turn_under_way(), "the board holds push until the turn ends");
+        assert!(item.summary().ends_with("ready to push · its Claude is taking a turn"), "{}", item.summary());
+        item.git.as_mut().unwrap().uncommitted = 1;
+        assert_eq!(item.group(), Group::Working, "an edit in that turn is new work");
+        item.git.as_mut().unwrap().uncommitted = 0;
+        for status in RESTARTING {
+            assert_eq!(at(&mut item, status), Group::ReadyToPush, "restart {status:?}");
+        }
+        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 40 });
+        assert_eq!(at(&mut item, Some("working")), Group::ReadyToPush, "a waiting push");
+        item.push_waits = None;
+        item.git.as_mut().unwrap().ahead = 0;
+        item.ci = Some(watched(crate::ci::State::Running, true));
+        item.ci.as_mut().unwrap().started_at = 50;
+        for status in [Some("done"), Some("idle"), None, Some("unknown")] {
+            assert_eq!(at(&mut item, status), Group::CiRunning, "pushed, {status:?}");
+        }
+        item.ci = None;
+        assert_eq!(at(&mut item, Some("done")), Group::NeedsYou, "without its watch a pushed task has nowhere to be, which is why the watch outlives the push and the close");
+    }
+
+    #[test]
+    fn a_restart_never_moves_a_task_to_another_group() {
+        for state in ["working", "needs-you", "ready", "blocked"] {
+            let mut item = task(Some("idle"), Some(state), 2);
+            let before = item.group();
+            for status in RESTARTING {
+                assert_eq!(at(&mut item, status), before, "{state}, {status:?}");
+            }
+        }
+        let mut pushed = task(Some("idle"), Some("ready"), 0);
+        pushed.ci = Some(watched(crate::ci::State::Running, true));
+        for status in RESTARTING {
+            assert_eq!(at(&mut pushed, status), Group::CiRunning, "{status:?}");
+        }
+    }
+
     #[test]
     fn a_pushed_task_waits_under_ci_running_and_a_failed_run_puts_it_under_needs_you_until_it_reports_again() {
         let mut item = task(Some("idle"), Some("ready"), 0);
@@ -864,6 +942,7 @@ pub(crate) mod tests {
     fn a_push_under_way_stays_under_ready_to_push_and_says_what_it_waits_for() {
         use tasks::{PendingPush, PushBy, PushWork};
         let mut item = task(Some("working"), Some("ready"), 1);
+        item.git.as_mut().unwrap().approved = false;
         assert_eq!((item.to_json()["push_waits"].clone(), item.push_note(), item.group()), (Value::Null, None, Group::Working));
         item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Tests, at: 10 });
         assert_eq!((item.to_json()["push_waits"].clone(), item.group()), (json!("lead"), Group::ReadyToPush), "the Claude working on the push is the push, not new work");

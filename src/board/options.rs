@@ -86,7 +86,7 @@ fn trunk(git: &crate::status::Git) -> &str {
 
 // While its Claude works, the branch can still move, so the steps that rewrite, push or close it wait.
 pub(super) fn busy(item: &Item) -> bool {
-    item.group() == Group::Working
+    item.group() == Group::Working || item.turn_under_way()
 }
 
 pub(super) fn ongoing_choices(note: &Ongoing) -> Vec<Choice> {
@@ -273,6 +273,14 @@ mod tests {
         item.verdict = Some(crate::status::tests::in_review(true, 0, false, false));
         assert_eq!(keys(&item), "gcrvtpdauzx");
         assert_eq!(row_facts(&item), "1 commit · reviewed");
+    }
+
+    #[test]
+    fn a_ready_task_whose_claude_takes_a_turn_stays_ready_but_push_waits_for_the_turn() {
+        let mut item = crate::status::tests::task(Some("working"), Some("ready"), 1);
+        assert!(item.group() == crate::status::Group::ReadyToPush && busy(&item));
+        item.agent.as_mut().unwrap().status = "idle".to_string();
+        assert!(!busy(&item));
     }
 
     #[test]
