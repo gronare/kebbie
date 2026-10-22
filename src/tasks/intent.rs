@@ -46,19 +46,24 @@ impl By {
         }
     }
 
-    pub(super) fn word(self) -> &'static str {
+    pub(crate) fn word(self) -> &'static str {
         match self {
             By::User => "the user",
             By::Lead => "the lead",
         }
     }
+
+    pub(crate) fn of_word(word: &str) -> Option<By> {
+        [By::User, By::Lead].into_iter().find(|by| by.word() == word)
+    }
 }
 
-// What the task's Claude does before the push goes on: test the files the default branch changed under it, or resolve the rebase that conflicted.
+// What the task's Claude does before the push goes on: test the files the default branch changed under it, resolve the rebase that conflicted, or fix what turned CI red after the push landed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Work {
     Tests,
     Conflict,
+    Ci,
 }
 
 impl Work {
@@ -66,6 +71,7 @@ impl Work {
         match self {
             Work::Tests => "tests",
             Work::Conflict => "conflict",
+            Work::Ci => "ci",
         }
     }
 }
@@ -105,6 +111,7 @@ impl Intent {
         };
         let work = match value["work"].as_str() {
             Some("conflict") => Work::Conflict,
+            Some("ci") => Work::Ci,
             _ => Work::Tests,
         };
         let through = match &value["through"] {
@@ -117,7 +124,7 @@ impl Intent {
             address: value["address"].as_str()?.to_string(),
             repo: PathBuf::from(value["repo"].as_str()?),
             task: value["task"].as_str()?.to_string(),
-            fingerprint: value["fingerprint"].as_str().filter(|text| !text.is_empty())?.to_string(),
+            fingerprint: value["fingerprint"].as_str().filter(|text| !text.is_empty() || work == Work::Ci)?.to_string(),
             through,
             at: value["at"].as_u64()?,
             seen: value["seen"].as_str().map(str::to_string),
@@ -152,6 +159,13 @@ pub(crate) struct Pending {
 // Reads only: the board and kelpie status never claim or drop an intent.
 pub(crate) fn pending(state: &Path, address: &str) -> Option<Pending> {
     load(state, address).map(|intent| Pending { by: intent.by, work: intent.work, at: intent.at })
+}
+
+// The pushed commits are on the default branch, so the push waits for a fix the lead checks: no commit of the task's is approved by the push itself.
+pub(crate) fn after_red_ci(state: &Path, repo: &Path, address: &str, by: By) -> Result<()> {
+    let task = address.split('@').next().unwrap_or(address).to_string();
+    let seen = messages::latest_reports(&messages::load()).get(address).map(|report| report.id.clone());
+    save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen })
 }
 
 pub(super) fn forget(state: &Path, address: &str) {
@@ -311,6 +325,26 @@ mod tests {
         assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abd"), false), Next::Wait, "changed commits wait for the lead's rules check");
         assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abd"), true), Next::Push, "the lead approved the changed commits");
         assert!(matches!(next(&waiting, Some(&report("r1", 200, "ready")), None, Some("abc"), true), Next::Drop(why) if why.contains("is gone")));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_red_ci_after_a_push_waits_as_that_push_and_sends_only_a_fix_the_lead_approved() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = format!("billing@{}", crate::repo::name_of(&dir));
+        after_red_ci(&state, &dir, &address, By::User).unwrap();
+        let red = load(&state, &address).expect("a red CI's push has no commits of its own yet, and still waits");
+        assert_eq!((red.by, red.work, red.fingerprint.as_str(), red.through, red.task.as_str()), (By::User, Work::Ci, "", Through::All, "billing"));
+        let mut forged = red.to_json();
+        forged["work"] = json!("tests");
+        crate::state::write(&file(&state, &address), forged.to_string()).unwrap();
+        assert_eq!(load(&state, &address), None, "only a red CI's push waits without commits");
+        let ready = report("r1", red.at + 1, "ready");
+        assert_eq!(next(&red, Some(&ready), Some(&slot), Some(""), false), Next::Wait, "ready without a fix: nothing to push");
+        assert_eq!(next(&red, Some(&ready), Some(&slot), Some("fix"), false), Next::Wait, "the fix waits for the lead's rules check");
+        assert_eq!(next(&red, Some(&ready), Some(&slot), Some("fix"), true), Next::Push);
+        assert_eq!(next(&red, Some(&report("r1", red.at + 1, "needs-you")), Some(&slot), Some("fix"), true), Next::Wait, "a fix that needs the user waits for them");
         cleanup(dir, origin, &slot);
     }
 

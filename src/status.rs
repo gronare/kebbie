@@ -205,6 +205,7 @@ impl Item {
             _ if self.reported_since(pending.at, "ready") => "the lead checks the new commits",
             tasks::PushWork::Tests => "its Claude runs the tests",
             tasks::PushWork::Conflict => "its Claude resolves the conflict",
+            tasks::PushWork::Ci => "its Claude fixes the red CI",
         };
         Some(format!("pushing for {who} · {what}"))
     }
@@ -361,7 +362,7 @@ impl Item {
 
     fn work(&self, git: &Git) -> String {
         if let (Group::ReadyToPush, Some(note)) = (self.group(), self.push_note()) {
-            return format!("{} · {note}", plural(git.ahead, "commit"));
+            return if git.ahead == 0 { note } else { format!("{} · {note}", plural(git.ahead, "commit")) };
         }
         if self.group() == Group::ReadyToPush {
             let review: String = self.rules_note().map(str::to_string).into_iter().chain(self.review_note()).map(|note| format!(" · {note}")).collect();
@@ -935,6 +936,13 @@ pub(crate) mod tests {
         item.agent.as_mut().unwrap().status = "idle".to_string();
         item.report.as_mut().unwrap().at = 30;
         assert!(item.group() == Group::NeedsYou && item.ci_group().is_none(), "a report after the failure decides again");
+        let mut red = task(Some("working"), Some("ready"), 0);
+        red.ci = Some(watched(crate::ci::State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, true));
+        red.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Ci, at: 20 });
+        assert_eq!((red.group(), red.summary(), red.next_for_you(), red.wanted("enter")), (Group::ReadyToPush, "pushing for you · its Claude fixes the red CI".to_string(), None, None), "the fix is the push still under way, not the user's to do");
+        red.report.as_mut().unwrap().at = 30;
+        red.report.as_mut().unwrap().report.as_mut().unwrap().state = "needs-you".to_string();
+        assert_eq!(red.group(), Group::NeedsYou, "its Claude cannot fix it, or the fix needs a decision");
         let mut partial = task(Some("idle"), Some("working"), 1);
         partial.ci = Some(watched(crate::ci::State::Running, false));
         assert!(partial.group() == Group::Working, "a partial push leaves the task where it is");

@@ -441,10 +441,18 @@ fn green(state: &Path, watch: &Watch, none_ran: bool) -> Event {
     Event { address: watch.address.clone(), kind: Kind::Green, text }
 }
 
-pub fn task_message(watch: &Watch, run: &Run, job: &str, tail: &str) -> String {
+// `pushing` names who pushed when kelpie pushes the fix under that same push.
+pub fn task_message(watch: &Watch, run: &Run, job: &str, tail: &str, pushing: Option<&str>) -> String {
     let log = if tail.trim().is_empty() { "gh showed no log for it.".to_string() } else { format!("The last lines of its log:\n{tail}") };
+    let then = match pushing {
+        Some(who) => format!(
+            "Find the cause and fix it with a new commit; do not push. Then report ready: the fix is part of the push {who} gave, and kelpie pushes it for {who} once the lead has checked it. \
+             Report needs-you only when you cannot fix it or the fix needs a decision from the user."
+        ),
+        None => "Find the cause, fix it with a new commit and report ready; the next push is watched the same way.".to_string(),
+    };
     format!(
-        "CI failed for {} on {}: {} · {job} ({}). {log}\nFind the cause, fix it with a new commit and report ready; the next push is watched the same way.",
+        "CI failed for {} on {}: {} · {job} ({}). {log}\n{then}",
         watch.short(), if watch.pushed.target.is_empty() { "the default branch" } else { &watch.pushed.target }, run.title(), run.url
     )
 }
@@ -460,10 +468,20 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     let what = format!("{} · {job}", run.title());
     watch.state = State::Failed { at: now, what: what.clone(), url: run.url.clone() };
     let _ = save(state, watch);
-    if let Err(error) = messages::hand_to(&watch.address, &task_message(watch, run, &job, &log_tail(&log, LOG_LINES))) {
+    let by = crate::tasks::PushBy::of_word(&watch.pushed.pusher).filter(|_| watch.close);
+    let who = by.map(crate::tasks::PushBy::word);
+    let handed = messages::hand_to(&watch.address, &task_message(watch, run, &job, &log_tail(&log, LOG_LINES), who));
+    if let Err(error) = &handed {
         eprintln!("Could not tell {} that CI failed: {error}", watch.address);
     }
-    let text = format!("CI failed for {} ({}): {what}. kelpie sent the task the failing log; it stays open under Needs you. {}", watch.address, watch.short(), run.url);
+    let pushing = by.filter(|by| handed.is_ok() && crate::tasks::after_red_ci(state, &watch.repo, &watch.address, *by).is_ok()).map(crate::tasks::PushBy::word);
+    let text = match pushing {
+        Some(who) => format!(
+            "CI failed for {} ({}): {what}. kelpie sent its Claude the failing log, and it fixes it as part of the push {who} gave: when it reports ready, check the fix against the rules (kelpie approve) and kelpie pushes it for {who}. It stays under Ready to push meanwhile. {}",
+            watch.address, watch.short(), run.url
+        ),
+        None => format!("CI failed for {} ({}): {what}. kelpie sent the task the failing log; it stays open under Needs you. {}", watch.address, watch.short(), run.url),
+    };
     if let Err(error) = messages::tell_lead(&text, Some("ci")) {
         eprintln!("Could not tell the lead that CI failed: {error}");
     }
@@ -570,10 +588,12 @@ mod tests {
         assert!(tail.starts_with("2026-10-20T10:00:00Z line 41") && tail.ends_with("line 100"), "{tail}");
         assert!(!tail.contains('\u{1b}') && !tail.contains('\u{7}') && !tail.contains("Run tests"));
         let watch = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, pushed: Pushed { target: "main".to_string(), ..Pushed::default() } };
-        let told = task_message(&watch, &run("completed", "failure"), "test", &tail);
+        let told = task_message(&watch, &run("completed", "failure"), "test", &tail, None);
         assert!(told.starts_with("CI failed for abcdef0 on main: CI · test (https://github.com/acme/app/actions/runs/1)."), "{told}");
         assert!(told.contains("line 100") && !told.contains("line 40\n"), "{told}");
-        assert!(task_message(&watch, &run("completed", "failure"), "test", "").contains("gh showed no log"));
+        assert!(task_message(&watch, &run("completed", "failure"), "test", "", None).contains("gh showed no log"));
+        let pushing = task_message(&watch, &run("completed", "failure"), "test", &tail, Some("the user"));
+        assert!(pushing.contains("kelpie pushes it for the user once the lead has checked it") && pushing.contains("do not push") && pushing.contains("needs-you only when you cannot fix it"), "{pushing}");
     }
 
     #[test]

@@ -816,7 +816,7 @@ fn after_a_push_the_task_waits_under_ci_running_and_closes_as_done_once_ci_is_gr
 }
 
 #[test]
-fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_open_under_needs_you() {
+fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_under_the_push_while_its_claude_fixes_it() {
     let lab = Lab::new("ci-failed");
     let (app, slot) = lab.task_fixture();
     on_github(&lab, &app);
@@ -831,10 +831,11 @@ fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_open_und
     let told = prompts_to(&lab, "p_task");
     let failure = told.iter().find(|text| text.contains("CI failed for")).unwrap_or_else(|| panic!("the task hears it: {told:?}"));
     assert!(failure.contains("CI · test") && failure.contains("line 41") && failure.contains("line 100") && !failure.contains("line 40"), "{failure}");
-    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("CI failed for billing@app")), "{:?}", prompts_to(&lab, "p_lead"));
+    assert!(failure.contains("kelpie pushes it for the user once the lead has checked it"), "the fix is part of the user's push: {failure}");
+    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("CI failed for billing@app") && text.contains("kelpie approve")), "{:?}", prompts_to(&lab, "p_lead"));
     let task = task_json(&lab);
-    assert_eq!(task["group"], "NEEDS YOU");
-    assert!(task["summary"].as_str().unwrap().contains("CI failed: CI · test"), "{task}");
+    assert_eq!((task["group"].as_str(), task["push_waits"].as_str()), (Some("READY TO PUSH"), Some("user")), "the push is under way, not the user's to act on: {task}");
+    assert_eq!(task["summary"], "pushing for you · its Claude fixes the red CI", "{task}");
     assert_eq!(git(&slot, &["branch", "--show-current"]), "billing", "the task stays open to fix it");
     let calls = gh_calls(&lab).len();
     assert_eq!(stdout(&lab.run(&["ci", "tick"])), "No CI watch is running.");

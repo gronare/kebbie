@@ -273,7 +273,7 @@ fn prepare(caller: &Caller, repo: &Path, slot: &Slot, through: Through, hand_ove
     committed(&slot.path, &task)?;
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
     if intent::load(&state, &address).is_some() && *caller != Caller::User {
-        return Err(format!("{task} is being pushed already: its Claude works on the rebase onto {upstream}, and kelpie pushes it once that reports ready"));
+        return Err(format!("{task} is being pushed already: its Claude works on it, and kelpie pushes it once that reports ready"));
     }
     let by = By::of(caller).ok_or_else(|| format!("{task} cannot be pushed by {}", crate::permit::describe(caller)))?;
     fetch(repo)?;

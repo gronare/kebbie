@@ -108,9 +108,9 @@ A watch runs while a board is open: every 30 seconds the board asks `gh run list
 | No runs yet | kelpie waits up to 3 minutes for runs to appear, then treats the commit as green. |
 | Running | The task waits under CI running. |
 | Every run passed, skipped or neutral | After at least a minute since the push, the task closes as `done`: its note is closed when the vault is on, and the lead hears what landed. |
-| A run failed | The task moves to Needs you with `CI failed: <workflow> · <job>`. Its Claude gets the job's name and the last 60 lines of its log, and the lead gets a line. The watch stops. |
+| A run failed | Its Claude gets the job's name and the last 60 lines of its log, and the lead gets a line. The watch stops. After a push of the whole task, the fix is part of that push: the task stays under Ready to push as `pushing for you · its Claude fixes the red CI`, and once its Claude reports ready and the lead approves the fix, kelpie pushes it for whoever gave the push, and watches it the same way. It moves to Needs you only when its Claude reports needs-you. After a push with `--through`, the task moves to Needs you with `CI failed: <workflow> · <job>`. |
 
-A task that fixes the failure pushes again as usual, and the new push is watched. `done` closes a task whatever CI says. A push with `--through` is watched too and leaves the task where it is.
+A task with `--through` that fixes the failure pushes again as usual, and the new push is watched. `done` closes a task whatever CI says. A push with `--through` is watched too and leaves the task where it is.
 
 ### `kelpie ci tick`
 
