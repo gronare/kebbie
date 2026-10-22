@@ -60,10 +60,29 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
         } else if line.is_empty()
             && let Some(path) = path.take()
         {
-            list.push(Worktree { path, branch: branch.take() });
+            let branch = branch.take().or_else(|| rebasing_branch(&path));
+            list.push(Worktree { path, branch });
         }
     }
     Ok(list)
+}
+
+// A rebase detaches HEAD until it finishes; the branch it rebuilds is named in its head-name file.
+fn rebasing_branch(worktree: &Path) -> Option<String> {
+    let dir = git_dir(worktree)?;
+    ["rebase-merge", "rebase-apply"].iter().find_map(|kind| {
+        let name = std::fs::read_to_string(dir.join(kind).join("head-name")).ok()?;
+        name.trim().strip_prefix("refs/heads/").map(str::to_string)
+    })
+}
+
+fn git_dir(worktree: &Path) -> Option<PathBuf> {
+    let dot_git = worktree.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git);
+    }
+    let text = std::fs::read_to_string(&dot_git).ok()?;
+    Some(worktree.join(text.trim().strip_prefix("gitdir:")?.trim()))
 }
 
 pub fn changed_count(path: &Path) -> Result<usize> {
@@ -352,6 +371,53 @@ mod tests {
         assert_eq!(slot_number(Path::new("/src/my.app"), Path::new("/src/wt2.my.app")), Some(2), "a dot in the repo's name is fine");
         assert_eq!(name_of(Path::new("/src/app/")), "app");
         assert_eq!(name_of(Path::new("/")), "");
+    }
+
+    fn conflicting(name: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kelpie-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let main = dir.join("app");
+        std::fs::create_dir_all(&main).unwrap();
+        let commit = |path: &Path, text: &str| {
+            std::fs::write(path.join("file"), text).unwrap();
+            git(path, &["add", "file"]).unwrap();
+            git(path, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", text]).unwrap();
+        };
+        git(&main, &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        commit(&main, "base");
+        let task = dir.join("wt1.app");
+        git(&main, &["worktree", "add", "--quiet", "-b", "billing", task.to_str().unwrap()]).unwrap();
+        commit(&task, "the task's line");
+        commit(&main, "main's line");
+        (dir, task)
+    }
+
+    fn branch_of(task: &Path) -> Option<String> {
+        worktrees(task).unwrap().into_iter().find(|worktree| worktree.path.canonicalize().ok() == task.canonicalize().ok()).unwrap().branch
+    }
+
+    #[test]
+    fn a_worktree_stopped_in_a_conflicting_rebase_still_names_the_branch_it_rebases() {
+        for (style, flag) in [("merge", "--merge"), ("apply", "--apply")] {
+            let (dir, task) = conflicting(&format!("rebase-{style}"));
+            assert!(git(&task, &["-c", "user.name=t", "-c", "user.email=t@t", "rebase", flag, "main"]).is_err(), "{style}: the rebase stops on the conflict");
+            assert!(rebase_in_progress(&task) && git(&task, &["symbolic-ref", "--quiet", "HEAD"]).is_err(), "{style}: git left HEAD detached mid-rebase");
+            assert_eq!(branch_of(&task).as_deref(), Some("billing"), "{style}-style rebase");
+            git(&task, &["rebase", "--abort"]).unwrap();
+            assert_eq!(branch_of(&task).as_deref(), Some("billing"));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn a_worktree_stopped_in_a_conflicting_merge_or_cherry_pick_stays_on_its_branch() {
+        let (dir, task) = conflicting("merge-pick");
+        assert!(git(&task, &["-c", "user.name=t", "-c", "user.email=t@t", "merge", "main"]).is_err());
+        assert_eq!(branch_of(&task).as_deref(), Some("billing"), "a merge keeps HEAD on the branch");
+        git(&task, &["merge", "--abort"]).unwrap();
+        assert!(git(&task, &["-c", "user.name=t", "-c", "user.email=t@t", "cherry-pick", "main"]).is_err());
+        assert_eq!(branch_of(&task).as_deref(), Some("billing"), "a cherry-pick keeps HEAD on the branch");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

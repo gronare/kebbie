@@ -268,6 +268,7 @@ fn tell_lead(text: &str) {
 mod tests {
     use super::*;
     use crate::messages::Report;
+    use crate::repo::git;
     use crate::tasks::test_support::*;
 
     fn report(id: &str, at: u64, state: &str) -> Message {
@@ -380,6 +381,27 @@ mod tests {
         assert!(load(&state, &address).is_some() && notes[0].contains("tries again"), "a push main kept outrunning waits for the next round, never dropped: {notes:?}");
         complete_in(&state, &ready("r3"), |_, _| Err("the reviewer has not passed it".to_string()));
         assert!(load(&state, &address).is_none(), "any other failure goes to the lead");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_waiting_on_a_task_that_is_rebasing_stays_and_goes_out_once_the_task_is_ready() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = format!("billing@{}", crate::repo::name_of(&dir));
+        save(&state, &intent(By::User, &dir, &fingerprint(&slot.path, &upstream).unwrap())).unwrap();
+        assert!(git(&slot.path, &["rebase", "--exec", "false", &upstream]).is_err(), "the rebase stops part-way");
+        assert!(crate::repo::rebase_in_progress(&slot.path));
+        assert_eq!(find_task(&dir, Some("billing"), &dir).map(|found| found.path).ok(), Some(slot.path.clone()), "the rebasing worktree is still the task's");
+        let mut pushed = 0;
+        let notes = complete_in(&state, &[], |_, _| { pushed += 1; Ok(String::new()) });
+        assert!(notes.is_empty() && load(&state, &address).is_some(), "the push waits through the rebase: {notes:?}");
+        git(&slot.path, &["rebase", "--continue"]).unwrap();
+        let mut ready = report("r1", 200, "ready");
+        ready.from = address.clone();
+        complete_in(&state, &[ready], |_, _| { pushed += 1; Ok(String::new()) });
+        assert_eq!(pushed, 1, "the task's ready report sends the push");
+        assert!(load(&state, &address).is_none());
         cleanup(dir, origin, &slot);
     }
 }
