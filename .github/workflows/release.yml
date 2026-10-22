@@ -100,3 +100,12 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "kelpie ${GITHUB_REF_NAME#v}" kelpie-*.tar.gz SHA256SUMS
           fi
+      - name: Publish the release once every binary and SHA256SUMS is attached
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          attached=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | sort)
+          expected=$(ls kelpie-*.tar.gz SHA256SUMS | sort)
+          [ "$attached" = "$expected" ] || { echo "::error::attached $attached, expected $expected"; exit 1; }
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
