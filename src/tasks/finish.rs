@@ -412,7 +412,8 @@ mod tests {
         std::fs::create_dir_all(tmp.join("deep")).unwrap();
         std::fs::write(tmp.join("deep/file"), "x").unwrap();
         assert!(is_clean(&slot.path).unwrap(), "temp files never show as changes in the worktree");
-        let written: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", None, Some(&tmp))).unwrap();
+        let dirs = crate::sandbox::TaskDirs::new(&slot.path, &tmp);
+        let written: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", None, Some(&dirs), None)).unwrap();
         for name in TMP_VARS {
             assert_eq!(written["env"][name], json!(tmp.to_string_lossy()), "{name}");
         }

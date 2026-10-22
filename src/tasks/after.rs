@@ -1559,7 +1559,7 @@ mod tests {
 
     #[test]
     fn a_tasks_settings_deny_changing_a_wait() {
-        let written: Value = serde_json::from_str(&crate::agent::claude::settings("/bin/kelpie", "billing@app", None, None)).unwrap();
+        let written: Value = serde_json::from_str(&crate::agent::claude::settings("/bin/kelpie", "billing@app", None, None, None)).unwrap();
         assert!(written["permissions"]["deny"].as_array().unwrap().contains(&json!("Bash(/bin/kelpie after:*)")));
     }
 

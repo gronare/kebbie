@@ -34,6 +34,7 @@ pub struct Area {
     pub git: Option<RepoState>,
     pub actions: Vec<Action>,
     pub errors: Vec<String>,
+    pub sandbox: bool,
 }
 
 impl Area {
@@ -113,7 +114,9 @@ pub fn gather() -> Result<Areas> {
             .filter(|other| other.kind == "task" && ["active", "draft", "backlog"].contains(&other.status.as_str()))
             .partition(|other| other.status != "backlog");
         let (actions, errors) = repo.as_deref().map(actions::load).unwrap_or_default();
+        let sandbox = crate::config::resolve(repo.as_deref()).map_or(true, |loaded| loaded.settings.sandbox.value);
         list.push(Area {
+            sandbox,
             log: vault::log_for(&logs, &note.stem, &own_logs(cli.as_ref(), &logs, &note.stem, repo.as_deref().map(name_of).as_deref())),
             git: repo.as_deref().and_then(|repo| repo_state(repo).ok()),
             key: note.key,
@@ -143,6 +146,9 @@ pub fn print() -> Result<String> {
         facts.push(format!("{} open, {} backlog", area.open.len(), area.backlog.len()));
         if area.repo_name().is_some_and(|repo| crate::permit::repo_permitted(&repo)) {
             facts.push("you may push its reviewed tasks".to_string());
+        }
+        if !area.sandbox {
+            facts.push("task sandbox off".to_string());
         }
         let keys: Vec<String> = area.actions.iter().map(|action| format!("{} {}", action.key, action.title)).collect();
         if !keys.is_empty() {
@@ -178,7 +184,7 @@ mod tests {
     }
 
     fn area() -> Area {
-        Area { key: "Areas/kelpie.md".to_string(), stem: "kelpie".to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new() }
+        Area { key: "Areas/kelpie.md".to_string(), stem: "kelpie".to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new(), sandbox: true }
     }
 
     #[test]

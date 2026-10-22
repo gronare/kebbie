@@ -20,6 +20,8 @@ Start a task in a pooled worktree, in its own herdr Space, with Claude. Running 
 
 In a folder you have trusted in Claude Code, kelpie answers Claude's "Do you trust this folder?" itself. In one you have not, that answer is yours: the prompt waits, and kelpie types it in once you have answered and Claude's input box is empty, while the keeper or an open board runs. If you type a first message yourself before then, kelpie drops the prompt instead of sending it again.
 
+A task's shell commands run in Claude Code's sandbox while `task.sandbox` is on; on a machine that cannot sandbox them fully, `kelpie start` refuses and names what to install. The start's answer says when the sandbox is off, and which commands a profile such as `ops` runs outside it. See [The trust boundary](../explanation/trust-boundary.md#the-sandbox).
+
 Started in `bypassPermissions`, Claude shows its bypass permissions warning until you accept it once on the machine. kelpie never answers it: the prompt waits the same way until you have. When managed settings disable bypass permissions mode, Claude starts with permission prompts, and `kelpie start` says so.
 
 | Option | Meaning |
@@ -187,7 +189,7 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 | --- | --- |
 | `kelpie board [--overlay]` | The board. `--overlay` is the popup form, which `esc` closes. See [Board](board.md). |
 | `kelpie status [--json]` | Every task and Claude session, grouped by what it needs from you. `--json` gives `away_since`, `items` and `checkouts`; a task's `push_waits` is `user` or `lead` while a push it asked for waits for the task's tests, and its `profile` is the profile it started with (`task` for the built-in one, `null` for a session that is no task). |
-| `kelpie profiles [--json]` | The [profiles](configuration.md#profiles) a task can start with: the built-in `task` and `reviewer`, then each file in `~/.config/kelpie/profiles`, each with what it is for, what it is about, and its agent, model, effort, permission mode and skills. A file that does not load is listed as ignored, with the reason. `--json` gives one object per profile, and `{"error": …}` for an ignored file. |
+| `kelpie profiles [--json]` | The [profiles](configuration.md#profiles) a task can start with: the built-in `task`, `reviewer` and `ops`, then each file in `~/.config/kelpie/profiles`, each with what it is for, what it is about, and its agent, model, effort, permission mode and skills. A file that does not load is listed as ignored, with the reason. `--json` gives one object per profile, and `{"error": …}` for an ignored file. |
 | `kelpie list [--json]` | The pool's worktrees: each one's task or `free`, uncommitted changes, commits ahead and behind, its port, and the first line of its setup note. `--json` adds `port` and `url`, the worktree's `dev_url` filled in, each `null` when there is none. |
 | `kelpie areas` | The vault's areas with their repo: main against origin, the last release, notes and actions. Needs the vault. |
 | `kelpie peers` | Who you are and the other task sessions, with what each is doing. |
@@ -238,7 +240,7 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 | --- | --- |
 | `kelpie config [--repo <path>]` | The config layers found and every key with its value in effect, the layer it comes from and what it does. See [Configuration](configuration.md). |
 | `kelpie config --get <key>` | Print one machine-wide value for scripts: `worktree.server_name` or `worktree.worker_name`. |
-| `kelpie doctor` | Check this machine, with the fix for each gap. Exits non-zero on a `fail`. See [Requirements](requirements.md#what-kelpie-doctor-checks). |
+| `kelpie doctor` | Check this machine, with the fix for each gap, the task sandbox's state among them. Exits non-zero on a `fail`. See [Requirements](requirements.md#what-kelpie-doctor-checks). |
 | `kelpie routes [--plain-http]` | Print a Caddy config with one site per pooled worktree that has a port, in every repo kelpie knows whose repo config sets [`worktree.dev_route = true`](configuration.md#keys): the host its `dev_url` names, `reverse_proxy localhost:<port>`. Sites keep the scheme and port `dev_url` names, so Caddy serves their TLS; `--plain-http` serves each as `http://<host>` for a proxy in front that ends TLS. A worktree without a port, a `dev_url` on localhost or without a host, or a host another worktree already has gets no site; the last comment line counts them with the reason, and the repos left out. It writes nothing. See [Open dev servers from a remote machine](../how-to/open-dev-servers-from-a-remote-machine.md). |
 | `kelpie setup vault` | Install the optional vault plugin in Claude Code, showing each `claude plugin` command and running it only on your `y`. |
 | `kelpie update` | Update everything to this machine's channel and restart idle Claude sessions. With open [kelpie issues](#kelpie-issues), it looks them up on GitHub through `gh` and asks the lead which ones the new commits likely fix. |

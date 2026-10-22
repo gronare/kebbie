@@ -231,7 +231,7 @@ pub fn forget(task: &str, repo: &Path) {
 }
 
 fn git_with(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git").args(args).current_dir(cwd).env("GIT_INDEX_FILE", index)
+    let output = Command::new("git").args(crate::repo::unhooked(Some(cwd), args)).current_dir(cwd).env("GIT_INDEX_FILE", index)
         .env("GIT_AUTHOR_NAME", "kelpie").env("GIT_AUTHOR_EMAIL", "kelpie@localhost").env("GIT_COMMITTER_NAME", "kelpie").env("GIT_COMMITTER_EMAIL", "kelpie@localhost")
         .stdin(Stdio::null()).output().map_err(|error| format!("git: {error}"))?;
     if !output.status.success() {

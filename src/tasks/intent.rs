@@ -28,7 +28,7 @@ impl By {
         match caller {
             Caller::User => Some(By::User),
             Caller::Lead => Some(By::Lead),
-            Caller::Task(_) | Caller::Agent => None,
+            Caller::Task(_) | Caller::Agent | Caller::Sandboxed | Caller::LeadSandboxed => None,
         }
     }
 

@@ -33,7 +33,8 @@ New tasks start in the mode. A task already running keeps the mode it started in
 
 ## What still holds
 
-- A task never pushes nor approves its own commits. Its Claude settings deny `git push`, `kelpie approve` and `kelpie push`, and Claude Code applies deny rules in every mode. The worktree's own push block stops a push the rules miss.
+- A task never pushes nor approves its own commits. Its Claude settings deny `git push` and kelpie's user-only commands, and Claude Code applies deny rules in every mode. The worktree's own push block stops a push the rules miss.
+- With `task.sandbox` on, the default, a task's shell commands still run in the sandbox: bypass mode skips the prompts, not the sandbox, and a command that fails in it is never retried outside it.
 - You still push, or the lead does when you [let it](let-the-lead-push.md), and a [review](send-a-task-to-review.md) still holds the push until it passes.
 - Managed settings with `permissions.disableBypassPermissionsMode = "disable"` keep Claude out of the mode. Claude then starts with permission prompts, and `kelpie start` says so.
 

@@ -18,6 +18,8 @@ kelpie runs on macOS and Linux, inside herdr 0.9.0 or later.
 
 Distro packages of `fzf` and `nvim` are often older than these versions.
 
+The task sandbox (`task.sandbox`, on by default) needs Claude Code 2.1.285 or later. On Linux it also needs `bubblewrap` and `socat` (`sudo apt install bubblewrap socat`) and the seccomp filter that blocks Unix sockets (`npm install -g @anthropic-ai/sandbox-runtime`). Without them kelpie refuses to start tasks until they are installed or `task.sandbox = false`. macOS needs nothing more.
+
 Rust is only needed where kelpie is built from source. A release tag installs a prebuilt binary on macOS (Apple silicon and Intel) and on Linux with glibc (x86_64 and arm64); see [Prebuilt binaries](../explanation/updates-and-restarts.md#prebuilt-binaries).
 
 Plan usage on the board needs a Claude.ai plan; an API key gives no usage numbers.
@@ -43,6 +45,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `push block` | Inside a repo: whether its task worktrees get the push block. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
 | `notify` | Whether `notify.command` is set. It is never run. |
+| `sandbox` | Whether tasks run in the sandbox: on and ready, on with what is missing on Linux (a `fail`, since tasks then do not start), or off with `task.sandbox = false` (a `warn` that says a task's shell can pass as you). |
 | `vault` | The vault plugin: on, missing (fine, it is optional) or too old. |
 | `backlog …` | Each backlog source can be read, and an installed source not in use. |
 

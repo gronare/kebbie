@@ -60,14 +60,20 @@ pub fn hook_script(original: &Path, state: &Path, main: &Path) -> String {
 }
 
 // The hooks the worktree ran before kelpie's: a hooksPath set anywhere but in its own worktree config, else the repo's hooks folder.
-fn original_hooks(worktree: &Path) -> Result<PathBuf> {
+pub fn original_hooks(worktree: &Path) -> Result<PathBuf> {
     let scoped = git(worktree, &["config", "--show-scope", "--get-all", "core.hooksPath"]).unwrap_or_default();
-    let set = scoped.lines().filter_map(|line| line.split_once('\t')).filter(|(scope, _)| *scope != "worktree").map(|(_, value)| value.trim()).next_back();
+    let set = scoped.lines().filter_map(|line| line.split_once('\t')).filter(|(scope, _)| !["worktree", "command"].contains(scope)).map(|(_, value)| value.trim()).next_back();
     Ok(match set {
         Some(path) if path.starts_with("~/") => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(&path[2..]),
         Some(path) => worktree.join(path),
         None => PathBuf::from(git(worktree, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?).join("hooks"),
     })
+}
+
+pub fn hooks_in_worktree(worktree: &Path) -> Result<Option<PathBuf>> {
+    let original = original_hooks(worktree)?;
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    Ok(real(&original).starts_with(real(worktree)).then_some(original))
 }
 
 fn hooks_dir(worktree: &Path) -> Result<PathBuf> {
@@ -138,10 +144,11 @@ mod tests {
         std::process::Command::new("git").args(args).current_dir(dir).env_remove(TOKEN_VAR).envs(env.iter().copied()).output().unwrap()
     }
 
+    // The task's own commit, in its own shell's git, which runs the repo's hooks.
     fn commit(dir: &Path, file: &str) {
         fs::write(dir.join(file), file).unwrap();
         git(dir, &["add", file]).unwrap();
-        git(dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", file]).unwrap();
+        assert!(run(dir, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", file], &[]).status.success());
     }
 
     struct Fixture {
@@ -213,6 +220,68 @@ mod tests {
         fs::remove_dir_all(&fixture.base).unwrap();
     }
 
+    fn pre_push(dir: &Path, ran: &Path) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("pre-push"), format!("#!/bin/sh\ntouch {}\n", quoted(&ran.to_string_lossy()))).unwrap();
+        fs::set_permissions(dir.join("pre-push"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn the_users_push_runs_the_repos_pre_push_hook_unless_a_sandboxed_task_holds_it() {
+        let fixture = fixture("user-push");
+        let Fixture { main, slot, state, .. } = &fixture;
+        let ran = fixture.base.join("pre-push-ran");
+        pre_push(&main.join(".git/hooks"), &ran);
+        install(slot, state).unwrap();
+        crate::sandbox::mark(&crate::lead::state_location().unwrap(), slot, true).unwrap();
+        commit(slot, "b");
+        crate::repo::push_from(slot, &["HEAD:refs/heads/billing"], state).unwrap();
+        assert!(ran.exists(), "the main checkout's pre-push hook runs on the push the user chose, sandboxed task or not");
+
+        let fixture = fixture_with_husky("user-push-husky");
+        let Fixture { slot, state, origin, .. } = &fixture;
+        let ran = fixture.base.join("pre-push-ran");
+        pre_push(&slot.join(".husky/_"), &ran);
+        commit(slot, "b");
+        let refused = crate::repo::push_from(slot, &["HEAD:refs/heads/billing"], state).unwrap_err();
+        let main = fixture.main.canonicalize().unwrap_or(fixture.main.clone());
+        assert!(refused.contains("the repo's pre-push hook lives in the task's worktree") && refused.contains("the task may have written it") && refused.contains("kelpie did not run it"), "{refused}");
+        assert!(refused.contains(&format!("git -C {} push origin billing", crate::sh::quote(&main.to_string_lossy()))) || refused.contains(&format!("git -C {} push origin billing", crate::sh::quote(&fixture.main.to_string_lossy()))), "the push it names is one the block lets through, from the main checkout: {refused}");
+        assert!(!ran.exists(), "a hook the task could have written does not run as the user");
+        assert!(git(origin, &["rev-parse", "--verify", "--quiet", "refs/heads/billing"]).is_err(), "and nothing was pushed without it");
+
+        crate::sandbox::mark(&crate::lead::state_location().unwrap(), slot, false).unwrap();
+        crate::repo::push_from(slot, &["HEAD:refs/heads/billing"], state).unwrap();
+        assert!(ran.exists(), "without the sandbox the worktree's pre-push hook runs, as before");
+    }
+
+    #[test]
+    fn a_push_in_a_repo_with_sandboxed_tasks_runs_the_repos_hooks_not_what_a_slot_holds() {
+        let fixture = fixture("sibling");
+        let Fixture { base, main, slot, state, .. } = &fixture;
+        let (ran, tampered) = (base.join("pre-push-ran"), base.join("tampered"));
+        pre_push(&main.join(".git/hooks"), &ran);
+        install(slot, state).unwrap();
+        let other = base.join("wt2.app");
+        git(main, &["worktree", "add", "--quiet", "-b", "api", &other.to_string_lossy()]).unwrap();
+        install(&other, state).unwrap();
+        crate::sandbox::mark(&crate::lead::state_location().unwrap(), &other, true).unwrap();
+        pre_push(&hooks_dir(slot).unwrap(), &tampered);
+        commit(slot, "b");
+        crate::repo::push_from(slot, &["HEAD:refs/heads/billing"], state).unwrap();
+        assert!(ran.exists(), "the repo's own pre-push hook runs");
+        assert!(!tampered.exists(), "a slot's kelpie-hooks, which another sandboxed task could reach, never run on the user's push");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    fn fixture_with_husky(name: &str) -> Fixture {
+        let fixture = fixture(name);
+        git(&fixture.main, &["config", "core.hooksPath", ".husky/_"]).unwrap();
+        install(&fixture.slot, &fixture.state).unwrap();
+        crate::sandbox::mark(&crate::lead::state_location().unwrap(), &fixture.slot, true).unwrap();
+        fixture
+    }
+
     #[test]
     fn a_hook_the_repo_gets_after_install_runs_in_the_tasks_worktree() {
         let fixture = fixture("later-hook");
@@ -225,6 +294,12 @@ mod tests {
         fs::set_permissions(slot.join(".husky/_/commit-msg"), fs::Permissions::from_mode(0o755)).unwrap();
         commit(slot, "b");
         assert!(ran.exists(), "a hook husky writes during npm install, after kelpie's install, still runs");
+        fs::remove_file(&ran).unwrap();
+        crate::sandbox::mark(&crate::lead::state_location().unwrap(), slot, true).unwrap();
+        fs::write(slot.join("c"), "c").unwrap();
+        git(slot, &["add", "c"]).unwrap();
+        git(slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "c"]).unwrap();
+        assert!(!ran.exists(), "kelpie's own git never runs a hook a sandboxed task's worktree holds");
         let url = git(slot, &["config", "remote.origin.url"]).unwrap();
         let refused = run(slot, &["-c", &format!("url.{url}.pushInsteadOf={url}"), "push", "origin", "HEAD:main"], &[]);
         let said = String::from_utf8_lossy(&refused.stderr);

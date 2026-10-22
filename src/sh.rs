@@ -9,7 +9,12 @@ pub fn quote(text: &str) -> String {
 
 fn command(program: &str, args: &[&str], cwd: Option<&Path>) -> Command {
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null());
+    if program == "git" {
+        command.args(crate::repo::unhooked(cwd, args));
+    } else {
+        command.args(args);
+    }
+    command.stdin(Stdio::null());
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }

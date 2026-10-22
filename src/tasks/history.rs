@@ -24,7 +24,7 @@ fn commit_like(path: &Path, tree: &str, parent: &str, like: &str, message: &str)
     let mut fields = author.split('\0');
     let (name, email, date) = (fields.next().unwrap_or_default(), fields.next().unwrap_or_default(), fields.next().unwrap_or_default());
     let output = std::process::Command::new("git")
-        .args(["commit-tree", tree, "-p", parent, "-m", message])
+        .args(crate::repo::unhooked(Some(path), &["commit-tree", tree, "-p", parent, "-m", message]))
         .env("GIT_AUTHOR_NAME", name).env("GIT_AUTHOR_EMAIL", email).env("GIT_AUTHOR_DATE", date)
         .current_dir(path).output().map_err(|error| error.to_string())?;
     if !output.status.success() {

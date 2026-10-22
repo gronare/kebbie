@@ -147,6 +147,14 @@ pub fn keeper(enabled: bool, running: Option<&crate::keeper::Holder>, now: u64) 
     }
 }
 
+pub fn sandbox(on: &Setting<bool>, missing: &[String]) -> Check {
+    match (on.value, missing.is_empty()) {
+        (false, _) => warn("sandbox", crate::sandbox::OFF, one(format!("set task.sandbox = true (now from the {})", on.layer.label()))),
+        (true, true) => ok("sandbox", "on: a task's shell writes only in its worktree and the folders it is given, reaches only the allowed hosts and no Unix socket, and kelpie refuses its user-only commands to a sandboxed process"),
+        (true, false) => fail("sandbox", format!("on, but this machine cannot sandbox a task's shell fully, so kelpie starts no task: {} missing", missing.join(", ")), crate::sandbox::fixes(missing).into_iter().chain([format!("or set task.sandbox = false in {}", config::path().display())]).collect()),
+    }
+}
+
 pub fn plugin_binary(root: &Path) -> Check {
     let binary = root.join("target/release/kelpie");
     match crate::update::binary_origin(root).filter(|_| binary.is_file()) {
@@ -548,6 +556,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(setup_skill(&settings.setup_skill, installed.as_ref(), &claude_settings));
     checks.extend(env.repo.as_deref().and_then(|repo| setup_command(&settings.setup_command, repo)));
     checks.push(notify(&settings.notify_command));
+    checks.push(sandbox(&settings.sandbox, &crate::sandbox::missing_here()));
     let plugin = crate::vault_cli::plugin(&env.claude_dir);
     let override_bin = std::env::var(crate::vault_cli::BIN_VAR).ok().filter(|bin| !bin.is_empty());
     let reachable = override_bin.is_some() || matches!(plugin, crate::vault_cli::Plugin::Enabled { .. });
@@ -1024,5 +1033,19 @@ mod tests {
         assert_eq!(version("build 2024 of 1.0"), Some(vec![1, 0]), "a bare number without a dot is skipped");
         assert_eq!(version(""), None);
         assert!(!at_least(&[], &[0, 9, 0]) && at_least(&[1], &[0, 9, 9]));
+    }
+
+    #[test]
+    fn doctor_says_plainly_when_the_sandbox_is_off_and_fails_a_machine_that_cannot_sandbox() {
+        let set = |value: bool, layer: config::Layer| Setting { value, layer };
+        let off = sandbox(&set(false, config::Layer::Machine), &[]);
+        assert_eq!(off.level, Level::Warn);
+        assert!(off.fact.starts_with("off (task.sandbox = false): a task's shell commands run unsandboxed"), "{}", off.fact);
+        assert_eq!(sandbox(&set(true, config::Layer::Default), &[]).level, Level::Ok);
+        let lacking = sandbox(&set(true, config::Layer::Default), &["socat".to_string(), "the seccomp filter".to_string()]);
+        assert_eq!(lacking.level, Level::Fail);
+        assert!(lacking.fact.contains("kelpie starts no task: socat, the seccomp filter missing"), "{}", lacking.fact);
+        assert!(lacking.fix.iter().any(|fix| fix.contains("npm install -g @anthropic-ai/sandbox-runtime")) && lacking.fix.last().unwrap().contains("task.sandbox = false"), "{:?}", lacking.fix);
+        assert!(include_str!("doctor.rs").contains("checks.push(sandbox(&settings.sandbox, &crate::sandbox::missing_here()));"), "doctor runs the check");
     }
 }

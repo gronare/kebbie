@@ -454,7 +454,8 @@ impl Pusher {
                 }
                 Ok("the lead")
             }
-            Caller::Task(_) | Caller::Agent => Err("no agent pushes; the user pushes from the board, or the lead for a task the user gave push permission".to_string()),
+            Caller::LeadSandboxed => Err(format!("{} cannot push", crate::permit::describe(&Caller::LeadSandboxed))),
+            Caller::Task(_) | Caller::Agent | Caller::Sandboxed => Err("no agent pushes; the user pushes from the board, or the lead for a task the user gave push permission".to_string()),
         }
     }
 }

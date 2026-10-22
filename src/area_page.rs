@@ -785,6 +785,9 @@ impl Page {
             let (text, color) = if permit::repo_permitted(&repo) { ("the lead may push reviewed tasks", GREEN) } else { ("you, and the lead for tasks you permit", TEXT) };
             lines.push(kv("pushes", text.to_string(), color));
         }
+        if !area.sandbox {
+            lines.push(kv("sandbox", crate::sandbox::OFF.to_string(), YELLOW));
+        }
         if let Some(line) = area.log.first() {
             lines.push(Line::default());
             lines.extend(card_text("last log", &format!("[{}] {}", line.date, line.text), FAINT, width, 2).into_iter().map(|line| line.style(Style::new())));
@@ -973,7 +976,7 @@ mod tests {
     use super::*;
 
     fn area(key: &str, stem: &str) -> Area {
-        Area { key: key.to_string(), stem: stem.to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new() }
+        Area { key: key.to_string(), stem: stem.to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new(), sandbox: true }
     }
 
     #[test]
@@ -1044,5 +1047,17 @@ mod tests {
         assert_eq!(choices.iter().find(|choice| choice.key == 'p').unwrap().label, "Push main");
         let keys: String = page.choices(&area("Areas/notes.md", "notes")).iter().map(|choice| choice.key).collect();
         assert_eq!(keys, "bl", "without a repo there is nothing to open, start or push");
+    }
+
+    #[test]
+    fn an_area_whose_tasks_run_unsandboxed_says_so_in_one_line() {
+        let page = Page::new(Vec::new());
+        let text = |area: &Area| page.detail_lines(area, 120).0.iter().map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>()).collect::<Vec<_>>();
+        let on = area("Areas/app.md", "app");
+        assert!(!text(&on).iter().any(|line| line.contains("sandbox")));
+        let off = Area { sandbox: false, ..on };
+        let lines: Vec<String> = text(&off).into_iter().filter(|line| line.contains("sandbox")).collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("off (task.sandbox = false)"), "{lines:?}");
     }
 }

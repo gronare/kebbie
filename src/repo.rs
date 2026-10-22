@@ -11,6 +11,28 @@ pub fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     run("git", args, Some(cwd))
 }
 
+// A sandboxed task writes its worktree, hooks and fsmonitor included through a hooksPath like husky's, so kelpie's own git there runs neither.
+pub const UNHOOKED: [&str; 4] = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
+
+pub fn unhooked<'a>(cwd: Option<&Path>, args: &[&'a str]) -> Vec<&'a str> {
+    let reads_config = args.iter().find(|arg| !arg.starts_with('-') && !arg.contains('=')) == Some(&"config");
+    if reads_config || !cwd.is_some_and(sandboxed_worktree) { args.to_vec() } else { UNHOOKED.iter().copied().chain(args.iter().copied()).collect() }
+}
+
+pub fn sandboxed_worktree(cwd: &Path) -> bool {
+    crate::lead::state_location().is_ok_and(|state| crate::sandbox::marked(&state, cwd))
+}
+
+pub fn git_dir_of(cwd: &Path) -> Option<PathBuf> {
+    let dot = cwd.join(".git");
+    if dot.is_dir() {
+        return Some(dot);
+    }
+    let text = std::fs::read_to_string(&dot).ok()?;
+    let named = Path::new(text.strip_prefix("gitdir:")?.trim());
+    Some(cwd.join(named))
+}
+
 const INDEX_RETRIES: [std::time::Duration; 3] = [std::time::Duration::from_millis(250), std::time::Duration::from_millis(500), std::time::Duration::from_secs(1)];
 
 // A git that takes index.lock fails at once while another git holds it; it is tried a few times, then the lock file is named.
@@ -122,15 +144,48 @@ pub fn push_as_user(path: &Path, refspecs: &[&str]) -> Result<()> {
 
 // Pushes to origin as the user from the board, where nobody may see a prompt: git and ssh fail instead of waiting for a password or passphrase.
 pub fn push_from(path: &Path, refspecs: &[&str], state: &Path) -> Result<()> {
+    let hooks = push_hooks(path)?;
     let token = crate::push_block::Token::new(state)?;
     let mut command = std::process::Command::new("git");
-    command.args(crate::push_block::unblock_args(path)?).args(["push", "--quiet", "origin"]).args(refspecs).current_dir(path).stdin(std::process::Stdio::null())
+    command.args(&hooks).args(crate::push_block::unblock_args(path)?).args(["push", "--quiet", "origin"]).args(refspecs).current_dir(path).stdin(std::process::Stdio::null())
         .env("GIT_TERMINAL_PROMPT", "0").env(crate::push_block::TOKEN_VAR, &token.value);
     if std::env::var_os("GIT_SSH_COMMAND").is_none() {
         command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
     }
     let output = command.output().map_err(|error| format!("git push: {error}"))?;
     if output.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+}
+
+// The user's push runs the repo's hooks, named on the command line past a slot's config a sibling sandboxed task could reach; held in a sandboxed task's own worktree they never run, and a pre-push there stops the push.
+fn push_hooks(path: &Path) -> Result<Vec<String>> {
+    let sandboxed = sandboxed_worktree(path);
+    if !sandboxed && !repo_has_sandboxed_task(path) {
+        return Ok(Vec::new());
+    }
+    let original = crate::push_block::original_hooks(path)?;
+    if !sandboxed || crate::push_block::hooks_in_worktree(path)?.is_none() {
+        return Ok(vec!["-c".to_string(), format!("core.hooksPath={}", original.display())]);
+    }
+    if original.join("pre-push").is_file() {
+        let branch = git(path, &["branch", "--show-current"]).unwrap_or_default();
+        return Err(format!(
+            "the repo's pre-push hook lives in the task's worktree ({}), and the task may have written it, so kelpie did not run it and did not push. Check the hook, then push from your own terminal: git -C {} push origin {branch}",
+            original.join("pre-push").display(), crate::sh::quote(&main_checkout(path)?.to_string_lossy())
+        ));
+    }
+    Ok(UNHOOKED.map(str::to_string).to_vec())
+}
+
+fn repo_has_sandboxed_task(path: &Path) -> bool {
+    let Ok(state) = crate::lead::state_location() else { return false };
+    let Ok(common) = git(path, &["rev-parse", "--path-format=absolute", "--git-common-dir"]) else { return false };
+    let real = |path: PathBuf| path.canonicalize().unwrap_or(path);
+    let common = real(PathBuf::from(common));
+    let common_of = |git_dir: PathBuf| match git_dir.parent() {
+        Some(worktrees) if worktrees.file_name().is_some_and(|name| name == "worktrees") => worktrees.parent().map_or(git_dir.clone(), Path::to_path_buf),
+        _ => git_dir,
+    };
+    crate::sandbox::marked_worktrees(&state).into_iter().filter_map(|worktree| git_dir_of(&worktree)).any(|git_dir| real(common_of(real(git_dir))) == common)
 }
 
 pub fn branch_exists(repo: &Path, branch: &str) -> bool {
@@ -277,6 +332,40 @@ pub fn locate(name: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hooked_repo(name: &str) -> (PathBuf, PathBuf) {
+        let dir = crate::sh::test_dir(name);
+        assert!(std::process::Command::new("git").args(["init", "-q"]).current_dir(&dir).status().unwrap().success());
+        let ran = dir.join("ran");
+        git(&dir, &["config", "core.fsmonitor", &format!("echo fsmonitor >> {}; false", crate::sh::quote(&ran.to_string_lossy()))]).unwrap();
+        std::fs::create_dir_all(dir.join("hooks")).unwrap();
+        std::fs::write(dir.join("hooks/post-commit"), format!("#!/bin/sh\necho hook >> {}\n", crate::sh::quote(&ran.to_string_lossy()))).unwrap();
+        std::fs::set_permissions(dir.join("hooks/post-commit"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        git(&dir, &["config", "core.hooksPath", "hooks"]).unwrap();
+        std::fs::write(dir.join("a"), "a").unwrap();
+        (dir, ran)
+    }
+
+    #[test]
+    fn kelpies_git_runs_no_fsmonitor_or_hook_in_a_sandboxed_tasks_worktree() {
+        let (dir, ran) = hooked_repo("unhooked");
+        crate::sandbox::mark(&crate::lead::state_location().unwrap(), &dir, true).unwrap();
+        git(&dir, &["add", "a"]).unwrap();
+        git(&dir, &["status", "--porcelain"]).unwrap();
+        git_writing(&dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "a"]).unwrap();
+        assert!(!ran.exists(), "neither ran");
+        assert_eq!(git(&dir, &["config", "--get", "core.hooksPath"]).unwrap(), "hooks", "git config reads the repo's own value, not kelpie's override");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn kelpies_git_runs_the_repos_hooks_where_the_task_is_not_sandboxed() {
+        let (dir, ran) = hooked_repo("hooked");
+        git(&dir, &["add", "a"]).unwrap();
+        git_writing(&dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "a"]).unwrap();
+        assert!(std::fs::read_to_string(&ran).unwrap().contains("hook"), "as in a task without the sandbox, the repo's hooks run");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn a_git_that_meets_index_lock_is_tried_again_and_a_lock_that_stays_is_named() {

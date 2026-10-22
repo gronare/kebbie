@@ -22,7 +22,7 @@ pub(crate) use history::{Commit, commits, draft_squash_message, reword, squash};
 pub(crate) use intent::{By as PushBy, Pending as PendingPush, Work as PushWork, after_red_ci, complete as complete_pushes, pending as pending_push};
 pub(crate) use landed::{EVERY as LANDED_EVERY, Unsure as LandedUnsure, mark as landed_mark, tick as landed_tick, tick_cli as landed_tick_cli};
 pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outside as ci_outside, outside_reason as ci_outside_reason};
-pub(crate) use launch::{Begun, Session, Start, begin, bypasses, new_session_id, profile_of, prompted_at, start, task_at, task_role, task_role_now, transcript};
+pub(crate) use launch::{Begun, Session, Start, begin, bypasses, new_session_id, profile_of, prompted_at, start, task_at, task_role, task_role_now, task_tmp, transcript};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of};
 pub(crate) use push::{after_ci, land, push, rebase, tidy};
 pub(crate) use started::{link, started_items, started_links};

@@ -59,6 +59,9 @@ pub(super) fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
     }
     let path = slot_path(repo, number);
     git(repo, &["worktree", "add", "--detach", &path.to_string_lossy(), upstream])?;
+    if let Some(git_dir) = crate::repo::git_dir_of(&path) {
+        crate::sandbox::deny_new_slot(&crate::lead::roles_dir()?, &name_of(repo), &git_dir.canonicalize().unwrap_or(git_dir))?;
+    }
     Ok(Slot { number, path, task: None, free: true })
 }
 
@@ -158,6 +161,25 @@ mod tests {
     use crate::tasks::test_support::*;
     use crate::repo::{git, is_clean, name_of, setup_line, slot_path};
     use crate::tasks::started::started_file_in;
+
+    #[test]
+    fn a_new_slot_is_denied_to_the_sandboxed_tasks_already_running_in_its_repo() {
+        let dir = repo();
+        let first = create_slot(&dir, "HEAD").unwrap();
+        let roles = crate::lead::roles_dir().unwrap();
+        let file = roles.join(format!("billing@{}.settings.json", name_of(&dir)));
+        std::fs::write(&file, serde_json::json!({ "permissions": { "deny": [] }, "sandbox": { "filesystem": { "denyWrite": [] } } }).to_string()).unwrap();
+        let second = create_slot(&dir, "HEAD").unwrap();
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let git_dir = crate::repo::git_dir_of(&second.path).unwrap().canonicalize().unwrap();
+        assert_eq!(written["sandbox"]["filesystem"]["denyWrite"], json!([git_dir.display().to_string()]), "the running task's shell cannot write the new slot's git dir");
+        assert_eq!(written["permissions"]["deny"], json!([format!("Edit(/{}/**)", git_dir.display())]));
+        std::fs::remove_file(file).unwrap();
+        for slot in [first, second] {
+            git(&dir, &["worktree", "remove", "--force", &slot.path.to_string_lossy()]).unwrap();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn a_slot_is_a_detached_worktree_with_its_setup_note_in_its_git_dir() {

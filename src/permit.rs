@@ -184,7 +184,12 @@ pub enum Caller {
     Lead,
     Task(String),
     Agent,
+    Sandboxed,
+    LeadSandboxed,
 }
+
+// The subcommands kelpie refuses to a task by who calls it: a task's settings deny each, and never take one out of the sandbox.
+pub const USER_ONLY: [&str; 19] = ["approve", "push", "choose", "after", "ci dismiss", "ci outside", "away", "decide", "defer", "answered", "notify", "follow", "release", "review --withdraw", "issue add", "issue close", "issue retry", "issue link", "issue send"];
 
 fn role_of(args: &str) -> Option<Caller> {
     let words: Vec<&str> = args.split_whitespace().collect();
@@ -279,9 +284,19 @@ pub fn processes(table: &str) -> Vec<(u32, u32, String)> {
 const PS: &str = if cfg!(debug_assertions) { "ps" } else { "/bin/ps" };
 
 pub fn caller() -> Caller {
-    match crate::sh::run(PS, &["-A", "-o", "pid=,ppid=,args="], None) {
+    let found = match crate::sh::run(PS, &["-A", "-o", "pid=,ppid=,args="], None) {
         Ok(table) => caller_in(&processes(&table), std::process::id()),
         Err(_) => Caller::Agent,
+    };
+    confined_as(found, crate::sandbox::confined)
+}
+
+// A sandboxed task can start a chain that reads as the user or the lead, never one that writes kelpie's state.
+pub fn confined_as(found: Caller, sandboxed: impl FnOnce() -> bool) -> Caller {
+    match found {
+        Caller::User => if sandboxed() { Caller::Sandboxed } else { found },
+        Caller::Lead => if sandboxed() { Caller::LeadSandboxed } else { found },
+        other => other,
     }
 }
 
@@ -302,6 +317,8 @@ pub fn describe(caller: &Caller) -> String {
         Caller::Lead => "the lead".to_string(),
         Caller::Task(address) => format!("the task {address}"),
         Caller::Agent => "a Claude session".to_string(),
+        Caller::Sandboxed => "a sandboxed process".to_string(),
+        Caller::LeadSandboxed => format!("the lead, whose shell runs in a Claude Code sandbox your own settings turn on (add \"{} *\" to sandbox.excludedCommands in ~/.claude/settings.json, or run it from your own terminal),", crate::peers::kelpie_command().unwrap_or_else(|_| "kelpie".to_string())),
     }
 }
 
@@ -495,5 +512,27 @@ mod tests {
         fs::write(away_file(&state), "garbage").unwrap();
         assert_eq!(away_since_in(&state), None);
         fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_sandboxed_process_never_passes_as_the_user_or_the_lead_whatever_its_chain_reads() {
+        for chain in [Caller::User, Caller::Lead] {
+            assert_eq!(confined_as(chain.clone(), || false), chain, "an unconfined process keeps what its chain reads");
+        }
+        assert_eq!(confined_as(Caller::User, || true), Caller::Sandboxed);
+        assert_eq!(confined_as(Caller::Lead, || true), Caller::LeadSandboxed);
+        let lead = user_only_as(&Caller::LeadSandboxed, "pushing").unwrap_err();
+        assert!(lead.contains("the lead, whose shell runs in a Claude Code sandbox your own settings turn on") && lead.contains("sandbox.excludedCommands"), "the lead is told the cause and the fix: {lead}");
+        let task = Caller::Task("billing@app".to_string());
+        assert_eq!(confined_as(task.clone(), || panic!("a task needs no probe")), task, "a task stays the task, so its own commands still name it");
+        assert_eq!(confined_as(Caller::Agent, || panic!("an agent needs no probe")), Caller::Agent);
+        let refused = user_only_as(&confined_as(Caller::User, || true), "switching away mode").unwrap_err();
+        assert_eq!(refused, "switching away mode is the user's call, from the board or their own terminal; a sandboxed process cannot");
+        let tmux = processes("  1 0 /sbin/launchd\n 40 1 tmux new -d kelpie push billing\n 60 40 /bin/zsh\n 70 60 /bin/kelpie push billing\n");
+        assert_eq!(caller_in(&tmux, 70), Caller::User, "a tmux server a task started reads as a terminal");
+        assert_eq!(confined_as(caller_in(&tmux, 70), || true), Caller::Sandboxed, "so the capability decides");
+        let source = include_str!("permit.rs");
+        let body = &source[source.find("\npub fn caller() -> Caller {").unwrap()..];
+        assert!(body[..body.find("\n}\n").unwrap()].contains("confined_as(found, crate::sandbox::confined)"), "every caller kelpie reads passes the capability probe");
     }
 }

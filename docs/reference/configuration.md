@@ -41,6 +41,7 @@ Rules:
 | `task.test_commands` | list of strings | `[]` | either | Test commands that kelpie records when a task's Claude runs them, on top of the built-in ones (`cargo test`, `bin/rails test`, `pytest`, `npm test`, `go test` and others; `kelpie config` lists them). A command counts when it starts with one of these, whole words, after any `cd … &&` and `VAR=value`. See [`kelpie evidence`](commands.md#kelpie-evidence-name---json). |
 | `task.also_noticed` | `"backlog"`, `"fix"` or `"ask"` | `"backlog"` | either | What a task's Claude does with what it notices outside its task, such as a bug nearby, a stale doc or a refactor. `"backlog"` files it: in the vault's backlog with the vault plugin, else with `kelpie backlog add`. `"fix"` fixes a small one beside the code it is changing, in a commit of its own, and files the rest. `"ask"` puts each to you with `kelpie ask` first. Each is listed under Also noticed on the sign-off card, and the reviewer counts a change outside the task as a finding under `"backlog"` and `"ask"`. See [Decide what a task does with what it notices](../how-to/decide-what-a-task-does-with-what-it-notices.md). |
 | `task.profile` | string | none | either | The [profile](#profiles) a task starts with when `kelpie start` names none with `--profile`. Unset, tasks start with the built-in `task`. A restarted task keeps the profile it started with. See [Give tasks a profile](../how-to/give-tasks-a-profile.md). |
+| `task.sandbox` | boolean | `true` | either | Whether a task's and the reviewer's shell commands run in Claude Code's sandbox, strict: no retry outside it, and no start without it. A task's shell then writes only in its worktree, its temp folder, the package caches (`~/.cargo/registry`, `~/.cargo/git`, `~/.npm`, `~/.cache`) and the repo's shared `.git` folder except its hooks, config and the other pooled worktrees' git dirs, reaches only crates.io, static.crates.io, index.crates.io, registry.npmjs.org, github.com, objects.githubusercontent.com, pypi.org and files.pythonhosted.org, and no Unix socket; on macOS it may listen on local ports for a dev server. kelpie's own task commands (`peers`, `tell`, `ask`, `report`, `routine ok`, `link`, `backlog add`, `config`) run outside it. On Linux it needs bubblewrap, socat and the seccomp filter (`npm install -g @anthropic-ai/sandbox-runtime`); without them kelpie refuses to start a task or a review and names what to install. `false` runs them unsandboxed, where a task's shell can pass as you to kelpie's user-only commands; `kelpie doctor`, a task's start and the board's Areas page say so. A profile's `[sandbox] enabled` wins over it. See [The trust boundary](../explanation/trust-boundary.md#the-sandbox). |
 | `task.permission_mode` | `"default"`, `"acceptEdits"`, `"plan"`, `"auto"`, `"dontAsk"` or `"bypassPermissions"` | none | either | The [permission mode](https://code.claude.com/docs/en/permission-modes) a task's Claude starts in. Unset, Claude Code's own default applies. `kelpie start --mode` and then the task's profile's `permission_mode` override it, and a restarted task keeps the mode it started in. Any other value is refused when the config loads. `"bypassPermissions"` runs every tool without asking; Claude Code recommends it only for an isolated container or VM. A task still never pushes nor approves its own commits in it, since kelpie's deny rules and the worktree's push block hold in every mode. See [Let tasks run without permission prompts](../how-to/let-tasks-run-without-prompts.md). |
 | `review.model` | string | none | either | The model the reviewer runs on: the `reviewer` profile's `model` by another name, and ahead of it when both are set. Unset leaves it to that profile, and then to Claude's default. |
 | `notify.command` | string | none | config.toml only | The shell command kelpie runs when something needs you. See [Notify command](#notify-command). Unset sends nothing. |
@@ -178,14 +179,15 @@ prompt = "Check that every node is Ready, no pod is crash-looping and every volu
 
 A profile names the agent, model, extra role, skills, permission mode and rules a task starts with. Each is a file, `~/.config/kelpie/profiles/<name>.toml`, its name lower-case letters, digits and dashes, starting with a letter. A task gets kelpie's own role, hooks, deny rules and push block whatever its profile says; a profile only adds to them.
 
-Two are built in:
+Three are built in:
 
 | Profile | What it is |
 | --- | --- |
 | `task` | kelpie's task as it is: nothing added. Tasks start with it unless `--profile` or `task.profile` names another. |
+| `ops` | kelpie's task whose `ssh`, `scp` and `rsync` run outside the sandbox, for work on other machines. An ssh session reaches this machine as you too, so kelpie says so when the task starts. |
 | `reviewer` | The read-only reviewer `kelpie review` runs. It is never a task's profile. |
 
-A file named `task.toml` or `reviewer.toml` adds its keys to that built-in profile.
+A file named `task.toml`, `ops.toml` or `reviewer.toml` adds its keys to that built-in profile.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -200,8 +202,12 @@ A file named `task.toml` or `reviewer.toml` adds its keys to that built-in profi
 | `deny` | list of strings | `[]` | Claude Code permission rules added after kelpie's own deny rules. |
 | `allow` | list of strings | `[]` | Claude Code permission rules added to the task's allow list. A rule that would let the task run `kelpie push`, `approve`, `choose`, `away`, `decide` or `after`, and a rule that allows every shell command, are refused when the profile loads. This check reads the rule's text; what keeps a task from pushing, approving or deciding is kelpie's deny rules, the push block and kelpie's own check of who calls it. |
 | `claude.plugins` | list of strings | `[]` | Claude Code plugins to turn on for the task, as `<plugin>@<marketplace>`; they go into the task's settings as `enabledPlugins`. The plugin must be installed. |
+| `sandbox.enabled` | boolean | `task.sandbox` | Whether this profile's tasks run sandboxed, ahead of `task.sandbox`. |
+| `sandbox.allowed_domains` | list of strings | kelpie's registries | The hosts a task's shell may reach, in place of kelpie's list. |
+| `sandbox.allow_write` | list of strings | kelpie's caches | The folders a task's shell may write besides its worktree and temp folder, in place of kelpie's list; each from `/` or `~/`. A folder that holds or lies inside kelpie's state, config or install, herdr's config, `~/.claude` or a shell startup file is refused when the profile loads. |
+| `sandbox.excluded_commands` | list of strings | `[]` | Commands that run outside the sandbox, added to kelpie's own and the built-in profile's, in Claude Code's syntax (`docker compose *`). One that names kelpie, herdr, tmux, screen or zellij, or starts with a wildcard, is refused when the profile loads. Such a command reaches everything you can. |
 
-The `reviewer` profile takes `about`, `for`, `agent`, `model`, `effort` and `role`: the reviewer only reads, so its tools and permission mode are kelpie's. Its `role` goes after the review skill.
+The `reviewer` profile takes `about`, `for`, `agent`, `model`, `effort` and `role`: the reviewer only reads, so its tools, permission mode and sandbox are kelpie's; its sandbox follows `task.sandbox`, with no host, folder or command outside it. Its `role` goes after the review skill.
 
 A profile that does not load is an error that names its file and key, and a task asked to start with it does not start. A running task whose recorded profile no longer loads, when it is restarted, goes on as the built-in `task`, and kelpie says so with the file and the error: in `kelpie start`'s answer, or to the lead for a restart by `kelpie restart` or the keeper. `kelpie profiles` lists the profiles with what each is for, and names a file it ignored with the reason.
 

@@ -5,12 +5,15 @@ use toml::Table;
 
 use crate::agent::Agent;
 use crate::config;
+use crate::sandbox::Policy;
 use crate::sh::Result;
 
 pub const TASK: &str = "task";
 pub const REVIEWER: &str = "reviewer";
+pub const OPS: &str = "ops";
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
-pub const KEYS: [&str; 11] = ["about", "for", "agent", "model", "effort", "role", "skills", "permission_mode", "deny", "allow", "claude"];
+pub const KEYS: [&str; 12] = ["about", "for", "agent", "model", "effort", "role", "skills", "permission_mode", "deny", "allow", "claude", "sandbox"];
+const SANDBOX_KEYS: [&str; 4] = ["enabled", "allowed_domains", "allow_write", "excluded_commands"];
 const REVIEWER_KEYS: [&str; 6] = ["about", "for", "agent", "model", "effort", "role"];
 const GUARDED: [&str; 6] = ["push", "approve", "choose", "away", "decide", "after"];
 
@@ -28,6 +31,7 @@ pub struct Profile {
     pub deny: Vec<String>,
     pub allow: Vec<String>,
     pub plugins: Vec<String>,
+    pub sandbox: Policy,
     pub file: Option<PathBuf>,
 }
 
@@ -39,11 +43,13 @@ pub fn built_in(name: &str) -> Option<Profile> {
     let (about, fits) = match name {
         TASK => ("kelpie's own task: its role, hooks and permissions, nothing added", "any task no other profile fits"),
         REVIEWER => ("The read-only reviewer that kelpie review runs", "kelpie review, never a task"),
+        OPS => ("kelpie's own task whose ssh, scp and rsync run outside the sandbox, so they reach other machines, and this one as you", "work on other machines over ssh"),
         _ => return None,
     };
+    let sandbox = if name == OPS { Policy { excluded: crate::sandbox::OPS_COMMANDS.map(str::to_string).to_vec(), ..Policy::default() } } else { Policy::default() };
     Some(Profile {
         name: name.to_string(), about: about.to_string(), fits: fits.to_string(), agent: Agent::Claude, model: None, effort: None, role: None,
-        skills: Vec::new(), permission_mode: None, deny: Vec::new(), allow: Vec::new(), plugins: Vec::new(), file: None,
+        skills: Vec::new(), permission_mode: None, deny: Vec::new(), allow: Vec::new(), plugins: Vec::new(), sandbox, file: None,
     })
 }
 
@@ -154,7 +160,7 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
     config::unknown_keys(&table, "", known).map_err(|error| format!("{source}: {error}"))?;
     let mut profile = base.unwrap_or(Profile {
         name: name.to_string(), about: String::new(), fits: String::new(), agent: Agent::Claude, model: None, effort: None, role: None,
-        skills: Vec::new(), permission_mode: None, deny: Vec::new(), allow: Vec::new(), plugins: Vec::new(), file: None,
+        skills: Vec::new(), permission_mode: None, deny: Vec::new(), allow: Vec::new(), plugins: Vec::new(), sandbox: Policy::default(), file: None,
     });
     profile.file = Some(file.to_path_buf());
     if let Some(about) = text(&table, "about", &source)? {
@@ -205,11 +211,40 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
             return Err(format!("{source}: claude.plugins: \"{plugin}\" is not a plugin; name it <plugin>@<marketplace>, as claude plugin list shows it"));
         }
     }
+    if let Some(sandbox) = table.get("sandbox") {
+        sandbox_policy(sandbox, &source, &mut profile.sandbox)?;
+    }
     Ok(profile)
 }
 
+// A profile's lists of hosts and writable folders replace kelpie's own; its commands outside the sandbox add to the base's.
+fn sandbox_policy(value: &toml::Value, source: &str, policy: &mut Policy) -> Result<()> {
+    let table = value.as_table().ok_or(format!("{source}: sandbox: must be a table"))?;
+    config::unknown_keys(table, "sandbox.", &SANDBOX_KEYS).map_err(|error| format!("{source}: {error}"))?;
+    if let Some(enabled) = table.get("enabled") {
+        policy.enabled = Some(enabled.as_bool().ok_or(format!("{source}: sandbox.enabled: must be true or false"))?);
+    }
+    if table.contains_key("allowed_domains") {
+        policy.domains = Some(strings(table, "allowed_domains", source)?);
+    }
+    if table.contains_key("allow_write") {
+        let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+        let writes = strings(table, "allow_write", source)?;
+        if let Some(why) = writes.iter().find_map(|entry| crate::sandbox::write_refusal(entry, &home)) {
+            return Err(format!("{source}: sandbox.allow_write: {why}"));
+        }
+        policy.writes = Some(writes);
+    }
+    let excluded = strings(table, "excluded_commands", source)?;
+    if let Some(why) = excluded.iter().find_map(|entry| crate::sandbox::excluded_refusal(entry)) {
+        return Err(format!("{source}: sandbox.excluded_commands: {why}"));
+    }
+    policy.excluded.extend(excluded.into_iter().filter(|entry| !policy.excluded.contains(entry)).collect::<Vec<_>>());
+    Ok(())
+}
+
 pub fn list_in(dir: &Path) -> (Vec<Profile>, Vec<String>) {
-    let mut names = vec![TASK.to_string(), REVIEWER.to_string()];
+    let mut names = vec![TASK.to_string(), REVIEWER.to_string(), OPS.to_string()];
     let mut files: Vec<String> = std::fs::read_dir(dir).into_iter().flatten().flatten()
         .filter_map(|entry| entry.path().file_name()?.to_str()?.strip_suffix(".toml").map(str::to_string))
         .filter(|stem| !names.contains(stem)).collect();
@@ -248,6 +283,7 @@ pub fn to_json(profile: &Profile) -> Value {
         "name": profile.name, "about": profile.about, "for": profile.fits, "agent": profile.agent.key(), "model": profile.model, "effort": profile.effort,
         "permission_mode": profile.permission_mode, "skills": profile.skills, "role": profile.role, "deny": profile.deny, "allow": profile.allow,
         "plugins": profile.plugins, "built_in": built_in(&profile.name).is_some(), "file": profile.file,
+        "sandbox": { "enabled": profile.sandbox.enabled, "allowed_domains": profile.sandbox.domains, "allow_write": profile.sandbox.writes, "excluded_commands": profile.sandbox.excluded },
     })
 }
 
@@ -269,6 +305,8 @@ pub fn describe(profiles: &[Profile], errors: &[String]) -> String {
         runs.extend(profile.effort.iter().map(|effort| format!("effort {effort}")));
         runs.extend(profile.permission_mode.iter().map(|mode| format!("mode {mode}")));
         runs.extend((!profile.skills.is_empty()).then(|| format!("skills {}", profile.skills.join(", "))));
+        runs.extend((profile.sandbox.enabled == Some(false)).then(|| "sandbox off".to_string()));
+        runs.extend((!profile.sandbox.excluded.is_empty()).then(|| format!("outside the sandbox: {}", profile.sandbox.excluded.join(", "))));
         lines.push(format!("  runs: {}", runs.join(" · ")));
     }
     lines.extend(errors.iter().map(|error| format!("ignored: {error}")));
@@ -395,13 +433,14 @@ mod tests {
     fn kelpie_profiles_lists_the_built_in_ones_then_each_file_and_names_a_broken_one() {
         let dir = folder("profile-list", &[("designer.toml", "about = \"UI work\"\nfor = \"UI, CSS\"\nmodel = \"opus\"\n"), ("broken.toml", "agent = \"codex\"\n"), ("notes.txt", "x")]);
         let (profiles, errors) = list_in(&dir);
-        assert_eq!(profiles.iter().map(|profile| profile.name.as_str()).collect::<Vec<_>>(), ["task", "reviewer", "designer"]);
+        assert_eq!(profiles.iter().map(|profile| profile.name.as_str()).collect::<Vec<_>>(), ["task", "reviewer", "ops", "designer"]);
         assert_eq!(errors.len(), 1);
         let shown = describe(&profiles, &errors);
         assert!(shown.starts_with("task  (built in)\n  for: any task no other profile fits\n"), "{shown}");
         assert!(shown.contains(&format!("designer  ({})\n  for: UI, CSS\n  about: UI work\n  runs: claude · model opus", dir.join("designer.toml").display())), "{shown}");
         assert!(shown.contains("ignored: ") && shown.contains("broken.toml: agent: \"codex\" is not supported yet"), "{shown}");
-        let json = to_json(&profiles[2]);
+        assert!(shown.contains("ops  (built in)\n  for: work on other machines over ssh\n") && shown.contains("outside the sandbox: ssh *, scp *, rsync *"), "{shown}");
+        let json = to_json(&profiles[3]);
         assert_eq!((json["name"].as_str(), json["for"].as_str(), json["about"].as_str(), json["agent"].as_str(), json["built_in"].as_bool()), (Some("designer"), Some("UI, CSS"), Some("UI work"), Some("claude"), Some(false)));
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -434,6 +473,30 @@ mod tests {
         assert!(for_running_task(&dir, None, Some("designer"), None).unwrap().1.unwrap().contains("No profile \"designer\""));
         assert!(for_running_task(&dir, Some("designer"), Some("task"), None).is_err(), "a profile asked for by name is refused, not swapped");
         assert!(for_running_task(&dir, None, None, Some("designer")).is_err(), "a new start never falls back");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_profile_turns_the_sandbox_off_or_replaces_its_hosts_and_folders_and_adds_commands_outside_it() {
+        let dir = folder("profile-sandbox", &[
+            ("loose.toml", "[sandbox]\nenabled = false\n"),
+            ("web.toml", "[sandbox]\nallowed_domains = [\"registry.yarnpkg.com\"]\nallow_write = [\"~/.gradle\"]\nexcluded_commands = [\"docker compose *\"]\n"),
+            ("ops.toml", "model = \"opus\"\n[sandbox]\nexcluded_commands = [\"kubectl *\", \"ssh *\"]\n"),
+        ]);
+        assert_eq!(load_in(&dir, "loose").unwrap().sandbox.enabled, Some(false));
+        let web = load_in(&dir, "web").unwrap().sandbox;
+        assert_eq!((web.enabled, web.domains(), web.writes(), web.excluded), (None, vec!["registry.yarnpkg.com".to_string()], vec!["~/.gradle".to_string()], vec!["docker compose *".to_string()]));
+        assert_eq!(built_in(TASK).unwrap().sandbox.domains(), crate::sandbox::DOMAINS.map(str::to_string).to_vec(), "kelpie's list until a profile names its own");
+        let ops = load_in(&dir, OPS).unwrap();
+        assert_eq!((ops.model.as_deref(), ops.sandbox.excluded), (Some("opus"), vec!["ssh *".to_string(), "scp *".to_string(), "rsync *".to_string(), "kubectl *".to_string()]), "a file adds to the built-in ops");
+        let refused = |text: &str| { std::fs::write(dir.join("x.toml"), text).unwrap(); load_in(&dir, "x").unwrap_err() };
+        assert!(refused("[sandbox]\nexcluded_commands = [\"tmux *\"]\n").contains("x.toml: sandbox.excluded_commands: \"tmux *\" would run tmux outside the sandbox"));
+        assert!(refused("[sandbox]\nexcluded_commands = [\"kelpie push *\"]\n").contains("would run kelpie outside the sandbox"));
+        assert!(refused("[sandbox]\nallow_write = [\"~/.config\"]\n").contains("sandbox.allow_write: \"~/.config\" would let a task's shell write"));
+        assert!(refused("[sandbox]\nenabled = \"no\"\n").contains("sandbox.enabled: must be true or false"));
+        assert!(refused("[sandbox]\nnetwork = true\n").contains("sandbox.network: unknown key"));
+        std::fs::write(dir.join("reviewer.toml"), "[sandbox]\nenabled = false\n").unwrap();
+        assert!(load_in(&dir, REVIEWER).unwrap_err().contains("the reviewer only reads"), "the reviewer's sandbox follows task.sandbox alone");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -56,9 +56,9 @@ impl Agent {
         Agent::ALL.into_iter().find(|agent| herdr_agent["agent"] == agent.kind())
     }
 
-    pub fn task_settings(self, kelpie: &str, address: &str, gate: Option<&str>, tmp: Option<&Path>, profile: &Profile) -> String {
+    pub fn task_settings(self, kelpie: &str, address: &str, gate: Option<&str>, dirs: Option<&crate::sandbox::TaskDirs>, profile: &Profile, sandbox: bool) -> String {
         match self {
-            Agent::Claude => claude::with_profile(&crate::inbox::with_inbox(&claude::settings(kelpie, address, gate, tmp), kelpie, address), profile),
+            Agent::Claude => claude::with_profile(&crate::inbox::with_inbox(&claude::settings(kelpie, address, gate, dirs, sandbox.then_some(&profile.sandbox)), kelpie, address), profile),
         }
     }
 
@@ -134,9 +134,9 @@ impl Agent {
         }
     }
 
-    pub fn reviewer_settings(self, kelpie: &str) -> String {
+    pub fn reviewer_settings(self, kelpie: &str, sandbox: bool) -> String {
         match self {
-            Agent::Claude => claude::reviewer_settings(kelpie),
+            Agent::Claude => claude::reviewer_settings(kelpie, sandbox),
         }
     }
 }

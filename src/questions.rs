@@ -357,7 +357,7 @@ fn answered_as(caller: &crate::permit::Caller, to: &str) -> Result<String> {
     let own = match caller {
         Caller::User | Caller::Lead => None,
         Caller::Task(address) => Some(address.as_str()),
-        Caller::Agent => return Err(format!("marking a question answered is the user's or the lead's; {} cannot", crate::permit::describe(caller))),
+        Caller::Agent | Caller::Sandboxed | Caller::LeadSandboxed => return Err(format!("marking a question answered is the user's or the lead's; {} cannot", crate::permit::describe(caller))),
     };
     let _lock = Lock::take(true)?;
     let messages = messages::load();

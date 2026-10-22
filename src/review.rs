@@ -270,7 +270,10 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     let rules_file = crate::agent::claude::home().and_then(|home| skill_file(rules, &slot.path, &home, &kelpie));
     let tests = crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha);
     let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value });
-    let guard = write_settings(&roles_dir()?, &format!("{address}.review"), &agent.reviewer_settings(&peers::kelpie_command()?))?;
+    if settings.sandbox.value {
+        crate::sandbox::refusal(&crate::sandbox::missing_here())?;
+    }
+    let guard = write_settings(&roles_dir()?, &format!("{address}.review"), &agent.reviewer_settings(&peers::kelpie_command()?, settings.sandbox.value))?;
     let prompt = reviewer_prompt(&kelpie.join("skills/review/SKILL.md"), &profile, &roles_dir()?.join(format!("{address}.review.md")))?;
     let (program, args) = agent.reviewer_command(&Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: &guard, prompt: &prompt, rules: rules_file.as_deref().and_then(Path::parent) });
     let mut child = Command::new(program).args(&args).current_dir(&slot.path)
@@ -446,7 +449,7 @@ mod tests {
         assert!(!args.contains(&"--add-dir".to_string()));
         let with_model = claude_args(&Reviewer { model: Some("opus"), rules: Some(Path::new("/plugins/rules/skills/house")), ..reviewer });
         assert_eq!(with_model[with_model.len() - 4..], ["--add-dir", "/plugins/rules/skills/house", "--model", "opus"]);
-        let settings: Value = serde_json::from_str(&guard_settings("/bin/kelpie")).unwrap();
+        let settings: Value = serde_json::from_str(&guard_settings("/bin/kelpie", false)).unwrap();
         assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "Bash");
         assert_eq!(settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kelpie' hook --review");
     }
@@ -770,7 +773,7 @@ mod tests {
 
     #[test]
     fn the_reviewers_settings_hold_only_the_guard_hook() {
-        let settings: Value = serde_json::from_str(&guard_settings("/bin/kelpie")).unwrap();
+        let settings: Value = serde_json::from_str(&guard_settings("/bin/kelpie", false)).unwrap();
         assert_eq!(settings.as_object().unwrap().keys().collect::<Vec<_>>(), ["hooks"], "no permissions, env or model of its own: the command line decides those");
         assert_eq!(settings["hooks"].as_object().unwrap().keys().collect::<Vec<_>>(), ["PreToolUse"]);
     }

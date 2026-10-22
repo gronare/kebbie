@@ -95,6 +95,7 @@ pub struct Worktree {
     pub also_noticed: Option<AlsoNoticed>,
     pub permission_mode: Option<String>,
     pub profile: Option<String>,
+    pub sandbox: Option<bool>,
     pub review_model: Option<String>,
     pub notify_command: Option<String>,
     pub vault_command: Option<String>,
@@ -159,6 +160,7 @@ pub struct Settings {
     pub also_noticed: Setting<AlsoNoticed>,
     pub permission_mode: Setting<Option<String>>,
     pub profile: Setting<Option<String>>,
+    pub sandbox: Setting<bool>,
     pub review_model: Setting<Option<String>>,
     pub notify_command: Setting<Option<String>>,
     pub vault_command: Setting<Option<String>>,
@@ -396,6 +398,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         also_noticed: None,
         permission_mode: None,
         profile: None,
+        sandbox: None,
         review_model: None,
         notify_command: None,
         vault_command: None,
@@ -407,7 +410,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
 
 fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(task) = subtable(table, "task", "task")? {
-        unknown_keys(task, "task.", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile"])?;
+        unknown_keys(task, "task.", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox"])?;
         worktree.rules_skill = skill(task, "rules_skill", "task.rules_skill")?;
         worktree.test_commands = task.get("test_commands").map(test_commands).transpose()?;
         worktree.also_noticed = also_noticed(task)?;
@@ -415,6 +418,7 @@ fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
             .map(|mode| permission_mode(&mode).map(str::to_string).map_err(|error| format!("task.permission_mode: {error}"))).transpose()?;
         worktree.profile = text(task, "profile", "task.profile")?
             .map(|profile| crate::profiles::name(&profile).map(str::to_string).map_err(|error| format!("task.profile: {error}"))).transpose()?;
+        worktree.sandbox = task.get("sandbox").map(|value| value.as_bool().ok_or("task.sandbox: must be true or false")).transpose()?;
     }
     Ok(worktree)
 }
@@ -534,6 +538,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         also_noticed: or_default(pick(repo.also_noticed.as_ref(), machine.worktree.also_noticed.as_ref()), AlsoNoticed::default()),
         permission_mode: optional(pick(repo.permission_mode.as_ref(), machine.worktree.permission_mode.as_ref())),
         profile: optional(pick(repo.profile.as_ref(), machine.worktree.profile.as_ref())),
+        sandbox: or_default(pick(repo.sandbox.as_ref(), machine.worktree.sandbox.as_ref()), true),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
@@ -589,7 +594,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, rules_skill, test_commands, also_noticed, permission_mode, profile, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -639,6 +644,8 @@ pub fn describe(loaded: &Loaded) -> String {
         &format!("The permission mode a task's Claude starts in, one of {}; none leaves it to Claude's own default. kelpie start --mode overrides it for one task, and a restarted task keeps the mode it started in. \"bypassPermissions\" runs every tool without asking, for an isolated machine only; a task still never pushes nor approves its own commits.", quoted(&PERMISSION_MODES)));
     key("task.profile", profile.value.as_ref().map_or(format!("none ({:?})", crate::profiles::TASK), |profile| format!("{profile:?}")), profile.layer,
         &format!("The profile a task starts with when kelpie start names none with --profile: a file in {}/<name>.toml with the agent, model, extra role, skills, permission mode and rules it adds to kelpie's own; none starts the built-in task. A restarted task keeps the profile it started with; kelpie profiles lists them.", crate::profiles::dir().display()));
+    key("task.sandbox", sandbox.value.to_string(), sandbox.layer,
+        &format!("Whether a task's and the reviewer's shell commands run in Claude Code's sandbox: writes only in the worktree, the task's temp folder and {}, network only to {} and a profile's own hosts, no Unix sockets; kelpie's own task commands ({}) run outside it, and kelpie refuses its user-only commands to a sandboxed process. On Linux it needs bubblewrap, socat and the seccomp filter, or kelpie refuses to start tasks; false runs them unsandboxed, where a task can pass as you to kelpie's user-only commands. A profile's [sandbox] enabled wins over it.", crate::sandbox::WRITES.join(", "), crate::sandbox::DOMAINS.join(", "), crate::sandbox::TASK_COMMANDS.join(", ")));
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
         "The model kelpie review's independent reviewer runs on, ahead of the reviewer profile's model; none leaves it to that profile, then to Claude's default.");
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
@@ -1230,5 +1237,15 @@ mod tests {
         assert!(shown.contains("task.profile = \"designer\"  (repo config)\n  The profile a task starts with when kelpie start names none with --profile"), "{shown}");
         let none = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
         assert!(none.contains("task.profile = none (\"task\")  (default)"), "{none}");
+    }
+
+    #[test]
+    fn the_task_sandbox_is_on_until_turned_off_and_a_repo_wins_over_the_machine() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).sandbox, Setting { value: true, layer: Layer::Default });
+        assert_eq!(settings(&Worktree::default(), &machine("[task]\nsandbox = false\n")).sandbox, Setting { value: false, layer: Layer::Machine });
+        assert_eq!(settings(&repo("[task]\nsandbox = true\n"), &machine("[task]\nsandbox = false\n")).sandbox, Setting { value: true, layer: Layer::Repo });
+        assert!(parse_repo("[task]\nsandbox = \"off\"\n", "app.toml").unwrap_err().contains("task.sandbox: must be true or false"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
+        assert!(shown.contains("task.sandbox = true  (default)\n  Whether a task's and the reviewer's shell commands run in Claude Code's sandbox"), "{shown}");
     }
 }

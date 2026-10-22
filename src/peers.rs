@@ -145,6 +145,12 @@ pub struct Place<'a> {
     pub rules_skill: &'a str,
     pub note: Option<&'a str>,
     pub profile: &'a str,
+    pub sandboxed: bool,
+}
+
+// A sandboxed task's file tools reach its temp folder but not kelpie's state; without the sandbox the plan stays in kelpie's state.
+pub fn plan_file(sandboxed: bool, me: &str, tmp: impl FnOnce() -> Result<PathBuf>, state: impl FnOnce() -> Result<PathBuf>) -> Result<PathBuf> {
+    if sandboxed { Ok(tmp()?.join("plan.md")) } else { Ok(state()?.join("plans").join(format!("{me}.md"))) }
 }
 
 pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
@@ -171,7 +177,7 @@ fn rules_line(rules_skill: &str) -> String {
     format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, the lead checks your commits against it.")
 }
 
-// The plan step of roles/task.md: the task's note when kelpie keeps one, else with the vault as a backlog source a note there, else a file in kelpie's state; never a file in the worktree, where it would land in the repo.
+// The plan step of roles/task.md: the task's note when kelpie keeps one, else with the vault as a backlog source a note there, else a plan file outside the worktree (plan_file); never a file in the worktree, where it would land in the repo.
 pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, kelpie: &str, task: &str, plans: &Path) -> String {
     if let Some(note) = note {
         return format!("Write your plan into your note `{note}` with the vault tools, and put it to the user with `{kelpie} ask --plan vault:{note} \"<one line on what the plan does>\"`; the board shows them the note.");
@@ -248,7 +254,7 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let me = address(task, &repo);
     let peers = peers.to_string();
     let kelpie = kelpie_command()?;
-    let plans = crate::lead::state_dir()?.join("plans").join(format!("{me}.md"));
+    let plans = plan_file(place.sandboxed, &me, || crate::tasks::task_tmp(place.worktree), crate::lead::state_dir)?;
     let plan = plan_step(&crate::config::sources().unwrap_or_default(), place.note, &kelpie, task, &plans);
     let vault = vault_section(place.note, &kelpie);
     let also_noticed = crate::config::resolve(Some(place.repo))?.settings.also_noticed.value;
@@ -406,15 +412,21 @@ mod tests {
     }
 
     #[test]
-    fn the_plan_goes_in_the_vault_note_with_the_vault_and_in_kelpies_state_without_it() {
+    fn the_plan_goes_in_the_vault_note_with_the_vault_and_in_the_tasks_temp_folder_without_it() {
         use crate::config::Source;
-        let plans = Path::new("/state/plans/billing@web.md");
+        let (tmp, state) = (|| Ok(PathBuf::from("/src/app/.git/worktrees/1/kelpie-tmp")), || Ok(PathBuf::from("/state")));
+        assert_eq!(plan_file(true, "billing@web", tmp, state).unwrap(), Path::new("/src/app/.git/worktrees/1/kelpie-tmp/plan.md"), "a sandboxed task's file tools are denied kelpie's state");
+        assert_eq!(plan_file(false, "billing@web", tmp, state).unwrap(), Path::new("/state/plans/billing@web.md"), "without the sandbox the plan stays where 0.25.0 kept it");
+        let source = include_str!("peers.rs");
+        let values = &source[source.find("\nfn role_values(").unwrap()..];
+        assert!(values[..values.find("\n}\n").unwrap()].contains("plan_file(place.sandboxed,"), "the role names the plan file plan_file picks");
+        let plans = Path::new("/src/app/.git/worktrees/1/kelpie-tmp/plan.md");
         let vault = plan_step(&[Source::Linear, Source::Vault], None, "/bin/kelpie", "billing", plans);
         assert!(vault.contains("into this task's note in the vault") && vault.contains("/bin/kelpie link billing Projects/<note>.md") && vault.contains("/bin/kelpie ask --plan vault:Projects/<note>.md"), "{vault}");
         let file = plan_step(&[Source::Local], None, "/bin/kelpie", "billing", plans);
         let note = plan_step(&[Source::Local], Some("Projects/kelpie-billing.md"), "/bin/kelpie", "billing", plans);
         assert!(note.contains("into your note `Projects/kelpie-billing.md`") && note.contains("--plan vault:Projects/kelpie-billing.md"), "{note}");
-        assert!(file.contains("to `/state/plans/billing@web.md`, kelpie's place for it outside your worktree") && file.contains("/bin/kelpie ask --plan /state/plans/billing@web.md"), "{file}");
+        assert!(file.contains("to `/src/app/.git/worktrees/1/kelpie-tmp/plan.md`, kelpie's place for it outside your worktree") && file.contains("/bin/kelpie ask --plan /src/app/.git/worktrees/1/kelpie-tmp/plan.md"), "{file}");
         assert!(!file.contains("vault"), "{file}");
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
         assert!(role.contains(&format!("2. A plan to approve: {file} The user approves it")) && !role.contains("{plan}"), "{role}");

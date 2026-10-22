@@ -508,8 +508,9 @@ fn kelpie_profiles_lists_the_built_in_and_the_users_profiles_and_a_missing_one_i
     assert!(shown.contains("reviewer  (built in)") && shown.contains("designer  (") && shown.contains("  for: UI, CSS, new surfaces\n  about: UI work, mockup first\n  runs: claude · model opus"), "{shown}");
     let json: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["profiles", "--json"]))).unwrap();
     let names: Vec<&str> = json.as_array().unwrap().iter().filter_map(|profile| profile["name"].as_str()).collect();
-    assert_eq!(names, ["task", "reviewer", "designer"]);
-    assert_eq!(json[2]["for"], "UI, CSS, new surfaces");
+    assert_eq!(names, ["task", "reviewer", "ops", "designer"]);
+    assert_eq!(json[3]["for"], "UI, CSS, new surfaces");
+    assert_eq!(json[2]["sandbox"]["excluded_commands"], serde_json::json!(["ssh *", "scp *", "rsync *"]));
     let (app, _) = lab.task_fixture();
     let refused = lab.run(&["-C", app.to_str().unwrap(), "start", "search", "--profile", "nope"]);
     assert!(!refused.status.success() && stderr(&refused).contains("--profile: No profile \"nope\""), "{}", stderr(&refused));

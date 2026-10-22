@@ -8,6 +8,8 @@ You are in `{path}`, worktree {slot} of `{main}`, a pooled worktree an earlier t
 
 ## Probes
 
+With the sandbox on, your file tools write only in your worktree (and your worktrees in the task's other repos) and your temp folder (`$TMPDIR`, where `mktemp -d` lands), and never your worktree's `.claude` settings, hooks, skills, agents, commands, `.mcp.json` or `.git`: those run as the user outside the sandbox, so ask the user for a change there.
+
 A probe is a throwaway run that tests your change from outside: a scratch repo, a headless Claude, a fake task reporting to kelpie. Give each probe its own temp directory and keep everything it writes inside it:
 
 - `KELPIE_STATE_DIR=<temp>/kelpie`, so its messages, reports and backlog land in the probe's own state.

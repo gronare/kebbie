@@ -38,6 +38,7 @@ mod routine_file;
 mod routine_page;
 mod routine_wizard;
 mod routines;
+mod sandbox;
 mod sh;
 mod state;
 mod setup;
@@ -197,13 +198,15 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie reset [name]             stop a task for good: discard its work, free its worktree, close its Space, and put
                                   the backlog item it was started from back in the Backlog column
   kelpie profiles [--json]        the profiles a task can start with (kelpie start --profile, task.profile): the built-in
-                                  task and reviewer, then each file in ~/.config/kelpie/profiles, with what each is for
+                                  task, reviewer and ops (ssh, scp and rsync outside the sandbox), then each file in
+                                  ~/.config/kelpie/profiles, with what each is for
   kelpie config [--repo <path>]   the config layers found (the repo config ~/.config/kelpie/repos/<repo>.toml,
                                   config.toml, defaults; a symlink with its target) and every key with its value in
                                   effect, the layer it comes from and what it does (--get <key> prints one
                                   machine-wide value, for scripts)
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap; checks
-                                  config.toml and every repo config
+                                  config.toml and every repo config, and whether tasks run in the sandbox
+                                  (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)
   kelpie setup vault              install the optional vault plugin in Claude Code (marketplace, plugin, its options),
                                   showing each claude command and running it only on your y
   kelpie restart [--all]          restart, with claude --resume in its own pane and with its own flags, each Claude
@@ -450,6 +453,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             if name == Some("inbox") {
                 return Ok(arguments.positional(2).map(|address| inbox::hook(address, &input)).unwrap_or_default());
             }
+            if name == Some("files") {
+                return Ok(sandbox::file_hook(arguments.positional(2), arguments.positional(3), arguments.positional(4), &input));
+            }
             if name == Some("gate") {
                 return Ok(arguments.positional(2).map(|address| task_note::hook(address, &input)).unwrap_or_default());
             }
@@ -585,6 +591,12 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(error) => {
+            let command = match (arguments.positional(0), arguments.positional(1)) {
+                (Some(first @ ("routine" | "backlog")), Some(second)) => format!("{first} {second}"),
+                (Some(first), _) => first.to_string(),
+                (None, _) => String::new(),
+            };
+            let error = if sandbox::TASK_COMMANDS.contains(&command.as_str()) { sandbox::ran_sandboxed(&command, &error, sandbox::confined()) } else { error };
             eprintln!("{error}");
             ExitCode::FAILURE
         }

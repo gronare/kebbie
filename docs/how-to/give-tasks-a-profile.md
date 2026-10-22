@@ -56,9 +56,33 @@ profile = "designer"
 
 `kelpie start --profile` still wins for one task. A routine names its own with `profile = "<name>"` in its `[[routines]]` table.
 
+## Open the sandbox for a kind of work
+
+A task's shell commands run in Claude Code's sandbox (see [The trust boundary](../explanation/trust-boundary.md#the-sandbox)). A profile can give its tasks other hosts, other folders to write, or commands that run outside the sandbox:
+
+```toml
+# ~/.config/kelpie/profiles/android.toml
+for = "the Android app"
+
+[sandbox]
+allowed_domains = ["dl.google.com", "repo.maven.apache.org", "services.gradle.org"]
+allow_write = ["~/.gradle", "~/.android"]
+excluded_commands = ["adb *"]
+```
+
+`allowed_domains` and `allow_write` replace kelpie's lists, so name every host and folder the work needs. `excluded_commands` adds to kelpie's own; a command outside the sandbox reaches everything you can, so name the narrowest one. One that can run another program is a full way out of the sandbox: `ssh -o ProxyCommand=…`, `git -c core.sshCommand=…`, an interpreter, `make`, `npm run` or any tool that reads a file in the worktree, which the task can write first. `enabled = false` runs the profile's tasks unsandboxed.
+
+For work on other machines, start the task with the built-in `ops` profile: its `ssh`, `scp` and `rsync` run outside the sandbox, which they need to connect at all.
+
+```bash
+kelpie start rotate-certs --profile ops "Rotate the TLS certificates on the web hosts"
+```
+
+An ssh session can reach this machine as you as well, past the sandbox, so `kelpie start` says so for an `ops` task. Start one only for work you would run over ssh yourself.
+
 ## What a profile cannot change
 
-A profile only adds. Whatever it says, a task's Claude still has kelpie's role, its hooks, its deny rules on `git push`, `kelpie push`, `kelpie approve`, `kelpie choose` and `kelpie after`, and the worktree's push block. An `allow` rule that would let a task run one of kelpie's guarded commands, or every shell command, is refused when the profile loads.
+A profile only adds. Whatever it says, a task's Claude still has kelpie's role, its hooks, its deny rules on `git push` and kelpie's user-only commands (`kelpie push`, `approve`, `choose`, `after` and the rest) and on kelpie's, herdr's and Claude Code's own files, and the worktree's push block. An `allow` rule that would let a task run one of kelpie's guarded commands, or every shell command, is refused when the profile loads, as are a `sandbox.excluded_commands` entry that names kelpie, herdr or a terminal multiplexer and an `allow_write` folder that holds kelpie's, herdr's or Claude Code's own files.
 
 `skills` puts the skills in the task's role as the first thing to run; Claude follows it like the rest of its role. `claude.plugins` turns installed plugins on for the task only.
 
