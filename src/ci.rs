@@ -716,7 +716,7 @@ mod tests {
             assert!(!load(&state, &address).unwrap().running());
         };
         red("the user");
-        assert_eq!(phase(), Some(Phase::Pushing), "its Claude fixes it as part of the user's push");
+        assert_eq!(phase(), Some(Phase::Pushing { ahead: 0 }), "its Claude fixes it as part of the user's push");
         crate::tasks::test_support::cleanup_intents(&state, &address);
         red("");
         assert_eq!(phase(), Some(Phase::CiRed { sha: "abcdef0".to_string() }));

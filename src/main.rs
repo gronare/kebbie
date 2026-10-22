@@ -161,10 +161,15 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   commit it ran on and whether the code changed since (task.test_commands adds commands)
   kelpie approve <name>           the lead's word that a task's commits hold to the rules skill; until a commit
                                   changes, the board shows it ready to push
-  kelpie push [name]              fetch, rebase the task onto the default branch and push it, then close it as done
-                                  (once CI is green, when kelpie watches it; see kelpie ci); when the new upstream
+  kelpie push [name]              put the task in its repo's push line; at the head, fetch, rebase it onto origin's
+                                  default branch and push it, then close it as done (once CI is green, when kelpie
+                                  watches it; see kelpie ci); one push per repo at a time, in the order they were
+                                  asked for, and a task is rebased only when its turn comes; when the new upstream
                                   commits changed files the task changes, its Claude runs their tests first and kelpie
-                                  pushes once it reports ready with the same commits; a conflict goes to its Claude
+                                  pushes once it reports ready with the same commits; a conflict goes to its Claude;
+                                  either way it keeps the head while its Claude works, and leaves the line for Needs
+                                  you after 30 minutes without a ready report, or new commits nobody checked
+                                  (--cancel takes it out of the line, unpushed)
                                   (--through <sha> pushes its commits up to that one and keeps the task open, the rest
                                   of its branch on top of what was pushed); the user's step, or the lead's for a task the
                                   user gave push permission on the board (a), or in a repo they did on the Areas page (a)
@@ -474,6 +479,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("backlog") => backlog::show(),
         Some("land") => tasks::land(&cwd, name),
         Some("follow") => tasks::follow(&cwd, &arguments.positionals[1..]),
+        Some("push") if arguments.flag("--cancel") => tasks::cancel_push(&cwd, name),
         Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
         Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kelpie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
         Some("review") if arguments.flag("--run") => review::run(&cwd),

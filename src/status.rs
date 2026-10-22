@@ -104,9 +104,23 @@ pub struct Item {
     pub landed: Option<tasks::LandedUnsure>,
     pub ci_outside: Option<String>,
     pub ci_dismissed: Vec<Value>,
+    pub push_left: Option<String>,
 }
 
 impl Item {
+    // A push kelpie stopped between taking it from the line and sending it leaves Pushing behind with nothing in the line; the task is ready again.
+    fn settle_orphaned_push(&mut self) {
+        let head = self.git.as_ref().and_then(|git| git.head.clone());
+        if let Some(record) = self.phase.as_mut().filter(|record| matches!(record.phase, Phase::Pushing { .. })).filter(|_| self.push_waits.is_none()) {
+            record.phase = Phase::Ready { head };
+        }
+    }
+
+    // A red CI's push waits for its fix outside the line, so it is never taken out of one.
+    pub fn in_push_line(&self) -> bool {
+        self.push_waits.as_ref().is_some_and(|pending| pending.work != tasks::PushWork::Ci)
+    }
+
     pub fn is_task(&self) -> bool {
         self.git.is_some() || self.queued.is_some()
     }
@@ -126,7 +140,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(),
+            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), push_left: None,
         }
     }
 
@@ -171,6 +185,7 @@ impl Item {
             Phase::Closing => Some("pushed · kelpie closes it".to_string()),
             Phase::NeedsYou(Why::Failed) => Some("kelpie could not finish its push or close it; the lead has why".to_string()),
             Phase::NeedsYou(Why::Unreadable) => Some(format!("gh has not read its CI for {} minutes", crate::ci::UNREADABLE_AFTER / 60)),
+            Phase::NeedsYou(Why::LeftLine) => Some(self.left_note()),
             _ => None,
         }
     }
@@ -199,17 +214,21 @@ impl Item {
     }
 
     fn push_note_at(&self, now: u64) -> Option<String> {
-        let pending = self.push_waits?;
+        let pending = self.push_waits.as_ref()?;
         let stalled = self.report.as_ref().is_some_and(|report| now.saturating_sub(report.at) > PUSH_STALLS_AFTER);
         let who = match pending.by {
             tasks::PushBy::User => "you",
             tasks::PushBy::Lead => "the lead",
         };
+        if pending.work == tasks::PushWork::Turn {
+            let place = if pending.ahead == 0 { "kelpie pushes it now".to_string() } else { tasks::place_in_line(pending.ahead, pending.after.as_deref()) };
+            return Some(format!("pushing for {who} · {place}"));
+        }
         let what = match pending.work {
             _ if self.reported_since(pending.at, "ready") && self.git.as_ref().is_some_and(|git| git.approved) && stalled => "ready for a while, but kelpie has not seen its Claude take the request; push again",
             _ if self.reported_since(pending.at, "ready") && self.git.as_ref().is_some_and(|git| git.approved) => "kelpie pushes it now",
             _ if self.reported_since(pending.at, "ready") => "the lead checks the new commits",
-            tasks::PushWork::Tests => "its Claude runs the tests",
+            tasks::PushWork::Turn | tasks::PushWork::Tests => "its Claude runs the tests",
             tasks::PushWork::Conflict => "its Claude resolves the conflict",
             tasks::PushWork::Ci => "its Claude fixes the red CI",
         };
@@ -257,7 +276,7 @@ impl Item {
             Phase::Idle => Group::Idle,
             Phase::NeedsYou(_) | Phase::CiRed { .. } => Group::NeedsYou,
             Phase::Ready { .. } if self.awaiting_review() => Group::ToReview,
-            Phase::Ready { .. } | Phase::Pushing => Group::ReadyToPush,
+            Phase::Ready { .. } | Phase::Pushing { .. } => Group::ReadyToPush,
             Phase::CiRunning { .. } => Group::CiRunning,
         }
     }
@@ -266,7 +285,7 @@ impl Item {
     pub(crate) fn derive_legacy(&self) -> Phase {
         let reported_after = |at: u64| self.report.as_ref().is_some_and(|report| report.at > at);
         if self.push_waits.is_some() {
-            return Phase::Pushing;
+            return Phase::Pushing { ahead: 0 };
         }
         if let Some(ci) = self.ci.as_ref().filter(|ci| !reported_after(ci.since())) {
             match ci.state {
@@ -320,7 +339,7 @@ impl Item {
         if self.blocked_on_a_prompt() {
             return Some(ANSWER_IN_SPACE);
         }
-        if self.turn_under_way() || self.recovering().is_some() || matches!(self.phase(), Some(Phase::Pushing | Phase::CiRunning { .. } | Phase::CiRed { .. } | Phase::Closing)) {
+        if self.turn_under_way() || self.recovering().is_some() || matches!(self.phase(), Some(Phase::Pushing { .. } | Phase::CiRunning { .. } | Phase::CiRed { .. } | Phase::Closing)) {
             return None;
         }
         if let Some(held) = &self.held_by_draft {
@@ -349,10 +368,20 @@ impl Item {
         if let Some(held) = &self.held_by_draft {
             return Some(held.clone());
         }
+        if matches!(self.phase(), Some(Phase::NeedsYou(Why::LeftLine))) && self.question.is_none() {
+            return Some(self.left_note());
+        }
         if let Some(question) = self.question.as_ref().and_then(|message| message.question.as_ref()) {
             return Some(if question.plan.is_some() { "approve the plan".to_string() } else { format!("answer a question · {}", plural(question.options.len(), "option")) });
         }
         self.report.as_ref()?.next_for_you().map(str::to_string)
+    }
+
+    fn left_note(&self) -> String {
+        match &self.push_left {
+            Some(why) => format!("out of the push line: {why}"),
+            None => "out of the push line before it went out; push it again when it is ready".to_string(),
+        }
     }
 
     pub fn landed_note(&self) -> Option<String> {
@@ -475,7 +504,8 @@ impl Item {
             "ci": self.ci.as_ref().map(crate::ci::Watch::to_json),
             "recover": self.recover.as_ref().map(|record| { let mut shown = record.to_json(); shown["note"] = json!(record.note()); shown }),
             "routine": self.routine,
-            "push_waits": self.push_waits.map(|pending| pending.by.key()),
+            "push_waits": self.push_waits.as_ref().map(|pending| pending.by.key()),
+            "push_ahead": self.push_waits.as_ref().filter(|pending| pending.work == tasks::PushWork::Turn).map(|pending| pending.ahead),
             "landed": self.landed_note(),
             "ci_outside": self.ci_outside,
             "ci_dismissed": self.ci_dismissed,
@@ -630,6 +660,18 @@ pub(crate) fn held_by_draft(log: &[Message], task: &str, address: &str) -> Optio
 
 const PUSH_STALLS_AFTER: u64 = 600;
 
+// The line names the push in front by its task; the row shows that task's title.
+fn name_push_fronts(items: &mut [Item]) {
+    let titles: Vec<(Option<PathBuf>, String, String)> = items.iter().map(|item| (item.repo.clone(), item.name.clone(), item.titled())).collect();
+    for item in items.iter_mut() {
+        let repo = item.repo.clone();
+        if let Some(after) = item.push_waits.as_mut().and_then(|pending| pending.after.as_mut())
+            && let Some((_, _, title)) = titles.iter().find(|(other, name, _)| *other == repo && name == after) {
+            *after = title.clone();
+        }
+    }
+}
+
 // Only a read of every pool knows which tasks are gone.
 fn sweep_phases(state: &Path, items: &[Item], every_pool_read: bool, began: u64) {
     if every_pool_read {
@@ -710,6 +752,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 landed: state.as_deref().and_then(|state| tasks::landed_mark(state, &address, &slot.path)),
                 ci_outside: state.as_deref().and_then(|state| tasks::ci_outside_reason(state, &address)),
                 ci_dismissed: state.as_deref().map(|state| tasks::ci_dismissed(state, &address)).unwrap_or_default(),
+                push_left: state.as_deref().and_then(|state| tasks::push_left(state, &address)),
                 phase: None,
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
@@ -718,12 +761,14 @@ pub fn gather() -> Result<Vec<Item>> {
                 Some(state) => crate::phase::current(state, &address, || item.derive_legacy()),
                 None => crate::phase::Record { phase: item.derive_legacy(), since: messages::now(), by: "migration".to_string() },
             });
+            item.settle_orphaned_push();
             items.push(item);
         }
     }
     if let Some(state) = state.as_deref() {
         sweep_phases(state, &items, every_pool_read, began);
     }
+    name_push_fronts(&mut items);
     if let Some(state) = state.as_deref() {
         let queued: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(Item::queued_from).collect();
         items.extend(queued);
@@ -765,6 +810,7 @@ pub fn gather() -> Result<Vec<Item>> {
             landed: None,
             ci_outside: None,
             ci_dismissed: Vec::new(),
+            push_left: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -798,6 +844,7 @@ pub(crate) mod tests {
             landed: None,
             ci_outside: None,
             ci_dismissed: Vec::new(),
+            push_left: None,
         };
         rederive(&mut item);
         item
@@ -859,9 +906,9 @@ pub(crate) mod tests {
         assert_eq!(derived(Some("idle"), None, 1), Phase::Ready { head: None });
         assert_eq!(derived(Some("idle"), None, 0), Phase::Idle);
         let mut pushing = task(Some("idle"), Some("ready"), 1);
-        pushing.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 5 });
+        pushing.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 5, ahead: 0, after: None });
         rederive(&mut pushing);
-        assert_eq!(pushing.phase(), Some(&Phase::Pushing));
+        assert_eq!(pushing.phase(), Some(&Phase::Pushing { ahead: 0 }));
         let mut pushed = task(Some("idle"), Some("ready"), 0);
         pushed.ci = Some(watched(crate::ci::State::Running, true));
         rederive(&mut pushed);
@@ -1030,7 +1077,7 @@ pub(crate) mod tests {
         item.git.as_mut().unwrap().approved = true;
         step(&mut item, "approved", None, &[Some("idle")], Group::ReadyToPush);
         step(&mut item, "an update notice it reads", Some(Event::TurnBegan { by_user: false }), &[Some("working"), Some("idle"), Some("done")], Group::ReadyToPush);
-        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 40 });
+        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Tests, at: 40, ahead: 0, after: None });
         step(&mut item, "push: main changed its files, so its Claude runs the tests", Some(Event::PushHanded), &[Some("idle")], Group::ReadyToPush);
         step(&mut item, "the hand-over it takes up", Some(Event::TurnBegan { by_user: false }), &[Some("working")], Group::ReadyToPush);
         reported(&mut item, "ready", 50);
@@ -1082,7 +1129,7 @@ pub(crate) mod tests {
 
     #[test]
     fn an_update_notice_never_moves_a_task() {
-        for (phase, group) in [(Phase::Ready { head: Some("abc".to_string()) }, Group::ReadyToPush), (Phase::NeedsYou(Why::Report), Group::NeedsYou), (Phase::Idle, Group::Idle), (Phase::CiRunning { sha: "abc".to_string() }, Group::CiRunning), (Phase::Pushing, Group::ReadyToPush)] {
+        for (phase, group) in [(Phase::Ready { head: Some("abc".to_string()) }, Group::ReadyToPush), (Phase::NeedsYou(Why::Report), Group::NeedsYou), (Phase::Idle, Group::Idle), (Phase::CiRunning { sha: "abc".to_string() }, Group::CiRunning), (Phase::Pushing { ahead: 0 }, Group::ReadyToPush)] {
             let mut item = task(Some("idle"), Some("ready"), 2);
             in_phase(&mut item, phase.clone());
             moved(&mut item, &Event::TurnBegan { by_user: false });
@@ -1181,7 +1228,7 @@ pub(crate) mod tests {
         assert_eq!(item.phase(), Some(&Phase::NeedsYou(Why::NothingToPush)), "a report after the failure decides again");
         let mut red = task(Some("working"), Some("ready"), 0);
         red.ci = Some(watched(crate::ci::State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, true));
-        red.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Ci, at: 20 });
+        red.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Ci, at: 20, ahead: 0, after: None });
         moved(&mut red, &Event::CiRed { sha: "abcdef0", pushing: true });
         assert_eq!((red.group(), red.summary(), red.next_for_you(), red.wanted("enter")), (Group::ReadyToPush, "pushing for you · its Claude fixes the red CI".to_string(), None, None), "the fix is the push still under way, not the user's to do");
         red.report.as_mut().unwrap().at = 30;
@@ -1269,17 +1316,54 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_pushing_phase_with_no_push_left_in_the_line_reads_as_ready_again() {
+        let mut item = task(Some("idle"), Some("ready"), 1);
+        item.git.as_mut().unwrap().head = Some("abc".to_string());
+        moved(&mut item, &Event::PushQueued { ahead: 0 });
+        item.push_waits = Some(tasks::PendingPush { by: tasks::PushBy::User, work: tasks::PushWork::Turn, at: 1, ahead: 0, after: None });
+        item.settle_orphaned_push();
+        assert_eq!(item.phase(), Some(&Phase::Pushing { ahead: 0 }), "a push in the line stays pushing");
+        item.push_waits = None;
+        item.settle_orphaned_push();
+        assert_eq!((item.phase(), item.group()), (Some(&Phase::Ready { head: Some("abc".to_string()) }), Group::ReadyToPush), "a crash between the line and the push leaves it pushable, not stuck");
+    }
+
+    #[test]
+    fn a_push_in_line_says_its_place_by_the_title_of_the_one_in_front_and_one_that_left_says_why() {
+        use tasks::{PendingPush, PushBy, PushWork};
+        let mut front = task(Some("idle"), Some("ready"), 1);
+        front.title = Some("Refunds on invoices".to_string());
+        let mut item = task(Some("idle"), Some("ready"), 2);
+        item.name = "search".to_string();
+        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Turn, at: 10, ahead: 1, after: Some("billing".to_string()) });
+        moved(&mut item, &Event::PushQueued { ahead: 1 });
+        let mut items = [front, item];
+        name_push_fronts(&mut items);
+        let item = &mut items[1];
+        assert_eq!((item.group(), item.summary()), (Group::ReadyToPush, "2 commits · pushing for you · 2nd in line after Refunds on invoices".to_string()));
+        assert_eq!((item.next_for_you(), item.to_json()["push_ahead"].clone()), (None, json!(1)), "nothing for the user while it waits its turn");
+        item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Turn, at: 10, ahead: 0, after: None });
+        assert_eq!(item.push_note().unwrap(), "pushing for the lead · kelpie pushes it now");
+        item.push_waits = None;
+        item.push_left = Some("its Claude did not report ready within 30 minutes, so the pushes behind it went on".to_string());
+        moved(item, &Event::PushFailed);
+        item.phase.as_mut().unwrap().phase = Phase::NeedsYou(Why::LeftLine);
+        assert_eq!(item.group(), Group::NeedsYou);
+        assert_eq!(item.wanted("g").unwrap(), "out of the push line: its Claude did not report ready within 30 minutes, so the pushes behind it went on");
+    }
+
+    #[test]
     fn a_push_under_way_stays_under_ready_to_push_and_says_what_it_waits_for() {
         use tasks::{PendingPush, PushBy, PushWork};
         let mut item = task(Some("working"), Some("ready"), 1);
         item.git.as_mut().unwrap().approved = false;
         assert_eq!((item.to_json()["push_waits"].clone(), item.push_note(), item.group()), (Value::Null, None, Group::ReadyToPush));
-        item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Tests, at: 10 });
+        item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Tests, at: 10, ahead: 0, after: None });
         moved(&mut item, &Event::PushHanded);
         assert_eq!((item.to_json()["push_waits"].clone(), item.group()), (json!("lead"), Group::ReadyToPush), "the Claude working on the push is the push, not new work");
         assert_eq!(item.summary(), "1 commit · pushing for the lead · its Claude runs the tests");
         assert_eq!(item.next_for_you(), None, "nothing for the user to do while it runs");
-        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Conflict, at: 10 });
+        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Conflict, at: 10, ahead: 0, after: None });
         assert_eq!((item.to_json()["push_waits"].clone(), item.push_note().unwrap()), (json!("user"), "pushing for you · its Claude resolves the conflict".to_string()));
         let report = |item: &mut Item, state: &str| {
             let message = item.report.as_mut().unwrap();

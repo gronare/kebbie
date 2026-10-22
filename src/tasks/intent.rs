@@ -4,10 +4,9 @@ use serde_json::{Value, json};
 
 use crate::messages::{self, Message};
 use crate::permit::Caller;
-use crate::repo::default_branch;
 use crate::sh::Result;
-use super::approval::{approval_holds, covers, fingerprint};
-use super::pool::{Slot, find_task};
+use super::approval::covers;
+use super::pool::Slot;
 
 // Which of the task's commits a push takes: all of them, or the first `count` of the `of` it had when the user chose.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -58,9 +57,10 @@ impl By {
     }
 }
 
-// What the task's Claude does before the push goes on: test the files the default branch changed under it, resolve the rebase that conflicted, or fix what turned CI red after the push landed.
+// What the push waits for: its turn in the repo's line, the task's Claude testing the files the default branch changed under it, resolving the rebase that conflicted, or fixing what turned CI red after the push landed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Work {
+    Turn,
     Tests,
     Conflict,
     Ci,
@@ -69,6 +69,7 @@ pub(crate) enum Work {
 impl Work {
     fn key(self) -> &'static str {
         match self {
+            Work::Turn => "turn",
             Work::Tests => "tests",
             Work::Conflict => "conflict",
             Work::Ci => "ci",
@@ -76,7 +77,7 @@ impl Work {
     }
 }
 
-// An authorised push that waits for the task's Claude; it goes out for the commits it was recorded for, or for commits the lead approved since.
+// An authorised push that waits in its repo's line, by `queued`, and for the task's Claude; it goes out for the commits it was recorded for, or for commits the lead approved since. A red CI's push waits outside the line, `queued` None, until its fix is ready.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Intent {
     pub by: By,
@@ -89,6 +90,7 @@ pub(super) struct Intent {
     pub at: u64,
     pub seen: Option<String>,
     pub hand: Option<String>,
+    pub queued: Option<u64>,
 }
 
 impl Intent {
@@ -100,7 +102,7 @@ impl Intent {
         json!({
             "by": self.by.key(), "work": self.work.key(),
             "address": self.address, "repo": self.repo, "task": self.task, "fingerprint": self.fingerprint,
-            "through": through, "at": self.at, "seen": self.seen, "hand": self.hand,
+            "through": through, "at": self.at, "seen": self.seen, "hand": self.hand, "queued": self.queued,
         })
     }
 
@@ -111,6 +113,7 @@ impl Intent {
             _ => return None,
         };
         let work = match value["work"].as_str() {
+            Some("turn") => Work::Turn,
             Some("conflict") => Work::Conflict,
             Some("ci") => Work::Ci,
             _ => Work::Tests,
@@ -119,6 +122,8 @@ impl Intent {
             Value::Null => Through::All,
             through => Through::First { count: usize::try_from(through["count"].as_u64()?).ok()?, of: usize::try_from(through["of"].as_u64()?).ok()? },
         };
+        let at = value["at"].as_u64()?;
+        let queued = value["queued"].as_u64().or((work != Work::Ci).then_some(at));
         Some(Intent {
             by,
             work,
@@ -127,9 +132,10 @@ impl Intent {
             task: value["task"].as_str()?.to_string(),
             fingerprint: value["fingerprint"].as_str().filter(|text| !text.is_empty() || work == Work::Ci)?.to_string(),
             through,
-            at: value["at"].as_u64()?,
+            at,
             seen: value["seen"].as_str().map(str::to_string),
             hand: value["hand"].as_str().map(str::to_string),
+            queued,
         })
     }
 }
@@ -150,17 +156,54 @@ pub(super) fn load(state: &Path, address: &str) -> Option<Intent> {
     Intent::from_json(&serde_json::from_str(&std::fs::read_to_string(file(state, address)).ok()?).ok()?).filter(|intent| intent.address == address)
 }
 
-// A push under way, as the board shows it: who asked, what the task's Claude does for it, and since when.
-#[derive(Clone, Copy, Debug, PartialEq)]
+// A push under way, as the board shows it: who asked, what it waits for, since when, how many pushes of its repo go first and the task right in front.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Pending {
     pub by: By,
     pub work: Work,
     pub at: u64,
+    pub ahead: usize,
+    pub after: Option<String>,
 }
 
 // Reads only: the board and kelpie status never claim or drop an intent.
 pub(crate) fn pending(state: &Path, address: &str) -> Option<Pending> {
-    load(state, address).map(|intent| Pending { by: intent.by, work: intent.work, at: intent.at })
+    let intent = load(state, address)?;
+    let line = line(state, &intent.repo);
+    let ahead = line.iter().position(|queued| queued.address == address).unwrap_or(0);
+    let after = ahead.checked_sub(1).and_then(|front| line.get(front)).map(|front| front.task.clone());
+    Some(Pending { by: intent.by, work: intent.work, at: intent.at, ahead, after })
+}
+
+// A repo's pushes in the order they go out: first queued first; a red CI's push waiting for its fix is not in it.
+pub(super) fn line(state: &Path, repo: &Path) -> Vec<Intent> {
+    let mut line: Vec<Intent> = all(state).into_iter().filter(|intent| intent.repo == repo && intent.queued.is_some()).collect();
+    line.sort_by(|one, other| (one.queued, &one.address).cmp(&(other.queued, &other.address)));
+    line
+}
+
+pub(super) fn repos(state: &Path) -> Vec<PathBuf> {
+    let mut repos: Vec<PathBuf> = all(state).into_iter().filter(|intent| intent.queued.is_some()).map(|intent| intent.repo).collect();
+    repos.sort();
+    repos.dedup();
+    repos
+}
+
+fn left_file(state: &Path, address: &str) -> PathBuf {
+    state.join("push-left").join(address)
+}
+
+// Why a push left its line before it went out, for the board's Needs you row until the task is pushed again or ends.
+pub(super) fn record_left(state: &Path, address: &str, why: &str) {
+    let _ = crate::state::write(&left_file(state, address), why);
+}
+
+pub(crate) fn left(state: &Path, address: &str) -> Option<String> {
+    std::fs::read_to_string(left_file(state, address)).ok().filter(|why| !why.is_empty())
+}
+
+pub(super) fn forget_left(state: &Path, address: &str) {
+    let _ = std::fs::remove_file(left_file(state, address));
 }
 
 // The pushed commits are on the default branch, so the push waits for a fix the lead checks: no commit of the task's is approved by the push itself.
@@ -168,7 +211,7 @@ pub(crate) fn after_red_ci(state: &Path, repo: &Path, address: &str, by: By) -> 
     let task = address.split('@').next().unwrap_or(address).to_string();
     let log = messages::load();
     let seen = messages::latest_reports(&log).get(address).map(|report| report.id.clone());
-    save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen, hand: last_hand_over(&log, address) })
+    save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen, hand: last_hand_over(&log, address), queued: None })
 }
 
 fn last_hand_over(log: &[Message], address: &str) -> Option<String> {
@@ -182,7 +225,7 @@ pub(super) fn note_hand_over(state: &Path, address: &str) -> Result<()> {
 }
 
 // A ready report answers the hand-over only when the task's Claude read it before reporting; without a transcript to tell, a report after the hand-over went out does.
-fn answers_hand_over(intent: &Intent, report: &Message, log: &[Message], transcript: Option<&str>) -> bool {
+pub(super) fn answers_hand_over(intent: &Intent, report: &Message, log: &[Message], transcript: Option<&str>) -> bool {
     let Some(hand) = intent.hand.as_ref().and_then(|id| log.iter().find(|message| &message.id == id)) else { return true };
     if hand.held {
         return false;
@@ -198,7 +241,7 @@ pub(super) fn forget(state: &Path, address: &str) {
 }
 
 // A file that does not read as an intent of the user or the lead is removed unread.
-fn all(state: &Path) -> Vec<Intent> {
+pub(super) fn all(state: &Path) -> Vec<Intent> {
     let Ok(entries) = std::fs::read_dir(dir(state)) else { return Vec::new() };
     let mut intents = Vec::new();
     for entry in entries.flatten() {
@@ -213,14 +256,6 @@ fn all(state: &Path) -> Vec<Intent> {
     }
     intents.sort_by(|one, other| one.address.cmp(&other.address));
     intents
-}
-
-// Moving the file away is atomic, so a board and a keeper never push the same intent twice.
-fn claim(state: &Path, address: &str) -> bool {
-    let claimed = dir(state).join(format!(".{address}.claimed"));
-    let taken = std::fs::rename(file(state, address), &claimed).is_ok();
-    let _ = std::fs::remove_file(claimed);
-    taken
 }
 
 #[derive(Debug, PartialEq)]
@@ -245,75 +280,21 @@ pub(super) fn next(intent: &Intent, report: Option<&Message>, slot: Option<&Slot
     Next::Wait
 }
 
-pub fn complete(state: &Path) -> Vec<String> {
-    let sessions = crate::peers::sessions().unwrap_or_default();
-    let read = |intent: &Intent, slot: &Slot| {
-        let pane = sessions.iter().find(|session| session.address == intent.address).and_then(|session| session.pane.clone());
-        let file = pane.and_then(|pane| crate::typing::transcript_of(&pane)).or_else(|| super::launch::transcript(&intent.repo, slot).map(|(_, file)| file))?;
-        std::fs::read_to_string(file).ok()
-    };
-    complete_in(state, &messages::load(), read, |intent, slot| super::push::push_task(&intent.by.caller(), &intent.repo, slot, intent.through))
-}
-
-pub(super) fn complete_in(state: &Path, log: &[Message], read: impl Fn(&Intent, &Slot) -> Option<String>, mut push: impl FnMut(&Intent, &Slot) -> Result<String>) -> Vec<String> {
-    let reports = messages::latest_reports(log);
-    let mut notes = Vec::new();
-    for intent in all(state) {
-        let slot = find_task(&intent.repo, Some(&intent.task), &intent.repo).ok();
-        let current = slot.as_ref().and_then(|slot| default_branch(&intent.repo).and_then(|upstream| fingerprint(&slot.path, &upstream)).ok());
-        let approved = current.as_deref().is_some_and(|current| approval_holds(state, &intent.address, current));
-        let report = reports.get(&intent.address).filter(|report| slot.as_ref().is_none_or(|slot| answers_hand_over(&intent, report, log, read(&intent, slot).as_deref())));
-        match next(&intent, report, slot.as_ref(), current.as_deref(), approved) {
-            Next::Wait => {}
-            Next::Drop(why) => {
-                forget(state, &intent.address);
-                crate::phase::forget(state, &intent.address);
-                tell_lead(&format!("{why}."));
-                notes.push(format!("push: {why}"));
-            }
-            Next::Push => {
-                let Some(slot) = slot.filter(|_| claim(state, &intent.address)) else { continue };
-                let said = match push(&intent, &slot) {
-                    Ok(said) => said,
-                    Err(error) if super::push::rejected(&error) && save(state, &intent).is_ok() => {
-                        format!("the push of {} that {} asked for was rejected while the default branch kept moving; kelpie tries again next round", intent.address, intent.by.word())
-                    }
-                    Err(error) => {
-                        crate::phase::record(state, &intent.address, "push", &crate::phase::Event::PushFailed);
-                        let text = format!("kelpie could not finish the push of {} that {} asked for: {error}", intent.address, intent.by.word());
-                        tell_lead(&text);
-                        text
-                    }
-                };
-                notes.push(format!("push: {}: {said}", intent.address));
-            }
-        }
-    }
-    notes
-}
-
-fn tell_lead(text: &str) {
-    if let Err(error) = messages::tell_lead(text, Some("push")) {
-        eprintln!("Could not tell the lead: {error}");
-    }
-}
-
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::messages::Report;
-    use crate::repo::git;
     use crate::tasks::test_support::*;
 
-    fn report(id: &str, at: u64, state: &str) -> Message {
+    pub(in crate::tasks) fn report(id: &str, at: u64, state: &str) -> Message {
         Message {
             id: id.to_string(), at, from: "billing@app".to_string(), to: crate::status::LEAD_LABEL.to_string(), text: "tests pass".to_string(), held: false,
             report: Some(Report { state: state.to_string(), next: "push".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
         }
     }
 
-    fn intent(by: By, repo: &Path, fingerprint: &str) -> Intent {
-        Intent { by, work: Work::Tests, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()), hand: None }
+    pub(in crate::tasks) fn intent(by: By, repo: &Path, fingerprint: &str) -> Intent {
+        Intent { by, work: Work::Tests, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()), hand: None, queued: Some(100) }
     }
 
     #[test]
@@ -341,10 +322,14 @@ mod tests {
         assert_eq!(By::of(&Caller::Task("billing@app".to_string())), None);
         assert_eq!(By::of(&Caller::Lead).map(By::caller), Some(Caller::Lead));
         save(&state, &written).unwrap();
-        assert_eq!((pending(&state, "billing@app"), pending(&state, "other@app")), (Some(Pending { by: By::Lead, work: Work::Conflict, at: 100 }), None));
+        assert_eq!((pending(&state, "billing@app"), pending(&state, "other@app")), (Some(Pending { by: By::Lead, work: Work::Conflict, at: 100, ahead: 0, after: None }), None));
         assert_eq!(load(&state, "billing@app"), Some(written.clone()), "reading what waits leaves the intent in place");
-        assert!(claim(&state, "billing@app") && !claim(&state, "billing@app"), "one claim wins");
-        assert_eq!(pending(&state, "billing@app"), None, "a claimed intent waits no more");
+        let mut older = written.to_json();
+        older.as_object_mut().unwrap().remove("queued");
+        crate::state::write(&file(&state, "billing@app"), older.to_string()).unwrap();
+        assert_eq!(load(&state, "billing@app").and_then(|intent| intent.queued), Some(100), "a push under way from before the line holds its place by when it was asked");
+        forget(&state, "billing@app");
+        assert_eq!(pending(&state, "billing@app"), None);
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -360,32 +345,6 @@ mod tests {
         assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abd"), false), Next::Wait, "changed commits wait for the lead's rules check");
         assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abd"), true), Next::Push, "the lead approved the changed commits");
         assert!(matches!(next(&waiting, Some(&report("r1", 200, "ready")), None, Some("abc"), true), Next::Drop(why) if why.contains("is gone")));
-        cleanup(dir, origin, &slot);
-    }
-
-    #[test]
-    fn a_waiting_push_completes_only_on_a_ready_report_written_after_its_claude_read_the_hand_over() {
-        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
-        let state = state_of(&dir);
-        let current = fingerprint(&slot.path, &upstream).unwrap();
-        let address = format!("billing@{}", crate::repo::name_of(&dir));
-        let hand = |held: bool| { let mut message = report("h1", 150, "ready"); (message.from, message.to, message.text, message.report, message.held, message.kind) = ("kelpie".to_string(), address.clone(), "run the tests".to_string(), None, held, Some(messages::HAND_KIND.to_string())); message };
-        let ready = |at: u64| { let mut message = report("r1", at, "ready"); message.from = address.clone(); message };
-        let read_at = |seconds: u64| json!({ "type": "user", "timestamp": format!("1970-01-01T00:{:02}:{:02}.000Z", seconds / 60, seconds % 60), "message": { "content": "[from kelpie] run the tests" } }).to_string();
-        let pushes = |log: Vec<Message>, transcript: Option<String>| {
-            save(&state, &Intent { hand: Some("h1".to_string()), ..intent(By::User, &dir, &current) }).unwrap();
-            let mut pushed = false;
-            complete_in(&state, &log, |_, _| transcript.clone(), |_, _| { pushed = true; Ok(String::new()) });
-            forget(&state, &address);
-            pushed
-        };
-        assert!(!pushes(vec![hand(true), ready(200)], None), "the hand-over is still held behind a draft: the report is from an earlier turn");
-        assert!(!pushes(vec![hand(false), ready(200)], Some(String::new())), "typed, but its Claude has not read it yet, as when the forced report after a notice comes first");
-        assert!(!pushes(vec![hand(false), ready(200)], Some(read_at(201))), "read after that report");
-        assert!(pushes(vec![hand(false), ready(200)], Some(read_at(160))), "read, then the tests, then ready");
-        assert!(pushes(vec![hand(false), ready(200)], None), "no transcript to tell: a report after the hand-over went out answers it");
-        assert!(!pushes(vec![hand(false), ready(140)], None), "and one before it does not");
-        assert!(pushes(vec![ready(200)], None), "a hand-over the log no longer has holds nothing up");
         cleanup(dir, origin, &slot);
     }
 
@@ -409,59 +368,4 @@ mod tests {
         cleanup(dir, origin, &slot);
     }
 
-    #[test]
-    fn kelpie_pushes_for_the_recorded_pusher_once_and_changed_commits_once_the_lead_approves_them() {
-        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
-        let state = state_of(&dir);
-        let current = fingerprint(&slot.path, &upstream).unwrap();
-        let address = format!("billing@{}", crate::repo::name_of(&dir));
-        let ready = |id: &str| { let mut message = report(id, 200, "ready"); message.from = address.clone(); vec![message] };
-        save(&state, &intent(By::Lead, &dir, &current)).unwrap();
-        let mut pushed = Vec::new();
-        complete_in(&state, &[], |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
-        assert!(pushed.is_empty() && load(&state, &address).is_some(), "no report yet: it waits");
-        complete_in(&state, &ready("r1"), |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
-        assert_eq!(pushed, [By::Lead], "pushed as the lead that asked, under its own checks");
-        assert!(load(&state, &address).is_none());
-        complete_in(&state, &ready("r1"), |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
-        assert_eq!(pushed.len(), 1, "an intent pushes once");
-        save(&state, &intent(By::User, &dir, &current)).unwrap();
-        commit(&slot.path, "e", "a fix while testing");
-        complete_in(&state, &ready("r2"), |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
-        assert_eq!(pushed.len(), 1, "changed commits are never pushed on the old commits' word");
-        assert!(load(&state, &address).is_some(), "the push stays under way while the lead checks the fix");
-        super::super::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
-        complete_in(&state, &ready("r2"), |_, _| None, |intent, _| { pushed.push(intent.by); Ok(String::new()) });
-        assert_eq!(pushed, [By::Lead, By::User], "the lead's approval of the fix lets the user's push go out");
-        assert!(load(&state, &address).is_none());
-        let current = fingerprint(&slot.path, &upstream).unwrap();
-        save(&state, &intent(By::User, &dir, &current)).unwrap();
-        let rejected = "Pushing billing failed: ! [rejected]        4333c9f -> main (non-fast-forward)";
-        let notes = complete_in(&state, &ready("r3"), |_, _| None, |_, _| Err(rejected.to_string()));
-        assert!(load(&state, &address).is_some() && notes[0].contains("tries again"), "a push main kept outrunning waits for the next round, never dropped: {notes:?}");
-        complete_in(&state, &ready("r3"), |_, _| None, |_, _| Err("the reviewer has not passed it".to_string()));
-        assert!(load(&state, &address).is_none(), "any other failure goes to the lead");
-        cleanup(dir, origin, &slot);
-    }
-
-    #[test]
-    fn a_push_waiting_on_a_task_that_is_rebasing_stays_and_goes_out_once_the_task_is_ready() {
-        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
-        let state = state_of(&dir);
-        let address = format!("billing@{}", crate::repo::name_of(&dir));
-        save(&state, &intent(By::User, &dir, &fingerprint(&slot.path, &upstream).unwrap())).unwrap();
-        assert!(git(&slot.path, &["rebase", "--exec", "false", &upstream]).is_err(), "the rebase stops part-way");
-        assert!(crate::repo::rebase_in_progress(&slot.path));
-        assert_eq!(find_task(&dir, Some("billing"), &dir).map(|found| found.path).ok(), Some(slot.path.clone()), "the rebasing worktree is still the task's");
-        let mut pushed = 0;
-        let notes = complete_in(&state, &[], |_, _| None, |_, _| { pushed += 1; Ok(String::new()) });
-        assert!(notes.is_empty() && load(&state, &address).is_some(), "the push waits through the rebase: {notes:?}");
-        git(&slot.path, &["rebase", "--continue"]).unwrap();
-        let mut ready = report("r1", 200, "ready");
-        ready.from = address.clone();
-        complete_in(&state, &[ready], |_, _| None, |_, _| { pushed += 1; Ok(String::new()) });
-        assert_eq!(pushed, 1, "the task's ready report sends the push");
-        assert!(load(&state, &address).is_none());
-        cleanup(dir, origin, &slot);
-    }
 }

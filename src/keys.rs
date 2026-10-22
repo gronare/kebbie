@@ -223,7 +223,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Rebase, on: &[Work], help: "rebase the task onto main now, without pushing; offered when it is behind, and a conflict goes to its Claude", hint: Hint::No },
     Binding { act: Act::Follow, on: &[Work], help: "keep the task rebased on main: the keeper rebases it when main moves, while its Claude is idle and its files are committed; or switch that off", hint: Hint::No },
     Binding { act: Act::Tidy, on: &[Work], help: "tidy commits: its Claude reshapes them by the rules skill", hint: Hint::No },
-    Binding { act: Act::Push, on: &[Work, Card], help: "push: its card and commits, all or the first few; rebases first", hint: Hint::No },
+    Binding { act: Act::Push, on: &[Work, Card], help: "push: its card and commits, all or the first few; joins its repo's push line, or leaves it when already in", hint: Hint::No },
     Binding { act: Act::Done, on: &[Work], help: "done: after you pushed elsewhere (asks first)", hint: Hint::No },
     Binding { act: Act::DismissCi, on: &[Work], help: "dismiss the red CI of a pushed task when the failure is not the code's: kept on record, and the task closes once its commits are on main (asks first)", hint: Hint::No },
     Binding { act: Act::Reset, on: &[Work], help: "reset the task: its work goes, its backlog item returns (asks first)", hint: Hint::No },

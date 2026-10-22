@@ -15,10 +15,11 @@ pub enum Why {
     Stopped,
     Failed,
     Unreadable,
+    LeftLine,
 }
 
 impl Why {
-    const ALL: [Why; 7] = [Why::Report, Why::Question, Why::NothingToPush, Why::Unreported, Why::Stopped, Why::Failed, Why::Unreadable];
+    const ALL: [Why; 8] = [Why::Report, Why::Question, Why::NothingToPush, Why::Unreported, Why::Stopped, Why::Failed, Why::Unreadable, Why::LeftLine];
 
     fn key(self) -> &'static str {
         match self {
@@ -29,6 +30,7 @@ impl Why {
             Why::Stopped => "stopped",
             Why::Failed => "failed",
             Why::Unreadable => "unreadable",
+            Why::LeftLine => "left-line",
         }
     }
 
@@ -44,7 +46,7 @@ pub enum Phase {
     Idle,
     NeedsYou(Why),
     Ready { head: Option<String> },
-    Pushing,
+    Pushing { ahead: usize },
     CiRunning { sha: String },
     CiRed { sha: String },
     Closing,
@@ -58,7 +60,7 @@ impl Phase {
             Phase::Idle => "idle",
             Phase::NeedsYou(_) => "needs-you",
             Phase::Ready { .. } => "ready",
-            Phase::Pushing => "pushing",
+            Phase::Pushing { .. } => "pushing",
             Phase::CiRunning { .. } => "ci-running",
             Phase::CiRed { .. } => "ci-red",
             Phase::Closing => "closing",
@@ -81,7 +83,11 @@ impl Record {
             Phase::CiRunning { sha } | Phase::CiRed { sha } => (None, None, Some(sha.as_str())),
             _ => (None, None, None),
         };
-        json!({ "name": self.phase.key(), "why": why, "head": head, "sha": sha, "since": self.since, "by": self.by })
+        let ahead = match &self.phase {
+            Phase::Pushing { ahead } => Some(*ahead),
+            _ => None,
+        };
+        json!({ "name": self.phase.key(), "why": why, "head": head, "sha": sha, "ahead": ahead, "since": self.since, "by": self.by })
     }
 
     pub fn from_json(value: &Value) -> Option<Record> {
@@ -92,7 +98,7 @@ impl Record {
             "idle" => Phase::Idle,
             "needs-you" => Phase::NeedsYou(Why::of_key(value["why"].as_str()?)?),
             "ready" => Phase::Ready { head: text("head") },
-            "pushing" => Phase::Pushing,
+            "pushing" => Phase::Pushing { ahead: value["ahead"].as_u64().and_then(|ahead| usize::try_from(ahead).ok()).unwrap_or(0) },
             "ci-running" => Phase::CiRunning { sha: text("sha")? },
             "ci-red" => Phase::CiRed { sha: text("sha")? },
             "closing" => Phase::Closing,
@@ -111,6 +117,7 @@ pub enum Event<'a> {
     Reported { state: &'a str, head: Option<&'a str>, committed: bool, pushing: bool },
     Asked,
     Answered,
+    PushQueued { ahead: usize },
     PushHanded,
     PushOut { sha: &'a str },
     PushFailed,
@@ -149,7 +156,7 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
         },
         Event::Reported { state, head, committed, pushing } => match (*state, current) {
             ("needs-you", _) => Phase::NeedsYou(Why::Report),
-            _ if *pushing => Phase::Pushing,
+            _ if *pushing => Phase::Pushing { ahead: match current { Some(Phase::Pushing { ahead }) => *ahead, _ => 0 } },
             (_, Some(Phase::Closing)) => return None,
             ("blocked", _) => Phase::Idle,
             (_, Some(Phase::CiRunning { .. })) => return None,
@@ -163,14 +170,15 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
             Some(Phase::NeedsYou(_)) => Phase::Working,
             _ => return None,
         },
-        Event::PushHanded => Phase::Pushing,
+        Event::PushQueued { ahead } => Phase::Pushing { ahead: *ahead },
+        Event::PushHanded => Phase::Pushing { ahead: 0 },
         Event::PushOut { sha } => Phase::CiRunning { sha: sha.to_string() },
         Event::PushFailed => Phase::NeedsYou(Why::Failed),
         Event::KeptOpen { clean: false, .. } => Phase::Working,
         Event::KeptOpen { rest: 0, .. } => Phase::Idle,
         Event::KeptOpen { head, .. } => Phase::Ready { head: head.map(str::to_string) },
         Event::Closing => Phase::Closing,
-        Event::CiRed { pushing: true, .. } => Phase::Pushing,
+        Event::CiRed { pushing: true, .. } => Phase::Pushing { ahead: 0 },
         Event::CiRed { sha, .. } => Phase::CiRed { sha: sha.to_string() },
         Event::CiUnreadable => match current {
             Some(Phase::CiRunning { .. }) => Phase::NeedsYou(Why::Unreadable),
@@ -281,7 +289,7 @@ mod tests {
     #[test]
     fn a_phase_reads_back_as_written_with_when_and_by_whom() {
         let state = crate::sh::test_dir("phase-file");
-        for phase in [Phase::Starting, Phase::Working, Phase::Idle, Phase::Ready { head: Some("abc".to_string()) }, Phase::Ready { head: None }, Phase::Pushing, Phase::CiRunning { sha: "abc".to_string() }, Phase::CiRed { sha: "def".to_string() }, Phase::Closing]
+        for phase in [Phase::Starting, Phase::Working, Phase::Idle, Phase::Ready { head: Some("abc".to_string()) }, Phase::Ready { head: None }, Phase::Pushing { ahead: 0 }, Phase::Pushing { ahead: 2 }, Phase::CiRunning { sha: "abc".to_string() }, Phase::CiRed { sha: "def".to_string() }, Phase::Closing]
             .into_iter().chain(Why::ALL.map(Phase::NeedsYou)) {
             let record = Record { phase, since: 7, by: "report".to_string() };
             save(&state, "billing@app", &record);
@@ -341,8 +349,9 @@ mod tests {
         assert_eq!(reported(ci.clone(), "blocked", false, false), Some(Phase::Idle));
         assert_eq!(reported(ci, "needs-you", false, false), Some(Phase::NeedsYou(Why::Report)));
         assert_eq!(reported(Phase::Closing, "ready", false, false), None);
-        assert_eq!(reported(Phase::Working, "ready", true, true), Some(Phase::Pushing), "a push waits for it");
-        assert_eq!(reported(Phase::Pushing, "needs-you", true, true), Some(Phase::NeedsYou(Why::Report)));
+        assert_eq!(reported(Phase::Working, "ready", true, true), Some(Phase::Pushing { ahead: 0 }), "a push waits for it");
+        assert_eq!(reported(Phase::Pushing { ahead: 2 }, "ready", true, true), Some(Phase::Pushing { ahead: 2 }), "a report keeps its place in the push line");
+        assert_eq!(reported(Phase::Pushing { ahead: 0 }, "needs-you", true, true), Some(Phase::NeedsYou(Why::Report)));
         assert_eq!(reported(Phase::Working, "ready", true, false), Some(Phase::Ready { head: Some("abc".to_string()) }));
         assert_eq!(reported(Phase::Working, "ready", false, false), Some(Phase::NeedsYou(Why::NothingToPush)));
         assert_eq!(reported(Phase::CiRed { sha: "abc".to_string() }, "ready", true, false), Some(Phase::Ready { head: Some("abc".to_string()) }), "the fix, after the red run");
@@ -362,7 +371,7 @@ mod tests {
         };
         for (file, name, event) in [
             ("questions.rs", "answer", "Event::Answered"), ("tasks/push.rs", "prepare", "Event::PushHanded"), ("tasks/push.rs", "deliver", "Event::KeptOpen"), ("tasks/launch.rs", "restart", "Event::Started"), ("tasks/push.rs", "after_ci", "Event::Closing"),
-            ("tasks/intent.rs", "complete_in", "Event::PushFailed"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("),
+            ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("),
         ] {
             assert!(body(file, name).contains(event), "{file} {name} writes {event}");
         }

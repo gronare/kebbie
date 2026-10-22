@@ -4,7 +4,11 @@ use crate::repo::git;
 use super::pool::{Slot, create_slot, find_task};
 
 pub(crate) fn repo() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("kelpie-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+    repo_named("")
+}
+
+fn repo_named(suffix: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("kelpie-test-{}-{:?}{suffix}", std::process::id(), std::thread::current().id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     git(&dir, &["init", "--quiet"]).unwrap();
@@ -19,7 +23,15 @@ pub(crate) fn repo() -> PathBuf {
 }
 
 pub(crate) fn task_with_a_commit(name: &str) -> (PathBuf, PathBuf, Slot, String) {
-    let dir = repo();
+    task_in(repo(), name)
+}
+
+// The same, in a second repo of its own, for what two repos do side by side.
+pub(crate) fn task_in_another_repo(name: &str) -> (PathBuf, PathBuf, Slot, String) {
+    task_in(repo_named("-other"), name)
+}
+
+fn task_in(dir: PathBuf, name: &str) -> (PathBuf, PathBuf, Slot, String) {
     let origin = dir.with_extension("origin");
     let _ = std::fs::remove_dir_all(&origin);
     git(&dir, &["clone", "--quiet", "--bare", ".", &origin.to_string_lossy()]).unwrap();
@@ -34,6 +46,14 @@ pub(crate) fn task_with_a_commit(name: &str) -> (PathBuf, PathBuf, Slot, String)
     git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "fourth"]).unwrap();
     let slot = find_task(&dir, Some(name), &dir).unwrap();
     (dir, origin, slot, format!("origin/{branch}"))
+}
+
+// Another task in the same repo, its own worktree with one commit of its own on `file`.
+pub(crate) fn another_task(dir: &Path, name: &str, file: &str) -> Slot {
+    let slot = create_slot(dir, "HEAD").unwrap();
+    git(&slot.path, &["switch", "--quiet", "--create", name]).unwrap();
+    commit(&slot.path, file, name);
+    find_task(dir, Some(name), dir).unwrap()
 }
 
 pub(crate) fn state_of(dir: &Path) -> PathBuf {

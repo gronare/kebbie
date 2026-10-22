@@ -102,6 +102,7 @@ pub struct Worktree {
     pub server_name: Option<String>,
     pub worker_name: Option<String>,
     pub ci_watch: Option<bool>,
+    pub clean_on_release: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -170,6 +171,7 @@ pub struct Settings {
     pub idle_minutes: Setting<u64>,
     pub auto_restart: Setting<bool>,
     pub ci_watch: Setting<bool>,
+    pub clean_on_release: Setting<Vec<String>>,
     pub keeper: Setting<bool>,
     pub recover: Setting<bool>,
 }
@@ -385,7 +387,7 @@ fn enabled_in(table: &Table, name: &str) -> Result<Option<bool>> {
 
 fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
-    unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "server_name", "worker_name"])?;
+    unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "server_name", "worker_name", "clean_on_release"])?;
     Ok(Worktree {
         setup_skill: skill(worktree, "setup_skill", "worktree.setup_skill")?,
         setup_command: text(worktree, "setup_command", "worktree.setup_command")?,
@@ -405,7 +407,20 @@ fn worktree(table: &Table) -> Result<Worktree> {
         server_name: text(worktree, "server_name", "worktree.server_name")?,
         worker_name: text(worktree, "worker_name", "worktree.worker_name")?,
         ci_watch: None,
+        clean_on_release: worktree.get("clean_on_release").map(clean_on_release).transpose()?,
     })
+}
+
+// Folders inside the worktree only: a path that climbs out or starts at / could reach anything.
+fn clean_on_release(value: &Value) -> Result<Vec<String>> {
+    let folders = strings(value, "worktree.clean_on_release")?;
+    for folder in &folders {
+        let inside = !folder.trim().is_empty() && Path::new(folder).components().all(|part| matches!(part, Component::Normal(name) if name != ".git"));
+        if !inside {
+            return Err(format!("worktree.clean_on_release: \"{folder}\" must be a folder inside the worktree, such as \"target\" or \"node_modules/.cache\""));
+        }
+    }
+    Ok(folders)
 }
 
 fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
@@ -548,6 +563,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         idle_minutes: or_default(pick(None, machine.restart.idle_minutes.as_ref()), DEFAULT_IDLE_MINUTES),
         auto_restart: or_default(pick(None, machine.restart.auto.as_ref()), true),
         ci_watch: or_default(pick(repo.ci_watch.as_ref(), machine.worktree.ci_watch.as_ref()), true),
+        clean_on_release: or_default(pick(repo.clean_on_release.as_ref(), machine.worktree.clean_on_release.as_ref()), vec!["target".to_string()]),
         keeper: or_default(pick(None, machine.keeper.as_ref()), true),
         recover: or_default(pick(None, machine.recover.as_ref()), true),
     }
@@ -594,7 +610,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, keeper, recover } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, keeper, recover } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -633,6 +649,9 @@ pub fn describe(loaded: &Loaded) -> String {
         &format!("The name of the tab the board's {server_key} starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; config.toml only."));
     key("worktree.worker_name", format!("{:?}", worker_name.value), worker_name.layer,
         &format!("The same for the worker tab {worker_key} starts; config.toml only."));
+    let cleaned: Vec<&str> = clean_on_release.value.iter().map(String::as_str).collect();
+    key("worktree.clean_on_release", quoted(&cleaned), clean_on_release.layer,
+        "Build output kelpie removes from a worktree when it goes back to the pool (done, drop, reset, a landed task closing), so the pool's disk use stays bounded; folders inside the worktree, each removed only when git ignores it and tracks nothing in it, and \"target\" only where the worktree has a Cargo.toml. [] keeps everything.");
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
         "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the lead checks a finished task against it, tidy reshapes commits by it.");
     let own: Vec<&str> = test_commands.value.iter().map(String::as_str).collect();
@@ -757,6 +776,18 @@ mod tests {
         let refused = parse_repo("[task]\nrules_skill = \"kelpie:../../outside\"\n", "app.toml").unwrap_err();
         assert!(refused.contains("task.rules_skill") && refused.contains("not a skill name"), "{refused}");
         assert!(parse_repo("[worktree]\nsetup_skill = \"../x\"\n", "app.toml").is_err());
+    }
+
+    #[test]
+    fn a_released_worktree_loses_its_target_by_default_and_a_repo_names_its_own_folders_inside_it() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).clean_on_release, Setting { value: vec!["target".to_string()], layer: Layer::Default });
+        let own = settings(&repo("[worktree]\nclean_on_release = [\"target\", \"node_modules/.cache\", \".next\"]\n"), &machine("[worktree]\nclean_on_release = []\n"));
+        assert_eq!(own.clean_on_release, Setting { value: ["target", "node_modules/.cache", ".next"].map(str::to_string).to_vec(), layer: Layer::Repo });
+        assert_eq!(settings(&Worktree::default(), &machine("[worktree]\nclean_on_release = []\n")).clean_on_release.value, Vec::<String>::new());
+        for outside in ["../other", "/tmp", "", ".git", "a/../../b", "./target"] {
+            let refused = parse_repo(&format!("[worktree]\nclean_on_release = [{outside:?}]\n"), "app.toml").unwrap_err();
+            assert!(refused.contains("must be a folder inside the worktree"), "{outside}: {refused}");
+        }
     }
 
     #[test]
@@ -942,7 +973,7 @@ mod tests {
         let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
         assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board.backlog] sources in "));
         assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, routines");
-        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, server_name, worker_name");
+        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, server_name, worker_name, clean_on_release");
     }
 
     #[test]

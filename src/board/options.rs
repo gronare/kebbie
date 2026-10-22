@@ -52,12 +52,14 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
                 choice(Act::SendReview, "Send to review", "a separate, read-only Claude reviews its commits; the task waits under To review until it passes them")
             });
         }
-        if let Some(git) = item.and_then(|item| item.git.as_ref()).filter(|git| git.behind > 0) {
+        if let Some(git) = item.filter(|item| item.push_waits.is_none()).and_then(|item| item.git.as_ref()).filter(|git| git.behind > 0) {
             choices.push(choice(Act::Rebase, &format!("Rebase onto {}", trunk(git)), "fetch and rebase it now, without pushing; a conflict goes to its Claude"));
         }
         choices.push(choice(Act::Tidy, "Tidy commits", "its Claude reshapes them by the rules skill"));
-        if !item.is_some_and(Item::awaiting_review) {
-            choices.push(choice(Act::Push, "Push", "its card and commits: push them all and close, or the first few and keep it open; rebases first"));
+        if item.is_some_and(Item::in_push_line) {
+            choices.push(choice(Act::Push, "Take out of the push line", "nothing of it is pushed; it waits under Ready to push until you push it again, at the end of the line"));
+        } else if !item.is_some_and(Item::awaiting_review) {
+            choices.push(choice(Act::Push, "Push", "its card and commits: push them all and close, or the first few and keep it open; it joins its repo's push line and is rebased when its turn comes"));
         }
         choices.push(match item.and_then(|item| item.git.as_ref()) {
             Some(git) if item.is_some_and(|item| item.landed.is_some()) => choice(Act::Done, "Done", &format!("its commits landed on {}: close it and free the worktree", trunk(git))),
@@ -297,6 +299,19 @@ mod tests {
         assert!(item.group() == crate::status::Group::ReadyToPush && busy(&item));
         item.agent.as_mut().unwrap().status = "idle".to_string();
         assert!(!busy(&item));
+    }
+
+    #[test]
+    fn a_task_in_the_push_line_offers_to_leave_it_and_no_rebase_and_a_red_cis_fix_offers_neither() {
+        use crate::tasks::{PendingPush, PushBy, PushWork};
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
+        item.git.as_mut().unwrap().behind = 2;
+        let labels = |item: &Item| task_choices(Some(item), None, None).into_iter().map(|choice| choice.label).collect::<Vec<_>>();
+        assert!(labels(&item).contains(&"Rebase onto main".to_string()) && labels(&item).contains(&"Push".to_string()));
+        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Turn, at: 1, ahead: 1, after: None });
+        assert!(labels(&item).contains(&"Take out of the push line".to_string()) && !labels(&item).iter().any(|label| label.starts_with("Rebase")), "{:?}", labels(&item));
+        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Ci, at: 1, ahead: 0, after: None });
+        assert!(!labels(&item).contains(&"Take out of the push line".to_string()), "a red CI's fix is not in a line: {:?}", labels(&item));
     }
 
     #[test]

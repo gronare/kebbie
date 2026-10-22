@@ -614,6 +614,16 @@ impl App {
                         self.about(act_kind(act), &item.name);
                         self.show(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports.").ok());
                     }
+                    Act::Rebase if item.push_waits.is_some() => {
+                        self.about("rebase", &item.name);
+                        self.show(Notice::new(Tone::NotNow, "Not rebased: it is in the push line").next("kelpie rebases it when its turn comes.").ok());
+                    }
+                    Act::Push if item.in_push_line() => {
+                        if let Some(path) = item.path.clone() {
+                            self.about("push", &item.name);
+                            self.in_background(format!("Taking {} out of the push line…", item.name), move || tasks::cancel_push(&path, None));
+                        }
+                    }
                     Act::Push if item.awaiting_review() => {
                         self.about("push", &item.name);
                         self.show(Notice::new(Tone::NotNow, "Not yet: it is in review").next("Push opens once its reviewer passes its commits.").ok());

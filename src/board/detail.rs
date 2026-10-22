@@ -614,7 +614,7 @@ mod tests {
         let (rows, _) = render(&mut app, 170, 40);
         assert!(!rows.join("\n").contains("pushing for"), "no intent, nothing waits: {}", rows.join("\n"));
         for (by, word) in [(tasks::PushBy::User, "you"), (tasks::PushBy::Lead, "the lead")] {
-            app.tasks[0].push_waits = Some(tasks::PendingPush { by, work: tasks::PushWork::Tests, at: 0 });
+            app.tasks[0].push_waits = Some(tasks::PendingPush { by, work: tasks::PushWork::Tests, at: 0, ahead: 0, after: None });
             let shown = format!("pushing for {word} · its Claude runs the tests");
             let (rows, buffer) = render(&mut app, 170, 40);
             let at: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.contains(&shown)).map(|(at, _)| at).collect();

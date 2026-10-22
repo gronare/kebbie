@@ -132,7 +132,7 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
         let main = upstream.trim_start_matches("origin/");
         return Notice::new(Tone::You, format!("Not closed: some of its commits are not on {main}")).you("Push them first, or drop the task.").detail("task", task).detail("commits", missing.join("\n")).err();
     }
-    release(repo, slot, upstream)?;
+    let freed = release(repo, slot, upstream)?;
     let address = peers::address(task, &name_of(repo));
     forget_address(state, &address);
     let mut said = Vec::new();
@@ -162,6 +162,9 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
     let mut closed = Notice::new(Tone::Done, format!("Closed: its work is on {main}")).next(format!("{} is free for the next task.", name_of(&slot.path)));
     for note in said {
         closed = closed.detail("note", note);
+    }
+    if let Some(freed) = freed {
+        closed = closed.detail("freed", freed);
     }
     Ok(closed.detail("checkout", fast_forward_main(repo, upstream)?))
 }
@@ -239,7 +242,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
         git_writing(&slot.path, &["reset", "--quiet", "--hard"])?;
         git_writing(&slot.path, &["clean", "-fdq"])?;
     }
-    release(&repo, &slot, &upstream)?;
+    let freed = release(&repo, &slot, &upstream)?;
     let notes: Vec<String> = forget_start(task, &repo).map(|text| crate::task_note::items(&text)).unwrap_or_default().into_iter().filter(|item| crate::vault_cli::is_note(item)).collect();
     let mut said = Vec::new();
     if let Ok(state) = state_dir() {
@@ -264,6 +267,9 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
     for note in said {
         dropped = dropped.detail("note", note);
     }
+    if let Some(freed) = freed {
+        dropped = dropped.detail("freed", freed);
+    }
     if let Some(error) = close_space(workspace) {
         dropped = dropped.detail("space", error);
     }
@@ -280,7 +286,13 @@ fn dropped_notes(vault: Option<&crate::vault_cli::Cli>, state: &Path, task: &str
     }).collect()
 }
 
-fn forget_address(state: &Path, address: &str) {
+pub(super) fn forget_address(state: &Path, address: &str) {
+    let queued = super::intent::load(state, address);
+    super::intent::forget(state, address);
+    if let Some(queued) = queued {
+        super::line::restamp(state, &queued.repo);
+    }
+    super::intent::forget_left(state, address);
     crate::phase::forget(state, address);
     crate::task_note::forget(state, address);
     super::landed::forget(state, address);

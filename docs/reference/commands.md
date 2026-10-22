@@ -83,9 +83,11 @@ Nothing is ever pushed. You or the lead switch it; a task's own Claude cannot. `
 
 ### `kelpie push [name]`
 
-Fetch, rebase the task onto the default branch, push its commits there, then close it as `done`. Only you may run it, or the lead for a task you gave push permission. The lead is told what landed. Uncommitted changes to tracked files stop it; untracked files do not.
+Put the task in its repo's push line; when its turn comes, fetch, rebase it onto origin's default branch, push its commits there, then close it as `done`. Only you may run it, or the lead for a task you gave push permission. The lead is told what landed. Uncommitted changes to tracked files stop it; untracked files do not.
 
-How far the task is behind the default branch does not matter. The rebase decides what happens next:
+Each repo pushes one task at a time, in the order the pushes were asked for. With the line empty, the push goes out at once and the command says how it went; otherwise it says `In the push line: 2nd in line after <task>`, and the keeper pushes it when the pushes before it are out. A task is fetched and rebased only when its turn comes, so a landing never sends a waiting task back to its Claude, and tasks nobody asked to push are never touched. Who may push is checked when you ask and again at the turn. A push leaves the line for Needs you, unpushed, when its commits changed after you chose push and nobody approved the new ones; pushing again puts it at the end of the line.
+
+How far the task is behind the default branch does not matter. The rebase at its turn decides what happens next:
 
 | Rebase | What happens |
 | --- | --- |
@@ -93,11 +95,14 @@ How far the task is behind the default branch does not matter. The rebase decide
 | Clean, but the new upstream commits changed files the task changes too | Nothing is pushed yet. kelpie hands the task to its Claude with the files and the commits that touched them, to run their tests and report ready. When it reports ready with the same commits, kelpie pushes for whoever asked: you, or the lead under its permission, with the same checks. When its commits changed, the lead checks them again and the push is asked for again. |
 | Conflict | kelpie aborts the rebase and hands it to the task's Claude, which resolves it, asks you when the conflict is a choice between two behaviours, and reports ready. The resolved commits need the lead's check before the next push. |
 
+While its Claude runs the tests or resolves the conflict, the task keeps the head of the line and the pushes behind it wait. It leaves the line for Needs you, marked `out of the push line: <why>`, when its Claude reports needs-you, or when 30 minutes pass without a ready report (or, after one, without the lead's approval of the changed commits); the next push in line goes on then.
+
 When origin is on GitHub and `gh` is logged in, the task stays open under CI running instead, and closes as `done` once every workflow run for the pushed commit is green. See `kelpie ci`. Otherwise the push result ends with `CI not watched:` and the reason.
 
 | Option | Meaning |
 | --- | --- |
 | `--through <sha>` | Push the commits up to and including `<sha>` and keep the task open, also when `<sha>` is its last commit. The rest of the branch is rebased on top of what was pushed. A task kept open stays open until you close it (`done`, or Done in its options). |
+| `--cancel` | Take the task out of the push line before it goes out; nothing of it is pushed, and it waits under Ready to push. The lead can take back only its own pushes. It does not apply while kelpie is pushing the task that moment, nor to a fix for red CI after a push, whose commits are on the default branch already: fix the CI or dismiss it (`kelpie ci dismiss`). `p` on a task in the line does the same on the board. A task mid-rebase does not join the line; a head found mid-rebase waits for the rebase to finish. |
 
 ### `kelpie ci [--json]`
 
@@ -188,7 +193,7 @@ The lead's word that a task's commits hold to the rules skill. Until a commit ch
 | Command | Output |
 | --- | --- |
 | `kelpie board [--overlay]` | The board. `--overlay` is the popup form, which `esc` closes. See [Board](board.md). |
-| `kelpie status [--json]` | Every task and Claude session, grouped by what it needs from you. `--json` gives `away_since`, `items` and `checkouts`; a task's `push_waits` is `user` or `lead` while a push it asked for waits for the task's tests, its `profile` is the profile it started with (`task` for the built-in one, `null` for a session that is no task), and its `phase` is where it stands as kelpie keeps it: `name` (`starting`, `working`, `idle`, `needs-you`, `ready`, `pushing`, `ci-running`, `ci-red` or `closing`), with `why` for `needs-you`, `head` for `ready` and `sha` for the CI phases, `since` and `by`, what moved it there. |
+| `kelpie status [--json]` | Every task and Claude session, grouped by what it needs from you. `--json` gives `away_since`, `items` and `checkouts`; a task's `push_waits` is `user` or `lead` while a push it asked for waits in its repo's push line or for the task's Claude, and `push_ahead` how many pushes of its repo go before it while it waits its turn, its `profile` is the profile it started with (`task` for the built-in one, `null` for a session that is no task), and its `phase` is where it stands as kelpie keeps it: `name` (`starting`, `working`, `idle`, `needs-you`, `ready`, `pushing`, `ci-running`, `ci-red` or `closing`), with `why` for `needs-you` (`left-line` when a push left its line unpushed), `head` for `ready`, `ahead` for `pushing` and `sha` for the CI phases, `since` and `by`, what moved it there. |
 | `kelpie profiles [--json]` | The [profiles](configuration.md#profiles) a task can start with: the built-in `task`, `reviewer` and `ops`, then each file in `~/.config/kelpie/profiles`, each with what it is for, what it is about, and its agent, model, effort, permission mode and skills. A file that does not load is listed as ignored, with the reason. `--json` gives one object per profile, and `{"error": …}` for an ignored file. |
 | `kelpie list [--json]` | The pool's worktrees: each one's task or `free`, uncommitted changes, commits ahead and behind, its port, and the first line of its setup note. `--json` adds `port` and `url`, the worktree's `dev_url` filled in, each `null` when there is none. |
 | `kelpie areas` | The vault's areas with their repo: main against origin, the last release, notes and actions. Needs the vault. |

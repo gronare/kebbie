@@ -87,10 +87,61 @@ pub fn list(cwd: &Path) -> Result<Vec<Value>> {
 }
 
 // -D because callers have already checked the commits are on upstream; git's -d checks the main checkout's local branch, which is still behind right after a push.
-pub(super) fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<()> {
+pub(super) fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<Option<String>> {
     git_writing(&slot.path, &["switch", "--quiet", "--detach", upstream])?;
     clear_tmp(&slot.path);
-    git(repo, &["branch", "-D", task_of(slot)]).map(|_| ())
+    git(repo, &["branch", "-D", task_of(slot)])?;
+    let folders = config::resolve(Some(repo)).map(|loaded| loaded.settings.clean_on_release.value).unwrap_or_else(|_| vec!["target".to_string()]);
+    let removed = clean_build_output(&slot.path, &folders);
+    if removed.is_empty() {
+        return Ok(None);
+    }
+    let freed = removed.iter().map(|(folder, bytes)| format!("{folder}/ ({})", size(*bytes))).collect::<Vec<_>>().join(", ");
+    Ok(Some(format!("removed {freed}")))
+}
+
+// Only output git ignores and tracks nothing in is removed, and target only in a Rust worktree; a symlink is never followed.
+pub(super) fn clean_build_output(worktree: &Path, folders: &[String]) -> Vec<(String, u64)> {
+    let mut removed = Vec::new();
+    for folder in folders {
+        let path = worktree.join(folder);
+        if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) || (folder == "target" && !worktree.join("Cargo.toml").is_file()) {
+            continue;
+        }
+        let tracked = git(worktree, &["ls-files", "--", folder]).map(|files| !files.is_empty()).unwrap_or(true);
+        let ignored = crate::sh::succeeds("git", &["check-ignore", "--quiet", &format!("{folder}/")], Some(worktree));
+        if tracked || !ignored {
+            continue;
+        }
+        let bytes = bytes_in(&path);
+        if std::fs::remove_dir_all(&path).is_ok() {
+            removed.push((folder.clone(), bytes));
+        }
+    }
+    removed
+}
+
+fn bytes_in(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    entries.flatten().map(|entry| match entry.metadata() {
+        Ok(meta) if meta.is_dir() => bytes_in(&entry.path()),
+        Ok(meta) => meta.len(),
+        Err(_) => 0,
+    }).sum()
+}
+
+fn size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1000 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64 / 1000.0;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
 }
 
 fn stash_index(repo: &Path, message: &str) -> Result<Option<usize>> {
@@ -161,6 +212,64 @@ mod tests {
     use crate::tasks::test_support::*;
     use crate::repo::{git, is_clean, name_of, setup_line, slot_path};
     use crate::tasks::started::started_file_in;
+
+    fn write(path: &Path, bytes: usize) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, vec![b'x'; bytes]).unwrap();
+    }
+
+    #[test]
+    fn a_released_worktree_loses_only_the_listed_build_output_git_ignores_and_tracks_nothing_in() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let worktree = &slot.path;
+        std::fs::write(worktree.join(".gitignore"), "target/\nnode_modules/\ndist/\n").unwrap();
+        write(&worktree.join("dist/keep.js"), 1);
+        git(worktree, &["add", "--force", ".gitignore", "dist/keep.js"]).unwrap();
+        git(worktree, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "dist"]).unwrap();
+        write(&worktree.join("target/debug/kelpie"), 3000);
+        write(&worktree.join("node_modules/.cache/babel"), 10);
+        write(&worktree.join("node_modules/left-pad/index.js"), 1);
+        write(&worktree.join("dist/bundle.js"), 5);
+        write(&worktree.join("build/out.o"), 5);
+        let all = ["target", "node_modules/.cache", "dist", "build"].map(str::to_string);
+        assert_eq!(clean_build_output(worktree, &all), [("node_modules/.cache".to_string(), 10)], "target only where there is a Cargo.toml; dist holds a tracked file; build is not ignored");
+        assert!(worktree.join("target/debug/kelpie").exists() && worktree.join("dist/bundle.js").exists() && worktree.join("build/out.o").exists() && worktree.join("node_modules/left-pad/index.js").exists());
+        std::fs::write(worktree.join("Cargo.toml"), "[package]\n").unwrap();
+        assert_eq!(clean_build_output(worktree, &[]), [], "[] keeps everything");
+        assert_eq!(clean_build_output(worktree, &all), [("target".to_string(), 3000)]);
+        assert!(!worktree.join("target").exists() && worktree.join("dist/keep.js").exists());
+        let outside = dir.with_extension("outside");
+        write(&outside.join("precious"), 4);
+        std::os::unix::fs::symlink(&outside, worktree.join("target")).unwrap();
+        assert_eq!(clean_build_output(worktree, &all), [], "a symlinked target is never followed");
+        assert!(outside.join("precious").exists());
+        std::fs::remove_dir_all(outside).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn releasing_a_worktree_frees_its_target_by_default_and_says_how_much() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        upstream_commit(&dir, ".gitignore", "target/\n", "ignore target");
+        upstream_commit(&dir, "Cargo.toml", "[package]\n", "a Rust repo");
+        git(&slot.path, &["rebase", "--quiet", &upstream]).unwrap();
+        write(&slot.path.join("target/release/kelpie"), 2_500_000);
+        let freed = release(&dir, &slot, &upstream).unwrap();
+        assert_eq!(freed.as_deref(), Some("removed target/ (2.5 MB)"));
+        assert!(!slot.path.join("target").exists() && slot.path.join("Cargo.toml").exists());
+        assert_eq!(release(&dir, &find_free(&dir, &slot), &upstream).ok().flatten(), None, "nothing left to free");
+        cleanup(dir, origin, &slot);
+    }
+
+    fn find_free(dir: &Path, slot: &Slot) -> Slot {
+        git(&slot.path, &["switch", "--quiet", "--create", "again"]).unwrap();
+        find_task(dir, Some("again"), dir).unwrap()
+    }
+
+    #[test]
+    fn sizes_read_in_the_unit_that_fits() {
+        assert_eq!([size(999), size(1000), size(2_500_000), size(33_500_000_000)], ["999 B", "1.0 KB", "2.5 MB", "33.5 GB"]);
+    }
 
     #[test]
     fn a_new_slot_is_denied_to_the_sandboxed_tasks_already_running_in_its_repo() {
