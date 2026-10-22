@@ -21,17 +21,26 @@ pub fn same_code(path: &Path, upstream: &str, one: &str, other: &str) -> bool {
     one == other || matches!((code(path, upstream, one), code(path, upstream, other)), (Ok(one), Ok(other)) if one == other)
 }
 
-// Every message and every added or removed line, without line numbers or context, so a rebase that applies cleanly keeps the fingerprint.
+// One line per commit, of its message and its added or removed lines without line numbers or context, so a clean rebase keeps each line and commits upstream absorbs below the task's own only drop lines.
 pub(super) fn fingerprint(path: &Path, upstream: &str) -> Result<String> {
     let range = format!("{upstream}..HEAD");
-    let messages = git(path, &["log", "--reverse", "--format=%B%x00", &range])?;
-    let changes = git(path, &["log", "--reverse", "-p", "-U0", "--no-color", "--no-ext-diff", "--format=%x00", &range])?;
-    let lines: Vec<&str> = changes.lines().filter(|line| !(line.starts_with("index ") || line.starts_with("@@"))).collect();
-    let mut hasher = Fnv::default();
-    hasher.write(messages.as_bytes());
-    hasher.write(&[0xff]);
-    hasher.write(lines.join("\n").as_bytes());
-    Ok(format!("{:016x}", hasher.0))
+    let log = git(path, &["log", "--reverse", "-p", "-U0", "--no-color", "--no-ext-diff", "--format=%x00%B%x01", &range])?;
+    let commits: Vec<String> = log.split('\0').skip(1).map(|commit| {
+        let (message, changes) = commit.split_once('\u{1}').unwrap_or((commit, ""));
+        let lines: Vec<&str> = changes.lines().filter(|line| !(line.starts_with("index ") || line.starts_with("@@"))).collect();
+        let mut hasher = Fnv::default();
+        hasher.write(message.trim().as_bytes());
+        hasher.write(&[0xff]);
+        hasher.write(lines.join("\n").trim().as_bytes());
+        format!("{:016x}", hasher.0)
+    }).collect();
+    Ok(commits.join("\n"))
+}
+
+// An approval covers the branch while every commit on it now is one the lead checked: a commit that reached the default branch is no longer the task's to check.
+pub(super) fn covers(approved: &str, current: &str) -> bool {
+    let approved: Vec<&str> = approved.lines().map(str::trim).collect();
+    !current.trim().is_empty() && current.lines().all(|commit| approved.contains(&commit.trim()))
 }
 
 // FNV-1a: stable across Rust versions, unlike DefaultHasher, so an approval survives a kelpie upgrade.
@@ -60,7 +69,7 @@ pub(super) fn record_approval(state: &Path, address: &str, fingerprint: &str) ->
 }
 
 pub(super) fn approval_holds(state: &Path, address: &str, fingerprint: &str) -> bool {
-    std::fs::read_to_string(approval_file(state, address)).is_ok_and(|stored| stored.trim() == fingerprint)
+    std::fs::read_to_string(approval_file(state, address)).is_ok_and(|stored| covers(&stored, fingerprint))
 }
 
 fn forget_approval_in(state: &Path, address: &str) {
@@ -167,6 +176,23 @@ mod tests {
         forget_approval_in(&state, "billing@app");
         assert!(!approval_holds(&state, "billing@app", "abc"));
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn an_approval_holds_when_the_default_branch_absorbs_commits_below_the_tasks_own() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let below = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        commit(&slot.path, "e", "fifth");
+        let state = std::env::temp_dir().join(format!("kelpie-approvals-absorbed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        record_approval(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), &below]).unwrap();
+        assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0));
+        assert!(approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "the task's own commit is unchanged; only its range shrank");
+        commit(&slot.path, "f", "sixth");
+        assert!(!approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "a commit the lead never saw takes the approval back");
+        std::fs::remove_dir_all(state).unwrap();
+        cleanup(dir, origin, &slot);
     }
 
     #[test]

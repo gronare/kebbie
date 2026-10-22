@@ -6,7 +6,7 @@ use crate::messages::{self, Message};
 use crate::permit::Caller;
 use crate::repo::default_branch;
 use crate::sh::Result;
-use super::approval::fingerprint;
+use super::approval::{covers, fingerprint};
 use super::pool::{Slot, find_task};
 
 // Which of the task's commits a push takes: all of them, or the first `count` of the `of` it had when the user chose.
@@ -170,7 +170,7 @@ pub(super) fn next(intent: &Intent, report: Option<&Message>, slot: Option<&Slot
     if !ready {
         return Next::Wait;
     }
-    if current != Some(intent.fingerprint.as_str()) {
+    if !current.is_some_and(|current| covers(&intent.fingerprint, current)) {
         return Next::Drop(format!(
             "{} changed its commits while testing the files the default branch changed under it, so kelpie did not push it for {}: check its commits against the rules again (kelpie approve) and push it as usual",
             intent.address, intent.by.word()
