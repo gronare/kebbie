@@ -148,7 +148,7 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Option<String> {
 }
 
 fn since(record: Option<&Record>) -> String {
-    record.and_then(|record| record.started.clone()).map_or("an earlier kelpie than kelpie records".to_string(), |started| started)
+    record.and_then(|record| record.started.clone()).unwrap_or_else(|| "an earlier kelpie than kelpie records".to_string())
 }
 
 // The message to a running session after an update: what changed since what it knows, and where its whole role is now.
