@@ -49,6 +49,7 @@ pub fn routines() -> Vec<Routine> {
         Routine { name: "prompts", every: crate::menu::EVERY, run: |ctx| { ctx.notes.extend(crate::menu::tick(&crate::lead::state_dir()?)?); Ok(()) } },
         Routine { name: "recover", every: 30, run: |_| { crate::recover::tick(&crate::lead::state_dir()?); Ok(()) } },
         Routine { name: "routines", every: crate::routines::EVERY, run: |ctx| { ctx.notes.extend(crate::routines::tick(&crate::lead::state_dir()?)); Ok(()) } },
+        Routine { name: "hub", every: crate::hub::EVERY, run: |_| crate::hub::tick() },
     ]
 }
 

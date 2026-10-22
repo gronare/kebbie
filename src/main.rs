@@ -12,6 +12,7 @@ mod docs;
 mod evidence;
 mod fetch;
 mod herdr;
+mod hub;
 mod inbox;
 mod issues;
 mod keeper;
@@ -224,6 +225,18 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   words, the pages whose title or headings match, each with its path and first
                                   sentence, best first; without, the docs index by section; never needs the network,
                                   and without the docs points at kelpie help and the docs online
+  kelpie hub [status]             the hub this machine posts its board to, the phones paired with it, the last post
+  kelpie hub join <url> <code> [--name <name>]
+                                  join a kelpie hub with a code from kelpie-hub admin join-code: makes this machine's
+                                  keys, kept in kelpie's state and never printed (--name is how the hub and your phone
+                                  name it; the short host name otherwise); yours only
+  kelpie hub pair                 pair a phone: prints a code for the hub's web app, then shows six digits to compare
+                                  with the phone's before it admits the phone; the keeper then posts the board, sealed
+                                  to every paired phone, when it changes and every minute, and a notice when a task
+                                  needs you, asks, is ready to push or its CI fails; yours only, in your own terminal
+  kelpie hub move <url>           the hub moved: post there once <url> answers as a hub; move only to a hub you run or trust;
+                                  a redirect to another host is never followed by itself; yours only
+  kelpie hub leave                forget the hub: take each paired phone off and remove the keys and token
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
                                   (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)
@@ -295,7 +308,7 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--profile", "--why"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--profile", "--why", "--name"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -535,6 +548,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("docs") => docs::print(&arguments.positionals[1..]),
         Some("profiles") => profiles::print(arguments.flag("--json")),
+        Some("hub") => hub::cli(name, &arguments.positionals[2..], arguments.value("--name")),
         Some("config") => match arguments.value("--get") {
             Some(key) => config::get(key),
             None => config::show(&cwd, arguments.value("--repo")),

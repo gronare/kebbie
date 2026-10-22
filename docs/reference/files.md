@@ -47,6 +47,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `update-check.json` | The last update check. |
 | `update-override.json` | The `--from` override, while it holds. |
 | `notify.log` | Notify command failures. |
+| `hub/` | The kelpie hub this machine joined: `identity.json` holds the hub's address, the machine's id and name there, its token, its signing and encryption keys, the secret its notices' collapse tags come from, and each paired phone's id and public keys; `relay.json` the board's last revision, when it went out, its fingerprint, the last error and the notices sent. `kelpie hub leave` removes the folder. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md). |
 | `keeper.lock` | Held by the running keeper, with its pid, binary and start time. |
 | `keeper.json` | The keeper's routines, each with its last run and error, and the stale sessions it last saw. |
 | `keeper.log` | What the keeper did: starts, exits, routine errors and restarts. Past 256 KB it moves to `keeper.log.1`. |

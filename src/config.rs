@@ -533,6 +533,9 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
+    if table.contains_key("hub") {
+        return Err(fail("hub: kelpie hub join sets the hub and keeps it in kelpie's state with the machine's keys; remove [hub] here".to_string()));
+    }
     if table.contains_key("docs") {
         return Err(fail(format!("docs.required: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }
@@ -771,7 +774,7 @@ pub fn show(cwd: &Path, repo: Option<&str>) -> Result<String> {
         }
         None => main_checkout(cwd).ok().map(|_| cwd.to_path_buf()),
     };
-    Ok(describe(&resolve(repo.as_deref())?))
+    Ok(format!("{}\n{}", describe(&resolve(repo.as_deref())?), crate::hub::config_line(crate::lead::state_location().ok().as_deref())))
 }
 
 #[cfg(test)]

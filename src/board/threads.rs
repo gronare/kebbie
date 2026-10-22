@@ -152,6 +152,7 @@ pub(super) fn spawn_routine_runner(overlay: bool) {
                     crate::routines::tick(&state);
                     crate::tasks::follow_tick(&state);
                     crate::tasks::landed_tick(&state);
+                    let _ = crate::hub::tick();
                 }
             }
             thread::sleep(Duration::from_secs(crate::tasks::AFTER_EVERY));

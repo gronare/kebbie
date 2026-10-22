@@ -612,6 +612,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(updates(&env.kelpie_state, channel, &crate::update_check::installed(&places)));
     let keeper_on = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.keeper).unwrap_or(true);
     checks.push(keeper(keeper_on, crate::keeper::holder(&env.kelpie_state).as_ref(), crate::messages::now()));
+    checks.push(crate::hub::doctor(&env.kelpie_state, crate::messages::now(), crate::hub::reach));
     let data_home = env.data_home.clone().unwrap_or_else(|| env.home.join(".local/share"));
     for (dir, about) in state_dirs(&env.kelpie_state, env.own_state, &env.state_home, &data_home) {
         checks.push(writable(&dir, about, env.uid));

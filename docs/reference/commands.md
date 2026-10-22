@@ -283,6 +283,20 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 
 `--from` and `--stable` cannot be combined.
 
+## The hub
+
+Show the board on your phone through a kelpie hub. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md).
+
+| Command | What it does |
+| --- | --- |
+| `kelpie hub [status]` | The hub this machine joined, its name and id there, each paired phone with when it paired, the board's last revision and when it went out, the last error, and which commands from phones the machine accepts (none: the phone reads). |
+| `kelpie hub join <url> <code> [--name <name>]` | Join the hub at `<url>` with a code from `kelpie-hub admin join-code`. Makes the machine's keys and keeps them, with the hub's token for it, in [`hub/`](files.md#the-state-directory); nothing prints them. `--name` is the name the hub and your phones show; the short host name otherwise. Takes `https://`, or `http://` for a hub on this machine. Refused when the machine has joined a hub already. Yours only. |
+| `kelpie hub pair` | Pair one phone: prints a code to type in the hub's web app, waits up to 10 minutes, then shows six digits and admits the phone only on your `y` when the phone shows the same. The phone commits to its keys before it sees the machine's, and the machine checks them against that commitment before it shows any digits, so a hub that swaps keys cannot pair. A mismatch, a `n` or a timeout pairs nothing; start again. Yours only, in your own terminal: it refuses to run without one. |
+| `kelpie hub move <url>` | The hub moved to `<url>`: kelpie checks only that it answers `/healthz`, without sending the token, then posts there from now on with the machine's token. That check proves nothing about who runs it, so the address is yours to check: move only to a hub you run or trust. Yours only. |
+| `kelpie hub leave` | Take each paired phone off this machine's board and forget the hub, the keys and the token. The hub lists the machine until its admin runs `kelpie-hub admin remove-machine <id>`. Yours only. |
+
+Once a phone is paired, the keeper posts the board every 15 seconds when what the phones would see changed, and once a minute when nothing did, sealed to every paired phone and signed by the machine, with a revision that only goes up. It sends a notice through the hub's Web Push once per moment a task needs you: a new question, a task in Needs you for something else, a head ready to push, a failed CI run. The board carries tasks with their group, summary, your next step, report, question and options, git counts, head, review verdict, CI, the checkouts' free and busy worktrees, the routines and away mode; never a path, a pane, a Space, a host name or a dev server address. A queued task waiting for its time is left out; a blocked one shows under Needs you. A plan to approve shows as its question, without the plan. The hub's 307 and 308 redirects are followed with the same method, body and token only on the hub's own host, to another port or path or from `http` to `https`, never from `https` to `http`; after such a 308 the machine keeps the new address. A redirect to another host is refused with the address it pointed to, for you to check and run `kelpie hub move`. The revision is at least the current Unix time, so it keeps rising when `hub/relay.json` is lost.
+
 ## kelpie issues
 
 Problems and wishes about kelpie itself, saved on this machine, one file each under `issues/` in the state directory. See [Report a problem with kelpie](../how-to/report-a-problem-with-kelpie.md) and [the issue file](files.md#the-issue-file).
