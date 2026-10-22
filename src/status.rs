@@ -93,6 +93,7 @@ pub struct Item {
     pub push_waits: Option<tasks::PendingPush>,
     pub queued: Option<Queued>,
     pub held_by_draft: Option<String>,
+    pub starting: bool,
 }
 
 impl Item {
@@ -114,7 +115,7 @@ impl Item {
             name: wait.task.clone(), title: None, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone() }),
-            held_by_draft: None,
+            held_by_draft: None, starting: false,
         }
     }
 
@@ -236,6 +237,7 @@ impl Item {
             (Some("working"), _, _) | (_, Some("working"), _) => Group::Working,
             (_, _, Some(group)) => group,
             _ if self.held_by_draft.is_some() => Group::NeedsYou,
+            _ if self.starting => Group::Working,
             (_, Some("needs-you"), _) => Group::NeedsYou,
             (_, Some("blocked"), _) => Group::Idle,
             _ if self.awaiting_review() => Group::ToReview,
@@ -514,6 +516,13 @@ fn held_by_draft(log: &[Message], task: &str, address: &str) -> Option<String> {
     draft.then(|| format!("clear the draft in its input box, or kelpie tell --force {task} \"<text>\" ({} held)", plural(waiting, "message")))
 }
 
+pub const STARTING_SECONDS: u64 = 120;
+
+// Started with a prompt its Claude has not taken up yet: it is about to work, not waiting for work; a prompt that never lands stops counting after STARTING_SECONDS.
+fn starting(prompted: Option<u64>, turn: Option<u64>, now: u64) -> bool {
+    prompted.is_some_and(|at| turn.is_none_or(|turn| turn < at) && now.saturating_sub(at) < STARTING_SECONDS)
+}
+
 pub fn gather() -> Result<Vec<Item>> {
     let workspaces = herdr::workspaces()?;
     let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| crate::agent::Agent::of(agent).is_some()).collect();
@@ -578,6 +587,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 push_waits: state.as_deref().and_then(|state| tasks::pending_push(state, &address)),
                 queued: None,
                 held_by_draft: held_by_draft(&log, &task, &address),
+                starting: state.as_deref().is_some_and(|state| starting(tasks::prompted_at(state, &address), crate::report::turn_started(&address), messages::now())),
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
             });
@@ -620,6 +630,7 @@ pub fn gather() -> Result<Vec<Item>> {
             push_waits: None,
             queued: None,
             held_by_draft: None,
+            starting: false,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -648,6 +659,7 @@ pub(crate) mod tests {
             push_waits: None,
             queued: None,
             held_by_draft: None,
+            starting: false,
         }
     }
 
@@ -790,6 +802,21 @@ pub(crate) mod tests {
 
     // herdr shows a restarting Claude as gone, then unknown, then idle; none of those is news for the user.
     const RESTARTING: [Option<&str>; 3] = [None, Some("unknown"), Some("idle")];
+
+    #[test]
+    fn a_task_started_with_a_prompt_goes_straight_to_working() {
+        assert!(starting(Some(100), None, 110) && starting(Some(100), Some(90), 110), "a turn from an earlier task by that name is not this one's");
+        assert!(!starting(Some(100), Some(100), 110) && !starting(None, None, 110), "a turn has taken it up, or there was no prompt");
+        assert!(!starting(Some(100), None, 100 + STARTING_SECONDS), "a prompt that never landed stops counting");
+        let mut item = task(None, None, 0);
+        item.starting = true;
+        for status in [None, Some("unknown"), Some("idle"), Some("done"), Some("working")] {
+            assert_eq!(at(&mut item, status), Group::Working, "{status:?}: never Waiting for work on the way in");
+        }
+        assert_eq!(at(&mut item, Some("blocked")), Group::NeedsYou, "the trust prompt is the user's");
+        item.starting = false;
+        assert_eq!(at(&mut item, Some("idle")), Group::Idle, "started without a prompt, it waits for work");
+    }
 
     #[test]
     fn each_transition_lands_in_its_group_without_a_stop_on_the_way() {

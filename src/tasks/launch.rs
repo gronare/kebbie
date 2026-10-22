@@ -117,6 +117,12 @@ pub(super) fn forget_session(task: &str, repo: &Path) {
     }
 }
 
+// When kelpie started the task with a prompt for its Claude; a task started without one has nothing to take up.
+pub(crate) fn prompted_at(state: &Path, address: &str) -> Option<u64> {
+    let modified = std::fs::metadata(prompt_file(&session_file_in(state, address))).ok()?.modified().ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|elapsed| elapsed.as_secs())
+}
+
 fn prompt_file(session: &Path) -> PathBuf {
     let mut name = session.file_name().unwrap_or_default().to_os_string();
     name.push(".prompt");
