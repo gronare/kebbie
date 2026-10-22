@@ -342,7 +342,7 @@ impl Item {
 // Files the task changed since it left the default branch, and how many of them the review has marked read
 // (marks are "path<TAB>content hash" lines, kept per worktree by scripts/review.sh).
 fn review_progress(path: &Path, upstream: &str) -> Option<(usize, usize)> {
-    let base = git(path, &["merge-base", "HEAD", upstream]).ok()?;
+    let base = fork_point(path, upstream).ok()?;
     let mut files: Vec<String> = git(path, &["diff", "--name-only", &base]).ok()?.lines().map(str::to_string).collect();
     files.extend(git(path, &["ls-files", "--others", "--exclude-standard"]).ok()?.lines().map(str::to_string));
     if files.is_empty() {
@@ -358,6 +358,19 @@ fn review_progress(path: &Path, upstream: &str) -> Option<(usize, usize)> {
         .filter(|(file, hash)| marks.lines().any(|line| line == format!("{file}\t{hash}")))
         .count();
     Some((read, files.len()))
+}
+
+// The task's own commits start where it left the default branch, local or remote, whichever is newer; local commits not pushed yet are not the task's.
+pub fn fork_point(path: &Path, upstream: &str) -> Result<String> {
+    let local = upstream.split_once('/').map(|(_, branch)| branch).filter(|branch| git(path, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok());
+    let mut args = vec!["merge-base", "HEAD", upstream];
+    args.extend(local);
+    git(path, &args)
+}
+
+fn own_commits(path: &Path, upstream: &str) -> Result<usize> {
+    let Ok(base) = fork_point(path, upstream) else { return Ok(ahead_behind(path, upstream)?.0) };
+    Ok(git(path, &["rev-list", "--count", &format!("{base}..HEAD")])?.parse().unwrap_or(0))
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -450,7 +463,8 @@ pub fn gather() -> Result<Vec<Item>> {
             let agent = workspace.as_ref()
                 .and_then(|id| agents.iter().find(|agent| agent["workspace_id"].as_str() == Some(id.as_str())))
                 .map(agent_from);
-            let (ahead, behind) = ahead_behind(&slot.path, &upstream)?;
+            let (_, behind) = ahead_behind(&slot.path, &upstream)?;
+            let ahead = own_commits(&slot.path, &upstream)?;
             let changed = changed_count(&slot.path)?;
             let uncommitted = uncommitted(&slot.path)?.len();
             let address = peers::address(&task, &name_of(repo));
@@ -880,5 +894,29 @@ pub(crate) mod tests {
         assert_eq!(item.next_for_you(), Some("start it anyway or drop the wait"));
         assert_eq!(item.to_json()["blocked"], json!("billing@api was dropped, so web-billing did not start"));
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_task_counts_only_its_own_commits_when_local_main_is_ahead_of_origin() {
+        let dir = crate::sh::test_dir("own-commits");
+        let commit = |message: &str| {
+            std::fs::write(dir.join("file"), message).unwrap();
+            git(&dir, &["add", "file"]).unwrap();
+            git(&dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", message]).unwrap();
+        };
+        git(&dir, &["init", "--quiet", "-b", "main"]).unwrap();
+        commit("pushed");
+        git(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]).unwrap();
+        for unpushed in ["local one", "local two", "local three"] {
+            commit(unpushed);
+        }
+        git(&dir, &["checkout", "--quiet", "-b", "task"]).unwrap();
+        commit("the task's own");
+        assert_eq!(ahead_behind(&dir, "origin/main").unwrap().0, 4, "what a push would land");
+        assert_eq!(own_commits(&dir, "origin/main").unwrap(), 1);
+        assert_eq!(review_progress(&dir, "origin/main").map(|(_, files)| files), Some(1));
+        git(&dir, &["branch", "--quiet", "-D", "main"]).unwrap();
+        assert_eq!(own_commits(&dir, "origin/main").unwrap(), 4, "without a local main the remote one is the fork point");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
