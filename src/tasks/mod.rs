@@ -12,7 +12,7 @@ mod started;
 mod test_support;
 
 pub(crate) use after::{EVERY as AFTER_EVERY, Wait, after as after_command, drop as drop_wait, now as start_now, queue, refuse_queued_name, shown as waits_shown, tick as after_tick};
-pub(crate) use approval::{approve, approved, rules_check, same_code};
+pub(crate) use approval::{approve, approved, awaits_check, rules_check, rules_check_task, same_code};
 pub(crate) use crate::agent::{Started, wait_for_prompt};
 pub(crate) use finish::{done, drop, drop_routine_ok, reset};
 pub(crate) use follow::{follow, follows, tick as follow_tick, toggle as toggle_follow};

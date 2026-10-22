@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::config;
 use crate::lead::state_dir;
 use crate::peers;
-use crate::repo::{ahead_behind, default_branch, git, main_checkout, name_of};
+use crate::repo::{ahead_behind, checkout_named, default_branch, git, main_checkout, name_of};
 use crate::sh::Result;
 use super::pool::{find_task, task_of};
 
@@ -118,10 +118,24 @@ pub fn rules_check(cwd: &Path) -> Result<Option<String>> {
     let rules = config::resolve(Some(&repo))?.settings.rules_skill.value;
     let sha = git(&slot.path, &["rev-parse", "--short", "HEAD"])?;
     Ok(Some(format!(
-        "{address} is ready at {sha}: check its commits against `{rules}` (git -C {} log -p {upstream}..HEAD). When they hold, run \
+        "{address}{READY_AT}{sha}: check its commits against `{rules}` (git -C {} log -p {upstream}..HEAD). When they hold, run \
          kelpie -C {} approve {task}; when one breaks a rule, kelpie tell {address} which commit and what to fix.",
         slot.path.display(), repo.display()
     )))
+}
+
+const READY_AT: &str = " is ready at ";
+
+pub fn rules_check_task(text: &str) -> Option<&str> {
+    text.split_once(READY_AT).map(|(address, _)| address).filter(|address| !address.contains(char::is_whitespace))
+}
+
+// A task still waits for the lead's rules check while it has commits and no approval matches them.
+pub fn awaits_check(address: &str) -> bool {
+    let Some((task, repo)) = address.split_once('@') else { return false };
+    let Some(repo) = checkout_named(repo) else { return false };
+    let (Ok(slot), Ok(upstream)) = (find_task(&repo, Some(task), &repo), default_branch(&repo)) else { return false };
+    ahead_behind(&slot.path, &upstream).is_ok_and(|(ahead, _)| ahead > 0) && !approved(&slot.path, &upstream, address)
 }
 
 pub fn approved(path: &Path, upstream: &str, address: &str) -> bool {
@@ -165,20 +179,6 @@ mod tests {
     }
 
     #[test]
-    fn an_approval_holds_only_for_the_fingerprint_it_recorded_and_is_gone_once_forgotten() {
-        let state = std::env::temp_dir().join(format!("kelpie-approvals-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&state);
-        assert!(!approval_holds(&state, "billing@app", "abc"));
-        record_approval(&state, "billing@app", "abc").unwrap();
-        assert!(approval_holds(&state, "billing@app", "abc"));
-        assert!(!approval_holds(&state, "billing@app", "abd"));
-        assert!(!approval_holds(&state, "billing@web", "abc"));
-        forget_approval_in(&state, "billing@app");
-        assert!(!approval_holds(&state, "billing@app", "abc"));
-        std::fs::remove_dir_all(state).unwrap();
-    }
-
-    #[test]
     fn an_approval_holds_when_the_default_branch_absorbs_commits_below_the_tasks_own() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let below = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
@@ -193,6 +193,20 @@ mod tests {
         assert!(!approval_holds(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()), "a commit the lead never saw takes the approval back");
         std::fs::remove_dir_all(state).unwrap();
         cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn an_approval_holds_only_for_the_fingerprint_it_recorded_and_is_gone_once_forgotten() {
+        let state = std::env::temp_dir().join(format!("kelpie-approvals-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        assert!(!approval_holds(&state, "billing@app", "abc"));
+        record_approval(&state, "billing@app", "abc").unwrap();
+        assert!(approval_holds(&state, "billing@app", "abc"));
+        assert!(!approval_holds(&state, "billing@app", "abd"));
+        assert!(!approval_holds(&state, "billing@web", "abc"));
+        forget_approval_in(&state, "billing@app");
+        assert!(!approval_holds(&state, "billing@app", "abc"));
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

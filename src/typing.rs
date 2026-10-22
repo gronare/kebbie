@@ -253,6 +253,12 @@ fn place(target: &str) -> (String, Option<PathBuf>) {
     (pane, transcript)
 }
 
+// Whether the Claude in this pane has taken the text since it was typed, by its transcript; false when there is none to read.
+pub fn taken_by(target: &str, text: &str, since_ms: u64) -> bool {
+    let (_, transcript) = place(target);
+    transcript.and_then(|file| std::fs::read_to_string(file).ok()).is_some_and(|transcript| taken_in(&transcript, text, since_ms))
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Outcome {
     Taken,
@@ -400,7 +406,9 @@ pub fn check() {
             }
             Outcome::NotDelivered => {
                 let _ = std::fs::remove_file(&path);
-                crate::restart::tell_board(&not_delivered(&typed));
+                let again = crate::messages::hold_again(&typed.label, &typed.text).unwrap_or(false);
+                let again = if again { format!(" kelpie holds it and sends it again once {} is free.", typed.label) } else { String::new() };
+                crate::restart::tell_board(&format!("{}{again}", not_delivered(&typed)));
             }
         }
     }
