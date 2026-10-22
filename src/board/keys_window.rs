@@ -96,7 +96,7 @@ const WORK: Sheet = Sheet {
         group("THE BOARD", &[
             bind(&[Act::New], "new task", "new task"),
             bind(&[Act::Refresh], "refresh the backlog", "refresh"),
-            bind(&[Act::Update], "update kelpie", "update"),
+            bind(&[Act::Update], "update kelpie and its plugins", "update"),
         ]),
         WINDOWS,
         group("THE SELECTED TASK", &[
@@ -108,13 +108,13 @@ const WORK: Sheet = Sheet {
         ]),
         group("PUSH", &[
             bind(&[Act::Push], "push, or take it out of the line", "push"),
-            bind(&[Act::SendReview], "send to review", "to review"),
+            bind(&[Act::SendReview], "send to review, or withdraw it", "to review"),
             bind(&[Act::Review], "open its review", "open review"),
             bind(&[Act::Permit], "let the lead push it", "lead may push"),
             bind(&[Act::Rebase], "rebase onto main now", "rebase now"),
-            bind(&[Act::Follow], "keep it rebased on main", "follow main"),
+            bind(&[Act::Follow], "keep it rebased on main, or stop", "follow main"),
             bind(&[Act::Tidy], "tidy its commits", "tidy commits"),
-            bind(&[Act::DismissCi], "dismiss its red CI", "dismiss red CI"),
+            bind(&[Act::DismissCi], "dismiss its red CI (asks first)", "dismiss red CI"),
         ]),
         Group { name: "END IT", note: ("each asks first", "asks first"), items: &[
             bind(&[Act::Done], "done", "done"),
@@ -127,7 +127,7 @@ const WORK: Sheet = Sheet {
         ]),
         group("IN THE CARD WINDOW", &[
             bind(&[Act::Switch], "image", "image"),
-            Item { on: On::Own("↑ ↓"), wide: "scroll", narrow: "scroll" },
+            bind(&[Act::Move], "scroll", "scroll"),
             bind(&[Act::Fullscreen], "fullscreen", "fullscreen"),
             bind(&[Act::OpenImage], "open the image", "open image"),
             bind(&[Act::Push], "push", "push"),
@@ -224,7 +224,16 @@ fn acts_on(act: Act, sheet: &Sheet, lead: bool) -> bool {
     (lead || !LEAD_ONLY.contains(&act)) && TABLE.iter().any(|row| row.act == act && row.on.iter().any(|ctx| sheet.ctxs.contains(ctx)))
 }
 
-fn shown_items(keys: &Keys, sheet: &Sheet, group: &Group, lead: bool, update: Option<&str>) -> Vec<Shown> {
+// The Backlog column's own meaning of a key that acts on both columns.
+fn in_backlog(act: Act) -> Option<(&'static str, &'static str)> {
+    match act {
+        Act::New => Some(("new backlog item", "new item")),
+        Act::Go => Some(("start it as a task", "start it")),
+        _ => None,
+    }
+}
+
+fn shown_items(keys: &Keys, sheet: &Sheet, group: &Group, lead: bool, update: Option<&str>, backlog: bool) -> Vec<Shown> {
     group.items.iter().filter_map(|item| {
         let (key, extra) = match item.on {
             On::Own(key) => (key.to_string(), None),
@@ -236,7 +245,11 @@ fn shown_items(keys: &Keys, sheet: &Sheet, group: &Group, lead: bool, update: Op
                 (acts.iter().map(|act| keys.label(*act)).collect::<Vec<_>>().join(" "), extra)
             }
         };
-        Some(Shown { key, wide: item.wide, narrow: item.narrow, extra })
+        let (wide, narrow) = match item.on {
+            On::Acts([act]) if backlog => in_backlog(*act).unwrap_or((item.wide, item.narrow)),
+            _ => (item.wide, item.narrow),
+        };
+        Some(Shown { key, wide, narrow, extra })
     }).collect()
 }
 
@@ -257,11 +270,11 @@ fn header(group: &Group, wide: bool) -> Vec<Span<'static>> {
     spans
 }
 
-fn column(keys: &Keys, sheet: &Sheet, groups: &[usize], lead: bool, update: Option<&str>) -> Vec<Vec<Span<'static>>> {
+fn column(keys: &Keys, sheet: &Sheet, groups: &[usize], lead: bool, update: Option<&str>, backlog: bool) -> Vec<Vec<Span<'static>>> {
     let mut rows: Vec<Vec<Span<'static>>> = Vec::new();
     for &index in groups {
         let group = &sheet.groups[index];
-        let items = shown_items(keys, sheet, group, lead, update);
+        let items = shown_items(keys, sheet, group, lead, update, backlog);
         if items.is_empty() {
             continue;
         }
@@ -272,8 +285,9 @@ fn column(keys: &Keys, sheet: &Sheet, groups: &[usize], lead: bool, update: Opti
         for item in items {
             let mut spans = vec![Span::styled(padded(&item.key, KEY), style(MAUVE)), Span::styled(item.wide, style(TEXT))];
             if let Some(extra) = item.extra {
-                spans.push(Span::raw(" ".repeat(HINT_AT.saturating_sub(KEY + text_width(item.wide)).max(2))));
-                spans.push(Span::styled(extra, style(MUTED)));
+                let gap = HINT_AT.saturating_sub(KEY + text_width(item.wide)).max(2);
+                spans.push(Span::raw(" ".repeat(gap)));
+                spans.push(Span::styled(take_width(&extra, COLUMN.saturating_sub(KEY + text_width(item.wide) + gap + 1)), style(MUTED)));
             }
             rows.push(spans);
         }
@@ -290,9 +304,9 @@ fn pages_line(keys: &Keys, sheet: &Sheet) -> String {
     format!("{first_name} ({}) and {second_name} ({}) show their own keys here when you are on them", keys.label(first), keys.label(second))
 }
 
-fn wide_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
-    let left = column(keys, sheet, sheet.left, lead, update);
-    let right = column(keys, sheet, sheet.right, lead, update);
+fn wide_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>, backlog: bool) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    let left = column(keys, sheet, sheet.left, lead, update, backlog);
+    let right = column(keys, sheet, sheet.right, lead, update, backlog);
     let mut body = vec![Line::default()];
     for row in 0..left.len().max(right.len()) {
         let mut spans = left.get(row).cloned().unwrap_or_default();
@@ -305,7 +319,7 @@ fn wide_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>) -> (
     let mut footer = Vec::new();
     if let Some(card) = sheet.card {
         let mut spans = vec![Span::styled("in the card window", style(MUTED))];
-        for (position, item) in shown_items(keys, sheet, &sheet.groups[card], lead, None).into_iter().enumerate() {
+        for (position, item) in shown_items(keys, sheet, &sheet.groups[card], lead, None, false).into_iter().enumerate() {
             spans.push(Span::styled(if position == 0 { "  " } else { " · " }, style(MUTED)));
             spans.push(Span::styled(item.key, style(MAUVE)));
             spans.push(Span::styled(format!(" {}", item.wide), style(MUTED)));
@@ -354,11 +368,11 @@ fn flow(items: Vec<Shown>, width: usize) -> Vec<Line<'static>> {
     lines
 }
 
-fn narrow_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>, width: usize) -> Vec<Line<'static>> {
+fn narrow_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>, backlog: bool, width: usize) -> Vec<Line<'static>> {
     let mut body = Vec::new();
     for &index in sheet.narrow {
         let group = &sheet.groups[index];
-        let items = shown_items(keys, sheet, group, lead, update);
+        let items = shown_items(keys, sheet, group, lead, update, backlog);
         if items.is_empty() {
             continue;
         }
@@ -368,18 +382,19 @@ fn narrow_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>, wi
     body
 }
 
-// The keys window over a page: two columns from 110 cells, else rows of up to three keys that scroll.
+// The keys window over a page, Backlog for the Work page with that column selected: two columns from 114 screen columns, else rows of up to three keys that scroll.
 pub(crate) fn draw(frame: &mut Frame, keys: &Keys, page: Ctx, lead: bool, update: Option<&str>, scroll: &mut Scroll) {
     let sheet = sheet(page);
+    let backlog = page == Ctx::Backlog;
     let screen = frame.area();
     let available = screen.width.saturating_sub(4);
     let wide = available >= 110;
     let width = available.min(if wide { 116 } else { 76 });
     let inner = width.saturating_sub(4) as usize;
     let (body, mut footer) = if wide {
-        wide_lines(keys, sheet, lead, update)
+        wide_lines(keys, sheet, lead, update, backlog)
     } else {
-        (narrow_lines(keys, sheet, lead, update, inner), vec![Line::from(Span::styled("any key closes", style(MUTED)))])
+        (narrow_lines(keys, sheet, lead, update, backlog, inner), vec![Line::from(Span::styled("any key closes", style(MUTED)))])
     };
     let room = (screen.height.saturating_sub(4) as usize).saturating_sub(footer.len()).max(1);
     let visible = body.len().min(room);
@@ -399,16 +414,15 @@ pub(crate) fn draw(frame: &mut Frame, keys: &Keys, page: Ctx, lead: bool, update
     frame.render_widget(Paragraph::new(lines).block(modal_block(sheet.title.to_string())), area);
 }
 
-// The update hint beside U: kelpie's own version when it is among the updates.
+// The update hint beside U: kelpie's own version only, never another component's or an override.
 pub(crate) fn update_hint(updates: &[(String, String)]) -> Option<String> {
     updates.iter().find(|(name, _)| name == "kelpie").map(|(_, version)| version.clone())
-        .or_else(|| updates.first().map(|(name, version)| format!("{name} {version}")))
 }
 
 #[cfg(test)]
 pub(crate) fn shown(keys: &Keys, page: Ctx, lead: bool) -> Vec<(String, &'static str)> {
     let sheet = sheet(page);
-    sheet.groups.iter().flat_map(|group| shown_items(keys, sheet, group, lead, None)).map(|item| (item.key, item.wide)).collect()
+    sheet.groups.iter().flat_map(|group| shown_items(keys, sheet, group, lead, None, page == Ctx::Backlog)).map(|item| (item.key, item.wide)).collect()
 }
 
 #[cfg(test)]
@@ -455,9 +469,9 @@ mod tests {
         assert!(row_with(&rows, "END IT").contains("each asks first"));
         assert!(row_with(&rows, "U         update kelpie").contains("↑ 0.26.0"), "{screen}");
         assert!(screen.contains("h         hide or show the lead's chat") && screen.contains("ctrl+c    twice: quit the board"), "{screen}");
-        assert!(screen.contains("in the card window  ← → image · ↑ ↓ scroll · f fullscreen · o open the image · p push"), "{screen}");
+        assert!(screen.contains("in the card window  ← → image · ↑ ↓ j k scroll · f fullscreen · o open the image · p push"), "{screen}");
         assert!(screen.contains("areas (2) and routines (3) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
-        assert!(!screen.contains("asks first)") && !screen.contains("worktree.dev_server"), "the long texts stay out: {screen}");
+        assert!(!screen.contains("one at a time with tab") && !screen.contains("worktree.dev_server"), "the long texts stay out: {screen}");
         let (x, y) = find(&rows, "THE SELECTED TASK")[0];
         assert_eq!((buffer[(x as u16, y as u16)].fg, buffer[(x as u16 - 54 , y as u16)].fg), (PEACH, PEACH));
         let (x, y) = find(&rows, "⏎         options")[0];
@@ -523,6 +537,44 @@ mod tests {
         assert!(rows.join("\n").contains("h         hide or show the lead's chat"));
         let rows = rows_of(&keys, Ctx::Work, false, 80, 40, &mut Scroll::default());
         assert!(!rows.join("\n").contains("hide chat"));
+    }
+
+    #[test]
+    fn beside_u_only_kelpies_own_version_shows_and_never_moves_the_right_column() {
+        let updates = |pairs: &[(&str, &str)]| pairs.iter().map(|(name, version)| (name.to_string(), version.to_string())).collect::<Vec<_>>();
+        assert_eq!(update_hint(&updates(&[("running", "override /tmp/kelpie"), ("vault", "0.2.17")])), None);
+        assert_eq!(update_hint(&updates(&[("running", "override /tmp/kelpie"), ("kelpie", "0.26.0")])).as_deref(), Some("0.26.0"));
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.updates = updates(&[("running", "override /tmp/kelpie"), ("vault", "0.2.17")]);
+        press(&mut app, key(KeyCode::Char('?')));
+        let (rows, _) = render(&mut app, 150, 40);
+        let row = row_with(&rows, "U         update kelpie and its plugins");
+        assert!(!row.contains('↑') && !row.contains("override") && !row.contains("vault"), "{row}");
+        app.updates = updates(&[("kelpie", "0.26.0-a-very-long-prerelease-name")]);
+        let (rows, _) = render(&mut app, 150, 40);
+        let (task_x, _) = find(&rows, "THE SELECTED TASK")[0];
+        let (end_x, _) = find(&rows, "END IT")[0];
+        assert!(row_with(&rows, "U         update kelpie").contains("↑ 0.26.0") && end_x == task_x, "{}", rows.join("\n"));
+        let row = row_with(&rows, "U         update kelpie");
+        assert!(!row.contains("prerelease-name"), "the hint is clipped to the left column: {row}");
+    }
+
+    #[test]
+    fn with_the_backlog_column_selected_n_and_g_say_what_they_do_there() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        press(&mut app, key(KeyCode::Char('?')));
+        let (rows, _) = render(&mut app, 150, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("n         new task") && screen.contains("g         go to its Space"), "{screen}");
+        press(&mut app, key(KeyCode::Char('x')));
+        app.column = crate::board::Column::Backlog;
+        press(&mut app, key(KeyCode::Char('?')));
+        let (rows, _) = render(&mut app, 150, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("keys · work") && screen.contains("n         new backlog item") && screen.contains("g         start it as a task") && !screen.contains("go to its Space"), "{screen}");
+        let (rows, _) = render(&mut app, 80, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("g     start it") && screen.contains("n         new item"), "{screen}");
     }
 
     #[test]

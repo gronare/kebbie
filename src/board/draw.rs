@@ -122,7 +122,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Fullscreen { .. } => draw_fullscreen(frame, app),
         Mode::Help(scroll) => {
             let mut scroll = *scroll;
-            keys_window::draw(frame, keys::map(), Ctx::Work, app.lead_chat.is_some(), keys_window::update_hint(&app.updates).as_deref(), &mut scroll);
+            let page = if app.column == Column::Backlog { Ctx::Backlog } else { Ctx::Work };
+            keys_window::draw(frame, keys::map(), page, app.lead_chat.is_some(), keys_window::update_hint(&app.updates).as_deref(), &mut scroll);
             app.mode = Mode::Help(scroll);
         }
         Mode::Message(text) => match Notice::parse(text) {
