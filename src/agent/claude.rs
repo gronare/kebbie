@@ -272,7 +272,8 @@ pub(crate) fn settings(kelpie: &str, address: &str, gate: Option<&str>, dirs: Op
             None => hooks["PreToolUse"] = json!([files]),
         }
     }
-    let mut env = json!({ "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "" });
+    // VAULT_STOP_HOOK=off silences the vault plugin's Stop hook: kelpie writes a task's log lines, and hooks inherit the session's env.
+    let mut env = json!({ "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "", "VAULT_STOP_HOOK": "off" });
     if let Some(dirs) = dirs {
         for name in TMP_VARS {
             env[name] = json!(dirs.tmp.to_string_lossy());

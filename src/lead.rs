@@ -770,6 +770,11 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_keeps_the_vaults_stop_hook_that_tasks_turn_off() {
+        assert!(!settings("/bin/kelpie").contains("VAULT_STOP_HOOK"), "the lead writes the vault's notes, so its Stop hook still reminds it");
+    }
+
+    #[test]
     fn the_leads_settings_allow_only_kelpies_own_subcommands_by_full_path() {
         let written: Value = serde_json::from_str(&settings("/opt/kelpie")).unwrap();
         let allow: Vec<&str> = written["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
