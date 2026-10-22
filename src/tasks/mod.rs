@@ -11,7 +11,7 @@ mod push;
 mod red_ci;
 mod started;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, after as after_command, at as start_at, drop as drop_wait, now as start_now, queue, refuse_queued_name, Shown as WaitShown, shown as waits_shown, tick as after_tick};
 pub(crate) use approval::{approve, approved, awaits_check, rules_check, rules_check_subject, rules_check_task, same_code};
@@ -22,7 +22,7 @@ pub(crate) use history::{Commit, commits, draft_squash_message, reword, squash};
 pub(crate) use intent::{By as PushBy, Pending as PendingPush, Work as PushWork, after_red_ci, complete as complete_pushes, pending as pending_push};
 pub(crate) use landed::{EVERY as LANDED_EVERY, Unsure as LandedUnsure, mark as landed_mark, tick as landed_tick, tick_cli as landed_tick_cli};
 pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outside as ci_outside, outside_reason as ci_outside_reason};
-pub(crate) use launch::{Begun, Session, Start, begin, bypasses, new_session_id, profile_of, prompted_at, start, task_at, task_role, task_role_now, task_tmp, transcript};
+pub(crate) use launch::{Begun, Session, Start, begin, bypasses, new_session_id, profile_of, start, task_at, task_role, task_role_now, task_tmp, transcript};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of};
 pub(crate) use push::{after_ci, land, push, rebase, tidy};
 pub(crate) use started::{link, started_items, started_links};
@@ -90,6 +90,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::repo::git;
 
     #[test]
     fn the_board_never_waits_on_the_vault_on_its_own_thread() {
@@ -124,6 +125,52 @@ mod tests {
                 assert!(!text.contains(word.as_str()), "{} names a commit rule: {word}", file.display());
             }
         }
+    }
+
+    #[test]
+    fn the_hooks_a_report_and_a_question_move_the_tasks_phase() {
+        use crate::phase::{Event, Phase, Why};
+        let (dir, origin, slot, _) = test_support::task_with_a_commit("billing");
+        let state = crate::lead::state_dir().unwrap();
+        let address = crate::peers::address("billing", &name_of(&dir));
+        let phase = || crate::phase::load(&state, &address).map(|record| record.phase);
+        let prompt = |text: &str| crate::report::hook(&serde_json::json!({ "hook_event_name": "UserPromptSubmit", "cwd": slot.path, "prompt": text }).to_string());
+        let stop = |active: bool| crate::report::hook(&serde_json::json!({ "hook_event_name": "Stop", "cwd": slot.path, "stop_hook_active": active }).to_string());
+        crate::phase::record(&state, &address, "start", &Event::Started { prompted: true });
+        prompt("Add a refund column");
+        assert_eq!(phase(), Some(Phase::Working), "the prompt kelpie typed for the user is taken up");
+        assert!(stop(false).contains("\"block\""), "a stop without a report is sent back once");
+        assert_eq!(phase(), Some(Phase::Working));
+        stop(true);
+        assert_eq!(phase(), Some(Phase::NeedsYou(Why::Unreported)), "and the stop after it, still without one, waits for the user");
+        prompt(&crate::messages::delivered("lead", "fix the second commit"));
+        prompt(&crate::messages::delivered("kelpie", "kelpie was updated"));
+        assert_eq!(phase(), Some(Phase::NeedsYou(Why::Unreported)), "the inbox's raw content from the lead or kelpie moves nothing");
+        prompt("go on");
+        assert_eq!(phase(), Some(Phase::Working), "the user's own prompt does");
+        crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, "refunds done").unwrap();
+        assert_eq!(phase(), Some(Phase::Ready { head: Some(git(&slot.path, &["rev-parse", "HEAD"]).unwrap()) }));
+        prompt(&crate::messages::delivered("kelpie", "kelpie was updated"));
+        assert!(matches!(phase(), Some(Phase::Ready { .. })), "an update notice leaves it ready");
+        crate::report::report(&slot.path, Some("working"), Some("nothing"), None, "one more test").unwrap();
+        assert_eq!(phase(), Some(Phase::Working));
+        crate::questions::ask(&slot.path, &["A: one", "B: two"], Some("1"), None, "Which queue?").unwrap();
+        assert_eq!(phase(), Some(Phase::NeedsYou(Why::Question)));
+        test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_start_that_never_reaches_its_claude_waits_for_work_and_not_under_working() {
+        let (dir, origin, slot, _) = test_support::task_with_a_commit("billing");
+        let state = crate::lead::state_dir().unwrap();
+        let address = crate::peers::address("search", &name_of(&dir));
+        let options = Start { prompt: Some("Search the invoices"), focus: false, from: None, mode: None, profile: None, backlog: None, note: false };
+        assert!(begin(&dir, "search", &options).is_err(), "herdr is not there to open its Space");
+        assert_eq!(crate::phase::load(&state, &address).map(|record| record.phase), Some(crate::phase::Phase::Idle));
+        if let Some(search) = slots(&dir).unwrap().into_iter().find(|slot| slot.task.as_deref() == Some("search")) {
+            git(&dir, &["worktree", "remove", "--force", &search.path.to_string_lossy()]).unwrap();
+        }
+        test_support::cleanup(dir, origin, &slot);
     }
 
     #[test]

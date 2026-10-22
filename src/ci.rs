@@ -14,6 +14,7 @@ pub const APPEAR_SECONDS: u64 = 180;
 pub const SETTLE_SECONDS: u64 = 60;
 pub const PUSHING_SECONDS: u64 = 300;
 pub const LOG_LINES: usize = 60;
+pub const UNREADABLE_AFTER: u64 = 15 * 60;
 pub const GH_VAR: &str = "KELPIE_GH_BIN";
 const PASSED: [&str; 3] = ["success", "skipped", "neutral"];
 
@@ -78,6 +79,7 @@ pub struct Watch {
     pub runs: Vec<Run>,
     pub state: State,
     pub error: Option<String>,
+    pub erring_since: Option<u64>,
     pub pushed: Pushed,
 }
 
@@ -101,9 +103,13 @@ impl Watch {
     pub fn note(&self) -> String {
         match &self.state {
             State::Failed { what, .. } => format!("CI failed: {what}"),
-            State::Running if self.runs.is_empty() => format!("CI running: waiting for runs of {}", self.short()),
-            State::Running => format!("CI running: {}", self.runs.iter().map(Run::title).collect::<Vec<_>>().join(", ")),
+            State::Running if self.runs.is_empty() => format!("CI running: waiting for runs of {}{}", self.short(), self.unread()),
+            State::Running => format!("CI running: {}{}", self.runs.iter().map(Run::title).collect::<Vec<_>>().join(", "), self.unread()),
         }
+    }
+
+    fn unread(&self) -> String {
+        self.error.as_ref().map(|error| format!(" · gh cannot read it: {}", error.split_whitespace().collect::<Vec<_>>().join(" "))).unwrap_or_default()
     }
 
     pub fn to_json(&self) -> Value {
@@ -115,7 +121,7 @@ impl Watch {
             "address": self.address, "task": self.task, "repo": self.repo, "slug": self.slug, "sha": self.sha,
             "started_at": self.started_at, "checked_at": self.checked_at, "close": self.close,
             "runs": self.runs.iter().map(Run::to_json).collect::<Vec<_>>(),
-            "state": state, "failed_at": failed_at, "failure": failure, "failure_url": failure_url, "error": self.error,
+            "state": state, "failed_at": failed_at, "failure": failure, "failure_url": failure_url, "error": self.error, "erring_since": self.erring_since,
             "pushed": { "pusher": self.pushed.pusher, "target": self.pushed.target, "commits": self.pushed.commits, "note": self.pushed.note, "logged": self.pushed.logged },
         })
     }
@@ -133,7 +139,7 @@ impl Watch {
             address: text("address")?, task: text("task")?, repo: PathBuf::from(text("repo")?), slug: text("slug")?, sha: text("sha")?,
             started_at: value["started_at"].as_u64()?, checked_at: value["checked_at"].as_u64(), close: value["close"].as_bool().unwrap_or(true),
             runs: value["runs"].as_array().map(|runs| runs.iter().filter_map(Run::from_json).collect()).unwrap_or_default(),
-            state, error: text("error"),
+            state, error: text("error"), erring_since: value["erring_since"].as_u64(),
             pushed: Pushed { pusher: pushed_text("pusher"), target: pushed_text("target"), commits: pushed_text("commits"), note: pushed["note"].as_str().map(str::to_string), logged: pushed["logged"].as_bool() },
         })
     }
@@ -348,7 +354,7 @@ pub fn begin(state: &Path, repo: &Path, address: &str, sha: &str, close: bool, p
         Err(reason) => return Begin::NotWatched(reason),
     };
     let task = address.split('@').next().unwrap_or(address).to_string();
-    let watch = Watch { address: address.to_string(), task, repo: repo.to_path_buf(), slug, sha: sha.to_string(), started_at: messages::now(), checked_at: None, close, runs: Vec::new(), state: State::Running, error: None, pushed };
+    let watch = Watch { address: address.to_string(), task, repo: repo.to_path_buf(), slug, sha: sha.to_string(), started_at: messages::now(), checked_at: None, close, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed };
     if let Err(error) = mark_pushing(state, address, watch.started_at) {
         return Begin::NotWatched(format!("its record could not be saved ({error})"));
     }
@@ -410,10 +416,15 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
             Ok(runs) => {
                 watch.runs = runs;
                 watch.error = None;
+                watch.erring_since = None;
             }
             Err(error) => {
+                let since = *watch.erring_since.get_or_insert(now);
                 watch.error = Some(error);
                 let _ = save(state, &watch);
+                if now.saturating_sub(since) >= UNREADABLE_AFTER {
+                    crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::CiUnreadable);
+                }
                 continue;
             }
         }
@@ -481,11 +492,14 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     }.unwrap_or_default();
     let step = jobs.as_deref().and_then(failed_step).map(|step| format!(" · {step}")).unwrap_or_default();
     let what = format!("{} · {job}{step}", run.title());
-    watch.state = State::Failed { at: now, what: what.clone(), url: run.url.clone() };
-    let _ = save(state, watch);
     let by = crate::tasks::PushBy::of_word(&watch.pushed.pusher).filter(|_| watch.close);
     let who = by.map(crate::tasks::PushBy::word);
     let open = task_open(watch, &messages::load());
+    if open {
+        crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::CiRed { sha: &watch.sha, pushing: by.is_some() });
+    }
+    watch.state = State::Failed { at: now, what: what.clone(), url: run.url.clone() };
+    let _ = save(state, watch);
     let handed = open && match messages::hand_to(&watch.address, &task_message(watch, run, &format!("{job}{step}"), &log_tail(&log, LOG_LINES), who)) {
         Ok(()) => true,
         Err(error) => {
@@ -494,6 +508,9 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
         }
     };
     let pushing = by.filter(|by| handed && crate::tasks::after_red_ci(state, &watch.repo, &watch.address, *by).is_ok()).map(crate::tasks::PushBy::word);
+    if open && by.is_some() && pushing.is_none() {
+        crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::CiRed { sha: &watch.sha, pushing: false });
+    }
     let text = match pushing {
         _ if !open => format!("CI failed for {} ({}): {what}. Its task has ended, so nobody was handed the log; fix it in a new task. {}", watch.address, watch.short(), run.url),
         Some(who) => format!(
@@ -565,7 +582,7 @@ mod tests {
         let state = crate::sh::test_dir("ci-file");
         let mut watch = Watch {
             address: "billing@app".to_string(), task: "billing".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(),
-            started_at: 100, checked_at: Some(130), close: true, runs: vec![run("in_progress", "")], state: State::Running, error: None,
+            started_at: 100, checked_at: Some(130), close: true, runs: vec![run("in_progress", "")], state: State::Running, error: None, erring_since: None,
             pushed: Pushed { pusher: "the user".to_string(), target: "main".to_string(), commits: "abc Add refunds".to_string(), note: Some("Projects/x.md".to_string()), logged: Some(true) },
         };
         save(&state, &watch).unwrap();
@@ -607,7 +624,7 @@ mod tests {
         assert_eq!(tail.lines().count(), LOG_LINES);
         assert!(tail.starts_with("2026-10-20T10:00:00Z line 41") && tail.ends_with("line 100"), "{tail}");
         assert!(!tail.contains('\u{1b}') && !tail.contains('\u{7}') && !tail.contains("Run tests"));
-        let watch = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, pushed: Pushed { target: "main".to_string(), ..Pushed::default() } };
+        let watch = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 0, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed: Pushed { target: "main".to_string(), ..Pushed::default() } };
         let told = task_message(&watch, &run("completed", "failure"), "test", &tail, None);
         assert!(told.starts_with("CI failed for abcdef0 on main: CI · test (https://github.com/acme/app/actions/runs/1)."), "{told}");
         assert!(told.contains("line 100") && !told.contains("line 40\n"), "{told}");
@@ -638,7 +655,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         crate::repo::git(&dir, &["init", "--quiet"]).unwrap();
         crate::repo::git(&dir, &["-c", "user.name=Ada", "-c", "user.email=a@x", "commit", "--quiet", "--allow-empty", "-m", "first"]).unwrap();
-        let watch = |task: &str| Watch { address: format!("{task}@app"), task: task.to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abc".to_string(), started_at: 100, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, pushed: Pushed::default() };
+        let watch = |task: &str| Watch { address: format!("{task}@app"), task: task.to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abc".to_string(), started_at: 100, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed: Pushed::default() };
         assert!(!task_open(&watch("billing"), &[]), "a task that is gone gets nothing, so no later task by its name inherits it");
         let worktree = crate::repo::slot_path(&dir, 1);
         let _ = fs::remove_dir_all(&worktree);
@@ -664,7 +681,7 @@ mod tests {
     #[test]
     fn a_watch_written_before_its_push_waits_for_the_push_and_a_failed_push_puts_the_old_one_back() {
         let state = crate::sh::test_dir("ci-pushing");
-        let failed = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "1111111".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, error: None, pushed: Pushed::default() };
+        let failed = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: PathBuf::from("/src/app"), slug: "acme/app".to_string(), sha: "1111111".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, error: None, erring_since: None, pushed: Pushed::default() };
         save(&state, &failed).unwrap();
         let before = load(&state, "billing@app");
         let next = Watch { sha: "2222222".to_string(), started_at: messages::now(), state: State::Running, ..failed.clone() };
@@ -686,10 +703,58 @@ mod tests {
     }
 
     #[test]
+    fn a_red_run_puts_a_pushed_task_under_its_push_for_the_fix_or_under_needs_you() {
+        use crate::phase::Phase;
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let state = crate::tasks::test_support::state_of(&dir);
+        let address = crate::peers::address("billing", &crate::repo::name_of(&dir));
+        let phase = || crate::phase::load(&state, &address).map(|record| record.phase);
+        let red = |pusher: &str| {
+            let mut watch = Watch { address: address.clone(), task: "billing".to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed: Pushed { pusher: pusher.to_string(), ..Pushed::default() } };
+            crate::phase::record(&state, &address, "push", &crate::phase::Event::PushOut { sha: "abcdef0" });
+            failed_run(&state, "false", &mut watch, &run("completed", "failure"), 50);
+            assert!(!load(&state, &address).unwrap().running());
+        };
+        red("the user");
+        assert_eq!(phase(), Some(Phase::Pushing), "its Claude fixes it as part of the user's push");
+        crate::tasks::test_support::cleanup_intents(&state, &address);
+        red("");
+        assert_eq!(phase(), Some(Phase::CiRed { sha: "abcdef0".to_string() }));
+        let source = include_str!("ci.rs");
+        let failed = &source[source.find("\nfn failed_run(").unwrap()..];
+        assert!(failed.find("Event::CiRed").unwrap() < failed.find("save(state, watch)").unwrap(), "the phase moves before the watch reads failed, so a round that dies between them never leaves it under CI running");
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_watch_gh_cannot_read_says_so_and_after_a_while_needs_the_user() {
+        let dir = crate::sh::test_dir("ci-unreadable");
+        let mut watch = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed: Pushed::default() };
+        save(&dir, &watch).unwrap();
+        crate::phase::record(&dir, "billing@app", "push", &crate::phase::Event::PushOut { sha: "abcdef0" });
+        tick_with(&dir, "false", 100);
+        watch = load(&dir, "billing@app").unwrap();
+        assert_eq!((watch.erring_since, watch.error.is_some()), (Some(100), true));
+        assert!(watch.note().starts_with("CI running: waiting for runs of abcdef0 · gh cannot read it: "), "{}", watch.note());
+        tick_with(&dir, "false", 100 + UNREADABLE_AFTER - 1);
+        assert_eq!(crate::phase::load(&dir, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::CiRunning { sha: "abcdef0".to_string() }), "gh failing for a while is no news yet");
+        tick_with(&dir, "false", 100 + UNREADABLE_AFTER);
+        assert_eq!(crate::phase::load(&dir, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::NeedsYou(crate::phase::Why::Unreadable)), "gh failing for good needs the user, and the task's reports count again");
+        let gh = dir.join("gh");
+        std::fs::write(&gh, "#!/bin/sh\necho '[]'\n").unwrap();
+        std::fs::set_permissions(&gh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        save(&dir, &Watch { started_at: 100 + UNREADABLE_AFTER, ..load(&dir, "billing@app").unwrap() }).unwrap();
+        tick_with(&dir, &gh.to_string_lossy(), 100 + UNREADABLE_AFTER + 30);
+        let read = load(&dir, "billing@app").unwrap();
+        assert_eq!((read.erring_since, read.error), (None, None), "a good read starts the count again");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn the_push_writes_the_watch_before_it_pushes_and_green_closes_the_task_before_the_watch_goes() {
         let push = include_str!("tasks/push.rs");
         let deliver = &push[push.find("\nfn deliver(").unwrap()..];
-        assert!(deliver.find("crate::ci::begin(").unwrap() < deliver.find("push_prefix(").unwrap(), "between the push and the watch a task is neither pushable nor CI running");
+        assert!(deliver.find("watch(state, repo").unwrap() < deliver.find("push_prefix(").unwrap(), "between the push and the watch a task is neither pushable nor CI running");
         let source = include_str!("ci.rs");
         let green = &source[source.find("\nfn green(").unwrap()..];
         let green = &green[..green.find("\n}\n").unwrap()];

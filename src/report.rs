@@ -40,8 +40,11 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     let card = card.map(|file| cwd.join(file));
     let text = card.as_deref().map(read_card).transpose()?;
     messages::log_report(&me, &report, &summary)?;
+    let state = state_dir()?;
+    let pushing = tasks::pending_push(&state, &me).is_some();
+    crate::phase::record(&state, &me, "report", &crate::phase::Event::Reported { state: &report.state, head: report.head.as_deref(), committed: crate::status::committed_at(cwd), pushing });
     let kept = match (&card, &text) {
-        (Some(file), Some(text)) => take_card(cwd, file, &state_dir()?, &me, text)?,
+        (Some(file), Some(text)) => take_card(cwd, file, &state, &me, text)?,
         _ => String::new(),
     };
     show_in_sidebar(&report);
@@ -196,7 +199,12 @@ pub fn turn_started(me: &str) -> Option<u64> {
 
 // Claude Code sets stop_hook_active on the stop that follows a block, so a session is asked once per turn.
 pub fn should_block(stop_hook_active: bool, turn_started: Option<u64>, last_report: Option<u64>) -> bool {
-    !stop_hook_active && last_report.is_none_or(|at| at < turn_started.unwrap_or(0))
+    !stop_hook_active && unreported(turn_started, last_report)
+}
+
+// The stop after the one sent back, with still no report from this turn.
+fn unreported(turn_started: Option<u64>, last_report: Option<u64>) -> bool {
+    last_report.is_none_or(|at| at < turn_started.unwrap_or(0))
 }
 
 fn block_reason(kelpie: &str) -> String {
@@ -212,12 +220,19 @@ pub fn hook(input: &str) -> String {
     match input["hook_event_name"].as_str() {
         Some("UserPromptSubmit") => {
             let _ = crate::state::write(&turn, messages::now().to_string());
+            if let Ok(state) = state_dir() {
+                let by_user = input["prompt"].as_str().is_none_or(crate::phase::by_user);
+                crate::phase::record(&state, &me, "turn", &crate::phase::Event::TurnBegan { by_user });
+            }
             crate::known::stale_for(&me).unwrap_or_default()
         }
         Some("Stop") => {
             let turn_started = fs::read_to_string(turn).ok().and_then(|at| at.trim().parse().ok());
             let last_report = messages::latest_reports(&messages::load()).get(&me).map(|message| message.at);
             if !should_block(input["stop_hook_active"] == true, turn_started, last_report) {
+                if unreported(turn_started, last_report) && let Ok(state) = state_dir() {
+                    crate::phase::record(&state, &me, "stop", &crate::phase::Event::TurnEndedUnreported);
+                }
                 return String::new();
             }
             let kelpie = peers::kelpie_command().unwrap_or_else(|_| "kelpie".to_string());

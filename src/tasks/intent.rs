@@ -267,6 +267,7 @@ pub(super) fn complete_in(state: &Path, log: &[Message], read: impl Fn(&Intent, 
             Next::Wait => {}
             Next::Drop(why) => {
                 forget(state, &intent.address);
+                crate::phase::forget(state, &intent.address);
                 tell_lead(&format!("{why}."));
                 notes.push(format!("push: {why}"));
             }
@@ -278,6 +279,7 @@ pub(super) fn complete_in(state: &Path, log: &[Message], read: impl Fn(&Intent, 
                         format!("the push of {} that {} asked for was rejected while the default branch kept moving; kelpie tries again next round", intent.address, intent.by.word())
                     }
                     Err(error) => {
+                        crate::phase::record(state, &intent.address, "push", &crate::phase::Event::PushFailed);
                         let text = format!("kelpie could not finish the push of {} that {} asked for: {error}", intent.address, intent.by.word());
                         tell_lead(&text);
                         text

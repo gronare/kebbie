@@ -589,6 +589,7 @@ fn apply(state: &Path, task: &Task, old: Option<&Record>, act: Act) {
         }
         Act::Stop(record) => {
             let _ = save(state, &record);
+            crate::phase::record(state, &record.address, "recover", &crate::phase::Event::Stopped);
             let line = stuck_line(&record);
             if let Err(error) = messages::tell_lead(&line, Some("recover")) {
                 eprintln!("Could not tell the lead that {} stopped: {error}", record.address);

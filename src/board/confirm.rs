@@ -127,7 +127,7 @@ mod tests {
         assert!(!crate::board::options::task_choices(Some(&item), None, None).iter().any(|choice| choice.act == Some(crate::keys::Act::DismissCi)));
         item.ci = Some(crate::ci::Watch {
             address: "billing@web".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
-            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, pushed: crate::ci::Pushed::default(),
+            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         });
         assert!(crate::board::options::task_choices(Some(&item), None, None).iter().any(|choice| choice.act == Some(crate::keys::Act::DismissCi) && choice.label == "Dismiss the red CI"));
         let mut app = test_app(vec![item]);

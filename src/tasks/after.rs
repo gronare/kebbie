@@ -1136,7 +1136,7 @@ mod tests {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let (state, wait) = waiting_on(&dir, "billing");
         let address = peers::address("billing", &name_of(&dir));
-        crate::ci::save(&state, &crate::ci::Watch { address: address.clone(), task: "billing".to_string(), repo: dir.clone(), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Running, error: None, pushed: crate::ci::Pushed::default() }).unwrap();
+        crate::ci::save(&state, &crate::ci::Watch { address: address.clone(), task: "billing".to_string(), repo: dir.clone(), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default() }).unwrap();
         assert_eq!(next(&wait, &Facts::read(&state, &[], std::slice::from_ref(&wait)), 500), Next::Wait, "open under CI running");
         untouched(&state, &wait);
         let ended = [end(&address, 200, "done", None)];
@@ -1160,7 +1160,7 @@ mod tests {
         assert_eq!(label(&DepState::CiFailed, None), "ci failed on what it landed");
         let state = crate::sh::test_dir("after-red");
         save(&state, &wait).unwrap();
-        crate::ci::save(&state, &crate::ci::Watch { address: "billing@api".to_string(), task: "billing".to_string(), repo: PathBuf::from("/repos/api"), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: crate::ci::State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, error: None, pushed: crate::ci::Pushed::default() }).unwrap();
+        crate::ci::save(&state, &crate::ci::Watch { address: "billing@api".to_string(), task: "billing".to_string(), repo: PathBuf::from("/repos/api"), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: crate::ci::State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default() }).unwrap();
         let (started, told) = ticked(&state, &[end("billing@api", 200, "done", None)], 210);
         assert!(started.is_empty() && matches!(told.as_slice(), [Told::Blocked { .. }]));
         assert!(load(&state, "web-billing@web").unwrap().blocked.is_some(), "it waits for you under Needs you");
@@ -1170,7 +1170,7 @@ mod tests {
     #[test]
     fn a_task_closed_as_done_while_its_ci_runs_keeps_its_followers_waiting_until_green() {
         let state = crate::sh::test_dir("after-ci");
-        let watch = crate::ci::Watch { address: "billing@api".to_string(), task: "billing".to_string(), repo: PathBuf::from("/repos/api"), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Running, error: None, pushed: crate::ci::Pushed::default() };
+        let watch = crate::ci::Watch { address: "billing@api".to_string(), task: "billing".to_string(), repo: PathBuf::from("/repos/api"), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: true, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default() };
         crate::ci::save(&state, &watch).unwrap();
         settle_ci(&state, "billing@api");
         assert!(crate::ci::load(&state, "billing@api").is_none(), "nothing waits on it: the watch goes with the task");
@@ -1456,7 +1456,7 @@ mod tests {
     #[test]
     fn dropping_or_starting_a_wait_blocked_on_red_ci_lets_that_watch_go() {
         let state = crate::sh::test_dir("after-red-release");
-        let red = crate::ci::Watch { address: "billing@api".to_string(), task: "billing".to_string(), repo: PathBuf::from("/repos/api"), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: crate::ci::State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, error: None, pushed: crate::ci::Pushed::default() };
+        let red = crate::ci::Watch { address: "billing@api".to_string(), task: "billing".to_string(), repo: PathBuf::from("/repos/api"), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: crate::ci::State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default() };
         let blocked = Wait { blocked: Some("billing@api landed with red CI, so web-billing did not start".to_string()), ..wait_for("web-billing", "web", &["billing@api"]) };
         crate::ci::save(&state, &red).unwrap();
         save(&state, &blocked).unwrap();
@@ -1480,7 +1480,7 @@ mod tests {
     #[test]
     fn a_new_task_by_a_done_tasks_name_keeps_the_ci_watch_a_wait_needs() {
         let state = crate::sh::test_dir("after-new-name");
-        let watch = crate::ci::Watch { address: "billing@api".to_string(), task: "billing".to_string(), repo: PathBuf::from("/repos/api"), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: crate::ci::State::Running, error: None, pushed: crate::ci::Pushed::default() };
+        let watch = crate::ci::Watch { address: "billing@api".to_string(), task: "billing".to_string(), repo: PathBuf::from("/repos/api"), slug: "acme/api".to_string(), sha: "abcdef0".to_string(), started_at: 10, checked_at: None, close: false, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default() };
         crate::ci::save(&state, &watch).unwrap();
         save(&state, &wait_for("web-billing", "web", &["billing@api"])).unwrap();
         forget_unwaited_watch(&state, "billing@api");
@@ -1488,7 +1488,7 @@ mod tests {
         forget(&state, "web-billing@web");
         forget_unwaited_watch(&state, "billing@api");
         assert!(crate::ci::load(&state, "billing@api").is_none(), "nothing waits on it: a leftover goes");
-        assert!(include_str!("launch.rs").contains("super::after::forget_unwaited_watch(&state_dir()?, &address);") && !include_str!("launch.rs").contains("crate::ci::forget("));
+        assert!(include_str!("launch.rs").contains("super::after::forget_unwaited_watch(&state, &address);") && !include_str!("launch.rs").contains("crate::ci::forget("));
         fs::remove_dir_all(state).unwrap();
     }
 

@@ -243,7 +243,7 @@ fn nothing_to_push<T>(task: &str) -> Result<T> {
 }
 
 pub(super) fn push_task(caller: &Caller, repo: &Path, slot: &Slot, through: Through) -> Result<String> {
-    push_task_with(caller, repo, slot, through, &hand_over, &mut |pusher| deliver(repo, slot, &default_branch(repo)?, through, pusher, &state_dir()?))
+    push_task_with(caller, repo, slot, through, &hand_over, &mut |pusher| deliver(repo, slot, &default_branch(repo)?, through, pusher, &state_dir()?, &crate::ci::begin))
 }
 
 const PUSH_TRIES: usize = 3;
@@ -304,6 +304,7 @@ fn prepare(caller: &Caller, repo: &Path, slot: &Slot, through: Through, hand_ove
                 return Notice::new(Tone::Failed, format!("Not pushed: it conflicts with {}, and kelpie could not pass the rebase to its Claude", main_of(&upstream)))
                     .you("Push again; if this repeats, rebase it yourself in its worktree.").detail("task", &task).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
             }
+            crate::phase::record(&state, &address, by.key(), &crate::phase::Event::PushHanded);
             tell_lead(&format!("{} pushed {address}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, check the resolved commits against the rules (kelpie approve): kelpie pushes them for {} then, and the task stays under Ready to push meanwhile.", capitalized(pusher), by.word()), Some("push"));
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: it conflicts with {}", main_of(&upstream)))
                 .next(format!("Its Claude resolves the conflict, the lead checks the result, then kelpie pushes it{}.", for_whom(pusher))).detail("task", &task).to_string()));
@@ -317,6 +318,7 @@ fn prepare(caller: &Caller, repo: &Path, slot: &Slot, through: Through, hand_ove
                     .you("Run the tests for those files in its worktree, then push again.").detail("task", &task).detail("files", files.join(" · "))
                     .detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
             }
+            crate::phase::record(&state, &address, by.key(), &crate::phase::Event::PushHanded);
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: {} changed the same files, so their tests run first", main_of(&upstream)))
                 .next(format!("Its Claude runs those tests now; kelpie pushes it{} as soon as it reports ready.", for_whom(pusher))).detail("task", &task).detail("files", files.join(" · ")).to_string()));
         }
@@ -325,7 +327,9 @@ fn prepare(caller: &Caller, repo: &Path, slot: &Slot, through: Through, hand_ove
     authorize(caller, repo, slot, &upstream, through).map(Prepared::Push)
 }
 
-fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &'static str, state: &Path) -> Result<String> {
+pub(super) type Watch<'a> = &'a dyn Fn(&Path, &Path, &str, &str, bool, crate::ci::Pushed) -> crate::ci::Begin;
+
+fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &'static str, state: &Path, watch: Watch) -> Result<String> {
     let task = task_of(slot).to_string();
     let address = peers::address(&task, &name_of(repo));
     let sha = through_sha(&slot.path, upstream, through)?;
@@ -337,11 +341,16 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
     let main = main_of(upstream);
     let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: None };
     let before = crate::ci::load(state, &address);
-    let watch = crate::ci::begin(state, repo, &address, &sha, !keep_open, told_ci);
+    let phase_before = crate::phase::load(state, &address);
+    let watch = watch(state, repo, &address, &sha, !keep_open, told_ci);
+    if !keep_open && matches!(watch, crate::ci::Begin::Watching) {
+        crate::phase::record(state, &address, "push", &crate::phase::Event::PushOut { sha: &sha });
+    }
     let count = match push_prefix(&slot.path, upstream, &sha, state) {
         Ok(count) => count,
         Err(error) => {
             crate::ci::put_back(state, &address, before);
+            crate::phase::put_back(state, &address, &crate::phase::Phase::CiRunning { sha: sha.clone() }, phase_before);
             return Notice::new(Tone::Failed, "Not pushed: git refused the push").detail("task", &task).detail("error", error).err();
         }
     };
@@ -371,6 +380,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
         }
         let ready = note_ready(vault.as_ref(), state, &address, &task);
         if let Err(waits) = &ready {
+            crate::phase::record(state, &address, "push", &crate::phase::Event::Closing);
             tell_lead_pushed(&landed(false, true));
             let waits = Notice::read(waits, false);
             let mut notice = said(Notice::new(Tone::You, headline(false)).next(waits.next.unwrap_or_default()).you(waits.you.unwrap_or_default()));
@@ -378,6 +388,9 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
             return Ok(notice.to_string());
         }
         let closed = close_task(repo, Some(&task), vault.as_ref(), ready.unwrap_or_default(), Some(&pushed));
+        if closed.is_err() {
+            crate::phase::record(state, &address, "push", &crate::phase::Event::PushFailed);
+        }
         tell_lead_pushed(&landed(closed.is_ok(), false));
         return Ok(match closed {
             Ok(closed) => {
@@ -391,9 +404,13 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
     tell_lead_pushed(&landed(false, false));
     let (clean, rest) = match keep_going(state, repo, slot, upstream, &address, was_approved) {
         Rest::Rebased { clean, rest } => (clean, rest),
-        Rest::NotRebased(error) => return Ok(said(Notice::new(Tone::You, headline(true))).next(format!("The rest could not be rebased onto {main} afterwards."))
-            .you(format!("Rebase the rest (kelpie land {task}).")).detail("error", error).to_string()),
+        Rest::NotRebased(error) => {
+            crate::phase::record(state, &address, "push", &crate::phase::Event::PushFailed);
+            return Ok(said(Notice::new(Tone::You, headline(true))).next(format!("The rest could not be rebased onto {main} afterwards."))
+                .you(format!("Rebase the rest (kelpie land {task}).")).detail("error", error).to_string());
+        }
     };
+    crate::phase::record(state, &address, "push", &crate::phase::Event::KeptOpen { rest, clean, head: git(&slot.path, &["rev-parse", "HEAD"]).ok().as_deref() });
     let told = format!(
         "{} pushed {} of this task, through {short}, to {target}; they are on {target} for good. Your branch continues from there with {} on top: reshape only those.",
         capitalized(pusher), plural(count, "commit"), plural(rest, "commit")
@@ -417,10 +434,14 @@ pub fn after_ci(repo: &Path, task: &str, address: &str, told: &crate::ci::Pushed
     let landed = |closed: bool, waits: bool| Landed { pusher: &told.pusher, address, target: &told.target, commits: &told.commits, closed, note: told.note.as_deref(), logged: told.logged, waits };
     let ready = note_ready(vault.as_ref(), &state, address, task);
     if let Err(waits) = &ready {
+        crate::phase::record(&state, address, "ci", &crate::phase::Event::Closing);
         tell_lead_pushed(&landed(false, true));
         return Ok(waits.clone());
     }
     let closed = close_task(repo, Some(task), vault.as_ref(), ready.unwrap_or_default(), Some(&told.commits));
+    if closed.is_err() {
+        crate::phase::record(&state, address, "ci", &crate::phase::Event::PushFailed);
+    }
     tell_lead_pushed(&landed(closed.is_ok(), false));
     closed.map(|closed| closed.detail("task", task).to_string())
 }
@@ -932,7 +953,7 @@ mod tests {
         commit(&slot.path, "e", "fifth");
         let state = state_of(&dir);
         let address = crate::peers::address("billing", &name_of(&dir));
-        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, "the user", &state).unwrap();
+        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, "the user", &state, &crate::ci::begin).unwrap();
         let fifth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         git(&dir, &["merge", "--quiet", "--ff-only", &upstream]).unwrap();
         pick(&dir, &fifth);
@@ -958,7 +979,7 @@ mod tests {
         commit(&slot.path, "e", "fifth");
         let state = state_of(&dir);
         let address = crate::peers::address("billing", &name_of(&dir));
-        let said = deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, "the user", &state).unwrap();
+        let said = deliver(&dir, &slot, &upstream, Through::First { count: 2, of: 2 }, "the user", &state, &crate::ci::begin).unwrap();
         assert!(said.contains("It stays open, as you chose, with everything on main"), "{said}");
         assert!(branch_exists(&dir, "billing"));
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap().0, 0, "everything is on main");
@@ -971,6 +992,26 @@ mod tests {
         assert_eq!(crate::tasks::landed_mark(&state, &address, &slot.path), None, "no landed line");
         crate::tasks::finish::finish(&dir, &slot, &upstream, &state, None).unwrap();
         assert!(!branch_exists(&dir, "billing"), "done closes it when the user chooses");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_watched_push_is_under_ci_running_and_one_git_refuses_leaves_the_phase_as_it_was() {
+        use crate::phase::{Event, Phase};
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        let phase = || crate::phase::load(&state, &address).map(|record| record.phase);
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        crate::phase::record(&state, &address, "report", &Event::Reported { state: "ready", head: Some(&head), committed: true, pushing: false });
+        let watching: Watch = &|_, _, _, _, _, _| crate::ci::Begin::Watching;
+        git(&dir, &["remote", "set-url", "origin", &dir.with_extension("nowhere").to_string_lossy()]).unwrap();
+        assert!(deliver(&dir, &slot, &upstream, Through::All, "the user", &state, watching).unwrap_err().contains("git refused the push"));
+        assert_eq!(phase(), Some(Phase::Ready { head: Some(head.clone()) }), "refused, it is where it was");
+        git(&dir, &["remote", "set-url", "origin", &origin.to_string_lossy()]).unwrap();
+        deliver(&dir, &slot, &upstream, Through::All, "the user", &state, watching).unwrap();
+        assert_eq!(phase(), Some(Phase::CiRunning { sha: head.clone() }));
+        assert_eq!(git(&origin, &["rev-parse", upstream.trim_start_matches("origin/")]).unwrap(), head, "pushed");
         cleanup(dir, origin, &slot);
     }
 

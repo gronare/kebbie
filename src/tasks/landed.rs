@@ -757,9 +757,10 @@ mod tests {
         let mut red = crate::status::tests::task(Some("idle"), None, 1);
         red.ci = Some(crate::ci::Watch {
             address: "billing@web".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
-            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, pushed: crate::ci::Pushed::default(),
+            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         });
         red.ci_outside = Some("pushed outside the deploy window".to_string());
+        crate::status::tests::rederive(&mut red);
         assert_eq!(red.group(), crate::status::Group::NeedsYou);
         assert!(red.summary().starts_with("CI failed: deploy · release · Deploy · its Claude says outside the code: pushed outside the deploy window"), "{}", red.summary());
     }
@@ -809,7 +810,7 @@ mod tests {
         let passed = crate::ci::Run { id: 2, name: "lint".to_string(), workflow: "lint".to_string(), status: "completed".to_string(), conclusion: "success".to_string(), url: "u".to_string() };
         crate::ci::Watch {
             address: address.to_string(), task: "billing".to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 1, checked_at: None, close, runs: vec![failed, passed],
-            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, pushed: crate::ci::Pushed::default(),
+            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         }
     }
 

@@ -281,6 +281,7 @@ fn dropped_notes(vault: Option<&crate::vault_cli::Cli>, state: &Path, task: &str
 }
 
 fn forget_address(state: &Path, address: &str) {
+    crate::phase::forget(state, address);
     crate::task_note::forget(state, address);
     super::landed::forget(state, address);
     crate::status::forget_title(state, address);

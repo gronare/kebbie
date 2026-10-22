@@ -237,7 +237,11 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
     }
     let text = answer_text(message, choice, comment)?;
     let told = match sessions.iter().find(|session| session.address == message.from) {
-        Some(task) => messages::send_locked(USER_LABEL, &[task], &text, &sessions, Some(id), Some("answer"))?.join(" "),
+        Some(task) => {
+            let sent = messages::send_locked(USER_LABEL, &[task], &text, &sessions, Some(id), Some("answer"))?.join(" ");
+            crate::phase::record(&state_dir()?, &message.from, "answer", &crate::phase::Event::Answered);
+            sent
+        }
         None => {
             messages::hold_for(USER_LABEL, &message.from, &text, Some(id), Some("answer"))?;
             messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
@@ -321,6 +325,7 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
     let next = if plan.is_some() { format!("read and approve the plan: {}", asked.text) } else { format!("answer: {}", asked.text) };
     let report = Report { state: "needs-you".to_string(), next, head: None };
     messages::log_report(&me, &report, &format!("asked the user: {}", asked.text))?;
+    crate::phase::record(&state_dir()?, &me, "ask", &crate::phase::Event::Asked);
     report::show_in_sidebar(&report);
     let id = messages::new_id("question");
     let plan_at = plan.as_deref().and_then(|plan| plan.strip_prefix(VAULT_PLAN)).and_then(|key| crate::vault::Index::open().ok()?.changed_at(key)).map(millis);

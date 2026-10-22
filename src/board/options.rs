@@ -432,7 +432,7 @@ mod tests {
         let run = |id: u64, name: &str| crate::ci::Run { id, name: name.to_string(), workflow: name.to_string(), status: "completed".to_string(), conclusion: "failure".to_string(), url: format!("https://github.com/acme/web/actions/runs/{id}") };
         item.ci = Some(crate::ci::Watch {
             address: "search-filters@web".to_string(), task: "search-filters".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
-            started_at: 0, checked_at: None, close: true, runs: vec![run(42, "CI"), run(43, "Lint")], state: crate::ci::State::Running, error: None, pushed: crate::ci::Pushed::default(),
+            started_at: 0, checked_at: None, close: true, runs: vec![run(42, "CI"), run(43, "Lint")], state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         });
         let long = format!("https://claude.ai/artifact/{}", "a1b2c3d4".repeat(12));
         item.report.as_mut().unwrap().text = format!("mock at {long} and the PR https://github.com/acme/web/pull/7, also https://docs.example.org/guide");

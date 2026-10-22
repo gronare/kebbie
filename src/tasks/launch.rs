@@ -134,12 +134,6 @@ pub(super) fn forget_session(task: &str, repo: &Path) {
     }
 }
 
-// When kelpie started the task with a prompt for its Claude; a task started without one has nothing to take up.
-pub(crate) fn prompted_at(state: &Path, address: &str) -> Option<u64> {
-    let modified = std::fs::metadata(prompt_file(&session_file_in(state, address))).ok()?.modified().ok()?;
-    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|elapsed| elapsed.as_secs())
-}
-
 fn prompt_file(session: &Path) -> PathBuf {
     let mut name = session.file_name().unwrap_or_default().to_os_string();
     name.push(".prompt");
@@ -227,7 +221,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
 }
 
 pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
-    let Start { prompt, focus, from, mode, profile: given, backlog, note: with_note } = *options;
+    let Start { prompt, focus, from, mode, profile: given, note: with_note, .. } = *options;
     mode.map(config::permission_mode).transpose().map_err(|error| format!("--mode: {error}"))?;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
@@ -237,7 +231,7 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     let running = slots(&repo)?.into_iter().find(|slot| slot.task.as_deref() == Some(task.as_str()));
     let recorded = running.as_ref().and_then(|_| recorded_session(&task, &repo).profile);
     let (profile, fell_back) = task_profile(&repo, given, recorded.as_deref())?;
-    let shell = sandboxed(config::resolve(Some(&repo))?.settings.sandbox.value, &profile, crate::sandbox::missing_here)?;
+    sandboxed(config::resolve(Some(&repo))?.settings.sandbox.value, &profile, crate::sandbox::missing_here)?;
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = running {
         return restart(&place(&existing), &existing, focus, prompt).map(|begun| match &fell_back {
@@ -256,11 +250,25 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     }
 
     let address = peers::address(&task, &name_of(&repo));
-    super::after::forget_unwaited_watch(&state_dir()?, &address);
-    let shared = vault.as_ref().map(|_| state_dir().map(|state| crate::task_note::shared(&state, &task, &address))).transpose()?.flatten();
-    let (note, vault_said) = match (&vault, shared) {
+    let state = state_dir()?;
+    super::after::forget_unwaited_watch(&state, &address);
+    crate::phase::record(&state, &address, "start", &crate::phase::Event::Started { prompted: prompt.is_some() });
+    let begun = launch_new(&repo, &task, &slot, &address, place(&slot), vault.as_ref(), options);
+    if begun.is_err() {
+        crate::phase::record(&state, &address, "start", &crate::phase::Event::Started { prompted: false });
+    }
+    begun
+}
+
+// The new task's Space, Claude and prompt; when any of them fails, its prompt never reached Claude.
+fn launch_new(repo: &Path, task: &str, slot: &Slot, address: &str, place: Launch, vault: Option<&crate::vault_cli::Cli>, options: &Start) -> Result<Begun> {
+    let shell = sandboxed(config::resolve(Some(repo))?.settings.sandbox.value, place.profile, crate::sandbox::missing_here)?;
+    let Start { prompt, focus, mode, backlog, .. } = *options;
+    let profile = place.profile;
+    let shared = vault.map(|_| state_dir().map(|state| crate::task_note::shared(&state, task, address))).transpose()?.flatten();
+    let (note, vault_said) = match (vault, shared) {
         (_, Some(note)) => (Some(note.clone()), format!("{note}, shared with its other halves")),
-        (Some(cli), None) => match crate::task_note::open(cli, &task, &slot.path, backlog) {
+        (Some(cli), None) => match crate::task_note::open(cli, task, &slot.path, backlog) {
             Ok(note) => (Some(note.clone()), note),
             Err(error) => (None, format!("not opened ({error}); the task runs without one")),
         },
@@ -268,20 +276,20 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     };
     if note.is_some() {
         let entry = start_entry(note.as_deref(), backlog).unwrap_or_default();
-        started_file(&task, &repo).and_then(|file| crate::state::write(&file, entry))?;
+        started_file(task, repo).and_then(|file| crate::state::write(&file, entry))?;
     }
-    store_prompt(&prompt_file(&session_file(&task, &repo)?), prompt)?;
-    let space = open_space(&repo, &slot, &task, false)?;
+    store_prompt(&prompt_file(&session_file(task, repo)?), prompt)?;
+    let space = open_space(repo, slot, task, false)?;
     let agent_pane = match space.root_pane_id {
         Some(pane) => pane,
         None => herdr::create_tab(&space.workspace_id, &slot.path, profile.agent.key())?,
     };
-    let configured = configured_mode(&repo)?;
+    let configured = configured_mode(repo)?;
     let configured = profile.permission_mode.clone().or(configured);
-    let (agent_name, started) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place(&slot) }, &agent_pane, Session::New(new_session_id()?))?;
+    let (agent_name, started) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place }, &agent_pane, Session::New(new_session_id()?))?;
     let prompted = match &started {
-        Ok(started) => send_prompt(started, prompt, |text| crate::typing::prompt_confirmed(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
-            .map_err(|error| unprompted("Started", &task, &slot.path, &error)),
+        Ok(started) => send_prompt(started, prompt, |text| crate::typing::prompt_confirmed(&agent_name, text, address), |text| messages::hold_prompt(address, text))
+            .map_err(|error| unprompted("Started", task, &slot.path, &error)),
         Err(_) => Ok(Asks::default()),
     };
     if focus {
@@ -290,13 +298,13 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     let started = started?;
     let trust_said = prompted?;
     if let Some(item) = backlog.filter(|_| note.is_none()) {
-        started_file(&task, &repo).and_then(|file| crate::state::write(&file, item))?;
+        started_file(task, repo).and_then(|file| crate::state::write(&file, item))?;
     }
-    if let Err(error) = messages::announce(&task, &name_of(&repo)) {
+    if let Err(error) = messages::announce(task, &name_of(repo)) {
         eprintln!("Could not tell {task}'s other halves it started: {error}");
     }
-    let mut said = trust_said.on(Notice::new(Tone::Done, "Started")).detail("task", &task).detail("folder", slot.path.display().to_string()).detail("note", vault_said);
-    if let Some(sandbox) = sandbox_said(shell, &profile) {
+    let mut said = trust_said.on(Notice::new(Tone::Done, "Started")).detail("task", task).detail("folder", slot.path.display().to_string()).detail("note", vault_said);
+    if let Some(sandbox) = sandbox_said(shell, profile) {
         said = said.detail("sandbox", sandbox);
     }
     Ok(Begun { said: said.to_string(), started })
@@ -460,6 +468,9 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     }
     let started = started?;
     let trust_said = prompted?;
+    if prompt.is_some() {
+        crate::phase::record(&state_dir()?, &address, "restart", &crate::phase::Event::Started { prompted: true });
+    }
     let held = started.asks().is_some();
     let how = match (resumed, prompt.is_some()) {
         (true, true) if !held => "It resumes its last conversation and has the prompt again.",
@@ -622,7 +633,7 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
         let source = include_str!("launch.rs");
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
-        assert!(body("begin").find("store_prompt(").unwrap() < body("begin").find("launch(").unwrap(), "the prompt is kept even when the first start fails");
+        assert!(body("launch_new").find("store_prompt(").unwrap() < body("launch_new").find("launch(").unwrap(), "the prompt is kept even when the first start fails");
         assert!(body("begin").contains("restart(&place(&existing), &existing, focus, prompt)"), "start's prompt reaches the resume path");
         assert!(body("restart").contains("prompt_for(&session, given, stored, unheard)") && body("restart").contains("send_prompt(started, prompt.as_deref(),"));
         assert!(body("restart").contains("user_messages(&text).is_empty()"));
@@ -703,7 +714,7 @@ mod tests {
         assert_eq!(chosen_mode(Some(BYPASS), Some("plan"), None), Some(BYPASS));
         let source = include_str!("launch.rs");
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
-        assert!(body("begin").contains("mode: chosen_mode(mode, None, configured.as_deref())") && body("begin").contains("configured_mode(&repo)?"));
+        assert!(body("launch_new").contains("mode: chosen_mode(mode, None, configured.as_deref())") && body("launch_new").contains("configured_mode(repo)?"));
         assert!(body("restart").contains("chosen_mode(place.mode, mode.as_deref(), configured.as_deref())"));
         assert!(body("begin").find("config::permission_mode").unwrap() < body("begin").find("fetch(").unwrap(), "a mistyped --mode is refused before a worktree is claimed");
         assert!(body("launch").contains("Started::BypassDisabled { None }"), "a Claude that policy keeps out of bypass is not recorded as bypassing");

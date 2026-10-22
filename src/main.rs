@@ -23,6 +23,7 @@ mod messages;
 mod notice;
 mod notify;
 mod peers;
+mod phase;
 mod permit;
 mod profiles;
 mod push_block;

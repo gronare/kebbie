@@ -565,6 +565,7 @@ mod tests {
         let report = item.report.as_mut().unwrap().report.as_mut().unwrap();
         report.state = "needs-you".to_string();
         report.next = "approve the mock of the task rows for Needs you, Working and Ready to push before anything is built".to_string();
+        crate::status::tests::rederive(&mut item);
         let mut ready = served("search-filters");
         ready.report.as_mut().unwrap().report.as_mut().unwrap().next = "review the 2 commits and the card, then push and close".to_string();
         let mut app = test_app(vec![item, ready]);
@@ -634,8 +635,9 @@ mod tests {
         let run = crate::ci::Run { id: 42, name: "CI".to_string(), workflow: "CI".to_string(), status: "in_progress".to_string(), conclusion: String::new(), url: "https://github.com/acme/web/actions/runs/42".to_string() };
         item.ci = Some(crate::ci::Watch {
             address: "billing@web".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
-            started_at: 0, checked_at: None, close: true, runs: vec![run], state: crate::ci::State::Running, error: None, pushed: crate::ci::Pushed::default(),
+            started_at: 0, checked_at: None, close: true, runs: vec![run], state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         });
+        crate::status::tests::rederive(&mut item);
         let (lines, links) = ci_lines(&item, 80);
         assert_eq!(lines.iter().map(Line::to_string).collect::<Vec<_>>(), ["ci      ◐ CI running: CI", "        CI  https://github.com/acme/web/actions/runs/42"]);
         assert_eq!((links[0].shown.as_str(), links[0].url.as_str()), ("https://github.com/acme/web/actions/runs/42", "https://github.com/acme/web/actions/runs/42"));

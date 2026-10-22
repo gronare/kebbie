@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::repo::git;
 use super::pool::{Slot, create_slot, find_task};
 
-pub(super) fn repo() -> PathBuf {
+pub(crate) fn repo() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("kelpie-test-{}-{:?}", std::process::id(), std::thread::current().id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -18,7 +18,7 @@ pub(super) fn repo() -> PathBuf {
     dir
 }
 
-pub(super) fn task_with_a_commit(name: &str) -> (PathBuf, PathBuf, Slot, String) {
+pub(crate) fn task_with_a_commit(name: &str) -> (PathBuf, PathBuf, Slot, String) {
     let dir = repo();
     let origin = dir.with_extension("origin");
     let _ = std::fs::remove_dir_all(&origin);
@@ -36,20 +36,20 @@ pub(super) fn task_with_a_commit(name: &str) -> (PathBuf, PathBuf, Slot, String)
     (dir, origin, slot, format!("origin/{branch}"))
 }
 
-pub(super) fn state_of(dir: &Path) -> PathBuf {
+pub(crate) fn state_of(dir: &Path) -> PathBuf {
     let state = dir.with_extension("state");
     std::fs::create_dir_all(&state).unwrap();
     state
 }
 
-pub(super) fn cleanup(dir: PathBuf, origin: PathBuf, slot: &Slot) {
+pub(crate) fn cleanup(dir: PathBuf, origin: PathBuf, slot: &Slot) {
     let _ = std::fs::remove_dir_all(dir.with_extension("state"));
     git(&dir, &["worktree", "remove", "--force", &slot.path.to_string_lossy()]).unwrap();
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(origin).unwrap();
 }
 
-pub(super) fn commit(path: &Path, file: &str, message: &str) -> String {
+pub(crate) fn commit(path: &Path, file: &str, message: &str) -> String {
     std::fs::write(path.join(file), message).unwrap();
     git(path, &["add", file]).unwrap();
     git(path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", message]).unwrap();
@@ -57,20 +57,24 @@ pub(super) fn commit(path: &Path, file: &str, message: &str) -> String {
 }
 
 // Main moves on first, so the landed commits cannot come out with the task's own shas.
-pub(super) fn land_on_main(dir: &Path, upstream: &str, land: impl Fn(&Path)) {
+pub(crate) fn land_on_main(dir: &Path, upstream: &str, land: impl Fn(&Path)) {
     commit(dir, "elsewhere", "someone else's work");
     land(dir);
     git(dir, &["update-ref", &format!("refs/remotes/{upstream}"), "HEAD"]).unwrap();
 }
 
-pub(super) fn pick(dir: &Path, sha: &str) {
+pub(crate) fn pick(dir: &Path, sha: &str) {
     git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "cherry-pick", sha]).unwrap();
 }
 
-pub(super) fn upstream_commit(dir: &Path, file: &str, text: &str, message: &str) {
+pub(crate) fn upstream_commit(dir: &Path, file: &str, text: &str, message: &str) {
     std::fs::write(dir.join(file), text).unwrap();
     git(dir, &["add", file]).unwrap();
     git(dir, &["-c", "user.name=Bo", "-c", "user.email=bo@example.com", "commit", "--quiet", "-m", message]).unwrap();
     git(dir, &["push", "--quiet", "origin", "HEAD"]).unwrap();
     git(dir, &["fetch", "--quiet", "origin"]).unwrap();
+}
+
+pub(crate) fn cleanup_intents(state: &Path, address: &str) {
+    super::intent::forget(state, address);
 }

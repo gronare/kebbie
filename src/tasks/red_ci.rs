@@ -90,6 +90,7 @@ pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option
         intent::forget(state, &address);
     }
     super::after::red_ci_superseded(state, &address);
+    crate::phase::record(state, &address, "dismiss", &crate::phase::Event::Dismissed { kept_open: super::landed::kept_open(state, &address) });
     let then = if super::landed::kept_open(state, &address) { "It stays open, as the user chose when pushing it." } else { "kelpie closes the task once its commits are on the default branch." };
     let text = format!("The user dismissed the red CI of {address} on {}: {why}. {then}", watch.short());
     if let Err(error) = messages::tell_lead(&text, Some("ci")) {
@@ -110,7 +111,7 @@ mod tests {
     fn red_watch(dir: &Path, address: &str) -> crate::ci::Watch {
         crate::ci::Watch {
             address: address.to_string(), task: "billing".to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
-            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: "https://ci/1".to_string() }, error: None, pushed: crate::ci::Pushed::default(),
+            state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: "https://ci/1".to_string() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         }
     }
 
