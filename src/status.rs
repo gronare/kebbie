@@ -94,6 +94,7 @@ pub struct Item {
     pub routine: Option<String>,
     pub push_waits: Option<tasks::PushBy>,
     pub queued: Option<Queued>,
+    pub held_by_draft: Option<String>,
 }
 
 impl Item {
@@ -114,6 +115,7 @@ impl Item {
             name: wait.task.clone(), place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone() }),
+            held_by_draft: None,
         }
     }
 
@@ -202,6 +204,7 @@ impl Item {
             (Some("blocked"), _, _) => Group::NeedsYou,
             (Some("working"), _, _) | (_, Some("working"), _) => Group::Working,
             (_, _, Some(group)) => group,
+            _ if self.held_by_draft.is_some() => Group::NeedsYou,
             (_, Some("needs-you"), _) => Group::NeedsYou,
             (_, Some("blocked"), _) => Group::Idle,
             _ if self.awaiting_review() => Group::ToReview,
@@ -219,7 +222,7 @@ impl Item {
         match (self.agent.as_ref().map(|agent| agent.status.as_str()), self.report_state()) {
             _ if self.queued.is_some() => 1,
             (Some("blocked"), _) => 0,
-            _ if self.ci_group().is_some() || self.recover_group().is_some() => 1,
+            _ if self.ci_group().is_some() || self.recover_group().is_some() || self.held_by_draft.is_some() => 1,
             (_, Some("needs-you")) => 1,
             (_, Some("ready")) => 2,
             _ => 3,
@@ -236,6 +239,9 @@ impl Item {
         }
         if self.agent.as_ref().is_some_and(|agent| agent.status == "working") || self.ci_group().is_some() || self.recover_group().is_some() {
             return None;
+        }
+        if let Some(held) = &self.held_by_draft {
+            return Some(held);
         }
         self.report.as_ref()?.next_for_you()
     }
@@ -405,6 +411,13 @@ pub fn running_url(repo: &Path, worktree: &Path) -> Option<String> {
     crate::config::dev_url(settings.dev_url.value.as_deref(), repo, worktree)
 }
 
+// Messages that wait because the task's input box holds the user's own text: the row says what clears the way.
+fn held_by_draft(log: &[Message], address: &str) -> Option<String> {
+    let waiting = log.iter().filter(|message| message.held && message.to == address).count();
+    let draft = log.iter().any(|message| message.held && message.to == address && message.why.as_deref() == Some(messages::DRAFT_HOLD));
+    draft.then(|| format!("clear the draft in its input box ({} held)", plural(waiting, "message")))
+}
+
 pub fn gather() -> Result<Vec<Item>> {
     let workspaces = herdr::workspaces()?;
     let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| crate::agent::Agent::of(agent).is_some()).collect();
@@ -466,6 +479,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 routine: state.as_deref().and_then(|state| crate::routines::run_of(state, &address)).map(|(id, _)| id),
                 push_waits: state.as_deref().and_then(|state| tasks::pending_push(state, &address)),
                 queued: None,
+                held_by_draft: held_by_draft(&log, &address),
                 name: task,
             });
         }
@@ -505,6 +519,7 @@ pub fn gather() -> Result<Vec<Item>> {
             routine: None,
             push_waits: None,
             queued: None,
+            held_by_draft: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -524,7 +539,7 @@ pub(crate) mod tests {
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
-                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None, kind: None, landed: None,
+                report: Some(Report { state: state.to_string(), next: "nothing".to_string() }), ended: false, question: None, about: None, kind: None, landed: None, why: None,
             }),
             question: None,
             ci: None,
@@ -532,6 +547,7 @@ pub(crate) mod tests {
             routine: None,
             push_waits: None,
             queued: None,
+            held_by_draft: None,
         }
     }
 
@@ -724,6 +740,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_task_whose_messages_wait_behind_the_users_draft_needs_you_and_its_row_says_what_clears_the_way() {
+        let log = messages::fold(&[
+            r#"{"id":"m1","at":1,"from":"lead","to":"billing@web","text":"a","state":"held","why":"has a draft in its input box"}"#,
+            r#"{"id":"m2","at":2,"from":"you","to":"billing@web","text":"b","state":"held","why":"still has earlier messages held"}"#,
+            r#"{"id":"m3","at":3,"from":"lead","to":"shop@web","text":"c","state":"held","why":"is waiting for an answer"}"#,
+        ].join("\n"));
+        let held = held_by_draft(&log, "billing@web");
+        assert_eq!(held.as_deref(), Some("clear the draft in its input box (2 messages held)"));
+        assert_eq!(held_by_draft(&log, "shop@web"), None, "held for another reason, the row stays as the task reported");
+        let mut item = task(Some("idle"), Some("blocked"), 0);
+        assert!(item.group() == Group::Idle);
+        item.held_by_draft = held;
+        assert!(item.group() == Group::NeedsYou && item.urgency() == 1);
+        assert_eq!(item.next_for_you(), item.held_by_draft.as_deref());
+        item.agent.as_mut().unwrap().status = "working".to_string();
+        assert!(item.group() == Group::Working && item.next_for_you().is_none(), "a turn under way takes it up");
+        let delivered = messages::fold(r#"{"id":"m1","at":1,"from":"lead","to":"billing@web","text":"a","state":"held","why":"has a draft in its input box"}
+{"id":"m1","at":2,"state":"delivered"}"#);
+        assert_eq!(held_by_draft(&delivered, "billing@web"), None);
+    }
+
+    #[test]
     fn without_a_report_herdr_decides_as_before() {
         assert!(task(Some("done"), None, 0).group() == Group::NeedsYou);
         assert!(task(Some("idle"), None, 1).group() == Group::ReadyToPush);
@@ -789,7 +827,7 @@ pub(crate) mod tests {
         assert_eq!(item.to_json()["push_permission"], "task");
         item.question = Some(Message {
             id: "q".to_string(), at: 0, from: "billing@web".to_string(), to: "you".to_string(), text: "Which?".to_string(), held: false, report: None, ended: false,
-            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, answered: false, waits: true }), about: None, kind: None, landed: None,
+            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, answered: false, waits: true }), about: None, kind: None, landed: None, why: None,
         });
         let shown = item.to_json();
         assert_eq!(shown["question"]["kept_for_user"], true);

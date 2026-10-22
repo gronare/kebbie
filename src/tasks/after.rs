@@ -722,7 +722,7 @@ mod tests {
 
     fn end(address: &str, at: u64, how: &str, landed: Option<&str>) -> Message {
         let task = address.split('@').next().unwrap();
-        Message { id: format!("end-{address}-{at}"), at, from: "kelpie".to_string(), to: address.to_string(), text: format!("{task} ended ({how})"), held: false, report: None, ended: true, question: None, about: None, kind: None, landed: landed.map(str::to_string) }
+        Message { id: format!("end-{address}-{at}"), at, from: "kelpie".to_string(), to: address.to_string(), text: format!("{task} ended ({how})"), held: false, report: None, ended: true, question: None, about: None, kind: None, landed: landed.map(str::to_string), why: None }
     }
 
     fn facts(ends: &[Message], open: &[&str]) -> Facts {
