@@ -43,7 +43,7 @@ impl App {
                     return None;
                 }
                 if let Mode::Questions(window) = &mut self.mode {
-                    window.scroll = if event.kind == MouseEventKind::ScrollUp { window.scroll.saturating_sub(3) } else { window.scroll.saturating_add(3) };
+                    window.wheel(&self.questions, if event.kind == MouseEventKind::ScrollUp { -3 } else { 3 });
                     return None;
                 }
                 if let Mode::ConfirmPush { scroll, .. } = &mut self.mode {

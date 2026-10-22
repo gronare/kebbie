@@ -126,7 +126,7 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
     }
     release(repo, slot, upstream)?;
     let address = peers::address(task, &name_of(repo));
-    crate::task_note::forget(state, &address);
+    forget_address(state, &address);
     let mut said = Vec::new();
     for item in forget_start_in(state, task, repo).map(|text| crate::task_note::items(&text)).unwrap_or_default() {
         let notice = match vault.filter(|_| crate::vault_cli::is_note(&item)) {
@@ -208,7 +208,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
     let mut said = Vec::new();
     if let Ok(state) = state_dir() {
         let address = peers::address(task, &name_of(&repo));
-        crate::task_note::forget(&state, &address);
+        forget_address(&state, &address);
         said = dropped_notes(if notes.is_empty() { None } else { crate::vault_cli::detect() }.as_ref(), &state, task, &address, &notes);
     }
     forget_session(task, &repo);
@@ -242,6 +242,11 @@ fn dropped_notes(vault: Option<&crate::vault_cli::Cli>, state: &Path, task: &str
         NoteBack::Back(path) => format!("back in the backlog ({path})"),
         NoteBack::Failed(error) => format!("{note} could not go back to the backlog ({error}); set its status to backlog in the vault"),
     }).collect()
+}
+
+fn forget_address(state: &Path, address: &str) {
+    crate::task_note::forget(state, address);
+    crate::status::forget_title(state, address);
 }
 
 fn forget_held_prompt(address: &str) {
@@ -280,7 +285,7 @@ mod tests {
         assert!(body("close_task").contains("evidence::forget(") && body("discard").contains("evidence::forget("), "a later task by the same name must not show this one's test runs");
         assert!(body("close_task").contains("permit::forget(") && body("discard").contains("permit::forget("), "done, drop and reset take the push permission back");
         assert!(body("close_task").contains("follow::forget(") && body("discard").contains("follow::forget("), "a later task by the same name must not follow main unasked");
-        assert!(body("finish").contains("task_note::forget(") && body("discard").contains("task_note::forget("), "a later task by the same name must not inherit this one's Problem pass");
+        assert!(body("finish").contains("forget_address(") && body("discard").contains("forget_address("), "a later task by the same name must not inherit this one's Problem pass or title");
         assert!(body("close_task").contains("forget_held_prompt(") && body("discard").contains("forget_held_prompt("), "a prompt still held for the task is never typed into a later task by the same name");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard(cwd, name, force, \"dropped\", None)"));
         assert!(source.contains("discard(cwd, None, false, \"dropped\", Some(ROUTINE_OK))"), "a routine's ok closes like a drop, marked ok");
@@ -333,6 +338,20 @@ mod tests {
         assert!(said.contains("note: Projects/billing.md stays open for the task's other halves"), "{said}");
         assert!(fake.calls().is_empty(), "{:?}", fake.calls());
         assert!(!started_file_in(&state, "billing", &dir).unwrap().exists());
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_later_task_by_the_same_name_shows_its_own_name_not_the_title_of_the_one_that_ended() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        let state = state_of(&dir);
+        let address = peers::address("billing", &name_of(&dir));
+        let title = |seen: Option<&str>| crate::status::title_of(&state, &address, seen, &name_of(&dir), "billing", "wt1");
+        assert_eq!(title(Some("Refund mails")).as_deref(), Some("Refund mails"));
+        assert_eq!(title(None).as_deref(), Some("Refund mails"), "kept while the task runs");
+        finish(&dir, &slot, &upstream, &state, None).unwrap();
+        assert_eq!(title(None), None, "the next billing task shows its name until its Claude names it");
         cleanup(dir, origin, &slot);
     }
 

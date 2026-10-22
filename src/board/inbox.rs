@@ -20,13 +20,14 @@ use crate::questions;
 use crate::notice::{Notice, Tone};
 use super::{App, Hit, Mode};
 use super::card::{WIDE, rich_wrap};
-use super::widgets::{BLUE, FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEXT, YELLOW, bold, centered, fill, fit, rule, section_header, style};
+use super::widgets::{BLUE, FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEXT, YELLOW, bold, centered, faint_behind, fill, fit, rule, section_header, style};
 
 pub(super) struct QuestionWindow {
     id: String,
     selected: usize,
     pub(super) option: usize,
     pub(super) scroll: u16,
+    shift: i32,
     pub(super) typing: bool,
     pub(super) comment: TextArea<'static>,
     notice: Option<(bool, String)>,
@@ -43,7 +44,7 @@ fn comment_field() -> TextArea<'static> {
 
 impl QuestionWindow {
     fn new(questions: &[Message], selected: usize) -> Self {
-        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, typing: false, comment: comment_field(), notice: None, answering: None };
+        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, shift: 0, typing: false, comment: comment_field(), notice: None, answering: None };
         window.select(questions, selected);
         window
     }
@@ -60,6 +61,7 @@ impl QuestionWindow {
         self.id = id;
         self.option = message.and_then(|message| message.question.as_ref()).map_or(0, |question| question.recommend.saturating_sub(1));
         self.scroll = 0;
+        self.shift = 0;
     }
 
     // The list changes under the window as questions open and close; the selection follows its question, not its row.
@@ -81,6 +83,24 @@ impl QuestionWindow {
         self.typing = false;
         if let Some(answer) = answers.get(index).filter(|answer| answer.takes_comment) {
             self.open_comment(answer);
+        }
+    }
+
+    fn pick(&mut self, option: usize) {
+        self.option = option;
+        self.shift = 0;
+    }
+
+    pub(super) fn wheel(&mut self, questions: &[Message], rows: i32) {
+        let planned = questions.get(self.selected).and_then(|message| message.question.as_ref()).is_some_and(|question| question.plan.is_some());
+        self.page(planned, rows);
+    }
+
+    fn page(&mut self, planned: bool, rows: i32) {
+        if planned {
+            self.scroll = self.scroll.saturating_add_signed(rows as i16);
+        } else {
+            self.shift += rows;
         }
     }
 
@@ -164,8 +184,8 @@ impl App {
         if window.typing {
             match key.code {
                 KeyCode::Esc => window.typing = false,
-                KeyCode::PageUp => window.scroll = window.scroll.saturating_sub(10),
-                KeyCode::PageDown => window.scroll = window.scroll.saturating_add(10),
+                KeyCode::PageUp => window.page(planned, -PAGE),
+                KeyCode::PageDown => window.page(planned, PAGE),
                 KeyCode::Enter if !busy => self.send(&mut window, &answers),
                 KeyCode::Enter => {}
                 _ => {
@@ -182,21 +202,19 @@ impl App {
         let open = map.codes(Act::OpenImage).contains(&key.code);
         match key.code {
             _ if pressed.is_some() => {
-                window.option = pressed.unwrap_or_default();
+                window.pick(pressed.unwrap_or_default());
                 self.choose(&mut window, &answers);
             }
             KeyCode::Esc => return,
             KeyCode::Char(character) if character == keys::key(Act::Close) => return,
             KeyCode::Tab => window.select(&self.questions, (window.selected + 1) % count),
             KeyCode::BackTab => window.select(&self.questions, (window.selected + count - 1) % count),
-            KeyCode::Up | KeyCode::Char('k') if !planned => window.option = (window.option + count_answers - 1) % count_answers,
-            KeyCode::Down | KeyCode::Char('j') if !planned => window.option = (window.option + 1) % count_answers,
-            KeyCode::Up | KeyCode::Char('k') => window.scroll = window.scroll.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => window.scroll = window.scroll.saturating_add(1),
-            KeyCode::PageUp => window.scroll = window.scroll.saturating_sub(10),
-            KeyCode::PageDown => window.scroll = window.scroll.saturating_add(10),
-            KeyCode::Left if planned => window.option = (window.option + count_answers - 1) % count_answers,
-            KeyCode::Right if planned => window.option = (window.option + 1) % count_answers,
+            KeyCode::Up | KeyCode::Char('k') => window.pick((window.option + count_answers - 1) % count_answers),
+            KeyCode::Down | KeyCode::Char('j') => window.pick((window.option + 1) % count_answers),
+            KeyCode::Left if planned => window.pick((window.option + count_answers - 1) % count_answers),
+            KeyCode::Right if planned => window.pick((window.option + 1) % count_answers),
+            KeyCode::PageUp => window.page(planned, -PAGE),
+            KeyCode::PageDown => window.page(planned, PAGE),
             KeyCode::Enter if !busy => self.choose(&mut window, &answers),
             KeyCode::Char(character) if character == keys::key(Act::Go) => {
                 let workspace = self.questions.get(window.selected).and_then(|message| self.task_of(&message.from)).and_then(|item| item.workspace.clone());
@@ -381,13 +399,10 @@ fn answer_row(answers: &[Answer], option: usize, area: Rect, hits: &mut Vec<(Rec
 fn question_keys(typing: bool, plan: bool, several: bool, open: bool) -> String {
     let map = keys::map();
     if typing {
-        return format!("{} send · pgup pgdn plan · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
+        return format!("{} send · pgup pgdn scroll · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
     }
-    let mut keys = Vec::new();
-    if plan {
-        keys.push("↑ ↓ scroll".to_string());
-    }
-    keys.push(format!("{} answer", map.label(Act::Switch)));
+    let mut keys = vec![if plan { format!("↑ ↓ {} pick", map.label(Act::Switch)) } else { "↑ ↓ pick".to_string() }];
+    keys.push("pgup pgdn scroll".to_string());
     keys.push(format!("{} send", map.label(Act::Options)));
     if several {
         keys.push(format!("{} next", map.label(Act::Lead)));
@@ -514,17 +529,18 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
 }
 
 const ASK_WIDTH: u16 = 80;
+const PAGE: i32 = 10;
 const INDENT: usize = 5;
 
 fn ask_keys(typing: bool, options: usize, several: bool, wide: bool) -> String {
     let map = keys::map();
     if typing {
-        return format!("{} send · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
+        return format!("{} send · pgup pgdn scroll · {} back to the answers", map.label(Act::Options), map.label(Act::Back));
     }
     let range = if options > 1 { format!("1–{options}") } else { "1".to_string() };
     let mut keys = vec![format!("{range} answer"), "w own words".to_string()];
     if wide {
-        keys.push(format!("↑ ↓ {} pick", map.label(Act::Options)));
+        keys.extend(["↑ ↓ pick".to_string(), "pgup pgdn scroll".to_string(), format!("{} send", map.label(Act::Options))]);
     }
     if several {
         keys.push(format!("{} next", map.label(Act::Lead)));
@@ -604,10 +620,7 @@ fn ask_offset(block: (usize, usize), rows: usize, view: usize) -> usize {
 
 fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, count: usize, hits: &mut Vec<(Rect, Hit)>) {
     let full = frame.area();
-    for cell in &mut frame.buffer_mut().content {
-        cell.set_fg(FAINT).set_bg(ratatui::style::Color::Reset);
-        cell.modifier = Modifier::empty();
-    }
+    faint_behind(frame);
     let width = ASK_WIDTH.min(full.width.saturating_sub(4));
     let inner_width = width.saturating_sub(4) as usize;
     let answers = answers(message);
@@ -626,7 +639,10 @@ fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, c
     frame.render_widget(block, area);
     let [text, line, foot] = Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
     let view = text.height as usize;
-    let offset = ask_offset(body.blocks.get(window.option).copied().unwrap_or_default(), body.lines.len(), view);
+    let follow = ask_offset(body.blocks.get(window.option).copied().unwrap_or_default(), body.lines.len(), view) as i32;
+    let offset = (follow + window.shift).clamp(0, body.lines.len().saturating_sub(view) as i32);
+    window.shift = offset - follow;
+    let offset = offset as usize;
     frame.render_widget(Paragraph::new(body.lines[offset.min(body.lines.len())..].to_vec()), text);
     let visible = |row: usize| (offset..offset + view).contains(&row);
     for (index, (start, end)) in body.blocks.iter().enumerate() {
@@ -701,7 +717,7 @@ mod tests {
         assert!(rows[answers].contains("c comment") && rows[answers].contains("r changes"), "{screen}");
         assert_eq!(row_of(&rows, "recommended · build it as planned"), answers + 1, "the selected answer's meaning under the row");
         assert!(rows[answers].contains("x reject w own words"), "every answer fits a 60-column window: {screen}");
-        assert!(rows[answers + 2].contains("────") && rows[answers + 3].contains("│ ↑ ↓ scroll · ← → answer · ⏎ send"), "the footer: a rule, then the keys: {screen}");
+        assert!(rows[answers + 2].contains("────") && rows[answers + 3].contains("│ ↑ ↓ ← → pick · pgup pgdn scroll · ⏎ send"), "the footer: a rule, then the keys: {screen}");
         assert!(rows[answers + 4].contains("╰"), "the keys are the window's last inner row: {screen}");
         assert_eq!(row_of(&rows, "ANSWER ─"), answers - 1);
         assert_eq!(app.hits.iter().filter(|(_, hit)| matches!(hit, Hit::Question(_))).count(), 0, "no list in a narrow window");
@@ -959,6 +975,56 @@ mod tests {
         assert!(screen.contains("1/1 · routines") && screen.contains("1–4 answer · w own words"), "{screen}");
         let (x, y) = find(&rows, "4  Per routine")[0];
         assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Answer(3)), "the hits follow the scroll");
+    }
+
+    #[test]
+    fn page_up_and_down_scroll_a_tall_question_back_to_its_top_and_down_to_its_end() {
+        let mut app = test_app(Vec::new());
+        app.questions = messages::fold(LONG_ASK);
+        app.open_questions(Some(0));
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Down);
+        }
+        let shows = |app: &mut App, text: &str| render(app, 60, 24).0.join("\n").contains(text);
+        assert!(!shows(&mut app, "Which side should own"), "the selected answer pushed the question off");
+        for _ in 0..5 {
+            press(&mut app, KeyCode::PageUp);
+        }
+        assert!(shows(&mut app, "Which side should own"), "pgup reaches the top of the question");
+        press(&mut app, KeyCode::PageDown);
+        assert!(!shows(&mut app, "Which side should own"), "pgdn moves at once after pgup went past the top");
+        for _ in 0..5 {
+            press(&mut app, KeyCode::PageDown);
+            render(&mut app, 60, 24);
+        }
+        let end = render(&mut app, 60, 24).0;
+        press(&mut app, KeyCode::PageUp);
+        assert_ne!(render(&mut app, 60, 24).0, end, "pgup moves at once after pgdn went past the end");
+        press(&mut app, KeyCode::Down);
+        assert!(shows(&mut app, "▸ w  In my own words") && !shows(&mut app, "Which side should own"), "picking an answer brings it into view");
+        for _ in 0..5 {
+            let wheel = ratatui::crossterm::event::MouseEvent { kind: ratatui::crossterm::event::MouseEventKind::ScrollUp, column: 30, row: 12, modifiers: ratatui::crossterm::event::KeyModifiers::NONE };
+            app.work_mouse(wheel, None);
+            render(&mut app, 60, 24);
+        }
+        assert!(shows(&mut app, "Which side should own"), "the wheel scrolls it as pgup does");
+    }
+
+    #[test]
+    fn up_and_down_pick_an_answer_in_a_plan_too_and_page_keys_scroll_the_plan() {
+        let mut app = test_app(Vec::new());
+        long_plan(&mut app);
+        app.open_questions(Some(1));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('j'));
+        let screen = render(&mut app, 60, 30).0.join("\n");
+        assert!(screen.contains("revise and ask again") && screen.contains("PLAN 0% ─"), "down and j pick, the plan stays put: {screen}");
+        press(&mut app, KeyCode::Up);
+        let screen = render(&mut app, 60, 30).0.join("\n");
+        assert!(screen.contains("taking the comment in"), "{screen}");
+        press(&mut app, KeyCode::PageDown);
+        let screen = render(&mut app, 60, 30).0.join("\n");
+        assert!(!screen.contains("PLAN 0% ─") && screen.contains("taking the comment in"), "pgdn scrolls the plan and keeps the answer: {screen}");
     }
 
     #[test]

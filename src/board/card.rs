@@ -16,7 +16,7 @@ use super::detail::Detail;
 use super::images::{Shown, image_shown, preview_note, render_image};
 use super::link::file_link;
 use super::{App, Column, Hit, Mode};
-use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, bold, centered, fill, fit, plural, section_header, rule, style};
+use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, bold, centered, fill, fit, plural, section_header, rule, style, text_width};
 
 impl App {
     pub(super) fn card_of(&self, item: &Item) -> Option<std::rc::Rc<Detail>> {
@@ -122,13 +122,14 @@ pub(super) fn card_parts(text: &str) -> (Vec<Section>, Vec<CardImage>) {
 
 fn split_url_word(word: Vec<(String, bool)>, width: usize) -> Vec<Vec<(String, bool)>> {
     let plain: String = word.iter().map(|(part, _)| part.as_str()).collect();
-    if plain.chars().count() <= width || !plain.contains("://") {
+    if text_width(&plain) <= width || !plain.contains("://") {
         return vec![word];
     }
     let mut rows: Vec<Vec<(String, bool)>> = vec![Vec::new()];
     let mut used = 0;
     for (character, bolded) in word.iter().flat_map(|(part, bolded)| part.chars().map(move |character| (character, *bolded))) {
-        if used == width {
+        let cells = text_width(character.encode_utf8(&mut [0; 4]));
+        if used + cells > width && used > 0 {
             rows.push(Vec::new());
             used = 0;
         }
@@ -137,7 +138,7 @@ fn split_url_word(word: Vec<(String, bool)>, width: usize) -> Vec<Vec<(String, b
             Some((part, same)) if *same == bolded => part.push(character),
             _ => row.push((character.to_string(), bolded)),
         }
-        used += 1;
+        used += cells;
     }
     rows
 }
@@ -172,7 +173,7 @@ pub(super) fn rich_wrap(text: &str, width: usize, max_lines: usize, color: Color
     let words = words.into_iter().flat_map(|word| split_url_word(word, width));
     let mut lines: Vec<(Vec<(String, bool)>, usize)> = Vec::new();
     for word in words {
-        let count: usize = word.iter().map(|(part, _)| part.chars().count()).sum();
+        let count: usize = word.iter().map(|(part, _)| text_width(part)).sum();
         match lines.last_mut() {
             Some((parts, used)) if *used + 1 + count <= width => {
                 let joined = parts.last().is_some_and(|(_, bolded)| *bolded) && word[0].1;

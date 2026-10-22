@@ -202,7 +202,7 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 | `kelpie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. `<state>` is `needs-you`, `ready`, `working` or `blocked`. With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task. A routine's task also lists its findings on a card with `needs-you`. |
 | `kelpie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. Refused outside a routine's task, from anyone but that task's Claude, and while the task has changes or commits. |
 | `kelpie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. A question about how goes to the lead instead. The question opens with one plain sentence on what the task is doing, and each of the two to four options says what you get with it, one recommended, without flags, commit ids, file names or internal terms you did not use. `--plan <file>` or `--plan vault:<note>` asks you to approve a plan instead. |
-| `kelpie answered <task>` | The task's question was settled elsewhere; it leaves the board. |
+| `kelpie answered <task>` | The task's question was settled elsewhere, dropped, or sent back to be asked again; it leaves the board, and a `kelpie tell` to that task is no longer held. |
 | `kelpie tell <to> <text>` | Message another session: a task (every half of it), `task@repo`, or `lead`. Held while the receiver waits for an answer, and logged. |
 
 ## Setup and maintenance

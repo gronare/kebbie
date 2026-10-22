@@ -1508,6 +1508,25 @@ mod tests {
     }
 
     #[test]
+    fn the_leads_request_to_rewrite_a_question_reaches_the_task_once_the_question_is_marked_answered() {
+        let dir = state("rewrite");
+        write_log(&dir, &[question("q1", 2, "billing@web")]);
+        let typed = std::cell::RefCell::new(Vec::new());
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        let task = session(Some("w1:p1"), Some("idle"));
+        let held = send_locked_in(&dir, LEAD_LABEL, &[&task], "ask it again", std::slice::from_ref(&task), None, None, &mut type_into).unwrap();
+        assert!(held[0].contains("waits for the user's answer to its question") && typed.borrow().is_empty(), "{held:?}");
+        write_log(&dir, &[question("q1", 2, "billing@web"), mark("q1", 3, "answered")]);
+        let told = send_locked_in(&dir, LEAD_LABEL, &[&task], "ask it again", std::slice::from_ref(&task), None, None, &mut type_into).unwrap();
+        assert_eq!((told, typed.borrow().as_slice()), (vec!["Told billing@web.".to_string()], ["[from lead] ask it again".to_string()].as_slice()));
+        let lead = include_str!("../roles/lead.md");
+        let rewrite = lead.lines().find(|line| line.contains("cannot read on the first pass")).unwrap();
+        let (answered, tell) = (rewrite.find("`kelpie answered <task>`").expect(rewrite), rewrite.find("`kelpie tell <task>`").expect(rewrite));
+        assert!(answered < tell, "the lead closes the question before it tells the task: {rewrite}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn rotation_keeps_a_held_answer_and_the_lead_mark_points_at_a_kept_message() {
         let dir = state("rotate-mark");
         write_log(&dir, &[

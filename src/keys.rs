@@ -204,7 +204,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::RoutinesPage, on: ALL, help: "the routines page; ⚠ on its tab counts the runs whose findings wait for you", hint: Hint::No },
     Binding { act: Act::Lead, on: ALL, help: "move focus to the lead's chat, showing it first when it is hidden", hint: Hint::Full },
     Binding { act: Act::HideChat, on: BOARD, help: "hide or show the lead's chat: hidden, it runs on and the board takes the whole width (on the board in the lead Space)", hint: Hint::Full },
-    Binding { act: Act::Inbox, on: ALL, help: "inbox: the questions waiting on you, one at a time with tab to the next; ↑ ↓ scroll the plan, ← → pick an answer and ⏎ sends it, or its letter (a c r x, 1-9, w) answers directly; an answer with a comment opens the comment box, esc back to the answers; o opens a plan file, g goes to the task's Space", hint: Hint::Both },
+    Binding { act: Act::Inbox, on: ALL, help: "inbox: the questions waiting on you, one at a time with tab to the next; ↑ ↓ j k (and ← → in a plan) pick an answer and ⏎ sends it, pgup pgdn scroll the question or the plan, or its letter (a c r x, 1-9, w) answers directly; an answer with a comment opens the comment box, esc back to the answers; o opens a plan file, g goes to the task's Space", hint: Hint::Both },
     Binding { act: Act::Messages, on: BOARD, help: "messages at the bottom: one line, then open with ↑ ↓ moving through them and ⏎ reading one (esc back to the tasks), then hidden", hint: Hint::Full },
     Binding { act: Act::Filter, on: BOARD, help: "filter the selected column: type part of a name, ⏎ keeps it, esc clears it", hint: Hint::No },
     Binding { act: Act::New, on: &[Work], help: "new task", hint: Hint::No },

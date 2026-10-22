@@ -46,13 +46,42 @@ pub fn plural(count: usize, noun: &str) -> String {
     if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
 }
 
+// Terminal cells a text takes: an emoji or a CJK character takes two.
+pub fn text_width(text: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(text)
+}
+
+fn char_width(character: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(character).unwrap_or(0)
+}
+
+pub fn split_at_width(text: &str, width: usize) -> Vec<String> {
+    let mut rows = vec![String::new()];
+    let mut used = 0;
+    for character in text.chars() {
+        let cells = char_width(character);
+        if used + cells > width.max(1) && used > 0 {
+            rows.push(String::new());
+            used = 0;
+        }
+        rows.last_mut().unwrap().push(character);
+        used += cells;
+    }
+    rows
+}
+
+pub fn take_width(text: &str, width: usize) -> String {
+    let mut used = 0;
+    text.chars().take_while(|&character| { used += char_width(character); used <= width }).collect()
+}
+
 pub fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
     note_urls(text);
     let width = width.max(10);
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace().flat_map(|word| split_url(word, width)) {
-        if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > width {
+        if !current.is_empty() && text_width(&current) + 1 + text_width(&word) > width {
             lines.push(std::mem::take(&mut current));
         }
         if !current.is_empty() {
@@ -66,8 +95,7 @@ pub fn wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
     if lines.len() > max_lines {
         lines.truncate(max_lines);
         let last = lines.last_mut().unwrap();
-        let keep = width.saturating_sub(1).min(last.chars().count());
-        *last = last.chars().take(keep).collect::<String>() + "…";
+        *last = take_width(last, width.saturating_sub(1)) + "…";
     }
     lines
 }
@@ -163,11 +191,10 @@ pub fn card_text(label: &str, text: &str, accent: Color, width: usize, max_lines
 
 // A URL wider than the row is broken into rows, so all of it shows; every other word stays whole.
 pub fn split_url(word: &str, width: usize) -> Vec<String> {
-    let chars: Vec<char> = word.chars().collect();
-    if chars.len() <= width || !word.contains("://") {
+    if text_width(word) <= width || !word.contains("://") {
         return vec![word.to_string()];
     }
-    chars.chunks(width.max(1)).map(|chunk| chunk.iter().collect()).collect()
+    split_at_width(word, width)
 }
 
 pub fn cut(text: &str, width: usize) -> String {
@@ -182,6 +209,13 @@ pub fn cut(text: &str, width: usize) -> String {
     }).collect();
     shown.push('…');
     shown
+}
+
+pub(super) fn faint_behind(frame: &mut Frame) {
+    for cell in &mut frame.buffer_mut().content {
+        cell.set_fg(FAINT).set_bg(Color::Reset);
+        cell.modifier = Modifier::empty();
+    }
 }
 
 pub fn options_hint() -> Line<'static> {
@@ -353,5 +387,17 @@ mod tests {
         assert_eq!(wrap("see https://x.example/abcdefghij now", 10, 5), ["see", "https://x.", "example/ab", "cdefghij", "now"], "a URL wider than the row is the one word that is");
         assert_eq!(wrap("", 20, 3), Vec::<String>::new());
         assert_eq!(wrap("a  b\n\n c", 20, 3), ["a b c"], "whitespace collapses");
+    }
+
+    #[test]
+    fn wide_characters_wrap_by_the_cells_they_take() {
+        let text = "退款 显示 在页 面面 🎉🎉";
+        let lines = wrap(text, 10, 9);
+        assert_eq!(lines, ["退款 显示", "在页 面面", "🎉🎉"]);
+        let cut = wrap(text, 10, 1);
+        assert!(text_width(&cut[0]) <= 10 && cut[0].ends_with('…'), "{cut:?}");
+        let rich: Vec<String> = crate::board::card::rich_wrap(text, 10, 9, TEXT).iter().map(Line::to_string).collect();
+        assert_eq!(rich, lines, "the card's wrap counts cells the same way");
+        assert!(split_at_width("https://例え.example/退款显示", 10).iter().all(|row| text_width(row) <= 10));
     }
 }

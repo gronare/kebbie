@@ -730,6 +730,7 @@ dependencies = [
  "sha1_smol",
  "toml",
  "tui-markdown",
+ "unicode-width",
 ]
 
 [[package]]

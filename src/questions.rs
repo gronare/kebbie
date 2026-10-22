@@ -248,7 +248,32 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
     crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).ok()
 }
 
-const CLOSED_BEFORE: &str = "(The question had already closed when the user answered it on the board, since a new turn started in your pane; act on it if it still applies.)";
+#[derive(Debug, PartialEq)]
+enum Closed {
+    Ended,
+    Newer { open: bool },
+    Turn,
+}
+
+fn closed_by(messages: &[Message], question: &Message, turn_started: impl Fn(&str) -> Option<u64>) -> Closed {
+    let after = messages.iter().skip_while(|message| message.id != question.id).skip(1);
+    for message in after {
+        if message.ended && message.to == question.from {
+            return Closed::Ended;
+        }
+        if message.question.is_some() && message.from == question.from && message.about == question.about {
+            return Closed::Newer { open: open(messages, &turn_started).iter().any(|open| open.id == message.id) };
+        }
+    }
+    Closed::Turn
+}
+
+fn closed_before(closed: &Closed) -> &'static str {
+    match closed {
+        Closed::Newer { .. } => "(The question had already closed when the user answered it on the board, since you asked a newer one; act on it if it still applies.)",
+        _ => "(The question had already closed when the user answered it on the board, since a new turn started in your pane; act on it if it still applies.)",
+    }
+}
 
 // A task's question nobody has answered yet, though it no longer waits on the board; a restart question's answer means nothing once it has closed.
 fn closed_unanswered<'a>(messages: &'a [Message], id: &str) -> Option<&'a Message> {
@@ -256,10 +281,15 @@ fn closed_unanswered<'a>(messages: &'a [Message], id: &str) -> Option<&'a Messag
         .filter(|message| message.kind.as_deref() != Some(crate::restart::QUESTION_KIND))
 }
 
-// The caller holds the lock. A turn that starts in the task's pane closes its question, so an answer given on the board a moment later is delivered as the user's word rather than lost.
+// The caller holds the lock. A turn that starts in the task's pane, or a newer question, closes a question, so an answer given on the board a moment later is delivered as the user's word rather than lost; a task that ended gets nothing.
 fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &str, sessions: &[peers::Session]) -> Result<String> {
     let message = closed_unanswered(messages, id).ok_or("That question no longer waits for an answer")?;
-    let text = format!("{} {CLOSED_BEFORE}", answer_text(message, choice, comment)?);
+    let closed = closed_by(messages, message, report::turn_started);
+    if closed == Closed::Ended {
+        messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
+        return crate::notice::Notice::new(crate::notice::Tone::NotNow, "Not sent: its task ended before you answered").detail("task", &message.from).err();
+    }
+    let text = format!("{} {}", answer_text(message, choice, comment)?, closed_before(&closed));
     let told = match sessions.iter().find(|session| session.address == message.from) {
         Some(task) => messages::send_locked(USER_LABEL, &[task], &text, sessions, None, Some("answer"))?.join(" "),
         None => {
@@ -269,7 +299,13 @@ fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &
     };
     messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
     messages::copy_to_lead_locked(&answer_copy(message, choice, comment), None, sessions)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, "Answered, as a message").next(format!("The question had closed when a turn started in its pane. {told}")).detail("task", &message.from).ok()
+    let notice = match closed {
+        Closed::Newer { open: true } => crate::notice::Notice::new(crate::notice::Tone::Moving, "Answer held: the task asked a newer question")
+            .next(format!("It reaches {} once you answer its newer question.", message.from)),
+        Closed::Newer { open: false } => crate::notice::Notice::new(crate::notice::Tone::Done, "Answered, as a message").next(format!("The question had closed when the task asked a newer one. {told}")),
+        _ => crate::notice::Notice::new(crate::notice::Tone::Done, "Answered, as a message").next(format!("The question had closed when a turn started in its pane. {told}")),
+    };
+    notice.detail("task", &message.from).ok()
 }
 
 pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&str>, text: &str) -> Result<String> {
@@ -416,13 +452,31 @@ mod tests {
         let messages = fold(&log);
         assert!(open(&messages, |task| (task == "billing@web").then_some(20)).iter().all(|question| question.id != "q1"), "a new turn in the pane closed it");
         let late = closed_unanswered(&messages, "q1").unwrap();
-        assert_eq!(format!("{} {CLOSED_BEFORE}", answer_text(late, Some(0), "").unwrap()), "The user's answer to \"Probe?\": Yes (run it). (The question had already closed when the user answered it on the board, since a new turn started in your pane; act on it if it still applies.)");
+        assert_eq!(closed_by(&messages, late, |task| (task == "billing@web").then_some(20)), Closed::Turn);
+        assert_eq!(format!("{} {}", answer_text(late, Some(0), "").unwrap(), closed_before(&Closed::Turn)), "The user's answer to \"Probe?\": Yes (run it). (The question had already closed when the user answered it on the board, since a new turn started in your pane; act on it if it still applies.)");
         assert!(closed_unanswered(&messages, "q2").is_none(), "answered once on the board, a second answer is refused");
         assert!(closed_unanswered(&messages, "nope").is_none());
         assert!(closed_unanswered(&messages, "q3").is_none(), "a restart question's late yes would restart nothing it still means");
         let source = include_str!("questions.rs");
-        let answer = &source[source.find("pub fn answer(").unwrap()..source.find("pub const CLOSED_BEFORE").or_else(|| source.find("const CLOSED_BEFORE")).unwrap()];
+        let answer = &source[source.find("pub fn answer(").unwrap()..source.find("enum Closed").unwrap()];
         assert!(answer.contains("else {\n        return answer_late("), "a question no longer open goes to answer_late instead of an error that drops the answer");
+    }
+
+    #[test]
+    fn a_late_answer_names_why_its_question_closed_and_waits_while_a_newer_one_is_open() {
+        let asked = |id: &str, at: u64, from: &str| json!({ "id": id, "at": at, "from": from, "to": "you", "text": format!("{id}?"), "state": "asked", "question": { "options": [["A", "a"], ["B", "b"]], "recommend": 1 } });
+        let ended = |at: u64, to: &str| json!({ "id": format!("end{at}"), "at": at, "from": "kelpie", "to": to, "text": "ended", "state": "ended" });
+        let no_turn = |_: &str| None;
+        let newer = log(&[asked("q1", 10, "billing@web"), asked("q2", 11, "billing@web")]);
+        assert_eq!(closed_by(&newer, &newer[0], no_turn), Closed::Newer { open: true });
+        assert!(closed_before(&Closed::Newer { open: true }).contains("since you asked a newer one"), "never a new turn it did not start");
+        assert_eq!(question_hold(None, Some("q2")), Some("waits for the user's answer to its question"), "the late answer is held while the newer question waits");
+        let settled = log(&[asked("q1", 10, "billing@web"), asked("q2", 11, "billing@web"), state("q2", "answered")]);
+        assert_eq!(closed_by(&settled, &settled[0], no_turn), Closed::Newer { open: false });
+        let gone = log(&[asked("q1", 10, "billing@web"), ended(12, "billing@web"), asked("q3", 13, "billing@web")]);
+        assert_eq!(closed_by(&gone, &gone[0], no_turn), Closed::Ended, "a later task by the same name never gets an old task's answer");
+        let other = log(&[asked("q1", 10, "billing@web"), asked("q2", 11, "shop@web"), ended(12, "shop@web")]);
+        assert_eq!(closed_by(&other, &other[0], |task| (task == "billing@web").then_some(20)), Closed::Turn, "another task's question or end says nothing about this one");
     }
 
     #[test]

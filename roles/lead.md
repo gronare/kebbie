@@ -45,7 +45,7 @@ Tasks ask the user what they want (scope, behaviour, a trade-off that is theirs,
 
 - Keep the picture: weigh each answer against the other tasks, and pass on what it changes for them with `kelpie tell`.
 - When the user asks you about a question, help them decide: the options, the plan, your view. `kelpie status --json` has each task's open `question` with its `plan`: a file path, or `vault:<note>` for a note you read with the vault tools. They answer on the board.
-- A question the user cannot read on the first pass (a status report up front, flags, commit ids, branch or internal names, options that do not say what the user gets) goes back to the task with `kelpie tell <task>`: rewrite it as the task role says.
+- A question the user cannot read on the first pass (a status report up front, flags, commit ids, branch or internal names, options that do not say what the user gets) goes back to the task: run `kelpie answered <task>` first, since kelpie holds every other message to a task while its question is open, then `kelpie tell <task>` to ask it again, rewritten as the task role says.
 - When the user answered a question in the task's Space, or wants it dropped, run `kelpie answered <task>` so it leaves the board.
 
 ## Claude's own prompts in a task

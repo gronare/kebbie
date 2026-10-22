@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 use ratatui::Frame;
@@ -9,7 +9,7 @@ use ratatui::Frame;
 use crate::keys::{self, Act};
 use crate::notice::{Notice, Tone};
 use crate::status::Item;
-use super::widgets::{BLUE, FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, TEXT, YELLOW, bold, centered, rule, style};
+use super::widgets::{self, BLUE, FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, TEXT, YELLOW, bold, centered, faint_behind, rule, split_at_width, style};
 
 pub(super) const TOAST_FOR: Duration = Duration::from_secs(6);
 const WIDTH: u16 = 80;
@@ -68,20 +68,15 @@ pub(super) fn offers(notice: &Notice, subject: Option<&Subject>) -> Vec<Act> {
     }
 }
 
+// Paragraphs stay apart, and a word wider than the window (a path) is broken into rows rather than cut off at its edge.
 fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.lines() {
-        let mut line = String::new();
-        for word in paragraph.split_whitespace() {
-            if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
-                lines.push(std::mem::take(&mut line));
-            }
-            if !line.is_empty() {
-                line.push(' ');
-            }
-            line.push_str(word);
+        let wrapped = widgets::wrap(paragraph, width, usize::MAX);
+        if wrapped.is_empty() {
+            lines.push(String::new());
         }
-        lines.push(line);
+        lines.extend(wrapped.iter().flat_map(|line| split_at_width(line, width)));
     }
     lines
 }
@@ -138,13 +133,6 @@ fn keys_line(acts: &[Act]) -> String {
     }).collect();
     keys.push(if acts.is_empty() { "any key closes".to_string() } else { "any other key closes".to_string() });
     keys.join(" · ")
-}
-
-fn faint_behind(frame: &mut Frame) {
-    for cell in &mut frame.buffer_mut().content {
-        cell.set_fg(FAINT).set_bg(Color::Reset);
-        cell.modifier = Modifier::empty();
-    }
 }
 
 pub(super) fn draw_notice(frame: &mut Frame, notice: &Notice, subject: Option<&Subject>) {
@@ -241,6 +229,22 @@ mod tests {
         app.toast.as_mut().unwrap().at = Instant::now() - TOAST_FOR - Duration::from_millis(1);
         let (rows, _) = render(&mut app, 120, 30);
         assert!(app.toast.is_none() && find(&rows, "Pushed 3 commits").is_empty(), "it leaves once its time is up");
+    }
+
+    #[test]
+    fn a_url_or_a_long_path_in_a_notice_wraps_whole_and_the_url_is_one_link() {
+        let url = "https://github.com/gronare/kelpie/actions/runs/18734523412/job/53412345678";
+        let path = "/Users/someone/projects/kelpie/target/debug/build/kelpie-0123456789abcdef/out/notes.md";
+        let mut app = test_app(vec![titled("billing", "Refund mails")]);
+        app.show(Notice::new(Tone::You, "CI failed").next(format!("Its log: {url}")).detail("file", path).ok());
+        let (rows, buffer) = render(&mut app, 60, 30);
+        assert_whole_link(&buffer, url, 2, "the notice window");
+        let screen: String = rows.iter().map(|row| row.trim_matches(|character| character == ' ' || character == '│')).collect::<Vec<_>>().join("");
+        assert!(screen.contains(path.trim_start_matches('/').split_at(40).1), "the end of the path shows: {}", rows.join("\n"));
+        app.mode = Mode::Normal;
+        app.show(Notice::new(Tone::Done, "Pushed").next(format!("CI runs at {url}")).ok());
+        let (_, buffer) = render(&mut app, 70, 30);
+        assert_whole_link(&buffer, url, 2, "the toast");
     }
 
     #[test]

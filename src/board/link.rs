@@ -118,6 +118,8 @@ pub(super) fn urls_in(text: &str) -> Vec<String> {
 }
 
 pub(super) fn link_urls(buffer: &mut Buffer, urls: &[String]) {
+    let mut urls: Vec<&String> = urls.iter().collect();
+    urls.sort_by_key(|url| std::cmp::Reverse(url.len()));
     for url in urls {
         let chars: Vec<String> = url.chars().map(String::from).collect();
         let (width, height) = (buffer.area.width as usize, buffer.area.height as usize);
@@ -152,7 +154,7 @@ fn follow(buffer: &Buffer, url: &[String], x: usize, y: usize, at: usize) -> Opt
         return None;
     }
     if at == url.len() {
-        return Some(cells);
+        return url_ends(buffer, x, y).then_some(cells);
     }
     if x < width && symbol(x) == "…" {
         return (at >= LEAST_BEFORE_ELLIPSIS).then(|| { cells.push(y * width + x); cells });
@@ -163,6 +165,14 @@ fn follow(buffer: &Buffer, url: &[String], x: usize, y: usize, at: usize) -> Opt
     let next = y + 1;
     let gap = |x: usize| x == 0 || blank(buffer.content[next * width + x - 1].symbol());
     (0..width).filter(|&x| gap(x)).find_map(|x| follow(buffer, url, x, next, at)).map(|rest| { cells.extend(rest); cells })
+}
+
+// The URL stops before x: the row ends, or a blank, an ellipsis or punctuation that urls_in trims followed by a blank does.
+fn url_ends(buffer: &Buffer, x: usize, y: usize) -> bool {
+    let width = buffer.area.width as usize;
+    let trimmed = |symbol: &str| matches!(symbol, "." | "," | ";" | ":" | "!" | "?" | "*" | "'" | ")" | "]" | "<" | ">" | "\"" | "`");
+    let after = (x..width).find(|&x| !trimmed(buffer.content[y * width + x].symbol())).unwrap_or(width);
+    after == width || blank(buffer.content[y * width + after].symbol())
 }
 
 // The row's text stops at x: the row ends, a frame character follows, or a gap wider than one space between words does.
@@ -257,6 +267,20 @@ mod tests {
         assert!((7..29).chain(33..42).all(|index| link_of(&buffer.content[index]).is_some_and(|(url, _)| url == "https://x.example/one/two/three")), "both rows of the first URL");
         assert_eq!(link_of(&buffer[(29, 0)]), None, "the space after it");
         assert!((2..4).all(|y| (0..31).all(|x| link_of(&buffer[(x, y)]).is_none())), "a URL followed by a word on its row does not continue below");
+    }
+
+    #[test]
+    fn a_url_links_only_where_it_ends_so_a_longer_url_it_starts_is_never_cut_short() {
+        let short = "https://x.example/pr/12".to_string();
+        let long = "https://x.example/pr/12/files".to_string();
+        let mut buffer = Buffer::with_lines(["https://x.example/pr/12/files and https://x.example/pr/12. done"]);
+        link_urls(&mut buffer, std::slice::from_ref(&short));
+        assert!((0..29).all(|x| link_of(&buffer[(x, 0)]).is_none()), "the start of a longer URL is not the shorter one");
+        assert!((34..57).all(|x| link_of(&buffer[(x, 0)]).is_some_and(|(url, _)| url == short)), "the short one before its full stop");
+        let mut buffer = Buffer::with_lines(["https://x.example/pr/12/files and https://x.example/pr/12 done"]);
+        link_urls(&mut buffer, &[short.clone(), long.clone()]);
+        assert!((0..29).all(|x| link_of(&buffer[(x, 0)]).is_some_and(|(url, _)| url == long)), "the longer URL links whole, whichever was noted first");
+        assert!((34..57).all(|x| link_of(&buffer[(x, 0)]).is_some_and(|(url, _)| url == short)));
     }
 
     #[test]

@@ -119,7 +119,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   --plan vault:<note> or --plan <file> asks you to approve a plan instead. It waits on
                                   the board, where you answer it, the lead gets a copy, and the answer reaches the task
                                   as a message from you
-  kelpie answered <task>          a task's question is settled elsewhere (in its Space, or dropped): it leaves the board
+  kelpie answered <task>          a task's question is settled elsewhere (in its Space, dropped, or sent back to be asked again): it
+                                  leaves the board, so a kelpie tell to that task is no longer held
   kelpie notify <text>            run notify.command with this text (KELPIE_EVENT=summary): the lead's word to the user
                                   when they are away; tasks that need you or are ready, and questions, notify by themselves
   kelpie decide <task> <answer>   the lead's own answer to a task's question about how, not what, whether or not you
