@@ -526,12 +526,12 @@ mod tests {
         let (rows, _) = render(&mut app, 84, 50);
         assert!(!rows.join("\n").contains("tests "), "no run recorded, no tests line");
         std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().tests = Some(covered.clone());
-        for width in [170] {
-            let (rows, buffer) = render(&mut app, width, 50);
-            let at = rows.iter().position(|row| row.contains("tests   ✓ cargo test · 493 passed · at a1b2c3d")).unwrap_or_else(|| panic!("{}", rows.join("\n")));
-            let column = rows[at].chars().position(|char| char == '✓').unwrap() as u16;
-            assert_eq!(buffer[(column, at as u16)].fg, GREEN, "a pass on the code as it is is green");
-        }
+        let (rows, _) = render(&mut app, 84, 50);
+        assert!(!rows.join("\n").contains("tests "), "the unfolded row leaves the run to the panel and the card");
+        let (rows, buffer) = render(&mut app, 170, 50);
+        let at = rows.iter().position(|row| row.contains("tests   ✓ cargo test · 493 passed · at a1b2c3d")).unwrap_or_else(|| panic!("{}", rows.join("\n")));
+        let column = rows[at].chars().position(|char| char == '✓').unwrap() as u16;
+        assert_eq!(buffer[(column, at as u16)].fg, GREEN, "a pass on the code as it is is green");
         let commits = vec![tasks::Commit { sha: "1111111aaaa".to_string(), message: "Add refunds".to_string() }];
         let stale = evidence::Shown { mark: evidence::Mark::Stale, text: "cargo test · 493 passed · at a1b2c3d, code changed since".to_string() };
         let (lines, first) = push_lines(None, Some(&stale), &commits, 0, 88);
