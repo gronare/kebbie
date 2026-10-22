@@ -6,7 +6,7 @@ use crate::messages::{self, Message};
 use crate::permit::Caller;
 use crate::repo::default_branch;
 use crate::sh::Result;
-use super::approval::{covers, fingerprint};
+use super::approval::{approval_holds, covers, fingerprint};
 use super::pool::{Slot, find_task};
 
 // Which of the task's commits a push takes: all of them, or the first `count` of the `of` it had when the user chose.
@@ -54,10 +54,27 @@ impl By {
     }
 }
 
-// An authorised push that waits for the task's Claude to test the files the default branch changed under it; it holds for these commits only.
+// What the task's Claude does before the push goes on: test the files the default branch changed under it, or resolve the rebase that conflicted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Work {
+    Tests,
+    Conflict,
+}
+
+impl Work {
+    fn key(self) -> &'static str {
+        match self {
+            Work::Tests => "tests",
+            Work::Conflict => "conflict",
+        }
+    }
+}
+
+// An authorised push that waits for the task's Claude; it goes out for the commits it was recorded for, or for commits the lead approved since.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Intent {
     pub by: By,
+    pub work: Work,
     pub address: String,
     pub repo: PathBuf,
     pub task: String,
@@ -74,7 +91,7 @@ impl Intent {
             Through::First { count, of } => json!({ "count": count, "of": of }),
         };
         json!({
-            "by": self.by.key(),
+            "by": self.by.key(), "work": self.work.key(),
             "address": self.address, "repo": self.repo, "task": self.task, "fingerprint": self.fingerprint,
             "through": through, "at": self.at, "seen": self.seen,
         })
@@ -86,12 +103,17 @@ impl Intent {
             "lead" => By::Lead,
             _ => return None,
         };
+        let work = match value["work"].as_str() {
+            Some("conflict") => Work::Conflict,
+            _ => Work::Tests,
+        };
         let through = match &value["through"] {
             Value::Null => Through::All,
             through => Through::First { count: usize::try_from(through["count"].as_u64()?).ok()?, of: usize::try_from(through["of"].as_u64()?).ok()? },
         };
         Some(Intent {
             by,
+            work,
             address: value["address"].as_str()?.to_string(),
             repo: PathBuf::from(value["repo"].as_str()?),
             task: value["task"].as_str()?.to_string(),
@@ -119,9 +141,17 @@ pub(super) fn load(state: &Path, address: &str) -> Option<Intent> {
     Intent::from_json(&serde_json::from_str(&std::fs::read_to_string(file(state, address)).ok()?).ok()?).filter(|intent| intent.address == address)
 }
 
+// A push under way, as the board shows it: who asked, what the task's Claude does for it, and since when.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Pending {
+    pub by: By,
+    pub work: Work,
+    pub at: u64,
+}
+
 // Reads only: the board and kelpie status never claim or drop an intent.
-pub(crate) fn pending(state: &Path, address: &str) -> Option<By> {
-    load(state, address).map(|intent| intent.by)
+pub(crate) fn pending(state: &Path, address: &str) -> Option<Pending> {
+    load(state, address).map(|intent| Pending { by: intent.by, work: intent.work, at: intent.at })
 }
 
 pub(super) fn forget(state: &Path, address: &str) {
@@ -161,8 +191,8 @@ pub(super) enum Next {
     Drop(String),
 }
 
-// The push completes only on a ready report written after the intent, with the commits the intent was recorded for.
-pub(super) fn next(intent: &Intent, report: Option<&Message>, slot: Option<&Slot>, current: Option<&str>) -> Next {
+// The push completes only on a ready report written after the intent, with the commits the intent was recorded for or ones the lead approved since; changed commits wait for that approval.
+pub(super) fn next(intent: &Intent, report: Option<&Message>, slot: Option<&Slot>, current: Option<&str>, approved: bool) -> Next {
     if slot.is_none() {
         return Next::Drop(format!("{} is gone, so kelpie dropped the push {} asked for", intent.address, intent.by.word()));
     }
@@ -170,13 +200,10 @@ pub(super) fn next(intent: &Intent, report: Option<&Message>, slot: Option<&Slot
     if !ready {
         return Next::Wait;
     }
-    if !current.is_some_and(|current| covers(&intent.fingerprint, current)) {
-        return Next::Drop(format!(
-            "{} changed its commits while testing the files the default branch changed under it, so kelpie did not push it for {}: check its commits against the rules again (kelpie approve) and push it as usual",
-            intent.address, intent.by.word()
-        ));
+    if current.is_some_and(|current| covers(&intent.fingerprint, current)) || approved {
+        return Next::Push;
     }
-    Next::Push
+    Next::Wait
 }
 
 pub fn complete(state: &Path) -> Vec<String> {
@@ -189,7 +216,8 @@ pub(super) fn complete_in(state: &Path, log: &[Message], mut push: impl FnMut(&I
     for intent in all(state) {
         let slot = find_task(&intent.repo, Some(&intent.task), &intent.repo).ok();
         let current = slot.as_ref().and_then(|slot| default_branch(&intent.repo).and_then(|upstream| fingerprint(&slot.path, &upstream)).ok());
-        match next(&intent, reports.get(&intent.address), slot.as_ref(), current.as_deref()) {
+        let approved = current.as_deref().is_some_and(|current| approval_holds(state, &intent.address, current));
+        match next(&intent, reports.get(&intent.address), slot.as_ref(), current.as_deref(), approved) {
             Next::Wait => {}
             Next::Drop(why) => {
                 forget(state, &intent.address);
@@ -233,7 +261,7 @@ mod tests {
     }
 
     fn intent(by: By, repo: &Path, fingerprint: &str) -> Intent {
-        Intent { by, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()) }
+        Intent { by, work: Work::Tests, address: format!("billing@{}", crate::repo::name_of(repo)), repo: repo.to_path_buf(), task: "billing".to_string(), fingerprint: fingerprint.to_string(), through: Through::All, at: 100, seen: Some("before".to_string()) }
     }
 
     #[test]
@@ -242,8 +270,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&state);
         let mut written = intent(By::Lead, Path::new("/repos/app"), "abc");
         written.through = Through::First { count: 1, of: 2 };
+        written.work = Work::Conflict;
         save(&state, &written).unwrap();
         assert_eq!(load(&state, "billing@app"), Some(written.clone()));
+        let mut older = written.to_json();
+        older.as_object_mut().unwrap().remove("work");
+        crate::state::write(&file(&state, "billing@app"), older.to_string()).unwrap();
+        assert_eq!(load(&state, "billing@app").map(|intent| intent.work), Some(Work::Tests), "an intent written before conflicts were recorded waits for tests");
+        save(&state, &written).unwrap();
         for by in ["agent", "task", "", "User"] {
             let mut forged = written.to_json();
             forged["by"] = json!(by);
@@ -255,7 +289,7 @@ mod tests {
         assert_eq!(By::of(&Caller::Task("billing@app".to_string())), None);
         assert_eq!(By::of(&Caller::Lead).map(By::caller), Some(Caller::Lead));
         save(&state, &written).unwrap();
-        assert_eq!((pending(&state, "billing@app"), pending(&state, "other@app")), (Some(By::Lead), None));
+        assert_eq!((pending(&state, "billing@app"), pending(&state, "other@app")), (Some(Pending { by: By::Lead, work: Work::Conflict, at: 100 }), None));
         assert_eq!(load(&state, "billing@app"), Some(written.clone()), "reading what waits leaves the intent in place");
         assert!(claim(&state, "billing@app") && !claim(&state, "billing@app"), "one claim wins");
         assert_eq!(pending(&state, "billing@app"), None, "a claimed intent waits no more");
@@ -263,21 +297,22 @@ mod tests {
     }
 
     #[test]
-    fn the_push_completes_only_on_a_new_ready_report_with_the_same_commits() {
+    fn the_push_completes_only_on_a_new_ready_report_with_the_same_commits_or_approved_ones() {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let waiting = intent(By::User, &dir, "abc");
-        assert_eq!(next(&waiting, None, Some(&slot), Some("abc")), Next::Wait);
-        assert_eq!(next(&waiting, Some(&report("before", 200, "ready")), Some(&slot), Some("abc")), Next::Wait, "the report it was pushed on is not the check");
-        assert_eq!(next(&waiting, Some(&report("r1", 90, "ready")), Some(&slot), Some("abc")), Next::Wait);
-        assert_eq!(next(&waiting, Some(&report("r1", 200, "needs-you")), Some(&slot), Some("abc")), Next::Wait, "a question keeps the push waiting");
-        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abc")), Next::Push);
-        assert!(matches!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abd")), Next::Drop(why) if why.contains("changed its commits") && why.contains("kelpie approve")));
-        assert!(matches!(next(&waiting, Some(&report("r1", 200, "ready")), None, Some("abc")), Next::Drop(why) if why.contains("is gone")));
+        assert_eq!(next(&waiting, None, Some(&slot), Some("abc"), false), Next::Wait);
+        assert_eq!(next(&waiting, Some(&report("before", 200, "ready")), Some(&slot), Some("abc"), false), Next::Wait, "the report it was pushed on is not the check");
+        assert_eq!(next(&waiting, Some(&report("r1", 90, "ready")), Some(&slot), Some("abc"), false), Next::Wait);
+        assert_eq!(next(&waiting, Some(&report("r1", 200, "needs-you")), Some(&slot), Some("abc"), true), Next::Wait, "a question or a red test keeps the push waiting");
+        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abc"), false), Next::Push);
+        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abd"), false), Next::Wait, "changed commits wait for the lead's rules check");
+        assert_eq!(next(&waiting, Some(&report("r1", 200, "ready")), Some(&slot), Some("abd"), true), Next::Push, "the lead approved the changed commits");
+        assert!(matches!(next(&waiting, Some(&report("r1", 200, "ready")), None, Some("abc"), true), Next::Drop(why) if why.contains("is gone")));
         cleanup(dir, origin, &slot);
     }
 
     #[test]
-    fn kelpie_pushes_for_the_recorded_pusher_once_and_drops_an_intent_whose_commits_changed() {
+    fn kelpie_pushes_for_the_recorded_pusher_once_and_changed_commits_once_the_lead_approves_them() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let state = state_of(&dir);
         let current = fingerprint(&slot.path, &upstream).unwrap();
@@ -294,9 +329,13 @@ mod tests {
         assert_eq!(pushed.len(), 1, "an intent pushes once");
         save(&state, &intent(By::User, &dir, &current)).unwrap();
         commit(&slot.path, "e", "a fix while testing");
-        let notes = complete_in(&state, &ready("r2"), |intent, _| { pushed.push(intent.by); Ok(String::new()) });
-        assert_eq!(pushed.len(), 1, "changed commits are never pushed on an old intent");
-        assert!(load(&state, &address).is_none() && notes.iter().any(|note| note.contains("changed its commits")), "{notes:?}");
+        complete_in(&state, &ready("r2"), |intent, _| { pushed.push(intent.by); Ok(String::new()) });
+        assert_eq!(pushed.len(), 1, "changed commits are never pushed on the old commits' word");
+        assert!(load(&state, &address).is_some(), "the push stays under way while the lead checks the fix");
+        super::super::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
+        complete_in(&state, &ready("r2"), |intent, _| { pushed.push(intent.by); Ok(String::new()) });
+        assert_eq!(pushed, [By::Lead, By::User], "the lead's approval of the fix lets the user's push go out");
+        assert!(load(&state, &address).is_none());
         cleanup(dir, origin, &slot);
     }
 }

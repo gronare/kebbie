@@ -15,7 +15,7 @@ pub const LEAD_LABEL: &str = "lead";
 pub const UNCHECKED: &str = "rules not checked by the lead";
 pub const CHECKING: &str = "lead checking rules";
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
     NeedsYou,
     Working,
@@ -90,7 +90,7 @@ pub struct Item {
     pub ci: Option<crate::ci::Watch>,
     pub recover: Option<crate::recover::Record>,
     pub routine: Option<String>,
-    pub push_waits: Option<tasks::PushBy>,
+    pub push_waits: Option<tasks::PendingPush>,
     pub queued: Option<Queued>,
     pub held_by_draft: Option<String>,
 }
@@ -129,7 +129,7 @@ impl Item {
 
     // A task that reported ready has asked the lead for its rules check; one that has not, has not.
     pub fn rules_note(&self) -> Option<&'static str> {
-        let unchecked = self.git.as_ref().is_some_and(|git| git.ahead > 0 && !git.approved) && self.group() != Group::Working;
+        let unchecked = self.git.as_ref().is_some_and(|git| git.ahead > 0 && !git.approved) && self.group() != Group::Working && self.push_waits.is_none();
         unchecked.then(|| if self.report_state() == Some("ready") { CHECKING } else { UNCHECKED })
     }
 
@@ -188,11 +188,28 @@ impl Item {
     }
 
     pub fn push_note(&self) -> Option<String> {
-        let who = match self.push_waits? {
+        let pending = self.push_waits?;
+        let who = match pending.by {
             tasks::PushBy::User => "you",
-            tasks::PushBy::Lead => "lead",
+            tasks::PushBy::Lead => "the lead",
         };
-        Some(format!("push waits for tests · {who}"))
+        let what = match pending.work {
+            _ if self.reported_since(pending.at, "ready") && self.git.as_ref().is_some_and(|git| git.approved) => "kelpie pushes it now",
+            _ if self.reported_since(pending.at, "ready") => "the lead checks the new commits",
+            tasks::PushWork::Tests => "its Claude runs the tests",
+            tasks::PushWork::Conflict => "its Claude resolves the conflict",
+        };
+        Some(format!("pushing for {who} · {what}"))
+    }
+
+    fn reported_since(&self, at: u64, state: &str) -> bool {
+        self.report.as_ref().is_some_and(|report| report.at > at && report.report.as_ref().is_some_and(|report| report.state == state))
+    }
+
+    // A push under way stays where it was pushed from; only the task's word that something broke, or a draft in the way, puts it under Needs you.
+    fn push_group(&self) -> Option<Group> {
+        let pending = self.push_waits?;
+        Some(if self.held_by_draft.is_some() || self.reported_since(pending.at, "needs-you") { Group::NeedsYou } else { Group::ReadyToPush })
     }
 
     // Between turns the task's own report says what it needs; herdr's "done" only says nobody has looked yet.
@@ -201,6 +218,9 @@ impl Item {
             return if queued.blocked.is_some() { Group::NeedsYou } else { Group::Queued };
         }
         let status = self.agent.as_ref().map(|agent| agent.status.as_str());
+        if let Some(group) = self.push_group().filter(|_| status != Some("blocked")) {
+            return group;
+        }
         match (status, self.report_state(), self.ci_group().or_else(|| self.recover_group())) {
             (Some("blocked"), _, _) => Group::NeedsYou,
             (Some("working"), _, _) | (_, Some("working"), _) => Group::Working,
@@ -238,7 +258,7 @@ impl Item {
         if self.agent.as_ref().is_some_and(|agent| agent.status == "blocked") {
             return Some(ANSWER_IN_SPACE);
         }
-        if self.agent.as_ref().is_some_and(|agent| agent.status == "working") || self.ci_group().is_some() || self.recover_group().is_some() {
+        if self.agent.as_ref().is_some_and(|agent| agent.status == "working") || self.ci_group().is_some() || self.recover_group().is_some() || self.push_group() == Some(Group::ReadyToPush) {
             return None;
         }
         if let Some(held) = &self.held_by_draft {
@@ -294,6 +314,9 @@ impl Item {
     }
 
     fn work(&self, git: &Git) -> String {
+        if let (Group::ReadyToPush, Some(note)) = (self.group(), self.push_note()) {
+            return format!("{} · {note}", plural(git.ahead, "commit"));
+        }
         if self.group() == Group::ReadyToPush {
             let review: String = self.rules_note().map(str::to_string).into_iter().chain(self.review_note()).map(|note| format!(" · {note}")).collect();
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
@@ -350,7 +373,7 @@ impl Item {
             "ci": self.ci.as_ref().map(crate::ci::Watch::to_json),
             "recover": self.recover.as_ref().map(|record| { let mut shown = record.to_json(); shown["note"] = json!(record.note()); shown }),
             "routine": self.routine,
-            "push_waits": self.push_waits.map(tasks::PushBy::key),
+            "push_waits": self.push_waits.map(|pending| pending.by.key()),
             "server": self.server,
             "url": self.url,
             "worker": self.worker,
@@ -838,13 +861,32 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_push_waiting_for_the_tasks_tests_says_who_asked_in_the_summary_and_the_json() {
-        let mut item = task(Some("working"), None, 1);
-        assert_eq!((item.to_json()["push_waits"].clone(), item.push_note()), (Value::Null, None));
-        item.push_waits = Some(tasks::PushBy::Lead);
-        assert_eq!((item.to_json()["push_waits"].clone(), item.summary()), (json!("lead"), "push waits for tests · lead · 1 commit".to_string()));
-        item.push_waits = Some(tasks::PushBy::User);
-        assert_eq!(item.to_json()["push_waits"], json!("user"));
+    fn a_push_under_way_stays_under_ready_to_push_and_says_what_it_waits_for() {
+        use tasks::{PendingPush, PushBy, PushWork};
+        let mut item = task(Some("working"), Some("ready"), 1);
+        assert_eq!((item.to_json()["push_waits"].clone(), item.push_note(), item.group()), (Value::Null, None, Group::Working));
+        item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Tests, at: 10 });
+        assert_eq!((item.to_json()["push_waits"].clone(), item.group()), (json!("lead"), Group::ReadyToPush), "the Claude working on the push is the push, not new work");
+        assert_eq!(item.summary(), "1 commit · pushing for the lead · its Claude runs the tests");
+        assert_eq!(item.next_for_you(), None, "nothing for the user to do while it runs");
+        item.push_waits = Some(PendingPush { by: PushBy::User, work: PushWork::Conflict, at: 10 });
+        assert_eq!((item.to_json()["push_waits"].clone(), item.push_note().unwrap()), (json!("user"), "pushing for you · its Claude resolves the conflict".to_string()));
+        let report = |item: &mut Item, state: &str| { let message = item.report.as_mut().unwrap(); message.at = 20; message.report.as_mut().unwrap().state = state.to_string(); };
+        item.agent.as_mut().unwrap().status = "idle".to_string();
+        report(&mut item, "ready");
+        item.git.as_mut().unwrap().approved = false;
+        assert_eq!((item.group(), item.push_note().unwrap()), (Group::ReadyToPush, "pushing for you · the lead checks the new commits".to_string()));
+        assert_eq!(item.rules_note(), None, "the push note says it");
+        item.git.as_mut().unwrap().approved = true;
+        assert_eq!(item.push_note().unwrap(), "pushing for you · kelpie pushes it now");
+        report(&mut item, "needs-you");
+        assert_eq!(item.group(), Group::NeedsYou, "a red test or a choice between behaviours stops the push");
+        report(&mut item, "working");
+        item.held_by_draft = Some("its box holds your draft".to_string());
+        assert_eq!(item.group(), Group::NeedsYou, "a draft in the way needs the user");
+        item.held_by_draft = None;
+        item.agent.as_mut().unwrap().status = "blocked".to_string();
+        assert_eq!(item.group(), Group::NeedsYou, "a prompt of Claude's own needs the user");
     }
 
     #[test]

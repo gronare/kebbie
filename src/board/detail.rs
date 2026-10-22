@@ -545,20 +545,21 @@ mod tests {
     }
 
     #[test]
-    fn a_push_waiting_for_the_tasks_tests_shows_on_its_row_and_in_its_panel_with_who_asked() {
+    fn a_push_under_way_shows_under_ready_to_push_and_in_its_panel_with_who_asked() {
         let mut item = served("search-filters");
         item.agent.as_mut().unwrap().status = "working".to_string();
         let mut app = test_app(vec![item]);
         with_detail(&mut app);
         let (rows, _) = render(&mut app, 170, 40);
-        assert!(!rows.join("\n").contains("push waits"), "no intent, nothing waits: {}", rows.join("\n"));
-        for (by, word) in [(tasks::PushBy::User, "you"), (tasks::PushBy::Lead, "lead")] {
-            app.tasks[0].push_waits = Some(by);
-            let shown = format!("push waits for tests · {word}");
+        assert!(!rows.join("\n").contains("pushing for"), "no intent, nothing waits: {}", rows.join("\n"));
+        for (by, word) in [(tasks::PushBy::User, "you"), (tasks::PushBy::Lead, "the lead")] {
+            app.tasks[0].push_waits = Some(tasks::PendingPush { by, work: tasks::PushWork::Tests, at: 0 });
+            let shown = format!("pushing for {word} · its Claude runs the tests");
             let (rows, buffer) = render(&mut app, 170, 40);
             let at: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.contains(&shown)).map(|(at, _)| at).collect();
-            assert_eq!(at.len(), 2, "the row and the panel: {}", rows.join("\n"));
-            assert!(rows[at[1]].contains(&format!("▌◐ search-filters  {shown} · 2 c")), "the row, in the Work column: {}", rows.join("\n"));
+            assert_eq!(at.len(), 1, "the panel: {}", rows.join("\n"));
+            let row = rows.iter().position(|row| row.contains(&format!("▌◐ search-filters  pushing for {word}"))).unwrap_or_else(|| panic!("the row, in the Work column: {}", rows.join("\n")));
+            assert!(rows[..row].iter().any(|above| above.contains("READY TO PUSH")), "under Ready to push while it runs: {}", rows.join("\n"));
             let panel = rows[at[0]].split('│').nth(1).unwrap();
             assert_eq!(panel.trim(), shown, "the panel's state line: {}", rows.join("\n"));
             let column = rows[at[0]].find(&shown).map(|byte| rows[at[0]][..byte].chars().count()).unwrap() as u16;

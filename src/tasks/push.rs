@@ -11,7 +11,7 @@ use crate::permit::Caller;
 use crate::repo::{ahead_behind, default_branch, git, git_writing, hidden_from_status, main_checkout, name_of, rebase_in_progress, uncommitted};
 use crate::sh::Result;
 use super::approval::{approved, fingerprint, record_approval, same_code};
-use super::intent::{self, By, Intent, Through};
+use super::intent::{self, By, Intent, Through, Work};
 use super::finish::{close_task, note_ready};
 use super::{fast_forward_main, fetch};
 use super::pool::{Slot, find_task, task_of};
@@ -119,7 +119,7 @@ fn rebase_or_hand_over(slot: &Slot, upstream: &str, why: &str) -> Result<bool> {
         return Ok(true);
     }
     let task = task_of(slot);
-    hand_over(slot, &conflict_prompt(why, upstream)).map_err(|cannot| format!("{task} conflicts with {upstream} and {cannot}; rebase it in {} or clear its box and try again", slot.path.display()))?;
+    hand_over(slot, &conflict_prompt(why, upstream)).map_err(|cannot| format!("{task} conflicts with {upstream} and kelpie could not hand it to its Claude ({cannot}); rebase it in {}", slot.path.display()))?;
     Ok(false)
 }
 
@@ -129,8 +129,8 @@ pub(super) fn conflict_prompt(why: &str, upstream: &str) -> String {
          resolve each conflict keeping the intent of both sides (read the upstream commits that touched the file), run the tests for the files \
          involved, and continue until the rebase is finished. When a conflict is a choice of intent rather than mechanics, both sides wanting \
          different behaviour from the same code, do not pick one: ask the user with kelpie ask, with the options and your recommendation, and \
-         resolve it by their answer. Do not push. Then report ready, saying in a few lines what conflicted and how you resolved it; the lead \
-         checks the commits again before they are pushed."
+         resolve it by their answer. Do not push. Then report ready, saying in a few lines what conflicted and how you resolved it. When a \
+         push started this, kelpie pushes the resolved commits as soon as the lead has checked them; report needs-you only when a test stays red."
     )
 }
 
@@ -139,16 +139,16 @@ fn overlap_prompt(by: By, upstream: &str, touched: &[Touched]) -> String {
     format!(
         "{} asked kelpie to push this task. kelpie fetched and rebased it onto {upstream} without conflicts, but the commits it was rebased over \
          changed files this task changes too:\n{}\nRun the tests that cover those files and fix what broke with a new commit. Do not push. When \
-         the tests pass, report ready: if your commits are unchanged, kelpie pushes the task for {} then; a fix goes to the lead for its rules \
-         check first.",
+         the tests pass, report ready: kelpie pushes the task for {} then, once the lead has checked a fix against the rules. Report needs-you \
+         only when a test stays red.",
         capitalized(by.word()), files.join("\n"), by.word()
     )
 }
 
+// Held like any message, so a draft in the box or an open question delays the work and never drops it.
 pub(super) fn hand_over(slot: &Slot, text: &str) -> std::result::Result<(), String> {
-    let task = task_of(slot);
-    let pane = claude_of(&slot.path).ok_or_else(|| "it has no Claude running to take it over".to_string())?;
-    crate::typing::prompt(&pane, text, task).map_err(|refused| format!("its Claude {}, so kelpie typed nothing", refused.reason()))
+    let repo = main_checkout(&slot.path)?;
+    messages::hand_to(&peers::address(task_of(slot), &name_of(&repo)), text)
 }
 
 fn claude_of(path: &Path) -> Option<String> {
@@ -254,33 +254,40 @@ fn prepare(caller: &Caller, repo: &Path, slot: &Slot, through: Through, hand_ove
     committed(&slot.path, &task)?;
     let pusher = authorize(caller, repo, slot, &upstream, through)?;
     if intent::load(&state, &address).is_some() && *caller != Caller::User {
-        return Err(format!("{task} waits for its Claude to test the files {upstream} changed under it; kelpie pushes it once that reports ready with the same commits"));
+        return Err(format!("{task} is being pushed already: its Claude works on the rebase onto {upstream}, and kelpie pushes it once that reports ready"));
     }
     let by = By::of(caller).ok_or_else(|| format!("{task} cannot be pushed by {}", crate::permit::describe(caller)))?;
     fetch(repo)?;
-    let touched = match update(&slot.path, &upstream)? {
-        Updated::Clean => None,
-        Updated::Overlap(touched) => Some(touched),
+    let recorded = fingerprint(&slot.path, &upstream)?;
+    let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
+    let record = |work: Work, fingerprint: String| intent::save(&state, &Intent { by, work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone() });
+    match update(&slot.path, &upstream)? {
+        Updated::Clean => {}
         Updated::Conflict => {
-            intent::forget(&state, &address);
+            record(Work::Conflict, recorded)?;
             let why = format!("{} asked kelpie to push this task", capitalized(pusher));
-            hand_over(slot, &conflict_prompt(&why, &upstream)).map_err(|cannot| format!("{task} conflicts with {upstream} and {cannot}; rebase it in {}", slot.path.display()))?;
-            tell_lead(&format!("{} tried to push {address}; rebasing onto {upstream} conflicted, so its Claude is resolving it. Its commits change, so check them against the rules again when it reports ready; it is not pushed until then.", capitalized(pusher)), Some("push"));
-            return Err(format!("{task} conflicts with {upstream}; its Claude is resolving the rebase and reports back. It is not pushed: the lead checks the resolved commits first, then push again."));
+            if let Err(cannot) = hand_over(slot, &conflict_prompt(&why, &upstream)) {
+                intent::forget(&state, &address);
+                return Err(format!("{task} conflicts with {upstream} and kelpie could not hand it to its Claude ({cannot}); rebase it in {}", slot.path.display()));
+            }
+            tell_lead(&format!("{} pushed {address}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, check the resolved commits against the rules (kelpie approve): kelpie pushes them for {} then, and the task stays under Ready to push meanwhile.", capitalized(pusher), by.word()), Some("push"));
+            return Ok(Prepared::Handed(format!("{task} conflicts with {upstream}; its Claude resolves the rebase as part of the push, and kelpie pushes it for {pusher} once the lead has checked the resolved commits.")));
         }
-    };
-    if let Some(touched) = touched {
-        let files: Vec<&str> = touched.iter().map(|touched| touched.file.as_str()).collect();
-        hand_over(slot, &overlap_prompt(by, &upstream, &touched)).map_err(|cannot| format!(
-            "{task} is rebased onto {upstream}, whose new commits changed files it changes too ({}), and {cannot}. It is not pushed: run the tests for those files in {}, then push again.",
-            files.join(", "), slot.path.display()
-        ))?;
-        let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
-        intent::save(&state, &Intent { by, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint: fingerprint(&slot.path, &upstream)?, through, at: messages::now(), seen })?;
-        return Ok(Prepared::Handed(format!(
-            "{task} is rebased onto {upstream}, whose new commits changed files it changes too ({}). Its Claude runs their tests now; kelpie pushes it for {pusher} once it reports ready with the same commits.",
-            files.join(", ")
-        )));
+        Updated::Overlap(touched) => {
+            let files: Vec<&str> = touched.iter().map(|touched| touched.file.as_str()).collect();
+            record(Work::Tests, fingerprint(&slot.path, &upstream)?)?;
+            if let Err(cannot) = hand_over(slot, &overlap_prompt(by, &upstream, &touched)) {
+                intent::forget(&state, &address);
+                return Err(format!(
+                    "{task} is rebased onto {upstream}, whose new commits changed files it changes too ({}), and kelpie could not hand it to its Claude ({cannot}). It is not pushed: run the tests for those files in {}, then push again.",
+                    files.join(", "), slot.path.display()
+                ));
+            }
+            return Ok(Prepared::Handed(format!(
+                "{task} is rebased onto {upstream}, whose new commits changed files it changes too ({}). Its Claude runs their tests as part of the push; kelpie pushes it for {pusher} once they pass.",
+                files.join(", ")
+            )));
+        }
     }
     intent::forget(&state, &address);
     authorize(caller, repo, slot, &upstream, through).map(Prepared::Push)
@@ -714,26 +721,31 @@ mod tests {
         assert_eq!((recorded.by, recorded.fingerprint.as_str(), recorded.through), (By::Lead, fingerprint(&slot.path, &upstream).unwrap().as_str(), Through::All));
         assert!(approved(&slot.path, &upstream, &pushing.address), "the clean rebase kept the approval");
         let waits = prepare(&Caller::Lead, &dir, &slot, Through::All, &hand).unwrap_err();
-        assert!(waits.contains("waits for its Claude"), "{waits}");
+        assert!(waits.contains("being pushed already"), "{waits}");
         assert_eq!(prepare(&Caller::User, &dir, &slot, Through::All, &hand).unwrap(), Prepared::Push("the user"), "the user may push past it");
         assert!(intent::load(&pushing.state, &pushing.address).is_none());
         cleanup(dir, origin, &slot);
     }
 
     #[test]
-    fn a_conflict_on_push_goes_to_its_claude_with_the_intent_rule_and_records_no_push() {
+    fn a_conflict_on_push_goes_to_its_claude_with_the_intent_rule_and_records_the_push_for_who_asked() {
         use crate::permit::Caller;
-        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let pushing = Pushing::new(&dir);
         upstream_commit(&dir, "d", "theirs", "d on main");
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let (texts, hand) = handed();
-        let conflict = prepare(&Caller::User, &dir, &slot, Through::All, &hand).unwrap_err();
-        assert!(conflict.contains("conflicts with") && conflict.contains("not pushed"), "{conflict}");
+        let Prepared::Handed(said) = prepare(&Caller::User, &dir, &slot, Through::All, &hand).unwrap() else { panic!("the rebase conflicts") };
+        assert!(said.contains("conflicts with") && said.contains("as part of the push"), "{said}");
         assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), head);
         let typed = texts.borrow()[0].clone();
-        assert!(typed.contains("kelpie ask") && typed.contains("recommendation") && typed.contains("Do not push"), "{typed}");
-        assert!(intent::load(&pushing.state, &pushing.address).is_none());
+        assert!(typed.contains("kelpie ask") && typed.contains("recommendation") && typed.contains("Do not push") && typed.contains("kelpie pushes the resolved commits"), "{typed}");
+        let recorded = intent::load(&pushing.state, &pushing.address).unwrap();
+        assert_eq!((recorded.by, recorded.work, recorded.fingerprint), (By::User, Work::Conflict, fingerprint(&slot.path, &upstream).unwrap()));
+        let failing = |_: &Slot, _: &str| Err("the log is locked".to_string());
+        let refused = prepare(&Caller::User, &dir, &slot, Through::All, &failing).unwrap_err();
+        assert!(refused.contains("could not hand it to its Claude (the log is locked)"), "{refused}");
+        assert!(intent::load(&pushing.state, &pushing.address).is_none(), "a push nobody works on is not shown as under way");
         cleanup(dir, origin, &slot);
     }
 

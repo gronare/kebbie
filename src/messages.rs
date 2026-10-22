@@ -466,10 +466,15 @@ fn send(from: &str, recipients: &[&Session], text: &str, sessions: &[Session]) -
 
 // The caller holds the lock. A message about the recipient's open question is the answer to it: it goes ahead of what is held for the recipient, and closes the question.
 pub fn send_locked(from: &str, recipients: &[&Session], text: &str, sessions: &[Session], about: Option<&str>, kind: Option<&str>) -> Result<Vec<String>> {
-    flush_held(sessions)?;
+    send_locked_in(&state_dir()?, from, recipients, text, sessions, about, kind, &mut crate::typing::prompt)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], text: &str, sessions: &[Session], about: Option<&str>, kind: Option<&str>, type_into: TypeInto) -> Result<Vec<String>> {
+    flush_held_in(dir, sessions, type_into, &heard, &rules_check_wanted)?;
     let mut report = Vec::new();
     for (index, session) in recipients.iter().enumerate() {
-        let messages = load();
+        let messages = load_in(dir);
         let open = questions::open_now(&messages);
         let question = open.iter().find(|question| question.from == session.address);
         let earlier_held = messages.iter().any(|message| message.held && message.to == session.address);
@@ -477,7 +482,7 @@ pub fn send_locked(from: &str, recipients: &[&Session], text: &str, sessions: &[
         let outcome = match question_hold(about, question.map(|question| question.id.as_str())) {
             Some(reason) => Err(reason),
             None if earlier_held && !answering => Err("still has earlier messages held"),
-            None => deliver(session, &delivered(from, text), &mut crate::typing::prompt),
+            None => deliver(session, &delivered(from, text), type_into),
         };
         let id = new_id(&index.to_string());
         let mut record = json!({ "id": id, "at": now(), "from": from, "to": session.address, "text": text, "state": if outcome.is_ok() { "delivered" } else { "held" } });
@@ -490,9 +495,9 @@ pub fn send_locked(from: &str, recipients: &[&Session], text: &str, sessions: &[
         if let Some(kind) = kind {
             record["kind"] = json!(kind);
         }
-        append(&record)?;
+        append_in(dir, &record, ROTATE_BYTES)?;
         if let Some(question) = question.filter(|_| answering) {
-            append(&json!({ "id": question.id, "at": now(), "state": "answered" }))?;
+            append_in(dir, &json!({ "id": question.id, "at": now(), "state": "answered" }), ROTATE_BYTES)?;
         }
         report.push(match outcome {
             Ok(()) => format!("Told {}.", session.address),
@@ -594,6 +599,20 @@ pub fn tell_lead(text: &str, kind: Option<&str>) -> Result<()> {
         return append(&json!({ "id": id, "at": now(), "from": "kelpie", "to": LEAD_LABEL, "text": text, "state": "held", "kind": kind }));
     };
     send_locked("kelpie", &[lead], text, &sessions, None, kind).map(|_| ())
+}
+
+// kelpie's word to a task that must reach it: held while its box holds the user's draft or it waits for an answer, and kept for a session that is not running yet.
+pub fn hand_to(to: &str, text: &str) -> Result<()> {
+    let sessions = peers::sessions().unwrap_or_default();
+    let _lock = Lock::take(true)?;
+    hand_to_in(&state_dir()?, to, text, &sessions, &mut crate::typing::prompt)
+}
+
+fn hand_to_in(dir: &Path, to: &str, text: &str, sessions: &[Session], type_into: TypeInto) -> Result<()> {
+    match sessions.iter().find(|session| session.address == to) {
+        Some(session) => send_locked_in(dir, "kelpie", &[session], text, sessions, None, None, type_into).map(|_| ()),
+        None => append_in(dir, &json!({ "id": new_id("held"), "at": now(), "from": "kelpie", "to": to, "text": text, "state": "held" }), ROTATE_BYTES),
+    }
 }
 
 // The caller holds the lock. A message for a session that has none now, delivered once it runs.
@@ -924,6 +943,23 @@ mod tests {
         use crate::permit::Caller;
         assert_eq!((forcer(&Caller::User), forcer(&Caller::Lead)), (Ok(USER_LABEL), Ok(LEAD_LABEL)));
         assert!(forcer(&Caller::Task("shop@web".to_string())).is_err() && forcer(&Caller::Agent).is_err(), "a task never clears what the user typed");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_hand_over_behind_a_draft_or_before_its_claude_runs_is_held_and_delivered_once_the_box_is_free() {
+        let dir = state("hand");
+        let idle = session(Some("w1:p1"), Some("idle"));
+        hand_to_in(&dir, "billing@web", "run the tests", std::slice::from_ref(&idle), &mut |_, _, _| Err(crate::typing::Refused::Draft)).unwrap();
+        hand_to_in(&dir, "shop@web", "resolve the rebase", std::slice::from_ref(&idle), &mut |_, _, _| panic!("no session, nothing typed")).unwrap();
+        let messages = load_in(&dir);
+        assert!(messages.iter().all(|message| message.held && message.from == "kelpie"), "never dropped: {messages:?}");
+        assert_eq!(messages[0].why.as_deref(), Some(DRAFT_HOLD));
+        let typed = std::cell::RefCell::new(Vec::new());
+        let mut type_into = |_: &str, text: &str, _: &str| { typed.borrow_mut().push(text.to_string()); Ok(()) };
+        assert_eq!(flush_held_in(&dir, std::slice::from_ref(&idle), &mut type_into, &|_, _| false, &|_, _| true).unwrap(), 1);
+        assert_eq!(typed.borrow().as_slice(), ["[from kelpie] run the tests"]);
+        assert!(!load_in(&dir)[0].held && load_in(&dir)[1].held, "the other waits for its own session");
         fs::remove_dir_all(&dir).unwrap();
     }
 

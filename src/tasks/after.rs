@@ -983,7 +983,7 @@ mod tests {
         let (dir, origin, slot, _) = task_with_a_commit("billing");
         let (state, wait) = waiting_on(&dir, "billing");
         let address = peers::address("billing", &name_of(&dir));
-        super::super::intent::save(&state, &super::super::intent::Intent { by: By::User, address: address.clone(), repo: dir.clone(), task: "billing".to_string(), fingerprint: "abc".to_string(), through: super::super::intent::Through::All, at: 90, seen: None }).unwrap();
+        super::super::intent::save(&state, &super::super::intent::Intent { by: By::User, work: super::super::intent::Work::Tests, address: address.clone(), repo: dir.clone(), task: "billing".to_string(), fingerprint: "abc".to_string(), through: super::super::intent::Through::All, at: 90, seen: None }).unwrap();
         assert_eq!(Facts::read(&state, &[], std::slice::from_ref(&wait)).state(&address, 100), DepState::Open);
         untouched(&state, &wait);
         cleanup(dir, origin, &slot);
