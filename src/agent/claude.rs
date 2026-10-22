@@ -37,6 +37,7 @@ pub enum Started {
     Ready,
     AwaitsTrust,
     AwaitsBypass,
+    AwaitsHooks,
     BypassDisabled,
 }
 
@@ -46,21 +47,39 @@ impl Started {
         match self {
             Started::AwaitsTrust => Some("whether you trust its folder"),
             Started::AwaitsBypass => Some("you to accept bypass permissions mode"),
+            Started::AwaitsHooks => Some("whether to trust the hooks it found new or changed"),
             Started::Ready | Started::BypassDisabled => None,
         }
     }
 }
 
-// herdr types Claude's command into the pane's shell, so it is typed only once that shell is idle at its prompt.
+// What kelpie reads on an agent's screen as it starts, and how herdr knows it.
+pub(crate) struct Screens {
+    pub kind: &'static str,
+    pub name: &'static str,
+    pub asks_trust: fn(&str) -> bool,
+    pub trust_selected: fn(&str) -> bool,
+    pub toward_trust: &'static str,
+    pub held: fn(&str) -> Option<Started>,
+    pub running: fn(&str) -> Started,
+}
+
+const CLAUDE: Screens = Screens { kind: "claude", name: "Claude", asks_trust: |screen| screen.contains("trust this folder"), trust_selected: yes_selected, toward_trust: "down", held: |screen| asks_for_bypass(screen).then_some(Started::AwaitsBypass), running };
+
+// herdr types the agent's command into the pane's shell, so it is typed only once that shell is idle at its prompt.
 pub fn start_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<Started> {
-    start_twice(pane, || {
+    start_with(&CLAUDE, name, pane, args, trusted)
+}
+
+pub(crate) fn start_with(screens: &Screens, name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<Started> {
+    start_twice(screens, pane, || {
         wait_for_prompt(pane)?;
-        type_claude(name, pane, args, trusted)
+        type_agent(screens, name, pane, args, trusted)
     })
 }
 
 // A line read away by the shell's own startup, as oh-my-zsh's update question takes its first key, leaves the shell at its prompt: one more try then lands.
-fn start_twice(pane: &str, mut attempt: impl FnMut() -> Result<Launched>) -> Result<Started> {
+fn start_twice(screens: &Screens, pane: &str, mut attempt: impl FnMut() -> Result<Launched>) -> Result<Started> {
     let mut shown = String::new();
     for _ in 0..2 {
         match attempt()? {
@@ -68,23 +87,23 @@ fn start_twice(pane: &str, mut attempt: impl FnMut() -> Result<Launched>) -> Res
             Launched::ShellBack(line) => shown = line,
         }
     }
-    Err(format!("Claude did not start in pane {pane}: its shell is back at the prompt, showing \"{shown}\"; see what the shell printed there"))
+    Err(format!("{} did not start in pane {pane}: its shell is back at the prompt, showing \"{shown}\"; see what the shell printed there", screens.name))
 }
 
-fn type_claude(name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<Launched> {
+fn type_agent(screens: &Screens, name: &str, pane: &str, args: &[&str], trusted: bool) -> Result<Launched> {
     let mut last = String::new();
     for _ in 0..30 {
-        match herdr::start_agent(name, "claude", pane, args) {
-            Ok(()) => return Ok(Launched::Up(running(&herdr::read_pane(pane).unwrap_or_default()))),
+        match herdr::start_agent(name, screens.kind, pane, args) {
+            Ok(()) => return Ok(Launched::Up((screens.running)(&herdr::read_pane(pane).unwrap_or_default()))),
             Err(error) => match refusal(&error) {
                 Refusal::NotYet => last = error,
-                Refusal::Starting => return wait_until_ready(name, pane, trusted),
-                Refusal::Final => return Err(format!("herdr would not start Claude in pane {pane}: {error}")),
+                Refusal::Starting => return wait_until_ready(screens, name, pane, trusted),
+                Refusal::Final => return Err(format!("herdr would not start {} in pane {pane}: {error}", screens.name)),
             },
         }
         std::thread::sleep(Duration::from_secs(1));
     }
-    Err(format!("The shell in pane {pane} never became ready for Claude; herdr said: {last}"))
+    Err(format!("The shell in pane {pane} never became ready for {}; herdr said: {last}", screens.name))
 }
 
 fn last_line(screen: &str) -> &str {
@@ -151,10 +170,14 @@ fn prompt_with(mut look: impl FnMut() -> Result<(bool, String)>, mut pause: impl
     Ok(asking.map_or(Ok(()), Err))
 }
 
-// Escape clears what is typed or interrupts; Claude Code exits on its second ctrl-c, and a ctrl-c more would reach the shell.
+// Escape clears what is typed or interrupts; Claude Code and Codex exit on their second ctrl-c, and a ctrl-c more would reach the shell.
 pub fn end_claude(pane: &str) -> Result<()> {
+    end_agent("Claude", pane)
+}
+
+pub(crate) fn end_agent(name: &str, pane: &str) -> Result<()> {
     end_with(|key| herdr::send_keys(pane, &[key]), || Ok(herdr::foreground(pane)?.is_none()), || std::thread::sleep(Duration::from_millis(500)), 10)
-        .map_err(|_| format!("Claude in {pane} did not exit after escape and ctrl-c; see what holds it there"))
+        .map_err(|_| format!("{name} in {pane} did not exit after escape and ctrl-c; see what holds it there"))
 }
 
 fn end_with(mut send: impl FnMut(&str) -> Result<()>, mut at_shell: impl FnMut() -> Result<bool>, mut pause: impl FnMut(), tries: usize) -> Result<()> {
@@ -170,11 +193,11 @@ fn end_with(mut send: impl FnMut(&str) -> Result<()>, mut at_shell: impl FnMut()
     if at_shell()? { Ok(()) } else { Err("still running".to_string()) }
 }
 
-fn wait_until_ready(name: &str, pane: &str, trusted: bool) -> Result<Launched> {
+fn wait_until_ready(screens: &Screens, name: &str, pane: &str, trusted: bool) -> Result<Launched> {
     let look = || Ok((herdr::foreground(pane)?.is_none(), herdr::read_pane(pane)?));
     let press = |key: &str| herdr::send_keys(pane, &[key]);
-    ready_with(look, || herdr::agent_ready(name).unwrap_or(false), press, || std::thread::sleep(Duration::from_millis(500)), trusted, 120)?
-        .ok_or_else(|| format!("Claude in pane {pane} never became ready; see what it waits for there"))
+    ready_with(screens, look, || herdr::agent_ready(name).unwrap_or(false), press, || std::thread::sleep(Duration::from_millis(500)), trusted, 120)?
+        .ok_or_else(|| format!("{} in pane {pane} never became ready; see what it waits for there", screens.name))
 }
 
 // Claude wraps a dialog's lines to the pane's width and draws them inside a box.
@@ -197,7 +220,7 @@ fn yes_selected(screen: &str) -> bool {
 }
 
 // Claude asks about a folder it has not seen, and about bypass permissions mode until the user accepts it once, with "No, exit" selected; a prompt sent before it is ready is lost.
-fn ready_with(mut look: impl FnMut() -> Result<(bool, String)>, mut ready: impl FnMut() -> bool, mut press: impl FnMut(&str) -> Result<()>, mut pause: impl FnMut(), trusted: bool, tries: usize) -> Result<Option<Launched>> {
+fn ready_with(screens: &Screens, mut look: impl FnMut() -> Result<(bool, String)>, mut ready: impl FnMut() -> bool, mut press: impl FnMut(&str) -> Result<()>, mut pause: impl FnMut(), trusted: bool, tries: usize) -> Result<Option<Launched>> {
     let mut at_shell = 0;
     for _ in 0..tries {
         let (shell, screen) = look()?;
@@ -205,16 +228,16 @@ fn ready_with(mut look: impl FnMut() -> Result<(bool, String)>, mut ready: impl 
         if at_shell >= QUIET_LOOKS {
             return Ok(Some(Launched::ShellBack(last_line(&screen).to_string())));
         }
-        if asks_for_bypass(&screen) {
-            return Ok(Some(Launched::Up(Started::AwaitsBypass)));
+        if let Some(held) = (screens.held)(&screen) {
+            return Ok(Some(Launched::Up(held)));
         }
-        if screen.contains("trust this folder") {
+        if (screens.asks_trust)(&screen) {
             if !trusted {
                 return Ok(Some(Launched::Up(Started::AwaitsTrust)));
             }
-            press(if yes_selected(&screen) { "enter" } else { "down" })?;
+            press(if (screens.trust_selected)(&screen) { "enter" } else { screens.toward_trust })?;
         } else if ready() {
-            return Ok(Some(Launched::Up(running(&screen))));
+            return Ok(Some(Launched::Up((screens.running)(&screen))));
         }
         pause();
     }
@@ -533,7 +556,7 @@ mod tests {
         let run = |outcomes: Vec<Launched>| {
             let mut outcomes = outcomes.into_iter();
             let mut tries = 0;
-            let result = start_twice("w1-2", || { tries += 1; Ok(outcomes.next().unwrap()) });
+            let result = start_twice(&CLAUDE, "w1-2", || { tries += 1; Ok(outcomes.next().unwrap()) });
             (result, tries)
         };
         assert_eq!(run(vec![Launched::Up(Started::Ready)]), (Ok(Started::Ready), 1));
@@ -551,7 +574,7 @@ mod tests {
         let mut screens = screens.iter().map(|screen| screen.to_string());
         let keys = std::cell::RefCell::new(Vec::new());
         let mut asked = 0;
-        let result = ready_with(|| Ok((false, screens.next().unwrap_or_default())), || { asked += 1; asked > ready_after }, |key| { keys.borrow_mut().push(key.to_string()); Ok(()) }, || {}, trusted, 20).unwrap();
+        let result = ready_with(&CLAUDE, || Ok((false, screens.next().unwrap_or_default())), || { asked += 1; asked > ready_after }, |key| { keys.borrow_mut().push(key.to_string()); Ok(()) }, || {}, trusted, 20).unwrap();
         (result, keys.into_inner())
     }
 
@@ -698,7 +721,7 @@ mod tests {
         let paths = [
             format!("/{}/**", state.display()), "~/.config/kelpie/**".to_string(), "~/.config/herdr/**".to_string(), "~/.claude/settings*.json".to_string(), "~/.zshrc".to_string(), "~/.bashrc".to_string(),
             "//opt/kelpie/kelpie".to_string(), "~/.claude.json".to_string(), "~/.claude/hooks/**".to_string(), "~/.claude/skills/**".to_string(), "~/.claude/agents/**".to_string(), "~/.claude/commands/**".to_string(),
-            "~/.gitconfig".to_string(), "~/.config/git/**".to_string(), "~/.ssh/**".to_string(), "~/Library/LaunchAgents/**".to_string(), "~/.local/bin/**".to_string(),
+            "~/.gitconfig".to_string(), "~/.config/git/**".to_string(), "~/.codex/**".to_string(), "~/.ssh/**".to_string(), "~/Library/LaunchAgents/**".to_string(), "~/.local/bin/**".to_string(),
             "//src/wt1.app/.claude/settings.json".to_string(), "//src/wt1.app/.claude/settings.local.json".to_string(), "//src/wt1.app/.claude/hooks/**".to_string(), "//src/wt1.app/.mcp.json".to_string(), "//src/wt1.app/.git".to_string(),
             "//src/app/.claude/**".to_string(), "//src/app/.mcp.json".to_string(), "//src/app/.git/config".to_string(), "//src/app/.git/hooks/**".to_string(), "//src/app/.git/worktrees/*/commondir".to_string(), "//src/app/.git/worktrees/1/config.worktree".to_string(),
         ];

@@ -728,6 +728,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "sha1_smol",
+ "sha2",
  "toml",
  "tui-markdown",
  "unicode-width",

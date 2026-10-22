@@ -400,7 +400,7 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     let stranger = lab.run_as("search@app", &["answered", "billing"]);
     assert!(!stranger.status.success() && stderr(&stranger).contains("search@app marks only its own question answered"), "{}", stderr(&stranger));
     let agent = lab.run_as("helper", &["answered", "billing"]);
-    assert!(!agent.status.success() && stderr(&agent).contains("a Claude session cannot"), "{}", stderr(&agent));
+    assert!(!agent.status.success() && stderr(&agent).contains("an agent session (Claude or Codex) cannot"), "{}", stderr(&agent));
     let settled = lab.run_as("billing@app", &["answered", "billing"]);
     assert!(settled.status.success(), "{}", stderr(&settled));
     assert_eq!(stdout(&settled), "Marked the question from billing@app answered; it leaves the board.");

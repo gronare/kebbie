@@ -147,7 +147,8 @@ pub fn forget_card_in(state: &Path, address: &str) {
 // herdr's sidebar shows the same as the board: the next step as $next, and the state in place of idle or done.
 pub fn show_in_sidebar(report: &Report) {
     if let Ok(pane) = std::env::var("HERDR_PANE_ID") {
-        let args = metadata_args(report);
+        let agent = herdr::agents().ok().and_then(|agents| agents.iter().find(|agent| agent["pane_id"] == pane.as_str()).and_then(crate::agent::Agent::of)).unwrap_or(crate::agent::Agent::Claude);
+        let args = metadata_args(report, agent);
         let _ = herdr::report_metadata(&pane, &args.iter().map(String::as_str).collect::<Vec<_>>());
     }
 }
@@ -171,8 +172,8 @@ fn label(state: &str) -> Option<&'static str> {
 }
 
 // herdr replaces a source's labels with each new set, and refuses to set and clear the same field at once.
-pub fn metadata_args(report: &Report) -> Vec<String> {
-    let mut args: Vec<String> = ["--source", "kelpie", "--agent", "claude"].map(str::to_string).to_vec();
+pub fn metadata_args(report: &Report, agent: crate::agent::Agent) -> Vec<String> {
+    let mut args: Vec<String> = ["--source", "kelpie", "--agent", agent.kind()].map(str::to_string).to_vec();
     let next = report.next.trim();
     if next.is_empty() || next.eq_ignore_ascii_case("nothing") {
         args.extend(["--clear-token".to_string(), "next".to_string()]);
@@ -322,10 +323,11 @@ mod tests {
     #[test]
     fn herdr_shows_the_next_step_and_the_state() {
         let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string(), head: None };
-        assert_eq!(metadata_args(&report("needs-you", "answer: which queue?"))[4..], [
+        assert_eq!(metadata_args(&report("needs-you", "answer: which queue?"), crate::agent::Agent::Codex)[..4], ["--source", "kelpie", "--agent", "codex"], "herdr shows it on the pane of the agent that reported");
+        assert_eq!(metadata_args(&report("needs-you", "answer: which queue?"), crate::agent::Agent::Claude)[4..], [
             "--token", "next=answer: which queue?", "--state-label", "idle=needs you", "--state-label", "done=needs you",
         ]);
-        assert_eq!(metadata_args(&report("working", "nothing"))[4..], ["--clear-token", "next", "--clear-state-labels"]);
+        assert_eq!(metadata_args(&report("working", "nothing"), crate::agent::Agent::Claude)[4..], ["--clear-token", "next", "--clear-state-labels"]);
     }
 
     #[test]

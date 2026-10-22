@@ -121,14 +121,14 @@ pub fn reader_block() -> Value {
 }
 
 // Files in a home that Claude Code, git, ssh, the shell, the OS or a tool on PATH later loads or runs as the user, outside any sandbox.
-const HOME_LOADED: [&str; 41] = [
+const HOME_LOADED: [&str; 42] = [
     ".claude.json", ".claude.json.backup", ".claude/settings*.json", ".claude/CLAUDE.md", ".claude/*.sh", ".claude/*.py", ".claude/*.js", ".claude/*.mjs",
     ".claude/plugins/**", ".claude/hooks/**", ".claude/agents/**", ".claude/skills/**", ".claude/commands/**", ".claude/rules/**", ".claude/workflows/**", ".claude/output-styles/**", ".claude/scheduled_tasks.json",
     ".gitconfig", ".config/git/**", ".ssh/**", ".netrc", ".git-credentials", ".config/gh/**",
     "Library/LaunchAgents/**", ".config/autostart/**", ".config/systemd/**",
     ".local/bin/**", "bin/**", ".cargo/**", ".rustup/**", ".npm/**", ".npmrc", ".cache/**", ".bun/**", "go/bin/**",
     ".config/direnv/**", ".local/share/direnv/**", ".config/mise/**", ".local/state/mise/**",
-    ".config/herdr/**", ".local/share/herdr/**",
+    ".config/herdr/**", ".local/share/herdr/**", ".codex/**",
 ];
 const SHELL_DIRS: [&str; 2] = [".config/zsh/**", ".oh-my-zsh/**"];
 
@@ -141,6 +141,7 @@ pub struct Protected {
     pub data: PathBuf,
     pub home: PathBuf,
     pub claude_home: Option<PathBuf>,
+    pub codex_home: Option<PathBuf>,
     pub install: Option<PathBuf>,
     pub path: Vec<PathBuf>,
 }
@@ -152,7 +153,8 @@ impl Protected {
         let path = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
         Protected {
             state: crate::lead::state_location().unwrap_or_else(|_| home.join(".local/state/kelpie")), config: crate::config::dir(), data: data.join("kelpie"),
-            claude_home: std::env::var("CLAUDE_CONFIG_DIR").ok().filter(|dir| !dir.is_empty()).map(PathBuf::from), install: crate::lead::install_root().ok(), path, home,
+            claude_home: std::env::var("CLAUDE_CONFIG_DIR").ok().filter(|dir| !dir.is_empty()).map(PathBuf::from),
+            codex_home: std::env::var("CODEX_HOME").ok().filter(|dir| !dir.is_empty()).map(PathBuf::from), install: crate::lead::install_root().ok(), path, home,
         }
     }
 
@@ -164,6 +166,9 @@ impl Protected {
         paths.extend(HOME_LOADED.iter().chain(&SHELL_FILES).chain(&SHELL_DIRS).map(|path| format!("~/{}", path.trim_start_matches("~/"))));
         if let Some(claude) = self.claude_home.as_ref().filter(|claude| **claude != self.home.join(".claude")) {
             paths.extend(HOME_LOADED.iter().filter_map(|path| path.strip_prefix(".claude/")).chain([".claude.json"]).map(|path| format!("{}/{path}", absolute(claude))));
+        }
+        if let Some(codex) = self.codex_home.as_ref().filter(|codex| **codex != self.home.join(".codex")) {
+            paths.push(tree(codex));
         }
         let worktrees: Vec<&Path> = dirs.map(|dirs| dirs.all().into_iter().map(|half| half.worktree.as_path()).collect()).unwrap_or_default();
         let outside = |path: &Path| path.is_absolute() && worktrees.iter().all(|worktree| !path.starts_with(worktree) && !worktree.starts_with(path));
@@ -339,7 +344,7 @@ pub fn write_refusal(entry: &str, home: &Path) -> Option<String> {
     };
     let path = PathBuf::from(path.to_string_lossy().trim_end_matches(['/', '*']));
     let path = if path.as_os_str().is_empty() { PathBuf::from("/") } else { path };
-    let guarded = [".local/state/kelpie", ".local/share/kelpie", ".config/kelpie", ".config/herdr", ".claude", ".zshrc", ".bashrc", ".profile"].map(|part| home.join(part));
+    let guarded = [".local/state/kelpie", ".local/share/kelpie", ".config/kelpie", ".config/herdr", ".claude", ".codex", ".zshrc", ".bashrc", ".profile"].map(|part| home.join(part));
     guarded.iter().find(|guarded| guarded.starts_with(&path) || path.starts_with(guarded))
         .map(|guarded| format!("\"{entry}\" would let a task's shell write {}", guarded.display()))
 }
@@ -609,7 +614,7 @@ mod tests {
     #[test]
     fn a_profile_cannot_open_kelpies_herdrs_or_claudes_own_files_to_the_shell() {
         let home = Path::new("/home/ada");
-        for refused in ["~", "~/", "/", "~/.config", "~/.config/kelpie", "~/.local", "~/.local/state/kelpie/roles", "/home/ada/.claude", "~/.zshrc", "~/.local/share/*", "build", "./cache"] {
+        for refused in ["~", "~/", "/", "~/.config", "~/.config/kelpie", "~/.local", "~/.local/state/kelpie/roles", "/home/ada/.claude", "~/.codex", "~/.codex/plugins", "/home/ada/.codex/plugins/cache/kelpie/kelpie/local/bin", "~/.zshrc", "~/.local/share/*", "build", "./cache"] {
             assert!(write_refusal(refused, home).is_some(), "{refused}");
         }
         for kept in WRITES.iter().chain(&["~/.gradle", "/tmp/build", "~/.local/share/pnpm"]) {

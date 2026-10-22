@@ -70,9 +70,81 @@ pub fn vault() -> Result<String> {
     Ok(configure_text(&claude))
 }
 
+fn yes(question: &str, input: &mut impl BufRead, output: &mut impl Write) -> Result<bool> {
+    write!(output, "{question}\n  [y/N] ").map_err(|error| error.to_string())?;
+    output.flush().map_err(|error| error.to_string())?;
+    let mut answer = String::new();
+    input.read_line(&mut answer).map_err(|error| error.to_string())?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
+}
+
+pub fn codex(uninstall: bool) -> Result<String> {
+    crate::permit::user_only("kelpie setup codex")?;
+    let home = crate::agent::codex::home().ok_or("Neither CODEX_HOME nor HOME is set, so kelpie cannot find Codex's home")?;
+    let kelpie = crate::peers::kelpie_command()?;
+    let stdin = std::io::stdin();
+    codex_in(&home, &kelpie, uninstall, &mut stdin.lock(), &mut std::io::stdout())
+}
+
+// Codex's plugin cache is the one place kelpie writes in Codex's home, and only on the user's y; config.toml and hooks.json stay theirs.
+pub fn codex_in(home: &Path, kelpie: &str, uninstall: bool, input: &mut impl BufRead, output: &mut impl Write) -> Result<String> {
+    use crate::agent::codex::{self, Installed};
+    let root = codex::plugin_root(home);
+    if uninstall {
+        if !root.exists() {
+            return Ok(format!("kelpie's Codex plugin is not installed; {} is not there.", root.display()));
+        }
+        if !yes(&format!("kelpie setup codex --uninstall removes kelpie's plugin from Codex: {}", root.display()), input, output)? {
+            return Ok("Skipped; nothing was removed.".to_string());
+        }
+        codex::uninstall(home)?;
+        return Ok(format!("Removed {}. Tasks whose profile runs Codex now start without kelpie's hooks, so they neither report nor get their role.", root.display()));
+    }
+    let state = codex::installed(home, kelpie);
+    if state == Installed::Current {
+        return Ok(format!("kelpie's Codex plugin is installed and current at {}; nothing to do.", root.display()));
+    }
+    let verb = if state == Installed::Missing { "install" } else { "update" };
+    let question = format!(
+        "kelpie setup codex: {verb} kelpie's plugin in Codex's plugin cache, {}.\nIts three hooks (SessionStart, UserPromptSubmit, Stop) record the session, give it its role and ask for kelpie report before a turn ends; outside a kelpie task they do nothing.\nkelpie enables the plugin, and trusts those three hooks by their hash, only in the Codex sessions it starts (-c on its command line). It never edits {} or {}.",
+        root.display(), home.join("config.toml").display(), home.join("hooks.json").display(),
+    );
+    if !yes(&question, input, output)? {
+        return Ok("Skipped; nothing was written.".to_string());
+    }
+    let written = codex::install(home, kelpie)?;
+    let files = written.iter().map(|file| format!("  {}", file.display())).collect::<Vec<_>>().join("\n");
+    Ok(format!("Wrote:\n{files}\nkelpie doctor's codex lines say whether Codex and its hooks are ready."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_codex_writes_only_on_a_yes_and_says_what_it_leaves_alone() {
+        let home = crate::sh::test_dir("setup-codex");
+        std::fs::write(home.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
+        let run = |answers: &str, uninstall: bool| {
+            let mut output = Vec::new();
+            let said = codex_in(&home, "/opt/kelpie", uninstall, &mut answers.as_bytes(), &mut output).unwrap();
+            (said, String::from_utf8(output).unwrap())
+        };
+        let (said, asked) = run("", false);
+        assert_eq!(said, "Skipped; nothing was written.");
+        assert!(asked.contains("install kelpie's plugin in Codex's plugin cache") && asked.contains(&format!("It never edits {}", home.join("config.toml").display())), "{asked}");
+        assert!(!home.join("plugins").exists(), "no answer is no");
+        let (said, _) = run("y\n", false);
+        assert!(said.starts_with("Wrote:\n") && said.contains("hooks/hooks.json"), "{said}");
+        let (said, asked) = run("", false);
+        assert!(said.contains("installed and current") && asked.is_empty(), "a second setup asks nothing and writes nothing");
+        assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), "model = \"gpt-5.5\"\n");
+        assert!(!home.join("hooks.json").exists(), "Codex's own hooks file is never written");
+        assert_eq!(run("n\n", true).0, "Skipped; nothing was removed.");
+        assert!(run("y\n", true).0.starts_with("Removed "));
+        assert!(run("", true).0.contains("is not installed"));
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     fn steps_for(plugin: &Plugin, marketplace: bool) -> Vec<String> {
         steps("/fake/claude", plugin, marketplace).iter().map(|step| step.join(" ")).collect()

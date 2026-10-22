@@ -24,6 +24,8 @@ Rust is only needed where kelpie is built from source. A release tag installs a 
 
 Plan usage on the board needs a Claude.ai plan; an API key gives no usage numbers.
 
+A task whose profile runs Codex needs Codex CLI 0.163.0 or later (`curl -fsSL https://chatgpt.com/codex/install.sh | sh`, `brew install --cask codex` or `npm install -g @openai/codex`) and kelpie's plugin in it (`kelpie setup codex`).
+
 ## What `kelpie doctor` checks
 
 Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` line for macOS and Linux. `kelpie doctor` exits non-zero when any line fails.
@@ -47,6 +49,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `notify` | Whether `notify.command` is set. It is never run. |
 | `sandbox` | Whether tasks run in the sandbox: on and ready, on with what is missing on Linux (a `fail`, since tasks then do not start), or off with `task.sandbox = false` (a `warn` that says a task's shell can pass as you). |
 | `vault` | The vault plugin: on, missing (fine, it is optional) or too old. |
+| `codex`, `codex plugin`, `codex hooks` | Codex on `PATH` at 0.163.0 or later, kelpie's plugin in its cache and current, and nothing in Codex's `config.toml` that turns kelpie's hooks off (`[features] hooks = false`, or one of them turned off in `/hooks`). Only `codex` shows until a profile runs Codex or Codex is on `PATH`; a gap is a `warn` until a profile runs Codex, and a `fail` after. |
 | `backlog …` | Each backlog source can be read, and an installed source not in use. |
 
 ## Repos

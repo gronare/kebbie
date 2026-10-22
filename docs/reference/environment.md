@@ -18,6 +18,7 @@
 | `KELPIE_IMAGES` | detected | How the board draws images such as a sign-off card's screenshots: `kitty`, `sixel` or `iterm2` use that graphics protocol, `halfblocks` draws a preview in text cells without querying the terminal, `off` shows their paths instead. Detected, it asks the terminal when the first image is about to show; inside herdr (`TERM_PROGRAM=herdr`) it asks nothing and uses Kitty, and the board not on a terminal shows paths. |
 | `HERDR_BIN_PATH` | `herdr` | The herdr binary. `false` makes kelpie reach no herdr at all. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Where kelpie reads Claude Code's installed plugins and their settings. |
+| `CODEX_HOME` | `~/.codex` | Codex's home: where `kelpie setup codex` installs kelpie's plugin, and where kelpie reads a Codex task's session files and the folders Codex trusts. |
 | `XDG_CONFIG_HOME` | `~/.config` | Base for the config files. |
 | `XDG_STATE_HOME` | `~/.local/state` | Base for the state directory. |
 | `XDG_DATA_HOME` | `~/.local/share` | Where herdr's startup writes the `current` link. kelpie reads the link under `~/.local/share`, so `kelpie doctor` warns when this is set elsewhere. |
@@ -34,6 +35,14 @@ For `notify.command`:
 | `KELPIE_TASK` | The task's name |
 | `KELPIE_REPO` | The task's repo |
 | `KELPIE_TEXT` | The notification's one line |
+
+For every command a Codex task runs:
+
+| Variable | Value |
+| --- | --- |
+| `KELPIE_ADDRESS` | The task's address, `<task>@<repo>` |
+| `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0`, `GIT_CONFIG_VALUE_0` | The push block's `url.kelpie-blocks-push:.pushInsteadOf` |
+| `TMPDIR` | The task's temp folder, in its worktree's git dir |
 
 For `worktree.dev_server` and `worktree.dev_worker`:
 

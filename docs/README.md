@@ -35,6 +35,7 @@ Repos and worktrees
 - [Decide what a task does with what it notices](how-to/decide-what-a-task-does-with-what-it-notices.md): file it, fix it or ask you.
 - [Let tasks run without permission prompts](how-to/let-tasks-run-without-prompts.md): bypass permissions mode, on an isolated machine.
 - [Give tasks a profile](how-to/give-tasks-a-profile.md): a model, role, skills and permissions for one kind of work.
+- [Run a task with Codex](how-to/run-a-task-with-codex.md): a profile with `agent = "codex"` and kelpie's Codex plugin.
 - [Add a release action to a repo](how-to/add-a-release-action.md): bump, tag and push from the Areas page.
 - [Share a team setup](how-to/share-a-team-setup.md): repo configs linked in from a team repo.
 

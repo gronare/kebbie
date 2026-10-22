@@ -215,6 +215,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)
   kelpie setup vault              install the optional vault plugin in Claude Code (marketplace, plugin, its options),
                                   showing each claude command and running it only on your y
+  kelpie setup codex [--uninstall]
+                                  install kelpie's plugin into Codex's plugin cache, on your y, so tasks whose profile
+                                  runs Codex report, get their role and are recorded; never edits Codex's config.toml
+                                  or hooks.json (--uninstall removes the plugin)
   kelpie restart [--all]          restart, with claude --resume in its own pane and with its own flags, each Claude
                                   session that runs older code than is installed (Claude Code, a plugin, MCP servers,
                                   kelpie) and is idle, not the pane you are in and without background work (that one
@@ -465,6 +469,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             if name == Some("gate") {
                 return Ok(arguments.positional(2).map(|address| task_note::hook(address, &input)).unwrap_or_default());
             }
+            if name == Some("codex") {
+                return Ok(agent::codex::hook(&input));
+            }
             let _ = messages::flush();
             Ok(report::hook(&input))
         }
@@ -518,7 +525,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("issues") => Ok(issues::list_in(&issues::dir(&lead::state_dir()?), arguments.flag("--all"), arguments.flag("--json"))),
         Some("issue") => issue(arguments, name),
         Some("setup") if name == Some("vault") => setup::vault(),
-        Some("setup") => Err("kelpie setup knows vault: kelpie setup vault".to_string()),
+        Some("setup") if name == Some("codex") => setup::codex(arguments.flag("--uninstall")),
+        Some("setup") => Err("kelpie setup knows vault and codex: kelpie setup vault, kelpie setup codex [--uninstall]".to_string()),
         Some("restart") => restart::now_cli(arguments.flag("--all")),
         Some("keeper") if arguments.flag("--status") => keeper::status_cli(),
         Some("keeper") if arguments.flag("--stop") => keeper::stop(),

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::agent::{Agent, Started};
+use crate::agent::{Agent, Started, TaskFiles};
 use crate::config;
 use crate::herdr;
 use crate::lead::state_dir;
@@ -74,9 +74,10 @@ fn configured_mode(repo: &Path) -> Result<Option<String>> {
     Ok(config::resolve(Some(repo))?.settings.permission_mode.value)
 }
 
+// Claude Code's sandbox needs its helpers on the machine; Codex brings its own.
 fn sandboxed(configured: bool, profile: &Profile, missing: impl FnOnce() -> Vec<String>) -> Result<bool> {
     let on = profile.sandbox.on(configured);
-    if on {
+    if on && profile.agent == Agent::Claude {
         crate::sandbox::refusal(&missing())?;
     }
     Ok(on)
@@ -164,7 +165,7 @@ fn prompt_for(session: &Session, given: Option<&str>, stored: Option<String>, un
 }
 
 // A slot is reused across tasks, so only a conversation written since this task's branch was created can be this task's.
-fn latest_transcript(dir: &Path, since: std::time::SystemTime) -> Option<String> {
+pub(crate) fn latest_transcript(dir: &Path, since: std::time::SystemTime) -> Option<String> {
     std::fs::read_dir(dir).ok()?.flatten()
         .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "jsonl"))
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
@@ -180,9 +181,8 @@ fn branch_created(repo: &Path, task: &str) -> Option<std::time::SystemTime> {
 }
 
 fn previous_session(agent: Agent, repo: &Path, slot: &Slot, task: &str, home: &Path, recorded: Option<String>) -> Option<String> {
-    let dir = agent.transcripts_dir(home, &slot.path);
-    recorded.filter(|id| dir.join(format!("{id}.jsonl")).exists())
-        .or_else(|| latest_transcript(&dir, branch_created(repo, task)?))
+    recorded.filter(|id| agent.session_transcript(home, Some(&slot.path), id).is_some())
+        .or_else(|| agent.latest_session(home, &slot.path, branch_created(repo, task)?))
 }
 
 // The task's own conversation, where the user's prompt and later word to it are.
@@ -192,7 +192,22 @@ pub fn transcript(repo: &Path, slot: &Slot) -> Option<(Agent, PathBuf)> {
     let agent = record.agent();
     let home = agent.home()?;
     let id = previous_session(agent, repo, slot, task, &home, record.session)?;
-    Some((agent, agent.transcripts_dir(&home, &slot.path).join(format!("{id}.jsonl"))))
+    Some((agent, agent.session_transcript(&home, Some(&slot.path), &id)?))
+}
+
+// Codex picks its own session id, so its SessionStart hook writes it into the task's record; a task on Claude keeps the id kelpie gave it.
+pub(crate) fn record_session(address: &str, session: &str) -> Result<()> {
+    record_session_in(&crate::lead::state_location()?, address, session)
+}
+
+fn record_session_in(state: &Path, address: &str, session: &str) -> Result<()> {
+    let file = session_file_in(state, address);
+    let Ok(text) = std::fs::read_to_string(&file) else { return Ok(()) };
+    let record = parse_record(&text);
+    if record.agent() != Agent::Codex || record.session.as_deref() == Some(session) {
+        return Ok(());
+    }
+    crate::state::write(&file, record_text(&Record { session: Some(session.to_string()), ..record }))
 }
 
 pub(super) fn open_space(repo: &Path, slot: &Slot, task: &str, focus: bool) -> Result<herdr::Space> {
@@ -232,6 +247,9 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     let recorded = running.as_ref().and_then(|_| recorded_session(&task, &repo).profile);
     let (profile, fell_back) = task_profile(&repo, given, recorded.as_deref())?;
     sandboxed(config::resolve(Some(&repo))?.settings.sandbox.value, &profile, crate::sandbox::missing_here)?;
+    if profile.agent == Agent::Codex {
+        crate::agent::codex::ready_to_start(crate::agent::codex::home().as_deref(), &peers::kelpie_command()?)?;
+    }
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = running {
         return restart(&place(&existing), &existing, focus, prompt).map(|begun| match &fell_back {
@@ -288,8 +306,8 @@ fn launch_new(repo: &Path, task: &str, slot: &Slot, address: &str, place: Launch
     let configured = profile.permission_mode.clone().or(configured);
     let (agent_name, started) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place }, &agent_pane, Session::New(new_session_id()?))?;
     let prompted = match &started {
-        Ok(started) => send_prompt(started, prompt, |text| crate::typing::prompt_confirmed(&agent_name, text, address), |text| messages::hold_prompt(address, text))
-            .map_err(|error| unprompted("Started", task, &slot.path, &error)),
+        Ok(started) => send_prompt(profile.agent.name(), started, prompt, |text| crate::typing::prompt_confirmed(&agent_name, text, address), |text| messages::hold_prompt(address, text))
+            .map_err(|error| unprompted(profile.agent.name(), "Started", task, &slot.path, &error)),
         Err(_) => Ok(Asks::default()),
     };
     if focus {
@@ -328,8 +346,15 @@ fn skills(repo: &Path) -> Result<(String, Option<String>, String)> {
     Ok((setup_skill.value, config::setup_command_in(setup_command.value, repo), rules_skill.value))
 }
 
-// Every Claude kelpie starts or resumes for a task runs with these two files, written afresh: a session without them never reports.
-fn prepare(place: &Launch, resumed: bool) -> Result<(PathBuf, PathBuf)> {
+pub(crate) struct Prepared {
+    pub settings: PathBuf,
+    pub role: PathBuf,
+    pub sandboxed: bool,
+    pub tmp: PathBuf,
+}
+
+// Every agent kelpie starts or resumes for a task runs with these two files, written afresh: a session without them never reports.
+fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
     let Launch { repo, task, profile, setup_skill, setup_command, rules_skill, ref worktree, vault, note, .. } = *place;
     crate::push_block::warn_if_off(crate::push_block::install(worktree, &state_dir()?)?);
     let address = peers::address(task, &name_of(repo));
@@ -347,9 +372,9 @@ fn prepare(place: &Launch, resumed: bool) -> Result<(PathBuf, PathBuf)> {
     let written = profile.agent.task_settings(&peers::kelpie_command()?, &address, note.map(|_| address.as_str()), Some(&dirs), profile, shell);
     let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &written)?;
     let added = profiles::role_section(profile)?;
-    let (role, text) = peers::role_file(task, &peers::Place { repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added, sandboxed: shell })?;
+    let (role, text) = peers::role_file(task, &peers::Place { agent: profile.agent, repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added, sandboxed: shell })?;
     crate::known::began(&address, &text, resumed);
-    Ok((settings, role))
+    Ok(Prepared { settings, role, sandboxed: shell, tmp })
 }
 
 pub(crate) fn task_at(cwd: &Path) -> Option<(PathBuf, Slot)> {
@@ -373,7 +398,7 @@ pub(crate) fn task_role(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
         }
     }
     let place = Launch { repo: &repo, task: &task, mode: None, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault, note: note.as_deref() };
-    prepare(&place, true).map(Some)
+    prepare(&place, true).map(|prepared| Some((prepared.settings, prepared.role)))
 }
 
 // The task's role as kelpie gives it now, written to its role file alone: the file, and the role without its peer list.
@@ -385,13 +410,16 @@ pub(crate) fn task_role_now(cwd: &Path) -> Result<Option<(PathBuf, String)>> {
     let (profile, _) = task_profile(&repo, None, recorded_session(&task, &repo).profile.as_deref())?;
     let added = profiles::role_section(&profile)?;
     let sandboxed = profile.sandbox.on(config::resolve(Some(&repo))?.settings.sandbox.value);
-    peers::role_file(&task, &peers::Place { repo: &repo, worktree: &slot.path, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, note: note.as_deref(), profile: &added, sandboxed }).map(Some)
+    peers::role_file(&task, &peers::Place { agent: profile.agent, repo: &repo, worktree: &slot.path, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, note: note.as_deref(), profile: &added, sandboxed }).map(Some)
 }
 
-// Starts the task's Claude in the pane with its role and settings; the outer error is setup, the inner one is Claude not starting.
+// Starts the task's agent in the pane with its role and settings; the outer error is setup, the inner one is the agent not starting.
 fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<Started>)> {
     let Launch { repo, task, mode, profile, .. } = *place;
-    let (settings, role) = prepare(place, matches!(session, Session::Resume(_)))?;
+    if profile.agent == Agent::Codex {
+        crate::agent::codex::ready_to_start(crate::agent::codex::home().as_deref(), &peers::kelpie_command()?)?;
+    }
+    let prepared = prepare(place, matches!(session, Session::Resume(_)))?;
     if let Err(error) = messages::drop_held_prompts(&peers::address(task, &name_of(repo))) {
         eprintln!("Could not drop a prompt still held for {task} from an earlier start: {error}");
     }
@@ -399,10 +427,13 @@ fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Resul
     let taken = herdr::agents()?.iter().any(|agent| agent["name"] == task);
     let agent_name: String = if taken { format!("{task}_{}", slug(&name_of(repo))?) } else { task.to_string() }.chars().take(32).collect();
     let agent = profile.agent;
-    let agent_args = agent.start_args(mode, profile, &settings, &role, &session);
+    let address = peers::address(task, &name_of(repo));
+    let files = TaskFiles { address: &address, settings: &prepared.settings, role: &prepared.role, sandboxed: prepared.sandboxed, tmp: Some(&prepared.tmp) };
+    let agent_args = agent.start_args(mode, profile, &files, &session);
     let started = agent.start(&agent_name, pane, &agent_args.iter().map(String::as_str).collect::<Vec<_>>(), agent.trusted_by_user(repo));
     if let Ok(started) = &started {
         let id = match &session {
+            Session::New(_) if agent == Agent::Codex => None,
             Session::New(id) => Some(id.clone()),
             Session::Resume(_) => recorded_session(task, repo).session,
         };
@@ -452,15 +483,15 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
         store_prompt(path, Some(given))?;
     }
     let unheard = match &session {
-        Session::Resume(id) => agent.home().and_then(|home| std::fs::read_to_string(agent.transcripts_dir(&home, &slot.path).join(format!("{id}.jsonl"))).ok()).is_none_or(|text| agent.user_messages(&text).is_empty()),
+        Session::Resume(id) => agent.home().and_then(|home| agent.session_transcript(&home, Some(&slot.path), id)).is_none_or(|file| unheard_in(agent, &file)),
         Session::New(_) => true,
     };
     let prompt = prompt_for(&session, given, stored, unheard);
     let (agent_name, started) = launch(&place, &pane, session)?;
     let address = peers::address(task, &name_of(place.repo));
     let prompted = match &started {
-        Ok(started) => send_prompt(started, prompt.as_deref(), |text| crate::typing::prompt_confirmed(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
-            .map_err(|error| unprompted("Restarted", task, &slot.path, &error)),
+        Ok(started) => send_prompt(agent.name(), started, prompt.as_deref(), |text| crate::typing::prompt_confirmed(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
+            .map_err(|error| unprompted(agent.name(), "Restarted", task, &slot.path, &error)),
         Err(_) => Ok(Asks::default()),
     };
     if focus {
@@ -479,12 +510,17 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
         (false, true) => "No conversation of its own was found, so it starts a new one.",
         (false, false) => "No conversation of its own was found, so it starts a new one; there was no prompt to send again.",
     };
-    let said = trust_said.on(Notice::new(Tone::Done, "Restarted its Claude").next(how)).detail("task", task).detail("folder", slot.path.display().to_string());
+    let said = trust_said.on(Notice::new(Tone::Done, format!("Restarted its {}", agent.name())).next(how)).detail("task", task).detail("folder", slot.path.display().to_string());
     Ok(Begun { said: said.to_string(), started })
 }
 
-fn unprompted(how: &str, task: &str, folder: &Path, error: &str) -> String {
-    Notice::new(Tone::You, format!("{how}, but its prompt did not reach Claude")).you("Paste the task's prompt into its Claude.").detail("task", task).detail("folder", folder.display().to_string()).detail("error", error).to_string()
+// A conversation kelpie cannot read, as a rollout Codex compressed, may have heard its prompt, so it is not sent again.
+fn unheard_in(agent: Agent, file: &Path) -> bool {
+    !crate::agent::codex::compressed(file) && std::fs::read_to_string(file).ok().is_none_or(|text| agent.user_messages(&text).is_empty())
+}
+
+fn unprompted(name: &str, how: &str, task: &str, folder: &Path, error: &str) -> String {
+    Notice::new(Tone::You, format!("{how}, but its prompt did not reach {name}")).you(format!("Paste the task's prompt into its {name}.")).detail("task", task).detail("folder", folder.display().to_string()).detail("error", error).to_string()
 }
 
 // What a start still asks of the user once Claude runs: an answer only they can give, and what kelpie does after it.
@@ -512,10 +548,11 @@ impl Asks {
 }
 
 // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
-fn send_prompt(started: &Started, prompt: Option<&str>, type_now: impl FnOnce(&str) -> Result<()>, hold: impl FnOnce(&str) -> Result<()>) -> Result<Asks> {
+fn send_prompt(name: &str, started: &Started, prompt: Option<&str>, type_now: impl FnOnce(&str) -> Result<()>, hold: impl FnOnce(&str) -> Result<()>) -> Result<Asks> {
     let asks = match started {
-        Started::AwaitsTrust => "Answer Claude's question in its Space: whether you trust the repo's folder.",
-        Started::AwaitsBypass => "Answer Claude's question in its Space: whether to accept bypass permissions mode.",
+        Started::AwaitsTrust => format!("Answer {name}'s question in its Space: whether you trust the repo's folder."),
+        Started::AwaitsBypass => format!("Answer {name}'s question in its Space: whether to accept bypass permissions mode."),
+        Started::AwaitsHooks => format!("Answer {name}'s question in its Space: whether to trust the hooks it found new or changed."),
         Started::Ready | Started::BypassDisabled => {
             if let Some(prompt) = prompt {
                 type_now(prompt)?;
@@ -567,7 +604,7 @@ mod tests {
     fn a_prompt_is_typed_at_once_into_a_ready_claude_and_held_while_the_user_owes_the_trust_answer() {
         let sent = |started: Started, prompt: Option<&str>, keeps: bool| {
             let (typed, held) = (std::cell::RefCell::new(Vec::new()), std::cell::RefCell::new(Vec::new()));
-            let said = send_prompt(&started, prompt, |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |text| { held.borrow_mut().push(text.to_string()); if keeps { Ok(()) } else { Err("Another kelpie is holding the message log; try again".to_string()) } });
+            let said = send_prompt("Claude", &started, prompt, |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |text| { held.borrow_mut().push(text.to_string()); if keeps { Ok(()) } else { Err("Another kelpie is holding the message log; try again".to_string()) } });
             (said, typed.into_inner(), held.into_inner())
         };
         assert_eq!(sent(Started::Ready, Some("Fix the flaky test"), true), (Ok(Asks::default()), vec!["Fix the flaky test".to_string()], Vec::new()));
@@ -635,8 +672,8 @@ mod tests {
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(super) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
         assert!(body("launch_new").find("store_prompt(").unwrap() < body("launch_new").find("launch(").unwrap(), "the prompt is kept even when the first start fails");
         assert!(body("begin").contains("restart(&place(&existing), &existing, focus, prompt)"), "start's prompt reaches the resume path");
-        assert!(body("restart").contains("prompt_for(&session, given, stored, unheard)") && body("restart").contains("send_prompt(started, prompt.as_deref(),"));
-        assert!(body("restart").contains("user_messages(&text).is_empty()"));
+        assert!(body("restart").contains("prompt_for(&session, given, stored, unheard)") && body("restart").contains("send_prompt(agent.name(), started, prompt.as_deref(),"));
+        assert!(body("restart").contains("unheard_in(agent, &file)"));
         assert!(body("forget_session").contains("prompt_file("));
     }
 
@@ -678,6 +715,60 @@ mod tests {
         assert_eq!(previous_session(Agent::Claude, &dir, &slot, "billing", &home, Some("gone".to_string())).as_deref(), Some("latest"));
         std::fs::remove_dir_all(home).unwrap();
         cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_codex_task_resumes_the_session_its_hook_recorded_or_the_newest_rollout_begun_in_its_worktree() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let home = dir.with_extension("codex");
+        let day = home.join("sessions/2026/10/22");
+        std::fs::create_dir_all(&day).unwrap();
+        let created = branch_created(&dir, "billing").unwrap();
+        let write = |id: &str, cwd: &Path, at: std::time::SystemTime| {
+            let file = day.join(format!("rollout-2026-10-22T09-00-00-{id}.jsonl"));
+            std::fs::write(&file, format!("{}\n", json!({ "timestamp": "2026-10-22T09:00:00.000Z", "type": "session_meta", "payload": { "id": id, "cwd": cwd } }))).unwrap();
+            std::fs::File::options().append(true).open(&file).unwrap().set_modified(at).unwrap();
+        };
+        write("0000-other-folder", Path::new("/elsewhere"), created + Duration::from_secs(30));
+        assert_eq!(previous_session(Agent::Codex, &dir, &slot, "billing", &home, None), None, "a conversation in another folder is not the task's");
+        write("0001-first", &slot.path, created + Duration::from_secs(10));
+        write("0002-latest", &slot.path, created + Duration::from_secs(20));
+        assert_eq!(previous_session(Agent::Codex, &dir, &slot, "billing", &home, None).as_deref(), Some("0002-latest"));
+        assert_eq!(previous_session(Agent::Codex, &dir, &slot, "billing", &home, Some("0001-first".to_string())).as_deref(), Some("0001-first"));
+        assert_eq!(previous_session(Agent::Codex, &dir, &slot, "billing", &home, Some("gone".to_string())).as_deref(), Some("0002-latest"));
+        std::fs::remove_dir_all(home).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_resumed_conversation_hears_its_prompt_again_only_when_kelpie_can_read_it_had_none() {
+        let dir = crate::sh::test_dir("unheard");
+        let empty = dir.join("rollout-x-1.jsonl");
+        std::fs::write(&empty, "").unwrap();
+        let heard = dir.join("rollout-x-2.jsonl");
+        std::fs::write(&heard, json!({ "timestamp": "2026-10-22T09:00:00.000Z", "type": "event_msg", "payload": { "type": "user_message", "message": "fix it" } }).to_string()).unwrap();
+        let packed = dir.join("rollout-x-3.jsonl.zst");
+        std::fs::write(&packed, [0x28, 0xb5, 0x2f, 0xfd]).unwrap();
+        assert!(unheard_in(Agent::Codex, &empty));
+        assert!(!unheard_in(Agent::Codex, &heard));
+        assert!(!unheard_in(Agent::Codex, &packed), "a compressed rollout is resumed without sending the prompt twice");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_session_codex_picked_is_written_into_a_codex_tasks_record_and_never_a_claude_tasks() {
+        let state = crate::sh::test_dir("codex-record");
+        let codex = Record { session: None, mode: Some("acceptEdits".to_string()), profile: Some("coder".to_string()), agent: Some("codex".to_string()) };
+        crate::state::write(&session_file_in(&state, "billing@app"), record_text(&codex)).unwrap();
+        record_session_in(&state, "billing@app", "019b3136-fdf0").unwrap();
+        assert_eq!(parse_record(&std::fs::read_to_string(session_file_in(&state, "billing@app")).unwrap()), Record { session: Some("019b3136-fdf0".to_string()), ..codex }, "the mode and profile stay");
+        let claude = Record { session: Some("kelpies-own-id".to_string()), agent: Some("claude".to_string()), ..Record::default() };
+        crate::state::write(&session_file_in(&state, "search@app"), record_text(&claude)).unwrap();
+        record_session_in(&state, "search@app", "other").unwrap();
+        assert_eq!(parse_record(&std::fs::read_to_string(session_file_in(&state, "search@app")).unwrap()).session.as_deref(), Some("kelpies-own-id"));
+        record_session_in(&state, "nobody@app", "x").unwrap();
+        assert!(!session_file_in(&state, "nobody@app").exists(), "a session outside kelpie's tasks writes no record");
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     #[test]
@@ -754,12 +845,12 @@ mod tests {
     #[test]
     fn a_policy_that_disables_bypass_is_said_and_the_prompt_still_goes_in() {
         let typed = std::cell::RefCell::new(Vec::new());
-        let said = send_prompt(&Started::BypassDisabled, Some("Fix the flaky test"), |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |_| panic!("nothing is held for a running Claude")).unwrap();
+        let said = send_prompt("Claude", &Started::BypassDisabled, Some("Fix the flaky test"), |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |_| panic!("nothing is held for a running Claude")).unwrap();
         assert_eq!(typed.into_inner(), ["Fix the flaky test"]);
         let detail = said.detail.unwrap();
         assert!(detail.contains("disable bypass permissions mode") && detail.contains("permissions.disableBypassPermissionsMode"), "{detail}");
         let held = std::cell::RefCell::new(Vec::new());
-        let said = send_prompt(&Started::AwaitsBypass, Some("Fix the flaky test"), |_| panic!("no key reaches the bypass warning"), |text| { held.borrow_mut().push(text.to_string()); Ok(()) }).unwrap();
+        let said = send_prompt("Claude", &Started::AwaitsBypass, Some("Fix the flaky test"), |_| panic!("no key reaches the bypass warning"), |text| { held.borrow_mut().push(text.to_string()); Ok(()) }).unwrap();
         assert_eq!(held.into_inner(), ["Fix the flaky test"]);
         assert_eq!(said.you.as_deref(), Some("Answer Claude's question in its Space: whether to accept bypass permissions mode."));
         assert!(said.next.unwrap().starts_with("Once you answer, kelpie types"));
@@ -829,9 +920,10 @@ mod tests {
         assert_eq!(chosen_mode(None, None, configured.as_deref()), Some("acceptEdits"), "the profile's mode goes ahead of task.permission_mode");
         assert_eq!(chosen_mode(Some(BYPASS), None, configured.as_deref()), Some(BYPASS), "--mode goes ahead of the profile's");
         let (file, role) = (Path::new("/state/roles/billing@app.settings.json"), Path::new("/state/roles/billing@app.md"));
-        let args = Agent::Claude.start_args(chosen_mode(None, None, configured.as_deref()), &designer, file, role, &Session::New("1f0c".to_string()));
+        let files = TaskFiles { address: "billing@app", settings: file, role, sandboxed: true, tmp: None };
+        let args = Agent::Claude.start_args(chosen_mode(None, None, configured.as_deref()), &designer, &files, &Session::New("1f0c".to_string()));
         assert_eq!(args, ["--permission-mode", "acceptEdits", "--model", "opus", "--effort", "high", "--settings", "/state/roles/billing@app.settings.json", "--append-system-prompt-file", "/state/roles/billing@app.md", "--session-id", "1f0c"]);
-        assert_eq!(Agent::Claude.start_args(None, &task, file, role, &Session::Resume("1f0c".to_string())), claude_args(None, file, role, &Session::Resume("1f0c".to_string())));
+        assert_eq!(Agent::Claude.start_args(None, &task, &files, &Session::Resume("1f0c".to_string())), claude_args(None, file, role, &Session::Resume("1f0c".to_string())));
         assert!(!claude_args(None, file, role, &Session::Resume("1f0c".to_string())).iter().any(|arg| arg == "--model" || arg == "--effort"), "the built-in task leaves the model to Claude");
         let source = include_str!("launch.rs");
         let prepare = &source[source.find("\nfn prepare(").unwrap()..];

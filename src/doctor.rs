@@ -466,6 +466,8 @@ pub struct Env {
     pub own_state: bool,
     pub data_home: Option<PathBuf>,
     pub claude_dir: PathBuf,
+    pub codex_dir: PathBuf,
+    pub profiles_dir: PathBuf,
     pub config: PathBuf,
     pub repos_dir: PathBuf,
     pub repo_config: Option<PathBuf>,
@@ -484,6 +486,8 @@ impl Env {
             own_state: var(crate::lead::STATE_DIR_VAR).is_some(),
             data_home: var("XDG_DATA_HOME"),
             claude_dir: var("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
+            codex_dir: var("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),
+            profiles_dir: crate::profiles::dir(),
             config: config::path(),
             repos_dir: config::repos_dir(),
             repo_config: std::env::current_dir().ok().filter(|cwd| crate::repo::main_checkout(cwd).is_ok()).map(|cwd| config::repo_file(&cwd)),
@@ -492,6 +496,37 @@ impl Env {
             home,
         }
     }
+}
+
+pub const MIN_CODEX: &str = "0.163.0";
+
+// Codex is optional until a profile runs it; then its binary, kelpie's plugin and nothing in the user's config that turns hooks off are what a Codex task needs to report.
+pub fn codex(found: &crate::agent::codex::Availability, config: Option<&toml::Table>, needed: bool, home: &Path) -> Vec<Check> {
+    use crate::agent::codex::Installed;
+    let missing = |name: &str, fact: String, fix: Vec<String>| if needed { fail(name, fact, fix) } else { warn(name, fact, fix) };
+    let install = both("curl -fsSL https://chatgpt.com/codex/install.sh | sh (or brew install --cask codex)", "curl -fsSL https://chatgpt.com/codex/install.sh | sh (or npm install -g @openai/codex)");
+    let Some(binary) = &found.binary else {
+        return vec![if needed { fail("codex", "not on PATH; a profile here runs Codex", install) } else { ok("codex", "not on PATH; only a profile with agent = \"codex\" needs it") }];
+    };
+    let want = version(MIN_CODEX).unwrap_or_default();
+    let mut checks = vec![match found.version.as_deref().and_then(version) {
+        Some(have) if at_least(&have, &want) => ok("codex", format!("{} at {}", shown(&have), binary.display())),
+        Some(have) => missing("codex", format!("{} is older than {MIN_CODEX}, whose plugin hooks kelpie's Codex tasks need", shown(&have)), one("codex update")),
+        None => missing("codex", format!("cannot read the version from {} --version; need {MIN_CODEX}", binary.display()), one("codex update")),
+    }];
+    let root = crate::agent::codex::plugin_root(home);
+    checks.push(match &found.plugin {
+        Installed::Current => ok("codex plugin", format!("kelpie's plugin at {}", root.display())),
+        Installed::Missing => missing("codex plugin", "kelpie's plugin is not installed, so a Codex task neither reports nor gets its role".to_string(), one("kelpie setup codex")),
+        Installed::Stale(files) => missing("codex plugin", format!("kelpie's plugin is out of date ({})", files.join(", ")), one("kelpie setup codex")),
+    });
+    let blocked = crate::agent::codex::hooks_blocked(config);
+    checks.push(if blocked.is_empty() {
+        ok("codex hooks", "kelpie enables its plugin and trusts its three hooks by hash in each Codex session it starts")
+    } else {
+        missing("codex hooks", format!("{}: {}", home.join("config.toml").display(), blocked.join("; ")), one("turn them back on in Codex's /hooks, or drop [features] hooks = false"))
+    });
+    checks
 }
 
 fn read_json(path: &Path) -> Option<Value> {
@@ -536,6 +571,10 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(status_line(&claude_settings));
     checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
     checks.push(kelpie_on_path(&env.home, &env.path));
+    let needed = crate::profiles::list_in(&env.profiles_dir).0.iter().any(|profile| profile.agent == crate::agent::Agent::Codex);
+    let kelpie = crate::peers::kelpie_command().unwrap_or_default();
+    let codex_config = std::fs::read_to_string(env.codex_dir.join("config.toml")).ok().and_then(|text| text.parse::<toml::Table>().ok());
+    checks.extend(codex(&crate::agent::codex::availability(&env.path, Some(&env.codex_dir), &kelpie), codex_config.as_ref(), needed, &env.codex_dir));
     let places = crate::update_check::Places::new(plugin.as_ref().map(|plugin| plugin.root.clone()), env.claude_dir.clone(), channel);
     checks.push(updates(&env.kelpie_state, channel, &crate::update_check::installed(&places)));
     let keeper_on = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.keeper).unwrap_or(true);
@@ -1008,7 +1047,7 @@ mod tests {
         let dir = scratch("env");
         let env = Env {
             path: vec![dir.join("bin")], home: dir.join("home"), state_home: dir.join("state"), kelpie_state: dir.join("state/kelpie"), own_state: true, data_home: None,
-            claude_dir: dir.join("claude"), config: dir.join("config.toml"), repos_dir: dir.join("repos"), repo_config: None, repo: None, uid: 0,
+            claude_dir: dir.join("claude"), codex_dir: dir.join("codex"), profiles_dir: dir.join("profiles"), config: dir.join("config.toml"), repos_dir: dir.join("repos"), repo_config: None, repo: None, uid: 0,
         };
         let checks = checks(&env);
         assert!(failed(&checks), "no tools on PATH is a failure");
@@ -1016,11 +1055,34 @@ mod tests {
         for needed in ["git", "herdr", "claude", "jq", "herdr plugin", "claude plugin", "status line", "current link", "kelpie on PATH", "updates", "state dir", "config", "setup skill", "notify", "vault", "backlog local"] {
             assert!(names.contains(&needed), "{needed} is not checked: {names:?}");
         }
-        assert!(!dir.join("home").exists() && !dir.join("claude").exists(), "doctor reads, it never creates");
+        assert!(!dir.join("home").exists() && !dir.join("claude").exists() && !dir.join("codex").exists(), "doctor reads, it never creates");
+        assert!(names.contains(&"codex"), "{names:?}");
         let rendered = render(&checks);
         assert!(rendered.lines().last().unwrap().ends_with(" ok"), "{rendered}");
         assert!(rendered.contains("fail  git"), "{rendered}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn doctor_shows_codex_as_optional_until_a_profile_runs_it_and_then_what_it_still_needs() {
+        use crate::agent::codex::{Availability, Installed};
+        let home = Path::new("/u/.codex");
+        let absent = Availability { binary: None, version: None, plugin: Installed::Missing };
+        assert_eq!(codex(&absent, None, false, home).iter().map(|check| (check.level, check.name.as_str())).collect::<Vec<_>>(), [(Level::Ok, "codex")], "no line nags a Claude-only machine");
+        let needed = codex(&absent, None, true, home);
+        assert_eq!((needed.len(), needed[0].level), (1, Level::Fail));
+        assert!(needed[0].fix.iter().any(|fix| fix.contains("https://chatgpt.com/codex/install.sh")));
+        let ready = Availability { binary: Some(PathBuf::from("/u/.local/bin/codex")), version: Some("codex-cli 0.163.0".to_string()), plugin: Installed::Current };
+        let lines = codex(&ready, Some(&"model = \"gpt-5.5\"\n".parse().unwrap()), true, home);
+        assert_eq!(lines.iter().map(|check| (check.level, check.name.as_str())).collect::<Vec<_>>(), [(Level::Ok, "codex"), (Level::Ok, "codex plugin"), (Level::Ok, "codex hooks")]);
+        assert_eq!(lines[0].fact, "0.163.0 at /u/.local/bin/codex");
+        assert!(lines[1].fact.contains("/u/.codex/plugins/cache/kelpie/kelpie/local") && lines[2].fact.contains("trusts its three hooks by hash"));
+        let old = Availability { version: Some("codex-cli 0.120.4".to_string()), plugin: Installed::Missing, ..ready };
+        let off: toml::Table = "[features]\nhooks = false\n".parse().unwrap();
+        let lines = codex(&old, Some(&off), true, home);
+        assert!(lines.iter().all(|check| check.level == Level::Fail), "{lines:?}");
+        assert!(lines[0].fact.contains("older than 0.163.0") && lines[1].fix == ["kelpie setup codex"] && lines[2].fact.contains("[features] hooks = false"), "{lines:?}");
+        assert_eq!(codex(&old, Some(&off), false, home)[2].level, Level::Warn, "a gap is a warning until a profile runs Codex");
     }
 
     #[test]

@@ -149,6 +149,13 @@ pub fn releases_guard(rule: &str) -> bool {
     command.is_none_or(|command| command.contains('*') || GUARDED.contains(&command))
 }
 
+// Claude Code's permission rules, plugins and sandbox lists have no Codex counterpart kelpie can set, so a Codex profile is refused them rather than silently running without them.
+fn claude_only(table: &Table) -> Option<String> {
+    let keys = ["deny", "allow", "claude"].into_iter().find(|key| table.contains_key(*key)).map(str::to_string);
+    let sandbox = table.get("sandbox").and_then(toml::Value::as_table).and_then(|sandbox| sandbox.keys().find(|key| *key != "enabled").map(|key| format!("sandbox.{key}")));
+    keys.or(sandbox)
+}
+
 pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> Result<Profile> {
     let source = file.display().to_string();
     let table: Table = contents.parse().map_err(|error: toml::de::Error| format!("{source}: {}", error.to_string().trim()))?;
@@ -171,6 +178,12 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
     }
     if let Some(agent) = text(&table, "agent", &source)? {
         profile.agent = Agent::named(&agent).map_err(|error| format!("{source}: agent: {error}"))?;
+    }
+    if reviewer && profile.agent != Agent::Claude {
+        return Err(format!("{source}: agent: kelpie review runs Claude; a task's profile can name \"{}\"", profile.agent.key()));
+    }
+    if profile.agent == Agent::Codex && let Some(key) = claude_only(&table) {
+        return Err(format!("{source}: {key}: Claude Code's, which a Codex task does not read; drop it from a profile with agent = \"codex\""));
     }
     profile.model = text(&table, "model", &source)?.or(profile.model);
     if let Some(effort) = text(&table, "effort", &source)? {
@@ -287,7 +300,7 @@ pub fn to_json(profile: &Profile) -> Value {
     })
 }
 
-pub fn describe(profiles: &[Profile], errors: &[String]) -> String {
+pub fn describe(profiles: &[Profile], errors: &[String], codex: Option<&str>) -> String {
     let mut lines = Vec::new();
     for profile in profiles {
         let source = match (&profile.file, built_in(&profile.name).is_some()) {
@@ -308,6 +321,9 @@ pub fn describe(profiles: &[Profile], errors: &[String]) -> String {
         runs.extend((profile.sandbox.enabled == Some(false)).then(|| "sandbox off".to_string()));
         runs.extend((!profile.sandbox.excluded.is_empty()).then(|| format!("outside the sandbox: {}", profile.sandbox.excluded.join(", "))));
         lines.push(format!("  runs: {}", runs.join(" · ")));
+        if let Some(codex) = codex.filter(|_| profile.agent == Agent::Codex) {
+            lines.push(format!("  codex: {codex}"));
+        }
     }
     lines.extend(errors.iter().map(|error| format!("ignored: {error}")));
     lines.join("\n")
@@ -315,12 +331,22 @@ pub fn describe(profiles: &[Profile], errors: &[String]) -> String {
 
 pub fn print(json: bool) -> Result<String> {
     let (profiles, errors) = list_in(&dir());
+    let codex = profiles.iter().any(|profile| profile.agent == Agent::Codex).then(codex_availability).flatten();
     if json {
         let mut shown: Vec<Value> = profiles.iter().map(to_json).collect();
+        for item in shown.iter_mut().filter(|item| item["agent"] == "codex") {
+            item["codex"] = json!(codex);
+        }
         shown.extend(errors.iter().map(|error| json!({ "error": error })));
         return serde_json::to_string_pretty(&shown).map_err(|error| error.to_string());
     }
-    Ok(describe(&profiles, &errors))
+    Ok(describe(&profiles, &errors, codex.as_deref()))
+}
+
+fn codex_availability() -> Option<String> {
+    let path: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+    let kelpie = crate::peers::kelpie_command().ok()?;
+    Some(crate::agent::codex::availability(&path, crate::agent::codex::home().as_deref(), &kelpie).line())
 }
 
 #[cfg(test)]
@@ -354,10 +380,9 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_names_claude_or_is_refused_with_its_file_and_key() {
+    fn a_profile_names_claude_or_codex_or_is_refused_with_its_file_and_key() {
         let dir = folder("profile-refused", &[]);
         let refused = |text: &str| { std::fs::write(dir.join("x.toml"), text).unwrap(); load_in(&dir, "x").unwrap_err() };
-        assert!(refused("agent = \"codex\"\n").ends_with("x.toml: agent: \"codex\" is not supported yet; kelpie runs \"claude\""), "{}", refused("agent = \"codex\"\n"));
         assert!(refused("agent = \"gemini\"\n").contains("agent: \"gemini\" is not an agent kelpie runs"));
         assert!(refused("permission_mode = \"yolo\"\n").contains("x.toml: permission_mode: \"yolo\" is not a Claude Code permission mode"), "the same check as task.permission_mode");
         assert!(refused("effort = \"huge\"\n").contains("effort: \"huge\" is not an effort level; use \"low\", \"medium\", \"high\", \"xhigh\", \"max\""));
@@ -431,14 +456,15 @@ mod tests {
 
     #[test]
     fn kelpie_profiles_lists_the_built_in_ones_then_each_file_and_names_a_broken_one() {
-        let dir = folder("profile-list", &[("designer.toml", "about = \"UI work\"\nfor = \"UI, CSS\"\nmodel = \"opus\"\n"), ("broken.toml", "agent = \"codex\"\n"), ("notes.txt", "x")]);
+        let dir = folder("profile-list", &[("designer.toml", "about = \"UI work\"\nfor = \"UI, CSS\"\nmodel = \"opus\"\n"), ("broken.toml", "agent = \"gemini\"\n"), ("notes.txt", "x")]);
         let (profiles, errors) = list_in(&dir);
         assert_eq!(profiles.iter().map(|profile| profile.name.as_str()).collect::<Vec<_>>(), ["task", "reviewer", "ops", "designer"]);
         assert_eq!(errors.len(), 1);
-        let shown = describe(&profiles, &errors);
+        let shown = describe(&profiles, &errors, Some("codex-cli 0.163.0 at /bin/codex · kelpie's plugin installed"));
         assert!(shown.starts_with("task  (built in)\n  for: any task no other profile fits\n"), "{shown}");
         assert!(shown.contains(&format!("designer  ({})\n  for: UI, CSS\n  about: UI work\n  runs: claude · model opus", dir.join("designer.toml").display())), "{shown}");
-        assert!(shown.contains("ignored: ") && shown.contains("broken.toml: agent: \"codex\" is not supported yet"), "{shown}");
+        assert!(shown.contains("ignored: ") && shown.contains("broken.toml: agent: \"gemini\" is not an agent kelpie runs"), "{shown}");
+        assert!(!shown.contains("  codex: "), "Codex's line shows only under a profile that runs it: {shown}");
         assert!(shown.contains("ops  (built in)\n  for: work on other machines over ssh\n") && shown.contains("outside the sandbox: ssh *, scp *, rsync *"), "{shown}");
         let json = to_json(&profiles[3]);
         assert_eq!((json["name"].as_str(), json["for"].as_str(), json["about"].as_str(), json["agent"].as_str(), json["built_in"].as_bool()), (Some("designer"), Some("UI, CSS"), Some("UI work"), Some("claude"), Some(false)));
@@ -464,15 +490,35 @@ mod tests {
     fn a_running_task_whose_recorded_profile_no_longer_loads_goes_on_as_task_and_says_why() {
         let dir = folder("profile-running", &[("designer.toml", "model = \"opus\"\n")]);
         assert_eq!(for_running_task(&dir, None, Some("designer"), None).unwrap().1, None);
-        std::fs::write(dir.join("designer.toml"), "agent = \"codex\"\n").unwrap();
+        std::fs::write(dir.join("designer.toml"), "agent = \"gemini\"\n").unwrap();
         let (profile, said) = for_running_task(&dir, None, Some("designer"), None).unwrap();
         assert_eq!(profile, built_in(TASK).unwrap(), "work keeps going");
         let said = said.unwrap();
-        assert!(said.contains("its profile \"designer\" did not load") && said.contains("designer.toml: agent: \"codex\" is not supported yet"), "{said}");
+        assert!(said.contains("its profile \"designer\" did not load") && said.contains("designer.toml: agent: \"gemini\" is not an agent kelpie runs"), "{said}");
         std::fs::remove_file(dir.join("designer.toml")).unwrap();
         assert!(for_running_task(&dir, None, Some("designer"), None).unwrap().1.unwrap().contains("No profile \"designer\""));
         assert!(for_running_task(&dir, Some("designer"), Some("task"), None).is_err(), "a profile asked for by name is refused, not swapped");
         assert!(for_running_task(&dir, None, None, Some("designer")).is_err(), "a new start never falls back");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_profile_that_says_codex_starts_codex_with_its_model_and_effort_and_no_claude_only_keys() {
+        let dir = folder("profile-codex", &[("coder.toml", "about = \"Codex on GPT\"\nfor = \"a second opinion\"\nagent = \"codex\"\nmodel = \"gpt-5.5\"\neffort = \"xhigh\"\npermission_mode = \"acceptEdits\"\n[sandbox]\nenabled = true\n")]);
+        let coder = load_in(&dir, "coder").unwrap();
+        assert_eq!((coder.agent, coder.model.as_deref(), coder.effort.as_deref(), coder.sandbox.enabled), (Agent::Codex, Some("gpt-5.5"), Some("xhigh"), Some(true)));
+        let shown = describe(&[built_in(TASK).unwrap(), coder.clone()], &[], Some("codex-cli 0.163.0 at /bin/codex · kelpie's plugin installed"));
+        assert!(shown.contains("coder  (") && shown.contains("  runs: codex · model gpt-5.5 · effort xhigh · mode acceptEdits\n  codex: codex-cli 0.163.0 at /bin/codex · kelpie's plugin installed"), "{shown}");
+        assert!(shown.starts_with("task  (built in)\n") && shown.contains("nothing added\n  runs: claude\ncoder"), "the built-in profiles stay Claude: {shown}");
+        assert_eq!(to_json(&coder)["agent"], "codex");
+        let refused = |text: &str| { std::fs::write(dir.join("x.toml"), format!("agent = \"codex\"\n{text}")).unwrap(); load_in(&dir, "x").unwrap_err() };
+        for (text, key) in [("deny = [\"Bash(rm:*)\"]\n", "deny"), ("allow = [\"Read\"]\n", "allow"), ("[claude]\nplugins = [\"a@b\"]\n", "claude"), ("[sandbox]\nallowed_domains = [\"x.org\"]\n", "sandbox.allowed_domains")] {
+            assert!(refused(text).contains(&format!("x.toml: {key}: Claude Code's, which a Codex task does not read")), "{key}: {}", refused(text));
+        }
+        std::fs::write(dir.join("reviewer.toml"), "agent = \"codex\"\n").unwrap();
+        assert!(load_in(&dir, REVIEWER).unwrap_err().contains("agent: kelpie review runs Claude"), "the reviewer stays Claude");
+        let ops = { std::fs::write(dir.join("ops.toml"), "agent = \"codex\"\n").unwrap(); load_in(&dir, OPS).unwrap() };
+        assert_eq!(ops.agent, Agent::Codex, "a file may move a built-in profile to Codex; only its own keys are checked");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

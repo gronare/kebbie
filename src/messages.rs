@@ -363,12 +363,12 @@ fn heard(address: &str, since: u64) -> bool {
     let Some((task, repo)) = address.split_once('@') else { return false };
     let Some(repo) = crate::repo::checkout_named(repo) else { return false };
     crate::tasks::slots(&repo).ok().and_then(|slots| slots.into_iter().find(|slot| slot.task.as_deref() == Some(task)))
-        .and_then(|slot| crate::tasks::transcript(&repo, &slot)).and_then(|(_, file)| fs::read_to_string(file).ok())
-        .is_some_and(|text| typed_by_user_since(&text, since))
+        .and_then(|slot| crate::tasks::transcript(&repo, &slot)).and_then(|(agent, file)| Some((agent, fs::read_to_string(file).ok()?)))
+        .is_some_and(|(agent, text)| typed_by_user_since(agent, &text, since))
 }
 
-fn typed_by_user_since(transcript: &str, since: u64) -> bool {
-    crate::agent::Agent::Claude.user_messages_at(transcript).iter().any(|(at, text)| at.is_some_and(|at| at >= since * 1000) && !text.starts_with("[from "))
+fn typed_by_user_since(agent: crate::agent::Agent, transcript: &str, since: u64) -> bool {
+    agent.user_messages_at(transcript).iter().any(|(at, text)| at.is_some_and(|at| at >= since * 1000) && !text.starts_with("[from "))
 }
 
 type Wanted<'a> = &'a dyn Fn(&Message, &Session) -> bool;
@@ -1302,11 +1302,11 @@ mod tests {
         let entry = |stamp: &str, text: &str| json!({ "type": "user", "timestamp": stamp, "message": { "role": "user", "content": text } }).to_string();
         let held_at = crate::typing::iso_millis("2026-10-21T10:00:00.000Z").unwrap() / 1000;
         let older = entry("2026-10-20T09:00:00.000Z", "Fix the login page");
-        assert!(!typed_by_user_since(&older, held_at), "an older conversation's turns do not drop a newly held prompt");
+        assert!(!typed_by_user_since(crate::agent::Agent::Claude, &older, held_at), "an older conversation's turns do not drop a newly held prompt");
         let told = entry("2026-10-21T10:00:05.000Z", &delivered("lead", "also check the cache"));
-        assert!(!typed_by_user_since(&told, held_at), "a message kelpie delivered is not the user's word");
+        assert!(!typed_by_user_since(crate::agent::Agent::Claude, &told, held_at), "a message kelpie delivered is not the user's word");
         let typed = entry("2026-10-21T10:00:05.000Z", "Fix the flaky test");
-        assert!(typed_by_user_since(&[older, told, typed].join("\n"), held_at), "a word typed after the hold drops the prompt");
+        assert!(typed_by_user_since(crate::agent::Agent::Claude, &[older, told, typed].join("\n"), held_at), "a word typed after the hold drops the prompt");
     }
 
     #[test]

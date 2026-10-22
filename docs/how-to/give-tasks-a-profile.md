@@ -35,7 +35,7 @@ A profile starts a task with its own model, effort, extra role, skills, permissi
 
    A profile with a mistake is listed as ignored, with its file and key.
 
-[`examples/profiles/`](../../examples/profiles) has a `designer` and a `careful` profile, each with its role file, to copy. [Profiles](../reference/configuration.md#profiles) lists every key.
+[`examples/profiles/`](../../examples/profiles) has a `designer` and a `careful` profile, each with its role file, to copy. [Profiles](../reference/configuration.md#profiles) lists every key. A profile with `agent = "codex"` runs the task in Codex instead; see [Run a task with Codex](run-a-task-with-codex.md).
 
 ## Start a task with it
 

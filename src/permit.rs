@@ -189,11 +189,14 @@ pub enum Caller {
 }
 
 // The subcommands kelpie refuses to a task by who calls it: a task's settings deny each, and never take one out of the sandbox.
-pub const USER_ONLY: [&str; 19] = ["approve", "push", "choose", "after", "ci dismiss", "ci outside", "away", "decide", "defer", "answered", "notify", "follow", "release", "review --withdraw", "issue add", "issue close", "issue retry", "issue link", "issue send"];
+pub const USER_ONLY: [&str; 20] = ["approve", "push", "setup", "choose", "after", "ci dismiss", "ci outside", "away", "decide", "defer", "answered", "notify", "follow", "release", "review --withdraw", "issue add", "issue close", "issue retry", "issue link", "issue send"];
 
 fn role_of(args: &str) -> Option<Caller> {
     let words: Vec<&str> = args.split_whitespace().collect();
     let program = words.first().map(|word| Path::new(word).file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default())?;
+    if program == "codex" || program.starts_with("codex-") || args.contains("@openai/codex") {
+        return Some(codex_role(args));
+    }
     if program != "claude" && !args.contains("@anthropic-ai/claude-code") {
         return None;
     }
@@ -208,6 +211,16 @@ fn role_of(args: &str) -> Option<Caller> {
         Some(address) if address.contains('@') && !address.ends_with(".review") => Caller::Task(address.to_string()),
         _ => Caller::Agent,
     })
+}
+
+// A Codex kelpie started names its task in the environment it sets for the commands Codex runs; any other Codex is an agent.
+fn codex_role(args: &str) -> Caller {
+    let marker = format!("{}=\"", crate::agent::codex::TASK_VAR);
+    let address = args.find("shell_environment_policy.set=").and_then(|at| args[at..].find(&marker).map(|found| at + found + marker.len())).and_then(|start| args[start..].split_once('"').map(|(address, _)| address.to_string()));
+    match address.filter(|address| address.contains('@') && args.contains(&crate::agent::codex::enable_override())) {
+        Some(address) => Caller::Task(address),
+        None => Caller::Agent,
+    }
 }
 
 // A Claude kelpie started before it wrote settings files carries the JSON inline: the lead's has the messages --unread prompt hook, a task's the kelpie hook command, and a task's role file names it.
@@ -316,7 +329,7 @@ pub fn describe(caller: &Caller) -> String {
         Caller::User => "the user".to_string(),
         Caller::Lead => "the lead".to_string(),
         Caller::Task(address) => format!("the task {address}"),
-        Caller::Agent => "a Claude session".to_string(),
+        Caller::Agent => "an agent session (Claude or Codex)".to_string(),
         Caller::Sandboxed => "a sandboxed process".to_string(),
         Caller::LeadSandboxed => format!("the lead, whose shell runs in a Claude Code sandbox your own settings turn on (add \"{} *\" to sandbox.excludedCommands in ~/.claude/settings.json, or run it from your own terminal),", crate::peers::kelpie_command().unwrap_or_else(|_| "kelpie".to_string())),
     }
@@ -431,9 +444,21 @@ mod tests {
         assert_eq!(role_of("claude --settings"), Some(Caller::Agent), "a dangling --settings names no file");
         assert_eq!(role_of("claude --settings /state/roles/other.settings.json"), Some(Caller::Agent), "a settings file without @ is no task");
         assert_eq!(role_of("claude --settings /state/roles/billing@app.review.settings.json"), Some(Caller::Agent), "the reviewer is an agent, never the task it reads");
-        assert_eq!(role_of("vim --settings /state/roles/lead.settings.json"), None, "only a Claude carries a role");
+        assert_eq!(role_of("vim --settings /state/roles/lead.settings.json"), None, "only an agent carries a role");
         assert_eq!(role_of(""), None);
         assert_eq!(role_of("   "), None);
+    }
+
+    #[test]
+    fn a_codex_kelpie_started_is_its_task_and_any_other_codex_an_agent_so_neither_passes_as_the_user() {
+        let profile = crate::profiles::Profile { agent: crate::agent::Agent::Codex, ..crate::profiles::built_in(crate::profiles::TASK).unwrap() };
+        let args = crate::agent::codex::start_args(None, &profile, "billing@app", true, Some(Path::new("/src/app/.git/worktrees/1/kelpie-tmp")), &crate::tasks::Session::New("x".to_string()));
+        let codex = format!("/Users/ada/.local/bin/codex {}", args.join(" "));
+        let table = |agent: &str| processes(&format!("  1     0 /sbin/launchd\n 40     1 /usr/bin/herdr server\n 50    40 {agent}\n 60    50 /bin/zsh -c kelpie push billing\n 70    60 /bin/kelpie push billing\n"));
+        assert_eq!(caller_in(&table(&codex), 70), Caller::Task("billing@app".to_string()));
+        assert_eq!(caller_in(&table("codex"), 70), Caller::Agent, "the user's own Codex runs no user-only command either");
+        assert_eq!(caller_in(&table("node /opt/node_modules/@openai/codex/bin/codex.js --model gpt-5.5"), 70), Caller::Agent, "the npm install runs as node");
+        assert_eq!(role_of("codex -c 'shell_environment_policy.set={KELPIE_ADDRESS=\"billing@app\"}'"), Some(Caller::Agent), "the address alone, without kelpie's plugin, is no task");
     }
 
     #[test]
@@ -487,7 +512,7 @@ mod tests {
         let lead = user_only_as(&Caller::Lead, "switching away mode").unwrap_err();
         assert_eq!(lead, "switching away mode is the user's call, from the board or their own terminal; the lead cannot");
         assert!(user_only_as(&Caller::Task("billing@app".to_string()), "x").unwrap_err().contains("the task billing@app cannot"));
-        assert!(user_only_as(&Caller::Agent, "x").unwrap_err().contains("a Claude session cannot"));
+        assert!(user_only_as(&Caller::Agent, "x").unwrap_err().contains("an agent session (Claude or Codex) cannot"));
         assert_eq!(describe(&Caller::User), "the user");
     }
 

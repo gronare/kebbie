@@ -636,6 +636,10 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             continue;
         }
         let line = |verdict: &Verdict| Line { label: pane.label.clone(), said: verdict.words(auto), stale: verdict.stale() };
+        if pane.agent != Agent::Claude {
+            lines.push(line(&Verdict::Skip(format!("kelpie restarts Claude sessions; {} is left as it runs", pane.agent.name()))));
+            continue;
+        }
         let Some(session) = pane.session.clone() else {
             lines.push(line(&Verdict::Skip("its session id is unknown".to_string())));
             continue;
@@ -1034,7 +1038,8 @@ mod tests {
         let mut anonymous = agent.clone();
         anonymous["agent_session"] = Value::Null;
         assert_eq!(Pane::from_agent(&anonymous).unwrap().session, None);
-        assert!(Pane::from_agent(&json!({ "agent": "codex", "pane_id": "p" })).is_none());
+        assert_eq!(Pane::from_agent(&json!({ "agent": "codex", "pane_id": "p" })).map(|pane| pane.agent), Some(Agent::Codex), "a Codex pane is kelpie's");
+        assert!(Pane::from_agent(&json!({ "agent": "gemini", "pane_id": "p" })).is_none());
     }
 
     #[test]

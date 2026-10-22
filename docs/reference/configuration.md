@@ -194,12 +194,12 @@ A file named `task.toml`, `ops.toml` or `reviewer.toml` adds its keys to that bu
 | --- | --- | --- | --- |
 | `about` | string | none | One line on what the profile does. `kelpie profiles` shows it, and the task's role opens its profile section with it. |
 | `for` | string | none | The work it fits, in your words. The lead chooses a task's profile by it. |
-| `agent` | `"claude"` | `"claude"` | The agent CLI the task runs. `"codex"` is refused as not supported yet. |
-| `model` | string | none | The model, as `claude --model` takes it. Unset leaves it to Claude's default. |
-| `effort` | `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"` | none | The effort level, as `claude --effort` takes it. |
+| `agent` | `"claude"` or `"codex"` | `"claude"` | The agent CLI the task runs. `"codex"` runs OpenAI's Codex CLI, which needs kelpie's plugin installed with [`kelpie setup codex`](commands.md#setup-and-maintenance); see [Run a task with Codex](../how-to/run-a-task-with-codex.md). The built-in profiles run Claude. |
+| `model` | string | none | The model, as `claude --model` or `codex --model` takes it. Unset leaves it to the agent's default. |
+| `effort` | `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"` | none | The effort level, as `claude --effort` takes it; a Codex task gets it as `model_reasoning_effort`. |
 | `role` | string | none | A markdown file in the profiles folder, its path relative to it: no absolute path, no `..`, and not a symlink. The task's role carries it after kelpie's own, under `## Your profile: <name>`. |
 | `skills` | list of strings | `[]` | Skills the task's Claude runs once its worktree is set up, named as `task.rules_skill` is. The role names them; this is an instruction, not a guarantee. |
-| `permission_mode` | the values of `task.permission_mode` | none | The permission mode, ahead of `task.permission_mode` and behind `kelpie start --mode`. |
+| `permission_mode` | the values of `task.permission_mode` | none | The permission mode, ahead of `task.permission_mode` and behind `kelpie start --mode`. A Codex task gets it as Codex's sandbox and approval flags, where only `"auto"` lets Codex's own reviewer approve a command outside the sandbox; see [How the sandbox and the permission mode map](../how-to/run-a-task-with-codex.md#how-the-sandbox-and-the-permission-mode-map). |
 | `deny` | list of strings | `[]` | Claude Code permission rules added after kelpie's own deny rules. |
 | `allow` | list of strings | `[]` | Claude Code permission rules added to the task's allow list. A rule that would let the task run `kelpie push`, `approve`, `choose`, `away`, `decide` or `after`, and a rule that allows every shell command, are refused when the profile loads. This check reads the rule's text; what keeps a task from pushing, approving or deciding is kelpie's deny rules, the push block and kelpie's own check of who calls it. |
 | `claude.plugins` | list of strings | `[]` | Claude Code plugins to turn on for the task, as `<plugin>@<marketplace>`; they go into the task's settings as `enabledPlugins`. The plugin must be installed. |
@@ -208,7 +208,9 @@ A file named `task.toml`, `ops.toml` or `reviewer.toml` adds its keys to that bu
 | `sandbox.allow_write` | list of strings | kelpie's caches | The folders a task's shell may write besides its worktree and temp folder, in place of kelpie's list; each from `/` or `~/`. A folder that holds or lies inside kelpie's state, config or install, herdr's config, `~/.claude` or a shell startup file is refused when the profile loads. |
 | `sandbox.excluded_commands` | list of strings | `[]` | Commands that run outside the sandbox, added to kelpie's own and the built-in profile's, in Claude Code's syntax (`docker compose *`). One that names kelpie, herdr, tmux, screen or zellij, or starts with a wildcard, is refused when the profile loads. Such a command reaches everything you can. |
 
-The `reviewer` profile takes `about`, `for`, `agent`, `model`, `effort` and `role`: the reviewer only reads, so its tools, permission mode and sandbox are kelpie's; its sandbox follows `task.sandbox`, with no host, folder or command outside it. Its `role` goes after the review skill.
+`deny`, `allow`, `claude.plugins` and every `sandbox` key but `enabled` are Claude Code's: a profile with `agent = "codex"` that sets one does not load, and the error names the key.
+
+The `reviewer` profile takes `about`, `for`, `agent`, `model`, `effort` and `role`, its `agent` only `"claude"`: the reviewer only reads, so its tools, permission mode and sandbox are kelpie's; its sandbox follows `task.sandbox`, with no host, folder or command outside it. Its `role` goes after the review skill.
 
 A profile that does not load is an error that names its file and key, and a task asked to start with it does not start. A running task whose recorded profile no longer loads, when it is restarted, goes on as the built-in `task`, and kelpie says so with the file and the error: in `kelpie start`'s answer, or to the lead for a restart by `kelpie restart` or the keeper. `kelpie profiles` lists the profiles with what each is for, and names a file it ignored with the reason.
 

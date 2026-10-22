@@ -138,6 +138,7 @@ fn replaced_binary(exe: &Path) -> PathBuf {
 }
 
 pub struct Place<'a> {
+    pub agent: crate::agent::Agent,
     pub repo: &'a Path,
     pub worktree: &'a Path,
     pub setup_skill: &'a str,
@@ -158,19 +159,25 @@ pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
 }
 
 pub fn worktree_values(place: &Place) -> Result<Vec<(&'static str, String)>> {
+    let note = setup_note(place.worktree)?.display().to_string();
     Ok(vec![
         ("path", place.worktree.display().to_string()),
         ("slot", name_of(place.worktree)),
         ("main", place.repo.display().to_string()),
-        ("note", setup_note(place.worktree)?.display().to_string()),
-        ("setup_skill", place.setup_skill.to_string()),
-        ("setup", setup_line(place.setup_command)),
-        ("rules", rules_line(place.rules_skill)),
+        ("agent", place.agent.name().to_string()),
+        ("prepare", prepare_line(place.agent, place.setup_skill, place.setup_command, &note)),
+        ("rules", if place.agent == crate::agent::Agent::Claude { rules_line(place.rules_skill) } else { String::new() }),
     ])
 }
 
-fn setup_line(command: Option<&str>) -> String {
-    command.map_or(String::new(), |command| format!(" It prepares the worktree with the repo's own command `{command}` (worktree.setup_command)."))
+// Claude runs the setup skill; Codex has no kelpie skill, so it runs the repo's own setup command itself.
+fn prepare_line(agent: crate::agent::Agent, setup_skill: &str, command: Option<&str>, note: &str) -> String {
+    if agent == crate::agent::Agent::Claude {
+        let setup = command.map_or(String::new(), |command| format!(" It prepares the worktree with the repo's own command `{command}` (worktree.setup_command)."));
+        return format!("Before anything else, run the skill `{setup_skill}` and follow it: it makes this worktree runnable without touching the main checkout, and leaves a note in `{note}` on what it did.{setup}");
+    }
+    let how = command.map_or("install its dependencies and create what it needs with the repo's own tools, never touching the main checkout".to_string(), |command| format!("run the repo's own setup command `{command}` from the worktree (worktree.setup_command)"));
+    format!("Before anything else, make this worktree runnable: {how}. Then write a short note in `{note}` on what you did.")
 }
 
 fn rules_line(rules_skill: &str) -> String {
@@ -277,7 +284,7 @@ mod tests {
         let dir = crate::sh::test_dir("role-profile");
         let file = dir.join("billing@app.md");
         let section = "\n\n## Your profile: designer\n\nMeasure in the browser.\n";
-        write_role(&file, include_str!("../roles/task.md"), &[("task", "billing"), ("repo", "app")], section).unwrap();
+        write_role(&file, include_str!("../roles/task.md"), &[("agent", "Claude"), ("task", "billing"), ("repo", "app")], section).unwrap();
         let written = std::fs::read_to_string(&file).unwrap();
         assert!(written.starts_with("# You are a kelpie task\n\nYou are the Claude for the task **billing** in the repo **app**"), "{}", &written[..200]);
         assert!(written.ends_with(section), "the profile's section closes the role");
@@ -349,7 +356,8 @@ mod tests {
             (Worktree::default(), Machine::default(), "kelpie:set-up-worktree"),
         ] {
             let skill_value = settings(&own, &machine).setup_skill.value;
-            let role = fill(template, &[("path", "/src/wt2.app"), ("slot", "wt2.app"), ("main", "/src/app"), ("note", "/src/app/.git/worktrees/wt2.app/kelpie-setup.md"), ("setup_skill", &skill_value)]);
+            let prepare = prepare_line(crate::agent::Agent::Claude, &skill_value, None, "/src/app/.git/worktrees/wt2.app/kelpie-setup.md");
+            let role = fill(template, &[("path", "/src/wt2.app"), ("slot", "wt2.app"), ("main", "/src/app"), ("prepare", &prepare)]);
             assert!(role.contains(&format!("run the skill `{skill}` and follow it")), "{role}");
             assert!(role.contains("You are in `/src/wt2.app`, worktree wt2.app of `/src/app`"));
             assert!(role.contains("a note in `/src/app/.git/worktrees/wt2.app/kelpie-setup.md`"));
@@ -361,12 +369,25 @@ mod tests {
         use crate::config::{Machine, Worktree, parse_repo, settings};
         let template = include_str!("../roles/task.md");
         let own = parse_repo("[worktree]\nsetup_command = \"script/prepare_worktree\"\n", "app.toml").unwrap();
-        let role = |own: &Worktree| fill(template, &[("setup_skill", "kelpie:set-up-worktree"), ("setup", &setup_line(settings(own, &Machine::default()).setup_command.value.as_deref()))]);
+        let role = |own: &Worktree| fill(template, &[("prepare", &prepare_line(crate::agent::Agent::Claude, "kelpie:set-up-worktree", settings(own, &Machine::default()).setup_command.value.as_deref(), "/n.md"))]);
         let set = role(&own);
         assert!(set.contains("on what it did. It prepares the worktree with the repo's own command `script/prepare_worktree` (worktree.setup_command). The main checkout"), "{set}");
         let unset = role(&Worktree::default());
         assert!(unset.contains("on what it did. The main checkout is read-only to you."), "{unset}");
-        assert!(!unset.contains("{setup}") && !unset.contains("setup_command"));
+        assert!(!unset.contains("{prepare}") && !unset.contains("setup_command"));
+    }
+
+    #[test]
+    fn a_codex_tasks_role_names_codex_and_runs_the_repos_setup_command_itself() {
+        let template = include_str!("../roles/task.md");
+        let codex = |command: Option<&str>| fill(template, &[("agent", "Codex"), ("prepare", &prepare_line(crate::agent::Agent::Codex, "kelpie:set-up-worktree", command, "/n.md")), ("rules", "")]);
+        let set = codex(Some("script/prepare_worktree"));
+        assert!(set.contains("You are the Codex for the task") && !set.contains("You are the Claude"), "{set}");
+        assert!(set.contains("run the repo's own setup command `script/prepare_worktree` from the worktree") && set.contains("a short note in `/n.md`"), "{set}");
+        assert!(!set.contains("kelpie:set-up-worktree") && !set.contains("{rules}"), "a skill Codex cannot run is not named: {set}");
+        assert!(codex(None).contains("install its dependencies and create what it needs with the repo's own tools"));
+        let claude = fill(template, &[("agent", "Claude")]);
+        assert!(claude.contains("You are the Claude for the task"));
     }
 
     #[test]

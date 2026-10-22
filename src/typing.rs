@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
+use crate::agent::Agent;
 use crate::herdr;
 use crate::sh::Result;
 
@@ -21,13 +22,13 @@ pub fn is_border(line: &str) -> bool {
 }
 
 // One screen line as plain text, with whether each character is drawn faint (SGR 2).
-struct Styled {
-    text: String,
+pub(crate) struct Styled {
+    pub(crate) text: String,
     faint: Vec<bool>,
 }
 
 // Reads SGR sequences for faint and drops every other escape; 38/48 colour arguments are skipped, so the 2 in 38;2;r;g;b is not taken for faint.
-fn styled(line: &str) -> Styled {
+pub(crate) fn styled(line: &str) -> Styled {
     let mut text = String::new();
     let mut faint = Vec::new();
     let mut dim = false;
@@ -97,15 +98,15 @@ pub fn draft(screen: &str) -> Draft {
     let first = inside(lines[prompt]).trim_start_matches('❯').trim().to_string();
     let text: Vec<String> = std::iter::once(first).chain(lines[prompt + 1..bottom].iter().map(|line| inside(line))).filter(|line| !line.is_empty()).collect();
     let text = text.join("\n");
-    if text.is_empty() || suggested(&styled[prompt..bottom]) {
+    if text.is_empty() || suggested(&styled[prompt..bottom], &['❯', '│']) {
         return Draft::Empty;
     }
     Draft::Typed(text)
 }
 
-// Claude draws what nobody typed faint: its suggested next prompt, a fresh conversation's example, the hint about queued messages. One character not faint makes it the user's.
-fn suggested(lines: &[Styled]) -> bool {
-    lines.iter().all(|line| line.text.chars().zip(&line.faint).all(|(character, faint)| *faint || character.is_whitespace() || matches!(character, '❯' | '│')))
+// An agent draws what nobody typed faint: Claude its suggested next prompt, a fresh conversation's example, the hint about queued messages; Codex its placeholder. One character not faint makes it the user's.
+pub(crate) fn suggested(lines: &[Styled], marks: &[char]) -> bool {
+    lines.iter().all(|line| line.text.chars().zip(&line.faint).all(|(character, faint)| *faint || character.is_whitespace() || marks.contains(&character)))
 }
 
 fn screen(pane: &str) -> Result<String> {
@@ -189,6 +190,8 @@ fn said_at(transcript: &str, text: &str, since_ms: u64, enqueued: bool) -> Optio
         let at = record["timestamp"].as_str().and_then(iso_millis).filter(|at| at + 2000 >= since_ms)?;
         let said = if record["type"] == "user" {
             content_text(&record["message"]["content"])
+        } else if let Some(text) = crate::agent::codex::user_text(&record) {
+            text
         } else if record["type"] == "attachment" && record["attachment"]["type"] == "queued_command" {
             content_text(&record["attachment"]["prompt"])
         } else if enqueued && record["type"] == "queue-operation" && record["operation"] == "enqueue" {
@@ -200,13 +203,16 @@ fn said_at(transcript: &str, text: &str, since_ms: u64, enqueued: bool) -> Optio
     })
 }
 
-// Claude records a prompt submitted while its turn runs as an enqueue without the text, and takes it only when the turn ends; with kelpie's text gone from the box, that enqueue is kelpie's. An enqueue with another text (a task notification) is not.
-fn taken(transcript: Option<&str>, shown: &Draft, text: &str, since_ms: u64) -> bool {
+// Claude records a prompt submitted while its turn runs as an enqueue without the text, and takes it only when the turn ends; with kelpie's text gone from the box, that enqueue is kelpie's. An enqueue with another text (a task notification) is not. Codex records a queued prompt only once its turn ends, so its box letting go of the text is the take.
+fn taken(agent: Agent, transcript: Option<&str>, shown: &Draft, text: &str, since_ms: u64) -> bool {
     let left_box = match shown {
         Draft::Empty => true,
         Draft::Typed(box_text) => !holds(box_text, text),
         Draft::Unreadable => false,
     };
+    if agent == Agent::Codex {
+        return left_box || transcript.is_some_and(|transcript| taken_in(transcript, text, since_ms));
+    }
     match transcript {
         Some(transcript) => taken_in(transcript, text, since_ms) || (left_box && queued_since(transcript, since_ms)),
         None => *shown == Draft::Empty,
@@ -220,12 +226,12 @@ fn queued_since(transcript: &str, since_ms: u64) -> bool {
     })
 }
 
-// A box that still holds what was typed: its start, or Claude's fold of a long paste.
+// A box that still holds what was typed: its start, or the agent's fold of a long paste.
 fn holds(box_text: &str, text: &str) -> bool {
     let shown = normalized(box_text);
     let start: String = normalized(text).chars().take(40).collect();
     let shown_start: String = shown.chars().take(40).collect();
-    shown.contains("[Pasted text") || (shown_start.chars().count() >= 10 && (shown_start.starts_with(&start) || start.starts_with(&shown_start)))
+    shown.contains("[Pasted text") || shown.contains("[Pasted Content") || (shown_start.chars().count() >= 10 && (shown_start.starts_with(&start) || start.starts_with(&shown_start)))
 }
 
 pub fn now_ms() -> u64 {
@@ -263,24 +269,30 @@ impl Typed {
     }
 }
 
-fn place(target: &str) -> (String, Option<PathBuf>) {
+struct Place {
+    pane: String,
+    transcript: Option<PathBuf>,
+    agent: Agent,
+}
+
+fn place(target: &str) -> Place {
     let agents = herdr::agents().unwrap_or_default();
-    let Some(agent) = agents.iter().find(|agent| agent["pane_id"] == target || agent["name"] == target) else { return (target.to_string(), None) };
+    let Some(agent) = agents.iter().find(|agent| agent["pane_id"] == target || agent["name"] == target) else { return Place { pane: target.to_string(), transcript: None, agent: Agent::Claude } };
     let pane = agent["pane_id"].as_str().unwrap_or(target).to_string();
     let session = agent["agent_session"]["value"].as_str().filter(|id| !id.is_empty());
     let cwd = agent["cwd"].as_str().map(Path::new);
-    let transcript = session.zip(crate::agent::claude::home()).and_then(|(session, home)| crate::restart::transcript(&home, cwd, session));
-    (pane, transcript)
+    let kind = Agent::of(agent).unwrap_or(Agent::Claude);
+    let transcript = session.zip(kind.home()).and_then(|(session, home)| kind.session_transcript(&home, cwd, session));
+    Place { pane, transcript, agent: kind }
 }
 
 pub fn transcript_of(target: &str) -> Option<PathBuf> {
-    place(target).1
+    place(target).transcript
 }
 
-// Whether the Claude in this pane has taken the text since it was typed, by its transcript; false when there is none to read.
+// Whether the agent in this pane has taken the text since it was typed, by its transcript; false when there is none to read.
 pub fn taken_by(target: &str, text: &str, since_ms: u64) -> bool {
-    let (_, transcript) = place(target);
-    transcript.and_then(|file| std::fs::read_to_string(file).ok()).is_some_and(|transcript| taken_in(&transcript, text, since_ms))
+    place(target).transcript.and_then(|file| std::fs::read_to_string(file).ok()).is_some_and(|transcript| taken_in(&transcript, text, since_ms))
 }
 
 #[derive(Debug, PartialEq)]
@@ -291,13 +303,13 @@ pub enum Outcome {
 }
 
 pub fn advance(typed: &mut Typed) -> Outcome {
-    let (pane, transcript) = place(&typed.target);
+    let Place { pane, transcript, agent } = place(&typed.target);
     let transcript = transcript.and_then(|file| std::fs::read_to_string(file).ok());
     if typed.inbox {
         return advance_inbox(typed, transcript.as_deref(), now_ms());
     }
-    let shown = screen(&pane).map(|screen| draft(&screen)).unwrap_or(Draft::Unreadable);
-    let taken = taken(transcript.as_deref(), &shown, &typed.text, typed.at_ms);
+    let shown = screen(&pane).map(|screen| agent.draft(&screen)).unwrap_or(Draft::Unreadable);
+    let taken = taken(agent, transcript.as_deref(), &shown, &typed.text, typed.at_ms);
     let elapsed = Duration::from_millis(now_ms().saturating_sub(typed.at_ms));
     match step(elapsed, typed.presses, taken) {
         Step::Taken => Outcome::Taken,
@@ -357,8 +369,8 @@ pub fn watching_in(dir: &Path, label: &str, text: &str) -> bool {
 
 // Types into a running conversation only when its input box is empty, so the user's draft is never typed over; the board then checks that Claude took it.
 pub fn prompt(target: &str, text: &str, label: &str) -> std::result::Result<(), Refused> {
-    let (pane, _) = place(target);
-    match screen(&pane).map(|screen| draft(&screen)) {
+    let Place { pane, agent, .. } = place(target);
+    match screen(&pane).map(|screen| agent.draft(&screen)) {
         Ok(Draft::Empty) => {}
         Ok(Draft::Typed(_)) => return Err(Refused::Draft),
         Ok(Draft::Unreadable) | Err(_) => return Err(Refused::Unreadable),
@@ -395,8 +407,8 @@ pub fn clear_draft(read: &mut dyn FnMut() -> Draft, press: &mut dyn FnMut() -> R
 
 // Types even over the user's draft, which it clears first and returns, so the caller can log it; used only when the user or the lead forces a delivery.
 pub fn prompt_forced(target: &str, text: &str, label: &str) -> std::result::Result<Option<String>, Refused> {
-    let (pane, _) = place(target);
-    let mut read = || screen(&pane).map(|screen| draft(&screen)).unwrap_or(Draft::Unreadable);
+    let Place { pane, agent, .. } = place(target);
+    let mut read = || screen(&pane).map(|screen| agent.draft(&screen)).unwrap_or(Draft::Unreadable);
     let mut press = || herdr::send_keys(&pane, &["ctrl+u"]);
     let cleared = clear_draft(&mut read, &mut press)?;
     type_and_watch(target, text, label)?;
@@ -592,15 +604,31 @@ mod tests {
         let typed_at = iso_millis("2026-10-22T08:39:47.300Z").unwrap();
         let queued_for_the_turns_end = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-22T08:39:47.581Z", "sessionId": "s" }).to_string();
         let answer = "[from you] The user's answer to \"Treat Claude's dim suggestion as an empty box\": Approve";
-        assert!(taken(Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at), "submitted while a turn ran: Claude records the enqueue without the text and takes it when the turn ends, 17 minutes later in the case seen");
-        assert!(taken(Some(&queued_for_the_turns_end), &Draft::Typed("my own words".to_string()), answer, typed_at), "the user typing after it does not undo it");
-        assert!(!taken(Some(&queued_for_the_turns_end), &Draft::Typed("[from you] The user's answer to \"Treat".to_string()), answer, typed_at), "an enqueue while kelpie's text still sits in the box is someone else's");
-        assert!(!taken(Some(&queued_for_the_turns_end), &Draft::Unreadable, answer, typed_at));
-        assert!(!taken(Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at + 60_000), "an enqueue from before kelpie typed is not its");
-        assert!(taken(None, &Draft::Empty, answer, typed_at) && !taken(None, &Draft::Typed(answer.to_string()), answer, typed_at), "without a transcript, an empty box is the sign");
+        assert!(taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at), "submitted while a turn ran: Claude records the enqueue without the text and takes it when the turn ends, 17 minutes later in the case seen");
+        assert!(taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Typed("my own words".to_string()), answer, typed_at), "the user typing after it does not undo it");
+        assert!(!taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Typed("[from you] The user's answer to \"Treat".to_string()), answer, typed_at), "an enqueue while kelpie's text still sits in the box is someone else's");
+        assert!(!taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Unreadable, answer, typed_at));
+        assert!(!taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at + 60_000), "an enqueue from before kelpie typed is not its");
+        assert!(taken(Agent::Claude, None, &Draft::Empty, answer, typed_at) && !taken(Agent::Claude, None, &Draft::Typed(answer.to_string()), answer, typed_at), "without a transcript, an empty box is the sign");
         let notification = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-22T08:39:48.500Z", "content": "<task-notification>\n<task-type>artifact-auto-react</task-type>" }).to_string();
-        assert!(!taken(Some(&notification), &Draft::Empty, answer, typed_at), "a notification Claude queued after kelpie typed is not kelpie's text: the CI log seen logged delivered and never taken");
-                let old_queue = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-20T11:00:00.000Z", "content": "[from lead] rebase onto main please" }).to_string();
+        assert!(!taken(Agent::Claude, Some(&notification), &Draft::Empty, answer, typed_at), "a notification Claude queued after kelpie typed is not kelpie's text: the CI log seen logged delivered and never taken");
+        let old_queue = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-20T11:00:00.000Z", "content": "[from lead] rebase onto main please" }).to_string();
         assert!(!taken_in(&old_queue, "[from lead] rebase onto main please", at));
+    }
+
+    #[test]
+    fn a_message_typed_to_codex_is_taken_once_its_rollout_has_it_or_its_composer_lets_it_go() {
+        let at = iso_millis("2026-10-22T09:16:00.000Z").unwrap();
+        let text = "[from lead] rebase onto main please";
+        let legacy = json!({ "timestamp": "2026-10-22T09:16:01.200Z", "type": "event_msg", "payload": { "type": "user_message", "message": text, "images": [] } }).to_string();
+        let paginated = json!({ "timestamp": "2026-10-22T09:16:02.000Z", "type": "event_msg", "payload": { "type": "item_completed", "turn_id": "t", "item": { "type": "UserMessage", "id": "u", "content": [{ "type": "text", "text": text, "text_elements": [] }] } } }).to_string();
+        assert_eq!(read_at(&legacy, text, at), Some(at + 1200), "Codex's legacy rollout");
+        assert_eq!(read_at(&paginated, text, at), Some(at + 2000), "Codex's paginated rollout");
+        assert!(!taken_in(&json!({ "timestamp": "2026-10-22T09:16:01.000Z", "type": "event_msg", "payload": { "type": "agent_message", "message": text } }).to_string(), text, at), "the agent saying it is not the user's turn");
+        assert!(taken(Agent::Codex, Some(""), &Draft::Empty, text, at), "a prompt Codex queued mid-turn is in no rollout until the turn ends, but its box is empty");
+        assert!(!taken(Agent::Codex, Some(""), &Draft::Typed(text.to_string()), text, at));
+        assert!(!taken(Agent::Codex, Some(""), &Draft::Typed("[Pasted Content 1005 chars]".to_string()), text, at), "Codex folds a long paste");
+        assert!(taken(Agent::Codex, Some(&legacy), &Draft::Unreadable, text, at));
+        assert!(!taken(Agent::Claude, Some(""), &Draft::Empty, text, at), "Claude's rule stays its own");
     }
 }
