@@ -228,6 +228,9 @@ pub(super) fn complete_in(state: &Path, log: &[Message], mut push: impl FnMut(&I
                 let Some(slot) = slot.filter(|_| claim(state, &intent.address)) else { continue };
                 let said = match push(&intent, &slot) {
                     Ok(said) => said,
+                    Err(error) if super::push::rejected(&error) && save(state, &intent).is_ok() => {
+                        format!("the push of {} that {} asked for was rejected while the default branch kept moving; kelpie tries again next round", intent.address, intent.by.word())
+                    }
                     Err(error) => {
                         let text = format!("kelpie could not finish the push of {} that {} asked for: {error}", intent.address, intent.by.word());
                         tell_lead(&text);
@@ -336,6 +339,13 @@ mod tests {
         complete_in(&state, &ready("r2"), |intent, _| { pushed.push(intent.by); Ok(String::new()) });
         assert_eq!(pushed, [By::Lead, By::User], "the lead's approval of the fix lets the user's push go out");
         assert!(load(&state, &address).is_none());
+        let current = fingerprint(&slot.path, &upstream).unwrap();
+        save(&state, &intent(By::User, &dir, &current)).unwrap();
+        let rejected = "Pushing billing failed: ! [rejected]        4333c9f -> main (non-fast-forward)";
+        let notes = complete_in(&state, &ready("r3"), |_, _| Err(rejected.to_string()));
+        assert!(load(&state, &address).is_some() && notes[0].contains("tries again"), "a push main kept outrunning waits for the next round, never dropped: {notes:?}");
+        complete_in(&state, &ready("r3"), |_, _| Err("the reviewer has not passed it".to_string()));
+        assert!(load(&state, &address).is_none(), "any other failure goes to the lead");
         cleanup(dir, origin, &slot);
     }
 }

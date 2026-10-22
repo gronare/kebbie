@@ -229,10 +229,29 @@ fn authorize(caller: &Caller, repo: &Path, slot: &Slot, upstream: &str, through:
 }
 
 pub(super) fn push_task(caller: &Caller, repo: &Path, slot: &Slot, through: Through) -> Result<String> {
-    match prepare(caller, repo, slot, through, &hand_over)? {
-        Prepared::Push(pusher) => deliver(repo, slot, &default_branch(repo)?, through, pusher, &state_dir()?),
-        Prepared::Handed(said) => Ok(said),
+    push_task_with(caller, repo, slot, through, &hand_over, &mut |pusher| deliver(repo, slot, &default_branch(repo)?, through, pusher, &state_dir()?))
+}
+
+const PUSH_TRIES: usize = 3;
+
+// Someone else's push can land between the fetch and this push; then it fetches, rebases and decides again, so shared files still go to the task's Claude.
+fn push_task_with(caller: &Caller, repo: &Path, slot: &Slot, through: Through, hand_over: HandOver, send: &mut dyn FnMut(&'static str) -> Result<String>) -> Result<String> {
+    let mut tried = 0;
+    loop {
+        tried += 1;
+        match prepare(caller, repo, slot, through, hand_over)? {
+            Prepared::Handed(said) => return Ok(said),
+            Prepared::Push(pusher) => match send(pusher) {
+                Err(error) if rejected(&error) && tried < PUSH_TRIES => {}
+                sent => return sent,
+            },
+        }
     }
+}
+
+// The default branch moved on the remote after kelpie fetched it.
+pub(super) fn rejected(error: &str) -> bool {
+    ["non-fast-forward", "(fetch first)", "stale info"].iter().any(|sign| error.contains(sign))
 }
 
 #[derive(Debug, PartialEq)]
@@ -714,6 +733,41 @@ mod tests {
         std::fs::write(slot.path.join("d"), "half done").unwrap();
         let dirty = prepare(&Caller::User, &dir, &slot, Through::All, &hand).unwrap_err();
         assert!(dirty.contains("1 uncommitted file") && dirty.contains("(d)"), "{dirty}");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn main_moving_while_its_claude_runs_the_tests_and_again_before_the_finishing_push_never_loses_the_push() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        shared_file(&dir, &slot, &upstream);
+        upstream_commit(&dir, "m", "1\n2\n3\n4\n5\n6\n7\n8\n9\nten\n", "last line of m");
+        let (texts, hand) = handed();
+        assert!(matches!(prepare(&Caller::User, &dir, &slot, Through::All, &hand).unwrap(), Prepared::Handed(_)), "m changed under it: its Claude runs the tests");
+        upstream_commit(&dir, "elsewhere", "x", "landed while the tests ran");
+        let finish = |race: &dyn Fn()| {
+            intent::forget(&pushing.state, &pushing.address);
+            let sends = std::cell::Cell::new(0);
+            let said = push_task_with(&Caller::User, &dir, &slot, Through::All, &hand, &mut |_| {
+                sends.set(sends.get() + 1);
+                if sends.get() == 1 {
+                    race();
+                }
+                let head = git(&slot.path, &["rev-parse", "HEAD"])?;
+                push_prefix(&slot.path, &upstream, &head, &pushing.state).map(|count| format!("pushed {count}"))
+            });
+            (said, sends.get())
+        };
+        let (said, sends) = finish(&|| upstream_commit(&dir, "m", "1\n2\n3\n4\n5\n6\n7\n8\nnine\nten\n", "another line of m"));
+        assert!(said.as_deref().is_ok_and(|said| said.contains("runs their tests")) && sends == 1, "rejected, rebased over m again: back to its Claude, {said:?}");
+        let waiting = intent::load(&pushing.state, &pushing.address).expect("the same push waits again");
+        assert_eq!((waiting.by, waiting.work), (By::User, Work::Tests));
+        assert_eq!(texts.borrow().len(), 2);
+        let (said, sends) = finish(&|| upstream_commit(&dir, "other", "y", "pushed in between"));
+        assert_eq!((said, sends), (Ok("pushed 2".to_string()), 2), "rejected, rebased cleanly, pushed on the second try");
+        let landed = git(&origin, &["log", "--format=%s", upstream.trim_start_matches("origin/")]).unwrap();
+        assert!(landed.starts_with("first line of m\nfourth\npushed in between\n"), "the task's commits on top of everything that landed: {landed}");
         cleanup(dir, origin, &slot);
     }
 
