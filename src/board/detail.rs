@@ -527,7 +527,6 @@ mod tests {
     use crate::tasks;
     use crate::board::columns::{group_color, row_facts};
     use crate::board::images::{Graphics, spawn_decoder};
-    use crate::board::Mode;
     use crate::board::push::push_lines;
     use crate::board::widgets::{BLUE, GREEN, MUTED, PEACH, RED, YELLOW};
 
@@ -556,7 +555,7 @@ mod tests {
         let (rows, _) = render(&mut bare, 84, 50);
         assert!(!rows.join("\n").contains(" s "), "no card, nothing for s: {}", rows.join("\n"));
         bare.handle_normal(key(KeyCode::Char('s')));
-        assert!(matches!(&bare.mode, Mode::Message(text) if text.contains("has no sign-off card yet")));
+        assert!(bare.toast.as_ref().is_some_and(|toast| toast.notice.headline == "No sign-off card yet"));
     }
 
     #[test]

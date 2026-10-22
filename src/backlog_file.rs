@@ -64,13 +64,13 @@ pub fn appended(existing: Option<&str>, priority: &str, item: &str) -> Result<(S
     let priority = match priority.trim().to_lowercase() {
         empty if empty.is_empty() => "none".to_string(),
         word if PRIORITIES.contains(&word.as_str()) => word,
-        other => return Err(format!("\"{other}\" is not a priority; use urgent, high, medium or low, or leave it empty")),
+        other => return crate::notice::Notice::new(crate::notice::Tone::You, format!("Not added: \"{other}\" is not a priority")).you("Use urgent, high, medium or low, or leave it empty.").err(),
     };
     let new = line(&priority, item.trim());
-    let entry = parse(&new).ok_or("The item needs a title, one that does not start with [")?;
+    let entry = parse(&new).ok_or_else(|| crate::notice::Notice::new(crate::notice::Tone::You, "Not added: the item needs a title").you("Give it a title that does not start with [.").to_string())?;
     let existing = existing.unwrap_or(HEADER);
     if entries(existing).iter().any(|other| other.title == entry.title) {
-        return Err(format!("\"{}\" is already in the backlog; its title is how kelpie knows it, so give this one another", entry.title));
+        return crate::notice::Notice::new(crate::notice::Tone::You, format!("Not added: \"{}\" is already in the backlog", entry.title)).you("Give this one another title; the title is how kelpie knows an item.").err();
     }
     let separator = if existing.is_empty() || existing.ends_with('\n') { "" } else { "\n" };
     Ok((format!("{existing}{separator}{new}\n"), entry))
@@ -87,7 +87,7 @@ pub fn add_to(path: &Path, priority: &str, item: &str) -> Result<String> {
         std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     }
     std::fs::write(path, text).map_err(|error| format!("{}: {error}", path.display()))?;
-    Ok(format!("Added \"{}\" [{}] to {}.", entry.title, entry.priority, path.display()))
+    crate::notice::Notice::new(crate::notice::Tone::Done, "Added to the backlog").detail("item", format!("\"{}\" [{}]", entry.title, entry.priority)).detail("file", path.display().to_string()).ok()
 }
 
 pub fn add(priority: Option<&str>, item: &str) -> Result<String> {
@@ -138,7 +138,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kelpie-backlog-file-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let file = dir.join("kelpie/backlog.md");
-        assert!(add_to(&file, "high", "Ship it (app)").unwrap().starts_with("Added \"Ship it\" [high]"));
+        assert!(add_to(&file, "high", "Ship it (app)").unwrap().contains("item: \"Ship it\" [high]"));
         add_to(&file, "", "Then this").unwrap();
         let titles: Vec<String> = read(&file).into_iter().map(|entry| entry.title).collect();
         assert_eq!(titles, ["Ship it", "Then this"]);

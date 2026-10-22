@@ -84,10 +84,12 @@ impl App {
                 let Some(through) = through.map(|commit| commit.sha.clone()) else { return };
                 let count = if keep_open { selected + 1 } else { commits.len() };
                 let (sender, result) = mpsc::channel();
+                let path_for_subject = path.clone();
                 thread::spawn(move || {
                     let _ = sender.send(tasks::push(&path, None, Some(&through), keep_open));
                 });
                 let label = if keep_open { format!("Rebasing and pushing {}; the task stays open…", plural(count, "commit")) } else { format!("Rebasing and pushing {}, then closing the task…", plural(count, "commit")) };
+                self.about_path("push", &path_for_subject);
                 self.mode = Mode::Working { label, result };
             }
             KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ConfirmPush { path, commits, selected: selected.saturating_sub(1), card, tests, scroll: scroll.follow() },

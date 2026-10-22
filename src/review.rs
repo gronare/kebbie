@@ -183,12 +183,12 @@ fn withdraw_as(caller: &crate::permit::Caller, cwd: &Path, name: Option<&str>) -
     let slot = tasks::find_task(&repo, name, cwd)?;
     let address = peers::address(tasks::task_of(&slot), &name_of(&repo));
     if !withdraw_in(&state_dir()?, &address) {
-        return Err(format!("{address} is not in review"));
+        return crate::notice::Notice::new(crate::notice::Tone::NotNow, "It is not in review").detail("task", &address).err();
     }
     if let Err(error) = messages::notify_lead(&format!("The user withdrew {address} from review: it pushes without a reviewer's pass now. Drop any findings you have not passed on.")) {
         eprintln!("Could not tell the lead: {error}");
     }
-    Ok(format!("Withdrew {address} from review; push is offered again."))
+    crate::notice::Notice::new(crate::notice::Tone::Done, "Withdrawn from review").next("Push is offered again.").detail("task", &address).ok()
 }
 
 // The reviewer runs in a process group of its own, so the signal stops its Claude too, before it can write a verdict.
@@ -209,23 +209,21 @@ pub fn request(cwd: &Path, name: Option<&str>) -> Result<String> {
     let task = tasks::task_of(&slot);
     let upstream = default_branch(&repo)?;
     if ahead_behind(&slot.path, &upstream)?.0 == 0 {
-        return Err(format!("{task} has no commits to review"));
+        return crate::notice::Notice::new(crate::notice::Tone::NotNow, "Nothing to review: it has no commits").detail("task", task).err();
     }
     let address = peers::address(task, &name_of(&repo));
     let state = state_dir()?;
     fs::create_dir_all(dir(&state)).map_err(|error| error.to_string())?;
     let sha = git(&slot.path, &["rev-parse", "--short", "HEAD"])?;
     let log = start_reviewer(&state, &address, &peers::own_exe()?, &slot.path)?;
-    Ok(format!(
-        "Reviewing {address} at {sha} in the background; the verdict goes to {} and the lead is told (output in {}).",
-        verdict_file(&state, &address).display(), log.display()
-    ))
+    crate::notice::Notice::new(crate::notice::Tone::Moving, "Review started").next("The reviewer reads its commits in the background; the lead hears its verdict.")
+        .detail("task", &address).detail("commit", &sha).detail("verdict", verdict_file(&state, &address).display().to_string()).detail("output", log.display().to_string()).ok()
 }
 
 // The marker is written here, from the child's pid, so a second request right after the first finds it running.
 fn start_reviewer(state: &Path, address: &str, kelpie: &Path, worktree: &Path) -> Result<PathBuf> {
     if running_in(state, address) {
-        return Err(format!("A review of {address} is already running; the lead hears when its verdict is in."));
+        return crate::notice::Notice::new(crate::notice::Tone::NotNow, "A review is already running").next("The lead hears its verdict when it is in.").detail("task", address).err();
     }
     let log = log_file(state, address);
     let output = crate::state::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;

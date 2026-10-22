@@ -6,7 +6,9 @@ use crate::repo;
 use crate::sh::Result;
 use crate::status::Item;
 use crate::lead;
-use super::{App, Mode};
+use crate::keys::{self, Act};
+use crate::notice::{Notice, Tone};
+use super::App;
 
 // A tab of that name from an earlier run, with its shell back at the prompt, gets reused.
 fn idle_tab_pane(workspace: &str, label: &str) -> Option<String> {
@@ -126,19 +128,21 @@ impl App {
     // Each process runs in a tab of the Space named after it; stopping it is ctrl-c to that tab.
     pub(super) fn toggle(&mut self, item: &Item, process: Process) {
         let (Some(workspace), Some(path)) = (&item.workspace, &item.path) else {
-            self.mode = Mode::Message(format!("{} has no Space open.", item.name));
+            self.about(process.key(), &item.name);
+            self.show(Notice::new(Tone::NotNow, "Its Space is not open").next(format!("{} opens it.", keys::map().label(Act::Go))).ok());
             return;
         };
         let settings = settings_of(item);
         let Some(command) = settings.as_ref().and_then(|settings| process.command(settings)) else {
-            self.mode = Mode::Message(format!("{} has no {}; kelpie config shows where to set one.", item.place, process.key()));
+            self.about(process.key(), &item.name);
+            self.show(Notice::new(Tone::You, format!("{} has no {} set", item.place, process.key())).you(format!("Set worktree.{} for {}; kelpie config shows where.", process.key(), item.place)).ok());
             return;
         };
         let tab = process.tab(settings.as_ref());
         let tab = tab.as_str();
         let busy = busy_tab_pane(workspace, tab);
         let result = match busy {
-            Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| format!("Stopping {} in {}.", process.noun(), item.name)),
+            Some(pane) => herdr::send_keys(&pane, &["ctrl+c"]).map(|_| Notice::new(Tone::Done, format!("Stopping {}", process.noun())).to_string()),
             None => {
                 let port = repo::worktree_port(path);
                 let on = port.map(|port| format!(" on port {port}")).unwrap_or_default();
@@ -148,16 +152,18 @@ impl App {
                 let at = url.map(|url| format!(" at {url}")).unwrap_or_default();
                 idle_tab_pane(workspace, tab).map(Ok).unwrap_or_else(|| herdr::create_tab(workspace, path, tab))
                     .and_then(|pane| herdr::run_in_pane(&pane, &server_command(&command, port)))
-                    .map(|_| format!("Started {command}{on} in the {tab} tab of {}'s Space{at}.", item.name))
+                    .map(|_| Notice::new(Tone::Done, format!("Started {}{on}{at}", process.noun())).detail("command", &command).detail("tab", tab).to_string())
             }
         };
+        self.about(process.key(), &item.name);
         self.show(result);
     }
 
     // The review opens next to the task's own Claude, so comments reach that agent; one already open in the Space gets the focus instead of a second split.
     pub(super) fn open_review(&mut self, item: &Item) {
         let (Some(path), Some(agent), Some(script)) = (&item.path, &item.agent, review_script()) else {
-            self.mode = Mode::Message("A review needs a task with its Claude running.".to_string());
+            self.about("review", &item.name);
+            self.show(Notice::new(Tone::NotNow, "No review: its Claude is not running").next(format!("{} starts it; then the review opens beside it.", keys::map().label(Act::Go))).ok());
             return;
         };
         if let Some(workspace) = &item.workspace
@@ -165,7 +171,8 @@ impl App {
         {
             let _ = herdr::focus_workspace(workspace);
             if let Err(error) = focus_pane(&pane) {
-                self.mode = Mode::Message(format!("The review is open in {}'s Space, but it could not get the focus: {error}", item.name));
+                self.about("review", &item.name);
+                self.show(Notice::new(Tone::NotNow, "The review is open in its Space, but kelpie could not focus it").detail("error", &error).ok());
                 return;
             }
             if self.overlay {
@@ -184,8 +191,14 @@ impl App {
                     self.quit = true;
                 }
             }
-            Ok(output) => self.mode = Mode::Message(String::from_utf8_lossy(&output.stderr).trim().to_string()),
-            Err(error) => self.mode = Mode::Message(error.to_string()),
+            Ok(output) => {
+                self.about("review", &item.name);
+                self.show(Notice::new(Tone::Failed, "The review did not open").detail("error", String::from_utf8_lossy(&output.stderr)).ok());
+            }
+            Err(error) => {
+                self.about("review", &item.name);
+                self.show(Notice::new(Tone::Failed, "The review did not open").detail("error", error.to_string()).ok());
+            }
         }
     }
 }

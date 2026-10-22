@@ -22,7 +22,10 @@ fn confirm_lines(name: &str, about: Option<&str>, question: &str, nudged: bool) 
 impl App {
     pub(super) fn confirm_reset(&mut self, path: PathBuf, name: String, key: KeyEvent, cancels: bool) {
         match key.code {
-            KeyCode::Char('y') => self.in_background("Resetting the task…".to_string(), move || tasks::reset(&path, None)),
+            KeyCode::Char('y') => {
+                self.about("reset", &name);
+                self.in_background("Resetting the task…".to_string(), move || tasks::reset(&path, None));
+            }
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmReset { path, name, nudged: true },
         }
@@ -30,7 +33,10 @@ impl App {
 
     pub(super) fn confirm_done(&mut self, path: PathBuf, name: String, key: KeyEvent, cancels: bool) {
         match key.code {
-            KeyCode::Char('y') => self.in_background(format!("Closing {name}…"), move || tasks::done(&path, None)),
+            KeyCode::Char('y') => {
+                self.about("done", &name);
+                self.in_background(format!("Closing {name}…"), move || tasks::done(&path, None));
+            }
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmDone { path, name, nudged: true },
         }
@@ -38,8 +44,14 @@ impl App {
 
     pub(super) fn confirm_queued(&mut self, name: String, about: String, now: bool, key: KeyEvent, cancels: bool) {
         match key.code {
-            KeyCode::Char('y') if now => self.in_background(format!("Starting {name}…"), move || tasks::start_now(&name)),
-            KeyCode::Char('y') => self.show(tasks::drop_wait(&name)),
+            KeyCode::Char('y') if now => {
+                self.about("start", &name);
+                self.in_background(format!("Starting {name}…"), move || tasks::start_now(&name));
+            }
+            KeyCode::Char('y') => {
+                self.about("queued", &name);
+                self.show(tasks::drop_wait(&name));
+            }
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmQueued { name, about, now, nudged: true },
         }
@@ -48,10 +60,14 @@ impl App {
     pub(super) fn confirm_drop(&mut self, path: PathBuf, name: String, force: bool, key: KeyEvent, cancels: bool) {
         match key.code {
             KeyCode::Char('y') => match tasks::drop(&path, None, force) {
-                Err(error) if !force && error.contains("--force") => {
-                    self.mode = Mode::ConfirmDrop { path, name: format!("{name}: {error}"), force: true, nudged: false };
+                Err(error) if !force && error.contains(tasks::FORCE) => {
+                    let said = crate::notice::Notice::read(&error, true).headline;
+                    self.mode = Mode::ConfirmDrop { path, name: format!("{name}: {said}"), force: true, nudged: false };
                 }
-                result => self.show(result),
+                result => {
+                    self.about("drop", &name);
+                    self.show(result);
+                }
             },
             _ if cancels => {}
             _ => self.mode = Mode::ConfirmDrop { path, name, force, nudged: true },
@@ -136,7 +152,7 @@ mod tests {
         app.handle_normal(key(KeyCode::Char('p')));
         assert!(matches!(app.mode, Mode::Normal), "a task's keys a queued row does not offer do nothing");
         app.handle_normal(key(KeyCode::Char('s')));
-        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("web-billing is queued and has no worktree yet")), "the card key, offered on every row, says what a queued row takes");
+        assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline == "It is queued and has no worktree yet"), "the card key, offered on every row, says what a queued row takes");
     }
 
     #[test]

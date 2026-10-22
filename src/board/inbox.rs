@@ -17,6 +17,7 @@ use crate::peers;
 use crate::sh::Result;
 use crate::status::Item;
 use crate::questions;
+use crate::notice::{Notice, Tone};
 use super::{App, Hit, Mode};
 use super::card::{WIDE, rich_wrap};
 use super::widgets::{BLUE, FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEXT, YELLOW, bold, centered, fill, fit, rule, section_header, style};
@@ -146,7 +147,8 @@ impl App {
 
     pub(super) fn open_questions(&mut self, at: Option<usize>) {
         if self.questions.is_empty() {
-            self.mode = Mode::Message("No questions are waiting.".to_string());
+            self.subject = Some(super::notices::Subject::plain("inbox"));
+            self.show(Notice::new(Tone::NotNow, "No questions are waiting").ok());
             return;
         }
         self.mode = Mode::Questions(Box::new(QuestionWindow::new(&self.questions, at.unwrap_or(0))));
@@ -264,7 +266,8 @@ impl App {
         self.questions.retain(|question| question.id != id);
         let _ = self.refresh.send(());
         if self.questions.is_empty() {
-            self.mode = Mode::Message(text);
+            self.subject = Some(super::notices::Subject::plain("answer"));
+            self.show(Ok(text));
             return;
         }
         if let Mode::Questions(window) = &mut self.mode {

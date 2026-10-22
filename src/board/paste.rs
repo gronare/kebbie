@@ -58,7 +58,8 @@ impl App {
         let Some(text) = self.take_paste(text) else { return };
         let result = herdr::workspaces().and_then(|workspaces| self.pass_on(target(&workspaces, &self.tasks), &text));
         if let Err(error) = result {
-            self.mode = Mode::Message(error);
+            self.subject = Some(super::notices::Subject::plain("paste"));
+            self.show(Err(error));
         }
     }
 
@@ -70,7 +71,7 @@ impl App {
                 herdr::focus_workspace(&workspace)?;
                 super::space::focus_pane(&pane)?;
             }
-            Target::Nowhere => return Err("The paste has nowhere to go: this Space has no Claude, and no text field is open on the board.".to_string()),
+            Target::Nowhere => return crate::notice::Notice::new(crate::notice::Tone::NotNow, "The paste has nowhere to go").next("This Space has no Claude, and no text field is open on the board.").err(),
         }
         if self.overlay {
             self.quit = true;

@@ -6,6 +6,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Frame};
 
+use crate::notice::{Notice, Tone};
 use crate::backlog::{self, Entry};
 use crate::peers;
 use crate::repo;
@@ -58,13 +59,15 @@ impl App {
             }
             Purpose::BacklogPriority(item) => {
                 let result = crate::backlog_file::add(Some(&text), &item);
+                self.subject = Some(super::notices::Subject::plain("backlog"));
                 if result.is_ok() {
                     self.backlog = backlog::load();
                 }
                 self.show(result);
             }
             Purpose::BacklogName(entry) | Purpose::BacklogLaterAt(entry, _) if entry.area.is_empty() => {
-                self.show(Err(format!("\"{}\" names no area, so kelpie cannot tell which repo it is in; add the repo's folder name as (area) at the end of its line.", entry.title)));
+                self.subject = Some(super::notices::Subject::plain("start"));
+                self.show(Notice::new(Tone::You, "Not started: kelpie cannot tell which repo it is in").you("Add the repo's folder name as (area) at the end of its backlog line.").detail("item", &entry.title).ok());
             }
             Purpose::TaskName => {
                 let label = "What should Claude do? (optional)".to_string();
@@ -73,6 +76,7 @@ impl App {
             Purpose::TaskPrompt(name) => {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
+                self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: name.clone(), task: false });
                 self.show(start_in_background(&repo, &name, prompt.as_deref(), None, None));
             }
             Purpose::BacklogName(_) | Purpose::BacklogLaterAt(..) => {
@@ -87,6 +91,7 @@ impl App {
                     Some(terminal) => outside(terminal, || repo::locate(&entry.area)),
                     None => repo::locate(&entry.area),
                 };
+                self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: name.clone(), task: false });
                 match known.map_or_else(located, Ok) {
                     Ok(repo) => self.show(start_in_background(&repo, &name, Some(&prompt), Some(&entry.reference), at.as_deref())),
                     Err(error) => self.show(Err(error)),
@@ -94,11 +99,14 @@ impl App {
             }
             Purpose::Tidy(path) => {
                 let result = tasks::tidy(&path, None, &text);
+                self.about_path("tidy", &path);
                 self.show(result);
             }
             Purpose::Message(_, _) if text.is_empty() => {}
             Purpose::Message(pane, name) => {
-                let result = crate::typing::prompt(&pane, &text, &name).map(|_| format!("Sent to {name}.")).map_err(|refused| format!("Nothing was sent: {name}'s Claude {}; your message was:\n{text}", refused.reason()));
+                let result = crate::typing::prompt(&pane, &text, &name).map(|_| Notice::new(Tone::Done, "Sent").to_string())
+                    .map_err(|refused| Notice::new(Tone::Failed, "Nothing was sent").next(format!("Its Claude {}.", refused.reason())).you("Send it again once its input box is clear.").detail("message", &text).to_string());
+                self.about("message", &name);
                 self.show(result);
             }
         }
@@ -128,7 +136,7 @@ fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: O
     // Its own process group, so closing the board's popup does not take the start down with it.
     command.stdin(std::process::Stdio::null()).stdout(output).stderr(errors).process_group(0);
     crate::sh::reap(command.spawn().map_err(|error| format!("kelpie start: {error}"))?);
-    Ok(format!("Starting {name} in the background; it shows under Work in a moment (output in {}).", log.display()))
+    Notice::new(Tone::Moving, "Starting in the background").next("It shows under Work in a moment.").detail("output", log.display().to_string()).ok()
 }
 
 impl App {

@@ -245,7 +245,7 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
         }
     };
     messages::copy_to_lead_locked(&answer_copy(message, choice, comment), None, &sessions)?;
-    Ok(format!("Answered {}'s question. {told}", message.from))
+    crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).ok()
 }
 
 const CLOSED_BEFORE: &str = "(The question had already closed when the user answered it on the board, since a new turn started in your pane; act on it if it still applies.)";
@@ -269,7 +269,7 @@ fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &
     };
     messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
     messages::copy_to_lead_locked(&answer_copy(message, choice, comment), None, sessions)?;
-    Ok(format!("Answered {}'s question, which had closed when a turn started in its pane; your answer goes to it as a message. {told}", message.from))
+    crate::notice::Notice::new(crate::notice::Tone::Done, "Answered, as a message").next(format!("The question had closed when a turn started in its pane. {told}")).detail("task", &message.from).ok()
 }
 
 pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&str>, text: &str) -> Result<String> {

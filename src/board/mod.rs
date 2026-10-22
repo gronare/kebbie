@@ -11,6 +11,7 @@ mod input;
 mod link;
 mod message_log;
 mod mouse;
+mod notices;
 mod options;
 mod paste;
 mod push;
@@ -45,6 +46,7 @@ use crate::fetch::Fetcher;
 use crate::herdr;
 use crate::keys::{self, Act, Ctx};
 use crate::messages::Message;
+use crate::notice::{Notice, Tone};
 use crate::permit;
 use crate::peers;
 use crate::repo::name_of;
@@ -169,6 +171,9 @@ struct App {
     ctrl_c: Option<Instant>,
     notice: Option<(String, Instant)>,
     lead_chat: Option<bool>,
+    subject: Option<notices::Subject>,
+    shown: Option<notices::Subject>,
+    toast: Option<notices::Toast>,
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
@@ -227,7 +232,7 @@ impl App {
                 self.lead_chat = Some(!hidden);
                 let _ = self.refresh.send(());
             }
-            Err(error) => self.mode = Mode::Message(error),
+            Err(error) => self.show(Err(error)),
         }
     }
 
@@ -281,12 +286,41 @@ impl App {
                 let _ = recheck.send(());
             }
         }
-        self.show(result);
+        let update = self.update_shown;
+        let result = if update { result.map(|said| updated(&said)) } else { result };
+        self.show_as(result, update);
     }
 
     fn show(&mut self, result: Result<String>) {
-        self.mode = Mode::Message(result.unwrap_or_else(|error| error));
+        self.show_as(result, false);
+    }
+
+    // A notice that asks nothing of the user goes by as a toast unless it is kept; the rest open a window that stays until a key.
+    fn show_as(&mut self, result: Result<String>, keep: bool) {
+        let failed = result.is_err();
+        let notice = Notice::read(&result.unwrap_or_else(|error| error), failed);
+        let subject = self.subject.take();
+        if notice.tone.passes() && notice.you.is_none() && !keep {
+            self.toast = Some(notices::Toast { notice, subject, at: Instant::now() });
+            self.mode = Mode::Normal;
+        } else {
+            self.shown = subject;
+            self.mode = Mode::Message(notice.to_string());
+        }
         let _ = self.refresh.send(());
+    }
+
+    fn about_path(&mut self, kind: &str, path: &Path) {
+        let name = self.tasks.iter().find(|item| item.path.as_deref() == Some(path)).map(|item| item.name.clone());
+        self.about(kind, &name.unwrap_or_else(|| name_of(path)));
+    }
+
+    // The task a step is about, by the name the step was started for, so its notice can name the task by its title.
+    fn about(&mut self, kind: &str, name: &str) {
+        self.subject = Some(match self.tasks.iter().find(|item| item.name == name) {
+            Some(item) => notices::Subject::of(kind, item),
+            None => notices::Subject { kind: kind.to_string(), title: name.to_string(), task: true },
+        });
     }
 
     fn move_selection(&mut self, step: isize) {
@@ -335,7 +369,7 @@ impl App {
             match map.act(ctx, &key) {
                 Some(Act::Lead) => {
                     if let Err(error) = lead::focus_toggle() {
-                        self.mode = Mode::Message(error);
+                        self.show(Err(error));
                     } else if self.lead_chat == Some(true) {
                         self.lead_chat = Some(false);
                     }
@@ -372,7 +406,14 @@ impl App {
         match std::mem::replace(&mut self.mode, Mode::Normal) {
             Mode::Normal => self.handle_normal(key),
             Mode::Options(index) => self.handle_options(index, act, key),
-            Mode::Help | Mode::Message(_) => {}
+            Mode::Help => {}
+            Mode::Message(text) => {
+                let shown = self.shown.take();
+                let offered = Notice::parse(&text).map(|notice| notices::offers(&notice, shown.as_ref())).unwrap_or_default();
+                if act.is_some_and(|act| offered.contains(&act)) {
+                    self.handle_normal(key);
+                }
+            }
             working @ Mode::Working { .. } => self.mode = working,
             Mode::Questions(window) => self.handle_questions(window, key),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
@@ -447,7 +488,10 @@ impl App {
                 }
             }
             Act::Refresh => self.refresh_backlog(),
-            Act::Away => self.show(permit::away(Some(if permit::away_since().is_some() { "off" } else { "on" }))),
+            Act::Away => {
+                self.subject = Some(notices::Subject::plain("away"));
+                self.show(permit::away(Some(if permit::away_since().is_some() { "off" } else { "on" })));
+            }
             Act::Update => self.start_update(),
             Act::Filter => {
                 let buffer = self.filter_of(self.column).unwrap_or_default().to_string();
@@ -462,10 +506,13 @@ impl App {
     }
 
     fn refresh_backlog(&mut self) {
-        let result = backlog::refresh_prompt(&self.sources).and_then(|prompt| match self.lead_pane() {
-            Some(pane) => crate::typing::prompt(&pane, &prompt, "the lead").map(|_| "Asked the lead to refresh the backlog; it updates here when it is saved.".to_string()).map_err(|refused| format!("Nothing was typed: the lead {}; ask again once it is clear.", refused.reason())),
-            None => Err("No lead is running; prefix+space starts it.".to_string()),
+        let prompt = backlog::refresh_prompt(&self.sources).map_err(|why| Notice::new(Tone::NotNow, "Nothing for the lead to refresh").detail("why", why).to_string());
+        let result = prompt.and_then(|prompt| match self.lead_pane() {
+            Some(pane) => crate::typing::prompt(&pane, &prompt, "the lead").map(|_| Notice::new(Tone::Moving, "The lead refreshes the backlog").next("It updates here when it is saved.").to_string())
+                .map_err(|refused| Notice::new(Tone::NotNow, format!("Nothing was typed: the lead {}", refused.reason())).next("Ask again once it is clear.").to_string()),
+            None => Notice::new(Tone::NotNow, "No lead is running").next("prefix+space starts it.").err(),
         });
+        self.subject = Some(notices::Subject::plain("backlog"));
         self.show(result);
     }
 
@@ -519,13 +566,17 @@ impl App {
                         Act::Go => self.mode = Mode::ConfirmQueued { about: format!("{note} Started now, it begins {}.", item.start_now_means().unwrap_or_default()), name: item.name, now: true, nudged: false },
                         Act::StartAt => self.mode = Mode::Input { purpose: Purpose::StartAt(item.name), label: input::START_AT_LABEL.to_string(), buffer: String::new() },
                         Act::Drop => self.mode = Mode::ConfirmQueued { about: format!("{note} Dropped, {}.", item.drop_means().unwrap_or_default()), name: item.name, now: false, nudged: false },
-                        _ => self.show(Err(format!("{} is queued and has no worktree yet: {go} starts it now, {} sets when it starts, {drop} drops the wait.", item.name, keys::key(Act::StartAt)))),
+                        _ => {
+                            self.about("queued", &item.name);
+                            self.show(Notice::new(Tone::NotNow, "It is queued and has no worktree yet").next(format!("{go} starts it now, {} sets when it starts, {drop} drops the wait.", keys::key(Act::StartAt))).ok());
+                        }
                     }
                     return;
                 }
                 match act {
                     Act::Go if item.agent.is_none() => {
                         let Some(path) = item.path.clone() else { return };
+                        self.about("restart", &item.name);
                         let (sender, result) = mpsc::channel();
                         let name = item.name.clone();
                         thread::spawn(move || {
@@ -552,10 +603,19 @@ impl App {
                     Act::Card => match (item.path.clone(), self.card_of(&item), self.question_of(&item)) {
                         (_, _, Some(at)) => self.open_questions(Some(at)),
                         (Some(path), Some(_), None) => self.mode = Mode::Card { path, name: item.name.clone(), scroll: 0, image: 0 },
-                        _ => self.show(Ok(format!("{} has no sign-off card yet; it writes one when it reports ready.", item.name))),
+                        _ => {
+                            self.about("card", &item.name);
+                            self.show(Notice::new(Tone::NotNow, "No sign-off card yet").next("Its Claude writes one when it reports ready.").ok());
+                        }
                     },
-                    Act::Tidy | Act::Push | Act::Done | Act::SendReview | Act::Rebase if busy(&item) => self.show(Err(format!("{} is still working; wait until it reports.", item.name))),
-                    Act::Push if item.awaiting_review() => self.show(Err(format!("{} is in review; push opens once its reviewer passes its commits.", item.name))),
+                    Act::Tidy | Act::Push | Act::Done | Act::SendReview | Act::Rebase if busy(&item) => {
+                        self.about(act_kind(act), &item.name);
+                        self.show(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports.").ok());
+                    }
+                    Act::Push if item.awaiting_review() => {
+                        self.about("push", &item.name);
+                        self.show(Notice::new(Tone::NotNow, "Not yet: it is in review").next("Push opens once its reviewer passes its commits.").ok());
+                    }
                     Act::Tidy => {
                         if let Some(path) = item.path.clone() {
                             let label = "How should the commits look? (optional, enter to let Claude decide)".to_string();
@@ -566,17 +626,23 @@ impl App {
                     Act::Worker => self.toggle(&item, Process::Worker),
                     Act::Rebase => {
                         if let Some(path) = item.path.clone() {
+                            self.about("rebase", &item.name);
                             self.in_background(format!("Rebasing {}…", item.name), move || tasks::rebase(&path));
                         }
                     }
                     Act::Follow => {
                         if let Some(repo) = &item.repo {
+                            self.about("follow", &item.name);
                             self.show(tasks::toggle_follow(repo, &item.name));
                         }
                     }
-                    Act::Permit if item.is_task() => self.show(permit::toggle_task(&peers::address(&item.name, &item.place))),
+                    Act::Permit if item.is_task() => {
+                        self.about("permission", &item.name);
+                        self.show(permit::toggle_task(&peers::address(&item.name, &item.place)));
+                    }
                     Act::SendReview => {
                         if let Some(path) = &item.path {
+                            self.about("review", &item.name);
                             self.show(if item.awaiting_review() { crate::review::withdraw(path, None) } else { crate::review::request(path, None) });
                         }
                     }
@@ -589,7 +655,10 @@ impl App {
                         let Some(path) = item.path.clone() else { return };
                         match act {
                             Act::Push => match tasks::commits(&path) {
-                                Ok(commits) if commits.is_empty() => self.show(Err(format!("{} has no commits to push.", item.name))),
+                                Ok(commits) if commits.is_empty() => {
+                                    self.about("push", &item.name);
+                                    self.show(Notice::new(Tone::NotNow, "Nothing to push: it has no commits yet").ok());
+                                }
                                 Ok(commits) => {
                                     let (card, tests) = (report::card_for(&path), evidence::for_path(&path));
                                     self.mode = Mode::ConfirmPush { path, commits, selected: 0, card, tests, scroll: push::Scroll::default() };
@@ -700,7 +769,7 @@ impl App {
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
-            filter: None, ctrl_c: None, notice: None, lead_chat: None,
+            filter: None, ctrl_c: None, notice: None, lead_chat: None, subject: None, shown: None, toast: None,
         }
     }
 }
@@ -820,7 +889,7 @@ pub fn run(overlay: bool) -> Result<String> {
             if (matches!(app.mode, Mode::Normal | Mode::Help) || matches!(app.mode, Mode::Message(_)) && !app.update_shown) && app.areas.is_idle() && app.routines.is_idle() && rebuild.ready() {
                 let error = rebuild.restart(&app);
                 terminal = init_terminal();
-                app.mode = Mode::Message(error);
+                app.show_as(Err(error), true);
             }
             if matches!(app.graphics, Graphics::Pending { wanted: true }) {
                 (app.graphics, app.cell_guessed) = graphics.resolve(Picker::from_query_stdio().ok());
@@ -843,6 +912,25 @@ pub fn run(overlay: bool) -> Result<String> {
     })();
     restore_terminal();
     result.map(|_| String::new())
+}
+
+fn act_kind(act: Act) -> &'static str {
+    match act {
+        Act::Tidy => "tidy",
+        Act::Push => "push",
+        Act::Done => "done",
+        Act::SendReview => "review",
+        Act::Rebase => "rebase",
+        _ => "kelpie",
+    }
+}
+
+fn updated(said: &str) -> String {
+    if Notice::parse(said).is_some() {
+        return said.to_string();
+    }
+    let (first, rest) = said.split_once('\n').unwrap_or((said, ""));
+    Notice::new(Tone::Done, "Update finished").next(first).detail("result", rest.trim()).to_string()
 }
 
 #[cfg(test)]
@@ -946,14 +1034,14 @@ mod tests {
         assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::TaskName, .. }), "n starts a new task");
         app.mode = Mode::Normal;
         app.handle_normal(key(KeyCode::Char('s')));
-        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("no sign-off card")), "s is the card, not a new task");
+        assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline.contains("No sign-off card")), "s is the card, not a new task");
         app.mode = Mode::Normal;
         app.column = Column::Backlog;
         app.handle_normal(key(KeyCode::Char('n')));
         assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogItem, .. }), "n in the Backlog column adds an item");
         app.mode = Mode::Normal;
         app.handle_normal(key(KeyCode::Char('i')));
-        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("No questions")), "i is the inbox");
+        assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline.contains("No questions")), "i is the inbox");
     }
 
     #[test]
@@ -1029,7 +1117,7 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         let Mode::Message(text) = &app.mode else { panic!("the result is shown") };
-        assert_eq!(text, "kelpie 0.18.1 → 0.18.2");
+        assert_eq!(text, "✓ Update finished\n  next: kelpie 0.18.1 → 0.18.2", "the update's result stays open, though it asks nothing");
         assert!(app.update_shown && app.updates.is_empty() && rechecked.try_recv().is_ok(), "the notice goes and a fresh check is asked for");
         assert!(help_lines(false).iter().any(|line| line.to_string().starts_with("U ")), "U is in the keys help");
     }

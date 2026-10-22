@@ -8,6 +8,7 @@ use crate::config;
 use crate::herdr;
 use crate::lead::state_dir;
 use crate::messages;
+use crate::notice::{Notice, Tone};
 use crate::peers;
 use crate::profiles::{self, Profile};
 use crate::repo::{branch_exists, default_branch, git, git_writing, main_checkout, name_of};
@@ -223,7 +224,7 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = running {
         return restart(&place(&existing), &existing, focus, prompt).map(|begun| match &fell_back {
-            Some(why) => Begun { said: format!("{} Careful: {why}.", begun.said), ..begun },
+            Some(why) => Begun { said: Notice::read(&begun.said, false).detail("careful", why).to_string(), ..begun },
             None => begun,
         });
     }
@@ -241,10 +242,10 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     super::after::forget_unwaited_watch(&state_dir()?, &address);
     let shared = vault.as_ref().map(|_| state_dir().map(|state| crate::task_note::shared(&state, &task, &address))).transpose()?.flatten();
     let (note, vault_said) = match (&vault, shared) {
-        (_, Some(note)) => (Some(note.clone()), format!(" Its note is {note}, shared with its other halves.")),
+        (_, Some(note)) => (Some(note.clone()), format!("{note}, shared with its other halves")),
         (Some(cli), None) => match crate::task_note::open(cli, &task, &slot.path, backlog) {
-            Ok(note) => (Some(note.clone()), format!(" Its note is {note}.")),
-            Err(error) => (None, format!(" Its vault note was not opened ({error}); the task runs without one.")),
+            Ok(note) => (Some(note.clone()), note),
+            Err(error) => (None, format!("not opened ({error}); the task runs without one")),
         },
         (None, None) => (None, String::new()),
     };
@@ -263,8 +264,8 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     let (agent_name, started) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place(&slot) }, &agent_pane, Session::New(new_session_id()?))?;
     let prompted = match &started {
         Ok(started) => send_prompt(started, prompt, |text| crate::typing::prompt_confirmed(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
-            .map_err(|error| format!("Started {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
-        Err(_) => Ok(String::new()),
+            .map_err(|error| unprompted("Started", &task, &slot.path, &error)),
+        Err(_) => Ok(Asks::default()),
     };
     if focus {
         herdr::focus_workspace(&space.workspace_id)?;
@@ -277,7 +278,8 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     if let Err(error) = messages::announce(&task, &name_of(&repo)) {
         eprintln!("Could not tell {task}'s other halves it started: {error}");
     }
-    Ok(Begun { said: format!("Started {task} in {}.{vault_said}{trust_said}", slot.path.display()), started })
+    let said = trust_said.on(Notice::new(Tone::Done, "Started")).detail("task", &task).detail("folder", slot.path.display().to_string()).detail("note", vault_said);
+    Ok(Begun { said: said.to_string(), started })
 }
 
 struct Launch<'a> {
@@ -388,7 +390,7 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
         if focus {
             herdr::focus_workspace(workspace)?;
         }
-        return Ok(Begun { said: format!("{task} is already running in {}.", slot.path.display()), started: Started::Ready });
+        return Ok(Begun { said: Notice::new(Tone::NotNow, "It is already running").detail("task", task).detail("folder", slot.path.display().to_string()).to_string(), started: Started::Ready });
     }
     let space = open_space(place.repo, slot, task, false)?;
     let pane = match (&open, space.root_pane_id) {
@@ -421,8 +423,8 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     let address = peers::address(task, &name_of(place.repo));
     let prompted = match &started {
         Ok(started) => send_prompt(started, prompt.as_deref(), |text| crate::typing::prompt_confirmed(&agent_name, text, &address), |text| messages::hold_prompt(&address, text))
-            .map_err(|error| format!("Restarted {task} in {}, but its prompt did not reach Claude: {error}", slot.path.display())),
-        Err(_) => Ok(String::new()),
+            .map_err(|error| unprompted("Restarted", task, &slot.path, &error)),
+        Err(_) => Ok(Asks::default()),
     };
     if focus {
         herdr::focus_workspace(&space.workspace_id)?;
@@ -431,33 +433,62 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     let trust_said = prompted?;
     let held = started.asks().is_some();
     let how = match (resumed, prompt.is_some()) {
-        (true, true) if !held => "resuming its last conversation, and sent it the prompt",
-        (true, _) => "resuming its last conversation",
-        (false, true) if !held => "with a new conversation, as none of its own was found, and sent it the task's prompt again",
-        (false, true) => "with a new conversation, as none of its own was found",
-        (false, false) => "with a new conversation, as none of its own was found; it had no prompt to send again",
+        (true, true) if !held => "It resumes its last conversation and has the prompt again.",
+        (true, _) => "It resumes its last conversation.",
+        (false, true) if !held => "No conversation of its own was found, so it starts a new one with the task's prompt.",
+        (false, true) => "No conversation of its own was found, so it starts a new one.",
+        (false, false) => "No conversation of its own was found, so it starts a new one; there was no prompt to send again.",
     };
-    Ok(Begun { said: format!("Restarted {task} in {}, {how}.{trust_said}", slot.path.display()), started })
+    let said = trust_said.on(Notice::new(Tone::Done, "Restarted its Claude").next(how)).detail("task", task).detail("folder", slot.path.display().to_string());
+    Ok(Begun { said: said.to_string(), started })
+}
+
+fn unprompted(how: &str, task: &str, folder: &Path, error: &str) -> String {
+    Notice::new(Tone::You, format!("{how}, but its prompt did not reach Claude")).you("Paste the task's prompt into its Claude.").detail("task", task).detail("folder", folder.display().to_string()).detail("error", error).to_string()
+}
+
+// What a start still asks of the user once Claude runs: an answer only they can give, and what kelpie does after it.
+#[derive(Debug, Default, PartialEq)]
+struct Asks {
+    you: Option<String>,
+    next: Option<String>,
+    detail: Option<String>,
+}
+
+impl Asks {
+    fn on(self, notice: Notice) -> Notice {
+        let mut notice = match self.you {
+            Some(you) => Notice { tone: Tone::You, ..notice }.you(you),
+            None => notice,
+        };
+        if let Some(next) = self.next {
+            notice = notice.next(next);
+        }
+        match self.detail {
+            Some(detail) => notice.detail("mode", detail),
+            None => notice,
+        }
+    }
 }
 
 // The prompt goes in as a paste: as an argument, herdr would have to quote it for the shell.
-fn send_prompt(started: &Started, prompt: Option<&str>, type_now: impl FnOnce(&str) -> Result<()>, hold: impl FnOnce(&str) -> Result<()>) -> Result<String> {
+fn send_prompt(started: &Started, prompt: Option<&str>, type_now: impl FnOnce(&str) -> Result<()>, hold: impl FnOnce(&str) -> Result<()>) -> Result<Asks> {
     let asks = match started {
-        Started::AwaitsTrust => " Claude there asks whether you trust the repo's folder, and that answer is yours",
-        Started::AwaitsBypass => " Claude there asks you to accept bypass permissions mode, and that answer is yours",
+        Started::AwaitsTrust => "Answer Claude's question in its Space: whether you trust the repo's folder.",
+        Started::AwaitsBypass => "Answer Claude's question in its Space: whether to accept bypass permissions mode.",
         Started::Ready | Started::BypassDisabled => {
             if let Some(prompt) = prompt {
                 type_now(prompt)?;
             }
-            let disabled = " Claude's managed settings disable bypass permissions mode (permissions.disableBypassPermissionsMode), so it runs with permission prompts.";
-            return Ok(if *started == Started::BypassDisabled { disabled.to_string() } else { String::new() });
+            let disabled = "Claude's managed settings disable bypass permissions mode (permissions.disableBypassPermissionsMode), so it runs with permission prompts";
+            return Ok(Asks { detail: (*started == Started::BypassDisabled).then(|| disabled.to_string()), ..Asks::default() });
         }
     };
     Ok(match prompt {
-        None => format!("{asks}."),
+        None => Asks { you: Some(asks.to_string()), ..Asks::default() },
         Some(prompt) => match hold(prompt) {
-            Ok(()) => format!("{asks}; once you give it, kelpie types the task's prompt in while the keeper or an open board runs."),
-            Err(error) => format!("{asks}; its prompt could not be kept for it ({error}), so paste the prompt there yourself once you have answered."),
+            Ok(()) => Asks { you: Some(asks.to_string()), next: Some("Once you answer, kelpie types the task's prompt in while the keeper or an open board runs.".to_string()), detail: None },
+            Err(error) => Asks { you: Some(format!("{asks} Then paste the task's prompt there yourself: kelpie could not keep it ({error}).")), ..Asks::default() },
         },
     })
 }
@@ -499,13 +530,13 @@ mod tests {
             let said = send_prompt(&started, prompt, |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |text| { held.borrow_mut().push(text.to_string()); if keeps { Ok(()) } else { Err("Another kelpie is holding the message log; try again".to_string()) } });
             (said, typed.into_inner(), held.into_inner())
         };
-        assert_eq!(sent(Started::Ready, Some("Fix the flaky test"), true), (Ok(String::new()), vec!["Fix the flaky test".to_string()], Vec::new()));
+        assert_eq!(sent(Started::Ready, Some("Fix the flaky test"), true), (Ok(Asks::default()), vec!["Fix the flaky test".to_string()], Vec::new()));
         let (said, typed, held) = sent(Started::AwaitsTrust, Some("Fix the flaky test"), true);
         assert_eq!((typed, held), (Vec::new(), vec!["Fix the flaky test".to_string()]));
-        assert!(said.unwrap().contains("kelpie types the task's prompt in while the keeper or an open board runs"));
+        assert!(said.unwrap().next.unwrap().contains("kelpie types the task's prompt in while the keeper or an open board runs"));
         let (said, _, _) = sent(Started::AwaitsTrust, Some("Fix the flaky test"), false);
-        assert!(said.unwrap().contains("paste the prompt there yourself"), "a prompt kelpie could not keep is the user's to paste, and the start still stands");
-        assert_eq!(sent(Started::AwaitsTrust, None, true).0.unwrap(), " Claude there asks whether you trust the repo's folder, and that answer is yours.");
+        assert!(said.unwrap().you.unwrap().contains("paste the task's prompt there yourself"), "a prompt kelpie could not keep is the user's to paste, and the start still stands");
+        assert_eq!(sent(Started::AwaitsTrust, None, true).0.unwrap().you.as_deref(), Some("Answer Claude's question in its Space: whether you trust the repo's folder."));
         let source = include_str!("launch.rs");
         let launch = &source[source.find("\nfn launch(").unwrap()..];
         let launch = &launch[..launch.find("\n}\n").unwrap()];
@@ -676,11 +707,13 @@ mod tests {
         let typed = std::cell::RefCell::new(Vec::new());
         let said = send_prompt(&Started::BypassDisabled, Some("Fix the flaky test"), |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |_| panic!("nothing is held for a running Claude")).unwrap();
         assert_eq!(typed.into_inner(), ["Fix the flaky test"]);
-        assert!(said.contains("disable bypass permissions mode") && said.contains("permissions.disableBypassPermissionsMode"), "{said}");
+        let detail = said.detail.unwrap();
+        assert!(detail.contains("disable bypass permissions mode") && detail.contains("permissions.disableBypassPermissionsMode"), "{detail}");
         let held = std::cell::RefCell::new(Vec::new());
         let said = send_prompt(&Started::AwaitsBypass, Some("Fix the flaky test"), |_| panic!("no key reaches the bypass warning"), |text| { held.borrow_mut().push(text.to_string()); Ok(()) }).unwrap();
         assert_eq!(held.into_inner(), ["Fix the flaky test"]);
-        assert!(said.starts_with(" Claude there asks you to accept bypass permissions mode, and that answer is yours; once you give it"), "{said}");
+        assert_eq!(said.you.as_deref(), Some("Answer Claude's question in its Space: whether to accept bypass permissions mode."));
+        assert!(said.next.unwrap().starts_with("Once you answer, kelpie types"));
     }
 
     #[test]
@@ -721,7 +754,7 @@ mod tests {
         assert!(body("launch").contains("profile: Some(profile.name.clone())") && body("launch").contains("record_text(&record)"), "every start records the profile it ran with");
         assert!(body("begin").contains("recorded_session(&task, &repo).profile") && body("begin").find("task_profile(").unwrap() < body("begin").find("fetch(").unwrap(), "a running task keeps its profile, and a missing one is refused before a worktree is claimed");
         assert!(body("task_role").contains("recorded_session(&task, &repo).profile"), "kelpie restart writes the role and settings of the profile the task started with");
-        assert!(body("begin").contains("Careful: {why}.") && body("task_role").contains("messages::notify_lead(&said)"), "a recorded profile that no longer loads is said where the restart reports, and the restart goes on");
+        assert!(body("begin").contains("detail(\"careful\", why)") && body("task_role").contains("messages::notify_lead(&said)"), "a recorded profile that no longer loads is said where the restart reports, and the restart goes on");
     }
 
     #[test]

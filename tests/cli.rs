@@ -297,7 +297,7 @@ fn the_local_backlog_file_is_written_next_to_the_machine_config() {
     let added = lab.run(&["backlog", "add", "--priority", "high", "Fix login — the session drops (app)"]);
     assert!(added.status.success(), "{}", stderr(&added));
     let file = lab.root.join("backlog.md");
-    assert!(stdout(&added).starts_with("Added \"Fix login\" [high]"), "{}", stdout(&added));
+    assert!(stdout(&added).contains("item: \"Fix login\" [high]"), "{}", stdout(&added));
     assert!(fs::read_to_string(&file).unwrap().ends_with("- [high] Fix login — the session drops (app)\n"));
     let twice = lab.run(&["backlog", "add", "Fix login"]);
     assert!(!twice.status.success() && stderr(&twice).contains("already in the backlog"));
@@ -319,7 +319,7 @@ fn the_statusline_keeps_the_plans_usage_and_prints_nothing() {
 #[test]
 fn away_mode_is_the_users_switch_and_the_lead_alone_decides_while_it_is_on() {
     let lab = Lab::new("away");
-    assert_eq!(stdout(&lab.run(&["away"])), "Away mode is off.");
+    assert_eq!(stdout(&lab.run(&["away"])), "✓ Away mode is off");
     let on = lab.run(&["away", "on"]);
     let said = format!("{}{}", stdout(&on), stderr(&on));
     assert!(said.contains("Away mode is on") || said.contains("is the user's call"), "under a Claude the switch is refused, from a terminal it turns on: {said}");
@@ -327,7 +327,7 @@ fn away_mode_is_the_users_switch_and_the_lead_alone_decides_while_it_is_on() {
         assert!(lab.state.join("away").exists());
         let decide = lab.run(&["decide", "billing", "use the queue"]);
         assert!(!decide.status.success() && stderr(&decide).contains("only the lead settles a question"), "{}", stderr(&decide));
-        assert!(stdout(&lab.run(&["away", "off"])).starts_with("Away mode is off"));
+        assert!(stdout(&lab.run(&["away", "off"])).starts_with("✓ Away mode is off"));
         assert!(!lab.state.join("away").exists());
     }
     assert!(!lab.run(&["away", "maybe"]).status.success());
@@ -408,16 +408,16 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
 
     let landed = lab.run(&["-C", app_str, "land", "billing"]);
     assert!(landed.status.success(), "{}", stderr(&landed));
-    assert!(stdout(&landed).contains("billing is rebased onto origin/main and ready") && stdout(&landed).contains("Add refunds"), "{}", stdout(&landed));
+    assert!(stdout(&landed).contains("Rebased onto main and ready to push") && stdout(&landed).contains("Add refunds"), "{}", stdout(&landed));
     fs::create_dir_all(lab.state.join("verdicts")).unwrap();
     fs::write(lab.state.join("verdicts/billing@app.md"), format!("verdict: changes\nreviewed: {}\n\n- b:1 — wrong\n", git(&slot, &["rev-parse", "HEAD"]))).unwrap();
     let pushed = lab.run(&["-C", app_str, "push", "billing"]);
     assert!(!pushed.status.success());
-    assert!(stderr(&pushed).contains("cannot be pushed yet: its review asks for changes (1 finding)"), "the review gate holds before anyone's permission is read: {}", stderr(&pushed));
+    assert!(stderr(&pushed).contains("Not pushed: its review asks for changes (1 finding)"), "the review gate holds before anyone's permission is read: {}", stderr(&pushed));
     assert_eq!(git(&lab.root.join("origin.git"), &["rev-parse", "main"]), git(&app, &["rev-parse", "main"]), "nothing reached origin");
     let withdrawn = lab.run(&["-C", app_str, "review", "--withdraw", "billing"]);
     let said = format!("{}{}", stdout(&withdrawn), stderr(&withdrawn));
-    assert!(said.contains("Withdrew billing@app from review") || said.contains("is the user's call"), "{said}");
+    assert!(said.contains("Withdrawn from review") || said.contains("is the user's call"), "{said}");
 }
 
 #[test]
@@ -785,7 +785,7 @@ fn after_a_push_the_task_waits_under_ci_running_and_closes_as_done_once_ci_is_gr
     on_github(&lab, &app);
     fake_gh(&lab, "[]");
     let pushed = landed_and_pushed(&lab, &app);
-    assert!(stdout(&pushed).contains("billing stays open under CI running until CI for"), "{}", stdout(&pushed));
+    assert!(stdout(&pushed).contains("CI runs now; kelpie closes the task when it is green") && stdout(&pushed).contains("task: billing"), "{}", stdout(&pushed));
     let sha = git(&lab.root.join("origin.git"), &["rev-parse", "main"]);
     assert_eq!(sha, git(&slot, &["rev-parse", "HEAD"]), "the commits are on origin");
     assert_eq!(git(&slot, &["branch", "--show-current"]), "billing", "the worktree stays the task's");
@@ -808,7 +808,7 @@ fn after_a_push_the_task_waits_under_ci_running_and_closes_as_done_once_ci_is_gr
     assert_eq!(git(&slot, &["branch", "--show-current"]), "billing");
     age_watch(&lab);
     let green = lab.run(&["ci", "tick"]);
-    assert!(stdout(&green).contains("CI is green for") && stdout(&green).contains("billing is done"), "{}\n{}", stdout(&green), stderr(&green));
+    assert!(stdout(&green).contains("CI is green for") && stdout(&green).contains("Closed: its work is on main"), "{}\n{}", stdout(&green), stderr(&green));
     assert!(git(&app, &["branch", "--list", "billing"]).is_empty(), "the task closed as done");
     assert_eq!(stdout(&lab.run(&["ci", "--json"])), "[]");
     assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("pushed billing@app") && text.contains("The task is done and closed")), "{:?}", prompts_to(&lab, "p_lead"));
@@ -851,13 +851,13 @@ fn without_gh_or_github_the_push_closes_the_task_at_once_and_says_why_ci_was_not
     let (app, _) = lab.task_fixture();
     on_github(&lab, &app);
     let pushed = landed_and_pushed(&lab, &app);
-    assert!(stdout(&pushed).contains("CI not watched: gh is not installed.") && stdout(&pushed).contains("billing is done"), "{}", stdout(&pushed));
+    assert!(stdout(&pushed).contains("ci: not watched: gh is not installed") && stdout(&pushed).contains("and closed the task"), "{}", stdout(&pushed));
     assert!(git(&app, &["branch", "--list", "billing"]).is_empty());
     let local = Lab::new("ci-local-origin");
     let (app, _) = local.task_fixture();
     fake_gh(&local, "[]");
     let pushed = landed_and_pushed(&local, &app);
-    assert!(stdout(&pushed).contains("CI not watched: origin is not on GitHub.") && stdout(&pushed).contains("billing is done"), "{}", stdout(&pushed));
+    assert!(stdout(&pushed).contains("ci: not watched: origin is not on GitHub") && stdout(&pushed).contains("and closed the task"), "{}", stdout(&pushed));
     assert!(gh_calls(&local).is_empty());
 }
 
@@ -869,7 +869,7 @@ fn with_ci_watch_off_the_push_closes_the_task_as_before_and_never_asks_gh() {
     fake_gh(&lab, "[]");
     fs::write(&lab.config, "[ci]\nwatch = false\n").unwrap();
     let pushed = landed_and_pushed(&lab, &app);
-    assert!(stdout(&pushed).contains("billing is done") && !stdout(&pushed).contains("CI"), "{}", stdout(&pushed));
+    assert!(stdout(&pushed).contains("and closed the task") && !stdout(&pushed).contains("ci:"), "{}", stdout(&pushed));
     assert!(gh_calls(&lab).is_empty());
     assert_eq!(stdout(&lab.run(&["ci"])), "No CI watches.");
 }
@@ -1124,7 +1124,7 @@ fn a_due_routine_starts_as_a_task_in_the_keeper_round_reports_its_findings_and_c
     assert!(listed.starts_with("cluster-health  Cluster health\n  every 1h in ") && listed.contains("fix, pushes its fix; next run now") && listed.ends_with("last: not run yet"), "{listed}");
     let ticked = lab.run(&["routines", "tick"]);
     assert!(ticked.status.success(), "{}", stderr(&ticked));
-    assert!(stdout(&ticked).starts_with("routine cluster-health: Started cluster-health-"), "{}", stdout(&ticked));
+    assert!(stdout(&ticked).starts_with("routine cluster-health: ✓ Started") && stdout(&ticked).contains("task: cluster-health-"), "{}", stdout(&ticked));
     let row = routine_status(&lab);
     let address = row["last_task"].as_str().unwrap().to_string();
     let task = address.strip_suffix("@app").expect("the run's task is in the routine's repo").to_string();
@@ -1166,7 +1166,7 @@ fn a_due_routine_starts_as_a_task_in_the_keeper_round_reports_its_findings_and_c
     assert!(!user.status.success() && stderr(&user).contains("is the word of the routine's own task"), "{}", stderr(&user));
     let closed = lab.run_as(&address, &["-C", run_slot.to_str().unwrap(), "routine", "ok", "kubelet back, every node Ready"]);
     assert!(closed.status.success(), "{}", stderr(&closed));
-    assert!(stdout(&closed).starts_with("Recorded cluster-health as ok.") && stdout(&closed).contains("dropped; wt2.app is free again"), "{}", stdout(&closed));
+    assert!(stdout(&closed).starts_with("Recorded cluster-health as ok.") && stdout(&closed).contains("Dropped") && stdout(&closed).contains("wt2.app is free for the next task"), "{}", stdout(&closed));
     let row = routine_status(&lab);
     assert_eq!((row["last_outcome"].as_str(), row["last_summary"].as_str(), row["open"].as_bool()), (Some("ok"), Some("kubelet back, every node Ready"), Some(false)));
     assert!(!lab.state.join("push-permits").join(&address).exists(), "the permission goes with the task");

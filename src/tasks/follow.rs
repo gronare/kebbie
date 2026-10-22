@@ -70,10 +70,11 @@ fn flagged(state: &Path) -> Vec<(String, PathBuf)> {
 }
 
 fn switched(task: &str, upstream: &str, on: bool) -> String {
+    let main = upstream.trim_start_matches("origin/");
     if on {
-        format!("{task} follows {upstream} now: when it moves, the keeper rebases {task} while its Claude is idle and its files are committed; a conflict goes to its Claude. Nothing is pushed.")
+        crate::notice::Notice::new(crate::notice::Tone::Done, format!("It follows {main} now")).next(format!("When {main} moves, the keeper rebases it while its Claude is idle and its files are committed; a conflict goes to its Claude. Nothing is pushed.")).detail("task", task).to_string()
     } else {
-        format!("{task} no longer follows {upstream}; rebase it when you choose (e on the board, or kelpie land {task}).")
+        crate::notice::Notice::new(crate::notice::Tone::Done, format!("It no longer follows {main}")).next(format!("Rebase it when you choose (e on the board, or kelpie land {task}).")).detail("task", task).to_string()
     }
 }
 

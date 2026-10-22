@@ -73,9 +73,9 @@ pub fn toggle_task(address: &str) -> Result<String> {
     let on = !task_file(&state, address).exists();
     set_task_in(&state, address, on)?;
     let (told, shown) = if on {
-        (format!("The user gave you push permission for {address}: you may push it with kelpie push once it is rules-approved and through any review it is in."), format!("The lead may push {address} now; done, drop and reset take the permission back."))
+        (format!("The user gave you push permission for {address}: you may push it with kelpie push once it is rules-approved and through any review it is in."), crate::notice::Notice::new(crate::notice::Tone::Done, "The lead may push it now").next("Done, drop and reset take the permission back.").detail("task", address).to_string())
     } else {
-        (format!("The user took back push permission for {address}: route it to them again."), format!("Only you push {address} now."))
+        (format!("The user took back push permission for {address}: route it to them again."), crate::notice::Notice::new(crate::notice::Tone::Done, "Only you push it now").detail("task", address).to_string())
     };
     tell_lead(&told);
     Ok(shown)
@@ -142,12 +142,12 @@ pub fn away(word: Option<&str>) -> Result<String> {
     let on = match word {
         Some("on") => true,
         Some("off") => false,
-        None => return Ok(if away_since().is_some() { "Away mode is on: kelpie away off when you are back.".to_string() } else { "Away mode is off.".to_string() }),
+        None => return Ok(if away_since().is_some() { crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is on").next("kelpie away off when you are back.").to_string() } else { crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is off").to_string() }),
         Some(other) => return Err(format!("kelpie away takes on or off, not \"{other}\"")),
     };
     user_only("switching away mode")?;
     let Some(since) = set_away_in(&state_dir()?, on, messages::now())? else {
-        return Ok(format!("Away mode is already {}.", if on { "on" } else { "off" }));
+        return crate::notice::Notice::new(crate::notice::Tone::Done, format!("Away mode is already {}", if on { "on" } else { "off" })).ok();
     };
     if on {
         let log = messages::load();
@@ -155,12 +155,12 @@ pub fn away(word: Option<&str>) -> Result<String> {
             .map(|question| format!("\n- {}", crate::questions::question_copy(question, true))).collect();
         let open = if open.is_empty() { String::new() } else { format!("\nQuestions waiting on the board now:{}", open.concat()) };
         tell_lead(&format!("The user is away from now on. Work by the away rules in your role: answer how-questions yourself with kelpie decide, keep what-questions for the user with kelpie defer, push only what their permissions allow, and keep what you decide for the summary they get back.{open}"));
-        return Ok("Away mode is on: the lead decides how-questions itself, keeps what-questions for you, and pushes only what you permitted.".to_string());
+        return crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is on").next("The lead decides how-questions itself, keeps what-questions for you, and pushes only what you permitted.").ok();
     }
     let log = messages::load();
     let waiting = crate::questions::open_now(&log).into_iter().filter(|question| question.question.as_ref().is_some_and(|question| question.waits)).cloned().collect::<Vec<_>>();
     tell_lead(&return_brief(&log, since, &waiting));
-    Ok("Away mode is off: the lead writes you what landed, what it decided and what waits for you.".to_string())
+    crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is off").next("The lead writes you what landed, what it decided and what waits for you.").ok()
 }
 
 // What the lead writes the user's summary from: the pushes, its own calls and the questions it kept, since the user left.

@@ -75,8 +75,9 @@ impl App {
             Some(Act::Help) => self.mode = Mode::Help,
             Some(Act::Inbox) => self.open_questions(None),
             Some(Act::Options) => {
-                if let Some(message) = self.selected_message() {
-                    self.mode = Mode::Message(format!("{} {} → {}\n\n{}", clock(message.at), message.from, message.to, message.text));
+                if let Some(text) = self.selected_message().map(|message| format!("{} {} → {}\n\n{}", clock(message.at), message.from, message.to, message.text)) {
+                    self.shown = Some(super::notices::Subject::plain("message"));
+                    self.mode = Mode::Message(text);
                 }
             }
             _ => {}

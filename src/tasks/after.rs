@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::notice::{Notice, Tone};
 use crate::messages::{self, Message};
 use crate::peers;
 use crate::permit::Caller;
@@ -172,7 +173,7 @@ pub(super) fn forget_unwaited_watch(state: &Path, address: &str) {
 }
 
 fn refusal(task: &str) -> String {
-    format!("{task} is queued: kelpie after {task} --now starts it, --drop drops the wait")
+    Notice::new(Tone::NotNow, "It is queued").next(format!("kelpie after {task} --now starts it; --drop drops the wait.")).detail("task", task).to_string()
 }
 
 // By address: a wait's own start has claimed its file away, and its other halves are other addresses.
@@ -358,10 +359,10 @@ fn launch(state: &Path, wait: &Wait, intro: &str, begin: Begin, tell: &mut dyn F
     match started {
         Ok(begun) => Ok(begun.said),
         Err(error) => {
-            let reason = format!("kelpie could not start it: {error}");
+            let reason = format!("kelpie could not start it: {}", Notice::read(&error, true).details.iter().find(|(label, _)| label == "error").map_or(error.clone(), |(_, error)| error.clone()));
             let _ = save(state, &Wait { blocked: Some(reason.clone()), ..wait.clone() });
             tell(Told::Blocked { address: wait.address(), repo: wait.repo.clone(), text: blocked_text(wait, &reason) });
-            Err(format!("{}: {reason}", wait.address()))
+            Notice::new(Tone::Failed, "kelpie could not start it").detail("task", wait.address()).detail("error", error).err()
         }
     }
 }
@@ -621,7 +622,7 @@ fn halves(state: &Path, name: &str) -> Result<Vec<Wait>> {
     let task = slug(name)?;
     let found: Vec<Wait> = all(state).into_iter().filter(|wait| wait.task == task).collect();
     if found.is_empty() {
-        return Err(format!("{task} is not queued; kelpie after lists what is"));
+        return Notice::new(Tone::NotNow, "It is not queued").next("kelpie after lists what is.").detail("task", &task).err();
     }
     Ok(found)
 }
@@ -634,19 +635,27 @@ pub(crate) fn now_in(state: &Path, caller: &Caller, name: &str, log: &[Message],
     let (mut said, mut failed) = (Vec::new(), false);
     for wait in &waits {
         if !claim(state, &wait.address()) {
-            said.push(format!("{} is starting already.", wait.address()));
+            said.push((wait.address(), Notice::new(Tone::NotNow, "It is starting already").detail("task", wait.address()).to_string()));
             continue;
         }
         match launch(state, wait, &intro(wait, &facts, Some(by)), begin, tell) {
-            Ok(started) => said.push(started),
+            Ok(started) => said.push((wait.address(), started)),
             Err(error) => {
                 failed = true;
-                said.push(error);
+                said.push((wait.address(), error));
             }
         }
     }
     release_watches(state, &waits);
-    if failed { Err(said.join("\n")) } else { Ok(said.join("\n")) }
+    let said = match said.len() {
+        1 => said.remove(0).1,
+        _ => said.into_iter().fold(Notice::new(if failed { Tone::Failed } else { Tone::Done }, if failed { "Not every half started" } else { "Started every half" }), |notice, (address, text)| {
+            let said = Notice::read(&text, false);
+            let error = said.details.iter().find(|(label, _)| label == "error").map(|(_, error)| format!(" ({error})")).unwrap_or_default();
+            notice.detail(&address, format!("{}{error}", said.headline))
+        }).to_string(),
+    };
+    if failed { Err(said) } else { Ok(said) }
 }
 
 pub(crate) fn drop_in(state: &Path, caller: &Caller, name: &str) -> Result<String> {
@@ -658,8 +667,9 @@ pub(crate) fn drop_in(state: &Path, caller: &Caller, name: &str) -> Result<Strin
         crate::status::forget_title(state, &wait.address());
     }
     release_watches(state, &waits);
-    let back = waits.iter().find_map(|wait| wait.backlog.as_deref()).map_or(String::new(), |item| format!(" Its backlog item {item} is back in the Backlog column."));
-    Ok(format!("Dropped the wait of {}; nothing was started.{back}", waits.iter().map(Wait::address).collect::<Vec<_>>().join(" and ")))
+    let back = waits.iter().find_map(|wait| wait.backlog.as_deref());
+    Notice::new(Tone::Done, "Dropped the wait; nothing was started").next(if back.is_some() { "Its backlog item is back in the Backlog column." } else { "" })
+        .detail("task", waits.iter().map(Wait::address).collect::<Vec<_>>().join(" and ")).detail("item", back.unwrap_or_default()).ok()
 }
 
 pub(crate) fn label(state: &DepState, item: Option<&crate::status::Item>) -> String {
@@ -1370,9 +1380,9 @@ mod tests {
         let state = state_of(&dir);
         save(&state, &Wait { task: "search".to_string(), repo: dir.clone(), ..wait_for("search", "web", &["other@web"]) }).unwrap();
         let search = peers::address("search", &name_of(&dir));
-        assert_eq!(queued_refusal(&state, &search).unwrap_err(), "search is queued: kelpie after search --now starts it, --drop drops the wait");
+        assert_eq!(queued_refusal(&state, &search).unwrap_err(), "– It is queued\n  next: kelpie after search --now starts it; --drop drops the wait.\n  task: search");
         assert!(queued_refusal(&state, "search@elsewhere").is_ok() && queued_refusal(&state, &peers::address("billing", &name_of(&dir))).is_ok(), "begin refuses by address");
-        assert_eq!(queued_name_refusal(&state, "Search").unwrap_err(), "search is queued: kelpie after search --now starts it, --drop drops the wait", "kelpie start refuses the name in every repo");
+        assert!(queued_name_refusal(&state, "Search").unwrap_err().contains("kelpie after search --now starts it"), "kelpie start refuses the name in every repo");
         let main = include_str!("../main.rs");
         let start = &main[main.find("Some(\"start\") => {").unwrap()..];
         assert!(start.find("tasks::refuse_queued_name(name)?").unwrap() < start.find("tasks::start(repo").unwrap());
@@ -1564,7 +1574,7 @@ mod tests {
         save(&state, &Wait { backlog: Some("local:Fix login".to_string()), ..wait_for("web-billing", "web", &["billing@api"]) }).unwrap();
         assert!(held_items(&state).contains("local:Fix login"), "the Backlog column hides it while it waits");
         let said = drop_in(&state, &Caller::User, "web-billing").unwrap();
-        assert_eq!(said, "Dropped the wait of web-billing@web; nothing was started. Its backlog item local:Fix login is back in the Backlog column.");
+        assert_eq!(said, "✓ Dropped the wait; nothing was started\n  next: Its backlog item is back in the Backlog column.\n  task: web-billing@web\n  item: local:Fix login");
         assert!(held_items(&state).is_empty() && all(&state).is_empty());
         let source = include_str!("started.rs");
         assert!(source.contains("super::after::held_items(&state)"), "started_items takes in what waits hold");

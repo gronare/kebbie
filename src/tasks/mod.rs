@@ -14,7 +14,7 @@ mod test_support;
 pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, after as after_command, at as start_at, drop as drop_wait, now as start_now, queue, refuse_queued_name, Shown as WaitShown, shown as waits_shown, tick as after_tick};
 pub(crate) use approval::{approve, approved, awaits_check, rules_check, rules_check_task, same_code};
 pub(crate) use crate::agent::{Started, wait_for_prompt};
-pub(crate) use finish::{done, drop, drop_routine_ok, reset};
+pub(crate) use finish::{FORCE, done, drop, drop_routine_ok, reset};
 pub(crate) use follow::{follow, follows, tick as follow_tick, toggle as toggle_follow};
 pub(crate) use history::{Commit, commits, draft_squash_message, reword, squash};
 pub(crate) use intent::{By as PushBy, Pending as PendingPush, Work as PushWork, after_red_ci, complete as complete_pushes, pending as pending_push};
@@ -73,11 +73,11 @@ fn fast_forward_main(repo: &Path, upstream: &str) -> Result<String> {
     let local = upstream.trim_start_matches("origin/");
     let name = name_of(repo);
     if git(repo, &["branch", "--show-current"])? != local {
-        return Ok(format!("{name} left as is (not on {local})."));
+        return Ok(format!("{name} left as is (not on {local})"));
     }
     Ok(match git_writing(repo, &["merge", "--quiet", "--ff-only", upstream]) {
-        Ok(_) => format!("{name} fast-forwarded to {upstream}."),
-        Err(_) => format!("{name} could not fast-forward to {upstream}."),
+        Ok(_) => format!("{name} fast-forwarded to {local}"),
+        Err(_) => format!("{name} could not fast-forward to {local}"),
     })
 }
 

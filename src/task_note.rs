@@ -127,9 +127,9 @@ pub fn log_push(cli: &Cli, worktree: &Path, task: &str, log: &str) -> std::resul
 
 pub fn logged_text(logged: &std::result::Result<Option<String>, String>) -> String {
     match logged {
-        Ok(Some(path)) => format!(" Logged in {path}."),
+        Ok(Some(path)) => path.clone(),
         Ok(None) => String::new(),
-        Err(error) => format!(" The vault log line was not written ({error}); write it with the vault's log tool."),
+        Err(error) => format!("not written ({error}); write it with the vault's log tool"),
     }
 }
 
@@ -140,7 +140,8 @@ pub fn waits(cli: &Cli, note: &str, task: &str) -> std::result::Result<Option<(S
         return Ok(None);
     }
     let named = missing.join(" and ");
-    let user = format!("{task} is not done yet: its note {note} still lacks its {named}; kelpie asked the task to write them, so run done again once it reports ready.");
+    let user = crate::notice::Notice::new(crate::notice::Tone::You, format!("Not closed yet: its note lacks its {named}"))
+        .next("Its Claude was asked to write them.").you("Close it again once it reports ready.").detail("task", task).detail("note", note).to_string();
     let told = format!("kelpie done waits for your note {note}: write its {named} sections there with the vault MCP tools (what changes from the user's side, and each decision with its reason), then report ready.");
     Ok(Some((user, told)))
 }
@@ -273,7 +274,7 @@ mod tests {
         let fake = Fake::new("push");
         fake.answer("log-append", r#"{"path":"Log/kelpie-logg.md"}"#);
         let said = logged_text(&log_push(&fake.cli, Path::new("/src/wt1.kelpie"), "billing", "a1b2c3d Add refunds\ne4f5a6b Show refunds on the invoice"));
-        assert_eq!(said, " Logged in Log/kelpie-logg.md.");
+        assert_eq!(said, "Log/kelpie-logg.md");
         assert_eq!(fake.calls(), ["log append --cwd /src/wt1.kelpie --branch billing --line billing: Add refunds; Show refunds on the invoice --commit a1b2c3d --commit e4f5a6b"]);
         fake.fail("log-append", "S3 unreachable");
         assert!(logged_text(&log_push(&fake.cli, Path::new("/src/wt1.kelpie"), "billing", "a1b2c3d Add refunds")).contains("not written (vault log append: S3 unreachable)"), "a failing vault never fails the push");
@@ -285,7 +286,7 @@ mod tests {
         let fake = Fake::new("done");
         fake.answer("task-check", r#"{"missing":["decisions"]}"#);
         let (user, told) = waits(&fake.cli, "Projects/kelpie-billing.md", "billing").unwrap().unwrap();
-        assert!(user.contains("still lacks its decisions") && user.contains("run done again"), "{user}");
+        assert!(user.contains("its note lacks its decisions") && user.contains("Close it again once it reports ready"), "{user}");
         assert!(told.contains("Projects/kelpie-billing.md") && told.contains("decisions sections") && told.contains("report ready"), "{told}");
         fake.answer("task-check", r#"{"missing":[]}"#);
         assert_eq!(waits(&fake.cli, "Projects/kelpie-billing.md", "billing").unwrap(), None);

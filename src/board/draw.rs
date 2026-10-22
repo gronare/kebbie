@@ -16,6 +16,8 @@ use super::header::header;
 use super::inbox::draw_questions;
 use super::input::{draw_filter, draw_input};
 use super::link::{link_cells, link_urls, start_noting, take_noted};
+use crate::notice::Notice;
+use super::notices::{TOAST_FOR, draw_notice, draw_toast};
 use super::message_log::{Fold, messages_height, messages_lines};
 use super::{App, Column, Hit, Mode, Page};
 use super::options::draw_options;
@@ -119,11 +121,15 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Help => {
             modal(frame, "keys".to_string(), help_lines(app.lead_chat.is_some()), 72);
         }
-        Mode::Message(text) => {
-            let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
-            lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
-            modal(frame, "kelpie".to_string(), lines, 96);
-        }
+        Mode::Message(text) => match Notice::parse(text) {
+            Some(notice) => draw_notice(frame, &notice, app.shown.as_ref()),
+            None => {
+                let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
+                lines.push(Line::from(Span::styled("any key closes", style(MUTED))));
+                let title = app.shown.as_ref().map_or("kelpie".to_string(), |subject| subject.kind.clone());
+                modal(frame, title, lines, 96);
+            }
+        },
         Mode::ConfirmReset { name, nudged, .. } => draw_reset(frame, name, *nudged),
         Mode::ConfirmDone { name, nudged, .. } => draw_done(frame, name, *nudged),
         Mode::ConfirmQueued { name, about, now, nudged } => draw_queued(frame, name, about, *now, *nudged),
@@ -135,6 +141,12 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         }
         Mode::EditMessage(editor) => draw_editor(frame, editor),
         Mode::Input { label, buffer, .. } => draw_input(frame, label, buffer),
+    }
+    if app.toast.as_ref().is_some_and(|toast| toast.at.elapsed() >= TOAST_FOR) {
+        app.toast = None;
+    }
+    if let Some(toast) = app.toast.as_ref().filter(|_| matches!(app.mode, Mode::Normal)) {
+        draw_toast(frame, toast);
     }
     if matches!(app.mode, Mode::Normal) {
         app.hits.extend(tab_hits);

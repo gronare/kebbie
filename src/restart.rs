@@ -477,10 +477,10 @@ pub fn answer(session: &str, yes: bool) -> Result<String> {
     entry["answer"] = json!(if yes { "yes" } else { "no" });
     save_asked(&state, &asked)?;
     if !yes {
-        return Ok("Kept: it restarts once its background work is done and it is idle.".to_string());
+        return crate::notice::Notice::new(crate::notice::Tone::Done, "Kept running").next("It restarts once its background work is done and it is idle.").ok();
     }
     let lines = run(Mode::Manual { all: false }, &mut Memory::default(), Some(session))?;
-    Ok(lines.first().map_or("Restarted.".to_string(), |line| format!("{}: {}", line.label, line.said)))
+    Ok(lines.first().map_or(crate::notice::Notice::new(crate::notice::Tone::Done, "Restarted").to_string(), |line| crate::notice::Notice::new(crate::notice::Tone::Done, "Restarted").detail(&line.label, &line.said).to_string()))
 }
 
 fn close_question(id: &str) {

@@ -149,7 +149,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
         herdr::move_pane_to_new_tab(pane, &space.workspace_id, "claude", focus)?;
     }
     let main = fast_forward_main(&repo, &upstream)?;
-    Ok(format!("Moved {task} to {}. {main}\nSet it up: run the skill {} in {}{prepare}.", slot.path.display(), setup_skill.value, slot.path.display()))
+    Ok(format!("Moved {task} to {}. {main}.\nSet it up: run the skill {} in {}{prepare}.", slot.path.display(), setup_skill.value, slot.path.display()))
 }
 
 #[cfg(test)]

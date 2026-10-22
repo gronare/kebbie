@@ -19,6 +19,7 @@ mod lead;
 mod login_env;
 mod menu;
 mod messages;
+mod notice;
 mod notify;
 mod peers;
 mod permit;
