@@ -20,9 +20,75 @@ pub fn is_border(line: &str) -> bool {
     line.starts_with("───") && line.ends_with('─') && dashes >= 8
 }
 
-// What the user has typed into Claude's input box on this screen; a screen without a box that can be read counts as typed into.
+// One screen line as plain text, with whether each character is drawn faint (SGR 2).
+struct Styled {
+    text: String,
+    faint: Vec<bool>,
+}
+
+// Reads SGR sequences for faint and drops every other escape; 38/48 colour arguments are skipped, so the 2 in 38;2;r;g;b is not taken for faint.
+fn styled(line: &str) -> Styled {
+    let mut text = String::new();
+    let mut faint = Vec::new();
+    let mut dim = false;
+    let mut chars = line.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '\u{1b}' => match chars.next() {
+                Some('[') => {
+                    let mut params = String::new();
+                    let mut end = None;
+                    for next in chars.by_ref() {
+                        if ('\u{40}'..='\u{7e}').contains(&next) {
+                            end = Some(next);
+                            break;
+                        }
+                        params.push(next);
+                    }
+                    if end == Some('m') {
+                        dim = sgr_faint(&params, dim);
+                    }
+                }
+                Some(']') => {
+                    while let Some(next) = chars.next() {
+                        if next == '\u{7}' || (next == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\r' => {}
+            _ => {
+                text.push(character);
+                faint.push(dim);
+            }
+        }
+    }
+    Styled { text, faint }
+}
+
+fn sgr_faint(params: &str, mut dim: bool) -> bool {
+    let mut codes = params.split(';');
+    while let Some(code) = codes.next() {
+        match code {
+            "" | "0" | "22" => dim = false,
+            "2" => dim = true,
+            "38" | "48" | "58" => match codes.next() {
+                Some("5") => { codes.next(); }
+                Some("2") => { codes.nth(2); }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    dim
+}
+
+// What the user has typed into Claude's input box on this screen, read with its styling; a screen without a box that can be read counts as typed into.
 pub fn draft(screen: &str) -> Draft {
-    let lines: Vec<&str> = screen.lines().map(str::trim_end).collect();
+    let styled: Vec<Styled> = screen.lines().map(styled).collect();
+    let lines: Vec<&str> = styled.iter().map(|line| line.text.trim_end()).collect();
     let Some(prompt) = (1..lines.len()).rev().find(|&at| lines[at].trim_start().trim_start_matches('│').trim_start().starts_with('❯') && is_border(lines[at - 1])) else {
         return Draft::Unreadable;
     };
@@ -31,19 +97,19 @@ pub fn draft(screen: &str) -> Draft {
     let first = inside(lines[prompt]).trim_start_matches('❯').trim().to_string();
     let text: Vec<String> = std::iter::once(first).chain(lines[prompt + 1..bottom].iter().map(|line| inside(line))).filter(|line| !line.is_empty()).collect();
     let text = text.join("\n");
-    if text.is_empty() || placeholder(&text) {
+    if text.is_empty() || suggested(&styled[prompt..bottom]) {
         return Draft::Empty;
     }
     Draft::Typed(text)
 }
 
-// A fresh conversation's box shows an example to try, which nobody typed.
-fn placeholder(text: &str) -> bool {
-    !text.contains('\n') && text.starts_with("Try \"") && text.ends_with('"')
+// Claude draws what nobody typed faint: its suggested next prompt, a fresh conversation's example, the hint about queued messages. One character not faint makes it the user's.
+fn suggested(lines: &[Styled]) -> bool {
+    lines.iter().all(|line| line.text.chars().zip(&line.faint).all(|(character, faint)| *faint || character.is_whitespace() || matches!(character, '❯' | '│')))
 }
 
 fn screen(pane: &str) -> Result<String> {
-    crate::sh::run(&herdr::bin(), &["pane", "read", pane, "--source", "visible"], None)
+    crate::sh::run(&herdr::bin(), &["pane", "read", pane, "--source", "visible", "--format", "ansi"], None)
 }
 
 const ENTER_AT: [u64; 3] = [5, 10, 20];
@@ -320,7 +386,23 @@ mod tests {
         assert_eq!(draft(&screen_with(&["❯"])), Draft::Empty);
         assert_eq!(draft(&screen_with(&["❯ fix the flaky test"])), Draft::Typed("fix the flaky test".to_string()));
         assert_eq!(draft(&screen_with(&["❯ first line", "  second line"])), Draft::Typed("first line\nsecond line".to_string()));
-        assert_eq!(draft(&screen_with(&["❯ Try \"how does src/board.rs work?\""])), Draft::Empty, "the example a fresh conversation shows is nobody's draft");
+    }
+
+    #[test]
+    fn what_claude_draws_faint_in_the_box_is_nobodys_draft_and_one_character_not_faint_is_the_users() {
+        let rule = "\x1b[0m\x1b[38;2;136;136;136m────────────────────────────────────────\x1b[0m\r";
+        let boxed = |line: &str| ["\x1b[0m\x1b[38;2;153;153;153m✻\x1b[0m done\r", rule, line, rule, "  \x1b[0m\x1b[38;2;255;193;7m⏵⏵ auto mode on\x1b[0m"].join("\n");
+        assert_eq!(draft(&boxed("❯\u{a0}\x1b[0m\x1b[2mgodkänt, skriv planen\x1b[0m\r")), Draft::Empty, "the suggestion herdr read on a live pane");
+        assert_eq!(draft(&boxed("\x1b[39m❯\u{a0}\x1b[2mTry \"write a test for main.rs\"\x1b[0m")), Draft::Empty, "a fresh conversation's example");
+        assert_eq!(draft(&boxed("\x1b[38;5;246m❯\u{a0}\x1b[2m\x1b[39mPress up to edit queued messages\x1b[0m")), Draft::Empty, "the hint while a message waits in Claude's queue");
+        assert_eq!(draft(&boxed("\x1b[39m❯\u{a0}fix the flaky test")), Draft::Typed("fix the flaky test".to_string()), "typed text is drawn plain");
+        assert_eq!(draft(&boxed("\x1b[39m❯\u{a0}y\x1b[2mes, save it\x1b[0m")), Draft::Typed("yes, save it".to_string()), "one typed character makes the box the user's");
+        assert_eq!(draft(&boxed("❯ \x1b[38;2;255;193;7mcoloured but typed\x1b[0m")), Draft::Typed("coloured but typed".to_string()), "a 2 inside a 38;2 colour is not faint");
+        assert_eq!(draft(&boxed("❯ \x1b[2mfaint\x1b[22m bold-off ends it")), Draft::Typed("faint bold-off ends it".to_string()));
+        assert_eq!(draft(&boxed("❯ \x1b]8;;https://x\x07link\x1b]8;;\x07")), Draft::Typed("link".to_string()), "an OSC link is dropped, its text kept");
+        assert_eq!(draft(&boxed("❯ Try \"how does src/board.rs work?\"")), Draft::Typed("Try \"how does src/board.rs work?\"".to_string()), "without styling nothing is taken for a suggestion");
+        let source = include_str!("typing.rs");
+        assert!(source.contains("\"--source\", \"visible\", \"--format\", \"ansi\""), "the box is read with its styling, or a suggestion reads as typed");
     }
 
     #[test]
