@@ -626,6 +626,32 @@ mod tests {
     }
 
     #[test]
+    fn a_review_open_across_a_rebase_still_shows_only_the_tasks_own_changes() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("review");
+        let state = state_of(&dir);
+        let herdr = state.join("herdr");
+        std::fs::write(&herdr, "#!/bin/sh\necho '{\"result\":{\"pane\":{\"pane_id\":\"p_review\"}}}'\n").unwrap();
+        std::fs::set_permissions(&herdr, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/review.sh");
+        let review = |args: &[&str]| {
+            let output = std::process::Command::new("sh").arg(&script).args(args).current_dir(&slot.path)
+                .env("KELPIE_STATE_DIR", &state).env("HERDR_BIN_PATH", &herdr).env("HERDR_PANE_ID", "p_claude").output().unwrap();
+            assert!(output.status.success(), "review.sh {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        };
+        review(&["split"]);
+        let d = state.join("reviews/p_claude");
+        let files = |rows: &str| rows.lines().skip(1).map(|line| line.split('\t').next().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(files(&review(&["rows", &d.to_string_lossy()])), ["d"]);
+        land_on_main(&dir, &upstream, |_| {});
+        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Clean);
+        assert_eq!(files(&review(&["rows", &d.to_string_lossy()])), ["d"], "main's commits stay out of a review opened before the rebase");
+        let base = std::fs::read_to_string(d.join("base")).unwrap();
+        assert_eq!(review(&["diff", base.trim(), "elsewhere"]), "", "the open diff compares against the fork point after the rebase too");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
     fn a_rebase_git_refuses_to_start_reports_gits_reason_and_the_hidden_files_and_is_no_conflict() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         git(&slot.path, &["update-index", "--skip-worktree", "a"]).unwrap();

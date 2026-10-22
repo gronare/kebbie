@@ -27,6 +27,11 @@ worktree_base() {
   in_linked_worktree && branch=$(default_branch) && git merge-base HEAD "$branch"
 }
 
+# A review's base "fork" is resolved on every use: a sha frozen at opening would count the default branch's commits as the task's after a rebase.
+resolve_base() {
+  if [ "$1" = fork ]; then worktree_base 2>/dev/null || echo HEAD; else echo "$1"; fi
+}
+
 describe_base() {
   if [ "$1" = "$(worktree_base 2>/dev/null)" ]; then
     echo "$(git branch --show-current) since $(default_branch) ($(git rev-parse --short "$1"))"
@@ -36,8 +41,8 @@ describe_base() {
 }
 
 default_base() {
-  if worktree_base 2>/dev/null; then
-    return
+  if worktree_base >/dev/null 2>&1; then
+    echo fork
   elif [ -n "$(git status --porcelain)" ]; then
     echo HEAD
   else
@@ -45,12 +50,16 @@ default_base() {
   fi
 }
 
+label_of() {
+  if [ "$(cat "$1/base")" = fork ]; then describe_base "$(resolve_base fork)"; else cat "$1/label"; fi
+}
+
 review_dir() {
   echo "$state/reviews/$(echo "$1" | tr ':/' '__')"
 }
 
 changed_files() {
-  git diff --numstat "$1" | awk -F '\t' '{ printf "%s\t+%s -%s\n", $3, $1, $2 }'
+  git diff --numstat "$(resolve_base "$1")" | awk -F '\t' '{ printf "%s\t+%s -%s\n", $3, $1, $2 }'
   git ls-files --others --exclude-standard | while read -r path; do
     printf '%s\t+%s new\n' "$path" "$(wc -l < "$path" | tr -d ' ')"
   done
@@ -65,9 +74,10 @@ status_of() {
 }
 
 unified_diff() {
-  case "$(status_of "$1" "$2")" in
+  base=$(resolve_base "$1")
+  case "$(status_of "$base" "$2")" in
     A) git diff --color="$3" --no-index /dev/null "$2" || true ;;
-    *) git diff --color="$3" "$1" -- "$2" ;;
+    *) git diff --color="$3" "$base" -- "$2" ;;
   esac
 }
 
@@ -166,7 +176,7 @@ rows() {
 $(categorized "$1")
 EOF
   count() { printf '\033[33m%s\033[0m %s' "$1" "$2"; }
-  status="$(printf '\033[35m%s\033[0m' "$(cat "$1/label")")"
+  status="$(printf '\033[35m%s\033[0m' "$(label_of "$1")")"
   if [ -f "$1/scope" ] || [ -f "$1/baseline" ]; then
     status="$status  ·  $(count "$in_scope" "to review")"
     if [ "$others" -gt 0 ]; then
@@ -219,9 +229,10 @@ open() {
 }
 
 signature() {
-  base=$(cat "$1/base")
+  base=$(resolve_base "$(cat "$1/base")")
   {
-    cat "$1/base" "$1/scope" 2>/dev/null || true
+    echo "$base"
+    cat "$1/scope" 2>/dev/null || true
     git diff "$base" 2>/dev/null
     git ls-files --others --exclude-standard | while read -r path; do echo "$path $(git hash-object -- "$path")"; done
   } | cksum
@@ -308,7 +319,7 @@ split() {
     echo "$HERDR_PANE_ID" > "$d/agent"
   fi
   echo "$base" > "$d/base"
-  describe_base "$base" > "$d/label"
+  describe_base "$(resolve_base "$base")" > "$d/label"
   [ $# -gt 0 ] && printf '%s\n' "$@" > "$d/scope"
   if review_open "$d"; then
     reload_list "$d"
@@ -342,9 +353,8 @@ hook() {
   mkdir -p "$d"
   echo "$session" > "$d/session"
   echo "$HERDR_PANE_ID" > "$d/agent"
-  if base=$(worktree_base 2>/dev/null); then
-    echo "$base" > "$d/base"
-    describe_base "$base" > "$d/label"
+  if worktree_base >/dev/null 2>&1; then
+    echo fork > "$d/base"
   else
     echo "$head" > "$d/base"
     echo "since the work started ($(git rev-parse --short HEAD))" > "$d/label"
