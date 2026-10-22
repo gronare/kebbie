@@ -68,6 +68,17 @@ impl App {
         }
     }
 
+    pub(super) fn confirm_claimed(&mut self, entry: crate::backlog::Entry, about: String, machine: String, key: KeyEvent, cancels: bool) {
+        match key.code {
+            KeyCode::Char('y') => {
+                let buffer = super::suggested_name(&entry.title);
+                self.mode = Mode::Input { purpose: super::Purpose::ClaimedName(entry), label: "Start here too as task: name".to_string(), buffer };
+            }
+            _ if cancels => {}
+            _ => self.mode = Mode::ConfirmClaimed { entry, about, machine, nudged: true },
+        }
+    }
+
     pub(super) fn confirm_drop(&mut self, path: PathBuf, name: String, force: bool, key: KeyEvent, cancels: bool) {
         match key.code {
             KeyCode::Char('y') => match tasks::drop(&path, None, force) {
@@ -101,6 +112,10 @@ pub(super) fn draw_dismiss(frame: &mut Frame, name: &str, nudged: bool) {
 pub(super) fn draw_queued(frame: &mut Frame, name: &str, about: &str, now: bool, nudged: bool) {
     let (title, question) = if now { ("start now", "Start it now?") } else { ("drop the wait", "Drop the wait?") };
     modal(frame, title.to_string(), confirm_lines(name, Some(about), question, nudged), 72);
+}
+
+pub(super) fn draw_claimed(frame: &mut Frame, title: &str, about: &str, machine: &str, nudged: bool) {
+    modal(frame, "worked on elsewhere".to_string(), confirm_lines(title, Some(about), &format!("Start it here and take the note over from {machine}?"), nudged), 72);
 }
 
 pub(super) fn draw_drop(frame: &mut Frame, name: &str, force: bool, nudged: bool) {

@@ -48,6 +48,9 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
         _ => String::new(),
     };
     show_in_sidebar(&report);
+    if report.state == "ready" && crate::task_note::linked(&state, &me).is_some() && let Some(cli) = crate::vault_cli::detect() {
+        crate::task_note::heartbeat(&cli, &state, &me);
+    }
     if crate::notify::Event::of_state(&report.state).is_some() && crate::routines::found(&me, &summary) {
         crate::notify::send(cwd, &crate::notify::Notice::from(crate::notify::Event::RoutineFindings, &me, format!("{me} found: {summary}")));
     } else if let Some(event) = crate::notify::Event::of_state(&report.state) {

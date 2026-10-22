@@ -87,7 +87,7 @@ fn missing_notes(entries: &[Entry], notes: &[[String; 6]], today: i64) -> Vec<En
     }).collect()
 }
 
-fn today() -> i64 {
+pub(crate) fn today() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs() as i64 / 86_400)
 }
 

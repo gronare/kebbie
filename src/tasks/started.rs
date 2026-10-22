@@ -39,8 +39,23 @@ pub fn link(cwd: &Path, name: &str, item: &str) -> Result<String> {
         return Err("kelpie link needs the item: a vault note's path, a Linear id, or local:<Title>".to_string());
     }
     let previous = record_start(&started_file(&task, &repo)?, item)?;
-    let kept = crate::vault_cli::is_note(item) && crate::vault_cli::detect().is_some();
-    Ok(link_text(&task, item, previous.as_deref(), kept))
+    let vault = crate::vault_cli::is_note(item).then(crate::vault_cli::detect).flatten();
+    let claimed = vault.as_ref().map_or(String::new(), |cli| link_claim(cli, item, &task, &name_of(&repo)));
+    if let (Some(cli), Ok(state)) = (vault.as_ref(), crate::lead::state_dir()) {
+        for was in previous.as_deref().map(crate::task_note::items).unwrap_or_default().iter().filter(|was| crate::vault_cli::is_note(was) && was.as_str() != item) {
+            crate::task_note::release(cli, &state, was, &task);
+        }
+    }
+    Ok(link_text(&task, item, previous.as_deref(), vault.is_some()) + &claimed)
+}
+
+// A linked note is claimed as a started one is; one another machine holds stays theirs, and the answer says so.
+fn link_claim(cli: &crate::vault_cli::Cli, note: &str, task: &str, repo: &str) -> String {
+    match crate::task_note::claim(cli, note, task, repo, false) {
+        Ok(Some(held)) => format!(" kelpie on {} works on it as {}, so the claim stays theirs; start it with --anyway to take it over.", held.machine, held.task),
+        Ok(None) => String::new(),
+        Err(error) => format!(" Its claim for this machine was not written ({error})."),
+    }
 }
 
 fn link_text(task: &str, item: &str, previous: Option<&str>, kept: bool) -> String {
@@ -53,14 +68,21 @@ fn link_text(task: &str, item: &str, previous: Option<&str>, kept: bool) -> Stri
 
 pub(super) enum NoteBack {
     Shared,
+    Elsewhere(crate::vault::Claim),
+    Gone,
     Back(String),
     Failed(String),
 }
 
-// A note another half still holds stays as it is; the last half puts it back in the backlog.
+// A note another half still holds stays as it is, and so does one another machine has taken over; the last half clears this machine's claim and puts it back in the backlog.
 pub(super) fn note_to_backlog(cli: &crate::vault_cli::Cli, state: &Path, task: &str, address: &str, note: &str) -> NoteBack {
     if crate::task_note::held_elsewhere(state, task, address, note) {
         return NoteBack::Shared;
+    }
+    match crate::task_note::release(cli, state, note, task) {
+        crate::vault_cli::Released::Held(claim) => return NoteBack::Elsewhere(claim),
+        crate::vault_cli::Released::Gone => return NoteBack::Gone,
+        crate::vault_cli::Released::Done => {}
     }
     match crate::task_note::to_backlog(cli, note) {
         Ok(path) => NoteBack::Back(path),
@@ -118,6 +140,13 @@ mod tests {
 
     #[test]
     fn link_says_who_settles_the_note() {
+        let fake = crate::vault_cli::fake::Fake::new("link-claim");
+        fake.answer("task-claim", r#"{"path":"Projects/billing.md","claimed":true,"claim":{"machine":"mac","task":"billing","since":"2026-10-23T09:00:00Z"}}"#);
+        assert_eq!(link_claim(&fake.claiming(), "Projects/billing.md", "billing", "api"), "");
+        fake.answer("task-claim", r#"{"path":"Projects/billing.md","claimed":false,"claim":{"machine":"devbox","task":"search","since":"2026-10-21T08:00:00Z"}}"#);
+        assert!(link_claim(&fake.claiming(), "Projects/billing.md", "billing", "api").contains("kelpie on devbox works on it as search, so the claim stays theirs"));
+        assert_eq!(link_claim(&fake.cli, "Projects/billing.md", "billing", "api"), "", "an older vault claims nothing");
+        assert_eq!(fake.calls(), ["task claim Projects/billing.md --machine mac --task billing --repo api"; 2]);
         let off = link_text("billing", "Projects/billing.md", Some("local:Fix login"), false);
         assert_eq!(off, "Linked billing to Projects/billing.md (it was linked to local:Fix login): when it is done the lead is told to log and close it, and a reset puts it back in the backlog.", "without the vault the text is today's");
         let on = link_text("billing", "Projects/billing.md", Some("Projects/old.md\nlocal:Fix login"), true);

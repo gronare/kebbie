@@ -223,6 +223,7 @@ fn ongoing_rows(app: &App, focused: bool, width: usize, lines: &mut Vec<Line<'st
         return None;
     }
     let mut selected_line = None;
+    let today = backlog::today();
     lines.push(Line::from(vec![Span::styled("ONGOING", bold(TEAL)), Span::styled(format!("  {}", app.ongoing.len()), style(FAINT)), Span::styled("  vault notes in progress", style(MUTED))]));
     for (index, note) in app.ongoing.iter().enumerate() {
         if !app.shown(Column::Backlog, index) {
@@ -232,9 +233,10 @@ fn ongoing_rows(app: &App, focused: bool, width: usize, lines: &mut Vec<Line<'st
         if selected {
             selected_line = Some(lines.len());
         }
-        let (icon, facts) = match &note.task {
-            Some(task) => (Span::styled("↳", style(TEAL)), format!("task {task}")),
-            None => (Span::styled("○", style(PEACH)), "no task · ⏎ resume".to_string()),
+        let (icon, facts) = match (&note.task, &note.claim) {
+            (Some(task), _) => (Span::styled("↳", style(TEAL)), format!("task {task}")),
+            (None, Some(claim)) => (Span::styled("◇", style(if claim.stale(today) { MUTED } else { BLUE })), claim.shown(today)),
+            (None, None) => (Span::styled("○", style(PEACH)), "no task · ⏎ resume".to_string()),
         };
         rows.push((lines.len(), lines.len() + 1, Hit::Entry(index)));
         lines.push(row(selected, focused, icon, &note.title, None, &facts, width));
@@ -319,11 +321,47 @@ mod tests {
     }
 
     #[test]
+    fn a_note_another_machine_works_on_says_which_and_asks_before_it_starts_here() {
+        use ratatui::crossterm::event::KeyCode;
+        let today = crate::backlog::today();
+        let day = |back: i64| { let (year, month, date) = crate::when::civil(today - back); format!("{year:04}-{month:02}-{date:02}") };
+        let claim = |since: &str, updated: &str| crate::vault::Claim { machine: "devbox".to_string(), task: "billing".to_string(), repo: "web".to_string(), since: format!("{since}T08:00:00Z"), updated: updated.to_string() };
+        let mut app = test_app(vec![served("search-filters")]);
+        app.ongoing = vec![
+            Ongoing { key: "Projects/web-billing.md".to_string(), title: "web billing".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(2), &day(2))) },
+            Ongoing { key: "Projects/web-old.md".to_string(), title: "web old".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(30), &day(20))) },
+        ];
+        let (rows, _) = render(&mut app, 200, 50);
+        let screen = rows.join("\n");
+        assert!(screen.contains("working on devbox · billing") && !screen.contains("no task · ⏎ resume"), "{screen}");
+        assert!(screen.contains("working on devbox · billing · stale 20 d"), "a claim quiet for more than 14 days shows as stale: {screen}");
+        app.column = Column::Backlog;
+        app.backlog_selected = 0;
+        assert_eq!(app.choices()[0].label, "Start here too");
+        app.act(Act::Go);
+        assert!(matches!(&app.mode, Mode::ConfirmClaimed { entry, about, machine, nudged: false } if machine == "devbox" && entry.reference == "Projects/web-billing.md" && about.starts_with("kelpie working on devbox · billing since")), "go asks first");
+        let (rows, _) = render(&mut app, 200, 50);
+        assert!(rows.join("\n").contains("Start it here and take the note over from devbox?"), "{}", rows.join("\n"));
+        press(&mut app, key(KeyCode::Char('n')));
+        assert!(matches!(app.mode, Mode::Normal), "n leaves it to the other machine");
+        app.act(Act::Go);
+        press(&mut app, key(KeyCode::Char('y')));
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::ClaimedName(entry), buffer, .. } if entry.reference == "Projects/web-billing.md" && buffer == "web-billing"), "y asks for the task's name, and the start passes --anyway");
+        app.mode = Mode::Normal;
+        app.backlog.entries = vec![crate::backlog::Entry { source: "vault".to_string(), title: "web billing".to_string(), priority: "high".to_string(), area: "web".to_string(), reference: "Projects/web-billing.md".to_string(), summary: String::new(), age: String::new() }];
+        app.backlog_selected = 2;
+        app.act(Act::Go);
+        assert!(matches!(app.mode, Mode::ConfirmClaimed { .. }), "the same note in the Backlog column asks too");
+        let source = include_str!("input.rs");
+        assert!(source.contains("Purpose::ClaimedName(entry) => (entry, text, None, true)") && source.contains("command.arg(\"--anyway\")"));
+    }
+
+    #[test]
     fn ongoing_notes_head_the_backlog_with_their_task_or_a_resume() {
         let mut app = test_app(vec![served("search-filters")]);
         app.ongoing = vec![
-            Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()) },
-            Ongoing { key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None },
+            Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None },
+            Ongoing { key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None },
         ];
         let (rows, _) = render(&mut app, 84, 50);
         let screen = rows.join("\n");

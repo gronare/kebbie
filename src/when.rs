@@ -66,7 +66,7 @@ pub fn shown(at: u64, now: u64, offset: &dyn Fn(i64) -> i64) -> String {
     format!("{} {date} {}{year} {time}", WEEKDAYS[weekday(day) as usize], MONTHS[month as usize - 1])
 }
 
-fn civil(day: i64) -> (i64, u32, u32) {
+pub(crate) fn civil(day: i64) -> (i64, u32, u32) {
     let year = year_of(day);
     let mut month = 1;
     while month < 12 && days_from_civil(year, month + 1, 1) <= day {

@@ -463,7 +463,7 @@ fn start_run(routine: &Routine, dir: &Path, now: u64, offset: i64) -> Result<Str
             crate::permit::set_task_in(dir, &address, true)?;
         }
         let prompt = prompt(routine, &crate::peers::kelpie_command()?);
-        let options = crate::tasks::Start { prompt: Some(&prompt), focus: false, from: None, mode: Some("auto"), profile: routine.profile.as_deref(), backlog: None, note: false };
+        let options = crate::tasks::Start { prompt: Some(&prompt), focus: false, from: None, mode: Some("auto"), profile: routine.profile.as_deref(), backlog: None, note: false, anyway: false };
         crate::tasks::begin(&repo, &task, &options)
     });
     let cwd = repo_path(&routine.repo).unwrap_or_else(|_| dir.to_path_buf());

@@ -488,6 +488,9 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
     let vault = crate::vault_cli::detect();
     let log = vault.as_ref().map(|cli| crate::task_note::log_push(cli, &slot.path, &task, &pushed));
     let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
+    if let Some(cli) = vault.as_ref() {
+        crate::task_note::heartbeat(cli, state, &address);
+    }
     let landed = |closed: bool, waits: bool| Landed { pusher, address: &address, target: &target, commits: &pushed, closed, note: note.as_deref(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), waits };
     let short = &sha[..7.min(sha.len())];
     if matches!(watch, crate::ci::Begin::Watching) {

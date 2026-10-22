@@ -95,6 +95,7 @@ enum Mode {
     ConfirmDone { path: PathBuf, name: String, nudged: bool },
     ConfirmDismiss { path: PathBuf, name: String, nudged: bool },
     ConfirmQueued { name: String, about: String, now: bool, nudged: bool },
+    ConfirmClaimed { entry: Entry, about: String, machine: String, nudged: bool },
     Filter { buffer: String },
     Card { path: PathBuf, name: String, scroll: u16, image: usize },
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
@@ -186,9 +187,18 @@ struct Ongoing {
     title: String,
     area: String,
     task: Option<String>,
+    claim: Option<crate::vault::Claim>,
 }
 
 impl App {
+    // Another machine's claim on the note: the start asks first, and true says it did.
+    fn ask_if_claimed(&mut self, entry: &Entry) -> bool {
+        let Some(claim) = self.ongoing.iter().find(|note| note.key == entry.reference).and_then(|note| note.claim.clone()) else { return false };
+        let about = format!("kelpie {} since {}. Started here, the note's claim moves to this machine.", claim.shown(crate::backlog::today()), claim.since.get(..10).unwrap_or(&claim.since));
+        self.mode = Mode::ConfirmClaimed { entry: entry.clone(), about, machine: claim.machine, nudged: false };
+        true
+    }
+
     fn selected_task(&self) -> Option<Item> {
         self.tasks.get(self.work_selected).filter(|_| self.shown(Column::Work, self.work_selected)).cloned()
     }
@@ -424,6 +434,7 @@ impl App {
             Mode::ConfirmDone { path, name, .. } => self.confirm_done(path, name, key, cancels),
             Mode::ConfirmDismiss { path, name, .. } => self.confirm_dismiss(path, name, key, cancels),
             Mode::ConfirmQueued { name, about, now, .. } => self.confirm_queued(name, about, now, key, cancels),
+            Mode::ConfirmClaimed { entry, about, machine, .. } => self.confirm_claimed(entry, about, machine, key, cancels),
             Mode::ConfirmDrop { path, name, force, .. } => self.confirm_drop(path, name, force, key, cancels),
             Mode::Card { path, name, scroll, image } => self.handle_card(path, name, scroll, image, key),
             Mode::Fullscreen { path, name, scroll, index } => self.handle_fullscreen(path, name, scroll, index, key),
@@ -535,8 +546,10 @@ impl App {
                 }
                 None => {
                     let entry = ongoing_entry(&note);
-                    let buffer = suggested_name(&entry.title);
-                    self.mode = Mode::Input { purpose: Purpose::BacklogName(entry), label: "Resume as task: name".to_string(), buffer };
+                    if !self.ask_if_claimed(&entry) {
+                        let buffer = suggested_name(&entry.title);
+                        self.mode = Mode::Input { purpose: Purpose::BacklogName(entry), label: "Resume as task: name".to_string(), buffer };
+                    }
                 }
             }
             return;
@@ -544,7 +557,7 @@ impl App {
         match self.column {
             Column::Backlog => match act {
                 Act::Go => {
-                    if let Some(entry) = self.selected_entry() {
+                    if let Some(entry) = self.selected_entry().filter(|entry| !self.ask_if_claimed(entry)) {
                         let buffer = suggested_name(&entry.title);
                         self.mode = Mode::Input { purpose: Purpose::BacklogName(entry), label: "Start as task: name".to_string(), buffer };
                     }
@@ -585,7 +598,7 @@ impl App {
                         let (sender, result) = mpsc::channel();
                         let name = item.name.clone();
                         thread::spawn(move || {
-                            let options = tasks::Start { prompt: None, focus: true, from: None, mode: None, profile: None, backlog: None, note: true };
+                            let options = tasks::Start { prompt: None, focus: true, from: None, mode: None, profile: None, backlog: None, note: true, anyway: false };
                             let _ = sender.send(tasks::start(&path, &name, &options));
                         });
                         self.mode = Mode::Working { label: format!("Restarting {}…", item.name), result };
@@ -1012,7 +1025,7 @@ mod tests {
         }
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
         item.server = true;
-        let menus = [task_choices(Some(&item), Some("bin/dev"), Some("bin/jobs")), backlog_choices(&[Source::Local]), ongoing_choices(&Ongoing { key: String::new(), title: String::new(), area: String::new(), task: None })];
+        let menus = [task_choices(Some(&item), Some("bin/dev"), Some("bin/jobs")), backlog_choices(&[Source::Local]), ongoing_choices(&Ongoing { key: String::new(), title: String::new(), area: String::new(), task: None, claim: None })];
         for choice in menus.iter().flatten() {
             let act = choice.act.expect("a built-in choice names its action");
             assert_eq!(choice.key, map.char(act), "{}'s letter is the table's", choice.label);

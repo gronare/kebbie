@@ -24,6 +24,45 @@ pub struct Note {
     pub area: String,
 }
 
+// The kelpie frontmatter key a task note carries while a kelpie works on it: which machine, which task, since when.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Claim {
+    pub machine: String,
+    pub task: String,
+    pub repo: String,
+    pub since: String,
+    pub updated: String,
+}
+
+pub const CLAIM_STALE_DAYS: i64 = 14;
+
+impl Claim {
+    pub fn from_json(value: &Value, updated: &str) -> Option<Self> {
+        let field = |key: &str| value[key].as_str().unwrap_or_default().trim().to_string();
+        let claim = Claim { machine: field("machine"), task: field("task"), repo: field("repo"), since: field("since"), updated: updated.trim().to_string() };
+        (!claim.machine.is_empty() && !claim.task.is_empty()).then_some(claim)
+    }
+
+    // Days since the claim or the note last moved, whichever is later.
+    pub fn quiet_days(&self, today: i64) -> Option<i64> {
+        let latest = [&self.since, &self.updated].into_iter().filter_map(|date| crate::backlog::epoch_day(date)).max()?;
+        Some((today - latest).max(0))
+    }
+
+    pub fn stale(&self, today: i64) -> bool {
+        self.quiet_days(today).is_some_and(|days| days > CLAIM_STALE_DAYS)
+    }
+
+    pub fn elsewhere(&self, machine: &str) -> bool {
+        self.machine != machine
+    }
+
+    pub fn shown(&self, today: i64) -> String {
+        let quiet = self.quiet_days(today).filter(|_| self.stale(today)).map_or(String::new(), |days| format!(" · stale {days} d"));
+        format!("working on {} · {}{quiet}", self.machine, self.task)
+    }
+}
+
 fn home() -> PathBuf {
     std::env::var("HOME").map(PathBuf::from).unwrap_or_default()
 }
@@ -124,6 +163,15 @@ impl Index {
         let mut statement = self.db.prepare(&sql).map_err(|error| error.to_string())?;
         let rows = statement.query_map([], note).map_err(|error| error.to_string())?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|error| error.to_string())
+    }
+
+    // Every note's claim, by key; an index from a server without claims has no claim column and reads as none.
+    pub fn claims(&self) -> std::collections::HashMap<String, Claim> {
+        let Ok(mut statement) = self.db.prepare("SELECT key, claim, updated FROM notes WHERE claim IS NOT NULL AND claim != ''") else { return Default::default() };
+        let rows = statement.query_map([], |row| Ok((text(row, 0), text(row, 1), text(row, 2))));
+        rows.into_iter().flatten().flatten()
+            .filter_map(|(key, claim, updated)| Some((key, Claim::from_json(&serde_json::from_str(&claim).ok()?, &updated)?)))
+            .collect()
     }
 
     pub fn body(&self, key: &str) -> Option<String> {
@@ -307,6 +355,43 @@ The payload says amount.');
         assert_eq!(index.body("Projects/kelpie-new.md").as_deref(), Some("## Problem\nThe payload says amount."));
         assert_eq!(index.body("Projects/missing.md"), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_claim_is_read_from_the_index_and_an_older_index_has_none() {
+        let dir = std::env::temp_dir().join(format!("kelpie-vault-claims-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("index.sqlite");
+        let _ = std::fs::remove_file(&path);
+        Connection::open(&path).unwrap().execute_batch(r#"
+            CREATE TABLE notes (key TEXT PRIMARY KEY, updated TEXT, claim TEXT);
+            INSERT INTO notes VALUES ('Projects/a.md', '2026-10-20', '{"machine":"devbox","task":"billing","repo":"api","since":"2026-10-19T08:00:00Z"}');
+            INSERT INTO notes VALUES ('Projects/b.md', '2026-10-20', '');
+            INSERT INTO notes VALUES ('Projects/c.md', '2026-10-20', '{"machine":"","task":"x"}');
+        "#).unwrap();
+        let claims = Index::at(&path).unwrap().claims();
+        let claim = &claims["Projects/a.md"];
+        assert_eq!((claim.machine.as_str(), claim.task.as_str(), claim.repo.as_str(), claim.updated.as_str()), ("devbox", "billing", "api", "2026-10-20"));
+        assert_eq!(claims.len(), 1, "an empty claim and one without its machine are none: {claims:?}");
+        let old = dir.join("old.sqlite");
+        let _ = std::fs::remove_file(&old);
+        Connection::open(&old).unwrap().execute_batch("CREATE TABLE notes (key TEXT PRIMARY KEY, updated TEXT); INSERT INTO notes VALUES ('Projects/a.md', '2026-10-20');").unwrap();
+        let older = Index::at(&old).unwrap();
+        assert!(older.claims().is_empty(), "a server from before claims has no claim column");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_claim_quiet_for_more_than_fourteen_days_is_stale() {
+        let day = |date: &str| crate::backlog::epoch_day(date).unwrap();
+        let claim = Claim { machine: "devbox".to_string(), task: "billing".to_string(), repo: String::new(), since: "2026-10-01T08:00:00Z".to_string(), updated: "2026-10-05".to_string() };
+        assert!(!claim.stale(day("2026-10-19")), "fourteen days after the note last moved is still fresh");
+        assert!(claim.stale(day("2026-10-20")));
+        assert_eq!(claim.shown(day("2026-10-10")), "working on devbox · billing");
+        assert_eq!(claim.shown(day("2026-10-25")), "working on devbox · billing · stale 20 d");
+        let moved = Claim { updated: "2026-10-24".to_string(), ..claim.clone() };
+        assert!(!moved.stale(day("2026-10-25")), "a note the other machine still writes keeps its claim fresh");
+        assert!(claim.elsewhere("mac") && !claim.elsewhere("devbox"));
     }
 
     #[test]

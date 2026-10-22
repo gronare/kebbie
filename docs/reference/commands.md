@@ -28,7 +28,8 @@ Started in `bypassPermissions`, Claude shows its bypass permissions warning unti
 | --- | --- |
 | `--repo <name>` | Start in that repo instead of the current one. Repeat it for one task across repos: one half per repo, the first focused. See [Finding repos](#finding-repos). |
 | `--from <ref>` | Branch off this ref instead of the remote's default branch. |
-| `--backlog <item>` | Tie the task to a backlog item, as `kelpie link` does. |
+| `--backlog <item>` | Tie the task to a backlog item, as `kelpie link` does. A vault note is claimed for this machine: see [Two machines, one vault](../explanation/vault.md#two-machines-one-vault). |
+| `--anyway` | Start from a vault note that kelpie on another machine works on. Without it, `kelpie start --backlog` refuses such a note and names the machine and task that hold it. |
 | `--mode <mode>` | Claude's permission mode for the task, one of Claude Code's: `default`, `acceptEdits`, `plan`, `auto`, `dontAsk` or `bypassPermissions`. Without it, the task starts in its profile's `permission_mode`, then [`task.permission_mode`](configuration.md#keys), and without those in Claude Code's own default. |
 | `--profile <name>` | Start the task with this [profile](configuration.md#profiles) instead of `task.profile`, or the built-in `task`. A task that already runs keeps the profile it started with unless this names another; restarted with a new one, it gets that profile's model, role and rules, and keeps its recorded permission mode unless `--mode` is given too. A profile that does not load is refused before a worktree is claimed. With `--after`, the queued task starts with it. |
 | `--no-focus` | Stay where you are. |

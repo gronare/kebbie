@@ -30,11 +30,15 @@ fn load_ongoing() -> Vec<Ongoing> {
     if !config::sources().is_ok_and(|sources| sources.contains(&Source::Vault)) && !crate::vault_cli::plugin_enabled() {
         return Vec::new();
     }
-    let Ok(notes) = vault::Index::open().and_then(|index| index.ongoing()) else { return Vec::new() };
+    let Ok(index) = vault::Index::open() else { return Vec::new() };
+    let Ok(notes) = index.ongoing() else { return Vec::new() };
+    let claims = index.claims();
+    let machine = config::machine();
     let links = tasks::started_links();
     notes.into_iter().map(|note| {
         let task = links.iter().find(|(_, items)| items.contains(&note.key)).map(|(address, _)| address.clone());
-        Ongoing { key: note.key, title: note.title, area: note.area, task }
+        let claim = claims.get(&note.key).filter(|claim| claim.elsewhere(&machine)).cloned();
+        Ongoing { key: note.key, title: note.title, area: note.area, task, claim }
     }).collect()
 }
 

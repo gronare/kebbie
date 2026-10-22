@@ -189,7 +189,7 @@ mod tests {
         let (dir, origin, slot, _) = test_support::task_with_a_commit("billing");
         let state = crate::lead::state_dir().unwrap();
         let address = crate::peers::address("search", &name_of(&dir));
-        let options = Start { prompt: Some("Search the invoices"), focus: false, from: None, mode: None, profile: None, backlog: None, note: false };
+        let options = Start { prompt: Some("Search the invoices"), focus: false, from: None, mode: None, profile: None, backlog: None, note: false, anyway: false };
         assert!(begin(&dir, "search", &options).is_err(), "herdr is not there to open its Space");
         assert_eq!(crate::phase::load(&state, &address).map(|record| record.phase), Some(crate::phase::Phase::Idle));
         if let Some(search) = slots(&dir).unwrap().into_iter().find(|slot| slot.task.as_deref() == Some("search")) {

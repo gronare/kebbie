@@ -70,7 +70,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   --from <ref> branches off it
                                   instead of the default branch, --mode <mode> is Claude's permission mode,
                                   --profile <name> starts it with that profile instead of task.profile or task,
-                                  --no-focus keeps you where you are, --after <task[@repo]> (repeatable) queues it
+                                  --no-focus keeps you where you are, --anyway starts from a vault note kelpie on
+                                  another machine works on, --after <task[@repo]> (repeatable) queues it
                                   to start from the default branch once each of those tasks ended as done and,
                                   where kelpie watches CI, its CI is green; the user's or the lead's;
                                   --at <time> queues it to start at that time (15:00, tomorrow 09:00, fri 09:00,
@@ -404,7 +405,7 @@ fn run(arguments: &Arguments) -> Result<String> {
                 }
             }
             tasks::refuse_queued_name(name)?;
-            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), profile: arguments.value("--profile"), backlog: arguments.value("--backlog"), note: true };
+            let options = tasks::Start { prompt, focus: !arguments.flag("--no-focus"), from: arguments.value("--from"), mode: arguments.value("--mode"), profile: arguments.value("--profile"), backlog: arguments.value("--backlog"), note: true, anyway: arguments.flag("--anyway") };
             // One task across repos: a half per repo, the first one focused.
             let started: Vec<Result<String>> = repos.iter().enumerate()
                 .map(|(index, repo)| tasks::start(repo, name, &tasks::Start { focus: options.focus && index == 0, ..options }))

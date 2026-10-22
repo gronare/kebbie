@@ -109,9 +109,10 @@ pub(super) fn busy(item: &Item) -> bool {
 }
 
 pub(super) fn ongoing_choices(note: &Ongoing) -> Vec<Choice> {
-    vec![match note.task {
-        Some(_) => choice(Act::Go, "Go to its task", "select the task that works on this note"),
-        None => choice(Act::Go, "Resume as task", "a worktree, a Space and Claude with the note as its prompt"),
+    vec![match (&note.task, &note.claim) {
+        (Some(_), _) => choice(Act::Go, "Go to its task", "select the task that works on this note"),
+        (None, Some(claim)) => choice(Act::Go, "Start here too", &format!("kelpie on {} works on it as {}; a task here too (asks first)", claim.machine, claim.task)),
+        (None, None) => choice(Act::Go, "Resume as task", "a worktree, a Space and Claude with the note as its prompt"),
     }]
 }
 
@@ -481,7 +482,7 @@ mod tests {
         item.report.as_mut().unwrap().text = format!("mock at {long} and the PR https://github.com/acme/web/pull/7, also https://docs.example.org/guide");
         let mut app = test_app(vec![item]);
         with_detail(&mut app);
-        app.ongoing = vec![Ongoing { key: "Projects/search filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()) }];
+        app.ongoing = vec![Ongoing { key: "Projects/search filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None }];
         app
     }
 

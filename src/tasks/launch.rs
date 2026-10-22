@@ -224,6 +224,7 @@ pub struct Start<'a> {
     pub profile: Option<&'a str>,
     pub backlog: Option<&'a str>,
     pub note: bool,
+    pub anyway: bool,
 }
 
 pub struct Begun {
@@ -236,7 +237,7 @@ pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
 }
 
 pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
-    let Start { prompt, focus, from, mode, profile: given, note: with_note, .. } = *options;
+    let Start { prompt, focus, from, mode, profile: given, note: with_note, backlog, anyway } = *options;
     mode.map(config::permission_mode).transpose().map_err(|error| format!("--mode: {error}"))?;
     let repo = main_checkout(cwd)?;
     let task = slug(name)?;
@@ -257,25 +258,53 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
             None => begun,
         });
     }
-    fetch(&repo)?;
-    let upstream = default_branch(&repo)?;
-    let base = from.unwrap_or(&upstream);
-    let slot = claim_slot(&repo, &upstream)?;
-    if branch_exists(&repo, &task) {
-        git_writing(&slot.path, &["switch", "--quiet", &task])?;
-    } else {
-        git_writing(&slot.path, &["switch", "--quiet", "-c", &task, base])?;
-    }
-
-    let address = peers::address(&task, &name_of(&repo));
-    let state = state_dir()?;
-    super::after::forget_unwaited_watch(&state, &address);
-    crate::phase::record(&state, &address, "start", &crate::phase::Event::Started { prompted: prompt.is_some() });
-    let begun = launch_new(&repo, &task, &slot, &address, place(&slot), vault.as_ref(), options);
+    let claimed = claim_backlog(vault.as_ref(), backlog, &task, &name_of(&repo), anyway)?;
+    let begun = (|| {
+        fetch(&repo)?;
+        let upstream = default_branch(&repo)?;
+        let base = from.unwrap_or(&upstream);
+        let slot = claim_slot(&repo, &upstream)?;
+        if branch_exists(&repo, &task) {
+            git_writing(&slot.path, &["switch", "--quiet", &task])?;
+        } else {
+            git_writing(&slot.path, &["switch", "--quiet", "-c", &task, base])?;
+        }
+        let address = peers::address(&task, &name_of(&repo));
+        let state = state_dir()?;
+        super::after::forget_unwaited_watch(&state, &address);
+        crate::phase::record(&state, &address, "start", &crate::phase::Event::Started { prompted: prompt.is_some() });
+        let begun = launch_new(&repo, &task, &slot, &address, place(&slot), vault.as_ref(), options);
+        if begun.is_err() {
+            crate::phase::record(&state, &address, "start", &crate::phase::Event::Started { prompted: false });
+        }
+        begun
+    })();
     if begun.is_err() {
-        crate::phase::record(&state, &address, "start", &crate::phase::Event::Started { prompted: false });
+        give_back(vault.as_ref(), claimed.as_deref(), &task);
     }
     begun
+}
+
+// Any failure after the claim, from the fetch to the Claude launch, gives the note back to whoever starts it next.
+fn give_back(vault: Option<&crate::vault_cli::Cli>, claimed: Option<&str>, task: &str) {
+    if let (Some(cli), Some(note), Ok(state)) = (vault, claimed, state_dir()) {
+        crate::task_note::release(cli, &state, note, task);
+    }
+}
+
+// A vault note another machine works on refuses the start unless --anyway; Ok(Some(note)) is the note this start claimed, and a vault that does not answer lets it start unclaimed.
+fn claim_backlog(vault: Option<&crate::vault_cli::Cli>, backlog: Option<&str>, task: &str, repo: &str, anyway: bool) -> Result<Option<String>> {
+    let (Some(cli), Some(note)) = (vault.filter(|cli| cli.claims), backlog.filter(|item| crate::vault_cli::is_note(item))) else { return Ok(None) };
+    match crate::task_note::claim(cli, note, task, repo, anyway) {
+        Ok(None) => Ok(Some(note.to_string())),
+        Ok(Some(held)) => Err(crate::task_note::refusal(note, &held, crate::backlog::today())),
+        Err(error) => {
+            if let Ok(state) = state_dir() {
+                crate::vault_cli::warn_log(&state, &format!("{note}: not claimed ({error})"));
+            }
+            Ok(None)
+        }
+    }
 }
 
 // The new task's Space, Claude and prompt; when any of them fails, its prompt never reached Claude.
@@ -287,7 +316,10 @@ fn launch_new(repo: &Path, task: &str, slot: &Slot, address: &str, place: Launch
     let (note, vault_said) = match (vault, shared) {
         (_, Some(note)) => (Some(note.clone()), format!("{note}, shared with its other halves")),
         (Some(cli), None) => match crate::task_note::open(cli, task, &slot.path, backlog) {
-            Ok(note) => (Some(note.clone()), note),
+            Ok(note) => {
+                claim_opened(cli, &note, backlog, task, repo);
+                (Some(note.clone()), note)
+            }
             Err(error) => (None, format!("not opened ({error}); the task runs without one")),
         },
         (None, None) => (None, String::new()),
@@ -326,6 +358,18 @@ fn launch_new(repo: &Path, task: &str, slot: &Slot, address: &str, place: Launch
         said = said.detail("sandbox", sandbox);
     }
     Ok(Begun { said: said.to_string(), started })
+}
+
+// A note kelpie opened for the task is claimed as a backlog note is, so the other machine sees it worked on too.
+fn claim_opened(cli: &crate::vault_cli::Cli, note: &str, backlog: Option<&str>, task: &str, repo: &Path) {
+    if !cli.claims || backlog == Some(note) {
+        return;
+    }
+    if let Err(error) = crate::task_note::claim(cli, note, task, &name_of(repo), false)
+        && let Ok(state) = state_dir()
+    {
+        crate::vault_cli::warn_log(&state, &format!("{note}: not claimed ({error})"));
+    }
 }
 
 struct Launch<'a> {
@@ -578,6 +622,54 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[test]
+    fn a_start_from_a_vault_note_claims_it_for_this_machine_and_refuses_another_machines_without_anyway() {
+        let fake = crate::vault_cli::fake::Fake::new("start-claim");
+        let cli = fake.claiming();
+        fake.answer("task-claim", r#"{"path":"Projects/web-search.md","claimed":true,"claim":{"machine":"mac","task":"search","repo":"web","since":"2026-10-23T09:00:00Z"},"replaced":null}"#);
+        assert_eq!(claim_backlog(Some(&cli), Some("Projects/web-search.md"), "search", "web", false), Ok(Some("Projects/web-search.md".to_string())));
+        fake.answer("task-claim", r#"{"path":"Projects/web-search.md","claimed":false,"claim":{"machine":"devbox","task":"filters","repo":"web","since":"2026-10-20T08:00:00Z"}}"#);
+        let refused = claim_backlog(Some(&cli), Some("Projects/web-search.md"), "search", "web", false).unwrap_err();
+        assert!(refused.contains("Not started: devbox works on it") && refused.contains("working on devbox · filters") && refused.contains("--anyway"), "{refused}");
+        fake.answer("task-claim", r#"{"path":"Projects/web-search.md","claimed":true,"claim":{"machine":"mac","task":"search","repo":"web","since":"2026-10-23T09:00:00Z"},"replaced":{"machine":"devbox","task":"filters","since":"2026-10-20T08:00:00Z"}}"#);
+        assert_eq!(claim_backlog(Some(&cli), Some("Projects/web-search.md"), "search", "web", true), Ok(Some("Projects/web-search.md".to_string())), "--anyway takes it over");
+        assert_eq!(fake.calls(), [
+            "task claim Projects/web-search.md --machine mac --task search --repo web",
+            "task claim Projects/web-search.md --machine mac --task search --repo web",
+            "task claim Projects/web-search.md --machine mac --task search --repo web --force",
+        ]);
+        fake.fail("task-claim", "S3 unreachable");
+        assert_eq!(claim_backlog(Some(&cli), Some("Projects/web-search.md"), "search", "web", false), Ok(None), "a vault that does not answer never stops a start");
+        let asked = fake.calls().len();
+        assert_eq!(claim_backlog(Some(&cli), Some("local:Fix login"), "search", "web", false), Ok(None));
+        assert_eq!(claim_backlog(Some(&fake.cli), Some("Projects/web-search.md"), "search", "web", false), Ok(None), "an older vault plugin claims nothing");
+        assert_eq!(claim_backlog(None, Some("Projects/web-search.md"), "search", "web", false), Ok(None));
+        assert_eq!(fake.calls().len(), asked, "a local item, a vault without claims and no vault ask nothing");
+    }
+
+    #[test]
+    fn a_note_kelpie_opens_for_a_task_is_claimed_too_but_a_claimed_backlog_note_only_once() {
+        let fake = crate::vault_cli::fake::Fake::new("open-claim");
+        fake.answer("task-claim", r#"{"path":"Projects/web-search.md","claimed":true,"claim":{"machine":"m","task":"search","since":"2026-10-23T09:00:00Z"}}"#);
+        claim_opened(&fake.claiming(), "Projects/web-search.md", None, "search", Path::new("/src/web"));
+        claim_opened(&fake.claiming(), "Projects/web-search.md", Some("Projects/web-search.md"), "search", Path::new("/src/web"));
+        claim_opened(&fake.cli, "Projects/web-search.md", None, "search", Path::new("/src/web"));
+        assert_eq!(fake.calls(), ["task claim Projects/web-search.md --machine mac --task search --repo web"]);
+        let source = include_str!("launch.rs");
+        let begin = &source[source.find("\npub fn begin(").unwrap()..];
+        let begin = &begin[..begin.find("\n}\n").unwrap()];
+        assert!(begin.find("claim_backlog(").unwrap() < begin.find("claim_slot(").unwrap(), "a refused start claims no worktree");
+        let after_claim = &begin[begin.find("claim_backlog(").unwrap()..];
+        let inner = &after_claim[after_claim.find("(|| {").unwrap()..after_claim.find("})();").unwrap()];
+        assert!(["fetch(", "default_branch(", "claim_slot(", "git_writing(", "launch_new("].iter().all(|step| inner.contains(step)), "every step that can fail after the claim runs inside the part whose failure gives it back");
+        assert!(after_claim.contains("if begun.is_err() {\n        give_back("), "a start that fails gives its claim back");
+        let fake = crate::vault_cli::fake::Fake::new("give-back");
+        fake.answer("task-release", r#"{"path":"Projects/web-search.md","released":true,"claim":null}"#);
+        give_back(Some(&fake.claiming()), Some("Projects/web-search.md"), "search");
+        give_back(Some(&fake.claiming()), None, "search");
+        assert_eq!(fake.calls(), ["task release Projects/web-search.md --machine mac"]);
+    }
     use crate::agent::claude::{settings, start_args, transcripts_dir};
     use crate::tasks::test_support::*;
     use crate::peers;
@@ -793,6 +885,7 @@ mod tests {
         assert!(!allow.iter().any(|rule| rule.contains("push") || rule.contains("approve") || rule.contains("decide") || rule.contains("away")), "{allow:?}");
         assert_eq!(on["env"]["GIT_CONFIG_KEY_0"], "url.kelpie-blocks-push:.pushInsteadOf");
         assert_eq!(on["env"]["GIT_CONFIG_VALUE_0"], "");
+        assert_eq!(on["env"]["VAULT_STOP_HOOK"], "off", "the vault plugin's Stop hook never asks a task for the repo log kelpie writes");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 40);
     }
 

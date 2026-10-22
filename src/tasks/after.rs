@@ -362,7 +362,7 @@ pub(crate) type Begin<'a> = &'a mut dyn FnMut(&Path, &str, &Start) -> Result<Beg
 
 fn launch(state: &Path, wait: &Wait, intro: &str, begin: Begin, tell: &mut dyn FnMut(Told)) -> Result<String> {
     let prompt = if intro.is_empty() { wait.prompt.clone() } else { format!("{intro}\n\n{}", wait.prompt) };
-    let options = Start { prompt: Some(&prompt), focus: false, from: None, mode: wait.mode.as_deref(), profile: wait.profile.as_deref(), backlog: wait.backlog.as_deref(), note: true };
+    let options = Start { prompt: Some(&prompt), focus: false, from: None, mode: wait.mode.as_deref(), profile: wait.profile.as_deref(), backlog: wait.backlog.as_deref(), note: true, anyway: false };
     let started = begin(&wait.repo, &wait.task, &options);
     unclaim(state, &wait.address());
     match started {

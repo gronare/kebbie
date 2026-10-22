@@ -471,7 +471,16 @@ pub fn vault(plugin: &crate::vault_cli::Plugin, override_bin: Option<&str>, prob
         (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.configured => warn(name, format!("{id} {version} is installed but no vault is configured"), vec![format!("claude plugin configure {id} shows its options: vault_path for a local folder, or the s3_ ones"), "kelpie setup vault walks through it".to_string()]),
         (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.tasks => warn(name, format!("{id} {version} (notes-vault-mcp {}) is older than the task and log commands: the vault is read-only to kelpie, so tasks get no notes and pushes no log lines", probe.version), one(NEEDS_UPDATE)),
         (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if probe.writable == Some(false) => warn(name, format!("{id} {version}: the {} vault is not writable, so kelpie keeps tasks without it", probe.backend), one("check the vault folder's permissions or the S3 key's write access")),
-        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) => ok(name, format!("{id} {version} (notes-vault-mcp {}, {}): each task gets a note, edits wait for its Problem, pushes are logged, done closes it", probe.version, probe.backend)),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.claims => warn(name, format!("{id} {version} (notes-vault-mcp {}) is too old for cross-machine claims: tasks get notes and logs, but kelpie on another machine sharing this vault cannot see which machine works on a note", probe.version), one(NEEDS_UPDATE)),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) => ok(name, format!("{id} {version} (notes-vault-mcp {}, {}): each task gets a note claimed for this machine, edits wait for its Problem, pushes are logged, done closes it", probe.version, probe.backend)),
+    }
+}
+
+// Claims carry this name to the other machines on the vault, so a name nobody chose is worth one warning.
+pub fn machine_name(name: &config::Setting<String>, config_file: &Path) -> Check {
+    match name.layer {
+        config::Layer::Default => warn("machine", format!("machine.name is unset, so this kelpie claims vault notes as \"{}\", the host's short name", name.value), one(format!("set [machine] name = \"<a name of your own, such as mac or devbox>\" in {}", config_file.display()))),
+        _ => ok("machine", format!("claims vault notes as \"{}\"", name.value)),
     }
 }
 
@@ -627,7 +636,11 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let override_bin = std::env::var(crate::vault_cli::BIN_VAR).ok().filter(|bin| !bin.is_empty());
     let reachable = override_bin.is_some() || matches!(plugin, crate::vault_cli::Plugin::Enabled { .. });
     let command = crate::vault_cli::command(override_bin.clone(), settings.vault_command.value.clone(), &plugin).filter(|_| reachable);
+    let reached = command.is_some();
     checks.push(vault(&plugin, override_bin.as_deref(), command.map(|command| crate::vault_cli::Cli::new(command).probe(true))));
+    if reached {
+        checks.push(machine_name(&settings.machine_name, &env.config));
+    }
     checks.extend(backlog(&settings.sources.value, crate::vault::index_path, &env.config.with_file_name("backlog.md")));
     let claude = read_json(&env.claude_dir.join(".claude.json")).or_else(|| read_json(&env.home.join(".claude.json")));
     let vault = vault_plugin(installed.as_ref(), |file| std::fs::read_to_string(file).ok());
@@ -1015,13 +1028,22 @@ mod tests {
     }
 
     #[test]
+    fn an_unset_machine_name_is_a_warning_with_where_to_set_it() {
+        let unset = machine_name(&config::Setting { value: "mbp-7".to_string(), layer: config::Layer::Default }, Path::new("/home/u/.config/kelpie/config.toml"));
+        assert_eq!(unset.level, Level::Warn);
+        assert!(unset.fact.contains("machine.name is unset") && unset.fact.contains("\"mbp-7\"") && unset.fix[0].contains("[machine] name = ") && unset.fix[0].contains("/home/u/.config/kelpie/config.toml"), "{unset:?}");
+        let set = machine_name(&config::Setting { value: "devbox".to_string(), layer: config::Layer::Machine }, Path::new("/c.toml"));
+        assert_eq!((set.level, set.fact.as_str()), (Level::Ok, "claims vault notes as \"devbox\""));
+    }
+
+    #[test]
     fn the_vault_plugin_is_optional_and_an_old_one_reads_as_read_only() {
         use crate::vault_cli::{Plugin, Probe};
         let missing = vault(&Plugin::Missing, None, None);
         assert_eq!(missing.level, Level::Ok, "a user without the vault plugin sees no error");
         assert!(missing.fact.contains("(optional)") && missing.fix == ["kelpie setup vault"], "{missing:?}");
         let enabled = Plugin::Enabled { id: "vault@gronare".to_string(), version: "0.2.15".to_string(), root: "/x".into() };
-        let probe = |configured: bool, tasks: bool, writable: Option<bool>| Some(Ok(Probe { configured, writable, tasks, version: "0.5.1".to_string(), backend: "s3".to_string() }));
+        let probe = |configured: bool, tasks: bool, writable: Option<bool>| Some(Ok(Probe { configured, writable, tasks, claims: tasks, version: "0.5.1".to_string(), backend: "s3".to_string() }));
         let old = vault(&enabled, None, probe(true, false, Some(true)));
         assert_eq!(old.level, Level::Warn);
         assert!(old.fact.contains("read-only") && old.fix == ["claude plugin update vault@gronare"], "{old:?}");
@@ -1034,6 +1056,9 @@ mod tests {
         assert_eq!(stood_in.level, Level::Ok, "KELPIE_VAULT_BIN stands in for a missing plugin, as detect() lets it: {stood_in:?}");
         assert!(stood_in.fact.contains("KELPIE_VAULT_BIN=/tmp/fake-vault") && stood_in.fact.contains("each task gets a note"), "{stood_in:?}");
         assert!(vault(&Plugin::Missing, Some("/tmp/fake-vault"), Some(Err("no such file".to_string()))).fact.contains("the vault command failed"));
+        let unclaimed = vault(&enabled, None, Some(Ok(Probe { configured: true, writable: Some(true), tasks: true, claims: false, version: "0.7.0".to_string(), backend: "s3".to_string() })));
+        assert_eq!(unclaimed.level, Level::Warn, "a server without claims still keeps notes, and says once what it lacks");
+        assert!(unclaimed.fact.contains("too old for cross-machine claims") && unclaimed.fact.contains("notes-vault-mcp 0.7.0") && unclaimed.fix == ["claude plugin update vault@gronare"], "{unclaimed:?}");
     }
 
     #[test]

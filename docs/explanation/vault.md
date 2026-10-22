@@ -18,6 +18,22 @@ The vault also makes Claude state the problem before it starts changing code. A 
 - **Plans.** `kelpie ask --plan vault:<note>` asks you to approve a plan written in the task's note.
 - **The board.** The Backlog column lists ONGOING project notes, and the Areas page lists the vault's system notes with their repos.
 
+## Two machines, one vault
+
+Two kelpies, say on a Mac and a work devbox, can share one vault. Each claims the notes it works on, so the other sees which machine and which task has a note:
+
+- **Start.** A task started from a vault note, a note kelpie opens for a task, and a note `kelpie link` ties to a task gets a `kelpie` key in its frontmatter: `machine` (this kelpie's [`machine.name`](../reference/configuration.md#keys)), `task`, `repo` and `since`. kelpie owns the key: the vault server keeps it as it is when a session rewrites the note, so never edit it by hand.
+- **The other machine.** Its board's ONGOING row reads `working on <machine> · <task>` instead of `no task · ⏎ resume`. Starting the note there asks first (`Start it here and take the note over from <machine>?`), and `kelpie start --backlog <note>` refuses it and names who holds it; `--anyway` starts it all the same and takes the claim over. The lead sees the same in the vault's context, as `worked on at <machine> · <task>`.
+- **Stale.** Each push and each ready report renews the claim. A claim whose note has not moved for more than 14 days shows as `stale` with its days, and the vault's weekly `lint --park-stale` may then park the note, so a machine that went away does not hold a note for good.
+- **End.** Done, a landed task's close, drop and reset clear this machine's claim before the note is closed or goes back to the backlog. A note moved or renamed since is found by its claim's machine and task; one deleted counts as released, and the answer says it is gone. When another machine has taken the note over meanwhile, kelpie leaves the note as it is and says so.
+- **The machine's name.** `kelpie doctor` warns while [`machine.name`](../reference/configuration.md#keys) is unset and the claims carry the host's short name.
+
+Claims need a notes-vault-mcp that has `task claim`. With an older vault plugin kelpie claims nothing, everything else works as before, and `kelpie doctor` says once that the plugin is too old for cross-machine claims.
+
+## The vault plugin's Stop hook
+
+The vault plugin's Stop hook asks a session to write the repo log before it ends. kelpie writes each task's log lines itself, so it turns that hook off in the settings it writes for a task (`VAULT_STOP_HOOK=off` in their `env`, which Claude Code passes to the hooks it runs). The lead and your own sessions keep it.
+
 ## When the vault does not answer
 
 A vault call that fails never stops a start, a push or a done; the output says what was not written. A vault that does not answer lets an edit through with a warning, so an outage never locks a task out.

@@ -115,6 +115,7 @@ pub struct Machine {
     pub restart: Restart,
     pub keeper: Option<bool>,
     pub recover: Option<bool>,
+    pub machine_name: Option<String>,
     pub worktree: Worktree,
 }
 
@@ -178,6 +179,7 @@ pub struct Settings {
     pub docs_required: Setting<bool>,
     pub keeper: Setting<bool>,
     pub recover: Setting<bool>,
+    pub machine_name: Setting<String>,
 }
 
 pub struct Loaded {
@@ -389,6 +391,28 @@ fn enabled_in(table: &Table, name: &str) -> Result<Option<bool>> {
     section.get("enabled").map(|value| value.as_bool().ok_or_else(|| format!("{name}.enabled: must be true or false"))).transpose()
 }
 
+fn machine_name(table: &Table) -> Result<Option<String>> {
+    let Some(machine) = subtable(table, "machine", "machine")? else { return Ok(None) };
+    unknown_keys(machine, "machine.", &["name"])?;
+    let Some(value) = machine.get("name") else { return Ok(None) };
+    let name = value.as_str().map(str::trim).filter(|name| !name.is_empty() && !name.chars().any(char::is_control)).ok_or("machine.name: must be a non-empty string")?;
+    if name.eq_ignore_ascii_case("localhost") {
+        return Err("machine.name: \"localhost\" names every machine; give this one a name of its own, such as \"mac\" or \"devbox\"".to_string());
+    }
+    Ok(Some(name.to_string()))
+}
+
+// The host's name up to its first dot, as `hostname -s` gives it.
+pub fn short_hostname() -> String {
+    let mut buffer = [0u8; 256];
+    // SAFETY: gethostname writes at most buffer.len() bytes into the buffer this frame owns.
+    let named = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } == 0;
+    let end = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
+    let name = if named { String::from_utf8_lossy(&buffer[..end]).to_string() } else { String::new() };
+    let short = name.split('.').next().unwrap_or_default().trim().to_string();
+    if short.is_empty() { "this-machine".to_string() } else { short }
+}
+
 fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
     unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"])?;
@@ -512,7 +536,7 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     if table.contains_key("docs") {
         return Err(fail(format!("docs.required: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "keys", "ci", "routines"]).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "keys", "ci", "routines"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     if worktree.dev_route.is_some() {
         return Err(fail(format!("worktree.dev_route: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
@@ -521,7 +545,7 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
         return Err(fail(format!("worktree.stage_on_main: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, worktree })
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, worktree })
 }
 
 const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
@@ -530,7 +554,7 @@ const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("keys", "[keys]")] {
+    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("machine", "[machine] name"), ("keys", "[keys]")] {
         if table.contains_key(key) {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
@@ -588,6 +612,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         docs_required: or_default(pick(repo.docs_required.as_ref(), None), false),
         keeper: or_default(pick(None, machine.keeper.as_ref()), true),
         recover: or_default(pick(None, machine.recover.as_ref()), true),
+        machine_name: pick(None, machine.machine_name.as_ref()).unwrap_or_else(|| Setting { value: short_hostname(), layer: Layer::Default }),
     }
 }
 
@@ -623,6 +648,11 @@ pub fn recover_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.recover.unwrap_or(true))
 }
 
+// The name other machines on the same vault see this kelpie's claims under.
+pub fn machine() -> String {
+    load_machine(&path()).ok().and_then(|machine| machine.machine_name).unwrap_or_else(short_hostname)
+}
+
 pub fn channel() -> Result<Channel> {
     Ok(load_machine(&path())?.channel.unwrap_or_default())
 }
@@ -632,7 +662,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -709,6 +739,8 @@ pub fn describe(loaded: &Loaded) -> String {
         "Whether one background kelpie keeper per machine runs the routines (stale-session restarts, the update check, held messages, delivery checks of typed prompts, scheduled [[routines]]), so they go on with the board closed; herdr's startup, the board and kelpie update start it. false runs them in an open board instead; config.toml only.");
     key("recover.enabled", recover.value.to_string(), recover.layer,
         "Whether kelpie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
+    key("machine.name", format!("{:?}", machine_name.value), machine_name.layer,
+        "The name this kelpie claims vault notes under: a task started from a vault note writes it with the task's name into the note's kelpie frontmatter key, and kelpie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
     lines.push("[keys]  (config.toml only)\n  The board's keys, as name = \"key\" by action: a plain character for an action whose key is one (esc, ctrl+c, ⏎, the arrows and tab stay), and one not taken by another action where both act; moving two at once in the table works. An entry that breaks a rule is ignored, and named below. Help, hints and messages show the key in effect.".to_string());
     lines.extend(board_keys.describe(&key_errors).into_iter().map(|line| format!("  {line}")));
     lines.push(format!("[[routines]]  (config.toml or a repo config)\n  Checks kelpie runs on a schedule, each as a task that reports, plans or fixes, one table each with the keys {}; a repo config's run in its repo, one in config.toml names its repo. Listed below are config.toml's and this repo's; kelpie routines lists every one with its next run, and docs/reference/configuration.md shows each key.", crate::routines::KEYS.join(", ")));
@@ -985,8 +1017,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, keys, ci, routines");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, keys, ci, routines");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -1064,6 +1096,22 @@ mod tests {
         assert!(parse_repo("[keeper]\nenabled = false\n", "app.toml").unwrap_err().contains("keeper: applies to every repo, so it lives in config.toml; set [keeper] enabled in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
         assert!(shown.contains("keeper.enabled = false  (machine config)\n  Whether one background kelpie keeper"), "{shown}");
+    }
+
+    #[test]
+    fn the_machine_name_is_the_short_hostname_unless_config_toml_names_it() {
+        let default = settings(&Worktree::default(), &Machine::default()).machine_name;
+        assert_eq!(default.layer, Layer::Default);
+        assert!(!default.value.is_empty() && !default.value.contains('.'), "{default:?}");
+        let named = settings(&Worktree::default(), &machine("[machine]\nname = \"devbox\"\n"));
+        assert_eq!(named.machine_name, Setting { value: "devbox".to_string(), layer: Layer::Machine });
+        let error = |text: &str| parse_machine(text, "config.toml").unwrap_err();
+        assert!(error("[machine]\nname = \"\"\n").contains("machine.name: must be a non-empty string"));
+        assert!(error("[machine]\nname = \"LocalHost\"\n").contains("\"localhost\" names every machine"));
+        assert!(error("[machine]\nhost = \"x\"\n").contains("machine.host: unknown key; known keys here: name"));
+        assert!(parse_repo("[machine]\nname = \"x\"\n", "app.toml").unwrap_err().contains("machine: applies to every repo, so it lives in config.toml; set [machine] name in"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: named });
+        assert!(shown.contains("machine.name = \"devbox\"  (machine config)\n  The name this kelpie claims vault notes under"), "{shown}");
     }
 
     #[test]

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::sh::Result;
-use crate::vault_cli::{self, Cli};
+use crate::vault::Claim;
+use crate::vault_cli::{self, Cli, Released};
 
 pub fn open(cli: &Cli, task: &str, worktree: &Path, item: Option<&str>) -> Result<String> {
     cli.open(task, worktree, Some(task), item.filter(|item| vault_cli::is_note(item))).map(|opened| opened.path)
@@ -144,6 +145,54 @@ pub fn waits(cli: &Cli, note: &str, task: &str) -> std::result::Result<Option<(S
         .next("Its Claude was asked to write them.").you("Close it again once it reports ready.").detail("task", task).detail("note", note).to_string();
     let told = format!("kelpie done waits for your note {note}: write its {named} sections there with the vault MCP tools (what changes from the user's side, and each decision with its reason), then report ready.");
     Ok(Some((user, told)))
+}
+
+// Ok(Some(claim)) is another machine's claim, which a start refuses without --anyway; a vault without claims claims nothing.
+pub fn claim(cli: &Cli, note: &str, task: &str, repo: &str, anyway: bool) -> std::result::Result<Option<Claim>, String> {
+    if !cli.claims {
+        return Ok(None);
+    }
+    cli.claim(note, task, repo, anyway).map(|claimed| match claimed {
+        vault_cli::Claimed::Mine => None,
+        vault_cli::Claimed::Held(claim) => Some(claim),
+    })
+}
+
+// Held when another machine has taken the note over, so this machine leaves it as it is; a failed release is logged and lets the end go on.
+pub fn release(cli: &Cli, state: &Path, note: &str, task: &str) -> Released {
+    if !cli.claims {
+        return Released::Done;
+    }
+    cli.release(note, task).unwrap_or_else(|error| {
+        vault_cli::warn_log(state, &format!("{note}: its claim was not cleared ({error})"));
+        Released::Done
+    })
+}
+
+pub fn gone_text(note: &str) -> String {
+    format!("{note} is gone from the vault, and its claim with it")
+}
+
+// A push or a ready report renews the task's claim, so a note still worked on never reads as stale on the other machine.
+pub fn heartbeat(cli: &Cli, state: &Path, address: &str) {
+    let Some(note) = linked(state, address).filter(|_| cli.claims) else { return };
+    let (task, repo) = address.rsplit_once('@').unwrap_or((address, ""));
+    match claim(cli, &note, task, repo, false) {
+        Ok(None) => {}
+        Ok(Some(held)) => vault_cli::warn_log(state, &format!("{address}: {note} is held by {} · {}, so its claim was not renewed", held.machine, held.task)),
+        Err(error) => vault_cli::warn_log(state, &format!("{address}: the claim on {note} was not renewed ({error})")),
+    }
+}
+
+pub fn refusal(note: &str, claim: &Claim, today: i64) -> String {
+    crate::notice::Notice::new(crate::notice::Tone::You, format!("Not started: {} works on it", claim.machine))
+        .next("Its vault note is claimed by kelpie on another machine.")
+        .you("Start it with --anyway to work on it here too, or pick another item.")
+        .detail("note", note).detail("claim", format!("{} since {}", claim.shown(today), claim.since)).to_string()
+}
+
+pub fn held_text(note: &str, claim: &Claim, today: i64) -> String {
+    format!("{note} is left as it is: {}", claim.shown(today))
 }
 
 pub fn close(cli: &Cli, note: &str) -> std::result::Result<String, String> {
@@ -293,6 +342,54 @@ mod tests {
         fake.answer("task-close", r#"{"path":"Archive/kelpie-billing.md"}"#);
         assert_eq!(close(&fake.cli, "Projects/kelpie-billing.md").unwrap(), "Archive/kelpie-billing.md");
         assert_eq!(fake.calls(), ["task check Projects/kelpie-billing.md --need solution,decisions", "task check Projects/kelpie-billing.md --need solution,decisions", "task close Projects/kelpie-billing.md"]);
+    }
+
+    #[test]
+    fn a_vault_without_claims_is_never_asked_to_claim_or_release() {
+        let fake = Fake::new("no-claims");
+        let state = fake.state();
+        assert_eq!(claim(&fake.cli, "Projects/x.md", "billing", "api", false), Ok(None));
+        assert_eq!(release(&fake.cli, &state, "Projects/x.md", "billing"), Released::Done);
+        link(&state, "billing@api", "Projects/x.md");
+        heartbeat(&fake.cli, &state, "billing@api");
+        assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+    }
+
+    #[test]
+    fn a_release_that_fails_is_logged_and_never_holds_the_end_up() {
+        let fake = Fake::new("release-down");
+        let state = fake.state();
+        fake.fail("task-release", "S3 unreachable");
+        assert_eq!(release(&fake.claiming(), &state, "Projects/x.md", "billing"), Released::Done);
+        assert!(std::fs::read_to_string(state.join("vault.log")).unwrap().contains("Projects/x.md: its claim was not cleared (vault task release: S3 unreachable)"));
+    }
+
+    #[test]
+    fn a_push_or_a_ready_report_renews_the_tasks_claim() {
+        let fake = Fake::new("heartbeat");
+        let state = fake.state();
+        heartbeat(&fake.claiming(), &state, "billing@api");
+        assert!(fake.calls().is_empty(), "a task without a vault note renews nothing");
+        link(&state, "billing@api", "Projects/api-billing.md\nlocal:Fix login");
+        fake.answer("task-claim", r#"{"path":"Projects/api-billing.md","claimed":true,"claim":{"machine":"mac","task":"billing","repo":"api","since":"2026-10-20T08:00:00Z"}}"#);
+        heartbeat(&fake.claiming(), &state, "billing@api");
+        assert_eq!(fake.calls(), ["task claim Projects/api-billing.md --machine mac --task billing --repo api"]);
+        fake.answer("task-claim", r#"{"path":"Projects/api-billing.md","claimed":false,"claim":{"machine":"devbox","task":"x","since":"2026-10-21T08:00:00Z"}}"#);
+        heartbeat(&fake.claiming(), &state, "billing@api");
+        assert!(std::fs::read_to_string(state.join("vault.log")).unwrap().contains("held by devbox · x, so its claim was not renewed"), "a heartbeat never takes a note over");
+        let push = include_str!("tasks/push.rs");
+        let report = include_str!("report.rs");
+        assert!(push.contains("crate::task_note::heartbeat(cli, state, &address)") && report.contains("crate::task_note::heartbeat(&cli, &state, &me)"));
+    }
+
+    #[test]
+    fn the_refusal_names_the_machine_the_task_and_the_override() {
+        let held = Claim { machine: "devbox".to_string(), task: "search".to_string(), repo: "web".to_string(), since: "2026-10-20T08:00:00Z".to_string(), updated: String::new() };
+        let today = crate::backlog::epoch_day("2026-10-22").unwrap();
+        let said = refusal("Projects/x.md", &held, today);
+        assert!(said.contains("Not started: devbox works on it") && said.contains("--anyway") && said.contains("working on devbox · search since 2026-10-20T08:00:00Z") && said.contains("Projects/x.md"), "{said}");
+        assert_eq!(held_text("Projects/x.md", &held, today), "Projects/x.md is left as it is: working on devbox · search");
+        assert_eq!(gone_text("Projects/x.md"), "Projects/x.md is gone from the vault, and its claim with it");
     }
 
     #[test]

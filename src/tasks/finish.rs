@@ -35,6 +35,8 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
     for item in &items {
         match vault.as_ref().filter(|_| crate::vault_cli::is_note(item)).map(|cli| note_to_backlog(cli, &state, &task, &address, item)) {
             Some(NoteBack::Shared) => shown = shown.detail("note", format!("{item} stays open for the task's other halves")),
+            Some(NoteBack::Elsewhere(claim)) => shown = shown.detail("note", crate::task_note::held_text(item, &claim, crate::backlog::today())),
+            Some(NoteBack::Gone) => shown = shown.detail("note", crate::task_note::gone_text(item)),
             Some(NoteBack::Back(path)) => notice.push_str(&format!(" kelpie put its note {path} back in the backlog.")),
             Some(NoteBack::Failed(error)) => {
                 shown = shown.detail("note", format!("{item} could not go back to the backlog ({error}); set its status to backlog in the vault"));
@@ -142,15 +144,16 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
                 said.push(format!("{item} stays open for the task's other halves"));
                 continue;
             }
-            Some(cli) => match crate::task_note::close(cli, &item) {
-                Ok(path) => {
-                    said.push(format!("closed ({path})"));
-                    messages::log_for_lead(&format!("{task} is done and its commits are on the default branch; kelpie closed its note {item}."), None)
+            Some(cli) => match crate::task_note::release(cli, state, &item, task) {
+                crate::vault_cli::Released::Held(claim) => {
+                    said.push(crate::task_note::held_text(&item, &claim, crate::backlog::today()));
+                    messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but {} on {} has taken over its note {item}, so kelpie left the note open: settle it with the user.", claim.task, claim.machine))
                 }
-                Err(error) => {
-                    said.push(format!("{item} could not be closed ({error})"));
-                    messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but kelpie could not close its note {item} ({error}): close it with the vault tools."))
+                crate::vault_cli::Released::Gone => {
+                    said.push(crate::task_note::gone_text(&item));
+                    messages::log_for_lead(&format!("{task} is done and its commits are on the default branch; its note {item} is gone from the vault, so there was nothing to close."), None)
                 }
+                crate::vault_cli::Released::Done => close_note(cli, task, &item, &mut said),
             },
             None => messages::notify_lead(&crate::backlog::done_notice(task, &item)),
         };
@@ -167,6 +170,19 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
         closed = closed.detail("freed", freed);
     }
     Ok(closed.detail("checkout", fast_forward_main(repo, upstream)?))
+}
+
+fn close_note(cli: &crate::vault_cli::Cli, task: &str, item: &str, said: &mut Vec<String>) -> Result<()> {
+    match crate::task_note::close(cli, item) {
+        Ok(path) => {
+            said.push(format!("closed ({path})"));
+            messages::log_for_lead(&format!("{task} is done and its commits are on the default branch; kelpie closed its note {item}."), None)
+        }
+        Err(error) => {
+            said.push(format!("{item} could not be closed ({error})"));
+            messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but kelpie could not close its note {item} ({error}): close it with the vault tools."))
+        }
+    }
 }
 
 // Stashes are shared by every worktree of the repo; git names the branch each was made on.
@@ -285,6 +301,8 @@ fn dropped_notes(vault: Option<&crate::vault_cli::Cli>, state: &Path, task: &str
     let Some(cli) = vault else { return Vec::new() };
     notes.iter().map(|note| match note_to_backlog(cli, state, task, address, note) {
         NoteBack::Shared => format!("{note} stays open for the task's other halves"),
+        NoteBack::Elsewhere(claim) => crate::task_note::held_text(note, &claim, crate::backlog::today()),
+        NoteBack::Gone => crate::task_note::gone_text(note),
         NoteBack::Back(path) => format!("back in the backlog ({path})"),
         NoteBack::Failed(error) => format!("{note} could not go back to the backlog ({error}); set its status to backlog in the vault"),
     }).collect()
@@ -378,6 +396,52 @@ mod tests {
             cleanup(dir, origin, &slot);
         }
         assert_eq!(fake.calls(), ["task close Projects/billing.md"], "the vault is asked only when it is on");
+    }
+
+    #[test]
+    fn done_clears_this_machines_claim_before_it_closes_and_leaves_a_note_another_machine_took_over() {
+        let fake = crate::vault_cli::fake::Fake::new("finish-claim");
+        fake.answer("task-release", r#"{"path":"Projects/billing.md","released":true,"claim":null}"#);
+        fake.answer("task-close", r#"{"path":"Archive/billing.md"}"#);
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        let state = state_of(&dir);
+        record_start(&started_file_in(&state, "billing", &dir).unwrap(), "Projects/billing.md").unwrap();
+        let said = finish(&dir, &slot, &upstream, &state, Some(&fake.claiming())).unwrap().to_string();
+        assert!(said.contains("note: closed (Archive/billing.md)"), "{said}");
+        assert_eq!(fake.calls(), ["task release Projects/billing.md --machine mac", "task close Projects/billing.md"]);
+        cleanup(dir, origin, &slot);
+        let fake = crate::vault_cli::fake::Fake::new("finish-taken");
+        fake.answer("task-release", r#"{"path":"Projects/billing.md","released":false,"claim":{"machine":"devbox","task":"billing-v2","since":"2026-10-22T08:00:00Z"}}"#);
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "billing"]).unwrap();
+        let state = state_of(&dir);
+        record_start(&started_file_in(&state, "billing", &dir).unwrap(), "Projects/billing.md").unwrap();
+        let said = finish(&dir, &slot, &upstream, &state, Some(&fake.claiming())).unwrap().to_string();
+        assert!(said.contains("note: Projects/billing.md is left as it is: working on devbox · billing-v2"), "{said}");
+        assert_eq!(fake.calls(), ["task release Projects/billing.md --machine mac"], "a note another machine took over is not closed under it");
+        cleanup(dir, origin, &slot);
+        let landed = include_str!("landed.rs");
+        assert!(landed.contains("close_task(repo, Some(task), vault.as_ref(), said, None)"), "a landed task closes through close_task and so clears its claim as done does");
+    }
+
+    #[test]
+    fn drop_and_reset_clear_this_machines_claim_before_the_note_goes_back_to_the_backlog() {
+        let fake = crate::vault_cli::fake::Fake::new("drop-claim");
+        let state = fake.state();
+        let notes = ["Projects/billing.md".to_string()];
+        fake.answer("task-release", r#"{"path":"Projects/billing.md","released":true,"claim":null}"#);
+        fake.answer("task-backlog", r#"{"path":"Projects/billing.md"}"#);
+        assert_eq!(dropped_notes(Some(&fake.claiming()), &state, "billing", "billing@app", &notes), ["back in the backlog (Projects/billing.md)"]);
+        assert!(matches!(note_to_backlog(&fake.claiming(), &state, "billing", "billing@app", &notes[0]), NoteBack::Back(_)), "a reset settles the note the same way");
+        assert_eq!(fake.calls(), ["task release Projects/billing.md --machine mac", "task backlog Projects/billing.md", "task release Projects/billing.md --machine mac", "task backlog Projects/billing.md"]);
+        fake.answer("task-release", r#"{"path":"Projects/billing.md","released":false,"claim":{"machine":"devbox","task":"billing-v2","since":"2026-10-22T08:00:00Z"}}"#);
+        let asked = fake.calls().len();
+        assert_eq!(dropped_notes(Some(&fake.claiming()), &state, "billing", "billing@app", &notes), ["Projects/billing.md is left as it is: working on devbox · billing-v2"]);
+        assert_eq!(fake.calls().len(), asked + 1, "the note another machine works on stays active: {:?}", fake.calls());
+        let source = include_str!("finish.rs");
+        let reset = &source[source.find("\npub fn reset(").unwrap()..];
+        assert!(reset[..reset.find("\n}\n").unwrap()].contains("note_to_backlog("), "a reset settles the note through note_to_backlog");
     }
 
     #[test]
