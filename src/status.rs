@@ -60,10 +60,6 @@ pub struct Git {
 
 pub const ANSWER_IN_SPACE: &str = "answer Claude's prompt in its Space or through the lead";
 
-pub fn answer_in_space(go: &str) -> String {
-    format!("answer Claude's prompt in its Space ({go}) or through the lead")
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Queued {
     pub after: Vec<(String, String)>,
@@ -249,6 +245,29 @@ impl Item {
             return Some(held);
         }
         self.report.as_ref()?.next_for_you()
+    }
+
+    // What the user is wanted for, in a few words; outside Needs you the group says it all.
+    pub fn wanted(&self, go: &str) -> Option<String> {
+        if self.group() != Group::NeedsYou {
+            return None;
+        }
+        if let Some(queued) = &self.queued {
+            return queued.blocked.as_ref().map(|_| "start it anyway or drop the wait".to_string());
+        }
+        if self.agent.as_ref().is_some_and(|agent| agent.status == "blocked") {
+            return Some(format!("answer Claude's prompt · {go} goes there"));
+        }
+        if self.ci_group().is_some() || self.recover_group().is_some() {
+            return None;
+        }
+        if let Some(held) = &self.held_by_draft {
+            return Some(held.clone());
+        }
+        if let Some(question) = self.question.as_ref().and_then(|message| message.question.as_ref()) {
+            return Some(if question.plan.is_some() { "approve the plan".to_string() } else { format!("answer a question · {}", plural(question.options.len(), "option")) });
+        }
+        self.report.as_ref()?.next_for_you().map(str::to_string)
     }
 
     pub fn queued_note(&self) -> Option<String> {
@@ -787,7 +806,6 @@ pub(crate) mod tests {
         item.agent.as_mut().unwrap().status = "blocked".to_string();
         assert_eq!(item.next_for_you(), Some(ANSWER_IN_SPACE), "a prompt in its pane outranks the last report");
         assert_eq!(ANSWER_IN_SPACE, "answer Claude's prompt in its Space or through the lead");
-        assert_eq!(answer_in_space("g"), "answer Claude's prompt in its Space (g) or through the lead");
     }
 
     #[test]
@@ -926,6 +944,38 @@ pub(crate) mod tests {
         assert_eq!(item.next_for_you(), Some("start it anyway or drop the wait"));
         assert_eq!(item.to_json()["blocked"], json!("billing@api was dropped, so web-billing did not start"));
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_row_says_in_a_few_words_what_the_user_is_wanted_for_and_nothing_outside_needs_you() {
+        let go = "g";
+        let mut asked = task(Some("idle"), Some("needs-you"), 0);
+        asked.report.as_mut().unwrap().report.as_mut().unwrap().next = "answer: which queue for refund mails, Sidekiq or Solid Queue or inline?".to_string();
+        asked.question = Some(messages::fold(r#"{"id":"q1","at":10,"from":"billing@web","to":"lead","text":"Which queue?","state":"asked","question":{"options":[{"label":"A","meaning":"one"},{"label":"B","meaning":"two"}],"recommend":1}}"#).remove(0));
+        assert_eq!(asked.wanted(go).as_deref(), Some("answer a question · 2 options"));
+        asked.question.as_mut().unwrap().question.as_mut().unwrap().plan = Some("vault:Projects/billing.md".to_string());
+        assert_eq!(asked.wanted(go).as_deref(), Some("approve the plan"));
+        asked.agent.as_mut().unwrap().status = "blocked".to_string();
+        assert_eq!(asked.wanted(go).as_deref(), Some("answer Claude's prompt · g goes there"), "a prompt on screen outranks the question");
+        let mut mock = task(Some("idle"), Some("needs-you"), 1);
+        mock.report.as_mut().unwrap().report.as_mut().unwrap().next = "approve the mock".to_string();
+        assert_eq!(mock.wanted(go).as_deref(), Some("approve the mock"), "the task's own words, whole");
+        let mut ready = task(Some("idle"), Some("ready"), 5);
+        ready.report.as_mut().unwrap().report.as_mut().unwrap().next = "review the 5 commits and the card, then push and close".to_string();
+        for approved in [false, true] {
+            ready.git.as_mut().unwrap().approved = approved;
+            assert!(ready.group() == Group::ReadyToPush);
+            assert_eq!(ready.wanted(go), None, "the group says push, the row asks nothing");
+        }
+        let mut held = task(Some("idle"), Some("ready"), 0);
+        held.held_by_draft = Some("clear the draft in its input box".to_string());
+        assert_eq!(held.wanted(go).as_deref(), Some("clear the draft in its input box"));
+        let mut working = task(Some("working"), Some("needs-you"), 1);
+        working.report.as_mut().unwrap().report.as_mut().unwrap().next = "approve the mock".to_string();
+        assert_eq!(working.wanted(go), None);
+        let mut waiting = task(Some("idle"), Some("blocked"), 1);
+        waiting.report.as_mut().unwrap().report.as_mut().unwrap().next = "nudge the other task".to_string();
+        assert_eq!(waiting.wanted(go), None, "blocked on something other than the user");
     }
 
     #[test]

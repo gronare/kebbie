@@ -7,7 +7,7 @@ use crate::permit::Permit;
 use crate::status::{Checkout, Group, Item};
 use crate::tasks;
 use super::card::card_hint;
-use super::detail::detail_lines;
+use super::detail::unfolded_lines;
 use super::{App, Column, Hit};
 use super::widgets::{BLUE, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, column_title, group_line, options_hint, plural, row, style, wrap};
 
@@ -128,11 +128,12 @@ fn wrapped_row(icon: Span<'static>, name: &str, facts: &str, width: usize) -> Ve
     }).collect()
 }
 
-// What the task's last report asks of the user, under its row.
-fn you_line(next: &str, highlighted: bool, width: usize) -> Line<'static> {
-    let text = wrap(next, width.saturating_sub(8), 1).into_iter().next().unwrap_or_default();
-    let line = Line::from(vec![Span::raw("   "), Span::styled("you: ", style(PEACH)), Span::styled(text, style(SUBTEXT))]);
-    if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
+// What the task wants of the user, under its row, whole.
+fn wanted_lines(wanted: &str, highlighted: bool, width: usize) -> Vec<Line<'static>> {
+    wrap(wanted, width.saturating_sub(4), 8).into_iter().map(|text| {
+        let line = Line::from(vec![Span::raw("   "), Span::styled(text, style(PEACH))]);
+        if highlighted { line.style(Style::new().bg(SURFACE)) } else { line }
+    }).collect()
 }
 
 type Rows = Vec<(usize, usize, Hit)>;
@@ -183,19 +184,18 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
             line.spans.extend([Span::raw(" "), Span::styled("●", style(GREEN))]);
         }
         lines.push(line);
-        if let Some(next) = item.next_for_you() {
-            let next = if next == crate::status::ANSWER_IN_SPACE { crate::status::answer_in_space(&keys::key(Act::Go).to_string()) } else { next.to_string() };
-            lines.push(you_line(&next, selected && open && unfold, width));
+        if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()) {
+            lines.extend(wanted_lines(&wanted, selected && open && unfold, width));
         }
         if selected && open && unfold {
-            let (detail, links, _) = detail_lines(app, item, width.saturating_sub(4), false);
+            let (detail, links) = unfolded_lines(app, item, width.saturating_sub(4));
             lines.extend(detail.into_iter().map(|line| {
                 let mut spans = vec![Span::raw("    ")];
                 spans.extend(line.spans);
                 Line::from(spans).style(Style::new().bg(SURFACE))
             }));
             app.links.extend(links);
-            lines.push(app.s_opens(item).map_or_else(options_hint, card_hint));
+            lines.push(app.s_gives(item).map_or_else(options_hint, |gives| card_hint(&gives)));
         }
         rows.push((start, lines.len(), Hit::Task(index)));
     }

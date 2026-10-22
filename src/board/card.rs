@@ -16,7 +16,7 @@ use super::detail::Detail;
 use super::images::{Shown, image_shown, preview_note, render_image};
 use super::link::file_link;
 use super::{App, Column, Hit, Mode};
-use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, bold, centered, fill, fit, section_header, rule, style};
+use super::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, SURFACE, TEAL, TEXT, YELLOW, bold, centered, fill, fit, plural, section_header, rule, style};
 
 impl App {
     pub(super) fn card_of(&self, item: &Item) -> Option<std::rc::Rc<Detail>> {
@@ -26,6 +26,25 @@ impl App {
     // What s opens on a task: its waiting question before its card, since the question waits on the user.
     pub(super) fn s_opens(&self, item: &Item) -> Option<&'static str> {
         if self.question_of(item).is_some() { Some("question") } else if self.card_of(item).is_some() { Some("card") } else { None }
+    }
+
+    // What s gives on a task, said on its unfolded row: the question or plan waiting, else the card.
+    pub(super) fn s_gives(&self, item: &Item) -> Option<String> {
+        if let Some(index) = self.question_of(item) {
+            let question = self.questions[index].question.as_ref()?;
+            return Some(if question.plan.is_some() { "the plan".to_string() } else { format!("the question · {}", plural(question.options.len(), "answer")) });
+        }
+        let detail = self.card_of(item)?;
+        let (card, current) = detail.card.as_ref()?;
+        let images = card.text.lines().filter(|line| card_image_in(line).is_some()).count();
+        let mut gives = vec!["the card".to_string()];
+        if images > 0 {
+            gives.push(plural(images, "image"));
+        }
+        if !current {
+            gives.push("code changed since".to_string());
+        }
+        Some(gives.join(" · "))
     }
 
     pub(super) fn selected_s_opens(&self) -> Option<&'static str> {

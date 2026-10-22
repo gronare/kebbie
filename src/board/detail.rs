@@ -17,7 +17,7 @@ use crate::evidence;
 use crate::report;
 use crate::status::Item;
 use crate::tasks;
-use super::card::{card_image_in, card_lines, rich_wrap};
+use super::card::card_lines;
 use super::columns::absence;
 use super::images::{ImageAt, render_image};
 use super::link::{Link, file_link};
@@ -105,26 +105,6 @@ fn question_summary(message: &messages::Message, width: usize) -> String {
     let suffix = if plan { format!(" · plan to approve · {inbox}") } else { format!(" · {} · {inbox}", plural(count, "option")) };
     let one_line = message.text.split_whitespace().collect::<Vec<_>>().join(" ");
     format!("{}{suffix}", cut(&one_line, width.saturating_sub(suffix.chars().count()).max(8)))
-}
-
-fn card_field(card: &report::Card, current: bool, width: usize) -> Vec<Line<'static>> {
-    let (mark, color) = if current { ("✓ ", GREEN) } else { ("○ ", YELLOW) };
-    let text: Vec<&str> = card.text.lines().map(str::trim).filter(|line| !line.is_empty() && card_image_in(line).is_none()).take(2).collect();
-    let room = width.saturating_sub(LABEL + 2);
-    let mut lines = Vec::new();
-    for (index, line) in text.iter().enumerate() {
-        let mut spans = if index == 0 { vec![Span::styled(mark, style(color))] } else { vec![Span::raw("  ")] };
-        spans.extend(rich_wrap(line, room, 1, TEXT).into_iter().next().map(|first| first.spans).unwrap_or_default());
-        lines.push(field(if index == 0 { "card" } else { "" }, spans));
-    }
-    if text.is_empty() {
-        lines.push(field("card", vec![Span::styled(mark, style(color))]));
-    }
-    let images = card.text.lines().filter(|line| card_image_in(line).is_some()).count();
-    if images > 0 {
-        lines.push(field("", vec![Span::styled(format!("▣ {} · {} shows the card", plural(images, "image"), keys::key(Act::Card)), style(MUTED))]));
-    }
-    lines
 }
 
 fn verdict_chip(shown: &crate::review::Shown) -> Option<(String, Color)> {
@@ -294,7 +274,48 @@ fn state_spans(app: &App, item: &Item) -> Vec<Span<'static>> {
     spans
 }
 
-pub(super) fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool) -> (Vec<Line<'static>>, Vec<Link>, Vec<ImageAt>) {
+// Addresses the card and the last report name, such as a mock, a preview or a pull request, once each.
+pub(super) fn named_urls(item: &Item, card: Option<&report::Card>) -> Vec<String> {
+    let report = item.report.as_ref().map(|message| [message.text.as_str(), message.report.as_ref().map_or("", |report| report.next.as_str())].join(" ")).unwrap_or_default();
+    let text = [card.map_or("", |card| card.text.as_str()), report.as_str()].join(" ");
+    let mut urls: Vec<String> = Vec::new();
+    for word in text.split(|character: char| character.is_whitespace() || "()<>[]\"'`".contains(character)) {
+        let url = word.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if (url.starts_with("https://") || url.starts_with("http://")) && url.len() > 8 && !urls.iter().any(|seen| seen == url) && item.url.as_deref() != Some(url) {
+            urls.push(url.to_string());
+        }
+    }
+    urls
+}
+
+// The row already says what the task wants and how far it got; unfolded it adds only where it lives, its links and its note.
+pub(super) fn unfolded_lines(app: &mut App, item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>) {
+    let detail = app.detail(item).unwrap_or_default();
+    let mut lines = Vec::new();
+    let mut links = Vec::new();
+    let branch = if detail.branch.is_empty() { item.name.clone() } else { detail.branch.clone() };
+    let place = item.path.as_deref().map(|path| format!(" · {}", name_of(path))).unwrap_or_default();
+    lines.push(field("branch", vec![Span::styled(format!("{branch}{place}"), style(SUBTEXT))]));
+    if let Some((line, link)) = server_line(item, detail.dev_server, &detail.server_name, width) {
+        lines.push(line);
+        links.extend(link);
+    }
+    lines.extend(worker_line(item, detail.dev_worker, &detail.worker_name));
+    let (ci, ci_links) = ci_lines(item, width);
+    lines.extend(ci);
+    links.extend(ci_links);
+    for url in named_urls(item, detail.card.as_ref().map(|(card, _)| card)).into_iter().take(4) {
+        let shown = cut(&url, width.saturating_sub(LABEL).max(2));
+        lines.push(field("link", vec![Span::styled(shown.clone(), style(TEAL))]));
+        links.push(Link { shown, url });
+    }
+    if let Some(note) = note_of(app, item) {
+        lines.push(field("note", vec![Span::styled(format!("vault: {note}"), style(TEAL))]));
+    }
+    (lines, links)
+}
+
+pub(super) fn panel_lines(app: &mut App, item: &Item, width: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<ImageAt>) {
     let detail = app.detail(item).unwrap_or_default();
     let mut lines = Vec::new();
     let mut links = Vec::new();
@@ -318,13 +339,11 @@ pub(super) fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool
     if !state.is_empty() {
         lines.push(Line::from(state));
     }
-    if panel {
-        lines.push(Line::default());
-    }
+    lines.push(Line::default());
     if let Some(asked) = asked_question(item) {
         lines.push(field("asks", vec![Span::styled(question_summary(asked, width.saturating_sub(LABEL)), style(PEACH))]));
     } else if let Some((label, text, color)) = report_text(app, item, width) {
-        lines.extend(wrapped_field(&label, &text, color, width, if panel { 6 } else { 3 }));
+        lines.extend(wrapped_field(&label, &text, color, width, 6));
     } else if item.agent.is_none() {
         lines.push(field("claude", vec![Span::styled(format!("not running in its Space · {} restarts it", keys::key(Act::Go)), style(MUTED))]));
     }
@@ -350,12 +369,6 @@ pub(super) fn detail_lines(app: &mut App, item: &Item, width: usize, panel: bool
     }
     if let Some(note) = note_of(app, item) {
         lines.push(field("note", vec![Span::styled(format!("vault: {note}"), style(TEAL))]));
-    }
-    if !panel {
-        if let Some((card, current)) = &detail.card {
-            lines.extend(card_field(card, *current, width));
-        }
-        return (lines, links, images);
     }
     if !detail.commits.is_empty() {
         lines.push(Line::default());
@@ -418,7 +431,7 @@ pub(super) fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_widget(Paragraph::new(Span::styled("No task selected.", style(MUTED))), inner);
         return;
     };
-    let (lines, links, images) = detail_lines(app, &item, inner.width as usize, true);
+    let (lines, links, images) = panel_lines(app, &item, inner.width as usize);
     frame.render_widget(Paragraph::new(lines), inner);
     app.links.extend(links);
     let resting = matches!(app.mode, Mode::Normal);
@@ -458,20 +471,51 @@ mod tests {
     use crate::board::widgets::{BLUE, GREEN, MUTED, PEACH, RED, YELLOW};
 
     #[test]
-    fn a_narrow_row_shows_the_cards_first_lines_and_counts_its_images() {
+    fn an_unfolded_row_adds_only_where_the_task_lives_its_links_and_what_s_gives() {
         let mut app = carded(true);
+        let card = &mut std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card.as_mut().unwrap().0;
+        card.text.push_str("\nThe mock: https://claude.ai/artifact/abc123, and the server https://wt2.web.test.");
+        app.tasks[0].report.as_mut().unwrap().text = "mock at https://claude.ai/artifact/abc123 ready".to_string();
         let (rows, _) = render(&mut app, 84, 50);
         let screen = rows.join("\n");
-        assert!(screen.contains("card    ✓ Filters show on the search page.") && screen.contains("Price and size, both kept in the URL."), "{screen}");
-        assert!(!screen.contains("A third line"), "two lines of text under the row: {screen}");
-        assert!(screen.contains("▣ 2 images · s shows the card") && screen.contains("⏎ options · s card"), "{screen}");
-        assert!(rows[48].contains("s card"), "the hint line names s while the task has a card: {}", rows[48]);
+        let lines: Vec<&str> = screen.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        let row = lines.iter().position(|line| line.contains("search-filters")).unwrap_or_else(|| panic!("{screen}"));
+        let worker = format!("worker  ○ off · {} starts it", keys::key(Act::Worker));
+        assert_eq!(lines[row + 1..row + 5], ["branch  search-filters · wt2.web", "server  ● running  https://wt2.web.test", worker.as_str(), "link    https://claude.ai/artifact/abc123"], "{screen}");
+        assert!(lines[row + 5].starts_with("⏎ options · s the card · 2 images"), "{screen}");
+        assert_eq!(screen.matches("search-filters").count(), 2, "the name once on the row, once as the branch: {screen}");
+        for gone in ["Filters show on the search page", "report", "review", "changed", "plan written"] {
+            assert!(!screen.contains(gone), "{gone} belongs on the card, not the row: {screen}");
+        }
+        std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card.as_mut().unwrap().1 = false;
+        let (rows, _) = render(&mut app, 84, 50);
+        assert!(rows.join("\n").contains("s the card · 2 images · code changed since"), "{}", rows.join("\n"));
         let mut bare = test_app(vec![served("search-filters")]);
         with_detail(&mut bare);
         let (rows, _) = render(&mut bare, 84, 50);
-        assert!(!rows.join("\n").contains("card "), "no card, no card line");
+        assert!(!rows.join("\n").contains(" s "), "no card, nothing for s: {}", rows.join("\n"));
         bare.handle_normal(key(KeyCode::Char('s')));
         assert!(matches!(&bare.mode, Mode::Message(text) if text.contains("has no sign-off card yet")));
+    }
+
+    #[test]
+    fn a_needs_you_row_shows_its_title_and_what_it_wants_whole_with_no_you_prefix() {
+        let mut item = served("rows-say-what");
+        item.title = Some("Board task rows".to_string());
+        let report = item.report.as_mut().unwrap().report.as_mut().unwrap();
+        report.state = "needs-you".to_string();
+        report.next = "approve the mock of the task rows for Needs you, Working and Ready to push before anything is built".to_string();
+        let mut ready = served("search-filters");
+        ready.report.as_mut().unwrap().report.as_mut().unwrap().next = "review the 2 commits and the card, then push and close".to_string();
+        let mut app = test_app(vec![item, ready]);
+        app.work_selected = 1;
+        let (rows, _) = render(&mut app, 84, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("○ Board task rows") && !screen.contains("○ rows-say-what"), "the title, not the branch: {screen}");
+        assert!(!screen.contains("you:") && !screen.contains('…'), "{screen}");
+        let wanted: String = rows.iter().skip_while(|row| !row.contains("Board task rows")).skip(1).take_while(|row| !row.contains("READY TO PUSH")).map(|row| row.trim()).collect::<Vec<_>>().join(" ");
+        assert_eq!(wanted.trim(), "approve the mock of the task rows for Needs you, Working and Ready to push before anything is built");
+        assert!(!screen.contains("review the 2 commits"), "the lead approved it, so Ready to push asks nothing: {screen}");
     }
 
     #[test]
@@ -482,7 +526,7 @@ mod tests {
         let (rows, _) = render(&mut app, 84, 50);
         assert!(!rows.join("\n").contains("tests "), "no run recorded, no tests line");
         std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().tests = Some(covered.clone());
-        for width in [84, 170] {
+        for width in [170] {
             let (rows, buffer) = render(&mut app, width, 50);
             let at = rows.iter().position(|row| row.contains("tests   ✓ cargo test · 493 passed · at a1b2c3d")).unwrap_or_else(|| panic!("{}", rows.join("\n")));
             let column = rows[at].chars().position(|char| char == '✓').unwrap() as u16;
