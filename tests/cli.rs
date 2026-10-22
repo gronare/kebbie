@@ -28,7 +28,27 @@ impl Lab {
         let herdr_log = root.join("herdr.log");
         let lab = Self { config: root.join("config.toml"), root, home, state, herdr, herdr_log };
         lab.fake_herdr(None);
+        lab.fake_sandbox_tools();
         lab
+    }
+
+    // What Claude Code's sandbox needs on Linux, so a start is not refused on a CI machine without it.
+    fn fake_sandbox_tools(&self) {
+        let bin = self.root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        for tool in ["bwrap", "socat"] {
+            fs::write(bin.join(tool), "#!/bin/sh\nexit 0\n").unwrap();
+            fs::set_permissions(bin.join(tool), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        for arch in ["x64", "arm64"] {
+            let filter = self.home.join(".npm-global/lib/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp").join(arch);
+            fs::create_dir_all(&filter).unwrap();
+            fs::write(filter.join("apply-seccomp"), "").unwrap();
+        }
+    }
+
+    fn path(&self) -> String {
+        format!("{}:{}", self.root.join("bin").display(), std::env::var("PATH").unwrap_or_default())
     }
 
     fn fake_herdr(&self, sessions: Option<(&Path, &Path)>) {
@@ -74,6 +94,7 @@ impl Lab {
             .env("KELPIE_CONFIG", &self.config)
             .env("HERDR_BIN_PATH", &self.herdr)
             .env("KELPIE_GH_BIN", self.root.join("gh"))
+            .env("PATH", self.path())
             .env_remove("CLAUDE_CODE_MESSAGING_SOCKET")
             .env_remove("CLAUDE_CODE_MESSAGING_TOKEN")
             .stdin(Stdio::null());
@@ -666,7 +687,7 @@ fn sessions(lab: &Lab) -> Sessions {
 
 impl Lab {
     fn with_sessions(&self, sessions: &Sessions, args: &[&str]) -> Output {
-        let path = format!("{}:{}", sessions.bin.display(), std::env::var("PATH").unwrap_or_default());
+        let path = format!("{}:{}", sessions.bin.display(), self.path());
         self.command().env("PATH", path).env("KELPIE_CLAUDE_BIN", &sessions.claude).args(args).output().unwrap()
     }
 
@@ -785,7 +806,7 @@ fn run_as_user(lab: &Lab, args: &[&str]) -> Output {
     let line = std::iter::once(KELPIE).chain(args.iter().copied()).map(quote).collect::<Vec<_>>().join(" ");
     let script = lab.root.join("user.sh");
     fs::write(&script, format!("sleep 1\n{line} > {} 2> {}\necho $? > {}.tmp && mv {}.tmp {}\n", quote(&out.to_string_lossy()), quote(&err.to_string_lossy()), code.display(), code.display(), code.display())).unwrap();
-    assert!(Command::new("sh").env_clear().envs(lab.command().get_envs().filter_map(|(key, value)| Some((key, value?)))).arg("-c").arg(format!("sh < {} > /dev/null 2>&1 &", quote(&script.to_string_lossy()))).status().unwrap().success());
+    assert!(Command::new("sh").env_clear().envs(lab.command().get_envs().filter(|(key, _)| *key != "PATH").filter_map(|(key, value)| Some((key, value?)))).arg("-c").arg(format!("sh < {} > /dev/null 2>&1 &", quote(&script.to_string_lossy()))).status().unwrap().success());
     let waited = std::time::Instant::now();
     while !code.exists() && waited.elapsed() < std::time::Duration::from_secs(60) {
         std::thread::sleep(std::time::Duration::from_millis(50));
