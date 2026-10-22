@@ -166,7 +166,7 @@ pub fn iso_millis(stamp: &str) -> Option<u64> {
     u64::try_from(((days * 24 + hour) * 60 + minute) * 60_000 + second * 1000 + millis).ok()
 }
 
-// Claude took the prompt when its transcript has it, after it was typed, as the user's message or as a message queued while it worked.
+// Claude took the prompt when its transcript has it, after it was typed, as the user's message, or as a message queued while it worked: enqueued at once, absorbed only when the running tool returns.
 pub fn taken_in(transcript: &str, text: &str, since_ms: u64) -> bool {
     let wanted: String = normalized(text).chars().take(200).collect();
     if wanted.is_empty() {
@@ -178,10 +178,31 @@ pub fn taken_in(transcript: &str, text: &str, since_ms: u64) -> bool {
             content_text(&record["message"]["content"])
         } else if record["type"] == "attachment" && record["attachment"]["type"] == "queued_command" {
             content_text(&record["attachment"]["prompt"])
+        } else if record["type"] == "queue-operation" && record["operation"] == "enqueue" {
+            content_text(&record["content"])
         } else {
             return false;
         };
         recent && normalized(&said).contains(&wanted)
+    })
+}
+
+// Claude records a prompt submitted while its turn runs as an enqueue without the text, and takes it only when the turn ends; with kelpie's text gone from the box, that enqueue is kelpie's.
+fn taken(transcript: Option<&str>, shown: &Draft, text: &str, since_ms: u64) -> bool {
+    let left_box = match shown {
+        Draft::Empty => true,
+        Draft::Typed(box_text) => !holds(box_text, text),
+        Draft::Unreadable => false,
+    };
+    match transcript {
+        Some(transcript) => taken_in(transcript, text, since_ms) || (left_box && queued_since(transcript, since_ms)),
+        None => *shown == Draft::Empty,
+    }
+}
+
+fn queued_since(transcript: &str, since_ms: u64) -> bool {
+    transcript.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).any(|record| {
+        record["type"] == "queue-operation" && record["operation"] == "enqueue" && record["timestamp"].as_str().and_then(iso_millis).is_some_and(|at| at + 2000 >= since_ms)
     })
 }
 
@@ -242,10 +263,8 @@ pub enum Outcome {
 pub fn advance(typed: &mut Typed) -> Outcome {
     let (pane, transcript) = place(&typed.target);
     let shown = screen(&pane).map(|screen| draft(&screen)).unwrap_or(Draft::Unreadable);
-    let taken = match transcript.and_then(|file| std::fs::read_to_string(file).ok()) {
-        Some(transcript) => taken_in(&transcript, &typed.text, typed.at_ms),
-        None => shown == Draft::Empty,
-    };
+    let transcript = transcript.and_then(|file| std::fs::read_to_string(file).ok());
+    let taken = taken(transcript.as_deref(), &shown, &typed.text, typed.at_ms);
     let elapsed = Duration::from_millis(now_ms().saturating_sub(typed.at_ms));
     match step(elapsed, typed.presses, taken) {
         Step::Taken => Outcome::Taken,
@@ -455,5 +474,20 @@ mod tests {
         assert!(taken_in(&format!("not json\n{queued}"), "[from lead] rebase onto main please", at));
         assert!(!taken_in(&old, "[from lead] rebase onto main please", at), "the same words an hour earlier are an earlier message");
         assert!(!taken_in(&user, "[from lead] something else", at));
+        let enqueued = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-20T12:00:01.000Z", "content": "[from lead] rebase onto main please" }).to_string();
+        assert!(taken_in(&enqueued, "[from lead] rebase onto main please", at), "Claude queued it mid-turn; it is absorbed only when the running tool returns, often after 40 s");
+        let dequeued = json!({ "type": "queue-operation", "operation": "remove", "timestamp": "2026-10-20T12:00:01.000Z", "content": "[from lead] rebase onto main please" }).to_string();
+        assert!(!taken_in(&dequeued, "[from lead] rebase onto main please", at));
+        let typed_at = iso_millis("2026-10-22T08:39:47.300Z").unwrap();
+        let queued_for_the_turns_end = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-22T08:39:47.581Z", "sessionId": "s" }).to_string();
+        let answer = "[from you] The user's answer to \"Treat Claude's dim suggestion as an empty box\": Approve";
+        assert!(taken(Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at), "submitted while a turn ran: Claude records the enqueue without the text and takes it when the turn ends, 17 minutes later in the case seen");
+        assert!(taken(Some(&queued_for_the_turns_end), &Draft::Typed("my own words".to_string()), answer, typed_at), "the user typing after it does not undo it");
+        assert!(!taken(Some(&queued_for_the_turns_end), &Draft::Typed("[from you] The user's answer to \"Treat".to_string()), answer, typed_at), "an enqueue while kelpie's text still sits in the box is someone else's");
+        assert!(!taken(Some(&queued_for_the_turns_end), &Draft::Unreadable, answer, typed_at));
+        assert!(!taken(Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at + 60_000), "an enqueue from before kelpie typed is not its");
+        assert!(taken(None, &Draft::Empty, answer, typed_at) && !taken(None, &Draft::Typed(answer.to_string()), answer, typed_at), "without a transcript, an empty box is the sign");
+        let old_queue = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-20T11:00:00.000Z", "content": "[from lead] rebase onto main please" }).to_string();
+        assert!(!taken_in(&old_queue, "[from lead] rebase onto main please", at));
     }
 }
