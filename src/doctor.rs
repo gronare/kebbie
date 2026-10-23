@@ -476,11 +476,11 @@ pub fn vault(plugin: &crate::vault_cli::Plugin, override_bin: Option<&str>, prob
     }
 }
 
-// Claims carry this name to the other machines on the vault, so a name nobody chose is worth one warning.
+// The phone and the other machines on the vault show this name, so a name nobody chose is worth one warning.
 pub fn machine_name(name: &config::Setting<String>, config_file: &Path) -> Check {
     match name.layer {
-        config::Layer::Default => warn("machine", format!("machine.name is unset, so this kelpie claims vault notes as \"{}\", the host's short name", name.value), one(format!("set [machine] name = \"<a name of your own, such as mac or devbox>\" in {}", config_file.display()))),
-        _ => ok("machine", format!("claims vault notes as \"{}\"", name.value)),
+        config::Layer::Default => warn("machine", format!("machine.name is unset, so your phone and your other machines on the vault see this one as \"{}\", the host's short name", name.value), vec![format!("set [machine] name = \"<a name of your own, such as mac or devbox>\" in {}", config_file.display()), "or run /kelpie:configure, which asks for it first".to_string()]),
+        _ => ok("machine", format!("goes by \"{}\" on your phone and in vault claims", name.value)),
     }
 }
 
@@ -612,7 +612,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(updates(&env.kelpie_state, channel, &crate::update_check::installed(&places)));
     let keeper_on = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.keeper).unwrap_or(true);
     checks.push(keeper(keeper_on, crate::keeper::holder(&env.kelpie_state).as_ref(), crate::messages::now()));
-    checks.push(crate::hub::doctor(&env.kelpie_state, crate::messages::now(), crate::hub::reach));
+    checks.push(crate::hub::doctor(&env.kelpie_state, crate::hub::configured_name(&env.config).as_deref(), crate::messages::now(), crate::hub::reach));
     if let Ok(machine) = config::load_machine(&env.config) {
         checks.extend(crate::hub::inbox::doctor(&env.kelpie_state, &machine.report, crate::messages::now()));
     }
@@ -642,7 +642,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let command = crate::vault_cli::command(override_bin.clone(), settings.vault_command.value.clone(), &plugin).filter(|_| reachable);
     let reached = command.is_some();
     checks.push(vault(&plugin, override_bin.as_deref(), command.map(|command| crate::vault_cli::Cli::new(command).probe(true))));
-    if reached {
+    if reached || crate::hub::identity::load(&env.kelpie_state).ok().flatten().is_some() {
         checks.push(machine_name(&settings.machine_name, &env.config));
     }
     checks.extend(backlog(&settings.sources.value, crate::vault::index_path, &env.config.with_file_name("backlog.md")));
@@ -1035,7 +1035,8 @@ mod tests {
         assert_eq!(unset.level, Level::Warn);
         assert!(unset.fact.contains("machine.name is unset") && unset.fact.contains("\"mbp-7\"") && unset.fix[0].contains("[machine] name = ") && unset.fix[0].contains("/home/u/.config/kelpie/config.toml"), "{unset:?}");
         let set = machine_name(&config::Setting { value: "devbox".to_string(), layer: config::Layer::Machine }, Path::new("/c.toml"));
-        assert_eq!((set.level, set.fact.as_str()), (Level::Ok, "claims vault notes as \"devbox\""));
+        assert_eq!((set.level, set.fact.as_str()), (Level::Ok, "goes by \"devbox\" on your phone and in vault claims"));
+        assert!(unset.fix[1].contains("/kelpie:configure"), "{unset:?}");
     }
 
     #[test]

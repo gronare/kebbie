@@ -16,6 +16,11 @@ Every write in this skill lands in one of those two files, or in a team repo the
 
 **The key list** is `kelpie config --repo <main checkout>`: every key with its value in effect, the layer it comes from, what it does, and which keys are config.toml only. It is the source for key names and meanings; docs/reference/configuration.md adds examples.
 
+## Set kelpie up on this machine
+
+1. Name the machine first. When `kelpie config` shows `machine.name` with the default layer, it is unset; skip this step when it is set. Ask the user for a name, saying it is how their phone shows this machine and how their other machines working on the same vault see it, and offer the host's short name as the default. Give each machine its own, such as `mac` or `devbox`; `localhost` is refused. Write `[machine] name = "<name>"` in config.toml as in step 3 of Change a setting. Done when `kelpie config` shows `machine.name` from the machine config.
+2. Run `kelpie doctor` and work through each `warn` and `fail` with its `fix:` line, changing settings as below. Done when nothing says `fail`.
+
 ## Change a setting
 
 1. Run `kelpie config --repo <main checkout>` and find the key. Done when you know the key, its value in effect and the file it comes from.

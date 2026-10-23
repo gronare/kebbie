@@ -1750,7 +1750,7 @@ dependencies = [
 [[package]]
 name = "kelpie-hub"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=3597cee780585cfbb95cc9ae80e09c0bcb1e92e2#3597cee780585cfbb95cc9ae80e09c0bcb1e92e2"
+source = "git+https://github.com/gronare/kelpie-hub?rev=98d83271a237d6ab44f54ced0704e0af5ba732f3#98d83271a237d6ab44f54ced0704e0af5ba732f3"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -1781,7 +1781,7 @@ dependencies = [
 [[package]]
 name = "kelpie-hub-api"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=3597cee780585cfbb95cc9ae80e09c0bcb1e92e2#3597cee780585cfbb95cc9ae80e09c0bcb1e92e2"
+source = "git+https://github.com/gronare/kelpie-hub?rev=98d83271a237d6ab44f54ced0704e0af5ba732f3#98d83271a237d6ab44f54ced0704e0af5ba732f3"
 dependencies = [
  "base64 0.23.1",
  "kelpie-hub-protocol",
@@ -1792,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "kelpie-hub-fakes"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=3597cee780585cfbb95cc9ae80e09c0bcb1e92e2#3597cee780585cfbb95cc9ae80e09c0bcb1e92e2"
+source = "git+https://github.com/gronare/kelpie-hub?rev=98d83271a237d6ab44f54ced0704e0af5ba732f3#98d83271a237d6ab44f54ced0704e0af5ba732f3"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -1812,7 +1812,7 @@ dependencies = [
 [[package]]
 name = "kelpie-hub-protocol"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=3597cee780585cfbb95cc9ae80e09c0bcb1e92e2#3597cee780585cfbb95cc9ae80e09c0bcb1e92e2"
+source = "git+https://github.com/gronare/kelpie-hub?rev=98d83271a237d6ab44f54ced0704e0af5ba732f3#98d83271a237d6ab44f54ced0704e0af5ba732f3"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",

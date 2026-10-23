@@ -16,7 +16,17 @@ You need:
 kelpie hub join https://hub.example.com <join code>
 ```
 
-The machine makes its keys and keeps them, with the token the hub gave it, in `hub/` in kelpie's state directory, readable by you alone. Nothing prints them. The hub and the phone know the machine by its short host name; `--name <name>` gives it another one. A join code works once.
+The machine makes its keys and keeps them, with the token the hub gave it, in `hub/` in kelpie's state directory, readable by you alone. Nothing prints them. A join code works once.
+
+The phone shows the machine by its one name, [`[machine] name`](../reference/configuration.md#keys), the same name your other machines on the vault see it by:
+
+- set already, the join uses it;
+- `--name <name>` sets it in config.toml and joins with it;
+- neither, the join asks once in your terminal, `Name this machine (shown on your phone and to your other machines) [<host>]:`, with the host's short name as the answer to Enter. Run without a terminal, it joins with the host's short name and says where to set a name of your own.
+
+When the join writes the name, it says so in one line: `[machine] name = "<name>"` and the file. A config.toml that is a link, say into a dotfiles repo shared by several machines, is never written; the join says to set the name there or in a config.toml of this machine's own.
+
+To rename the machine later, change `[machine] name`: the keeper renames it on the hub with its next post, and `kelpie hub status` does it at once. Your phone shows the new name when it next reads the board, unless you gave the machine a name of your own on the phone when you paired it. While the hub is unreachable, `kelpie hub status` and `kelpie doctor` show the name the hub still has and why the rename failed. With `[machine] name` unset the hub keeps the name the machine joined with, even when the host is renamed.
 
 ## Add the app to your home screen
 

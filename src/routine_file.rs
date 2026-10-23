@@ -212,10 +212,83 @@ fn read(file: &Path) -> Result<String> {
 // Every change is checked as the whole file before it is written, so a file that parsed before still parses after.
 fn rewrite(file: &Path, machine: bool, change: impl FnOnce(&str) -> Result<String>) -> Result<()> {
     let text = read(file)?;
-    check(file, machine, &text).map_err(|error| format!("{error}\nFix that first; kelpie changes a routine only in a file that parses."))?;
+    check(file, machine, &text).map_err(|error| format!("{error}\nFix that first; kelpie changes a config file only when it parses."))?;
     let changed = change(&text)?;
     check(file, machine, &changed)?;
     write_config(file, &changed)
+}
+
+fn line_ending(line: &str) -> &'static str {
+    if line.ends_with("\r\n") { "\r\n" } else if line.ends_with('\n') { "\n" } else { "" }
+}
+
+// A comment after a one-line basic string value stays with the line; anything else after the value is dropped with it.
+fn trailing_comment(line: &str) -> &str {
+    let body = line.trim_end_matches(['\r', '\n']);
+    let Some(value) = body.split_once('=').map(|(_, value)| value.trim_start()).filter(|value| value.starts_with('"') && !value.starts_with("\"\"\"")) else { return "" };
+    let mut escaped = false;
+    for (at, character) in value.char_indices().skip(1) {
+        match character {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => {
+                let rest = &value[at + 1..];
+                return if rest.trim_start().starts_with('#') { rest } else { "" };
+            }
+            _ => {}
+        }
+    }
+    ""
+}
+
+// Only the name line changes, so the rest of the file keeps every byte, comment and order it had.
+fn with_machine_name(file: &Path, text: &str, name: &str) -> Result<String> {
+    let line = format!("name = {}", quoted(name));
+    let starts = table_lines(text);
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let header = |index: usize| starts.get(index).copied().unwrap_or(false) && lines[index].trim_start().starts_with('[');
+    let machine = (0..lines.len()).find(|index| header(*index) && lines[*index].split('#').next().unwrap_or_default().trim() == "[machine]");
+    let changed = match machine {
+        Some(start) => {
+            let end = (start + 1..lines.len()).find(|index| header(*index)).unwrap_or(lines.len());
+            let mut owned: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+            match (start + 1..end).find(|index| starts.get(*index).copied().unwrap_or(false) && key_of(lines[*index]) == Some("name")) {
+                Some(at) => owned[at] = line + trailing_comment(lines[at]) + line_ending(lines[at]),
+                None => {
+                    let ending = match line_ending(lines[start]) { "" => { owned[start].push('\n'); "\n" } ending => ending };
+                    owned.insert(start + 1, line + ending);
+                }
+            }
+            owned.concat()
+        }
+        None => {
+            let mut text = text.to_string();
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            if !text.trim().is_empty() {
+                text.push('\n');
+            }
+            text + "[machine]\n" + &line + "\n"
+        }
+    };
+    let by_hand = format!("{}: [machine] name is set in a form kelpie does not rewrite; edit it by hand", file.display());
+    match crate::config::parse_machine(&changed, &file.display().to_string()).map(|machine| machine.machine_name) {
+        Ok(Some(written)) if written == name => Ok(changed),
+        _ => Err(by_hand),
+    }
+}
+
+pub fn check_machine_name_in(file: &Path, name: &str) -> Result<()> {
+    let name = crate::config::valid_machine_name(name)?;
+    let text = read(file)?;
+    check(file, true, &text).map_err(|error| format!("{error}\nFix that first; kelpie changes a config file only when it parses."))?;
+    with_machine_name(file, &text, &name).map(|_| ())
+}
+
+pub fn set_machine_name_in(file: &Path, name: &str) -> Result<()> {
+    let name = crate::config::valid_machine_name(name)?;
+    rewrite(file, true, |text| with_machine_name(file, text, &name))
 }
 
 fn validate(draft: &Draft) -> Result<()> {
@@ -542,5 +615,23 @@ mod tests {
         assert!(!loaded(&machine, &repos)[0].enabled);
         assert!(!machine.exists(), "config.toml is not touched");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_machine_name_goes_under_machine_and_leaves_every_other_byte() {
+        let file = Path::new("/home/u/.config/kelpie/config.toml");
+        let set = |text: &str| with_machine_name(file, text, "mac");
+        assert_eq!(set("[machine] # me\r\n[keys]\r\ninbox = \"I\"\r\n").unwrap(), "[machine] # me\r\nname = \"mac\"\r\n[keys]\r\ninbox = \"I\"\r\n");
+        assert_eq!(set("[machine]").unwrap(), "[machine]\nname = \"mac\"\n");
+        assert_eq!(set("").unwrap(), "[machine]\nname = \"mac\"\n");
+        assert_eq!(set("[machine]\nname = \"o\\\"#ld\"  # first\n").unwrap(), "[machine]\nname = \"mac\"  # first\n");
+        assert_eq!(set("[machine]\nname = 'old' # literal\n").unwrap(), "[machine]\nname = \"mac\"\n");
+        let prompt = "[[routines]]\nid = \"x\"\ntitle = \"X\"\nrepo = \"r\"\nevery = \"1d\"\nprompt = \"\"\"\n[machine]\nname = \"no\"\n\"\"\"\n";
+        assert_eq!(set(prompt).unwrap(), format!("{prompt}\n[machine]\nname = \"mac\"\n"), "a header inside a prompt is no table");
+        for other_form in ["machine = { name = \"old\" }\n", "machine.name = \"old\"\n"] {
+            assert_eq!(set(other_form).unwrap_err(), "/home/u/.config/kelpie/config.toml: [machine] name is set in a form kelpie does not rewrite; edit it by hand", "{other_form}");
+        }
+        let dir = crate::sh::test_dir("machine-name-check");
+        assert!(check_machine_name_in(&dir.join("config.toml"), &"x".repeat(65)).unwrap_err().contains("at most 64 characters"));
     }
 }

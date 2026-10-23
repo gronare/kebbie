@@ -31,6 +31,10 @@ pub struct Identity {
     pub joined_at: u64,
     #[serde(default)]
     pub devices: Vec<Device>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_stopped: Option<String>,
 }
 
 pub fn dir(state: &Path) -> PathBuf {
@@ -50,7 +54,7 @@ pub fn random32() -> Result<[u8; 32]> {
 impl Identity {
     pub fn new(url: &str, machine: Id, name: &str, token: String, keys: &SecretKeys, now: u64) -> Result<Identity> {
         let (signing, encryption) = keys.to_bytes();
-        Ok(Identity { url: url.to_string(), machine, name: name.to_string(), token, signing: Bytes32(signing), encryption: Bytes32(encryption), collapse: Bytes32(random32()?), joined_at: now, devices: Vec::new() })
+        Ok(Identity { url: url.to_string(), machine, name: name.to_string(), token, signing: Bytes32(signing), encryption: Bytes32(encryption), collapse: Bytes32(random32()?), joined_at: now, devices: Vec::new(), rename_error: None, rename_stopped: None })
     }
 
     pub fn secret(&self) -> SecretKeys {

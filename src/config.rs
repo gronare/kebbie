@@ -438,11 +438,21 @@ fn machine_name(table: &Table) -> Result<Option<String>> {
     let Some(machine) = subtable(table, "machine", "machine")? else { return Ok(None) };
     unknown_keys(machine, "machine.", &["name"])?;
     let Some(value) = machine.get("name") else { return Ok(None) };
-    let name = value.as_str().map(str::trim).filter(|name| !name.is_empty() && !name.chars().any(char::is_control)).ok_or("machine.name: must be a non-empty string")?;
+    valid_machine_name(value.as_str().ok_or("machine.name: must be a string")?).map(Some)
+}
+
+// The hub refuses a name past 64 characters, so config.toml does too.
+pub const MACHINE_NAME_CHARS: usize = 64;
+
+pub fn valid_machine_name(text: &str) -> Result<String> {
+    let name = text.trim();
+    if name.is_empty() || name.chars().count() > MACHINE_NAME_CHARS || name.chars().any(char::is_control) {
+        return Err(format!("machine.name: must be a non-empty string of at most {MACHINE_NAME_CHARS} characters, without control characters such as a tab or a newline"));
+    }
     if name.eq_ignore_ascii_case("localhost") {
         return Err("machine.name: \"localhost\" names every machine; give this one a name of its own, such as \"mac\" or \"devbox\"".to_string());
     }
-    Ok(Some(name.to_string()))
+    Ok(name.to_string())
 }
 
 // The host's name up to its first dot, as `hostname -s` gives it.
@@ -793,7 +803,7 @@ pub fn describe(loaded: &Loaded) -> String {
     key("recover.enabled", recover.value.to_string(), recover.layer,
         "Whether kelpie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
     key("machine.name", format!("{:?}", machine_name.value), machine_name.layer,
-        "The name this kelpie claims vault notes under: a task started from a vault note writes it with the task's name into the note's kelpie frontmatter key, and kelpie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
+        "The machine's one name: your phone shows it through the hub, and kelpie claims vault notes under it; kelpie hub join uses it, sets it from --name or asks for it when unset. A task started from a vault note writes it with the task's name into the note's kelpie frontmatter key, and kelpie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
     key("report.enabled", report_enabled.value.to_string(), report_enabled.layer,
         "Whether the board offers to send a bug kelpie filed about itself to kelpie's maintainers, showing the text as it would go out (paths under your home as ~, no repo names, remote URLs or tokens); only your yes sends it, signed with this install's key. false hides the offer; kelpie issue report <id> still sends one; config.toml only.");
     key("report.url", format!("{:?}", report_url.value), report_url.layer,
@@ -1166,11 +1176,14 @@ mod tests {
         assert_eq!(named.machine_name, Setting { value: "devbox".to_string(), layer: Layer::Machine });
         let error = |text: &str| parse_machine(text, "config.toml").unwrap_err();
         assert!(error("[machine]\nname = \"\"\n").contains("machine.name: must be a non-empty string"));
+        assert!(error(&format!("[machine]\nname = \"{}\"\n", "x".repeat(65))).contains("at most 64 characters"));
+        assert!(error("[machine]\nname = \"a\\tb\"\n").contains("without control characters"));
+        assert!(error("[machine]\nname = 7\n").contains("machine.name: must be a string"));
         assert!(error("[machine]\nname = \"LocalHost\"\n").contains("\"localhost\" names every machine"));
         assert!(error("[machine]\nhost = \"x\"\n").contains("machine.host: unknown key; known keys here: name"));
         assert!(parse_repo("[machine]\nname = \"x\"\n", "app.toml").unwrap_err().contains("machine: applies to every repo, so it lives in config.toml; set [machine] name in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: named });
-        assert!(shown.contains("machine.name = \"devbox\"  (machine config)\n  The name this kelpie claims vault notes under"), "{shown}");
+        assert!(shown.contains("machine.name = \"devbox\"  (machine config)\n  The machine's one name"), "{shown}");
     }
 
     #[test]

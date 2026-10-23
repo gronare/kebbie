@@ -241,8 +241,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie hub [status]             the hub this machine posts its board to, the phones paired with it, the last post
   kelpie hub join <url> <code> [--name <name>]
                                   join a kelpie hub with a code from kelpie-hub admin join-code: makes this machine's
-                                  keys, kept in kelpie's state and never printed (--name is how the hub and your phone
-                                  name it; the short host name otherwise); yours only
+                                  keys, kept in kelpie's state and never printed; it goes by [machine] name, which
+                                  --name sets, or asks for it in a terminal (the short host name otherwise); yours only
   kelpie hub pair                 pair a phone: prints a code for the hub's web app, then shows six digits to compare
                                   with the phone's before it admits the phone; the keeper then posts the board, sealed
                                   to every paired phone, when it changes and every minute, and a notice when a task

@@ -83,7 +83,7 @@ fn a_machine_joins_and_keeps_its_keys_to_itself() {
     let joined = identity::load(&state).unwrap().unwrap();
     assert_eq!((joined.url.as_str(), joined.name.as_str()), (hub.url.as_str(), "mac"));
     assert!(joined.token().starts_with("khm_"));
-    let shown = super::status_text(&state, now()).unwrap();
+    let shown = super::status_text(&state, Some("mac"), now()).unwrap();
     assert!(shown.contains(&hub.url) && shown.contains("mac") && shown.contains("kelpie hub pair"), "{shown}");
     let (signing, encryption) = joined.secret().to_bytes();
     let file = std::fs::read_to_string(state.join("hub/identity.json")).unwrap();
@@ -226,10 +226,9 @@ fn leaving_takes_the_phone_off_the_board_and_forgets_the_keys() {
     assert!(identity::load(&state).unwrap().is_none() && !state.join("hub").exists());
 }
 
-fn moved_to(target: &str) -> String {
+fn serving(respond: impl Fn(&str) -> String + Send + 'static) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let target = target.to_string();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let mut reader = BufReader::new(stream);
@@ -249,10 +248,31 @@ fn moved_to(target: &str) -> String {
             let _ = reader.read_exact(&mut body);
             let path = first.split_whitespace().nth(1).unwrap_or("/").to_string();
             let mut stream = reader.into_inner();
-            let _ = write!(stream, "HTTP/1.1 308 Permanent Redirect\r\nLocation: {target}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = write!(stream, "{}", respond(&path));
         }
     });
     url
+}
+
+fn moved_to(target: &str) -> String {
+    let target = target.to_string();
+    serving(move |path| format!("HTTP/1.1 308 Permanent Redirect\r\nLocation: {target}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
+}
+
+fn answering(status: &'static str, body: &'static str) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let url = serving(move |_| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    });
+    (url, calls)
+}
+
+fn pointed_at(state: &Path, url: &str) {
+    let mut identity = identity::load(state).unwrap().unwrap();
+    identity.url = url.to_string();
+    identity::save(state, &identity).unwrap();
 }
 
 #[test]
@@ -281,19 +301,19 @@ fn a_hub_that_moved_port_is_followed_with_the_same_method_and_body_and_kept() {
 fn doctor_says_whether_the_hub_is_joined_reachable_and_posting() {
     let hub = TestHub::start();
     let alone = crate::sh::test_dir("hub-doctor-none");
-    let check = super::doctor(&alone, now(), |_| Ok(()));
+    let check = super::doctor(&alone, Some("mac"), now(), |_| Ok(()));
     assert_eq!(check.level, crate::doctor::Level::Ok);
     assert!(check.fact.contains("not joined"), "{}", check.fact);
     let state = hub.joined("mac");
-    let lonely = super::doctor(&state, now(), super::reach);
+    let lonely = super::doctor(&state, Some("mac"), now(), super::reach);
     assert_eq!(lonely.level, crate::doctor::Level::Warn);
     assert!(lonely.fact.contains("no phone paired") && lonely.fix == ["kelpie hub pair"], "{}", lonely.fact);
     hub.pair(&state, true).0.unwrap();
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
-    let posting = super::doctor(&state, now(), super::reach);
+    let posting = super::doctor(&state, Some("mac"), now(), super::reach);
     assert_eq!(posting.level, crate::doctor::Level::Ok, "{}", posting.fact);
     assert!(posting.fact.contains(&hub.url) && posting.fact.contains("1 paired") && posting.fact.contains("board rev ") && posting.fact.contains(" posted "), "{}", posting.fact);
-    let down = super::doctor(&state, now(), |_| Err("connection refused".to_string()));
+    let down = super::doctor(&state, Some("mac"), now(), |_| Err("connection refused".to_string()));
     assert!(down.level == crate::doctor::Level::Warn && down.fact.contains("not reachable: connection refused"), "{}", down.fact);
     assert!(super::config_line(Some(&state)).starts_with(&format!("hub.url = {:?}  (kelpie hub join)", hub.url)));
     assert!(super::config_line(Some(&alone)).starts_with("hub.url = none"));
@@ -423,4 +443,166 @@ fn a_hub_that_asks_for_more_work_than_kelpie_does_gets_nothing() {
     let refused = crate::hub::report::send_in(&user, &crate::permit::Caller::User, &id, &hub.url, &scrub, &read, now()).unwrap_err();
     assert!(refused.contains("more than kelpie does") && refused.contains("nothing was sent"), "{refused}");
     assert!(crate::issues::find(&crate::issues::dir(&user), &id).unwrap().report.is_none());
+}
+
+fn join_with(hub: &TestHub, config: &Path, given: Option<&str>, ask: Option<&super::AskName>) -> (PathBuf, crate::sh::Result<String>) {
+    let state = crate::sh::test_dir("hub-named");
+    let shown = super::join_named(&state, config, &hub.url, &hub.hub.mint_join_code().unwrap(), given, ask, now());
+    (state, shown)
+}
+
+#[test]
+fn a_join_goes_by_the_configured_machine_name() {
+    let hub = TestHub::start();
+    let config = crate::sh::test_dir("hub-named-config").join("config.toml");
+    let before = "# mine\n[machine]\nname = \"devbox\"\n";
+    std::fs::write(&config, before).unwrap();
+    let asked: &super::AskName = &|_| panic!("a configured name is never asked for");
+    let (state, shown) = join_with(&hub, &config, None, Some(asked));
+    assert!(shown.unwrap().contains("as devbox"));
+    assert_eq!(identity::load(&state).unwrap().unwrap().name, "devbox");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+}
+
+#[test]
+fn a_join_name_given_with_name_is_written_to_config_toml_and_nothing_else_changes() {
+    let hub = TestHub::start();
+    let dir = crate::sh::test_dir("hub-named-given");
+    let config = dir.join("config.toml");
+    let rest = "# kelpie\n[keeper]\nenabled = true   # keep it\n\n[machine]\n# who am I\n";
+    let after = "\n[keys]\ninbox = \"I\"";
+    std::fs::write(&config, format!("{rest}name = \"old\"  # first{after}")).unwrap();
+    let (state, shown) = join_with(&hub, &config, Some("studio"), None);
+    let shown = shown.unwrap();
+    assert!(shown.contains(&format!("[machine] name = \"studio\" in {}", config.display())), "{shown}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), format!("{rest}name = \"studio\"  # first{after}"));
+    assert_eq!(identity::load(&state).unwrap().unwrap().name, "studio");
+    let bare = dir.join("bare.toml");
+    std::fs::write(&bare, "[keeper]\nenabled = false").unwrap();
+    join_with(&hub, &bare, None, Some(&|host: &str| Ok(format!("  {host}-2\n")))).1.unwrap();
+    assert_eq!(std::fs::read_to_string(&bare).unwrap(), format!("[keeper]\nenabled = false\n\n[machine]\nname = \"{}-2\"\n", crate::config::short_hostname()));
+    let refused = join_with(&hub, &dir.join("fresh.toml"), Some("localhost"), None);
+    assert!(refused.1.unwrap_err().contains("\"localhost\" names every machine"));
+    assert!(identity::load(&refused.0).unwrap().is_none() && !dir.join("fresh.toml").exists(), "a name config.toml refuses joins nothing");
+}
+
+#[test]
+fn a_join_with_no_name_and_no_terminal_goes_by_the_host_and_says_how_to_name_it() {
+    let hub = TestHub::start();
+    let config = crate::sh::test_dir("hub-named-host").join("config.toml");
+    let (state, shown) = join_with(&hub, &config, None, None);
+    let shown = shown.unwrap();
+    assert_eq!(identity::load(&state).unwrap().unwrap().name, crate::config::short_hostname());
+    assert!(shown.contains("set [machine] name in") && shown.contains("after the next post"), "{shown}");
+    assert!(!config.exists(), "the host's name is not written for the user");
+}
+
+#[test]
+fn a_join_never_writes_the_machine_name_through_a_linked_config_toml() {
+    let hub = TestHub::start();
+    let dir = crate::sh::test_dir("hub-named-link");
+    let shared = dir.join("dotfiles.toml");
+    std::fs::write(&shared, "[keeper]\nenabled = true\n").unwrap();
+    let config = dir.join("config.toml");
+    std::os::unix::fs::symlink(&shared, &config).unwrap();
+    let (state, shown) = join_with(&hub, &config, Some("studio"), None);
+    let shown = shown.unwrap();
+    assert!(shown.contains(&format!("{} -> {}", config.display(), shared.display())) && shown.contains("is a link") && shown.contains("[machine] name = \"studio\""), "{shown}");
+    assert_eq!(std::fs::read_to_string(&shared).unwrap(), "[keeper]\nenabled = true\n");
+    assert_eq!(identity::load(&state).unwrap().unwrap().name, "studio");
+}
+
+#[test]
+fn a_name_set_after_joining_renames_the_machine_on_the_hub_and_a_failure_shows_until_it_works() {
+    let hub = TestHub::start();
+    let state = hub.joined("mac");
+    let phone = hub.pair(&state, true).2;
+    super::sync_name(&state, Some("studio")).unwrap();
+    assert_eq!(identity::load(&state).unwrap().unwrap().name, "studio");
+    relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
+    let names: Vec<String> = hub.runtime.block_on(phone.boards()).unwrap().into_iter().map(|entry| entry.name).collect();
+    assert_eq!(names, ["studio"]);
+    assert!(!super::status_text(&state, Some("studio"), now()).unwrap().contains("name:"));
+
+    let mut moved = identity::load(&state).unwrap().unwrap();
+    let url = moved.url.clone();
+    moved.url = "http://127.0.0.1:9".to_string();
+    identity::save(&state, &moved).unwrap();
+    super::sync_name(&state, Some("loft")).unwrap();
+    let failed = identity::load(&state).unwrap().unwrap();
+    assert_eq!(failed.name, "studio");
+    let shown = super::status_text(&state, Some("loft"), now()).unwrap();
+    assert!(shown.contains("the hub still shows this machine as \"studio\"; renaming it to \"loft\" failed: "), "{shown}");
+    let warned = super::doctor(&state, Some("loft"), now(), |_| Ok(()));
+    assert_eq!(warned.level, crate::doctor::Level::Warn, "{}", warned.fact);
+    assert!(warned.fact.contains("renaming it to \"loft\" failed"), "{}", warned.fact);
+
+    moved.url = url;
+    identity::save(&state, &moved).unwrap();
+    super::sync_name(&state, Some("loft")).unwrap();
+    let renamed = identity::load(&state).unwrap().unwrap();
+    assert_eq!((renamed.name.as_str(), renamed.rename_error.as_deref()), ("loft", None));
+}
+
+#[test]
+fn an_unset_machine_name_never_renames_the_machine_even_when_the_host_name_drifts() {
+    let hub = TestHub::start();
+    let state = hub.joined("mac");
+    let before = std::fs::read_to_string(state.join("hub/identity.json")).unwrap();
+    let mut moved = identity::load(&state).unwrap().unwrap();
+    moved.url = "http://127.0.0.1:9".to_string();
+    identity::save(&state, &moved).unwrap();
+    super::sync_name(&state, None).unwrap();
+    let after = identity::load(&state).unwrap().unwrap();
+    assert_eq!((after.name.as_str(), after.rename_error.as_deref()), ("mac", None), "no call goes out, so none fails");
+    assert!(!super::status_text(&state, None, now()).unwrap().contains("name:"));
+    assert!(!super::doctor(&state, None, now(), |_| Ok(())).fact.contains("rename"));
+    assert!(before.contains("\"name\": \"mac\""));
+}
+
+#[test]
+fn an_older_hub_or_one_that_keeps_another_name_is_said_once_and_a_paired_phone_is_kept() {
+    let hub = TestHub::start();
+    let state = hub.joined("mac");
+    hub.pair(&state, true).0.unwrap();
+    let (old, calls) = answering("404 Not Found", "{\"error\":\"not-found\"}");
+    pointed_at(&state, &old);
+    super::sync_name(&state, Some("studio")).unwrap();
+    let file = state.join("hub/identity.json");
+    let marked = std::fs::read_to_string(&file).unwrap() + "\n\n";
+    std::fs::write(&file, &marked).unwrap();
+    super::sync_name(&state, Some("studio")).unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), marked, "the same error is not written again");
+    let failed = identity::load(&state).unwrap().unwrap();
+    assert_eq!((failed.name.as_str(), failed.rename_error.as_deref(), failed.devices.len()), ("mac", Some("this hub cannot rename machines yet; update kelpie-hub"), 1));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2, "an older hub may be updated, so it is asked again");
+
+    let (keeps, calls) = answering("200 OK", "{\"name\":\"Studio\"}");
+    pointed_at(&state, &keeps);
+    super::sync_name(&state, Some("studio")).unwrap();
+    super::sync_name(&state, Some("studio")).unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "a name the hub changed is not sent again until config.toml changes");
+    let kept = identity::load(&state).unwrap().unwrap();
+    assert_eq!((kept.name.as_str(), kept.rename_stopped.as_deref(), kept.devices.len()), ("Studio", Some("studio"), 1));
+    assert!(super::status_text(&state, Some("studio"), now()).unwrap().contains("the hub shows this machine as \"Studio\", not \"studio\": the hub took it as \"Studio\""));
+    super::sync_name(&state, Some("loft")).unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2, "a new name is tried");
+}
+
+#[test]
+fn a_phone_paired_while_the_rename_is_on_its_way_is_kept() {
+    let state = crate::sh::test_dir("hub-rename-race");
+    let keys = kelpie_hub_protocol::SecretKeys::generate();
+    identity::save(&state, &identity::Identity::new("http://127.0.0.1:9", Id::new(kelpie_hub_protocol::Prefix::Machine).unwrap(), "mac", "khm_x".to_string(), &keys, now()).unwrap()).unwrap();
+    let pairing = state.clone();
+    let url = serving(move |_| {
+        let mut paired = identity::load(&pairing).unwrap().unwrap();
+        paired.admit(identity::Device { id: Id::new(kelpie_hub_protocol::Prefix::Device).unwrap(), keys: kelpie_hub_protocol::SecretKeys::generate().public(), paired_at: now() });
+        identity::save(&pairing, &paired).unwrap();
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"name\":\"studio\"}".to_string()
+    });
+    pointed_at(&state, &url);
+    super::sync_name(&state, Some("studio")).unwrap();
+    let after = identity::load(&state).unwrap().unwrap();
+    assert_eq!((after.name.as_str(), after.devices.len()), ("studio", 1));
 }
