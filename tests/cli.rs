@@ -214,6 +214,18 @@ fn the_user_files_a_kelpie_issue_and_a_task_is_sent_to_the_lead_instead() {
 }
 
 #[test]
+fn a_held_proposal_is_never_an_issue_and_a_task_cannot_hold_one() {
+    let lab = Lab::new("held");
+    let refused = lab.run_as("billing@app", &["issue", "hold", "kelpie push hid git's error"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("kelpie tell lead"), "{}", stderr(&refused));
+    let held = run_as_user(&lab, &["issue", "hold", "kelpie push hid git's error"]);
+    assert_eq!(stdout(&held), "Held for a calm moment: kelpie push hid git's error", "{}", stderr(&held));
+    assert_eq!(stdout(&lab.run(&["issues", "--all"])), "No kelpie issues on this machine.");
+    assert_eq!(stdout(&run_as_user(&lab, &["issue", "hold", "--take"])), "kelpie push hid git's error");
+    assert_eq!(stdout(&run_as_user(&lab, &["issue", "hold", "--take"])), "Nothing held.");
+}
+
+#[test]
 fn the_review_guard_denies_every_command_but_a_plain_git_read() {
     let lab = Lab::new("guard");
     let deny = lab.run_with_stdin(&["hook", "--review"], r#"{"tool_input":{"command":"git log | sh"}}"#);

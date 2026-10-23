@@ -283,6 +283,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie issue add --kind bug|wish --title <title> [<text>|-]
                                   save one, the text from the argument or stdin: what happened, what you expected,
                                   how to reproduce; the user's or the lead's (a task tells the lead)
+  kelpie issue hold <line> | --take
+                                  the lead's note of what kelpie did, held on this machine for a calm moment to propose
+                                  it; one at a time, a new one replaces it, and it is never an issue, offered or sent;
+                                  --take prints it and clears it; nothing is held with [issues] propose = false
   kelpie issue list [--json] [--all]
                                   the same as kelpie issues
   kelpie issue show|retry <id>    print one; retry marks it worth trying again
@@ -620,6 +624,8 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
             let body = issues::read_body(&arguments.positionals[2..], arguments.flag("-"));
             issues::add_in(&dir, &caller(), &issues::Filing { kind: arguments.value("--kind"), title: arguments.value("--title"), body: &body }, env!("KELPIE_BUILT_FROM"), config::report_settings().map_or(config::ReportText::Ask, |report| report.text()), messages::now())
         }
+        Some("hold") if arguments.flag("--take") => issues::take_held_in(&dir, &caller()),
+        Some("hold") => issues::hold_in(&dir, &caller(), &arguments.positionals[2..].join(" "), config::propose_issues_enabled()?),
         Some("show") => issues::show_in(&dir, id()?),
         Some("close") => issues::close_in(&dir, &caller(), id()?, arguments.positional(3)),
         Some("retry") => issues::retry_in(&dir, &caller(), id()?),
@@ -634,7 +640,7 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
         Some("report") if arguments.flag("--always") => hub::report::arm_cli(true),
         Some("report") if arguments.flag("--ask") => hub::report::arm_cli(false),
         Some("report") => hub::report::cli(id()?),
-        _ => Err("kelpie issue knows add, list, show <id>, close <id> fixed|wontfix|duplicate, reopen <id>, retry <id>, link <id> <number|url>, send <id>, report <id> and report --always | --ask".to_string()),
+        _ => Err("kelpie issue knows add, hold <line> | --take, list, show <id>, close <id> fixed|wontfix|duplicate, reopen <id>, retry <id>, link <id> <number|url>, send <id>, report <id> and report --always | --ask".to_string()),
     }
 }
 

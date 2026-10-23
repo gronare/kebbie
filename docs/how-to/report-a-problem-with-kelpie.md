@@ -4,9 +4,9 @@ Keep what kelpie got wrong, or could not do, on your machine, see after an updat
 
 ## Save it
 
-The lead proposes saving an issue when kelpie cost something in a session: an error, a workaround, a missing capability. It asks in one line, at most once a turn, and saves one only when you say yes. A task tells the lead instead of asking you. Once saved, an issue is the keeper's to look after: the lead leaves kelpie issues out of its briefings and of what it asks you to decide, and takes up closing or retrying one when you ask about it.
+When kelpie costs something in a session (an error, a workaround, a missing capability), the lead notes it in one line with `kelpie issue hold` and carries on with your work. It asks about it later, at a calm moment: once what you asked for is done, nothing on the board waits on you (no open question, nothing under Needs you, away mode off), and your latest message asks for nothing new. Then the question is the lead's whole reply, one yes/no line, and it saves the issue only when you say yes. One line is held at a time, so several things that went wrong come to you as one question; the held line stays on this machine, survives a restart of the lead, and is never an issue, offered on the board or sent anywhere. A task tells the lead instead of asking you. Once saved, an issue is the keeper's to look after: the lead leaves kelpie issues out of its briefings and of what it asks you to decide, and takes up closing or retrying one when you ask about it.
 
-To keep the lead from proposing them at all, set this in config.toml; it takes effect when the lead next restarts (`L` on the board), and the lead then saves one only when you ask it to:
+To keep the lead from proposing them at all, set this in config.toml; it takes effect when the lead next restarts (`L` on the board), and the lead then holds nothing and saves one only when you ask it to:
 
 ```toml
 [issues]

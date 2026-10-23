@@ -172,6 +172,7 @@ pub fn add_in(dir: &Path, caller: &Caller, filing: &Filing, built: &str, reports
         ..Issue::default()
     };
     save(dir, &issue)?;
+    let _ = fs::remove_file(held_file(dir));
     let offered = match reports {
         _ if issue.kind != "bug" => "",
         crate::config::ReportText::Ask => " · it waits on the board for the user to send or keep",
@@ -285,7 +286,41 @@ pub fn reopen_in(dir: &Path, caller: &Caller, id: &str, built: &str) -> Result<S
     issue.sent = None;
     issue.history.push(format!("{CAME_BACK} {}{was}", issue.built()));
     save(dir, &issue)?;
+    let _ = fs::remove_file(held_file(dir));
     Ok(format!("kelpie issue {} is open again: came back on {}.", issue.id, issue.built()))
+}
+
+// Not an .md file, so load, the board and the hub report never read the held line as an issue.
+fn held_file(dir: &Path) -> PathBuf {
+    dir.join("held")
+}
+
+fn held(dir: &Path) -> Option<String> {
+    fs::read_to_string(held_file(dir)).ok().map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
+}
+
+pub fn hold_in(dir: &Path, caller: &Caller, line: &str, propose: bool) -> Result<String> {
+    may_write(caller, "Holding a kelpie issue proposal")?;
+    if !propose {
+        return Ok("Proposing kelpie issues is off on this machine ([issues] propose = false); nothing held.".to_string());
+    }
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        return Err("kelpie issue hold needs one line on what kelpie did, or --take".to_string());
+    }
+    let earlier = held(dir).filter(|earlier| *earlier != line);
+    crate::state::write(&held_file(dir), format!("{line}\n"))?;
+    Ok(match earlier {
+        Some(earlier) => format!("Held for a calm moment: {line} · it replaces: {earlier}"),
+        None => format!("Held for a calm moment: {line}"),
+    })
+}
+
+pub fn take_held_in(dir: &Path, caller: &Caller) -> Result<String> {
+    may_write(caller, "Taking the held kelpie issue proposal")?;
+    let line = held(dir);
+    let _ = fs::remove_file(held_file(dir));
+    Ok(line.unwrap_or_else(|| "Nothing held.".to_string()))
 }
 
 pub fn github_number(url: &str) -> Option<u64> {
@@ -777,5 +812,44 @@ esac
         assert!(log.contains("api -X GET search/issues -f q=\"kelpie-issue: aaaaaa\" repo:gronare/kelpie"), "{log}");
         let issues = load(&dir);
         assert_eq!(issues.iter().map(|issue| (issue.id.as_str(), issue.status.as_str(), issue.link_label())).collect::<Vec<_>>(), [("aaaaaa", "open", Some("#3".to_string())), ("bbbbbb", "retry", Some("#7".to_string())), ("cccccc", "open", None)]);
+    }
+
+    #[test]
+    fn the_lead_holds_one_line_that_is_never_an_issue_and_takes_it_once() {
+        let state = crate::sh::test_dir("issues-held");
+        let dir = super::dir(&state);
+        assert_eq!(hold_in(&dir, &Caller::Lead, "  kelpie push hid\n git's error ", true).unwrap(), "Held for a calm moment: kelpie push hid git's error");
+        assert!(load(&dir).is_empty() && list_in(&dir, true, false) == "No kelpie issues on this machine." && crate::hub::report::offers(&state, true).is_empty(), "a held line is no issue, and the board never offers it");
+        assert_eq!(hold_in(&dir, &Caller::Lead, "kelpie push and land both hid git's error", true).unwrap(), "Held for a calm moment: kelpie push and land both hid git's error · it replaces: kelpie push hid git's error");
+        assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "kelpie push and land both hid git's error");
+        assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "Nothing held.", "a proposal taken is not raised again, whether the user said no or answered something else");
+        assert!(hold_in(&dir, &Caller::User, " ", true).unwrap_err().contains("one line"));
+    }
+
+    #[test]
+    fn a_task_neither_holds_nor_takes_a_proposal_and_proposing_off_holds_nothing() {
+        let dir = crate::sh::test_dir("issues-held-who");
+        for caller in [Caller::Task("billing@app".to_string()), Caller::Agent, Caller::LeadSandboxed] {
+            assert!(hold_in(&dir, &caller, "kelpie push hid git's error", true).unwrap_err().contains("the user's or the lead's"));
+        }
+        hold_in(&dir, &Caller::Lead, "kelpie push hid git's error", true).unwrap();
+        assert!(take_held_in(&dir, &Caller::Task("billing@app".to_string())).unwrap_err().contains("kelpie tell lead"));
+        assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "kelpie push hid git's error", "a refused take clears nothing");
+        assert!(hold_in(&dir, &Caller::Lead, "kelpie push hid git's error", false).unwrap().contains("nothing held"));
+        assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "Nothing held.");
+        assert!(crate::permit::USER_ONLY.contains(&"issue hold"), "a task's settings deny it");
+    }
+
+    #[test]
+    fn saving_or_reopening_an_issue_clears_the_held_line() {
+        let dir = crate::sh::test_dir("issues-held-saved");
+        hold_in(&dir, &Caller::Lead, "kelpie push hid git's error", true).unwrap();
+        add_in(&dir, &Caller::Lead, &filing("push hides git's error", ""), "", crate::config::ReportText::Ask, NOW).unwrap();
+        assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "Nothing held.");
+        let id = load(&dir).remove(0).id;
+        close_in(&dir, &Caller::Lead, &id, Some("fixed")).unwrap();
+        hold_in(&dir, &Caller::Lead, "kelpie push hides git's error again", true).unwrap();
+        reopen_in(&dir, &Caller::Lead, &id, "3333333 2026-10-23").unwrap();
+        assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "Nothing held.");
     }
 }
