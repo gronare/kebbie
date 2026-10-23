@@ -194,10 +194,6 @@ pub fn load_from(file: &Path) -> (Vec<Action>, Vec<String>) {
     }
 }
 
-pub fn load(repo: &Path) -> (Vec<Action>, Vec<String>) {
-    load_from(&crate::config::repo_file(repo))
-}
-
 pub fn answer<'a>(answers: &'a Answers, name: &str) -> Option<&'a str> {
     answers.iter().find(|(ask, _)| ask == name).map(|(_, value)| value.as_str())
 }

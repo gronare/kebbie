@@ -58,15 +58,12 @@ pub fn main_checkout(cwd: &Path) -> Result<PathBuf> {
 
 // origin/HEAD is unset in some older clones.
 pub fn default_branch(repo: &Path) -> Result<String> {
-    if let Ok(branch) = git(repo, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
-        return Ok(branch);
-    }
-    for candidate in ["origin/main", "origin/master"] {
-        if succeeds("git", &["show-ref", "--verify", "--quiet", &format!("refs/remotes/{candidate}")], Some(repo)) {
-            return Ok(candidate.to_string());
-        }
-    }
-    Err(format!("Cannot tell {}'s default branch; run: git remote set-head origin -a", repo.display()))
+    let listed = git(repo, &["for-each-ref", "--format=%(refname)%09%(symref:short)", "refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master"]).unwrap_or_default();
+    let refs: Vec<(&str, &str)> = listed.lines().map(|line| line.split_once('\t').unwrap_or((line, ""))).collect();
+    let head = refs.iter().find(|(name, target)| *name == "refs/remotes/origin/HEAD" && !target.is_empty()).map(|(_, target)| target.to_string());
+    let listed_ref = |candidate: &str| refs.iter().any(|(name, _)| name.strip_prefix("refs/remotes/") == Some(candidate));
+    head.or_else(|| ["origin/main", "origin/master"].into_iter().find(|candidate| listed_ref(candidate)).map(str::to_string))
+        .ok_or_else(|| format!("Cannot tell {}'s default branch; run: git remote set-head origin -a", repo.display()))
 }
 
 pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {

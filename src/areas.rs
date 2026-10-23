@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::actions::{self, Action, Work};
 use crate::repo::{self, default_branch, git, main_checkout, name_of};
@@ -65,11 +67,12 @@ pub struct Areas {
 }
 
 // The system note's path, else where the vault's hooks saw the repo, else a checkout named after the area.
-fn repo_for(note: &Note, index: &Index) -> Option<PathBuf> {
+fn repo_for(note: &Note, index: &Index, checkouts: &mut HashMap<PathBuf, Option<PathBuf>>) -> Option<PathBuf> {
+    let mut main_of = |dir: &Path| checkouts.entry(dir.to_path_buf()).or_insert_with(|| main_checkout(dir).ok()).clone();
     let from_paths = note.paths.iter().map(|path| vault::expand(path)).filter(|path| path.exists())
-        .find_map(|path| main_checkout(if path.is_dir() { &path } else { path.parent()? }).ok());
+        .find_map(|path| main_of(if path.is_dir() { &path } else { path.parent()? }));
     from_paths
-        .or_else(|| index.known_root(&note.stem).filter(|root| root.exists()).and_then(|root| main_checkout(&root).ok()))
+        .or_else(|| index.known_root(&note.stem).filter(|root| root.exists()).and_then(|root| main_of(&root)))
         .or_else(|| repo::checkout_named(&note.stem))
 }
 
@@ -84,12 +87,51 @@ fn repo_state(repo: &Path) -> Result<RepoState> {
     let counts = git(repo, &["rev-list", "--left-right", "--count", &format!("refs/heads/{branch}...{upstream}")])?;
     let mut numbers = counts.split_whitespace().map(count);
     let (ahead, behind) = (numbers.next().unwrap_or(0), numbers.next().unwrap_or(0));
-    let release = git(repo, &["describe", "--tags", "--abbrev=0", &format!("refs/heads/{branch}")]).ok().map(|tag| Release {
+    let release = git(repo, &["describe", "--tags", "--long", &format!("refs/heads/{branch}")]).ok().as_deref().and_then(described).map(|(tag, since)| Release {
         age: git(repo, &["log", "-1", "--format=%cr", &tag]).unwrap_or_default(),
-        since: git(repo, &["rev-list", "--count", &format!("{tag}..refs/heads/{branch}")]).map(|text| count(&text)).unwrap_or(0),
+        since,
         tag,
     });
     Ok(RepoState { branch, upstream, ahead, behind, changed: repo::changed_count(repo)?, release })
+}
+
+// `describe --long` prints <tag>-<commits since>-g<sha>, and a tag may itself hold dashes.
+fn described(text: &str) -> Option<(String, usize)> {
+    let mut parts = text.trim().rsplitn(3, '-');
+    let (_, since, tag) = (parts.next()?, parts.next()?, parts.next()?);
+    Some((tag.to_string(), since.parse().ok()?))
+}
+
+#[derive(Clone)]
+struct RepoFacts {
+    git: Option<RepoState>,
+    actions: Vec<Action>,
+    errors: Vec<String>,
+    sandbox: bool,
+}
+
+fn repo_facts(repo: Option<&Path>) -> RepoFacts {
+    let file = repo.map(crate::config::repo_file);
+    let (actions, errors) = file.as_deref().map(actions::load_from).unwrap_or_default();
+    let sandbox = crate::config::resolve_file(file).map_or(true, |loaded| loaded.settings.sandbox.value);
+    RepoFacts { git: repo.and_then(|repo| repo_state(repo).ok()), actions, errors, sandbox }
+}
+
+fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let next = AtomicUsize::new(0);
+    let mut done: Vec<(usize, R)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..items.len().min(8)).map(|_| scope.spawn(|| {
+            let mut own = Vec::new();
+            loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(index) else { return own };
+                own.push((index, work(item)));
+            }
+        })).collect();
+        workers.into_iter().flat_map(|worker| worker.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect()
+    });
+    done.sort_by_key(|(index, _)| *index);
+    done.into_iter().map(|(_, result)| result).collect()
 }
 
 fn own_logs(cli: Option<&crate::vault_cli::Cli>, logs: &[(String, String)], stem: &str, repo: Option<&str>) -> Vec<String> {
@@ -104,21 +146,31 @@ fn own_logs(cli: Option<&crate::vault_cli::Cli>, logs: &[(String, String)], stem
 
 pub fn gather() -> Result<Areas> {
     let index = Index::open()?;
+    gather_from(&index, crate::vault_cli::detect().as_ref(), repo_facts)
+}
+
+// Repo-keyed facts are read once per repo, however many areas share it.
+fn gather_from(index: &Index, cli: Option<&crate::vault_cli::Cli>, facts_of: impl Fn(Option<&Path>) -> RepoFacts + Sync) -> Result<Areas> {
     let logs = index.logs()?;
-    let cli = crate::vault_cli::detect();
+    let mut checkouts = HashMap::new();
+    let notes: Vec<(Note, Option<PathBuf>)> = index.areas()?.into_iter().map(|note| {
+        let repo = repo_for(&note, index, &mut checkouts);
+        (note, repo)
+    }).collect();
+    let mut repos: Vec<Option<PathBuf>> = notes.iter().map(|(_, repo)| repo.clone()).collect();
+    repos.sort();
+    repos.dedup();
+    let facts: HashMap<Option<PathBuf>, RepoFacts> = repos.iter().cloned().zip(in_parallel(&repos, |repo| facts_of(repo.as_deref()))).collect();
     let mut list = Vec::new();
-    for note in index.areas()? {
-        let repo = repo_for(&note, &index);
-        let notes = index.notes_of(&note.stem)?;
-        let (open, backlog): (Vec<Note>, Vec<Note>) = notes.into_iter()
+    for (note, repo) in notes {
+        let (open, backlog): (Vec<Note>, Vec<Note>) = index.notes_of(&note.stem)?.into_iter()
             .filter(|other| other.kind == "task" && ["active", "draft", "backlog"].contains(&other.status.as_str()))
             .partition(|other| other.status != "backlog");
-        let (actions, errors) = repo.as_deref().map(actions::load).unwrap_or_default();
-        let sandbox = crate::config::resolve(repo.as_deref()).map_or(true, |loaded| loaded.settings.sandbox.value);
+        let RepoFacts { git, actions, errors, sandbox } = facts[&repo].clone();
         list.push(Area {
             sandbox,
-            log: vault::log_for(&logs, &note.stem, &own_logs(cli.as_ref(), &logs, &note.stem, repo.as_deref().map(name_of).as_deref())),
-            git: repo.as_deref().and_then(|repo| repo_state(repo).ok()),
+            log: vault::log_for(&logs, &note.stem, &own_logs(cli, &logs, &note.stem, repo.as_deref().map(name_of).as_deref())),
+            git,
             key: note.key,
             stem: note.stem,
             summary: note.summary,
@@ -225,6 +277,7 @@ mod tests {
         git(&dir, &["init", "--quiet", "--bare", "--initial-branch=main", origin.to_str().unwrap()]).unwrap();
         git(&main, &["remote", "add", "origin", origin.to_str().unwrap()]).unwrap();
         git(&main, &["push", "--quiet", "origin", "main"]).unwrap();
+        assert_eq!(default_branch(&main).unwrap(), "origin/main", "without origin/HEAD the default branch is origin/main");
         git(&main, &["remote", "set-head", "origin", "main"]).unwrap();
         git(&main, &["tag", "v0.1.0"]).unwrap();
         commit("two");
@@ -234,8 +287,53 @@ mod tests {
         let release = state.release.unwrap();
         assert_eq!((release.tag.as_str(), release.since), ("v0.1.0", 1));
         assert!(!release.age.is_empty());
+        assert_eq!(described("v1-rc-3-g2d4dfd1"), Some(("v1-rc".to_string(), 3)), "a tag may hold dashes");
         assert_eq!(count(" 3 \n"), 3);
         assert_eq!(count("x"), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn many_areas_on_one_repo_read_that_repo_once() {
+        let dir = crate::sh::test_dir("areas-once");
+        let (shared, other) = (dir.join("shared"), dir.join("other"));
+        for repo in [&shared, &other] {
+            std::fs::create_dir_all(repo.join("lib")).unwrap();
+            git(repo, &["init", "--quiet"]).unwrap();
+        }
+        let path = dir.join("index.sqlite");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE notes (key TEXT PRIMARY KEY, version TEXT, mtime REAL, folder TEXT, stem TEXT, title TEXT, summary TEXT, status TEXT,
+              kind TEXT, area TEXT, tags TEXT, paths TEXT, date TEXT, updated TEXT, superseded_by TEXT, valid INT, error TEXT, size INT, priority TEXT, source TEXT);
+            CREATE TABLE repos (repo TEXT PRIMARY KEY, root TEXT, seen_at TEXT);
+            CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT);
+            CREATE VIRTUAL TABLE notes_fts USING fts5(title, summary, tags, body, stem, stemmed, key UNINDEXED);").unwrap();
+        let add = |stem: String, place: Option<PathBuf>| {
+            let paths = place.map(|place| format!("[\"{}\"]", place.display()));
+            db.execute("INSERT INTO notes (key, folder, stem, title, status, kind, paths, valid) VALUES (?1, 'Areas', ?2, ?2, 'active', 'system', ?3, 1)", rusqlite::params![format!("Areas/{stem}.md"), stem, paths]).unwrap();
+        };
+        for number in 0..12 {
+            add(format!("shared-{number}"), Some(if number % 2 == 0 { shared.clone() } else { shared.join("lib") }));
+        }
+        for number in 0..3 {
+            add(format!("other-{number}"), Some(other.join("lib")));
+        }
+        add("kelpie-test-area-without-a-repo".to_string(), None);
+        drop(db);
+        let reads = std::sync::Mutex::new(Vec::new());
+        let areas = gather_from(&Index::at(&path).unwrap(), None, |repo| {
+            reads.lock().unwrap().push(repo.map(Path::to_path_buf));
+            RepoFacts { git: None, actions: Vec::new(), errors: vec![repo.map_or("none".to_string(), name_of)], sandbox: repo.is_none() }
+        }).unwrap();
+        let mut reads = reads.into_inner().unwrap();
+        reads.sort();
+        assert_eq!(reads.len(), 3, "one read per repo and one for the areas without: {reads:?}");
+        assert_eq!(areas.list.len(), 16);
+        for area in &areas.list {
+            let expected = if area.stem.starts_with("shared") { "shared" } else if area.stem.starts_with("other") { "other" } else { "none" };
+            assert_eq!(area.errors, [expected], "{} carries its own repo's facts", area.stem);
+            assert_eq!(area.sandbox, expected == "none");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 }

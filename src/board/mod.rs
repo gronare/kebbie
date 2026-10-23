@@ -945,9 +945,7 @@ pub fn run(overlay: bool) -> Result<String> {
                 }
             }
             app.take_images();
-            if app.page == Page::Areas {
-                app.areas.tick();
-            }
+            app.areas.tick();
             app.routines.tick();
             let mut repos: Vec<PathBuf> = app.tasks.iter().filter_map(|item| item.repo.clone()).chain(app.areas.repos()).collect();
             repos.sort();

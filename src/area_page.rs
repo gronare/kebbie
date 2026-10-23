@@ -271,7 +271,7 @@ impl Page {
         }
     }
 
-    // Starts gathering the first time the page shows, then picks up what the background thread found and what a running action did.
+    // Starts gathering on the board's first tick, whichever page shows, then picks up what the background thread found and what a running action did.
     pub fn tick(&mut self) {
         if self.updates.is_none() {
             self.updates = Some(spawn_refresher());

@@ -715,8 +715,11 @@ pub fn setup_command_in(command: Option<String>, repo: &Path) -> Option<String> 
 }
 
 pub fn resolve(repo: Option<&Path>) -> Result<Loaded> {
+    resolve_file(repo.map(repo_file))
+}
+
+pub fn resolve_file(repo: Option<PathBuf>) -> Result<Loaded> {
     let machine = path();
-    let repo = repo.map(repo_file);
     let own = repo.as_deref().map(load_repo).transpose()?.unwrap_or_default();
     Ok(Loaded { settings: settings(&own, &load_machine(&machine)?), machine, repo })
 }
