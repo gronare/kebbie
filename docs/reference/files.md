@@ -50,6 +50,23 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `notify.log` | Notify command failures. |
 | `report/` | Reports and error signals to kelpie's maintainers: `install-key.json` holds this install's signing key, made on the first report or signal, mode 0600; `signals.jsonl` the failures counted since the last send, one line each with version, commit, component, kind and count, `signals-batch.jsonl` the counts a send is under way for, `signals.json` the time of the last send and its error, and `always-armed` the date you ran `kelpie issue report --always`, while it holds; with `[report] inbox_token` set, `inbox.json` holds the reports filed here by their report id, how many wait in quarantine on the hub, and the last fetch and its error. `kelpie hub leave` leaves it. |
 | `hub/` | The kelpie hub this machine joined: `identity.json` holds the hub's address, the machine's id and name there, its token, its signing and encryption keys, the secret its notices' collapse tags come from, and each paired phone's id and public keys; `relay.json` the board's last revision, when it went out, its fingerprint, the last error and the notices sent. `kelpie hub leave` removes the folder. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md). |
+| `messages.jsonl.1`, `messages.lock` | The previous message log, kept when the log rotates, and the lock its writers take. |
+| `board-messages`, `board-reports`, `cell-size` | The board's own memory: whether the messages panel is folded, whether the `B` list shows, and the terminal cell size a board in a normal pane last measured, for the popup board's images. |
+| `typed/` | One file per message kelpie typed into a Claude's input box or gave to its inbox, while the board checks the conversation for it. |
+| `inbox/` | Per session, `<address>.json`: the Claude Code inbox socket, its token and the session id its last start recorded, which kelpie delivers messages through. |
+| `started/` | Per task half, the vault note it was started from or opened. |
+| `vault-gate/` | Per task, the mark that its note's Problem is written, so its edits go through. |
+| `vault-status.json`, `vault-logs/`, `vault.log` | Whether the vault plugin is on and writes claims, kept a while so a start or a push does not ask the vault each time; each repo's vault log note; and the vault calls that failed, one line each. |
+| `halves/` | Per task, every worktree it has across repos, so each half's file tools take the others' worktrees as the task's own. |
+| `push-line/`, `push-left/`, `push-tokens/` | Per repo, the lock of its push line; per task, why a push left its line unpushed, for its Needs you row; per push, the token the worktree's push block lets through only while kelpie runs that push. |
+| `staged/` | Per repo, `<repo>.json`: the tasks [`kelpie stage`](commands.md#kelpie-stage-name) put on local main, in the order they went on. |
+| `red-ci/` | Per task, `<task>@<repo>.json`: the reason its Claude gave with `kelpie ci outside` and the red runs you dismissed. |
+| `landed/` | Per task: why the keeper leaves a landed task open, at which head and since when, and the mark of a task pushed to keep open. |
+| `follow-main/` | Per task, the flag that it follows main; `follow-main/handed/` the conflicts already handed to its Claude, once per new main. |
+| `closing/`, `fetch/` | Locks: one per task while it closes, one per repo while it fetches. |
+| `restart/` | The restarts: `updated`, when `kelpie update` last ran; `asked.json`, the sessions the board asked you about; `restarted.json`, the restarts done; and one lock per session while it restarts. |
+| `lead-session`, `lead-previous` | The lead's Claude session id, so it resumes its conversation, and the Space you were in before `kelpie lead`, to go back to. |
+| `notify-sent.json` | When each kind of notification last went out, for the limit of one per event a minute. |
 | `keeper.lock` | Held by the running keeper, with its pid, binary and start time. |
 | `keeper.json` | The keeper's routines, each with its last run and error, and the stale sessions it last saw. |
 | `keeper.log` | What the keeper did: starts, exits, routine errors and restarts. Past 256 KB it moves to `keeper.log.1`. |
@@ -133,5 +150,9 @@ What happened: …
 | `examples/herdr-config.toml` | A complete herdr config with kelpie's keys, the sidebar sync and a sidebar layout. |
 | `examples/profiles/` | Two [profiles](configuration.md#profiles) to copy into `~/.config/kelpie/profiles/`: `designer` for UI work and `careful` for risky changes, each with its role file. |
 | `scripts/sync.sh` | The sidebar sync, run from herdr's tab bar. |
+| `scripts/build.sh` | herdr's build step for the plugin: puts the binary at `target/release/kelpie`, the release's prebuilt one on a release tag, else `cargo build --release`. |
+| `scripts/herdr-startup.sh` | herdr's startup step: links `~/.local/share/kelpie/current` to the install and brings the board back in the lead Space. |
+| `scripts/review.sh` | The review split. |
+| `scripts/check.sh` | What CI checks, run locally before a push: tests, clippy, `cargo audit`, `cargo deny` and a build on the oldest Rust the crate supports. See [Develop kelpie](../how-to/develop-kelpie.md). |
 | `roles/lead.md`, `roles/task.md` | The lead's and a task's role templates. |
 | `skills/` | The Claude Code plugin's skills. See [Skills](skills.md). |

@@ -21,11 +21,11 @@ New tasks in the repo follow it from their start.
 
 ## What a task does
 
-A task's Claude runs the [`kelpie:keep-docs`](../../skills/keep-docs/SKILL.md) skill when its change alters what a user sees or does. The skill says what counts, and which page of the README or `docs/` each change belongs on, by the [Diátaxis](https://diataxis.fr) quadrants this documentation follows.
+A task's Claude runs the [`kelpie:keep-docs`](../../skills/keep-docs/SKILL.md) skill when its change alters what a user sees or does. The skill says what counts, and which page of the README or `docs/` each change belongs on, by the [Diátaxis](https://diataxis.fr) quadrants this documentation follows. A task that runs Codex is told the same in its role, and finds the page from the index in `docs/README.md`, or the README when there is none.
 
 ## What the reviewer does
 
-When you [send the task to review](send-a-task-to-review.md), the reviewer reads the commits for what a user sees or does, by the same skill, and gets the list of docs the commits change: the root README, anything under `docs/`, and a workspace package's own README. Each change those docs leave undescribed is a finding:
+Both reviewers check the docs: the read-only rules check that starts when the task reports ready, and the full review when you [send the task to review](send-a-task-to-review.md). Each reads the commits for what a user sees or does, by the same skill, and gets the list of docs the commits change: the root README, anything under `docs/`, and a workspace package's own README. Each change those docs leave undescribed is a finding:
 
 ```
 verdict: changes

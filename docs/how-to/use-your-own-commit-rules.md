@@ -13,13 +13,7 @@ Make tasks commit the way your team does. kelpie leaves commit style to a skill:
 
    Or in a repo config for one repo, `~/.config/kelpie/repos/app.toml`.
 
-3. Restart the lead so it checks by the new skill when the reviewer gives no verdict:
-
-   ```bash
-   kelpie lead --restart
-   ```
-
-New tasks follow it from their start. kelpie's own check of each commit's form (a subject, a blank line and a body) runs only with `kelpie:work-rules`; with your skill, the reviewer checks the form your rules ask for.
+New tasks follow it from their start, and a running task once it restarts. The reviewer checks by it from the next ready report, and when the reviewer gives no verdict, kelpie asks the lead to check by the same skill. kelpie's own check of each commit's form (a subject, a blank line and a body) runs only with `kelpie:work-rules`; with your skill, the reviewer checks the form your rules ask for.
 
 ## Reshape a task's commits
 

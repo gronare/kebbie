@@ -35,7 +35,7 @@ The branch keeps its commits. Develop in another checkout, never in the install 
 
 ## The Claude Code plugin
 
-When `kelpie doctor` reports `claude plugin source: GitHub, following the default branch` on a release machine, point the marketplace at the install root:
+When `kelpie doctor` reports `claude plugin source: GitHub, following the default branch, while this machine follows release tags`, point the marketplace at the install root:
 
 ```bash
 claude plugin marketplace remove kelpie

@@ -39,7 +39,7 @@ A run with findings sends `notify.command` a `routine-findings` event in place o
 
 ## The push exception
 
-A task never pushes, and the lead pushes a task only under a permission you gave. A fix routine with `push = true` is that permission given in advance: when the run starts, kelpie gives its task the same push permission as the board's `a` key. Once the task reports ready and the lead finds its commits hold to your rules, the lead lands and pushes the fix without waiting for you, as it would any task you let it push. Use it for fixes you would accept unseen, such as an incident runbook step or a routine bump. Without `push = true` you push a routine's fix yourself.
+A task never pushes, and the lead pushes a task only under a permission you gave. A fix routine with `push = true` is that permission given in advance: when the run starts, kelpie gives its task the same push permission as the board's `a` key. Once the task reports ready and the reviewer's rules check passes its commits, the lead lands and pushes the fix without waiting for you, as it would any task you let it push. Use it for fixes you would accept unseen, such as an incident runbook step or a routine bump. Without `push = true` you push a routine's fix yourself.
 
 ## Related
 

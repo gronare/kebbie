@@ -16,7 +16,7 @@ The vault also makes Claude state the problem before it starts changing code. A 
 - **Done** waits until the note has its solution and decisions. kelpie tells the task what is missing, and once they are written it closes the note.
 - **Reset** and **drop** put the note back in the backlog.
 - **Plans.** `kelpie ask --plan vault:<note>` asks you to approve a plan written in the task's note.
-- **The board.** The Backlog column lists ONGOING project notes, and the Areas page lists the vault's system notes with their repos.
+- **The board.** The Backlog column lists ONGOING, the project notes in progress, where [`board.backlog.ongoing`](../reference/configuration.md#keys) puts them, and the Areas page lists the vault's system notes with their repos.
 
 ## Two machines, one vault
 

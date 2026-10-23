@@ -33,6 +33,17 @@ Give every task a note in your [notes-vault-mcp](https://github.com/gronare/note
    kelpie lead --restart
    ```
 
+## Share the vault between machines
+
+Running kelpie on a second machine against the same vault, give each machine its own name in its own config.toml, so the other one sees which machine works on a note:
+
+```toml
+[machine]
+name = "laptop"
+```
+
+`kelpie doctor`'s `machine` line shows the name in use. What a claim does: [Two machines, one vault](../explanation/vault.md#two-machines-one-vault).
+
 ## Run the vault from your own checkout
 
 kelpie runs the plugin's pinned command. To run another one, set it in `config.toml`:

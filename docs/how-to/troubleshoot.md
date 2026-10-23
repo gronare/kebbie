@@ -29,13 +29,14 @@ Every `warn` and `fail` comes with its fix. What it checks: [Requirements](../re
 | A rebase is refused and names files hidden from `git status` | Those files are marked skip-worktree or assume-unchanged and have local changes git will not overwrite. Unhide them with `git update-index --no-skip-worktree <file>` or `--no-assume-unchanged`, then commit or stash them. |
 | A task with an approval stays out of Ready to push, marked `N uncommitted files` | Tracked files have changes that are not committed. Commit or discard them; untracked files do not count. |
 | A config error names a file and a key | The key is unknown, or belongs in config.toml rather than a repo config. `kelpie config` lists every valid key. |
-| The review split does not open, or its list is empty | Check that `fzf` is 0.71 or later and `nvim` 0.10 or later. |
+| The review split does not open, or its list is empty | It opens only inside herdr. Check that `fzf` is 0.71 or later, `nvim` 0.10 or later, and `jq` is on your `PATH`. |
 | The board shows no plan usage | [Set the status line](show-plan-usage.md). Usage comes only on a Claude.ai plan. |
 | No notifications arrive | Run the command by hand with `KELPIE_TEXT=test`. Failures are in `notify.log` in the state directory. |
 | The vault is reported too old | `claude plugin update vault@gronare` |
 | Sessions are not restarted, or held messages wait, with the board closed | `kelpie keeper --status`. Not running: `kelpie keeper --start`. A routine that keeps failing shows its error there and in `keeper.log` in the state directory. |
 | The keeper should stop | `kelpie keeper --stop`. The board and herdr's next startup start it again; `[keeper] enabled = false` keeps it off and hands the routines to an open board. |
 | A session is not restarted after an update | `kelpie update` prints why for each session. A skipped one needs a manual restart; one with background work waits for your answer on the board. |
+| kelpie itself got something wrong | Save it as an issue and send it to kelpie's maintainers when you choose: [Report a problem with kelpie](report-a-problem-with-kelpie.md). |
 | A task worktree has no push block | The repo's shared git config sets `core.worktree` or `core.bare = true`. Move those settings out of the shared config; `kelpie doctor` in the repo shows when the block applies. |
 
 ## Run kelpie without touching your state
@@ -55,3 +56,5 @@ KELPIE_STATE_DIR=$(mktemp -d) HERDR_BIN_PATH=false kelpie status
 | Automatic restarts | `[restart] auto = false`. See [Turn off automatic restarts](turn-off-automatic-restarts.md). |
 | The background keeper | `[keeper] enabled = false`. An open board runs the routines instead. |
 | The review split opening by itself | Turn `auto_open` off under `/plugin` → Installed → kelpie → Configure. |
+| Error counts sent to kelpie's maintainers | `[report] signals = false`. |
+| The offer to send a bug report to kelpie's maintainers | `[report] text = "never"`. |

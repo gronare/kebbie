@@ -9,13 +9,16 @@ A kelpie is the working dog that keeps a herd moving while the drover directs. h
 ## What you get
 
 - **A task is a worktree, a Space and a Claude.** `kelpie start billing "Fix the rounding in invoices"` takes a free worktree from a reusable pool, puts it on a new branch, opens it as a herdr Space and starts Claude there. Your main checkout stays untouched.
-- **A board that sorts work by what it needs from you.** Needs you, working, to review, ready to push. Questions from tasks wait there with their options and a recommendation, and you answer them in one window.
-- **A lead Claude that holds the picture.** It finds work in your backlog, writes informed task prompts, checks finished work against your rules and relays what one task needs to know from another.
+- **A board that sorts work by what it needs from you.** Needs you, working, to review, ready to push, in the order you set. Questions from tasks wait there with their options and a recommendation, and you answer them in one window.
+- **A lead Claude that holds the picture.** It finds work in your backlog, writes informed task prompts, relays what one task needs to know from another, and settles questions of method itself, leaving you the ones about what you want.
+- **A read-only reviewer on every ready task.** A separate Claude, limited to reading the code, checks a task's commits against your rules before it can be pushed. Send a risky task to a full review and it waits until that reviewer passes its current commits.
 - **Review next to Claude.** A split shows the task's changes as diffs in nvim. Comment on a line and the comment is typed into Claude's input box.
-- **Trunk-based by design.** kelpie rebases a task onto the default branch and pushes its commits there. No pull requests and no merges.
-- **A read-only reviewer that gates the push.** Send a risky task to review and it cannot be pushed until a separate Claude, limited to reading the code, passes its current commits.
-- **Optional vault integration.** With the [notes-vault-mcp](https://github.com/gronare/notes-vault-mcp) plugin, every task gets a note, edits wait until the problem is written down, and pushes are logged.
-- **Update channels and fresh sessions.** Follow tagged releases or the main branch, and the board tells you when a new version is out. One `kelpie update` brings everything along, and idle Claude sessions resume on the new code with their conversation intact.
+- **Trunk-based by design.** kelpie rebases a task onto the default branch and pushes its commits there, one task at a time per repo. No pull requests and no merges.
+- **Try it on local main first.** In a repo you run from its main checkout, `kelpie stage` puts a ready task's commits on local main, unpushed, until you push main.
+- **Your board on your phone.** Join a kelpie hub and pair your phone: the board goes to it sealed, with a notification when a task needs you. The phone only reads.
+- **Optional vault integration.** With the [notes-vault-mcp](https://github.com/gronare/notes-vault-mcp) plugin, every task gets a note, edits wait until the problem is written down, pushes are logged, an Areas page shows each repo's state, and kelpie on a second machine sharing the vault asks before it starts a note the first one works on.
+- **Update channels and fresh sessions.** Follow tagged releases or the main branch, and the board tells you when a new version is out. One `kelpie update` brings everything along, idle Claude sessions resume on the new code with their conversation intact, and the issues you filed about kelpie are rechecked against the new commits.
+- **kelpie's own bugs reach its maintainers on your yes.** You see the redacted text before anything is sent. Error signals carry only counts and versions, never your text, and `[report] signals = false` turns them off.
 
 ## Install
 

@@ -1,6 +1,6 @@
 # Run a task with Codex
 
-A task can run OpenAI's Codex CLI instead of Claude Code. It gets the same pooled worktree, card on the board, push block and `kelpie report` before each turn ends, and the task role written for Codex: Codex can't run kelpie's setup and rules skills, so it prepares its worktree with the repo's own `worktree.setup_command` and is not told the rules skill. The lead and the reviewer stay Claude.
+A task can run OpenAI's Codex CLI instead of Claude Code. It gets the same pooled worktree, card on the board, push block and `kelpie report` before each turn ends, and the task role written for Codex: Codex can't run kelpie's setup and rules skills, so it prepares its worktree with the repo's own `worktree.setup_command` and is not told the rules skill. Its commits are still checked against the rules skill when it reports ready, as any task's are. The lead and the reviewer stay Claude.
 
 ## Before you start
 

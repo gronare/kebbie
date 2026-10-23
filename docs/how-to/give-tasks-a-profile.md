@@ -88,7 +88,7 @@ A profile only adds. Whatever it says, a task's Claude still has kelpie's role, 
 
 ## Change the reviewer
 
-`kelpie review`'s reviewer is the built-in `reviewer` profile. A `~/.config/kelpie/profiles/reviewer.toml` sets its `model`, its `effort`, and a `role` that goes after the review skill:
+Both reviewers, the rules check that starts when a task reports ready and the full review `kelpie review` asks for, run as the built-in `reviewer` profile. A `~/.config/kelpie/profiles/reviewer.toml` sets its `model`, its `effort`, and a `role` that goes after the review skill:
 
 ```toml
 model = "opus"

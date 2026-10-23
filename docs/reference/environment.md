@@ -14,6 +14,8 @@
 | `KELPIE_CLAUDE_BIN` | `claude` | The Claude Code binary `kelpie setup vault` runs. |
 | `KELPIE_GH_BIN` | `gh` | The GitHub CLI kelpie watches CI with. |
 | `GH_HOST` | none | A GitHub Enterprise host whose remotes kelpie watches CI for, besides github.com. |
+| `KELPIE_RELEASES_URL` | `https://github.com/<owner>/<repo>/releases/download` for the install's GitHub origin | Where a release's prebuilt binaries are downloaded from. |
+| `KELPIE_CHANNEL` | `update.channel` | Read by `scripts/build.sh`: `release` never builds from source. |
 | `KELPIE_VAULT_BIN` | none | A vault command that stands in for the vault plugin, for tests. |
 | `KELPIE_IMAGES` | detected | How the board draws images such as a sign-off card's screenshots: `kitty`, `sixel` or `iterm2` use that graphics protocol, `halfblocks` draws a preview in text cells without querying the terminal, `off` shows their paths instead. Detected, it asks the terminal when the first image is about to show; inside herdr (`TERM_PROGRAM=herdr`) it asks nothing and uses Kitty, and the board not on a terminal shows paths. |
 | `HERDR_BIN_PATH` | `herdr` | The herdr binary. `false` makes kelpie reach no herdr at all. |
@@ -52,7 +54,7 @@ For `worktree.dev_server` and `worktree.dev_worker`:
 
 ## Internal
 
-`KELPIE_BOARD_STATE` and `KELPIE_PUSH_TOKEN` pass state between kelpie's own processes. Never set them.
+`KELPIE_BOARD_STATE`, `KELPIE_PUSH_TOKEN` and `KELPIE_REVIEWER_BIN` pass state between kelpie's own processes. Never set them.
 
 ## A throwaway run
 

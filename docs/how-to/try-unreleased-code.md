@@ -19,7 +19,7 @@ Commit your changes first: only commits are installed, so a checkout with uncomm
 ## While the override holds
 
 - A plain `kelpie update` fetches the same branch or checkout again, so you can keep pulling in new commits.
-- `kelpie update --check`, `kelpie doctor` and the board say `running <branch or path> @ <sha>, not the channel`.
+- `kelpie update --check`, `kelpie doctor` and the board say `running <branch or path> @ <sha>, not the <channel> channel`.
 
 ## Go back to the channel
 

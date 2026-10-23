@@ -71,7 +71,7 @@ It prints the same text and asks `y/N`. Only you can send: kelpie refuses it, an
 
 The install key is made on the first report and kept in `report/install-key.json` in the state directory, readable by you alone. The project's maintainers see that key as the report's sender; a key they have not seen before waits until they let it through, so the first report from a new install may take a while to be read.
 
-Every report sent, from the board, from `kelpie issue report` or unasked, adds a line under messages on the board: `Sent bug report <id> to kelpie's maintainers: kelpie issue <id>, "<title>"`.
+Every report sent, from the board, from `kelpie issue report` or unasked, adds a line under messages on the board: `Sent bug report <report> to kelpie's maintainers: kelpie issue <id>, "<title>", redacted as kelpie issue show <id> and kelpie issue report <id> show it.`
 
 `[report] text` in config.toml decides how bugs go out:
 
@@ -93,7 +93,7 @@ Once a day at most, the keeper sends the counts since the last send. Each signal
 - the error kind: `panic`, `internal-error` or `corrupt-state`,
 - how many times it happened.
 
-Never an error message, a path, a repo, task, branch or host name, or anything from your work: the format has no field for text, and the hub refuses one that carries any. It is signed with the same install key as reports. Each send adds a line under messages on the board, such as `Sent an error signal to kelpie's maintainers: keeper.push internal-error (×3); with kelpie 0.26.3 (16983b9) on macos aarch64 and nothing else.`
+Never an error message, a path, a repo, task, branch or host name, or anything from your work: the format has no field for text, and the hub refuses one that carries any. It is signed with the same install key as reports. Each send adds a line under messages on the board, such as `Sent an error signal to kelpie's maintainers: keeper.push internal-error (×3); with kelpie 0.26.3 (16983b9) on macos aarch64 and nothing else. [report] signals = false in config.toml turns these off.`
 
 Signals are on by default. To turn them off, in config.toml:
 

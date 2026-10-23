@@ -55,7 +55,7 @@ Your machine
 - [Show task state in herdr's sidebar](how-to/show-task-state-in-the-sidebar.md): the sidebar sync.
 - [See your board on your phone](how-to/see-your-board-on-your-phone.md): join a kelpie hub, pair your phone, get notified.
 - [Fix common problems](how-to/troubleshoot.md): `kelpie doctor` and what each message means.
-- [Report a problem with kelpie](how-to/report-a-problem-with-kelpie.md): save it on the machine, check it after an update, send it to GitHub.
+- [Report a problem with kelpie](how-to/report-a-problem-with-kelpie.md): save it on the machine, send it to kelpie's maintainers, and see it rechecked after an update.
 
 Working on kelpie
 
@@ -75,12 +75,12 @@ Working on kelpie
 
 ## Explanation
 
-- [How kelpie fits together](explanation/architecture.md): the binary, the two plugins and the optional vault.
+- [How kelpie fits together](explanation/architecture.md): the binary, the keeper, the two plugins, and the optional vault and hub.
 - [Trunk-based by design](explanation/trunk-based.md): why tasks land on the default branch with no pull request.
 - [The review gate](explanation/review-gate.md): the rules check, the read-only reviewer and what keeps a pass.
 - [The worktree pool](explanation/worktree-pool.md): why worktrees are kept and reused.
-- [The lead and away mode](explanation/lead-and-away-mode.md): what the lead holds and where it stops.
+- [The lead and away mode](explanation/lead-and-away-mode.md): what the lead holds, where it stops, and how it restarts.
 - [Routines](explanation/routines.md): scheduled checks that report, plan or fix.
 - [The trust boundary](explanation/trust-boundary.md): what kelpie guards against, and what it does not.
-- [The vault](explanation/vault.md): what a task note adds.
+- [The vault](explanation/vault.md): what a task note adds, and two machines sharing one vault.
 - [Updates and stale sessions](explanation/updates-and-restarts.md): channels, overrides and restarts.

@@ -5,8 +5,8 @@ The Claude Code plugin `kelpie@kelpie` ships these skills. You run the ones mark
 | Skill | Run by | What it does |
 | --- | --- | --- |
 | `kelpie:set-up-worktree` | A task's Claude at the start of a task, or `/kelpie:set-up-worktree` | Makes the worktree runnable without touching the main checkout: dependencies, the gitignored inputs the main checkout has, its own databases, a free port, then one check that tests run. The default `worktree.setup_skill`. |
-| `kelpie:work-rules` | A task's Claude when it commits, the lead when it checks, `tidy`, the reviewer | Commit rules: a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to you. The default `task.rules_skill`. |
-| `kelpie:review` | The reviewer started by `kelpie review` | Reviews a task's branch independently and gives a verdict with located findings. |
+| `kelpie:work-rules` | A task's Claude when it commits, the reviewer (the rules check on a ready report and `kelpie review`), the lead when that check gives no verdict, `tidy` | Commit rules: a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to you. The default `task.rules_skill`. |
+| `kelpie:review` | The reviewer started by `kelpie review`, and the rules check on a ready report, which does only its commit, rules and docs steps | Reviews a task's branch independently and gives a verdict with located findings. |
 | `kelpie:keep-docs` | A task's Claude in a repo with `docs.required`, or when a review finding ends `(keep-docs)` | Finds what a change alters for the user, places each item on its page by Diátaxis (reference, how-to, explanation, tutorial), and updates the README and `docs/` in the same task. |
 | `kelpie:configure` | Claude, when you ask it to configure kelpie | Changes a setting in config.toml or a repo config, sets a machine up, or adopts a team's linked setup, and checks each change with `kelpie doctor`. |
 | `kelpie:using-kelpie` | Claude, the lead and tasks, when you ask about kelpie itself | Answers a question about kelpie (how to set something up, what a command, key or config does, how a feature works) from kelpie's own docs first: [`kelpie docs <words>`](commands.md#setup-and-maintenance), the pages it names and `kelpie help`, and cites the page the answer came from. |
@@ -27,8 +27,10 @@ Each task's Claude starts with settings kelpie writes:
 
 | Hook | Runs | For |
 | --- | --- | --- |
+| `SessionStart` | `kelpie hook inbox <task>` | Recording the session's inbox socket, which kelpie delivers its messages through. |
 | `UserPromptSubmit`, `Stop` | `kelpie hook` | Delivering held messages and collecting the task's report at the end of a turn. |
 | `PreToolUse` on `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash` | `kelpie hook gate <task>` | With the vault only: holding edits until the task's note has its Problem. |
+| `PreToolUse` on `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | `kelpie hook files <task> …` | With the sandbox on only: keeping Claude's file tools to the task's worktrees and temp folder. |
 | `PostToolUse`, `PostToolUseFailure` on `Bash` | `kelpie hook evidence <task>` | Recording the task's test runs for [`kelpie evidence`](commands.md#kelpie-evidence-name---json). It prints nothing. |
 
-The same settings deny `git push`, `kelpie approve` and `kelpie push`.
+The same settings deny `git push`, every kelpie command that is yours alone or the lead's (such as `kelpie push`, `approve`, `stage`, `away`, `decide` and `issue send`), and herdr's commands that type into another pane.

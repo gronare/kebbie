@@ -2,7 +2,7 @@
 
 kelpie lets you run many Claude Code sessions at once without losing track of them. herdr already holds the terminals and the agents. kelpie adds what herdr does not know about: that a session is working on a task, in a branch, in a repo, and that the task ends with commits on the default branch.
 
-## Five parts
+## Six parts
 
 **The `kelpie` binary.** One Rust program does all the work: it starts tasks, keeps the worktree pool, draws the board, carries messages and questions, decides who may push, runs the reviewer and updates itself. Everything else calls it by name.
 
@@ -13,6 +13,8 @@ kelpie lets you run many Claude Code sessions at once without losing track of th
 **The Claude Code plugin.** It carries kelpie's skills (worktree setup, commit rules, the reviewer's instructions, the review split) and the hook that opens the review split. You add its marketplace from the same `current` folder, so the skills Claude loads are always the same code as the binary that runs them.
 
 **The vault plugin, optional.** [notes-vault-mcp](https://github.com/gronare/notes-vault-mcp) keeps notes in a vault. When it is installed and enabled, kelpie finds it and uses it: each task gets a note, edits wait until the problem is written down, and pushes are logged. Without it, kelpie keeps its own state and loses nothing it needs to run. See [The vault](vault.md).
+
+**The hub, optional.** A [kelpie hub](https://github.com/gronare/kelpie-hub) relays each machine's board, sealed, to the phones paired with it, and takes kelpie's error signals and bug reports for its maintainers. The phone only reads: the hub cannot start anything on the machine. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md) and [What goes to the hub](trust-boundary.md#what-goes-to-the-hub).
 
 ## What a task is
 
@@ -28,7 +30,7 @@ Because git is the source of truth for the pool, kelpie needs no database of tas
 
 ## Who talks to whom
 
-You talk to the lead. The lead is a Claude in the lead Space next to the board, with a role that makes it responsible for the whole picture. It starts tasks, reads their reports, checks their commits and relays what one task needs to know from another. See [The lead and away mode](lead-and-away-mode.md).
+You talk to the lead. The lead is a Claude in the lead Space next to the board, with a role that makes it responsible for the whole picture. It starts tasks, reads their reports, checks their commits when the reviewer's rules check gives no verdict, and relays what one task needs to know from another. See [The lead and away mode](lead-and-away-mode.md).
 
 Tasks talk through kelpie, never directly into each other's terminals:
 
@@ -47,13 +49,20 @@ Some of kelpie's work runs on a clock rather than on a command:
 - a prompt a task's Claude waits on in its own pane is sent to the lead, every 5 seconds (see [Claude's own prompts in a task](lead-and-away-mode.md#claudes-own-prompts-in-a-task)),
 - stale Claude sessions are restarted once idle, every minute,
 - a push that waits for a task's Claude to test the files the default branch changed under it completes once the task reports ready with the same commits, every 15 seconds,
+- a staged task whose stage conflicted goes back on local main once its Claude reports ready, and a staged task whose commits reached origin stops counting as staged, every 15 seconds (see [`kelpie stage`](../reference/commands.md#kelpie-stage-name)),
+- pushed tasks' CI watches are checked, every 30 seconds (see [`kelpie ci`](../reference/commands.md#kelpie-ci---json)),
+- tasks whose commits are on the default branch are closed as done, every minute (see [`kelpie done --landed`](../reference/commands.md#kelpie-done---landed)),
+- a ready task's rules check gets its read-only reviewer, checked every 5 seconds (see [The review gate](review-gate.md)),
 - tasks an API error stopped are resumed, every 30 seconds (see [When the API stops a task](lead-and-away-mode.md#when-the-api-stops-a-task)),
 - the update check reads its cache every 10 minutes and fetches when the last fetch is 6 hours old,
-- due [routines](routines.md) start their runs as tasks, every minute.
-- tasks that follow main are rebased when it moves, every minute (see [`kelpie follow`](../reference/commands.md#kelpie-follow-name-onoff)).
-- queued tasks start once every task they wait for has ended as done, every 15 seconds (see [`kelpie after`](../reference/commands.md#kelpie-after-name)).
+- after an update, each open kelpie issue filed on older code is rechecked against the new commits, checked every 30 seconds (see [Your kelpie issues](updates-and-restarts.md#your-kelpie-issues)),
+- due [routines](routines.md) start their runs as tasks, every minute,
+- tasks that follow main are rebased when it moves, every minute (see [`kelpie follow`](../reference/commands.md#kelpie-follow-name-onoff)),
+- queued tasks start once every task they wait for has ended as done, every 15 seconds (see [`kelpie after`](../reference/commands.md#kelpie-after-name)),
+- with a hub joined and a phone paired, the board goes to the hub sealed to each phone when it changes, checked every 15 seconds, and at least once a minute (see [See your board on your phone](../how-to/see-your-board-on-your-phone.md)),
 - error signals counted since the last send go to kelpie's maintainers, checked every hour and sent at most once a day (see [Error signals](../how-to/report-a-problem-with-kelpie.md#error-signals)),
-- with `[report] text = "always"`, bugs kelpie filed about itself go to kelpie's maintainers, every minute.
+- with `[report] text = "always"` armed, bugs kelpie filed about itself go to kelpie's maintainers, every minute,
+- with `[report] inbox_token` set, on the machine of whoever runs the hub that takes the reports, the reports the hub let through are filed as kelpie issues, every 10 minutes (see [Receiving reports](../how-to/report-a-problem-with-kelpie.md#receiving-reports)).
 
 The keeper runs all of them, each on its own interval, and sleeps in between. It has no terminal and logs to `keeper.log` in the state directory. A lock file in the state directory keeps it to one per machine; the kernel releases the lock when the keeper exits, so a crashed one never blocks the next. A routine that fails is retried later each time, up to every 15 minutes, and its error is logged once.
 

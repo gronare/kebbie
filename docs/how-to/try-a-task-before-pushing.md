@@ -18,7 +18,7 @@ kelpie's own repo is the one to turn it on for: a task's commits reach the kelpi
 
 1. Select a task under Ready to push and press `M` (Put on local main to try it, in its options).
 2. kelpie cherry-picks its commits onto local `main`, unpushed. The row says `on local main · waiting for your push`.
-3. In kelpie's own repo on the main channel, kelpie rebuilds, and the board and keeper restart onto the new binary. In any other repo, restart what you run from the main checkout.
+3. When the repo is kelpie's install root and the machine follows the `main` channel, kelpie rebuilds, and the board and keeper restart onto the new binary. In any other repo, restart what you run from the main checkout.
 
 From the command line:
 
@@ -32,7 +32,7 @@ Keep your own commits off local main while tasks are staged: kelpie never rewrit
 
 ## Take one off
 
-Press `M` on the staged task, or run `kelpie unstage billing`. Only its commits leave main; the other staged tasks stay, and its branch keeps its commits.
+Press `M` on the staged task, or run `kelpie unstage billing`. Only its commits leave main; the other staged tasks stay, and its branch keeps its commits. When a task staged after it builds on its commits, kelpie refuses: take that one off first.
 
 ## Push main
 

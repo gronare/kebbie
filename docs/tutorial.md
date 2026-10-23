@@ -137,11 +137,17 @@ cd ~/code/hello
 kelpie start greet "Add a script hello.sh that prints Hello from kelpie, make it executable, and commit it."
 ```
 
-kelpie prints where the task went:
+kelpie prints where the task went. Claude Code has not seen this folder before, so it first asks whether you trust it:
 
 ```text
-Started greet in /Users/you/code/wt1.hello.
+! Started
+  next: Once you answer, kelpie types the task's prompt in while the keeper or an open board runs.
+  you: Answer greet's question in its Space: whether you trust the repo's folder.
+  task: greet
+  folder: /Users/you/code/wt1.hello
 ```
+
+Go to the `greet` Space in herdr's sidebar and answer that you trust the folder. kelpie then types the task's prompt into Claude. In a folder you already trust, the first line is `✓ Started` and Claude gets the prompt at once.
 
 Look at what happened:
 
@@ -157,7 +163,7 @@ The board now lists `greet` under **Working**. Claude first makes its worktree r
 
 When Claude ends its turn it reports where it stands. The row moves to another group, and a `you:` line under it says what you should do next. Select the row with `↑` `↓` and the row opens with the task's report.
 
-When the task reports ready, kelpie checks that each commit has a subject, a blank line and a body, and a read-only reviewer checks the commits against the rules skill in the background, marked `reviewer checking rules`. Once it passes them, the mark goes and `greet` shows under **Ready to push**. If you pick it up before the check is done, you can push from there too.
+When the task reports ready, kelpie checks that each commit has a subject, a blank line and a body, and `greet` moves under **Ready to push**. A read-only reviewer then checks the commits against the rules skill in the background, and the row is marked `reviewer checking rules` until it passes them. You can push before the check is done too.
 
 ## 9. Push it
 

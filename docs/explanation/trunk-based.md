@@ -34,7 +34,13 @@ Without a merge to group them, each commit on the default branch is read on its 
 
 Without a pull request, the default branch is where CI runs, so a task is finished when its commits are on the default branch and CI passes them, not before. When origin is on GitHub and `gh` is logged in, kelpie watches the workflow runs for the pushed commit and keeps the task open, with its worktree and its Claude, under CI running. Once every run is green it closes the task as done. When a run fails, the task moves to Needs you and its Claude gets the failing job's log, so the session that wrote the change fixes it while it still knows the change. The fix is a new commit and a normal push, and that push is watched in turn.
 
-The board does the watching while it is open, every 30 seconds, and the watch is kept in the state directory, so it picks up again after a restart. Set `[ci] watch = false` for a repo whose CI says nothing useful, and its tasks close right after the push. See [`kelpie ci`](../reference/commands.md#kelpie-ci---json).
+The keeper does the watching, every 30 seconds (an open board does with `[keeper] enabled = false`), and the watch is kept in the state directory, so it picks up again after a restart. Set `[ci] watch = false` for a repo whose CI says nothing useful, and its tasks close right after the push. See [`kelpie ci`](../reference/commands.md#kelpie-ci---json).
+
+## Trying work on local main
+
+Some repos are run from their main checkout: kelpie itself when you run it from your own clone, or an app whose dev setup lives there. A task's worktree is the wrong place to try those, so a repo can opt in to staging with `worktree.stage_on_main`. `kelpie stage`, or `M` on the board, puts a ready task's commits on the main checkout's local default branch, unpushed, and several tasks stack there in the order you staged them. You try them together, as they will land, and push main yourself once it is right.
+
+Staging stays inside the trunk-based model rather than beside it. The commits are cherry-picked, not merged, so main stays a straight line; a staged task never goes through the push line, since it goes out with main; and it stays open until its commits are on origin, so the keeper closes it like any other landed task. Two limits keep your own work safe: kelpie never rewrites a commit of yours on local main, so it refuses to stage or unstage while one sits there, and a stage that conflicts leaves main exactly as it was and hands the rebase to the task's Claude. See [Try a task before pushing](../how-to/try-a-task-before-pushing.md).
 
 ## Work that waits for other work
 

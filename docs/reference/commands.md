@@ -10,7 +10,7 @@
 | `-h`, `--help`, `help` | Print the usage. |
 | `--version`, `version` | Print the version and the commit and date the binary was built from, such as `kelpie 0.24.0 (db8963f 2026-10-21)`. Many commits share a version number, so the commit says whether a fix is in. A build outside git prints the version alone. |
 
-Without a name, `land`, `review`, `push`, `stage`, `unstage`, `done`, `drop` and `reset` act on the task whose worktree you are in.
+Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstage`, `done`, `drop` and `reset` act on the task whose worktree you are in.
 
 ## Tasks
 
@@ -128,7 +128,7 @@ Take a staged task's commits off local main again, by patch, so they are found a
 
 The CI watches, one per pushed task: its sha, the GitHub repo, each workflow run with its status and address, and the last check's error. `--json` gives the watch records.
 
-A watch runs while a board is open: every 30 seconds the board asks `gh run list --commit <sha>` for each running watch, and asks nothing when none runs.
+Every 30 seconds the keeper (or an open board, with `keeper.enabled = false`) asks `gh run list --commit <sha>` for each running watch, and asks nothing when none runs.
 
 | State | What happens |
 | --- | --- |
@@ -146,7 +146,7 @@ A red run that is not the code's (a push outside the deploy window, infrastructu
 
 ### `kelpie ci tick`
 
-One round of checks for every running watch, as the board runs it, and what came of it.
+One round of checks for every running watch, as the keeper runs it, and what came of it.
 
 ### `kelpie ci outside "<reason>"`
 
@@ -192,7 +192,7 @@ Ask the task's Claude to reshape its commits by the rules skill (`task.rules_ski
 
 ### `kelpie review [name]`
 
-Send the task to the reviewer: a separate, read-only Claude reviews its commits in the background. The task waits under To review, and its push with it, until a `verdict: ok` on its current code.
+Send the task to the reviewer: a separate, read-only Claude reviews its commits in the background. The task waits under To review, and its push with it, until a `verdict: ok` on its current code. The reviewer reads the rules skill too, so that pass is also the task's rules approval and no separate rules check runs.
 
 | Option | Meaning |
 | --- | --- |
@@ -248,12 +248,14 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 | `kelpie choose <task> <n> --prompt <id>` | Answer the prompt a task's Claude shows in its own pane, such as a permission or trust question, with option `<n>` as kelpie numbered it for the lead. `<id>` is the prompt's id from kelpie's message; kelpie reads the pane again and refuses when that prompt is no longer on screen. On a menu with numbers whose focus is on its first option, for options 1 to 9, kelpie presses the option's digit. Otherwise it moves the focus with the arrow keys, reads the pane to check the focus landed on the chosen option, and only then presses Enter. It never types text, and refuses an option that takes your own words; that one you answer in the Space. It then reads the pane again and says whether the menu went away, or that it could not confirm it. Yours, or the lead's on your explicit choice: the lead's settings do not allow it, so Claude Code asks you before the lead runs it. When Claude Code asks you whether the lead may run `kelpie choose`, answer plain "Yes", never "don't ask again": that question is the gate only while your settings hold no allow rule for `kelpie choose`. Refused for a task. See [Claude's own prompts in a task](../explanation/lead-and-away-mode.md#claudes-own-prompts-in-a-task). |
 | `kelpie defer <task>` | The lead keeps a task's question for you while you are away. |
 | `kelpie notify <text>` | Run `notify.command` with this text as a `summary` event. You or the lead only. |
+| `kelpie tell --force <to> <text>` | Yours or the lead's: deliver now, for a delivery that is stuck behind a draft. It clears the draft from the receiver's input box, logged word for word (`ctrl+y` in its pane brings it back), then types what is held for that session and the new message, in order, as one prompt. |
+| `kelpie release <to>` | Yours or the lead's: deliver what is held for a session now, as `tell --force` does, without a new message. |
 
 ## Run by a task's Claude
 
 | Command | What it does |
 | --- | --- |
-| `kelpie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. `<state>` is `needs-you`, `ready`, `working` or `blocked`. With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task. A routine's task also lists its findings on a card with `needs-you`. With `kelpie:work-rules` as the rules skill, `ready` is refused while a commit lacks a subject, a blank line and a body. After a ready report the keeper starts the reviewer, which checks the commits against the rules skill: a pass approves them, a break goes to the task and a line to the lead, and no verdict within 15 minutes leaves the check to the lead. A ready report on code already checked gets the stored findings back, or goes to the lead after no verdict, without a new run. |
+| `kelpie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. `<state>` is `needs-you`, `ready`, `working` or `blocked`. With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task. A routine's task also lists its findings on a card with `needs-you`. With `kelpie:work-rules` as the rules skill, `ready` is refused while a commit lacks a subject, a blank line and a body. After a ready report the keeper starts the reviewer, which checks the commits against the rules skill, and against [`docs.required`](configuration.md#keys) in a repo that sets it: a pass approves them, a break goes to the task and a line to the lead, and no verdict within 15 minutes leaves the check to the lead. A ready report on code already checked gets the stored findings back, or goes to the lead after no verdict, without a new run. |
 | `kelpie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. Refused outside a routine's task, from anyone but that task's Claude, and while the task has changes or commits. |
 | `kelpie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. A question about how goes to the lead instead. The question opens with one plain sentence on what the task is doing, and each of the two to four options says what you get with it, one recommended, without flags, commit ids, file names or internal terms you did not use. `--plan <file>` or `--plan vault:<note>` asks you to approve a plan instead. |
 | `kelpie answered <task>` | The task's question was settled elsewhere, dropped, or sent back to be asked again; it leaves the board, and a `kelpie tell` to that task is no longer held. |
@@ -314,7 +316,7 @@ Problems and wishes about kelpie itself, saved on this machine, one file each un
 | `kelpie issue report --always` / `--ask` | Yours alone, in your own terminal: `--always` arms `[report] text = "always"`, so kelpie sends each bug it files about itself without asking, redacted, each send a line under messages; the key in config.toml does nothing until it is armed. `--ask` disarms it, and kelpie asks before every report again. The lead, tasks and sandboxed processes are refused. |
 | `kelpie issue send <id>` | Print the text and a prefilled new-issue URL on GitHub, and open it in the browser (`open` on macOS, `xdg-open` on Linux with a display; over SSH only the URL). The body adds the kind, version, commit and OS, and a `kelpie-issue: <id>` line; a text that would make the URL longer than GitHub accepts is shortened, and says so. Nothing is sent until you press Submit. Optional: the way a bug reaches kelpie's maintainers is `kelpie issue report` or the board's `B` list. Yours alone: kelpie refuses it to the lead and tasks, nothing in kelpie runs it for you, and the lead suggests it only when you ask for a GitHub issue. |
 
-After `kelpie update`, when `gh` is installed and logged in, kelpie searches kelpie's GitHub repo for each unlinked issue's `kelpie-issue:` line and links what it finds, and an issue closed on GitHub becomes `retry`. Without `gh` this step is skipped. Then each open issue of your own filed on older code than the update installed waits for a recheck, once per build; reports from other installs never do. The keeper takes them one at a time: it starts a read-only Claude from its own environment, as it does the rules reviewer, with the issue, every commit since the issue's build with its full message, and kelpie's source at the new commit. Its verdict is `fixed <sha>`, `not-fixed` or `unclear`. A fix by a commit since the issue's build closes it as `fixed` with the line `fixed in <version> (<sha>), checked automatically`, and the board shows `kelpie <version> fixed N of your issues` with their titles until you open it with `i` or three days pass; a later fix shows again. Anything else leaves the issue open until the next update; no verdict within 15 minutes also writes one line to `keeper.log`. Nobody is asked or told.
+After `kelpie update`, when `gh` is installed and logged in, kelpie searches kelpie's GitHub repo for each unlinked issue's `kelpie-issue:` line and links what it finds, and an issue closed on GitHub becomes `retry`. Without `gh` this step is skipped. Then each open issue of your own filed on older code than the update installed waits for a recheck, once per build; reports from other installs never do. The keeper takes them one at a time: it starts a read-only Claude from its own environment, as it does the rules reviewer, with the issue, every commit since the issue's build with its full message, and kelpie's source at the new commit. Its verdict is `fixed <sha>`, `not-fixed` or `unclear`. A fix by a commit since the issue's build closes it as `fixed` with the line `fixed in <version> (<sha>), checked automatically`, and the board shows `kelpie <version> fixed N of your issues` with their titles until you open it with `i` or three days pass; a later fix shows again. Anything else leaves the issue open until the next update; no verdict within 15 minutes also writes one line to `keeper.log`. Nobody is asked, and a recheck that fixes nothing says nothing.
 
 ## Used by kelpie itself
 
@@ -322,16 +324,18 @@ These run from hooks, the herdr plugin and kelpie's own processes. You do not ru
 
 | Command | Run by |
 | --- | --- |
-| `kelpie hook` | The hooks kelpie gives a task's Claude. Reads the hook's JSON on stdin. |
+| `kelpie hook` | The hooks kelpie gives a task's Claude, with `evidence`, `inbox`, `files` or `gate` for the test record, the inbox socket, the sandbox's file check and the vault note's gate, and `--review` for the reviewer's guard. Reads the hook's JSON on stdin. |
 | `kelpie hook codex <event>` | kelpie's Codex plugin, for `session-start`, `prompt` and `stop`. Reads the hook's JSON on stdin and prints nothing outside a kelpie task's worktree. |
 | `kelpie statusline` | Claude Code's `statusLine` command. Keeps the plan's usage for the board and prints nothing. |
 | `kelpie backlog save` | The lead, after refreshing the backlog. Reads a JSON array on stdin. |
 | `kelpie messages --unread` | The lead's prompt hook. |
 | `kelpie review --run` | The reviewer process `kelpie review` starts. |
+| `kelpie review --run --rules` | The read-only rules check the keeper starts after a task reports ready. |
 | `kelpie issue recheck --run <id>` | The checker the keeper starts after an update to recheck one kelpie issue. It reads the keeper's nonce on stdin and closes nothing without it; a task's Claude is denied it. |
 | `kelpie update --finish` | The newly built binary, at the end of `kelpie update`. It stops the keeper first and starts it again on the new binary last. |
 | `kelpie keeper` | The keeper itself, as `kelpie keeper --start` starts it: a loop with no terminal that runs the routines and logs to `keeper.log`. |
 | `kelpie lead --renew-board` | `kelpie update`, to restart the board on the new binary. |
+| `kelpie lead --revive-board --wait` | The background half of `kelpie lead --revive-board`, which waits for herdr's restore. |
 
 ## Finding repos
 
