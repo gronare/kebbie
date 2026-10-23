@@ -25,8 +25,10 @@ head=$(git rev-parse HEAD)
 ci=$(gh run list --commit "$head" --workflow ci --json status,conclusion -q '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || true)
 [ "$ci" = "completed success" ] || fail "CI on $(git rev-parse --short HEAD) is '${ci:-not found}'; release a commit whose CI is green"
 
-perl -pi -e 's/^version = "[^"]*"/version = "'"$version"'"/ if $. <= 10' Cargo.toml herdr-plugin.toml
+perl -pi -e 's/^version = "[^"]*"/version = "'"$version"'"/ if $. <= 10; close ARGV if eof' Cargo.toml herdr-plugin.toml
 perl -pi -e 's/"version": "[^"]*"/"version": "'"$version"'"/' .claude-plugin/plugin.json
+for manifest in Cargo.toml herdr-plugin.toml; do grep -q "^version = \"$version\"" "$manifest" || fail "$manifest still names another version"; done
+grep -q "\"version\": \"$version\"" .claude-plugin/plugin.json || fail ".claude-plugin/plugin.json still names another version"
 cargo check --quiet
 git add Cargo.toml Cargo.lock herdr-plugin.toml .claude-plugin/plugin.json
 git commit --quiet -m "kelpie $version: $summary"
