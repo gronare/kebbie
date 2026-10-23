@@ -1724,7 +1724,7 @@ dependencies = [
 
 [[package]]
 name = "kelpie"
-version = "0.26.9"
+version = "0.26.10"
 dependencies = [
  "image",
  "kelpie-hub",
