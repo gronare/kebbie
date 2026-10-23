@@ -14,6 +14,7 @@ mod fetch;
 mod herdr;
 mod hub;
 mod inbox;
+mod issue_recheck;
 mod issues;
 mod keeper;
 mod keys;
@@ -52,6 +53,7 @@ mod task_note;
 mod tasks;
 #[cfg(test)]
 mod test_seal;
+mod trusted_spawn;
 mod typing;
 mod update;
 mod update_check;
@@ -272,14 +274,18 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie issue add --kind bug|wish --title <title> [<text>|-]
                                   save one, the text from the argument or stdin: what happened, what you expected,
                                   how to reproduce; the user's or the lead's (a task tells the lead)
+  kelpie issue list [--json] [--all]
+                                  the same as kelpie issues
   kelpie issue show|retry <id>    print one; retry marks it worth trying again
   kelpie issue close <id> fixed|wontfix|duplicate
+  kelpie issue reopen <id>        open a closed one again, noted as come back on this build
   kelpie issue link <id> <number|url>
                                   tie it to its GitHub issue
   kelpie issue send <id>          print the text and a prefilled new-issue URL on GitHub (shortened past GitHub's
                                   limit), and open it in the browser for you to check and submit; nothing is sent
-                                  without your Submit (kelpie update looks the issues up with gh and asks the lead
-                                  which ones the new commits likely fix)
+                                  without your Submit (kelpie update looks the issues up with gh, and the keeper
+                                  rechecks each open one filed on older code against the new commits and closes
+                                  the ones they plainly fix)
   kelpie issue report <id>        show a bug kelpie filed as it would go to kelpie's maintainers (paths under your home
                                   as ~, no repo names, remote URLs or tokens) and send it on your y, signed with this
                                   install's key; the board offers each new one under Work ([report] enabled = false
@@ -603,13 +609,16 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
         Some("show") => issues::show_in(&dir, id()?),
         Some("close") => issues::close_in(&dir, &caller(), id()?, arguments.positional(3)),
         Some("retry") => issues::retry_in(&dir, &caller(), id()?),
+        Some("reopen") => issues::reopen_in(&dir, &caller(), id()?, env!("KELPIE_BUILT_FROM")),
+        Some("recheck") if arguments.flag("--run") => issue_recheck::run(id()?),
+        Some("list") => Ok(issues::list_in(&dir, arguments.flag("--all"), arguments.flag("--json"))),
         Some("link") => issues::link_in(&dir, &caller(), id()?, arguments.positional(3)),
         Some("send") => {
             let opener = board::images::image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
             issues::send_in(&dir, &caller(), id()?, opener, &issues::open_url, messages::now())
         }
         Some("report") => hub::report::cli(id()?),
-        _ => Err("kelpie issue knows add, show <id>, close <id> fixed|wontfix|duplicate, retry <id>, link <id> <number|url>, send <id> and report <id>".to_string()),
+        _ => Err("kelpie issue knows add, list, show <id>, close <id> fixed|wontfix|duplicate, reopen <id>, retry <id>, link <id> <number|url>, send <id> and report <id>".to_string()),
     }
 }
 

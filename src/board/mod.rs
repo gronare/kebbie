@@ -153,6 +153,8 @@ struct App {
     message_back: usize,
     questions: Vec<Message>,
     offers: Vec<bug_report::Offer>,
+    fixed: Option<crate::issue_recheck::Fixed>,
+    fixed_seen: u64,
     usage: Option<Usage>,
     ongoing: Vec<Ongoing>,
     details: HashMap<PathBuf, std::rc::Rc<Detail>>,
@@ -814,7 +816,7 @@ impl App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), sources, fetch_failures: Vec::new(), away: false,
-            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), offers: Vec::new(), usage: None, ongoing: Vec::new(),
+            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), offers: Vec::new(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
@@ -899,6 +901,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.message_back = app.message_back.min(app.messages.len().saturating_sub(1));
                         app.questions = snapshot.questions;
                         app.offers = snapshot.offers;
+                        app.fixed = snapshot.fixed.filter(|fixed| fixed.last > app.fixed_seen);
                         app.usage = snapshot.usage;
                         app.ongoing = snapshot.ongoing;
                         app.lead_chat = snapshot.lead_chat;

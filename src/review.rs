@@ -277,7 +277,7 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     let tests = crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha);
     let docs = if settings.docs_required.value { Some(docs_brief(&slot.path, &upstream, &sha, &kelpie.join(KEEP_DOCS))?) } else { None };
     let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value, docs: docs.as_deref() });
-    let answer = ask_reviewer(&Ask { address, worktree: &slot.path, settings: &settings, rules_file: rules_file.as_deref(), docs: docs.is_some(), input: &input, timeout: None, role: "review", program: None, group_file: None })?;
+    let answer = ask_reviewer(&Ask { address, worktree: &slot.path, settings: &settings, rules_file: rules_file.as_deref(), docs: docs.is_some(), input: &input, timeout: None, role: "review", program: None, group_file: None, prompt: None })?;
     let recorded = record(&answer, &sha).ok_or_else(|| no_verdict(&answer))?;
     let verdict = save(state, address, &recorded, rules_file.is_some(), || tasks::fingerprint_at(&slot.path, &upstream, &sha))?;
     Ok(format!("{address} reviewed at {}: {} — {}", &sha[..7.min(sha.len())], verdict.summary(), file.display()))
@@ -312,11 +312,12 @@ pub(crate) struct Ask<'a> {
     pub role: &'a str,
     pub program: Option<&'a Path>,
     pub group_file: Option<&'a Path>,
+    pub prompt: Option<&'a Path>,
 }
 
 // The reviewer's answer to a brief, from the read-only Claude kelpie:review sets up; past the timeout it is stopped and gives none.
 pub(crate) fn ask_reviewer(ask: &Ask) -> Result<String> {
-    let Ask { address, worktree, settings, rules_file, docs, input, timeout, role, program: bin, group_file } = *ask;
+    let Ask { address, worktree, settings, rules_file, docs, input, timeout, role, program: bin, group_file, prompt: skill } = *ask;
     let kelpie = install_root()?;
     let profile = reviewer_profile(&crate::profiles::load(crate::profiles::REVIEWER)?, settings.review_model.value.as_deref());
     let agent = profile.agent;
@@ -325,7 +326,7 @@ pub(crate) fn ask_reviewer(ask: &Ask) -> Result<String> {
     }
     let keep_docs = kelpie.join(KEEP_DOCS);
     let guard = write_settings(&roles_dir()?, &format!("{address}.{role}"), &agent.reviewer_settings(&peers::kelpie_command()?, settings.sandbox.value))?;
-    let prompt = reviewer_prompt(&kelpie.join("skills/review/SKILL.md"), &profile, &roles_dir()?.join(format!("{address}.{role}.md")))?;
+    let prompt = reviewer_prompt(&skill.map_or_else(|| kelpie.join("skills/review/SKILL.md"), Path::to_path_buf), &profile, &roles_dir()?.join(format!("{address}.{role}.md")))?;
     let (program, args) = agent.reviewer_command(&Reviewer { model: profile.model.as_deref(), effort: profile.effort.as_deref(), settings: &guard, prompt: &prompt, rules: rules_file.and_then(Path::parent), docs: if docs { keep_docs.parent() } else { None } });
     let mut command = Command::new(bin.map_or(Path::new(program), |bin| bin));
     command.args(&args).current_dir(worktree).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());

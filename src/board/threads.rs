@@ -22,6 +22,7 @@ pub(super) struct Snapshot {
     pub(super) messages: Vec<Message>,
     pub(super) questions: Vec<Message>,
     pub(super) offers: Vec<super::bug_report::Offer>,
+    pub(super) fixed: Option<crate::issue_recheck::Fixed>,
     pub(super) usage: Option<Usage>,
     pub(super) ongoing: Vec<Ongoing>,
     pub(super) lead_chat: Option<bool>,
@@ -68,7 +69,7 @@ pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::resu
             }
             let snapshot = status::gather().and_then(|items| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().collect();
-                Ok(Snapshot { checkouts: status::checkouts()?, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden) })
+                Ok(Snapshot { checkouts: status::checkouts()?, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden) })
             });
             if snapshot_tx.send(snapshot).is_err() {
                 return;
@@ -155,6 +156,7 @@ pub(super) fn spawn_routine_runner(overlay: bool) {
                     crate::tasks::follow_tick(&state);
                     crate::tasks::landed_tick(&state);
                     let _ = crate::hub::tick();
+                    crate::issue_recheck::tick(&state);
                 }
             }
             thread::sleep(Duration::from_secs(crate::tasks::AFTER_EVERY));

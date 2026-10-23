@@ -181,7 +181,7 @@ mod tests {
         git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]).unwrap();
         crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, "refunds done").unwrap();
         assert_eq!(crate::rules_check::shown_in(&state, &address, |_| true), Some(crate::rules_check::Shown::Checking), "the ready report asks for the rules check");
-        assert!(crate::rules_check::SPAWNED.with(|spawned| spawned.borrow().is_empty()), "and starts nothing from the task's own process");
+        assert!(crate::trusted_spawn::SPAWNED.with(|spawned| spawned.borrow().is_empty()), "and starts nothing from the task's own process");
         assert_eq!(phase(), Some(Phase::Ready { head: Some(git(&slot.path, &["rev-parse", "HEAD"]).unwrap()) }));
         prompt(&crate::messages::delivered("kelpie", "kelpie was updated"));
         assert!(matches!(phase(), Some(Phase::Ready { .. })), "an update notice leaves it ready");

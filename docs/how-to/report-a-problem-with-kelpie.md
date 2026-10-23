@@ -28,7 +28,21 @@ kelpie issue show <id>
 
 ## After an update
 
-`kelpie update` prints a `kelpie issues:` line when issues are open, and asks the lead which ones the new commits likely fix. The lead tells you which to try again. Then:
+You do nothing. After `kelpie update`, the keeper rechecks each of your open issues that was filed on older code, one at a time in the background. A read-only Claude reads the issue, every commit since the build it was filed on with its full message, and kelpie's source as it is now, and answers fixed, not fixed or unclear. It answers fixed only when a commit plainly addresses the issue and the code shows it.
+
+- **Fixed:** kelpie closes the issue as `fixed` and records `fixed in <version> (<sha>), checked automatically` in it.
+- **Not fixed or unclear:** the issue stays open, and is not checked again until the next update.
+- **No answer** (Claude failed, or gave none within 15 minutes): the issue stays open, with one line in the keeper's log.
+
+Nobody asks you anything. The board shows one line under Work as soon as the first recheck closes an issue, such as `✓ kelpie 0.26.3 fixed 2 of your issues`, with the titles below it, and adds to it as the other rechecks finish. `i` lists them all and clears the line, once any questions and report offers are dealt with; a fix that lands later shows again. The line also goes by itself three days after the last fix, and an issue you reopen leaves it. If a recheck closes one while `kelpie update` still runs, the update's output lists it too. `kelpie issues --all` shows every closed issue with its last recorded line.
+
+When a fixed issue comes back, reopen it rather than filing a new one; the lead does this when what you hit matches a closed issue:
+
+```bash
+kelpie issue reopen <id>         # records "came back on <version>"
+```
+
+The manual steps still work:
 
 ```bash
 kelpie issue retry <id>          # worth trying again
@@ -61,7 +75,7 @@ The install key is made on the first report and kept in `report/install-key.json
 
 ### Receiving reports
 
-If you run the hub that takes your users' reports, mint a token on it with `kelpie-hub admin token --name <this machine>` and set it in your own config.toml as `[report] inbox_token`. The keeper then fetches the reports the hub has let through every 10 minutes, files each as a kelpie issue on your machine, with the id `r<report id>` and the sender's title, and acknowledges it on the hub, once per report. `kelpie issues` and `kelpie issue show` mark such an issue `[report <id>, untrusted]` and show its text fenced as data; `kelpie update` leaves it out of what it tells the lead. `kelpie doctor` counts the reports still waiting in quarantine; `kelpie-hub admin reports --quarantine` lists them and `kelpie-hub admin reports allow <key>` lets a sender through. The token belongs in config.toml only; a repo config with `[report]` is refused.
+If you run the hub that takes your users' reports, mint a token on it with `kelpie-hub admin token --name <this machine>` and set it in your own config.toml as `[report] inbox_token`. The keeper then fetches the reports the hub has let through every 10 minutes, files each as a kelpie issue on your machine, with the id `r<report id>` and the sender's title, and acknowledges it on the hub, once per report. `kelpie issues` and `kelpie issue show` mark such an issue `[report <id>, untrusted]` and show its text fenced as data; it is never rechecked after an update. `kelpie doctor` counts the reports still waiting in quarantine; `kelpie-hub admin reports --quarantine` lists them and `kelpie-hub admin reports allow <key>` lets a sender through. The token belongs in config.toml only; a repo config with `[report]` is refused.
 
 ## Send it to GitHub
 

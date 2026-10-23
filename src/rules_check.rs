@@ -1,28 +1,19 @@
 use std::fs;
-use std::io::Read;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
-
-use sha2::{Digest, Sha256};
 
 use crate::config;
 use crate::lead::{install_root, state_dir};
 use crate::messages;
 use crate::peers;
-use crate::permit::Caller;
 use crate::repo::{ahead_behind, default_branch, git, main_checkout, name_of};
 use crate::review::{self, Verdict};
 use crate::sh::Result;
 use crate::tasks::{self, Slot};
+use crate::trusted_spawn::{self, claude_path, reviewer_env, trusted};
 
 pub const TIMEOUT: Duration = Duration::from_secs(15 * 60);
 pub const EVERY: u64 = 5;
-pub const REVIEWER_BIN: &str = "KELPIE_REVIEWER_BIN";
-
-const KEPT_ENV: [&str; 12] = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "PATH", "SSH_AUTH_SOCK", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME"];
-const KEPT_PREFIXES: [&str; 4] = ["KELPIE_", "CLAUDE_", "ANTHROPIC_", "HERDR_"];
 
 fn dir(state: &Path) -> PathBuf {
     state.join("rules")
@@ -193,85 +184,15 @@ fn worktree_is(path: &Path, address: &str) -> bool {
     main_checkout(path).ok().and_then(|repo| tasks::find_task(&repo, None, path).ok().map(|slot| peers::address(tasks::task_of(&slot), &name_of(&repo)))).as_deref() == Some(address)
 }
 
-// The reviewer's environment is the keeper's own, never the task's, and claude is the absolute path kelpie resolved from it.
-pub fn reviewer_env(own: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
-    own.filter(|(name, _)| KEPT_ENV.contains(&name.as_str()) || KEPT_PREFIXES.iter().any(|prefix| name.starts_with(prefix))).filter(|(name, _)| name != "KELPIE_ADDRESS").collect()
-}
-
-pub fn claude_path(env: &[(String, String)]) -> Option<PathBuf> {
-    let named = env.iter().find(|(name, _)| name == crate::setup::CLAUDE_VAR).map(|(_, value)| value.clone()).filter(|value| !value.is_empty()).unwrap_or_else(|| "claude".to_string());
-    if Path::new(&named).is_absolute() {
-        return Some(PathBuf::from(named));
-    }
-    let path = env.iter().find(|(name, _)| name == "PATH").map(|(_, value)| value.split(':').filter(|dir| Path::new(dir).is_absolute()).map(PathBuf::from).collect::<Vec<_>>()).unwrap_or_default();
-    crate::doctor::which(&named, &path)
-}
-
-fn reviewer_command(kelpie: &Path, worktree: &Path, env: &[(String, String)], claude: &Path) -> Command {
-    let mut command = Command::new(kelpie);
-    command.arg("-C").arg(worktree).args(["review", "--run", "--rules"]).env_clear().envs(env.iter().map(|(name, value)| (name, value))).env(REVIEWER_BIN, claude)
-        .current_dir(worktree).stdin(Stdio::piped()).process_group(0);
-    command
+fn reviewer_command(kelpie: &Path, worktree: &Path, env: &[(String, String)], claude: &Path) -> std::process::Command {
+    trusted_spawn::command(kelpie, worktree, &["-C", &worktree.to_string_lossy(), "review", "--run", "--rules"], env, claude)
 }
 
 fn begin(state: &Path, address: &str, worktree: &Path, round: u32, env: &[(String, String)]) -> Result<()> {
     let claude = claude_path(env).ok_or("kelpie found no claude on the keeper's PATH")?;
-    let log = log_file(state, address);
-    let output = crate::state::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
-    let errors = output.try_clone().map_err(|error| error.to_string())?;
-    let mut command = reviewer_command(&peers::own_exe()?, worktree, env, &claude);
-    command.stdout(output).stderr(errors);
-    let nonce = nonce()?;
-    crate::state::write(&file(state, address, "run"), format!("{}\n{round}\n", digest(&nonce)))?;
-    let pid = spawn(command, &nonce)?;
+    let command = reviewer_command(&peers::own_exe()?, worktree, env, &claude);
+    let pid = trusted_spawn::launch(command, &log_file(state, address), &file(state, address, "run"), &format!("{round}\n"))?;
     crate::state::write(&file(state, address, "running"), pid.to_string())
-}
-
-fn nonce() -> Result<String> {
-    let mut bytes = [0u8; 32];
-    fs::File::open("/dev/urandom").and_then(|mut random| random.read_exact(&mut bytes)).map_err(|error| error.to_string())?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
-}
-
-fn digest(nonce: &str) -> String {
-    Sha256::digest(nonce.trim().as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-// The nonce goes over stdin, which no other process can read, and the run record keeps only its hash.
-#[cfg(not(test))]
-fn spawn(mut command: Command, nonce: &str) -> Result<u32> {
-    use std::io::Write;
-    let mut child = command.spawn().map_err(|error| format!("kelpie review --rules: {error}"))?;
-    let written = child.stdin.take().ok_or("the reviewer has no stdin".to_string()).and_then(|mut stdin| writeln!(stdin, "{nonce}").map_err(|error| error.to_string()));
-    let pid = crate::sh::reap(child);
-    written.map(|_| pid)
-}
-
-#[cfg(test)]
-pub(crate) struct Spawned {
-    pub program: String,
-    pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
-    pub nonce: String,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static SPAWNED: std::cell::RefCell<Vec<Spawned>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-// Tests record the reviewer they would start; this test's own pid stands in for its marker.
-#[cfg(test)]
-fn spawn(command: Command, nonce: &str) -> Result<u32> {
-    let text = |value: &std::ffi::OsStr| value.to_string_lossy().to_string();
-    let spawned = Spawned {
-        program: text(command.get_program()),
-        args: command.get_args().map(text).collect(),
-        env: command.get_envs().filter_map(|(name, value)| Some((text(name), text(value?)))).collect(),
-        nonce: nonce.to_string(),
-    };
-    SPAWNED.with(|all| all.borrow_mut().push(spawned));
-    Ok(std::process::id())
 }
 
 fn running_pid(state: &Path, address: &str) -> Option<String> {
@@ -338,15 +259,9 @@ pub fn forget_in(state: &Path, address: &str) {
     }
 }
 
-// Only a reviewer the keeper started, with the nonce it handed over and no task in its chain, settles a verdict; the keeper runs detached, so its chain reads as an agent.
-pub fn trusted(caller: &Caller, presented: &str, recorded: Option<&str>) -> bool {
-    !matches!(caller, Caller::Task(_) | Caller::Sandboxed | Caller::LeadSandboxed) && !presented.trim().is_empty() && recorded.and_then(|record| record.lines().next()).is_some_and(|hash| hash.trim() == digest(presented))
-}
-
 // The background half: the reviewer checks the commits against the rules skill, and kelpie settles its verdict.
 pub fn run(cwd: &Path) -> Result<String> {
-    let mut presented = String::new();
-    let _ = std::io::stdin().take(256).read_to_string(&mut presented);
+    let presented = trusted_spawn::presented();
     let repo = main_checkout(cwd)?;
     let slot = tasks::find_task(&repo, None, cwd)?;
     let address = peers::address(tasks::task_of(&slot), &name_of(&repo));
@@ -416,11 +331,11 @@ fn check(state: &Path, repo: &Path, slot: &Slot, address: &str, upstream: &str, 
     let kelpie = install_root()?;
     let rules = &settings.rules_skill.value;
     let rules_file = review::rules_file(rules, &slot.path, &kelpie).ok_or(format!("kelpie found no file for the rules skill `{rules}`"))?;
-    let claude = std::env::var(REVIEWER_BIN).ok().map(PathBuf::from).filter(|bin| bin.is_absolute()).ok_or("the keeper gave no claude path")?;
+    let claude = trusted_spawn::claude_from_keeper()?;
     let commits = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
     let docs = if settings.docs_required.value { Some(review::docs_brief(&slot.path, upstream, sha, &kelpie.join("skills/keep-docs/SKILL.md"))?) } else { None };
     let input = brief(address, &slot.path, upstream, sha, &commits, rules, &rules_file, docs.as_deref());
-    let answer = review::ask_reviewer(&review::Ask { address, worktree: &slot.path, settings: &settings, rules_file: Some(&rules_file), docs: docs.is_some(), input: &input, timeout: Some(TIMEOUT), role: "rules", program: Some(&claude), group_file: Some(&file(state, address, "claude")) })?;
+    let answer = review::ask_reviewer(&review::Ask { address, worktree: &slot.path, settings: &settings, rules_file: Some(&rules_file), docs: docs.is_some(), input: &input, timeout: Some(TIMEOUT), role: "rules", program: Some(&claude), group_file: Some(&file(state, address, "claude")), prompt: None })?;
     review::record(&answer, sha).ok_or_else(|| review::no_verdict(&answer))
 }
 
@@ -508,6 +423,10 @@ mod tests {
     use super::*;
     use crate::tasks::test_support::*;
     use crate::repo::git;
+    use crate::permit::Caller;
+    use crate::trusted_spawn::{REVIEWER_BIN, SPAWNED, digest};
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
 
     #[test]
     fn a_commit_without_a_blank_line_and_a_body_breaks_the_form() {

@@ -189,7 +189,7 @@ pub enum Caller {
 }
 
 // The subcommands kelpie refuses to a task by who calls it: a task's settings deny each, and never take one out of the sandbox.
-pub const USER_ONLY: [&str; 22] = ["approve", "push", "stage", "unstage", "setup", "choose", "after", "ci dismiss", "ci outside", "away", "decide", "defer", "answered", "notify", "follow", "release", "review --withdraw", "issue add", "issue close", "issue retry", "issue link", "issue send"];
+pub const USER_ONLY: [&str; 25] = ["approve", "push", "stage", "unstage", "setup", "choose", "after", "ci dismiss", "ci outside", "away", "decide", "defer", "answered", "notify", "follow", "release", "review --withdraw", "issue add", "issue close", "issue retry", "issue reopen", "issue link", "issue send", "issue recheck", "review --run"];
 
 fn role_of(args: &str) -> Option<Caller> {
     let words: Vec<&str> = args.split_whitespace().collect();

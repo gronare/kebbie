@@ -18,6 +18,7 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<String
     let state = lead::state_dir()?;
     let places = Places::new(root.clone(), claude_dir.to_path_buf(), channel);
     let before = update_check::installed(&places);
+    let started = crate::messages::now();
     let mut lines = vec![herdr_plugin(&plugin, &state, channel, request, visible)?];
     lines.extend(finish_on_new_binary(claude_dir, root.as_deref()));
     let running = release::read_override(&state);
@@ -28,6 +29,7 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<String
     });
     summary.push(String::new());
     summary.extend(lines);
+    summary.extend(crate::issue_recheck::update_lines(&state, started));
     Ok(summary.join("\n"))
 }
 

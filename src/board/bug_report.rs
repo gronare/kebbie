@@ -4,12 +4,15 @@ use ratatui::Frame;
 use kelpie_hub_protocol::BugReport;
 
 use crate::hub::report::{self, Scrub};
+use crate::issue_recheck::Fixed;
 use crate::keys::{self, Act};
+use crate::notice::{Notice, Tone};
 use super::{App, Mode};
-use super::widgets::{FAINT, MUTED, PEACH, TEXT, YELLOW, bold, group_line, modal, style, wrap};
+use super::widgets::{FAINT, GREEN, MUTED, PEACH, TEXT, YELLOW, bold, group_line, modal, style, wrap};
 
 const PAGE: u16 = 10;
 const FRAME_ROWS: u16 = 14;
+const FIXED_TITLES: usize = 3;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Offer {
@@ -48,7 +51,39 @@ pub(super) fn offer_lines(offers: &[Offer], questions: bool, width: usize) -> Ve
     lines
 }
 
+pub(super) fn load_fixed() -> Option<Fixed> {
+    crate::issue_recheck::shown(&crate::lead::state_dir().ok()?, crate::messages::now())
+}
+
+pub(super) fn fixed_lines(fixed: Option<&Fixed>, questions: bool, offers: bool, width: usize) -> Vec<Line<'static>> {
+    let Some(fixed) = fixed else { return Vec::new() };
+    let mut lines = vec![Line::default(), Line::from(Span::styled(format!("✓ {}", crate::issue_recheck::headline(fixed)), style(GREEN)))];
+    for title in fixed.titles.iter().take(FIXED_TITLES) {
+        let title = wrap(title, width.saturating_sub(4), 1).into_iter().next().unwrap_or_default();
+        lines.push(Line::from(vec![Span::raw("  "), Span::styled(title, style(TEXT))]));
+    }
+    let more = fixed.titles.len().saturating_sub(FIXED_TITLES);
+    if more > 0 {
+        lines.push(Line::from(Span::styled(format!("  … and {more} more"), style(MUTED))));
+    }
+    let after = if questions { ", once the questions are answered" } else if offers { ", once the reports above are decided" } else { "" };
+    lines.push(Line::from(Span::styled(format!("  {} lists them and clears this{after}", keys::key(Act::Inbox)), style(MUTED))));
+    lines
+}
+
 impl App {
+    pub(super) fn open_fixed(&mut self) -> bool {
+        let Some(fixed) = self.fixed.take() else { return false };
+        self.fixed_seen = self.fixed_seen.max(fixed.last);
+        if let Ok(state) = crate::lead::state_dir() {
+            let _ = crate::issue_recheck::dismiss(&state, &fixed, crate::messages::now());
+        }
+        let notice = fixed.titles.iter().fold(Notice::new(Tone::Done, crate::issue_recheck::headline(&fixed)).next("kelpie issues --all lists them, each with the commit that fixed it."), |notice, title| notice.detail("fixed", title));
+        self.subject = Some(super::notices::Subject::plain("issues"));
+        self.show_as(notice.ok(), true);
+        true
+    }
+
     pub(super) fn open_report(&mut self) -> bool {
         let Some(offer) = self.offers.first() else { return false };
         self.mode = Mode::Report { id: offer.id.clone(), scroll: 0, read: false, nudged: false };
@@ -189,5 +224,28 @@ mod tests {
         assert!(matches!(app.mode, Mode::Report { read: true, .. }));
         press(&mut app, key(KeyCode::Char('y')));
         assert!(matches!(app.mode, Mode::Working { .. }) && app.offers.is_empty(), "y sends once the end was on screen");
+    }
+
+    #[test]
+    fn the_issues_an_update_fixed_show_under_work_until_the_inbox_key_lists_and_clears_them() {
+        let titles: Vec<String> = ["push hid git's error", "the board froze on resize", "stage lost a commit", "a fourth"].iter().map(|title| title.to_string()).collect();
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: titles.clone(), last: 500 });
+        let (rows, _) = render(&mut app, 120, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("✓ kelpie 0.26.3 fixed 4 of your issues") && screen.contains("  i lists them and clears this"), "{screen}");
+        assert!(screen.contains("  push hid git's error") && screen.contains("  stage lost a commit") && !screen.contains("a fourth") && screen.contains("… and 1 more"), "{screen}");
+        press(&mut app, key(KeyCode::Char('i')));
+        assert!(app.fixed.is_none() && app.fixed_seen == 500, "the line goes once it was opened, and a snapshot read before it cannot bring it back");
+        let Mode::Message(text) = &app.mode else { panic!("a window that stays until a key") };
+        assert!(text.contains("kelpie 0.26.3 fixed 4 of your issues") && text.contains("a fourth") && text.contains("kelpie issues --all"), "{text}");
+        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: vec!["x".to_string()], last: 600 });
+        app.questions = crate::messages::fold(QUESTION);
+        let hint = |questions: bool, offers: bool| fixed_lines(app.fixed.as_ref(), questions, offers, 120).iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(hint(true, false).contains("i lists them and clears this, once the questions are answered"), "{}", hint(true, false));
+        assert!(hint(false, true).contains("i lists them and clears this, once the reports above are decided"), "{}", hint(false, true));
+        press(&mut app, key(KeyCode::Esc));
+        press(&mut app, key(KeyCode::Char('i')));
+        assert!(matches!(app.mode, Mode::Questions(_)) && app.fixed.is_some(), "questions come first");
     }
 }

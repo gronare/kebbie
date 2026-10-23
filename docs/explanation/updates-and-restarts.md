@@ -69,6 +69,10 @@ A restart never interrupts work:
 
 `kelpie update` ends with one line per session: `restarted`, `restarts when idle`, `you are in it: restarts when you leave it`, `waiting for your answer: background work running`, or `skipped: <reason>`.
 
+## Your kelpie issues
+
+An update can fix the problems kelpie logged about itself. After `kelpie update`, the keeper rechecks each open [kelpie issue](../how-to/report-a-problem-with-kelpie.md#after-an-update) filed on older code in the background: a read-only Claude reads the issue, the commits since and the new source, and kelpie closes the issues a commit plainly fixes. You are not asked anything; the board shows one line naming what the update fixed.
+
 ## The keeper
 
 The keeper is the background `kelpie keeper` process that runs the restarts, the update check, the delivery of held messages and typed prompts, and the relay of a task's Claude's own prompts to the lead while no board is open. See [How kelpie fits together](architecture.md#the-keeper).
