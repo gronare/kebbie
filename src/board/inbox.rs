@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc;
 use std::thread;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -14,7 +14,6 @@ use crate::herdr;
 use crate::keys::{self, Act};
 use crate::messages::{self, Message};
 use crate::peers;
-use crate::sh::Result;
 use crate::status::Item;
 use crate::questions;
 use crate::notice::{Notice, Tone};
@@ -31,7 +30,6 @@ pub(super) struct QuestionWindow {
     pub(super) typing: bool,
     pub(super) comment: TextArea<'static>,
     notice: Option<(bool, String)>,
-    answering: Option<(String, Receiver<Result<String>>)>,
 }
 
 fn comment_field() -> TextArea<'static> {
@@ -44,7 +42,7 @@ fn comment_field() -> TextArea<'static> {
 
 impl QuestionWindow {
     fn new(questions: &[Message], selected: usize) -> Self {
-        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, shift: 0, typing: false, comment: comment_field(), notice: None, answering: None };
+        let mut window = Self { id: String::new(), selected: 0, option: 0, scroll: 0, shift: 0, typing: false, comment: comment_field(), notice: None };
         window.select(questions, selected);
         window
     }
@@ -183,7 +181,7 @@ impl App {
         let answers = self.questions.get(window.selected).map(answers).unwrap_or_default();
         let planned = self.questions.get(window.selected).and_then(|message| message.question.as_ref()).is_some_and(|question| question.plan.is_some());
         let count_answers = answers.len().max(1);
-        let busy = window.answering.is_some();
+        let busy = self.answering.is_some();
         if window.typing {
             match key.code {
                 KeyCode::Esc => window.typing = false,
@@ -267,35 +265,54 @@ impl App {
         thread::spawn(move || {
             let _ = sender.send(questions::answer(&asked, choice, &comment));
         });
-        window.answering = Some((id, result));
+        self.answering = Some((id, result));
         window.notice = Some((true, "Answering…".to_string()));
     }
 
-    pub(super) fn poll_answer(&mut self) {
+    pub(super) fn follow_questions(&mut self) {
         let Mode::Questions(window) = &mut self.mode else { return };
-        let Some((id, receiver)) = &window.answering else { return };
+        if !self.questions.is_empty() {
+            return window.follow(&self.questions);
+        }
+        self.mode = Mode::Normal;
+        if self.answering.is_none() {
+            self.subject = Some(super::notices::Subject::plain("inbox"));
+            self.show(Notice::new(Tone::NotNow, "The question you had open was answered or closed elsewhere").ok());
+        }
+    }
+
+    // The answer outlives the window: it is read and shown even after its question closed elsewhere and took the window with it.
+    pub(super) fn poll_answer(&mut self) {
+        let Some((id, receiver)) = &self.answering else { return };
         let Ok(result) = receiver.try_recv() else { return };
         let id = id.clone();
-        window.answering = None;
-        let text = match result {
-            Ok(text) => text,
-            Err(error) => {
-                window.notice = Some((false, error));
-                return;
+        self.answering = None;
+        if let (Err(error), Mode::Questions(window)) = (&result, &mut self.mode) {
+            window.notice = Some((false, error.clone()));
+            return;
+        }
+        if result.is_ok() {
+            self.questions.retain(|question| question.id != id);
+            let _ = self.refresh.send(());
+        }
+        let Mode::Questions(window) = &mut self.mode else {
+            if matches!(self.mode, Mode::Normal) {
+                self.subject = Some(super::notices::Subject::plain("answer"));
+                self.show(result);
+            } else {
+                self.say(result.unwrap_or_else(|error| error));
             }
+            return;
         };
-        self.questions.retain(|question| question.id != id);
-        let _ = self.refresh.send(());
+        let text = result.unwrap_or_default();
         if self.questions.is_empty() {
             self.subject = Some(super::notices::Subject::plain("answer"));
             self.show(Ok(text));
             return;
         }
-        if let Mode::Questions(window) = &mut self.mode {
-            let at = if window.id == id { window.selected } else { self.questions.iter().position(|question| question.id == window.id).unwrap_or(window.selected) };
-            window.select(&self.questions, at);
-            window.notice = Some((true, text));
-        }
+        let at = if window.id == id { window.selected } else { self.questions.iter().position(|question| question.id == window.id).unwrap_or(window.selected) };
+        window.select(&self.questions, at);
+        window.notice = Some((true, text));
     }
 }
 
@@ -770,7 +787,7 @@ mod tests {
         assert_eq!(plan_before - plan_after, 2, "the plan gives up only the box's rows: {screen}");
         press(&mut app, KeyCode::Char('a'));
         let Mode::Questions(window) = &app.mode else { panic!() };
-        assert!(window.answering.is_none() && window.comment() == "a", "a letter in the box is text, not an answer");
+        assert!(app.answering.is_none() && window.comment() == "a", "a letter in the box is text, not an answer");
         press(&mut app, KeyCode::PageDown);
         let Mode::Questions(window) = &app.mode else { panic!() };
         assert!(window.scroll > 0 && window.typing, "pgdn scrolls the plan while typing");
@@ -787,11 +804,11 @@ mod tests {
         app.open_questions(Some(1));
         assert!(app.take_paste("a".to_string()).is_some(), "with the box closed the paste is passed on, not taken as the answer a");
         let Mode::Questions(window) = &app.mode else { panic!() };
-        assert!(window.answering.is_none() && !window.typing);
+        assert!(app.answering.is_none() && !window.typing);
         press(&mut app, KeyCode::Char('c'));
         assert_eq!(app.take_paste("see /var/x.png".to_string()), None);
         let Mode::Questions(window) = &app.mode else { panic!() };
-        assert!(window.answering.is_none() && window.comment() == "see /var/x.png");
+        assert!(app.answering.is_none() && window.comment() == "see /var/x.png");
     }
 
     #[test]
@@ -875,7 +892,7 @@ mod tests {
         assert!(screen.contains("esc back to the answers"), "{screen}");
         press(&mut app, KeyCode::Enter);
         let Mode::Questions(window) = &app.mode else { panic!("the window stays open") };
-        assert!(window.answering.is_none() && window.typing, "an empty answer in your own words is refused");
+        assert!(app.answering.is_none() && window.typing, "an empty answer in your own words is refused");
         assert!(window.notice.as_ref().is_some_and(|(ok, text)| !ok && text.contains("own words")));
     }
 
@@ -1057,7 +1074,7 @@ mod tests {
 
     fn typing(app: &App) -> (bool, bool, Option<String>) {
         let Mode::Questions(window) = &app.mode else { panic!("the questions window is open") };
-        (window.typing, window.answering.is_some(), window.notice.as_ref().map(|(_, text)| text.clone()))
+        (window.typing, app.answering.is_some(), window.notice.as_ref().map(|(_, text)| text.clone()))
     }
 
     fn with_changes(app: &mut App) {
@@ -1088,6 +1105,54 @@ mod tests {
         assert!(typing(&app).1, "with text it sends");
     }
 
+    fn snapshot_without(app: &mut App, id: &str) {
+        app.questions.retain(|question| question.id != id);
+        app.follow_questions();
+    }
+
+    #[test]
+    fn a_question_answered_elsewhere_while_its_comment_is_typed_closes_the_window_and_gives_the_board_back() {
+        let mut app = test_app(vec![served("search-filters"), served("payments")]);
+        with_changes(&mut app);
+        app.open_questions(Some(0));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('x'));
+        assert_eq!(typing(&app), (true, false, None));
+        snapshot_without(&mut app, "q3");
+        let (rows, _) = render(&mut app, 112, 40);
+        let screen = rows.join("\n");
+        assert!(!matches!(app.mode, Mode::Questions(_)), "a window with no question left would draw nothing and still take every key: {screen}");
+        assert!(screen.contains("answered or closed"), "the board says why the window went: {screen}");
+        crate::board::test_support::press(&mut app, KeyEvent::from(KeyCode::Down));
+        assert_eq!(app.work_selected, 1, "keys move the board again");
+        let (rows, _) = render(&mut app, 112, 40);
+        let (x, y) = find(&rows, "search-filters")[0];
+        click(&mut app, x as u16, y as u16);
+        assert_eq!(app.work_selected, 0, "clicks reach the board again");
+    }
+
+    #[test]
+    fn an_answer_in_flight_when_its_question_closes_elsewhere_still_lands_on_the_board() {
+        let mut app = test_app(vec![served("search-filters")]);
+        app.questions = three_questions();
+        app.open_questions(Some(0));
+        let (sender, receiver) = mpsc::channel();
+        app.answering = Some(("a".to_string(), receiver));
+        snapshot_without(&mut app, "b");
+        assert!(matches!(app.mode, Mode::Questions(_)), "another question going leaves the window open");
+        app.questions.clear();
+        app.follow_questions();
+        assert!(matches!(app.mode, Mode::Normal), "the last question going closes the window even mid-send");
+        sender.send(Err("That question was answered already".to_string())).unwrap();
+        app.poll_answer();
+        assert!(app.answering.is_none(), "the answer resolves after its window closed");
+        let (rows, _) = render(&mut app, 112, 40);
+        assert!(rows.join("\n").contains("answered already"), "its outcome is shown: {}", rows.join("\n"));
+        app.mode = Mode::Normal;
+        crate::board::test_support::press(&mut app, KeyEvent::from(KeyCode::Char('i')));
+        assert!(!matches!(app.mode, Mode::Questions(_)), "an empty inbox never opens an empty window");
+    }
+
     #[test]
     fn an_option_without_the_mark_still_sends_on_its_digit() {
         let mut app = test_app(Vec::new());
@@ -1112,7 +1177,7 @@ mod tests {
         let (x, y) = find(&rows, "1  Approve")[0];
         click(&mut app, x as u16 + 3, y as u16);
         let Mode::Questions(window) = &app.mode else { panic!() };
-        assert_eq!((window.option, window.typing, window.answering.is_some()), (0, false, false), "a click never sends");
+        assert_eq!((window.option, window.typing, app.answering.is_some()), (0, false, false), "a click never sends");
     }
 
     #[test]
