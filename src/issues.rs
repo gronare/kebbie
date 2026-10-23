@@ -602,10 +602,8 @@ mod tests {
     }
 
     fn fake_gh(dir: &Path, script: &str) -> String {
-        use std::os::unix::fs::PermissionsExt;
         let bin = dir.join("gh");
-        fs::write(&bin, format!("#!/bin/sh\necho \"$*\" >> '{}/gh.log'\n{script}", dir.display())).unwrap();
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&bin, format!("#!/bin/sh\necho \"$*\" >> '{}/gh.log'\n{script}", dir.display())).unwrap();
         bin.to_string_lossy().to_string()
     }
 

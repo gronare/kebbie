@@ -690,8 +690,7 @@ mod tests {
     }
 
     fn executable(path: &Path) {
-        std::fs::write(path, "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(path, "#!/bin/sh\n").unwrap();
     }
 
     fn uid(dir: &Path) -> u32 {
@@ -971,7 +970,6 @@ mod tests {
 
     #[test]
     fn a_set_setup_command_must_be_an_executable_in_the_main_checkout() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = scratch("setup-command");
         let command = |value: Option<&str>| Setting { value: value.map(str::to_string), layer: config::Layer::Repo };
         assert_eq!(setup_command(&command(None), &dir), None, "unset means bin/setup-worktree when it exists");
@@ -982,7 +980,7 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\n").unwrap();
         let plain = setup_command(&command(Some("script/prepare_worktree")), &dir).unwrap();
         assert!(plain.level == Level::Warn && plain.fact.contains("not an executable file") && plain.fix[0] == "chmod +x script/prepare_worktree", "{plain:?}");
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&script, "#!/bin/sh\n").unwrap();
         assert_eq!(setup_command(&command(Some("script/prepare_worktree")), &dir).unwrap().level, Level::Ok);
         assert_eq!(setup_command(&command(Some("make prepare")), &dir).unwrap().level, Level::Ok);
         let machine_wide = Setting { value: Some("script/elsewhere".to_string()), layer: config::Layer::Machine };
@@ -1071,13 +1069,11 @@ mod tests {
         let (repo, file) = (dir.join("app"), dir.join("repos/app.toml"));
         std::fs::create_dir_all(&repo).unwrap();
         let gh = dir.join("gh");
-        std::fs::write(&gh, "#!/bin/sh\n[ \"$*\" = \"repo view --json visibility --jq .visibility\" ] && echo PUBLIC\n").unwrap();
-        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&gh, "#!/bin/sh\n[ \"$*\" = \"repo view --json visibility --jq .visibility\" ] && echo PUBLIC\n").unwrap();
         assert_eq!(visibility(Some(&gh), &repo, GH_TIMEOUT).as_deref(), Some("public"));
         assert_eq!(visibility(None, &repo, GH_TIMEOUT), None, "without gh there is no answer");
         let slow = dir.join("gh-slow");
-        std::fs::write(&slow, "#!/bin/sh\nsleep 30\necho PUBLIC\n").unwrap();
-        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&slow, "#!/bin/sh\nsleep 30\necho PUBLIC\n").unwrap();
         let started = std::time::Instant::now();
         assert_eq!(visibility(Some(&slow), &repo, std::time::Duration::from_millis(200)), None, "a gh that hangs is no answer");
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "and doctor does not wait for it");
@@ -1085,8 +1081,7 @@ mod tests {
             assert_eq!(gh_on(std::slice::from_ref(&dir)), Some(gh.clone()), "gh is found on the doctor's PATH");
         }
         let failing = dir.join("gh-failing");
-        std::fs::write(&failing, "#!/bin/sh\necho 'no git remotes found' >&2\nexit 1\n").unwrap();
-        std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&failing, "#!/bin/sh\necho 'no git remotes found' >&2\nexit 1\n").unwrap();
         assert_eq!(visibility(Some(&failing), &repo, GH_TIMEOUT), None, "a repo gh cannot read is no answer");
         let off = Setting { value: false, layer: config::Layer::Default };
         let suggested = docs(&off, || visibility(Some(&gh), &repo, GH_TIMEOUT), &file).unwrap();

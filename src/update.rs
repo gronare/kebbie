@@ -252,12 +252,10 @@ mod tests {
 
     #[test]
     fn the_steps_after_the_build_run_on_the_binary_just_built() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = scratch("finish");
         let binary = dir.join("target/release/kelpie");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
-        std::fs::write(&binary, "#!/bin/sh\n[ \"$*\" = \"update --finish\" ] && printf 'Claude Code plugin: from the new binary\\nboard: up to date\\n'\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&binary, "#!/bin/sh\n[ \"$*\" = \"update --finish\" ] && printf 'Claude Code plugin: from the new binary\\nboard: up to date\\n'\n").unwrap();
         assert_eq!(finish_on_new_binary(&dir, Some(&dir)), ["Claude Code plugin: from the new binary", "board: up to date"]);
     }
 
@@ -269,11 +267,9 @@ mod tests {
     }
 
     fn fake_claude(dir: &Path) -> (String, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
         let log = dir.join("claude.log");
         let bin = dir.join("claude");
-        std::fs::write(&bin, format!("#!/bin/sh\necho \"$*\" >> '{}'\n", log.display())).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&bin, format!("#!/bin/sh\necho \"$*\" >> '{}'\n", log.display())).unwrap();
         (bin.to_string_lossy().to_string(), log)
     }
 

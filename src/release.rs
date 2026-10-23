@@ -320,10 +320,8 @@ pub fn install(root: &Path, state: &Path, channel: Channel, request: &Request, h
 
 #[cfg(test)]
 pub fn fake_curl(dir: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let curl = dir.join("fake-curl");
-    std::fs::write(&curl, "#!/bin/sh\nfor url; do :; done\ncase \"$url\" in file://*) [ -f \"${url#file://}\" ] && printf 206 || printf 404 ;; *) printf 000; exit 7 ;; esac\n").unwrap();
-    std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::executable::write(&curl, "#!/bin/sh\nfor url; do :; done\ncase \"$url\" in file://*) [ -f \"${url#file://}\" ] && printf 206 || printf 404 ;; *) printf 000; exit 7 ;; esac\n").unwrap();
     curl
 }
 
@@ -448,12 +446,10 @@ mod tests {
 
     #[test]
     fn a_release_is_published_by_its_http_status_not_by_curls_exit_code() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = scratch("curl-status");
         let answer = |said: &str, exit: u8| {
             let curl = dir.join("curl");
-            std::fs::write(&curl, format!("#!/bin/sh\nprintf '{said}'\nexit {exit}\n")).unwrap();
-            std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::executable::write(&curl, format!("#!/bin/sh\nprintf '{said}'\nexit {exit}\n")).unwrap();
             Binaries { base: Some("https://github.com/gronare/kelpie/releases/download".to_string()), target: Some("aarch64-apple-darwin"), curl }.available("v0.25.0")
         };
         assert_eq!(answer("206", 0), Ok(true));

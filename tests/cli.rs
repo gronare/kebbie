@@ -1,8 +1,9 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+#[path = "../src/executable.rs"]
+mod executable;
 #[path = "../src/test_seal.rs"]
 mod test_seal;
 
@@ -37,8 +38,7 @@ impl Lab {
         let bin = self.root.join("bin");
         fs::create_dir_all(&bin).unwrap();
         for tool in ["bwrap", "socat"] {
-            fs::write(bin.join(tool), "#!/bin/sh\nexit 0\n").unwrap();
-            fs::set_permissions(bin.join(tool), fs::Permissions::from_mode(0o755)).unwrap();
+            crate::executable::write(bin.join(tool), "#!/bin/sh\nexit 0\n").unwrap();
         }
         for arch in ["x64", "arm64"] {
             let filter = self.home.join(".npm-global/lib/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp").join(arch);
@@ -70,8 +70,7 @@ impl Lab {
             "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\nkey=\"$1-$2\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
             self.root.display()
         );
-        fs::write(&self.herdr, script).unwrap();
-        fs::set_permissions(&self.herdr, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&self.herdr, script).unwrap();
     }
 
     // What the fake herdr shows as every pane's visible screen: Claude's input box holding this line.
@@ -109,8 +108,7 @@ impl Lab {
     fn run_as(&self, role: &str, args: &[&str]) -> Output {
         let claude = self.root.join("node_modules/@anthropic-ai/claude-code/cli.sh");
         fs::create_dir_all(claude.parent().unwrap()).unwrap();
-        fs::write(&claude, "#!/bin/sh\nshift 2\nkelpie=\"$1\"\nshift\n\"$kelpie\" \"$@\"\n").unwrap();
-        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&claude, "#!/bin/sh\nshift 2\nkelpie=\"$1\"\nshift\n\"$kelpie\" \"$@\"\n").unwrap();
         let command = self.command();
         let mut wrapped = Command::new(&claude);
         wrapped.envs(command.get_envs().filter_map(|(key, value)| Some((key, value?)))).stdin(Stdio::null());
@@ -393,8 +391,7 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     let task_bin = lab.root.join("task-bin");
     fs::create_dir_all(&task_bin).unwrap();
     let fake = task_bin.join("claude");
-    fs::write(&fake, format!("#!/bin/sh\necho \"$@\" > {}\ncat > /dev/null\necho 'verdict: ok'\n", lab.root.join("reviewer.args").display())).unwrap();
-    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::executable::write(&fake, format!("#!/bin/sh\necho \"$@\" > {}\ncat > /dev/null\necho 'verdict: ok'\n", lab.root.join("reviewer.args").display())).unwrap();
     let report = lab.command().env("PATH", format!("{}:{}", task_bin.display(), lab.path())).args(["-C", slot_str, "report", "--state", "ready", "--next", "push and close", "refunds done"]).output().unwrap();
     assert!(report.status.success(), "{}", stderr(&report));
     assert!(stdout(&report).starts_with("Reported to the lead and the board as billing@app."), "{}", stdout(&report));
@@ -646,8 +643,7 @@ impl Drop for Sessions {
 
 fn executable(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, text).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::executable::write(path, text).unwrap();
 }
 
 fn sessions(lab: &Lab) -> Sessions {
@@ -1134,14 +1130,14 @@ fn a_keeper_whose_binary_is_replaced_hands_over_to_the_new_one() {
     let lab = Lab::new("keeper-binary");
     let binary = lab.root.join("install/target/release/kelpie");
     fs::create_dir_all(binary.parent().unwrap()).unwrap();
-    fs::copy(KELPIE, &binary).unwrap();
+    crate::executable::write(&binary, fs::read(KELPIE).unwrap()).unwrap();
     let mut start = Command::new(&binary);
     start.env_clear().envs(lab.command().get_envs().filter_map(|(key, value)| Some((key, value?)))).args(["keeper", "--start"]).stdin(Stdio::null());
     let own = stdout(&start.output().unwrap());
     assert!(own.starts_with("keeper: started (pid "), "{own}");
     let old = pid_in(&own);
     let fresh = binary.with_file_name("kelpie.new");
-    fs::copy(KELPIE, &fresh).unwrap();
+    crate::executable::write(&fresh, fs::read(KELPIE).unwrap()).unwrap();
     fs::rename(&fresh, &binary).unwrap();
     assert!(eventually(|| !alive(&old)), "the old keeper exits once the new binary holds still");
     assert!(eventually(|| stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: running")), "and a keeper on the new one runs");

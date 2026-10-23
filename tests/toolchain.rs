@@ -1,3 +1,5 @@
+#[path = "../src/executable.rs"]
+mod executable;
 #[path = "../src/test_seal.rs"]
 mod test_seal;
 

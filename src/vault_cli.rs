@@ -355,7 +355,6 @@ pub fn warn_log(state: &Path, text: &str) {
 #[cfg(test)]
 pub mod fake {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     // A vault command that records each argv as one line in argv.log and answers with <dir>/answers/<word>-<word>.json, or fails with <word>-<word>.err.
     pub struct Fake {
@@ -369,11 +368,10 @@ pub mod fake {
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(dir.join("answers")).unwrap();
             let script = dir.join("vault");
-            std::fs::write(&script, format!(
+            crate::executable::write(&script, format!(
                 "#!/bin/sh\nd='{}'\nprintf '%s\\n' \"$*\" >> \"$d/argv.log\"\nkey=\"$1-$2\"\nif [ -f \"$d/answers/$key.err\" ]; then cat \"$d/answers/$key.err\" >&2; exit 1; fi\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\nif [ -f \"$d/answers/$1.json\" ]; then cat \"$d/answers/$1.json\"; exit 0; fi\nexit 0\n",
                 dir.display()
             )).unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             let cli = Cli { machine: "mac".to_string(), ..Cli::new(vec![script.to_string_lossy().to_string()]) };
             Self { dir, cli }
         }
@@ -424,12 +422,10 @@ mod tests {
 
     #[test]
     fn a_new_pin_uv_has_not_seen_is_retried_once_with_refresh() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("kelpie-vault-refresh-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let uvx = dir.join("uvx");
-        std::fs::write(&uvx, "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/argv.log\"\nif [ \"$1\" = --refresh ]; then echo '{\"missing\":[]}'; else echo 'requirements are unsatisfiable.' >&2; exit 1; fi\n").unwrap();
-        std::fs::set_permissions(&uvx, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&uvx, "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/argv.log\"\nif [ \"$1\" = --refresh ]; then echo '{\"missing\":[]}'; else echo 'requirements are unsatisfiable.' >&2; exit 1; fi\n").unwrap();
         let cli = Cli::new(vec![uvx.to_string_lossy().to_string(), "notes-vault-mcp==9.9.9".to_string()]);
         assert_eq!(cli.missing("Projects/x.md", &["problem"]), Ok(vec![]));
         let calls = std::fs::read_to_string(dir.join("argv.log")).unwrap();

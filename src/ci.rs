@@ -741,8 +741,7 @@ mod tests {
         tick_with(&dir, "false", 100 + UNREADABLE_AFTER);
         assert_eq!(crate::phase::load(&dir, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::NeedsYou(crate::phase::Why::Unreadable)), "gh failing for good needs the user, and the task's reports count again");
         let gh = dir.join("gh");
-        std::fs::write(&gh, "#!/bin/sh\necho '[]'\n").unwrap();
-        std::fs::set_permissions(&gh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        crate::executable::write(&gh, "#!/bin/sh\necho '[]'\n").unwrap();
         save(&dir, &Watch { started_at: 100 + UNREADABLE_AFTER, ..load(&dir, "billing@app").unwrap() }).unwrap();
         tick_with(&dir, &gh.to_string_lossy(), 100 + UNREADABLE_AFTER + 30);
         let read = load(&dir, "billing@app").unwrap();

@@ -83,11 +83,11 @@ impl Drop for FetchLock {
     }
 }
 
-// One fetch per repo at a time across kelpie's processes; one that landed while this one waited for the lock is shared, and a ref lock taken by a git outside kelpie is waited out.
+// One fetch per repo at a time across kelpie's processes; one that landed while this one waited for the lock (FETCH_HEAD changed meanwhile, never FETCH_HEAD against a clock a time sync can step back) is shared, and a ref lock taken by a git outside kelpie is waited out.
 pub fn shared_in(state: &Path, repo: &Path, attempt: impl FnMut() -> Result<(), String>, pause: impl FnMut(Duration)) -> Result<(), String> {
-    let asked = SystemTime::now();
+    let before = fetched_at(repo);
     let _lock = FetchLock::take(lock_file(state, repo), Duration::from_secs(120));
-    if fetched_at(repo).is_some_and(|at| at > asked) {
+    if fetched_at(repo).is_some_and(|at| before.is_none_or(|before| at > before)) {
         return Ok(());
     }
     retrying(attempt, pause)
@@ -218,6 +218,10 @@ mod tests {
         std::fs::write(repo.join(".git/FETCH_HEAD"), "").unwrap();
         drop(held);
         assert!(!waiting.join().unwrap(), "a fetch that landed while it waited for the lock is shared, not repeated");
+        std::fs::File::options().write(true).open(repo.join(".git/FETCH_HEAD")).unwrap().set_modified(SystemTime::now() + Duration::from_secs(1)).unwrap();
+        let mut called = false;
+        shared_in(&state, &repo, || { called = true; Ok(()) }, |_| {}).unwrap();
+        assert!(called, "a fetch from before the clock stepped back is not shared either");
         let _ = std::fs::remove_dir_all(state);
     }
 

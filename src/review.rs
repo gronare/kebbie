@@ -702,12 +702,10 @@ mod tests {
     }
 
     fn fake_kelpie(state: &Path) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
         let bin = state.join("bin");
         fs::create_dir_all(&bin).unwrap();
         let file = bin.join("kelpie");
-        fs::write(&file, "#!/bin/sh\nsleep 30\n").unwrap();
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&file, "#!/bin/sh\nsleep 30\n").unwrap();
         file
     }
 

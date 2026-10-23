@@ -405,10 +405,9 @@ mod tests {
     }
 
     fn fake_binary(root: &Path, said: &str) {
-        use std::os::unix::fs::PermissionsExt;
         let binary = root.join("target/release/kelpie");
-        write(&binary, &format!("#!/bin/sh\n[ \"$1\" = --version ] && echo '{said}'\n"));
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        crate::executable::write(&binary, format!("#!/bin/sh\n[ \"$1\" = --version ] && echo '{said}'\n")).unwrap();
     }
 
     fn fake_install(dir: &Path, with_vault: bool) -> Places {

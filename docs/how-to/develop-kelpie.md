@@ -20,7 +20,15 @@ Run kelpie from your own checkout while you change it.
    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HERDR_BIN_PATH=false KELPIE_STATE_DIR=$(mktemp -d) cargo test
    ```
 
-4. Hold your tasks in kelpie to its docs. kelpie's documentation is part of the product, so turn on `docs.required` for the checkout, named after its folder:
+4. Before you push, run the gate:
+
+   ```bash
+   scripts/check.sh
+   ```
+
+   It runs the tests as above, clippy, `cargo audit`, `cargo deny`, and a check on the oldest Rust that `rust-version` in `Cargo.toml` allows (install that toolchain, and `cargo install cargo-audit cargo-deny`, once): the same checks CI runs. It tests your working tree, and says so when that differs from the last commit.
+
+5. Hold your tasks in kelpie to its docs. kelpie's documentation is part of the product, so turn on `docs.required` for the checkout, named after its folder:
 
    ```toml
    # ~/.config/kelpie/repos/kelpie.toml

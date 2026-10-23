@@ -534,9 +534,7 @@ mod tests {
     fn the_keeper_starts_the_reviewer_from_its_own_environment_with_an_absolute_claude() {
         let bin = crate::sh::test_dir("rules-claude");
         let claude = bin.join("claude");
-        fs::write(&claude, "#!/bin/sh\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&claude, "#!/bin/sh\n").unwrap();
         let own = [("PATH", format!("relative:{}", bin.display())), ("HOME", "/home/ada".to_string()), ("KELPIE_ADDRESS", "billing@app".to_string()), ("EDITOR", "vim".to_string()), ("KELPIE_STATE_DIR", "/s".to_string())];
         let env = reviewer_env(own.iter().map(|(name, value)| (name.to_string(), value.clone())));
         assert_eq!(env.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["PATH", "HOME", "KELPIE_STATE_DIR"], "no task identity and nothing kelpie does not need");
@@ -631,11 +629,9 @@ mod tests {
     }
 
     fn fake_reviewer(state: &Path) -> std::process::Child {
-        use std::os::unix::fs::PermissionsExt;
         let kelpie = state.join("bin/kelpie");
         fs::create_dir_all(kelpie.parent().unwrap()).unwrap();
-        fs::write(&kelpie, "#!/bin/sh\nsleep 30\n").unwrap();
-        fs::set_permissions(&kelpie, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&kelpie, "#!/bin/sh\nsleep 30\n").unwrap();
         Command::new(&kelpie).args(["-C", "/nowhere", "review", "--run", "--rules"]).process_group(0).spawn().unwrap()
     }
 

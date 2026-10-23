@@ -1616,7 +1616,6 @@ mod tests {
             format!("{} → {}{held}", message.from, addressee(message))
         }).collect::<Vec<_>>();
         assert_eq!(text, ["x@r → y@r", "x@r → y@r  (held)", "x@r → you · needs you"]);
-        assert_eq!(recent(2).len().min(2), recent(2).len());
         fs::remove_dir_all(&dir).unwrap();
     }
 

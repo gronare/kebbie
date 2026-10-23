@@ -177,8 +177,7 @@ mod tests {
     fn a_tasks_own_push_fails_in_every_form_while_kelpies_push_and_the_main_checkouts_go_through() {
         let fixture = fixture("forms");
         let Fixture { main, origin, slot, state, .. } = &fixture;
-        fs::write(main.join(".git/hooks/pre-commit"), format!("#!/bin/sh\ntouch {}\n", quoted(&fixture.base.join("pre-commit-ran").to_string_lossy()))).unwrap();
-        fs::set_permissions(main.join(".git/hooks/pre-commit"), fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(main.join(".git/hooks/pre-commit"), format!("#!/bin/sh\ntouch {}\n", quoted(&fixture.base.join("pre-commit-ran").to_string_lossy()))).unwrap();
         install(slot, state).unwrap();
         commit(slot, "b");
         assert!(fixture.base.join("pre-commit-ran").exists(), "the repo's own hooks still run in the task's worktree");
@@ -222,8 +221,7 @@ mod tests {
 
     fn pre_push(dir: &Path, ran: &Path) {
         fs::create_dir_all(dir).unwrap();
-        fs::write(dir.join("pre-push"), format!("#!/bin/sh\ntouch {}\n", quoted(&ran.to_string_lossy()))).unwrap();
-        fs::set_permissions(dir.join("pre-push"), fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(dir.join("pre-push"), format!("#!/bin/sh\ntouch {}\n", quoted(&ran.to_string_lossy()))).unwrap();
     }
 
     #[test]
@@ -290,8 +288,7 @@ mod tests {
         assert_eq!(install(slot, state).unwrap(), Block::On);
         fs::create_dir_all(slot.join(".husky/_")).unwrap();
         let ran = fixture.base.join("commit-msg-ran");
-        fs::write(slot.join(".husky/_/commit-msg"), format!("#!/bin/sh\ntouch {}\n", quoted(&ran.to_string_lossy()))).unwrap();
-        fs::set_permissions(slot.join(".husky/_/commit-msg"), fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(slot.join(".husky/_/commit-msg"), format!("#!/bin/sh\ntouch {}\n", quoted(&ran.to_string_lossy()))).unwrap();
         commit(slot, "b");
         assert!(ran.exists(), "a hook husky writes during npm install, after kelpie's install, still runs");
         fs::remove_file(&ran).unwrap();
@@ -331,11 +328,10 @@ mod tests {
         let fixture = fixture("own-hook");
         let Fixture { main, slot, state, .. } = &fixture;
         fs::create_dir_all(main.join(".hooks")).unwrap();
-        fs::write(main.join(".hooks/pre-push"), "#!/bin/sh\necho repo hook refuses >&2\nexit 1\n").unwrap();
-        fs::set_permissions(main.join(".hooks/pre-push"), fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(main.join(".hooks/pre-push"), "#!/bin/sh\necho repo hook refuses >&2\nexit 1\n").unwrap();
         git(main, &["config", "core.hooksPath", ".hooks"]).unwrap();
         fs::create_dir_all(slot.join(".hooks")).unwrap();
-        fs::copy(main.join(".hooks/pre-push"), slot.join(".hooks/pre-push")).unwrap();
+        crate::executable::write(slot.join(".hooks/pre-push"), fs::read(main.join(".hooks/pre-push")).unwrap()).unwrap();
         install(slot, state).unwrap();
         assert!(fs::read_to_string(hooks_dir(slot).unwrap().join("pre-push")).unwrap().contains(&slot.join(".hooks").to_string_lossy().to_string()), "a relative hooksPath is the task's own worktree's");
         let token = Token::new(state).unwrap();
@@ -367,8 +363,7 @@ mod tests {
         assert!(!refused.status.success());
         let said = String::from_utf8_lossy(&refused.stderr);
         assert!(said.contains(REFUSAL) && said.contains(&format!("git -C {} push origin", main.display())), "{said}");
-        fs::write(original.join("post-commit"), "#!/bin/sh\necho ran \"$@\"\n").unwrap();
-        fs::set_permissions(original.join("post-commit"), fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(original.join("post-commit"), "#!/bin/sh\necho ran \"$@\"\n").unwrap();
         let other = base.join("post-commit");
         fs::write(&other, &script).unwrap();
         let chained = std::process::Command::new("sh").arg(&other).arg("one").arg("two words").output().unwrap();

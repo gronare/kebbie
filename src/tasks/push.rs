@@ -882,8 +882,7 @@ mod tests {
         let (dir, origin, slot, upstream) = task_with_a_commit("review");
         let state = state_of(&dir);
         let herdr = state.join("herdr");
-        std::fs::write(&herdr, "#!/bin/sh\necho '{\"result\":{\"pane\":{\"pane_id\":\"p_review\"}}}'\n").unwrap();
-        std::fs::set_permissions(&herdr, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        crate::executable::write(&herdr, "#!/bin/sh\necho '{\"result\":{\"pane\":{\"pane_id\":\"p_review\"}}}'\n").unwrap();
         let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/review.sh");
         let review = |args: &[&str]| {
             let output = std::process::Command::new("sh").arg(&script).args(args).current_dir(&slot.path)

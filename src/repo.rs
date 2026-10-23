@@ -339,8 +339,7 @@ mod tests {
         let ran = dir.join("ran");
         git(&dir, &["config", "core.fsmonitor", &format!("echo fsmonitor >> {}; false", crate::sh::quote(&ran.to_string_lossy()))]).unwrap();
         std::fs::create_dir_all(dir.join("hooks")).unwrap();
-        std::fs::write(dir.join("hooks/post-commit"), format!("#!/bin/sh\necho hook >> {}\n", crate::sh::quote(&ran.to_string_lossy()))).unwrap();
-        std::fs::set_permissions(dir.join("hooks/post-commit"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        crate::executable::write(dir.join("hooks/post-commit"), format!("#!/bin/sh\necho hook >> {}\n", crate::sh::quote(&ran.to_string_lossy()))).unwrap();
         git(&dir, &["config", "core.hooksPath", "hooks"]).unwrap();
         std::fs::write(dir.join("a"), "a").unwrap();
         (dir, ran)

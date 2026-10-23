@@ -1,5 +1,4 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -7,6 +6,9 @@ const KEPT: [&str; 4] = ["PATH", "USER", "LOGNAME", "LANG"];
 const KEPT_PREFIXES: [&str; 3] = ["LC_", "RUST_", "CARGO_"];
 
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+// git's auto maintenance detaches and goes on writing into a repo after the command returns, so a test removing its repos would race it.
+const GIT_CONFIG: &str = "[maintenance]\n\tauto = false\n[receive]\n\tautoGc = false\n";
 
 // Runs before main, while the test binary has one thread, so no test ever sees the environment it was started in.
 #[used]
@@ -20,7 +22,9 @@ extern "C" fn seal_at_start() {
     for dir in ["home", "state", "tmp", "bin"] {
         fs::create_dir_all(root.join(dir)).expect("the sealed test root");
     }
-    fs::write(root.join("gitconfig"), "").expect("the sealed git config");
+    for file in ["gitconfig", "home/.gitconfig"] {
+        fs::write(root.join(file), GIT_CONFIG).expect("the sealed git config");
+    }
     fake_ps(&root.join("bin/ps"));
     let path = std::env::var("PATH").unwrap_or_default();
     // SAFETY: before main, so no other thread reads the environment.
@@ -65,8 +69,7 @@ if [ "$*" != "-A -o pid=,ppid=,args=" ]; then exec /bin/ps "$@"; fi
 "#,
         std::process::id()
     );
-    fs::write(file, script).expect("the sealed ps");
-    fs::set_permissions(file, fs::Permissions::from_mode(0o755)).expect("the sealed ps");
+    crate::executable::write(file, script).expect("the sealed ps");
 }
 
 extern "C" fn remove_root() {
@@ -149,7 +152,24 @@ mod tests {
         let found = Command::new("git").args(["rev-parse", "--git-dir"]).current_dir(&dir).output().unwrap();
         assert!(!found.status.success(), "git found a repo above the sealed temp dir: {}", String::from_utf8_lossy(&found.stdout));
         let config = Command::new("git").args(["config", "--list", "--show-origin"]).current_dir(&dir).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&config.stdout), "", "git reads no config but the sealed one, which is empty");
+        assert_eq!(String::from_utf8_lossy(&config.stdout), ["maintenance.auto=false", "receive.autogc=false"].map(|line| format!("file:{}\t{line}\n", root().join("gitconfig").display())).concat(), "git reads no config but the sealed one");
+    }
+
+    #[test]
+    fn a_push_leaves_nothing_running_in_the_repo_it_pushed_to() {
+        let dir = std::env::temp_dir().join(format!("pushed-{:?}", std::thread::current().id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("work")).unwrap();
+        let git = |args: &[&str]| assert!(Command::new("git").args(["-c", "user.name=Ada", "-c", "user.email=ada@example.com"]).args(args).current_dir(dir.join("work")).status().unwrap().success(), "git {args:?}");
+        git(&["init", "--quiet"]);
+        git(&["commit", "--quiet", "--allow-empty", "-m", "first"]);
+        git(&["clone", "--quiet", "--bare", ".", "../origin"]);
+        git(&["commit", "--quiet", "--allow-empty", "-m", "second"]);
+        let trace = dir.join("trace.json");
+        assert!(Command::new("git").args(["push", "--quiet", "../origin", "HEAD"]).env("GIT_TRACE2_EVENT", &trace).current_dir(dir.join("work")).status().unwrap().success());
+        let started: Vec<String> = fs::read_to_string(&trace).unwrap().lines().filter(|line| line.contains("\"child_start\"")).map(str::to_string).collect();
+        assert!(started.iter().all(|child| !child.contains("\"maintenance\"") && !child.contains("\"gc\"")), "git push started maintenance, which outlives it: {started:?}");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -168,12 +188,12 @@ mod tests {
     fn every_test_binary_is_sealed() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let main = fs::read_to_string(manifest.join("src/main.rs")).unwrap();
-        assert!(main.contains("#[cfg(test)]\nmod test_seal;"), "the unit tests are sealed");
+        assert!(main.contains("#[cfg(test)]\nmod test_seal;") && main.contains("\nmod executable;\n"), "the unit tests are sealed");
         for entry in fs::read_dir(manifest.join("tests")).unwrap() {
             let file = entry.unwrap().path();
             if file.extension().is_some_and(|extension| extension == "rs") {
                 let source = fs::read_to_string(&file).unwrap();
-                assert!(source.contains("#[path = \"../src/test_seal.rs\"]\nmod test_seal;"), "{} is not sealed", file.display());
+                assert!(source.contains("#[path = \"../src/test_seal.rs\"]\nmod test_seal;") && source.contains("#[path = \"../src/executable.rs\"]\nmod executable;"), "{} is not sealed", file.display());
             }
         }
     }

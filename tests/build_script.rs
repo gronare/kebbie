@@ -1,8 +1,9 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../src/executable.rs"]
+mod executable;
 #[path = "../src/test_seal.rs"]
 mod test_seal;
 
@@ -22,8 +23,7 @@ fn git(cwd: &Path, args: &[&str]) -> String {
 
 fn executable(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, text).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::executable::write(path, text).unwrap();
 }
 
 struct Lab {
@@ -90,6 +90,14 @@ impl Lab {
             command.env("KELPIE_CHANNEL", channel);
         }
         command.output().unwrap()
+    }
+
+    // An edit inside the file system's timestamp tick after the last build is not newer to build.sh's find -newer, so it is dated past the binary.
+    fn edit_source(&self, text: &str) {
+        let file = self.root.join("src/main.rs");
+        fs::write(&file, text).unwrap();
+        let built = fs::metadata(self.root.join("target/release/kelpie")).and_then(|binary| binary.modified()).unwrap_or_else(|_| std::time::SystemTime::now());
+        fs::File::options().write(true).open(&file).unwrap().set_modified(built + std::time::Duration::from_secs(2)).unwrap();
     }
 
     fn binary(&self) -> String {
@@ -182,7 +190,7 @@ fn a_commit_past_the_tag_or_the_main_channel_builds_from_source() {
     assert!(past.status.success() && stderr(&past).contains("the checkout is not at v1.2.3"), "{}", stderr(&past));
     assert_eq!((lab.cargo_runs(), lab.binary().as_str()), (2, "#!/bin/sh\necho built\n"));
     fs::remove_file(lab.bin.join("cargo")).unwrap();
-    fs::write(lab.root.join("src/main.rs"), "fn main() { println!(\"edited\"); }\n").unwrap();
+    lab.edit_source("fn main() { println!(\"edited\"); }\n");
     let missing = lab.build(None);
     assert!(!missing.status.success() && stderr(&missing).contains("cargo is not installed"), "{}", stderr(&missing));
 }
@@ -220,7 +228,7 @@ fn a_source_build_without_rustup_refuses_a_rustc_older_than_the_workspace_needs(
     assert!(managed.status.success(), "rustup installs the pinned toolchain itself: {}", stderr(&managed));
     fs::remove_file(lab.bin.join("rustup")).unwrap();
     executable(&lab.bin.join("rustc"), "#!/bin/sh\necho 'rustc 1.90.0-nightly (abc 2025-09-01)'\n");
-    fs::write(lab.root.join("src/main.rs"), "fn main() { println!(\"again\"); }\n").unwrap();
+    lab.edit_source("fn main() { println!(\"again\"); }\n");
     let new_enough = lab.build(Some("main"));
     assert!(new_enough.status.success(), "{}", stderr(&new_enough));
     assert_eq!(lab.cargo_runs(), 2);

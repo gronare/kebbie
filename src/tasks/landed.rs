@@ -800,8 +800,7 @@ mod tests {
 
     fn fake_gh(dir: &Path, runs: &str) -> String {
         let gh = dir.with_extension("gh");
-        std::fs::write(&gh, format!("#!/bin/sh\ncat <<'JSON'\n{runs}\nJSON\n")).unwrap();
-        std::fs::set_permissions(&gh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        crate::executable::write(&gh, format!("#!/bin/sh\ncat <<'JSON'\n{runs}\nJSON\n")).unwrap();
         gh.to_string_lossy().to_string()
     }
 

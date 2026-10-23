@@ -10,6 +10,8 @@ mod config;
 mod doctor;
 mod docs;
 mod evidence;
+#[cfg(test)]
+mod executable;
 mod fetch;
 mod herdr;
 mod hub;

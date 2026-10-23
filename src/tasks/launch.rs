@@ -951,13 +951,11 @@ mod tests {
 
     #[test]
     fn the_hook_commands_run_from_a_path_with_an_apostrophe() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("kelpie-hook-quote-{}", std::process::id())).join("o'brien");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
         std::fs::create_dir_all(&dir).unwrap();
         let kelpie = dir.join("kelpie");
-        std::fs::write(&kelpie, "#!/bin/sh\necho ran \"$@\"\n").unwrap();
-        std::fs::set_permissions(&kelpie, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&kelpie, "#!/bin/sh\necho ran \"$@\"\n").unwrap();
         let written: Value = serde_json::from_str(&settings(&kelpie.to_string_lossy(), "billing@it's", Some("billing@it's"), None, None)).unwrap();
         for command in [&written["hooks"]["Stop"][0]["hooks"][0]["command"], &written["hooks"]["PreToolUse"][0]["hooks"][0]["command"], &written["hooks"]["PostToolUse"][0]["hooks"][0]["command"]] {
             let output = std::process::Command::new("sh").args(["-c", command.as_str().unwrap()]).output().unwrap();

@@ -448,12 +448,10 @@ mod tests {
     }
 
     fn fake_checker(state: &Path, id: &str) -> std::process::Child {
-        use std::os::unix::fs::PermissionsExt;
         use std::os::unix::process::CommandExt;
         let kelpie = state.join("bin/kelpie");
         fs::create_dir_all(kelpie.parent().unwrap()).unwrap();
-        fs::write(&kelpie, "#!/bin/sh\nsleep 30\n").unwrap();
-        fs::set_permissions(&kelpie, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&kelpie, "#!/bin/sh\nsleep 30\n").unwrap();
         std::process::Command::new(&kelpie).args(["issue", "recheck", "--run", id]).process_group(0).spawn().unwrap()
     }
 
@@ -567,13 +565,11 @@ mod tests {
 
     #[test]
     fn a_dead_checker_takes_its_claude_with_it() {
-        use std::os::unix::fs::PermissionsExt;
         use std::os::unix::process::CommandExt;
         let state = crate::sh::test_dir("recheck-orphan");
         let claude = state.join("bin/claude");
         fs::create_dir_all(claude.parent().unwrap()).unwrap();
-        fs::write(&claude, "#!/bin/sh\nsleep 30\n").unwrap();
-        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::executable::write(&claude, "#!/bin/sh\nsleep 30\n").unwrap();
         let mut orphan = std::process::Command::new(&claude).process_group(0).spawn().unwrap();
         crate::state::write(&file(&state, "aaaaaa", "claude"), orphan.id().to_string()).unwrap();
         crate::state::write(&file(&state, "aaaaaa", "running"), "999999999").unwrap();

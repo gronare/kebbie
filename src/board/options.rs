@@ -523,8 +523,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let opener = dir.join("open");
         let opened = dir.join("opened");
-        std::fs::write(&opener, format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", opened.display())).unwrap();
-        std::fs::set_permissions(&opener, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        crate::executable::write(&opener, format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", opened.display())).unwrap();
         let mut app = linked_app();
         app.viewer = Some(Box::leak(opener.display().to_string().into_boxed_str()));
         app.mode = Mode::Options(0);
