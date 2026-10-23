@@ -174,13 +174,13 @@ pub fn resumed_message(record: Option<&Record>, new: &Snapshot) -> Option<String
 }
 
 // A line for the session's prompt hook while it runs an older kelpie than is installed.
-pub fn stale_line(record: Option<&Record>, installed: &str, role_file: &Path) -> Option<String> {
+pub fn stale_line(record: Option<&Record>, installed: &str, role_file: &Path, restart: &str) -> Option<String> {
     let record = record?;
     if record.started.as_deref() == Some(installed) {
         return None;
     }
     let told = if record.known.kelpie == installed { format!("kelpie has sent you what changed for you, and your role as it is now is in {}", role_file.display()) } else { "What changed for you reaches you as a message from kelpie".to_string() };
-    Some(format!("kelpie: you started on {}; {installed} is installed. {told}; a restart brings it in.", since(Some(record))))
+    Some(format!("kelpie: you started on {}; {installed} is installed. {told}; {restart}.", since(Some(record))))
 }
 
 fn file_in(dir: &Path, address: &str) -> PathBuf {
@@ -264,9 +264,19 @@ pub fn announce_in(dir: &Path, sessions: &[Session], installed: &str, now: &mut 
     Ok(said)
 }
 
+pub fn lead_restart(auto: bool, key: &str) -> String {
+    if auto {
+        format!("kelpie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press {key} on the board")
+    } else {
+        format!("restart.auto is off, so nothing restarts you on its own: the user presses {key} on the board, which resumes this conversation on it")
+    }
+}
+
 pub fn stale_for(address: &str) -> Option<String> {
     let dir = crate::lead::roles_dir().ok()?;
-    stale_line(load_in(&dir, address).as_ref(), &this_kelpie(), &dir.join(format!("{address}.md")))
+    let auto = crate::config::restart_settings().map_or(true, |(auto, _)| auto);
+    let restart = if address == LEAD_LABEL { lead_restart(auto, &crate::keys::map().label(crate::keys::Act::RestartLead)) } else { "a restart brings it in".to_string() };
+    stale_line(load_in(&dir, address).as_ref(), &this_kelpie(), &dir.join(format!("{address}.md")), &restart)
 }
 
 #[cfg(test)]
@@ -393,11 +403,15 @@ mod tests {
         let role = Path::new("/r/lead.md");
         let old = snap("kelpie 0.22.4", "", &[], &[]);
         let fresh = Record { started: Some("kelpie 0.24.0".to_string()), known: snap("kelpie 0.24.0", "", &[], &[]) };
-        assert_eq!(stale_line(Some(&fresh), "kelpie 0.24.0", role), None);
-        assert_eq!(stale_line(None, "kelpie 0.24.0", role), None);
+        assert_eq!(stale_line(Some(&fresh), "kelpie 0.24.0", role, "a restart brings it in"), None);
+        assert_eq!(stale_line(None, "kelpie 0.24.0", role, "a restart brings it in"), None);
         let untold = Record { started: Some("kelpie 0.22.4".to_string()), known: old };
-        assert_eq!(stale_line(Some(&untold), "kelpie 0.24.0", role).unwrap(), "kelpie: you started on kelpie 0.22.4; kelpie 0.24.0 is installed. What changed for you reaches you as a message from kelpie; a restart brings it in.");
+        assert_eq!(stale_line(Some(&untold), "kelpie 0.24.0", role, "a restart brings it in").unwrap(), "kelpie: you started on kelpie 0.22.4; kelpie 0.24.0 is installed. What changed for you reaches you as a message from kelpie; a restart brings it in.");
         let told = Record { known: fresh.known.clone(), ..untold };
-        assert_eq!(stale_line(Some(&told), "kelpie 0.24.0", role).unwrap(), "kelpie: you started on kelpie 0.22.4; kelpie 0.24.0 is installed. kelpie has sent you what changed for you, and your role as it is now is in /r/lead.md; a restart brings it in.");
+        assert_eq!(stale_line(Some(&told), "kelpie 0.24.0", role, "a restart brings it in").unwrap(), "kelpie: you started on kelpie 0.22.4; kelpie 0.24.0 is installed. kelpie has sent you what changed for you, and your role as it is now is in /r/lead.md; a restart brings it in.");
+        let lead = |auto: bool| stale_line(Some(&told), "kelpie 0.24.0", role, &lead_restart(auto, "L")).unwrap();
+        assert!(lead(true).ends_with("; kelpie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press L on the board."), "{}", lead(true));
+        assert!(lead(false).ends_with("; restart.auto is off, so nothing restarts you on its own: the user presses L on the board, which resumes this conversation on it."), "{}", lead(false));
+        assert!(!lead(true).contains("kelpie lead --restart") && !lead(false).contains("another pane"));
     }
 }

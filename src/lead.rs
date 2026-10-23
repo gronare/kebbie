@@ -11,6 +11,7 @@ use crate::peers;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 use crate::tasks::{self, Session};
+use crate::typing::Draft;
 
 pub const STATE_DIR_VAR: &str = "KELPIE_STATE_DIR";
 
@@ -245,6 +246,7 @@ enum Restart {
     Nothing,
     Working,
     Asking,
+    Drafted,
     Go,
 }
 
@@ -257,6 +259,33 @@ fn restart_verdict(agent: Option<&Value>) -> Restart {
     }
 }
 
+// A restart ends the Claude and its unsent draft with it; a box kelpie cannot read does not stop a restart the user asked for.
+fn with_draft(verdict: Restart, draft: impl FnOnce() -> Draft) -> Restart {
+    if verdict != Restart::Go {
+        return verdict;
+    }
+    match draft() {
+        Draft::Typed(_) => Restart::Drafted,
+        Draft::Empty | Draft::Unreadable => Restart::Go,
+    }
+}
+
+fn draft_of(agent: Option<&Value>) -> Draft {
+    agent.and_then(|agent| agent["pane_id"].as_str()).map_or(Draft::Unreadable, |pane| crate::typing::draft_in(pane, Agent::Claude))
+}
+
+pub const REFUSED: &str = "Not restarted: ";
+
+fn refused(why: &str) -> String {
+    format!("{REFUSED}{why}.")
+}
+
+fn background_of(agent: Option<&Value>) -> Vec<String> {
+    let pane = agent.and_then(|agent| agent["pane_id"].as_str());
+    let session = agent.and_then(|agent| agent["agent_session"]["value"].as_str()).filter(|id| !id.is_empty());
+    pane.zip(session).map(|(pane, session)| crate::restart::background_in(pane, session)).unwrap_or_default()
+}
+
 pub fn lead_workspace(workspaces: &[Value]) -> Option<String> {
     workspaces.iter().find(|workspace| workspace["label"] == LEAD_LABEL).and_then(workspace_id)
 }
@@ -265,14 +294,25 @@ pub fn lead_agent<'a>(agents: &'a [Value], lead: &str) -> Option<&'a Value> {
     agents.iter().find(|agent| agent["agent"] == Agent::Claude.kind() && agent["workspace_id"].as_str() == Some(lead))
 }
 
-pub fn restart() -> Result<String> {
+// Every restart of the lead, by hand, from the board or from the keeper, holds this lock, so two never end and start its pane together.
+pub fn restart(anyway: bool) -> Result<String> {
+    let _lock = lead_lock()?;
+    restart_locked(anyway)
+}
+
+fn lead_lock() -> Result<crate::restart::SessionLock> {
+    crate::restart::SessionLock::take(&state_dir()?, LEAD_LABEL).map_err(|_| refused("another kelpie is restarting the lead"))
+}
+
+fn restart_locked(anyway: bool) -> Result<String> {
     let nothing = "No lead is running, so there is nothing to restart.".to_string();
     let Some(lead) = lead_workspace(&herdr::workspaces()?) else { return Ok(nothing) };
     let agents = herdr::agents()?;
     let agent = lead_agent(&agents, &lead);
-    let pane = match restart_verdict(agent) {
-        Restart::Working => return Err("The lead is working; run kelpie lead --restart when it is idle.".to_string()),
-        Restart::Asking => return Err("The lead is waiting on a question; answer it, then run kelpie lead --restart when the lead is idle.".to_string()),
+    let pane = match with_draft(restart_verdict(agent), || draft_of(agent)) {
+        Restart::Working => return Err(refused("the lead is working")),
+        Restart::Asking => return Err(refused("the lead is waiting on a question")),
+        Restart::Drafted => return Err(refused("the lead's input box holds text you have not sent")),
         Restart::Go => agent.and_then(|agent| agent["pane_id"].as_str()).ok_or("The lead's Claude has no pane")?.to_string(),
         // Its Claude already gone, the lead's chat pane at a shell prompt still takes the resumed conversation.
         Restart::Nothing => match places(&lead)?.chat.filter(|pane| herdr::foreground(pane).ok().flatten().is_none()) {
@@ -280,6 +320,10 @@ pub fn restart() -> Result<String> {
             None => return Ok(nothing),
         },
     };
+    let running = if anyway { Vec::new() } else { background_of(agent) };
+    if !running.is_empty() {
+        return Err(refused(&format!("the lead has background work running ({})", running.join(", "))));
+    }
     let dir = lead_dir()?;
     let recorded = fs::read_to_string(session_file()?).ok().map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
     let mut own: Vec<PathBuf> = [Some(dir.clone()), dir.canonicalize().ok()].into_iter().flatten().collect();
@@ -560,6 +604,14 @@ mod tests {
     }
 
     #[test]
+    fn after_an_update_the_lead_says_it_restarts_once_idle_and_never_sends_the_user_to_another_pane() {
+        let role = role_text(include_str!("../roles/lead.md"), &[Source::Local], false);
+        for needed in ["kelpie restarts you itself, resuming this conversation on the new role, once the user is out of your pane and you are idle, or at once when they press `L` on the board", "with `restart.auto` off only `L` does", "Never ask the user to run `kelpie lead --restart` or to open another pane", "say in one line what your prompt says about the restart"] {
+            assert!(role.contains(needed), "{needed}");
+        }
+    }
+
+    #[test]
     fn the_lead_role_mentions_linear_only_when_it_is_a_source() {
         let template = include_str!("../roles/lead.md");
         assert!(!role_text(template, &[Source::Vault], false).contains("Linear"));
@@ -747,6 +799,25 @@ mod tests {
         assert_eq!(restart_verdict(Some(&agent("blocked", true))), Restart::Asking);
         assert_eq!(restart_verdict(None), Restart::Nothing);
         assert_eq!(restart_verdict(Some(&json!({ "agent": "codex", "agent_status": "idle" }))), Restart::Nothing);
+    }
+
+    #[test]
+    fn a_restart_of_the_lead_never_goes_over_unsent_text_and_a_refusal_is_the_plain_reason() {
+        let agent = |status: &str| json!({ "agent": "claude", "agent_status": status, "interactive_ready": true, "pane_id": "p_9" });
+        let verdict = |status: &str, draft: Draft| with_draft(restart_verdict(Some(&agent(status))), || draft);
+        assert_eq!(verdict("idle", Draft::Empty), Restart::Go);
+        assert_eq!(verdict("idle", Draft::Typed("half a thought".to_string())), Restart::Drafted);
+        assert_eq!(verdict("idle", Draft::Unreadable), Restart::Go, "asked for, a box kelpie cannot read does not stop it");
+        assert_eq!(with_draft(Restart::Working, || panic!("a working lead's box is not read")), Restart::Working);
+        assert_eq!(refused("the lead is working"), "Not restarted: the lead is working.");
+    }
+
+    #[test]
+    fn a_restart_of_the_lead_waits_while_another_kelpie_restarts_it() {
+        let held = lead_lock().unwrap();
+        assert_eq!(lead_lock().err().as_deref(), Some("Not restarted: another kelpie is restarting the lead."), "the board's L and the keeper take the same lock");
+        drop(held);
+        assert!(lead_lock().is_ok(), "free again once the other is done");
     }
 
     #[test]

@@ -238,7 +238,7 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 | Command | What it does |
 | --- | --- |
 | `kelpie lead` | Go to the lead Space, creating it, or back to where you were. |
-| `kelpie lead --restart` | Restart an idle lead's Claude on its current role and settings, resuming its conversation. Refuses while the lead works or waits on a question. |
+| `kelpie lead --restart [--anyway]` | Restart an idle lead's Claude on its current role and settings, resuming its conversation. Refuses with `Not restarted: <reason>` while the lead works, waits on a question, holds text you have not sent, has background work running (unless `--anyway`) or another kelpie restarts it. After `kelpie update` the keeper runs it by itself once the lead is free, unless `restart.auto` is off. |
 | `kelpie lead --first` | Only move the lead Space to the top of herdr's Spaces. |
 | `kelpie lead --revive-board` | Run by herdr's startup hook. Returns at once; in the background it waits up to a minute for herdr to restore the lead Space, then starts the board in its board pane if that pane sits at a shell prompt. Never touches the lead's chat. Logs to `lead.log`. |
 | `kelpie lead --toggle-chat` | Hide the lead's chat so the board takes the whole width, or show it again. The chat keeps running. Takes you to the lead Space. herdr's `kelpie.chat` action runs it. |

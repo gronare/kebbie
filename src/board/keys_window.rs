@@ -97,6 +97,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::New], "new task", "new task"),
             bind(&[Act::Refresh], "refresh the backlog", "refresh"),
             bind(&[Act::Update], "update kelpie and its plugins", "update"),
+            bind(&[Act::RestartLead], "restart the lead on the new kelpie", "restart lead"),
         ]),
         WINDOWS,
         group("THE SELECTED TASK", &[
@@ -505,6 +506,7 @@ mod tests {
         let (rows, _) = render(&mut app, 80, 20);
         let screen = rows.join("\n");
         assert!(screen.contains("DEV SERVERS") && screen.contains("IN THE CARD WINDOW") && !screen.contains("↓ more") && !screen.contains("MOVE AROUND"), "{screen}");
+        press(&mut app, key(KeyCode::PageUp));
         press(&mut app, key(KeyCode::PageUp));
         let (rows, _) = render(&mut app, 80, 20);
         assert!(rows.join("\n").contains("MOVE AROUND"));

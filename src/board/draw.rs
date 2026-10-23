@@ -25,7 +25,7 @@ use super::options::draw_options;
 use super::push::draw_push;
 use super::keys_window;
 use super::status_bar::{hint_hits, hint_lines, status_line};
-use super::widgets::{MUTED, PEACH, RED, TEXT, modal, render_column, style};
+use super::widgets::{MAUVE, MUTED, PEACH, RED, TEXT, modal, render_column, style};
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     app.hits.clear();
@@ -34,8 +34,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let full = frame.area();
     let area = full.inner(Margin { horizontal: 2, vertical: 1 });
     let fold = if app.page == Page::Work { app.fold } else { Fold::Hidden };
-    let [top, _, body, messages_area, bottom] = Layout::vertical([
-        Constraint::Length(1), Constraint::Length(1), Constraint::Min(3), Constraint::Length(messages_height(fold, full.height)), Constraint::Length(1),
+    let lead_line = app.lead_line().filter(|_| app.page == Page::Work);
+    let [top, _, lead_area, body, messages_area, bottom] = Layout::vertical([
+        Constraint::Length(1), Constraint::Length(1), Constraint::Length(if lead_line.is_some() { 2 } else { 0 }), Constraint::Min(3), Constraint::Length(messages_height(fold, full.height)), Constraint::Length(1),
     ]).areas(area);
     let (line, tabs) = header(app, top.width);
     frame.render_widget(Paragraph::new(line), top);
@@ -63,6 +64,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let mut tab_hits = tab_hits;
+    if let Some(line) = lead_line {
+        let row = Rect { height: 1, ..lead_area };
+        frame.render_widget(Paragraph::new(Span::styled(line, style(MAUVE))), row);
+        tab_hits.push((row, Hit::Key(keys::map().code(keys::Act::RestartLead))));
+    }
     tab_hits.extend(hint_hits(&status, bottom, app.selected_s_opens(), app.lead_chat.is_some()));
     frame.render_widget(Paragraph::new(status), bottom);
     let (message_lines, first_message) = messages_lines(app, fold, messages_area.height as usize, messages_area.width as usize);

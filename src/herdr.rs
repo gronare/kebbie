@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 use crate::sh::{Result, attempt, run};
 
 fn herdr() -> String {
+    #[cfg(test)]
+    assert!(std::env::var_os("HERDR_BIN_PATH").is_some_and(|bin| !bin.is_empty()), "a test reached herdr without HERDR_BIN_PATH; it could act on a live herdr");
     std::env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string())
 }
 

@@ -20,6 +20,7 @@ mod keeper;
 mod keys;
 mod known;
 mod lead;
+mod lead_restart;
 mod login_env;
 mod menu;
 mod messages;
@@ -99,8 +100,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie lead                     go to the lead Space (creating it), or back to where you were
                                   (--first only moves the lead Space to the top of herdr's Spaces; --restart
                                   restarts an idle lead's Claude on its current role and settings, resuming
-                                  its conversation; --toggle-chat hides the lead's chat so the board takes the
-                                  whole width, or shows it again; --revive-board, run by herdr's startup, waits
+                                  its conversation, and --anyway also while it has background work running;
+                                  --toggle-chat hides the lead's chat so the board takes the whole width, or
+                                  shows it again; --revive-board, run by herdr's startup, waits
                                   in the background for herdr's restore and starts the board in the lead Space's
                                   board pane when that pane sits at a shell)
   kelpie focus                    in the lead Space, move focus between the board and the lead's chat; from
@@ -462,7 +464,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("areas") => areas::print(),
         Some("routes") => Ok(routes::print(arguments.flag("--plain-http"))),
         Some("lead") if arguments.flag("--first") => lead::keep_first(),
-        Some("lead") if arguments.flag("--restart") => lead::restart(),
+        Some("lead") if arguments.flag("--restart") => lead::restart(arguments.flag("--anyway")),
         Some("lead") if arguments.flag("--renew-board") => lead::renew_board(),
         Some("lead") if arguments.flag("--revive-board") && arguments.flag("--wait") => lead::revive_board(),
         Some("lead") if arguments.flag("--revive-board") => lead::revive_board_detached(),

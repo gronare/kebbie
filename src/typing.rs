@@ -86,7 +86,7 @@ fn sgr_faint(params: &str, mut dim: bool) -> bool {
     dim
 }
 
-// What the user has typed into Claude's input box on this screen, read with its styling; a screen without a box that can be read counts as typed into.
+// What the user has typed into Claude's input box on this screen, read with its styling; a screen without a box it can read is Unreadable, never Empty.
 pub fn draft(screen: &str) -> Draft {
     let styled: Vec<Styled> = screen.lines().map(styled).collect();
     let lines: Vec<&str> = styled.iter().map(|line| line.text.trim_end()).collect();
@@ -111,6 +111,10 @@ pub(crate) fn suggested(lines: &[Styled], marks: &[char]) -> bool {
 
 fn screen(pane: &str) -> Result<String> {
     crate::sh::run(&herdr::bin(), &["pane", "read", pane, "--source", "visible", "--format", "ansi"], None)
+}
+
+pub fn draft_in(pane: &str, agent: Agent) -> Draft {
+    screen(pane).map(|screen| agent.draft(&screen)).unwrap_or(Draft::Unreadable)
 }
 
 const ENTER_AT: [u64; 3] = [5, 10, 20];
@@ -308,7 +312,7 @@ pub fn advance(typed: &mut Typed) -> Outcome {
     if typed.inbox {
         return advance_inbox(typed, transcript.as_deref(), now_ms());
     }
-    let shown = screen(&pane).map(|screen| agent.draft(&screen)).unwrap_or(Draft::Unreadable);
+    let shown = draft_in(&pane, agent);
     let taken = taken(agent, transcript.as_deref(), &shown, &typed.text, typed.at_ms);
     let elapsed = Duration::from_millis(now_ms().saturating_sub(typed.at_ms));
     match step(elapsed, typed.presses, taken) {

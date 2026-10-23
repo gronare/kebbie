@@ -13,6 +13,7 @@ use crate::messages::{self, Lock, USER_LABEL};
 use crate::questions;
 use crate::sh::{self, Result};
 use crate::tasks;
+use crate::typing::Draft;
 
 pub const QUESTION_KIND: &str = "restart";
 const FROM: &str = "kelpie";
@@ -47,6 +48,7 @@ pub enum Verdict {
     Asked,
     Keep,
     Manual,
+    Drafted,
     Skip(String),
 }
 
@@ -66,6 +68,8 @@ impl Verdict {
             Verdict::Ask | Verdict::Asked => "waiting for your answer: background work running".to_string(),
             Verdict::Keep => "kept until its background work is done, then restarts when idle".to_string(),
             Verdict::Manual => "stale: run kelpie restart when you want it".to_string(),
+            Verdict::Drafted if auto => "its input box holds text or cannot be read: restarts once it is empty".to_string(),
+            Verdict::Drafted => "its input box holds text or cannot be read: run kelpie restart once it is empty".to_string(),
             Verdict::Skip(reason) => format!("skipped: {reason}"),
         }
     }
@@ -189,7 +193,7 @@ fn on_path(program: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|path| std::env::split_paths(&path).map(|dir| dir.join(program)).find(|file| file.is_file()))
 }
 
-fn restart_dir(state: &Path) -> Result<PathBuf> {
+pub(crate) fn restart_dir(state: &Path) -> Result<PathBuf> {
     let dir = state.join("restart");
     crate::state::private_dir(&dir)?;
     Ok(dir)
@@ -516,10 +520,10 @@ pub fn tell_board(text: &str) {
     let _ = messages::append(&json!({ "id": messages::new_id("restart"), "at": messages::now(), "from": FROM, "to": USER_LABEL, "text": text, "state": "logged" }));
 }
 
-struct SessionLock(PathBuf);
+pub(crate) struct SessionLock(PathBuf);
 
 impl SessionLock {
-    fn take(state: &Path, session: &str) -> Result<SessionLock> {
+    pub(crate) fn take(state: &Path, session: &str) -> Result<SessionLock> {
         let path = restart_dir(state)?.join(format!("{session}.lock"));
         if mtime(&path).is_some_and(|at| now().saturating_sub(at) > 300) {
             let _ = std::fs::remove_file(&path);
@@ -551,7 +555,11 @@ fn wait_for_claude(pane: &str) -> Result<()> {
 
 fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Result<tasks::Started> {
     if lead {
-        return sh::run(&crate::peers::kelpie_command()?, &["lead", "--restart"], None).map(|_| tasks::Started::Ready);
+        return match sh::attempt(&crate::peers::kelpie_command()?, &["lead", "--restart", "--anyway"], None)? {
+            Ok(_) => Ok(tasks::Started::Ready),
+            Err(stderr) if stderr.is_empty() => Err("kelpie lead --restart failed".to_string()),
+            Err(stderr) => Err(stderr),
+        };
     }
     let role = own.or(pane.cwd.as_deref()).map(tasks::task_role).transpose()?.flatten();
     let args = role.map_or_else(|| args.to_vec(), |(settings, role)| pane.agent.with_role(args, &settings, &role));
@@ -616,6 +624,60 @@ pub struct Line {
     pub stale: bool,
 }
 
+// The lead is the session the user talks to, so once they are out of its pane it waits a minute, not the idle minutes.
+pub const LEAD_IDLE: u64 = 60;
+
+pub fn mode_for(mode: Mode, lead: bool) -> Mode {
+    match mode {
+        Mode::Routine { min_idle } if lead => Mode::Routine { min_idle: min_idle.min(LEAD_IDLE) },
+        other => other,
+    }
+}
+
+// A restart on its own waits on a box kelpie cannot read, as it may hold a draft; one asked for goes ahead.
+pub fn with_draft(mode: Mode, verdict: Verdict, draft: impl FnOnce() -> Draft) -> Verdict {
+    if verdict != Verdict::Restart {
+        return verdict;
+    }
+    match draft() {
+        Draft::Typed(_) => Verdict::Drafted,
+        Draft::Unreadable if mode.follows_auto() => Verdict::Drafted,
+        Draft::Empty | Draft::Unreadable => Verdict::Restart,
+    }
+}
+
+pub fn background_in(pane: &str, session: &str) -> Vec<String> {
+    let Some(process) = herdr::process_info(pane).ok().as_ref().and_then(claude_process) else { return Vec::new() };
+    let at = now();
+    let Some(start) = started(process.pid, at) else { return Vec::new() };
+    let found = crate::agent::claude::home().and_then(|home| transcript(&home, process.cwd.as_deref(), session));
+    found.map(|path| Memory::default().background(&path, start, at)).unwrap_or_default()
+}
+
+fn refusal(error: &str) -> Option<&str> {
+    error.strip_prefix(lead::REFUSED)
+}
+
+// A refusal leaves no record, so it holds nothing back and the next round tries again; whatever ended or started a Claude is recorded.
+pub fn note_attempt(restarted: &mut Map<String, Value>, session: &str, entry: Value, done: &Result<tasks::Started>) -> bool {
+    if done.as_ref().err().is_some_and(|error| refusal(error).is_some()) {
+        return false;
+    }
+    restarted.insert(session.to_string(), entry);
+    true
+}
+
+pub fn told_failure(label: &str, error: &str) -> Option<String> {
+    refusal(error).is_none().then(|| format!("Restarting {label} failed: {error}"))
+}
+
+pub fn failed_said(error: &str) -> String {
+    match refusal(error) {
+        Some(why) => format!("not restarted yet: {}", why.trim_end_matches('.')),
+        None => format!("restart failed: {error}"),
+    }
+}
+
 pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Line>> {
     let (auto, idle_minutes) = config::restart_settings()?;
     let mode = match mode {
@@ -650,6 +712,7 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             continue;
         };
         live.insert(session.clone(), process.pid);
+        let lead = lead_space.is_some() && pane.workspace == lead_space;
         let Some(start) = started(process.pid, at) else {
             lines.push(line(&Verdict::Skip("its start time cannot be read".to_string())));
             continue;
@@ -661,7 +724,7 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             reasons.push(NO_ROLE.to_string());
         }
         if !reasons.is_empty() && let Some(why) = held_back(restarted.get(&session), exe.as_deref(), &reasons, matches!(mode, Mode::Manual { .. }), at) {
-            lines.push(Line { label: pane.label.clone(), said: format!("stale, held: {why}"), stale: false });
+            lines.push(Line { label: pane.label.clone(), said: format!("stale, held: {why}"), stale: lead });
             continue;
         }
         let args = match process.argv.as_deref().map(|argv| pane.agent.resume_args(argv, &session)) {
@@ -669,6 +732,7 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             Some(args) => args,
         };
         let transcript = home.as_deref().and_then(|home| transcript(home, cwd.as_deref(), &session));
+        let mode = mode_for(mode, lead);
         let entry = asked_for(&asked, &session, process.pid);
         let facts = Facts {
             stale: !reasons.is_empty(),
@@ -682,7 +746,7 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             Err(reason) if facts.stale || mode == (Mode::Manual { all: true }) => Verdict::Skip(reason.clone()),
             _ => match decide(mode, auto, &facts, || transcript.as_deref().is_some_and(|path| !memory.background(path, start, at).is_empty())) {
                 Verdict::Restart if transcript.is_none() => Verdict::Skip("its conversation file is not found".to_string()),
-                other => other,
+                other => with_draft(mode, other, || crate::typing::draft_in(&pane.pane, pane.agent)),
             },
         };
         let verdict = match verdict {
@@ -699,10 +763,10 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             lines.push(line(&verdict));
             continue;
         }
-        let lead = lead_space.is_some() && pane.workspace == lead_space;
         let done = SessionLock::take(&state, &session).and_then(|_lock| perform(&pane, process.cwd.as_deref(), args.as_deref().unwrap_or_default(), lead));
-        restarted.insert(session.clone(), json!({ "at": at, "exe": exe.as_deref().map(|exe| exe.to_string_lossy().to_string()), "reasons": reasons }));
-        crate::state::write(&restarted_file(&state)?, Value::Object(restarted.clone()).to_string())?;
+        if note_attempt(&mut restarted, &session, json!({ "at": at, "exe": exe.as_deref().map(|exe| exe.to_string_lossy().to_string()), "reasons": reasons }), &done) {
+            crate::state::write(&restarted_file(&state)?, Value::Object(restarted.clone()).to_string())?;
+        }
         match done {
             Ok(started) => {
                 memory.active.insert(session.clone(), at);
@@ -716,8 +780,10 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
                 });
             }
             Err(error) => {
-                tell_board(&format!("Restarting {} failed: {error}", pane.label));
-                lines.push(Line { label: pane.label.clone(), said: format!("restart failed: {error}"), stale: true });
+                if let Some(text) = told_failure(&pane.label, &error) {
+                    tell_board(&text);
+                }
+                lines.push(Line { label: pane.label.clone(), said: failed_said(&error), stale: true });
             }
         }
     }
@@ -843,6 +909,50 @@ mod tests {
         assert_eq!(Verdict::Asked.words(true), "waiting for your answer: background work running");
         assert_eq!(Verdict::Skip("its session id is unknown".to_string()).words(true), "skipped: its session id is unknown");
         assert!(!Verdict::Skip(String::new()).stale() && !Verdict::Fresh.stale() && Verdict::Busy.stale());
+        assert_eq!(Verdict::Drafted.words(true), "its input box holds text or cannot be read: restarts once it is empty");
+        assert!(Verdict::Drafted.stale());
+    }
+
+    #[test]
+    fn a_refused_lead_restart_holds_nothing_back_and_a_real_failure_is_recorded_and_told() {
+        let mut restarted = Map::new();
+        let entry = json!({ "at": 1000, "exe": "/v/2.1.304", "reasons": ["kelpie update"] });
+        let refused: Result<tasks::Started> = Err("Not restarted: the lead is working.".to_string());
+        assert!(!note_attempt(&mut restarted, "s1", entry.clone(), &refused));
+        assert!(held_back(restarted.get("s1"), Some(Path::new("/v/2.1.304")), &["kelpie update".to_string()], false, 1060).is_none(), "the next round tries again");
+        assert_eq!(told_failure("lead", "Not restarted: the lead is working."), None, "a refusal is not a failure to tell");
+        assert_eq!(failed_said("Not restarted: the lead is working."), "not restarted yet: the lead is working");
+        let failed: Result<tasks::Started> = Err("Claude did not come back in pane p_9".to_string());
+        assert!(note_attempt(&mut restarted, "s1", entry, &failed));
+        assert!(held_back(restarted.get("s1"), Some(Path::new("/v/2.1.304")), &["kelpie update".to_string()], false, 1060).is_some(), "a failure that ended a Claude waits out the cooldown");
+        assert_eq!(told_failure("lead", "Claude did not come back in pane p_9").as_deref(), Some("Restarting lead failed: Claude did not come back in pane p_9"));
+        assert_eq!(failed_said("Claude did not come back in pane p_9"), "restart failed: Claude did not come back in pane p_9");
+    }
+
+    #[test]
+    fn a_restart_never_ends_a_claude_over_unsent_text_and_on_its_own_waits_on_a_box_it_cannot_read() {
+        let typed = || Draft::Typed("half a thought".to_string());
+        for mode in [ROUTINE, Mode::Update, Mode::Manual { all: false }] {
+            assert_eq!(with_draft(mode, Verdict::Restart, typed), Verdict::Drafted, "{mode:?}");
+            assert_eq!(with_draft(mode, Verdict::Restart, || Draft::Empty), Verdict::Restart, "{mode:?}");
+        }
+        assert_eq!(with_draft(ROUTINE, Verdict::Restart, || Draft::Unreadable), Verdict::Drafted);
+        assert_eq!(with_draft(Mode::Update, Verdict::Restart, || Draft::Unreadable), Verdict::Drafted);
+        assert_eq!(with_draft(Mode::Manual { all: false }, Verdict::Restart, || Draft::Unreadable), Verdict::Restart, "kelpie restart by hand goes ahead");
+        assert_eq!(with_draft(ROUTINE, Verdict::Busy, || panic!("a busy session's box is not read")), Verdict::Busy);
+    }
+
+    #[test]
+    fn the_lead_restarts_on_its_own_a_minute_after_the_user_left_its_pane_but_never_while_they_are_in_it_or_it_has_background_work() {
+        let lead = mode_for(ROUTINE, true);
+        assert_eq!(lead, Mode::Routine { min_idle: LEAD_IDLE });
+        assert_eq!(mode_for(ROUTINE, false), ROUTINE, "a task waits the idle minutes");
+        assert_eq!(mode_for(Mode::Routine { min_idle: 30 }, true), Mode::Routine { min_idle: 30 });
+        assert_eq!(decide(lead, true, &facts(true, true, false, LEAD_IDLE), || false), Verdict::Restart);
+        assert_eq!(decide(lead, true, &facts(true, true, false, LEAD_IDLE - 1), || false), Verdict::Quiet);
+        assert_eq!(decide(lead, true, &facts(true, true, true, 99_999), || false), Verdict::Focused, "the user's keys would land in a pane being ended");
+        assert_eq!(decide(lead, true, &facts(true, true, false, 99_999), || true), Verdict::Ask, "background work is asked about");
+        assert_eq!(decide(lead, false, &facts(true, true, false, 99_999), || false), Verdict::Manual, "restart.auto = false restarts nothing on its own");
     }
 
     fn argv(words: &[&str]) -> Vec<String> {

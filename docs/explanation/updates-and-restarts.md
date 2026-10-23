@@ -59,15 +59,24 @@ Going back to an older kelpie, it reads a task's session record, now JSON, as it
 
 ## When restarts happen
 
-With `restart.auto` on, the default, `kelpie update` restarts idle sessions at once, and the keeper restarts each other stale session once it has been idle and out of focus for `restart.idle_minutes`. With `[keeper] enabled = false`, an open board does this instead. The status line shows `↻ N stale` while sessions wait.
+With `restart.auto` on, the default, `kelpie update` restarts idle sessions at once, and the keeper restarts each other stale session once it has been idle and out of focus for `restart.idle_minutes`; the lead waits one minute instead. With `[keeper] enabled = false`, the full board does this every minute; the `prefix+t` popup does not. The status line shows `↻ N stale` while sessions wait. With `restart.auto = false`, nothing restarts on its own: `kelpie restart`, `kelpie lead --restart` and the board's `L` do it when you choose.
 
-A restart never interrupts work:
+A restart on its own never interrupts work:
 
-- A session mid-turn, or the pane you are in, is never restarted on its own.
+- A session mid-turn, or the pane you are in, is never restarted on its own, as what you type would land in a pane being ended.
 - A session with background work running, such as a background shell, an agent or a monitor, is not cut off. The board asks you once, as a question.
+- A session with text in its input box that you have not sent, or whose box kelpie cannot read, waits until the box is empty, so a restart never loses a draft. A restart you ask for refuses typed text too, but goes ahead when the box cannot be read.
 - A session kelpie cannot restart safely is skipped with the reason: one whose session id herdr does not know, whose command line cannot be read or has an option kelpie does not know, whose Claude runs in another folder than its pane, or whose conversation file is missing.
 
-`kelpie update` ends with one line per session: `restarted`, `restarts when idle`, `you are in it: restarts when you leave it`, `waiting for your answer: background work running`, or `skipped: <reason>`.
+`kelpie update` ends with one line per session: `restarted`, `restarts when idle`, `you are in it: restarts when you leave it`, `its input box holds text or cannot be read: restarts once it is empty`, `waiting for your answer: background work running`, or `skipped: <reason>`.
+
+## Restarting the lead after an update
+
+The lead is usually the session you are talking to, so an update often lands while it works or while you are in its pane. kelpie records which kelpie the lead started on, and while the lead counts as stale the Work page shows one line under the status line, such as `↻ The lead runs kelpie 0.26.1; kelpie 0.26.2 is installed · you are in it: restarts when you leave it · L restarts it now`.
+
+With `restart.auto` on, the keeper restarts the lead the same way it restarts any session, but a minute after it is idle and you are out of its pane, such as on the board beside it, rather than after `restart.idle_minutes`. The restart is `kelpie lead --restart`, so the conversation is resumed under the new role, and the lead says in one line that it will be restarted; you never need another pane for it. With `restart.auto = false` the line says only `L restarts it`, and the lead says so too.
+
+`L` on the board, or a click on the line, restarts the lead at once, also while you are in its pane. It is refused with the plain reason while the lead works, waits on a question, holds text you have not sent or has background work running, and you can press it again later. The keeper and `L` never restart the lead together: each takes the lead's lock first, and the second is refused. Once the lead runs the installed kelpie, the line goes. A refusal costs nothing: the line says `not restarted yet: <reason>` and the keeper tries again on its next round, a minute later. A restart that fails after it ended or started the lead's Claude is told in the messages, and the keeper waits 30 minutes before it tries again, which the line says; `L` does not wait.
 
 ## Your kelpie issues
 

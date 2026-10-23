@@ -47,6 +47,7 @@ pub enum Act {
     Refresh,
     Away,
     Update,
+    RestartLead,
     Filter,
     AreaRefresh,
     Log,
@@ -88,10 +89,10 @@ const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 
 impl Act {
-    pub const EVERY: [Act; 44] = [
+    pub const EVERY: [Act; 45] = [
         Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
-        Act::Update, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
+        Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
     pub fn id(self) -> &'static str {
@@ -129,6 +130,7 @@ impl Act {
             Act::Refresh => "refresh",
             Act::Away => "away",
             Act::Update => "update",
+            Act::RestartLead => "restart_lead",
             Act::Filter => "filter",
             Act::AreaRefresh => "area_refresh",
             Act::Log => "log",
@@ -182,6 +184,7 @@ impl Act {
             Act::Refresh => Default::Char('R'),
             Act::Away => Default::Char('A'),
             Act::Update => Default::Char('U'),
+            Act::RestartLead => Default::Char('L'),
             Act::Filter => Default::Char('/'),
             Act::AreaRefresh => Default::Char('b'),
             Act::Log => Default::Char('l'),
@@ -237,6 +240,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Refresh, on: BOARD, help: "ask the lead to refresh the backlog", hint: Hint::No },
     Binding { act: Act::Away, on: BOARD, help: "away mode on or off: the lead settles how-questions and keeps what-questions for you", hint: Hint::No },
     Binding { act: Act::Update, on: BOARD, help: "update everything to the latest (kelpie update); ↑ at the bottom shows when there is a newer version", hint: Hint::No },
+    Binding { act: Act::RestartLead, on: BOARD, help: "restart the lead on the installed kelpie, resuming its conversation; offered while it runs an older one, and refused while it works, asks or holds text you have not sent", hint: Hint::No },
     Binding { act: Act::Go, on: &[Areas], help: "open the area's Space", hint: Hint::No },
     Binding { act: Act::New, on: &[Areas], help: "new task in its repo, with its notes", hint: Hint::No },
     Binding { act: Act::AreaRefresh, on: &[Areas], help: "ask the lead to refresh its backlog", hint: Hint::No },

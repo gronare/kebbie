@@ -695,7 +695,7 @@ fn sessions(lab: &Lab) -> Sessions {
          case \"$1 $2\" in\n\
          'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
          'pane send-keys') touch \"$d/ended-$3\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
-         'pane read') echo 'you@host $'; exit 0;;\n\
+         'pane read') if [ -f \"$d/ended-$3\" ]; then echo 'you@host $'; else printf '%s\\n' '────────────────────' '❯ ' '────────────────────'; fi; exit 0;;\n\
          'agent start'|'pane run') echo '{{\"result\":{{}}}}'; exit 0;;\n\
          esac\n\
          key=\"$1-$2\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",

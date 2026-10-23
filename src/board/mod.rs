@@ -179,6 +179,9 @@ struct App {
     ctrl_c: Option<Instant>,
     notice: Option<(String, Instant)>,
     lead_chat: Option<bool>,
+    lead_versions: Option<(String, String)>,
+    restart_auto: bool,
+    lead_restarter: Updater,
     subject: Option<notices::Subject>,
     shown: Option<notices::Subject>,
     toast: Option<notices::Toast>,
@@ -291,6 +294,19 @@ impl App {
         let updater = self.updater.clone();
         self.update_running = true;
         self.in_background("Updating kelpie, its plugins and the vault plugin…".to_string(), move || updater());
+    }
+
+    fn restart_lead(&mut self) {
+        if self.lead_line().is_none() {
+            return self.say("The lead runs the installed kelpie; nothing to restart".to_string());
+        }
+        let restarter = self.lead_restarter.clone();
+        self.subject = Some(notices::Subject::plain("lead"));
+        self.in_background("Restarting the lead on the new kelpie…".to_string(), move || restarter());
+    }
+
+    fn lead_line(&self) -> Option<String> {
+        crate::lead_restart::line(&self.stale, self.lead_versions.as_ref(), self.restart_auto)
     }
 
     fn take_working_result(&mut self) {
@@ -515,6 +531,7 @@ impl App {
                 self.show(permit::away(Some(if permit::away_since().is_some() { "off" } else { "on" })));
             }
             Act::Update => self.start_update(),
+            Act::RestartLead => self.restart_lead(),
             Act::Filter => {
                 let buffer = self.filter_of(self.column).unwrap_or_default().to_string();
                 self.mode = Mode::Filter { buffer };
@@ -820,7 +837,7 @@ impl App {
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
-            filter: None, ctrl_c: None, notice: None, lead_chat: None, subject: None, shown: None, toast: None,
+            filter: None, ctrl_c: None, notice: None, lead_chat: None, lead_versions: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), subject: None, shown: None, toast: None,
         }
     }
 }
@@ -905,6 +922,8 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.usage = snapshot.usage;
                         app.ongoing = snapshot.ongoing;
                         app.lead_chat = snapshot.lead_chat;
+                        app.lead_versions = snapshot.lead_versions;
+                        app.restart_auto = snapshot.restart_auto;
                         app.backlog_selected = app.backlog_selected.min(app.backlog_len().saturating_sub(1));
                         let newest = app.messages.last().map_or(0, |message| message.at);
                         if app.fold == Fold::Open && newest > app.seen {
@@ -1172,5 +1191,53 @@ mod tests {
         assert_eq!(text, "✓ Update finished\n  next: kelpie 0.18.1 → 0.18.2", "the update's result stays open, though it asks nothing");
         assert!(app.update_shown && app.updates.is_empty() && rechecked.try_recv().is_ok(), "the notice goes and a fresh check is asked for");
         assert!(shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "U"), "U is in the keys help");
+    }
+
+    #[test]
+    fn while_the_lead_runs_an_older_kelpie_one_line_says_so_and_l_restarts_it() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(!rows.join("\n").contains("The lead runs"), "nothing pending, no line");
+        app.handle_normal(key(KeyCode::Char('L')));
+        assert!(matches!(app.mode, Mode::Normal) && app.notice.as_ref().is_some_and(|(text, _)| text.contains("nothing to restart")), "L does nothing while the lead is current");
+        app.lead_versions = Some(("kelpie 0.26.1".to_string(), "kelpie 0.26.2".to_string()));
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(!rows.join("\n").contains("↻ The lead runs"), "the versions alone show nothing while the restart routine does not count the lead stale");
+        app.stale = vec!["lead: restarts when idle".to_string()];
+        let (rows, _) = render(&mut app, 170, 30);
+        let (x, y) = find(&rows, "↻ The lead runs kelpie 0.26.1")[0];
+        assert!(rows[y].contains("kelpie 0.26.2 is installed · restarts when idle · L restarts it now"), "{}", rows[y]);
+        assert!(rows[y + 1].trim().is_empty() && rows[y + 2].contains("WORK"), "one line, then the columns: {}", rows.join("\n"));
+        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Key(KeyCode::Char('L'))), "a click on the line restarts too");
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        app.lead_restarter = std::sync::Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            crate::lead_restart::outcome(Err("Not restarted: the lead is working.".to_string()))
+        });
+        app.handle_normal(key(KeyCode::Char('L')));
+        assert!(matches!(app.mode, Mode::Working { .. }));
+        for _ in 0..200 {
+            app.take_working_result();
+            if !matches!(app.mode, Mode::Working { .. }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline == "Not restarted: the lead is working." && toast.notice.tone == Tone::NotNow), "the plain reason, not an error");
+        app.mode = Mode::Normal;
+        app.handle_normal(key(KeyCode::Char('L')));
+        for _ in 0..200 {
+            app.take_working_result();
+            if !matches!(app.mode, Mode::Working { .. }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2, "a refused restart can be pressed again");
+        app.page = Page::Areas;
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(!rows.join("\n").contains("↻ The lead runs"), "the Work page only");
+        assert!(shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "L"), "L is in the keys help");
     }
 }

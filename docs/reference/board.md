@@ -9,6 +9,7 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 | Part | Shows |
 | --- | --- |
 | Status line, top | The page tabs, `1 Work  2 Areas  3 Routines`, with `⚠N` on Routines while N routine runs wait for you with findings. Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `chat hidden` while the lead's chat is hidden; `↑ kelpie <version> · U updates` when a newer version is out. |
+| Lead line, under the status line | While the lead counts as stale: `↻ The lead runs <old>; <new> is installed · <what happens to it> · L restarts it now`, `· L restarts it` alone with `restart.auto` off, or the error of a restart that failed. See [Restarting the lead after an update](../explanation/updates-and-restarts.md#restarting-the-lead-after-an-update). |
 | Work, left | Tasks from every repo with a worktree pool, grouped. A task's halves in other repos sit next to each other. |
 | Backlog, right | An ONGOING section of vault project notes in progress (status active or draft) when the vault is on, then the items from the configured sources, by priority. |
 | Messages, bottom | What sessions tell each other, newest last. |
@@ -64,6 +65,7 @@ kelpie keeps one phase per task, and only what changes it writes it: its start, 
 | `R` | Ask the lead to refresh the backlog. |
 | `A` | Away mode on or off. |
 | `U` | Run `kelpie update`. |
+| `L` | Restart the lead on the installed kelpie now, resuming its conversation, while the lead line shows. Refused with the plain reason while the lead works, asks, holds text you have not sent or has background work running; press it again later. |
 | `?` | The keys window: every key on the page you are on, one short line each, grouped by what you want to do, under the title `keys · work`, `keys · areas` or `keys · routines`. On a screen about 114 columns wide or more it is two columns; narrower, up to three keys a row, scrolling with `↑` `↓` and `pgup` `pgdn` when it does not fit. A moved key shows as you set it, and `↑` and the version beside `U` when there is a newer one. Any other key closes it. |
 | `esc` | One step back: close a window, a menu or the filter. At the top, close the board when it is a popup; on the full board it does nothing. |
 | `q` | Close the current view, like `esc`. At the top, close the popup; on the full board it says that `ctrl+c` twice quits. |
@@ -265,7 +267,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `reset`, `drop`, `refresh`, `away`, `update`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `reset`, `drop`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

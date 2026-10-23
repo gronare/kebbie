@@ -63,7 +63,7 @@ kelpie never types into a draft: a resume waits while the input box holds text, 
 
 ## Restarting the lead
 
-The lead reads its role and settings when it starts. `kelpie lead --restart` rewrites them and resumes the same conversation under the new role, so an update never costs you the lead's context. It waits until the lead is idle and not waiting on a question.
+The lead reads its role and settings when it starts. `kelpie lead --restart` rewrites them and resumes the same conversation under the new role, so an update never costs you the lead's context. It goes ahead only while the lead is idle, not waiting on a question, without text you have not sent in its input box and without background work running (`--anyway` cuts that off). After `kelpie update` you do not run it yourself: the keeper restarts the lead a minute after it is idle and you are out of its pane, and `L` on the board does it at once. With `restart.auto = false` only `L` and the command do. See [Restarting the lead after an update](updates-and-restarts.md#restarting-the-lead-after-an-update).
 
 ## The lead's folder
 
