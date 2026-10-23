@@ -7,7 +7,7 @@ description: Propose saving a kelpie issue when kelpie itself cost something in 
 
 `kelpie` is `${KELPIE_BIN:-$HOME/.local/share/kelpie/current/target/release/kelpie}`.
 
-kelpie issues are problems and wishes about kelpie itself, kept on this machine so they survive the session that found them: after `kelpie update` the keeper rechecks each open one against the new commits on its own and closes the ones they plainly fix. Logging one with `kelpie issue add` is the whole job: never run or suggest `kelpie issue send` or `kelpie issue report`; the board offers each bug to the user for sending. A proposal costs the user a moment, so it has to be worth one.
+kelpie issues are problems and wishes about kelpie itself, kept on this machine so they survive the session that found them: after `kelpie update` the keeper rechecks each open one against the new commits on its own and closes the ones they plainly fix. Logging one with `kelpie issue add` is the whole job. A bug reaches kelpie's maintainers only through the hub report the user approves, on the board's `B` list or with `kelpie issue report <id>`: never run or suggest it, and never create a GitHub issue for kelpie, not with `kelpie issue send`, not with `gh issue create`, not by suggesting one. A proposal costs the user a moment, so it has to be worth one.
 
 ## When to propose
 
@@ -46,7 +46,9 @@ Done when `kelpie issues` lists it. Tell the user its id in one line.
 
 ## Send on the user's ask
 
-Sending is the user's step: kelpie refuses `kelpie issue send` to the lead and tasks. When the user asks how, tell them to run `kelpie issue send <id>` themselves. It prints the text, opens a prefilled GitHub issue in the browser, and the user reads it and presses Submit themselves. Nothing reaches GitHub without that. Point them at the text before they submit, so they check it for anything about their project.
+Sending is the user's step: kelpie refuses `kelpie issue report`, `kelpie issue send` and `kelpie issue link` to the lead and tasks. When the user asks how to send a bug, point them at the board's `B` list or `kelpie issue report <id>` in their own terminal: kelpie shows them the text and sends it only on their yes.
+
+Only when the user asks for a GitHub issue in so many words, tell them to run `kelpie issue send <id>` themselves. It prints the text and opens a prefilled GitHub issue in the browser; the user reads it and presses Submit. Point them at the text first, so they check it for anything about their project.
 
 ## After an update
 

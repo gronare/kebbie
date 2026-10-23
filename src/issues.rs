@@ -296,7 +296,7 @@ fn issue_url(target: &str) -> Option<String> {
 }
 
 pub fn link_in(dir: &Path, caller: &Caller, id: &str, target: Option<&str>) -> Result<String> {
-    may_write(caller, "Linking a kelpie issue")?;
+    crate::permit::user_only_as(caller, "Linking a kelpie issue to GitHub")?;
     let url = target.and_then(issue_url).ok_or_else(|| format!("kelpie issue link needs the id and a GitHub issue number or URL, such as 12 or {REPOSITORY}/issues/12"))?;
     let mut issue = find(dir, id)?;
     issue.github = Some(url.clone());
@@ -521,6 +521,10 @@ mod tests {
         link_in(&dir, &user, &second, Some("https://github.com/gronare/kelpie/issues/40/")).unwrap();
         assert!(show_in(&dir, &second).unwrap().contains("GitHub: https://github.com/gronare/kelpie/issues/40"));
         assert!(link_in(&dir, &user, &second, Some("soon")).is_err());
+        for caller in [Caller::Lead, Caller::Task("a@b".to_string()), Caller::Agent, Caller::Sandboxed, Caller::LeadSandboxed] {
+            assert!(link_in(&dir, &caller, &second, Some("#13")).unwrap_err().contains("the user's call"), "{caller:?}");
+        }
+        assert!(show_in(&dir, &second).unwrap().contains("issues/40"), "a refused link leaves the issue as it was");
         assert!(show_in(&dir, "../etc").unwrap_err().contains("not an issue id"));
         assert!(show_in(&dir, "abcdef").unwrap_err().contains("No kelpie issue"));
         assert_eq!(list_in(&crate::sh::test_dir("issues-none"), false, false), "No open kelpie issues; --all lists the closed ones too.");
@@ -583,7 +587,7 @@ mod tests {
         let unopened = send_in(&dir, &Caller::User, &id, None, &|_: &str, _: &str| panic!("no opener, no browser"), NOW).unwrap();
         assert!(unopened.contains("Open the URL above"), "{unopened}");
         let before = load(&dir);
-        for caller in [Caller::Lead, Caller::Task("a@b".to_string())] {
+        for caller in [Caller::Lead, Caller::Task("a@b".to_string()), Caller::Agent, Caller::Sandboxed, Caller::LeadSandboxed] {
             let refused = send_in(&dir, &caller, &id, Some("open"), &|_: &str, _: &str| panic!("nothing opens for {caller:?}"), NOW + 86_400).unwrap_err();
             assert_eq!(refused, "Sending a kelpie issue to GitHub is the user's step; it stays logged here");
         }

@@ -34,6 +34,8 @@ Two things, both to the reports endpoint (`[report] url`), both signed with this
 
 Each signal batch and each report sent is a line under messages on the board.
 
+Nothing goes to kelpie's GitHub repo by itself. `kelpie update` only reads it through your `gh` to find the issues you opened there. An issue reaches GitHub only when you run `kelpie issue send <id>` and press Submit in the browser; kelpie refuses that command, and `kelpie issue link`, to the lead, tasks and sandboxed processes.
+
 ## The sandbox
 
 With `task.sandbox = true`, the default, kelpie writes Claude Code's sandbox into each task's settings, strict: `allowUnsandboxedCommands = false`, so a command that fails in the sandbox is never retried outside it, and `failIfUnavailable = true`, so Claude does not start without one. A task's shell commands then:

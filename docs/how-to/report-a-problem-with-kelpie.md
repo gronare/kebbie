@@ -1,6 +1,6 @@
 # Report a problem with kelpie
 
-Keep what kelpie got wrong, or could not do, on your machine, see after an update which of it may be fixed, and send one to kelpie's maintainers when you choose. Separately, kelpie counts its own crashes and internal errors and sends the maintainers those counts, with no text at all.
+Keep what kelpie got wrong, or could not do, on your machine, see after an update which of it may be fixed, and send a bug to kelpie's maintainers when you choose: through the hub, from the board's `B` list or `kelpie issue report`. A GitHub issue is optional, and only ever one you open yourself. Separately, kelpie counts its own crashes and internal errors and sends the maintainers those counts, with no text at all.
 
 ## Save it
 
@@ -67,7 +67,7 @@ From a terminal:
 kelpie issue report <id>
 ```
 
-It prints the same text and asks `y/N`. Only you can send: kelpie refuses it, and the board's `y`, to the lead, tasks and sandboxed processes. Wishes are not offered; send one with `kelpie issue send` below. A bug already sent with `kelpie issue send`, linked to a GitHub issue, closed or kept here is not offered either.
+It prints the same text and asks `y/N`. Only you can send: kelpie refuses it, and the board's `y`, to the lead, tasks and sandboxed processes. Wishes are not offered; open one on GitHub yourself if you like, as below. A bug already sent with `kelpie issue send`, linked to a GitHub issue, closed or kept here is not offered either.
 
 The install key is made on the first report and kept in `report/install-key.json` in the state directory, readable by you alone. The project's maintainers see that key as the report's sender; a key they have not seen before waits until they let it through, so the first report from a new install may take a while to be read.
 
@@ -108,9 +108,9 @@ signals = false   # sends no error signals and drops what was counted
 
 If you run the hub that takes your users' reports, mint a token on it with `kelpie-hub admin token --name <this machine>` and set it in your own config.toml as `[report] inbox_token`. The keeper then fetches the reports the hub has let through every 10 minutes, files each as a kelpie issue on your machine, with the id `r<report id>` and the sender's title, and acknowledges it on the hub, once per report. `kelpie issues` and `kelpie issue show` mark such an issue `[report <id>, untrusted]` and show its text fenced as data; it is never rechecked after an update. `kelpie doctor` counts the reports still waiting in quarantine; `kelpie-hub admin reports --quarantine` lists them and `kelpie-hub admin reports allow <key>` lets a sender through. The token belongs in config.toml only; a repo config with `[report]` is refused.
 
-## Send it to GitHub
+## Or open a GitHub issue yourself
 
-This is yours alone. kelpie refuses `kelpie issue send` to the lead and tasks: the lead logs issues with `kelpie issue add`, and a task tells the lead.
+The hub report above is how a bug reaches kelpie's maintainers. A GitHub issue is an optional alternative, and nothing in kelpie opens one for you: not the keeper, not an update, not the lead or a task. kelpie refuses `kelpie issue send` and `kelpie issue link` to the lead, tasks and sandboxed processes, and the lead never suggests a GitHub issue unless you ask for one; then it tells you to run this yourself:
 
 ```bash
 kelpie issue send <id>

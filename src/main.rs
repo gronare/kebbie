@@ -286,7 +286,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie issue reopen <id>        open a closed one again, noted as come back on this build
   kelpie issue link <id> <number|url>
                                   tie it to its GitHub issue
-  kelpie issue send <id>          print the text and a prefilled new-issue URL on GitHub (shortened past GitHub's
+  kelpie issue send <id>          optional: print the text and a prefilled new-issue URL on GitHub (shortened past GitHub's
                                   limit), and open it in the browser for you to check and submit; nothing is sent
                                   without your Submit (kelpie update looks the issues up with gh, and the keeper
                                   rechecks each open one filed on older code against the new commits and closes
