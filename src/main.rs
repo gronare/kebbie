@@ -645,6 +645,7 @@ fn version(built: &str) -> String {
 }
 
 fn doctor() -> ExitCode {
+    config::report_unknown_keys_quietly();
     let checks = doctor::checks(&doctor::Env::current());
     println!("{}", doctor::render(&checks));
     if doctor::failed(&checks) { ExitCode::FAILURE } else { ExitCode::SUCCESS }

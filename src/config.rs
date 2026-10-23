@@ -317,18 +317,80 @@ fn read(path: &Path) -> Result<Option<String>> {
 }
 
 pub fn load_machine(path: &Path) -> Result<Machine> {
-    read(path)?.map_or(Ok(Machine::default()), |text| parse_machine(&text, &path.display().to_string()))
+    check_machine(path).map(|(machine, unknown)| warn_once(machine, &unknown))
 }
 
 pub fn load_repo(path: &Path) -> Result<Worktree> {
-    read(path)?.map_or(Ok(Worktree::default()), |text| parse_repo(&text, &path.display().to_string()))
+    check_repo(path).map(|(worktree, unknown)| warn_once(worktree, &unknown))
+}
+
+pub fn check_machine(path: &Path) -> Result<(Machine, Vec<String>)> {
+    let source = path.display().to_string();
+    read(path)?.map_or(Ok((Machine::default(), Vec::new())), |text| Ok((parse_machine(&text, &source)?, unknown_in_file(&text, &source, &MACHINE_KEYS))))
+}
+
+pub fn check_repo(path: &Path) -> Result<(Worktree, Vec<String>)> {
+    let source = path.display().to_string();
+    read(path)?.map_or(Ok((Worktree::default(), Vec::new())), |text| Ok((parse_repo(&text, &source)?, unknown_in_file(&text, &source, &REPO_KEYS))))
+}
+
+pub const UNKNOWN_FIX: &str = "a newer kelpie may know it; kelpie update";
+
+static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn report_unknown_keys_quietly() {
+    QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn warn_once<T>(value: T, unknown: &[String]) -> T {
+    static WARNED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    if QUIET.load(std::sync::atomic::Ordering::Relaxed) {
+        return value;
+    }
+    let mut warned = WARNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    for line in unknown.iter().filter(|line| !warned.contains(line)).cloned().collect::<Vec<_>>() {
+        eprintln!("kelpie: {line} (ignored: {UNKNOWN_FIX}, or fix the spelling)");
+        warned.push(line);
+    }
+    value
+}
+
+const MACHINE_KEYS: [&str; 15] = ["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "keys", "ci", "routines", "report"];
+const REPO_KEYS: [&str; 7] = ["actions", "worktree", "task", "review", "ci", "docs", "routines"];
+const SECTION_KEYS: [(&str, &[&str]); 15] = [
+    ("board", &["groups", "backlog"]),
+    ("board.backlog", &["sources", "ongoing"]),
+    ("update", &["channel"]),
+    ("restart", &["idle_minutes", "auto"]),
+    ("keeper", &["enabled"]),
+    ("recover", &["enabled"]),
+    ("report", &["url", "signals", "text", "enabled", "inbox_token"]),
+    ("machine", &["name"]),
+    ("worktree", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"]),
+    ("task", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox"]),
+    ("review", &["model"]),
+    ("notify", &["command"]),
+    ("vault", &["command"]),
+    ("ci", &["watch"]),
+    ("docs", &["required"]),
+];
+
+fn unknown_in(table: &Table, prefix: &str, known: &[&str]) -> Vec<String> {
+    table.keys().filter(|key| !known.contains(&key.as_str())).map(|key| format!("{prefix}{key}: unknown key; known keys here: {}", known.join(", "))).collect()
 }
 
 pub fn unknown_keys(table: &Table, prefix: &str, known: &[&str]) -> Result<()> {
-    match table.keys().find(|key| !known.contains(&key.as_str())) {
-        Some(key) => Err(format!("{prefix}{key}: unknown key; known keys here: {}", known.join(", "))),
-        None => Ok(()),
-    }
+    unknown_in(table, prefix, known).into_iter().next().map_or(Ok(()), Err)
+}
+
+// A key a settings parser reads but SECTION_KEYS lacks is warned about while still read, so add every new key here too.
+fn unknown_settings(table: &Table, top: &[&str]) -> Vec<String> {
+    let sections = SECTION_KEYS.iter().filter_map(|(path, known)| path.split('.').try_fold(table, |table, key| table.get(key)?.as_table()).map(|section| unknown_in(section, &format!("{path}."), known)));
+    unknown_in(table, "", top).into_iter().chain(sections.flatten()).collect()
+}
+
+fn unknown_in_file(text: &str, source: &str, top: &[&str]) -> Vec<String> {
+    text.parse::<Table>().map(|table| unknown_settings(&table, top).into_iter().map(|line| format!("{source}: {line}")).collect()).unwrap_or_default()
 }
 
 fn subtable<'a>(table: &'a Table, key: &str, name: &str) -> Result<Option<&'a Table>> {
@@ -465,16 +527,13 @@ struct Board {
 
 fn board(table: &Table) -> Result<Board> {
     let Some(board) = subtable(table, "board", "board")? else { return Ok(Board::default()) };
-    unknown_keys(board, "board.", &["groups", "backlog"])?;
     let groups = board.get("groups").map(groups).transpose()?;
     let Some(backlog) = subtable(board, "backlog", "board.backlog")? else { return Ok(Board { groups, ..Board::default() }) };
-    unknown_keys(backlog, "board.backlog.", &["sources", "ongoing"])?;
     Ok(Board { sources: backlog_sources(backlog)?, groups, ongoing: ongoing_at(backlog)? })
 }
 
 fn update(table: &Table) -> Result<Option<Channel>> {
     let Some(update) = subtable(table, "update", "update")? else { return Ok(None) };
-    unknown_keys(update, "update.", &["channel"])?;
     match text(update, "channel", "update.channel")?.as_deref() {
         None => Ok(None),
         Some("main") => Ok(Some(Channel::Main)),
@@ -491,7 +550,6 @@ fn keys(table: &Table) -> Result<Vec<(String, String)>> {
 
 fn restart(table: &Table) -> Result<Restart> {
     let Some(restart) = subtable(table, "restart", "restart")? else { return Ok(Restart::default()) };
-    unknown_keys(restart, "restart.", &["idle_minutes", "auto"])?;
     let idle_minutes = match restart.get("idle_minutes") {
         None => None,
         Some(value) => Some(value.as_integer().filter(|minutes| (1..=1440).contains(minutes)).ok_or("restart.idle_minutes: must be a whole number of minutes, 1 to 1440")? as u64),
@@ -502,13 +560,11 @@ fn restart(table: &Table) -> Result<Restart> {
 
 fn enabled_in(table: &Table, name: &str) -> Result<Option<bool>> {
     let Some(section) = subtable(table, name, name)? else { return Ok(None) };
-    unknown_keys(section, &format!("{name}."), &["enabled"])?;
     section.get("enabled").map(|value| value.as_bool().ok_or_else(|| format!("{name}.enabled: must be true or false"))).transpose()
 }
 
 fn report(table: &Table) -> Result<Report> {
     let Some(report) = subtable(table, "report", "report")? else { return Ok(Report::default()) };
-    unknown_keys(report, "report.", &["url", "signals", "text", "enabled", "inbox_token"])?;
     let url = text(report, "url", "report.url")?.map(|url| crate::hub::hub_url(&url).map_err(|error| format!("report.url: {error}"))).transpose()?;
     let enabled = report.get("enabled").map(|value| value.as_bool().ok_or("report.enabled: must be true or false")).transpose()?;
     let signals = report.get("signals").map(|value| value.as_bool().ok_or("report.signals: must be true or false")).transpose()?;
@@ -522,7 +578,6 @@ fn report(table: &Table) -> Result<Report> {
 
 fn machine_name(table: &Table) -> Result<Option<String>> {
     let Some(machine) = subtable(table, "machine", "machine")? else { return Ok(None) };
-    unknown_keys(machine, "machine.", &["name"])?;
     let Some(value) = machine.get("name") else { return Ok(None) };
     valid_machine_name(value.as_str().ok_or("machine.name: must be a string")?).map(Some)
 }
@@ -554,7 +609,6 @@ pub fn short_hostname() -> String {
 
 fn worktree(table: &Table) -> Result<Worktree> {
     let Some(worktree) = subtable(table, "worktree", "worktree")? else { return Ok(Worktree::default()) };
-    unknown_keys(worktree, "worktree.", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"])?;
     Ok(Worktree {
         setup_skill: skill(worktree, "setup_skill", "worktree.setup_skill")?,
         setup_command: text(worktree, "setup_command", "worktree.setup_command")?,
@@ -594,7 +648,6 @@ fn clean_on_release(value: &Value) -> Result<Vec<String>> {
 
 fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(task) = subtable(table, "task", "task")? {
-        unknown_keys(task, "task.", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox"])?;
         worktree.rules_skill = skill(task, "rules_skill", "task.rules_skill")?;
         worktree.test_commands = task.get("test_commands").map(test_commands).transpose()?;
         worktree.also_noticed = also_noticed(task)?;
@@ -623,7 +676,6 @@ fn test_commands(value: &Value) -> Result<Vec<String>> {
 
 fn with_review(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(review) = subtable(table, "review", "review")? {
-        unknown_keys(review, "review.", &["model"])?;
         worktree.review_model = text(review, "model", "review.model")?;
     }
     Ok(worktree)
@@ -631,7 +683,6 @@ fn with_review(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 
 fn with_notify(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(notify) = subtable(table, "notify", "notify")? {
-        unknown_keys(notify, "notify.", &["command"])?;
         worktree.notify_command = text(notify, "command", "notify.command")?;
     }
     Ok(worktree)
@@ -639,7 +690,6 @@ fn with_notify(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 
 fn with_vault(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(vault) = subtable(table, "vault", "vault")? {
-        unknown_keys(vault, "vault.", &["command"])?;
         worktree.vault_command = text(vault, "command", "vault.command")?;
     }
     Ok(worktree)
@@ -647,7 +697,6 @@ fn with_vault(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 
 fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(ci) = subtable(table, "ci", "ci")? {
-        unknown_keys(ci, "ci.", &["watch"])?;
         worktree.ci_watch = ci.get("watch").map(|value| value.as_bool().ok_or("ci.watch: must be true or false")).transpose()?;
     }
     Ok(worktree)
@@ -655,7 +704,6 @@ fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 
 fn with_docs(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(docs) = subtable(table, "docs", "docs")? {
-        unknown_keys(docs, "docs.", &["required"])?;
         worktree.docs_required = docs.get("required").map(|value| value.as_bool().ok_or("docs.required: must be true or false")).transpose()?;
     }
     Ok(worktree)
@@ -678,7 +726,6 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     if table.contains_key("docs") {
         return Err(fail(format!("docs.required: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "keys", "ci", "routines", "report"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     if worktree.dev_route.is_some() {
         return Err(fail(format!("worktree.dev_route: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
@@ -702,7 +749,6 @@ pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
     }
-    unknown_keys(&table, "", &["actions", "worktree", "task", "review", "ci", "docs", "routines"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     let repo = Path::new(source).file_stem().map(|stem| stem.to_string_lossy().to_string());
     crate::routines::parse_list(&table, repo.as_deref(), source).map_err(fail)?;
@@ -815,7 +861,14 @@ pub fn report_settings() -> Result<Report> {
 }
 
 pub fn channel() -> Result<Channel> {
-    Ok(load_machine(&path())?.channel.unwrap_or_default())
+    channel_in(&path())
+}
+
+// kelpie update reads only [update] channel, so nothing else in config.toml can keep a machine from updating.
+pub fn channel_in(path: &Path) -> Result<Channel> {
+    let source = path.display().to_string();
+    let Some(text) = read(path)? else { return Ok(Channel::default()) };
+    update(&table(&text, &source)?).map(Option::unwrap_or_default).map_err(|error| format!("{source}: {error}"))
 }
 
 fn quoted(items: &[&str]) -> String {
@@ -991,6 +1044,16 @@ mod tests {
         parse_repo(text, "app.toml").unwrap()
     }
 
+    fn unknown_machine(text: &str) -> String {
+        machine(text);
+        unknown_in_file(text, "config.toml", &MACHINE_KEYS).join("\n")
+    }
+
+    fn unknown_repo(text: &str) -> String {
+        repo(text);
+        unknown_in_file(text, "app.toml", &REPO_KEYS).join("\n")
+    }
+
     #[test]
     fn a_repo_configs_paths_and_skill_names_stay_inside_their_folders() {
         for good in ["pyproject.toml", "crates/app/Cargo.toml", "./uv.lock"] {
@@ -1029,7 +1092,7 @@ mod tests {
         let off = settings(&repo("[ci]\nwatch = false\n"), &machine("[ci]\nwatch = true\n"));
         assert_eq!(off.ci_watch, Setting { value: false, layer: Layer::Repo });
         assert!(parse_machine("[ci]\nwatch = \"yes\"\n", "config.toml").unwrap_err().contains("ci.watch: must be true or false"));
-        assert!(parse_repo("[ci]\npoll = 10\n", "app.toml").unwrap_err().contains("ci.poll: unknown key; known keys here: watch"));
+        assert!(unknown_repo("[ci]\npoll = 10\n").contains("ci.poll: unknown key; known keys here: watch"));
         let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: off });
         assert!(shown.contains("ci.watch = false  (repo config)"), "{shown}");
     }
@@ -1073,7 +1136,7 @@ mod tests {
         let refused = parse_repo("[task]\nalso_noticed = \"ignore\"\n", "app.toml").unwrap_err();
         assert!(refused.contains("task.also_noticed: \"ignore\" is not a choice; use \"backlog\", \"fix\" or \"ask\""), "{refused}");
         assert!(parse_machine("[task]\nalso_noticed = true\n", "config.toml").unwrap_err().contains("task.also_noticed: must be a string"));
-        assert!(parse_repo("[task]\nnoticed = \"fix\"\n", "app.toml").unwrap_err().contains("known keys here: rules_skill, test_commands, also_noticed, permission_mode"));
+        assert!(unknown_repo("[task]\nnoticed = \"fix\"\n").contains("known keys here: rules_skill, test_commands, also_noticed, permission_mode"));
         let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: own });
         assert!(shown.contains("task.also_noticed = \"fix\"  (repo config)") && shown.contains("outside its task"), "{shown}");
     }
@@ -1189,23 +1252,62 @@ mod tests {
     }
 
     #[test]
-    fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
+    fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
+        let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kelpie/config.toml", &MACHINE_KEYS);
+        let all = "board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report";
+        assert_eq!(warned("colour = 1
+"), [format!("/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: {all}")]);
+        assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: {all}")]);
+        assert_eq!(warned("[board.backlog]\nsource = []\n"), ["/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources, ongoing"]);
+        assert_eq!(machine("colour = 1\n[backlog]\nsources = []\n[board]\ncolumns = 3\n[board.backlog]\nsource = []\n"), Machine::default(), "unknown keys and tables are ignored");
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report");
-        assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources, ongoing");
-        assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
+        assert_eq!(error("colour = 1\n[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
         assert!(error("[board.backlog]\nsources = [\"vault\", \"vault\"]\n").contains("listed twice"));
-        assert!(error("[repos.app]\nsetup = [\"x\"]\n").contains("repos: unknown key"));
-        assert!(error("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name"));
+        assert!(unknown_machine("[repos.app]\nsetup = [\"x\"]\n").contains("repos: unknown key"));
+        assert!(unknown_machine("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name"));
         assert!(error("[worktree]\ndev_server = [\"bin/dev\"]\n").contains("worktree.dev_server: must be a string"));
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
         assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board] groups and [board.backlog] sources and ongoing in "));
-        assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, docs, routines");
-        assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release");
+        assert!(repo_error("colour = 1\n[ci]\nwatch = \"yes\"\n").contains("ci.watch: must be true or false"), "a known key with the wrong type still fails in a repo config");
+        let repo_warned = |text: &str| unknown_in_file(text, "/home/u/.config/kelpie/repos/app.toml", &REPO_KEYS);
+        assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, docs, routines"]);
+        assert_eq!(repo_warned("[worktree]\nport = 3000\n"), ["/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release"]);
+        assert_eq!(repo("colour = 1\n[lint]\nstrict = true\n[worktree]\nport = 3000\ndev_server = \"bin/dev\"\n").dev_server, Some("bin/dev".to_string()), "a repo config reads its known keys past unknown ones");
+    }
+
+    #[test]
+    fn the_files_load_past_a_key_from_a_newer_kelpie_and_say_which() {
+        let dir = scratch("newer");
+        let config = dir.join("config.toml");
+        std::fs::write(&config, "[update]\nchannel = \"main\"\nmirror = \"x\"\n\n[board]\nlanes = 2\n\n[signals]\nsample = 0.5\n").unwrap();
+        let (machine, unknown) = check_machine(&config).unwrap();
+        assert_eq!(machine.channel, Some(Channel::Main));
+        assert_eq!(unknown.iter().map(|line| line.split(": ").nth(1).unwrap_or_default()).collect::<Vec<_>>(), ["signals", "board.lanes", "update.mirror"]);
+        assert_eq!(load_machine(&config).unwrap().channel, Some(Channel::Main));
+        let file = dir.join("app.toml");
+        std::fs::write(&file, "[review]\nmodel = \"opus\"\neffort = \"high\"\n\n[lint]\nstrict = true\n").unwrap();
+        let (worktree, unknown) = check_repo(&file).unwrap();
+        assert_eq!(worktree.review_model.as_deref(), Some("opus"));
+        assert_eq!(unknown.len(), 2, "{unknown:?}");
+        assert!(unknown.iter().all(|line| line.starts_with(&file.display().to_string())), "{unknown:?}");
+        std::fs::write(&config, "[restart]\nidle_minutes = \"soon\"\n").unwrap();
+        assert!(check_machine(&config).unwrap_err().contains("restart.idle_minutes: must be a whole number"), "a known key with the wrong type still fails");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_update_channel_reads_past_everything_else_in_config_toml() {
+        let dir = scratch("channel");
+        let config = dir.join("config.toml");
+        assert_eq!(channel_in(&config).unwrap(), Channel::Release, "no file is the default channel");
+        std::fs::write(&config, "colour = 1\n\n[update]\nchannel = \"main\"\nmirror = \"x\"\n\n[signals]\nsample = 0.5\n\n[restart]\nidle_minutes = \"soon\"\n").unwrap();
+        assert_eq!(channel_in(&config).unwrap(), Channel::Main, "unknown keys and tables and a bad value elsewhere leave update alone");
+        std::fs::write(&config, "[update]\nchannel = \"stable\"\n").unwrap();
+        assert!(channel_in(&config).unwrap_err().contains("update.channel: \"stable\" is not a channel"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1214,7 +1316,7 @@ mod tests {
         assert_eq!(settings(&Worktree::default(), &from_machine).review_model, Setting { value: Some("opus".to_string()), layer: Layer::Machine });
         let both = settings(&repo("[review]\nmodel = \"sonnet\"\n"), &from_machine);
         assert_eq!(both.review_model, Setting { value: Some("sonnet".to_string()), layer: Layer::Repo });
-        assert!(parse_repo("[review]\nmodle = \"opus\"\n", "app.toml").unwrap_err().contains("review.modle: unknown key; known keys here: model"));
+        assert!(unknown_repo("[review]\nmodle = \"opus\"\n").contains("review.modle: unknown key; known keys here: model"));
         assert!(parse_machine("[review]\nmodel = \"\"\n", "config.toml").unwrap_err().contains("review.model: must not be empty"));
         let loaded = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both };
         assert!(describe(&loaded).contains("review.model = \"sonnet\"  (repo config)"));
@@ -1231,7 +1333,7 @@ mod tests {
         assert!(parse_repo("[notify]\n", "app.toml").unwrap_err().contains("lives in config.toml"));
         let sneaked = Worktree { notify_command: Some("bin/notify".to_string()), ..Worktree::default() };
         assert_eq!(settings(&sneaked, &from_machine).notify_command.layer, Layer::Machine, "the repo layer is never read for it");
-        assert!(parse_machine("[notify]\ncmd = \"x\"\n", "config.toml").unwrap_err().contains("notify.cmd: unknown key; known keys here: command"));
+        assert!(unknown_machine("[notify]\ncmd = \"x\"\n").contains("notify.cmd: unknown key; known keys here: command"));
         assert!(parse_machine("[notify]\ncommand = \" \"\n", "config.toml").unwrap_err().contains("notify.command: must not be empty"));
         assert!(parse_machine("[notify]\ncommand = [\"x\"]\n", "config.toml").unwrap_err().contains("notify.command: must be a string"));
         assert!(parse_machine("notify = \"x\"\n", "config.toml").unwrap_err().contains("notify: must be a table"));
@@ -1250,7 +1352,7 @@ mod tests {
         assert_eq!(settings(&Worktree::default(), &Machine::default()).groups.value, Group::ALL, "no list keeps today's order");
         assert_eq!(error("[board]\ngroups = [\"needs-me\"]\n"), "/home/u/.config/kelpie/config.toml: board.groups: \"needs-me\" is not a group; use \"needs-you\", \"working\", \"to-review\", \"ready-to-push\", \"ci-running\", \"waiting-for-work\", \"queued\"");
         assert!(error("[board]\ngroups = [\"queued\", \"queued\"]\n").contains("board.groups: \"queued\" is listed twice"));
-        assert!(error("[board]\ncolumns = []\n").contains("board.columns: unknown key; known keys here: groups, backlog"));
+        assert!(unknown_machine("[board]\ncolumns = []\n").contains("board.columns: unknown key; known keys here: groups, backlog"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
         assert!(shown.contains("board.groups = [\"ready-to-push\", \"waiting-for-work\", \"needs-you\", \"working\", \"to-review\", \"ci-running\", \"queued\"]  (machine config)\n  The order of the Work column's groups"), "{shown}");
     }
@@ -1277,7 +1379,7 @@ mod tests {
             assert!(error(&format!("[restart]\nidle_minutes = {bad}\n")).contains("restart.idle_minutes: must be a whole number of minutes, 1 to 1440"), "{bad}");
         }
         assert!(error("[restart]\nauto = \"no\"\n").contains("restart.auto: must be true or false"));
-        assert!(error("[restart]\nidle = 5\n").contains("restart.idle: unknown key; known keys here: idle_minutes, auto"));
+        assert!(unknown_machine("[restart]\nidle = 5\n").contains("restart.idle: unknown key; known keys here: idle_minutes, auto"));
         assert!(parse_repo("[restart]\nauto = false\n", "app.toml").unwrap_err().contains("restart: applies to every repo, so it lives in config.toml"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
         assert!(shown.contains("restart.auto = false  (machine config)\n  Whether kelpie restarts") && shown.contains("restart.idle_minutes = 25  (machine config)\n  How long a stale session waits"), "{shown}");
@@ -1290,7 +1392,7 @@ mod tests {
         assert_eq!(off.keeper, Setting { value: false, layer: Layer::Machine });
         let error = |text: &str| parse_machine(text, "config.toml").unwrap_err();
         assert!(error("[keeper]\nenabled = \"no\"\n").contains("keeper.enabled: must be true or false"));
-        assert!(error("[keeper]\non = true\n").contains("keeper.on: unknown key; known keys here: enabled"));
+        assert!(unknown_machine("[keeper]\non = true\n").contains("keeper.on: unknown key; known keys here: enabled"));
         assert!(parse_repo("[keeper]\nenabled = false\n", "app.toml").unwrap_err().contains("keeper: applies to every repo, so it lives in config.toml; set [keeper] enabled in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
         assert!(shown.contains("keeper.enabled = false  (machine config)\n  Whether one background kelpie keeper"), "{shown}");
@@ -1309,7 +1411,7 @@ mod tests {
         assert!(error("[machine]\nname = \"a\\tb\"\n").contains("without control characters"));
         assert!(error("[machine]\nname = 7\n").contains("machine.name: must be a string"));
         assert!(error("[machine]\nname = \"LocalHost\"\n").contains("\"localhost\" names every machine"));
-        assert!(error("[machine]\nhost = \"x\"\n").contains("machine.host: unknown key; known keys here: name"));
+        assert!(unknown_machine("[machine]\nhost = \"x\"\n").contains("machine.host: unknown key; known keys here: name"));
         assert!(parse_repo("[machine]\nname = \"x\"\n", "app.toml").unwrap_err().contains("machine: applies to every repo, so it lives in config.toml; set [machine] name in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: named });
         assert!(shown.contains("machine.name = \"devbox\"  (machine config)\n  The machine's one name"), "{shown}");
@@ -1322,7 +1424,7 @@ mod tests {
         assert_eq!(off.recover, Setting { value: false, layer: Layer::Machine });
         let error = |text: &str| parse_machine(text, "config.toml").unwrap_err();
         assert!(error("[recover]\nenabled = 1\n").contains("recover.enabled: must be true or false"));
-        assert!(error("[recover]\nretries = 3\n").contains("recover.retries: unknown key; known keys here: enabled"));
+        assert!(unknown_machine("[recover]\nretries = 3\n").contains("recover.retries: unknown key; known keys here: enabled"));
         assert!(parse_repo("[recover]\nenabled = false\n", "app.toml").unwrap_err().contains("recover: applies to every repo, so it lives in config.toml; set [recover] enabled in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
         assert!(shown.contains("recover.enabled = false  (machine config)\n  Whether kelpie resumes a task"), "{shown}");
@@ -1336,7 +1438,7 @@ mod tests {
         assert_eq!(machine("[update]\n").channel, None);
         let error = |text: &str| parse_machine(text, "config.toml").unwrap_err();
         assert!(error("[update]\nchannel = \"stable\"\n").contains("update.channel: \"stable\" is not a channel; use \"main\" or \"release\""));
-        assert!(error("[update]\nchanel = \"main\"\n").contains("update.chanel: unknown key; known keys here: channel"));
+        assert!(unknown_machine("[update]\nchanel = \"main\"\n").contains("update.chanel: unknown key; known keys here: channel"));
         assert!(error("[update]\nchannel = 1\n").contains("update.channel: must be a string"));
         assert!(parse_repo("[update]\nchannel = \"main\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err().starts_with("/home/u/.config/kelpie/repos/app.toml: update: applies to every repo"));
         let default = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
@@ -1363,7 +1465,7 @@ mod tests {
         assert!(refused.contains("report: applies to every repo, so it lives in config.toml"), "a repo config never holds the token: {refused}");
         assert!(parse_machine("[report]\nurl = \"http://hub.example.com\"\n", "config.toml").unwrap_err().contains("report.url"));
         assert!(parse_machine("[report]\ninbox_token = \"khm_machine\"\n", "config.toml").unwrap_err().contains("report.inbox_token"));
-        assert!(parse_machine("[report]\nsecret = 1\n", "config.toml").is_err());
+        assert!(unknown_machine("[report]\nsecret = 1\n").contains("report.secret: unknown key"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1391,7 +1493,7 @@ mod tests {
         let from_machine = machine("[vault]\ncommand = \"uv run --project ~/src/notes-vault-mcp notes-vault-mcp\"\n");
         assert_eq!(settings(&Worktree::default(), &from_machine).vault_command, Setting { value: Some("uv run --project ~/src/notes-vault-mcp notes-vault-mcp".to_string()), layer: Layer::Machine });
         assert!(parse_repo("[vault]\ncommand = \"evil\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err().starts_with("/home/u/.config/kelpie/repos/app.toml: vault: applies to every repo"));
-        assert!(parse_machine("[vault]\ncmd = \"x\"\n", "config.toml").unwrap_err().contains("vault.cmd: unknown key; known keys here: command"));
+        assert!(unknown_machine("[vault]\ncmd = \"x\"\n").contains("vault.cmd: unknown key; known keys here: command"));
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&default).contains("vault.command = none  (default)\n  The notes-vault-mcp command"), "{}", describe(&default));
     }
@@ -1488,7 +1590,7 @@ mod tests {
         let refused = parse_machine("[docs]\nrequired = true\n", "config.toml").unwrap_err();
         assert!(refused.starts_with("config.toml: docs.required: each repo opts in on its own, so it lives in its repo config"), "{refused}");
         assert!(parse_repo("[docs]\nrequired = \"yes\"\n", "app.toml").unwrap_err().contains("docs.required: must be true or false"));
-        assert!(parse_repo("[docs]\nrequire = true\n", "app.toml").unwrap_err().contains("docs.require: unknown key; known keys here: required"));
+        assert!(unknown_repo("[docs]\nrequire = true\n").contains("docs.require: unknown key; known keys here: required"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&repo("[docs]\nrequired = true\n"), &Machine::default()) });
         assert!(shown.contains("docs.required = true  (repo config)"), "{shown}");
     }
@@ -1584,9 +1686,11 @@ mod tests {
 
     #[test]
     fn a_repo_config_cannot_hold_a_machine_wide_key_under_another_table() {
-        for text in ["[worktree]\nnotify_command = \"x\"\n", "[worktree]\nvault_command = \"x\"\n", "[task]\nnotify = \"x\"\n", "[review]\ncommand = \"x\"\n", "[board]\nbacklog = {}\n"] {
-            assert!(parse_repo(text, "app.toml").is_err(), "{text}");
+        for text in ["[worktree]\nnotify_command = \"x\"\n", "[worktree]\nvault_command = \"x\"\n", "[task]\nnotify = \"x\"\n", "[review]\ncommand = \"x\"\n"] {
+            assert!(unknown_repo(text).contains("unknown key"), "{text}");
+            assert_eq!(repo(text), Worktree::default(), "{text}");
         }
+        assert!(parse_repo("[board]\nbacklog = {}\n", "app.toml").is_err());
         let smuggled = Worktree { vault_command: Some("evil".to_string()), notify_command: Some("evil".to_string()), server_name: Some("x".to_string()), worker_name: Some("y".to_string()), ..Worktree::default() };
         let resolved = settings(&smuggled, &Machine::default());
         assert_eq!(resolved.vault_command.value, None);

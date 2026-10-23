@@ -21,7 +21,8 @@ kelpie never reads settings from a file inside a repo.
 Rules:
 
 - A key marked **config.toml only** in a repo config is an error that says so.
-- An unknown key in either file is an error that names the file and the key.
+- An unknown key or table in either file is ignored, with one line on stderr that names the file and the key, so a key from a newer kelpie never stops this one. `kelpie doctor` lists them as warnings. A known key with a value of the wrong type is an error that names the file and the key. Unknown keys inside an `[[actions]]` or `[[routines]]` entry are errors, since that entry says what kelpie runs.
+- `kelpie update` reads only `update.channel` from config.toml, so nothing else in the file stops an update.
 - Either file may be a symlink. `kelpie config` and `kelpie doctor` show each link with its target, and `kelpie doctor` reports a broken one.
 
 ## Keys

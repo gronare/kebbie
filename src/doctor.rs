@@ -264,9 +264,10 @@ pub fn writable(path: &Path, about: &str, uid: u32) -> Check {
 }
 
 pub fn config_file(path: &Path) -> (Check, Option<Machine>) {
-    match config::load_machine(path) {
-        Ok(config) if path.exists() => (ok("config", format!("{} parses", path.display())), Some(config)),
-        Ok(config) => (ok("config", format!("{} not found; every machine setting is its default", path.display())), Some(config)),
+    match config::check_machine(path) {
+        Ok((config, unknown)) if !unknown.is_empty() => (warn("config", unknown.join("; "), one(config::UNKNOWN_FIX)), Some(config)),
+        Ok((config, _)) if path.exists() => (ok("config", format!("{} parses", path.display())), Some(config)),
+        Ok((config, _)) => (ok("config", format!("{} not found; every machine setting is its default", path.display())), Some(config)),
         Err(error) => (fail("config", error, one("fix that key; kelpie config shows the result")), None),
     }
 }
@@ -277,12 +278,13 @@ pub fn repo_file(path: &Path) -> (Check, Option<Worktree>) {
     if !path.exists() && std::fs::symlink_metadata(path).is_ok() {
         return (fail(name, format!("{shown}: the link points at nothing"), one("clone the repo it links into, or remove the link")), None);
     }
-    match config::load_repo(path) {
-        Ok(worktree) if path.exists() => match crate::actions::load_from(path).1 {
-            errors if errors.is_empty() => (ok(name, format!("{shown} parses")), Some(worktree)),
-            errors => (fail(name, errors.join("; "), fix()), Some(worktree)),
+    match config::check_repo(path) {
+        Ok((worktree, unknown)) if path.exists() => match crate::actions::load_from(path).1 {
+            errors if !errors.is_empty() => (fail(name, errors.join("; "), fix()), Some(worktree)),
+            _ if !unknown.is_empty() => (warn(name, unknown.join("; "), one(config::UNKNOWN_FIX)), Some(worktree)),
+            _ => (ok(name, format!("{shown} parses")), Some(worktree)),
         },
-        Ok(worktree) => (ok(name, format!("{shown}; config.toml and the defaults apply")), Some(worktree)),
+        Ok((worktree, _)) => (ok(name, format!("{shown}; config.toml and the defaults apply")), Some(worktree)),
         Err(error) => (fail(name, format!("{shown}: {error}"), fix()), None),
     }
 }
@@ -588,7 +590,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     if let Some(plugin) = &plugin {
         checks.push(plugin_binary(&plugin.root));
     }
-    let channel = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.channel).unwrap_or_default();
+    let channel = config::channel_in(&env.config).unwrap_or_default();
     if let Some((tool, found)) = &cargo {
         let origin = plugin.as_ref().and_then(|plugin| crate::update::binary_origin(&plugin.root));
         checks.push(self::cargo(tool, found.as_deref(), channel, origin.as_ref()));
@@ -610,10 +612,10 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.extend(codex(&crate::agent::codex::availability(&env.path, Some(&env.codex_dir), &kelpie), codex_config.as_ref(), needed, &env.codex_dir));
     let places = crate::update_check::Places::new(plugin.as_ref().map(|plugin| plugin.root.clone()), env.claude_dir.clone(), channel);
     checks.push(updates(&env.kelpie_state, channel, &crate::update_check::installed(&places)));
-    let keeper_on = crate::config::load_machine(&env.config).ok().and_then(|machine| machine.keeper).unwrap_or(true);
+    let keeper_on = config::check_machine(&env.config).ok().and_then(|(machine, _)| machine.keeper).unwrap_or(true);
     checks.push(keeper(keeper_on, crate::keeper::holder(&env.kelpie_state).as_ref(), crate::messages::now()));
     checks.push(crate::hub::doctor(&env.kelpie_state, crate::hub::configured_name(&env.config).as_deref(), crate::messages::now(), crate::hub::reach));
-    if let Ok(machine) = config::load_machine(&env.config) {
+    if let Ok((machine, _)) = config::check_machine(&env.config) {
         checks.push(crate::signals::doctor(&env.kelpie_state, &machine.report, crate::messages::now()));
         checks.extend(crate::hub::inbox::doctor(&env.kelpie_state, &machine.report, crate::messages::now()));
     }
@@ -889,13 +891,23 @@ mod tests {
         std::fs::write(&file, "[board.backlog]\nsources = [\"jira\"]\n").unwrap();
         let (check, config) = config_file(&file);
         assert!(check.level == Level::Fail && config.is_none() && check.fact.contains("board.backlog.sources"));
+        std::fs::write(&file, "[update]\nchannel = \"main\"\n\n[board]\nlanes = 2\n\n[signals]\nsample = 0.5\n").unwrap();
+        let (check, config) = config_file(&file);
+        assert!(check.level == Level::Warn && check.fact.contains("signals: unknown key") && check.fact.contains("board.lanes: unknown key"), "{check:?}");
+        assert_eq!(check.fix, ["a newer kelpie may know it; kelpie update"]);
+        assert_eq!(config.and_then(|config| config.channel), Some(crate::config::Channel::Main), "the rest of the file still applies");
+        std::fs::write(&file, "[restart]\nidle_minutes = \"soon\"\n").unwrap();
+        assert_eq!(config_file(&file).0.level, Level::Fail, "a known key with the wrong type still fails");
         let repos = dir.join("repos");
         std::fs::create_dir_all(&repos).unwrap();
         let own = repos.join("app.toml");
         assert_eq!(repo_file(&own).0.level, Level::Ok);
         std::fs::write(&own, "[worktree]\ndev_server = \"bin/dev\"\nport = 3000\n").unwrap();
         let (check, worktree) = repo_file(&own);
-        assert!(check.level == Level::Fail && worktree.is_none() && check.fact.contains("worktree.port: unknown key"), "{check:?}");
+        assert!(check.level == Level::Warn && check.fact.contains("worktree.port: unknown key") && check.fix == ["a newer kelpie may know it; kelpie update"], "{check:?}");
+        assert_eq!(worktree.and_then(|worktree| worktree.dev_server).as_deref(), Some("bin/dev"));
+        std::fs::write(&own, "[ci]\nwatch = \"yes\"\n").unwrap();
+        assert_eq!(repo_file(&own).0.level, Level::Fail, "a known key with the wrong type still fails");
         std::fs::write(&own, "[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\ncolour = \"red\"\n").unwrap();
         let (check, _) = repo_file(&own);
         assert!(check.level == Level::Fail && check.fact.contains("actions[0].colour: unknown key"), "an action's error fails the check too: {check:?}");
