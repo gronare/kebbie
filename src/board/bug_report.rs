@@ -100,7 +100,7 @@ pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'s
     let key = keys::key(Act::Reports);
     let panel = &app.offer_panel;
     let mut lines = vec![Line::default(), group_line("Send to kelpie's maintainers?", app.offers.len(), YELLOW)];
-    let hint = if panel.focused { format!("↑ ↓ pick · ⏎ shows the text and asks · n keeps it here only · esc back · {key} hides") } else { format!("bugs kelpie filed about itself · {key} selects · {key} again hides") };
+    let hint = if panel.focused { format!("↑ ↓ pick · ⏎ shows the text and asks · n keeps it here only · esc back · {key} hides") } else { format!("kelpie bugs you or the lead filed · {key} selects · {key} again hides") };
     lines.push(Line::from(Span::styled(hint, style(MUTED))));
     let mut rows = Vec::new();
     let mut selected_line = None;

@@ -295,7 +295,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   without your Submit (kelpie update looks the issues up with gh, and the keeper
                                   rechecks each open one filed on older code against the new commits and closes
                                   the ones they plainly fix)
-  kelpie issue report <id>        show a bug kelpie filed as it would go to kelpie's maintainers (paths under your home
+  kelpie issue report <id>        show a kelpie bug filed here as it would go to kelpie's maintainers (paths under your home
                                   as ~, no repo names, remote URLs or tokens) and send it on your y, signed with this
                                   install's key; the board counts each new one in its header and B lists them ([report]
                                   text = \"never\" hides the offer); sent once, and the issue keeps the report's id

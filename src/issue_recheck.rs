@@ -148,9 +148,17 @@ pub fn run(id: &str) -> Result<String> {
     let root = crate::lead::install_root()?;
     let outcome = check(&state, &root, id, &head);
     let settled = settle(&state, &root, id, &Checked { head: &head, version: &version }, outcome, crate::messages::now());
-    let _ = fs::remove_file(file(&state, id, "claude"));
-    let _ = fs::remove_file(file(&state, id, "running"));
+    finish(&state, id, settled.is_ok());
     settled
+}
+
+// A check that gave no verdict keeps its log for the user to read; the next launch for that issue overwrites it.
+fn finish(state: &Path, id: &str, verdict: bool) {
+    let _ = fs::remove_file(file(state, id, "claude"));
+    let _ = fs::remove_file(file(state, id, "running"));
+    if verdict {
+        let _ = fs::remove_file(file(state, id, "log"));
+    }
 }
 
 // A task's chain is refused before the record is read, so it cannot use up the keeper's run.
@@ -306,10 +314,6 @@ pub fn headline(fixed: &Fixed) -> String {
     format!("{kelpie} fixed {count} of your issues")
 }
 
-pub fn update_lines(state: &Path, since: u64) -> Vec<String> {
-    fixed_between(state, since.saturating_sub(1), u64::MAX).map(|fixed| std::iter::once(headline(&fixed)).chain(fixed.titles.iter().map(|title| format!("- {title}"))).collect()).unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,8 +384,6 @@ mod tests {
         assert!(issues::list_in(&issues::dir(&state), true, false).contains("checked automatically"));
         assert_eq!(issue.rechecked.as_deref(), Some(format!("{} fixed {NOW} 0.26.3", shas[2]).as_str()), "the result lives on the issue");
         assert_eq!(shown(&state, NOW + 60), Some(Fixed { version: "0.26.3".to_string(), titles: vec!["push hid git's error (aaaaaa)".to_string()], last: NOW }));
-        assert_eq!(update_lines(&state, NOW), ["kelpie 0.26.3 fixed 1 of your issues".to_string(), "- push hid git's error (aaaaaa)".to_string()]);
-        assert!(update_lines(&state, NOW + 1).is_empty(), "a fix from before the update began is not its news");
         issues::reopen_in(&issues::dir(&state), &Caller::Lead, "aaaaaa", "3333333").unwrap();
         assert_eq!(shown(&state, NOW + 60), None, "a reopened issue is no longer shown as fixed");
         assert!(crate::messages::load().iter().all(|message| !message.text.contains("aaaaaa")), "nobody is told");
@@ -436,6 +438,19 @@ mod tests {
         assert!(notes[0].starts_with("issues: the recheck of kelpie issue aaaaaa gave no verdict (claude gave no answer") && notes[0].ends_with("it stays open"), "{notes:?}");
         assert!(notes[1].contains("no recheck line"), "{notes:?}");
         assert!(tick_with(&state, &[]).is_empty(), "each note once");
+    }
+
+    #[test]
+    fn a_check_with_a_verdict_leaves_no_files_behind_and_one_without_keeps_its_log() {
+        let state = crate::sh::test_dir("recheck-finish");
+        for kind in ["claude", "running", "log"] {
+            for id in ["aaaaaa", "bbbbbb"] {
+                crate::state::write(&file(&state, id, kind), "x").unwrap();
+            }
+        }
+        finish(&state, "aaaaaa", true);
+        finish(&state, "bbbbbb", false);
+        assert!(fs::read_dir(dir(&state)).unwrap().flatten().map(|entry| entry.file_name().to_string_lossy().to_string()).collect::<Vec<_>>() == ["bbbbbb.log"], "{:?}", fs::read_dir(dir(&state)).unwrap().flatten().map(|entry| entry.file_name()).collect::<Vec<_>>());
     }
 
     #[test]

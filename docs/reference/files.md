@@ -43,7 +43,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `backlog.json` | The backlog the lead saved on its last refresh. |
 | `recover/` | One file per task an API error stopped, `<task>@<repo>.json`: the error, how many times kelpie resumed the task, when it resumes next and whether it is stuck. It survives restarts, so kelpie never resumes a task twice for one error. |
 | `routines/` | One file per routine, `<id>.json`: when the scheduler first saw it, when its last run started, that run's task, its outcome (`running`, `ok`, `findings` or `failed`) and summary, and the four runs before it, which the board's Routines page lists. `lock` keeps two schedulers from starting the same run. |
-| `issues/` | One file per [kelpie issue](commands.md#kelpie-issues), `<id>.md`. See [The issue file](#the-issue-file). `issues/recheck/` holds the rechecks under way, per issue: `.wanted` the build it waits to be checked on, `.run` the keeper's record of the checker it started, `.running` the check under way, `.claude` its Claude's process group, `.log` its output, `.note` a failure the keeper logs once; and `dismissed`, when you last cleared the board's line. The result of a recheck lives in the issue file's `rechecked` key. |
+| `issues/` | One file per [kelpie issue](commands.md#kelpie-issues), `<id>.md`. See [The issue file](#the-issue-file). `issues/recheck/` holds the rechecks under way, per issue: `.wanted` the build it waits to be checked on, `.run` the keeper's record of the checker it started, `.running` the check under way, `.claude` its Claude's process group, `.log` its output, removed once the check gives a verdict, `.note` a failure the keeper logs once; and `dismissed`, when you last cleared the board's line. The result of a recheck lives in the issue file's `rechecked` key. |
 | `usage.json` | Plan usage from the status line. |
 | `update-check.json` | The last update check. |
 | `update-override.json` | The `--from` override, while it holds. |
@@ -127,7 +127,7 @@ What happened: …
 | `declined` | The date you answered `n` to sending it. The board offers it no more. Optional. |
 | `source` | `report <id>` for an issue the keeper filed from a report another install sent, under the id `r<id>`. Such an issue shows as `[report <id>, untrusted]`, its text fenced; it is never offered for sending, and never rechecked after an update. Optional. |
 | `rechecked` | The last recheck after an update: the build's commit, the verdict (`started`, `fixed`, `not-fixed`, `unclear` or `failed`), when, as seconds since 1970, and the build's version. An issue is rechecked once per build. The board's `kelpie <version> fixed N of your issues` counts your issues still `fixed` by a recheck in the last three days and since you last cleared it, under the latest fix's version. Optional. |
-| `history` | What happened to it since it was filed, oldest first: `fixed in <version> (<sha>), checked automatically` from a recheck, `came back on <version> (<commit>)` from `kelpie issue reopen`. Optional. |
+| `history` | What happened to it since it was filed, oldest first: `fixed in <version> (<sha>), checked automatically` from a recheck, `came back on <version> (<commit>)` from `kelpie issue reopen`, with `(was report <id>)` when it had been sent; a reopen clears `report`, `sent` and `declined`, so the bug is offered for sending again. Optional. |
 
 ## The verdict file
 

@@ -922,10 +922,14 @@ pub fn report_line(message: &Message) -> String {
     format!("- {} ({state}): {} — you: {}", message.from, message.text, message.next_for_you().unwrap_or("nothing"))
 }
 
-// Messages to or from the lead are already in its chat; reports, the board's copies and kelpie's notices to it are not.
+// Messages to or from the lead are already in its chat; reports, the board's copies and kelpie's notices to it are not; what kelpie sent its maintainers is the user's alone.
 fn copies_for_lead(messages: &[Message], seen: usize) -> Vec<&Message> {
     messages.iter().skip(seen.min(messages.len()))
-        .filter(|message| message.report.is_some() || is_copy(message) || message.fyi || (message.from != LEAD_LABEL && message.to != LEAD_LABEL)).collect()
+        .filter(|message| message.report.is_some() || is_copy(message) || message.fyi || (message.from != LEAD_LABEL && message.to != LEAD_LABEL && !sent_to_maintainers(message))).collect()
+}
+
+fn sent_to_maintainers(message: &Message) -> bool {
+    message.to == USER_LABEL && message.kind.as_deref().is_some_and(|kind| kind == crate::hub::report::SENT_KIND || kind == crate::signals::KIND)
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -1818,6 +1822,16 @@ mod tests {
         let typed = std::cell::RefCell::new(Vec::new());
         notice_locked_in(&dir, &task, "kelpie was updated", std::slice::from_ref(&task), &mut |_, text, _| { typed.borrow_mut().push(text.to_string()); Ok(Via::Typed) }).unwrap();
         assert_eq!(typed.borrow().as_slice(), ["[from kelpie] kelpie was updated"], "a task still gets kelpie's notice live");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn what_kelpie_sent_its_maintainers_shows_on_the_board_and_never_in_the_leads_digest() {
+        let dir = state("maintainers");
+        log_for_user_in(&dir, "Sent bug report 4 to kelpie's maintainers: kelpie issue a1b2c3", crate::hub::report::SENT_KIND).unwrap();
+        log_for_user_in(&dir, "Sent an error signal to kelpie's maintainers: keeper.push internal-error (×1)", crate::signals::KIND).unwrap();
+        assert_eq!(shown_in_log(load_in(&dir)).len(), 2, "the board's log shows both");
+        assert_eq!(unread_in(&dir).unwrap(), "", "the lead's digest has neither");
         fs::remove_dir_all(&dir).unwrap();
     }
 

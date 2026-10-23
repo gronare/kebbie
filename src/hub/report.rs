@@ -416,7 +416,7 @@ pub fn send_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub
         return Err(format!("kelpie issue {} changed since you read it, so nothing was sent; read it again with kelpie issue report {0}", issue.id));
     }
     let sent = deliver(state, &mut issue, report, url, now)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent kelpie issue {} to kelpie's maintainers as report {sent}", issue.id)).next("It stays logged here; kelpie update tells the lead when a new version may fix it.").ok()
+    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent kelpie issue {} to kelpie's maintainers as report {sent}", issue.id)).next("It stays logged here; after each update the keeper rechecks it and closes it once a commit plainly fixes it.").ok()
 }
 
 const ARMED: &str = "always-armed";

@@ -144,6 +144,7 @@ pub struct Machine {
     pub recover: Option<bool>,
     pub machine_name: Option<String>,
     pub report: Report,
+    pub propose_issues: Option<bool>,
     pub worktree: Worktree,
 }
 
@@ -268,6 +269,7 @@ pub struct Settings {
     pub report_signals: Setting<bool>,
     pub report_text: Setting<ReportText>,
     pub report_inbox: Setting<bool>,
+    pub propose_issues: Setting<bool>,
 }
 
 pub struct Loaded {
@@ -355,9 +357,9 @@ fn warn_once<T>(value: T, unknown: &[String]) -> T {
     value
 }
 
-const MACHINE_KEYS: [&str; 15] = ["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "keys", "ci", "routines", "report"];
+const MACHINE_KEYS: [&str; 16] = ["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "keys", "ci", "routines", "report", "issues"];
 const REPO_KEYS: [&str; 7] = ["actions", "worktree", "task", "review", "ci", "docs", "routines"];
-const SECTION_KEYS: [(&str, &[&str]); 15] = [
+const SECTION_KEYS: [(&str, &[&str]); 16] = [
     ("board", &["groups", "backlog"]),
     ("board.backlog", &["sources", "ongoing"]),
     ("update", &["channel"]),
@@ -365,6 +367,7 @@ const SECTION_KEYS: [(&str, &[&str]); 15] = [
     ("keeper", &["enabled"]),
     ("recover", &["enabled"]),
     ("report", &["url", "signals", "text", "enabled", "inbox_token"]),
+    ("issues", &["propose"]),
     ("machine", &["name"]),
     ("worktree", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"]),
     ("task", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox"]),
@@ -558,6 +561,11 @@ fn restart(table: &Table) -> Result<Restart> {
     Ok(Restart { idle_minutes, auto })
 }
 
+fn propose_issues(table: &Table) -> Result<Option<bool>> {
+    let Some(section) = subtable(table, "issues", "issues")? else { return Ok(None) };
+    section.get("propose").map(|value| value.as_bool().ok_or_else(|| "issues.propose: must be true or false".to_string())).transpose()
+}
+
 fn enabled_in(table: &Table, name: &str) -> Result<Option<bool>> {
     let Some(section) = subtable(table, name, name)? else { return Ok(None) };
     section.get("enabled").map(|value| value.as_bool().ok_or_else(|| format!("{name}.enabled: must be true or false"))).transpose()
@@ -735,7 +743,7 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
     let Board { sources, groups, ongoing } = board(&table).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, report: report(&table).map_err(fail)?, worktree })
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, worktree })
 }
 
 const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
@@ -744,7 +752,7 @@ const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    for (key, setting) in [("board", "[board] groups and [board.backlog] sources and ongoing"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("machine", "[machine] name"), ("keys", "[keys]"), ("report", "[report] url, signals, text and inbox_token")] {
+    for (key, setting) in [("board", "[board] groups and [board.backlog] sources and ongoing"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("machine", "[machine] name"), ("keys", "[keys]"), ("report", "[report] url, signals, text and inbox_token"), ("issues", "[issues] propose")] {
         if table.contains_key(key) {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
@@ -808,6 +816,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         report_signals: or_default(pick(None, machine.report.signals.as_ref().or(machine.report.enabled.as_ref())), true),
         report_text: or_default(pick(None, machine.report.text.as_ref().or((machine.report.enabled == Some(false)).then_some(&ReportText::Never))), ReportText::Ask),
         report_inbox: or_default(pick(None, machine.report.inbox_token.as_ref().map(|_| &true)), false),
+        propose_issues: or_default(pick(None, machine.propose_issues.as_ref()), true),
     }
 }
 
@@ -843,6 +852,10 @@ pub fn restart_settings() -> Result<(bool, u64)> {
     Ok((settings.auto_restart.value, settings.idle_minutes.value))
 }
 
+pub fn propose_issues_enabled() -> Result<bool> {
+    Ok(load_machine(&path())?.propose_issues.unwrap_or(true))
+}
+
 pub fn keeper_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.keeper.unwrap_or(true))
 }
@@ -876,7 +889,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, report_url, report_signals, report_text, report_inbox } = &loaded.settings;
+    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, report_url, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -963,11 +976,13 @@ pub fn describe(loaded: &Loaded) -> String {
     key("report.signals", report_signals.value.to_string(), report_signals.layer,
         "Whether kelpie sends its maintainers error signals: when kelpie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kelpie's version and commit, the OS and CPU architecture, the component (a fixed name from kelpie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Each send is a line under messages on the board; false sends none and drops what was counted; config.toml only.");
     key("report.text", format!("{:?}", report_text.value.key()), report_text.layer,
-        "What happens to a bug kelpie filed about itself, with its text redacted (paths under your home as ~, no repo names, remote URLs or tokens): \"ask\" shows it on the board as it would go out and only your yes sends it; \"always\" sends it without asking, and says so under messages, once you arm it with kelpie issue report --always in your own terminal (until then it asks); \"never\" keeps it on this machine, though kelpie issue report <id> still sends one when you ask. Signed with this install's key; config.toml only.");
+        "What happens to a kelpie bug you or the lead filed, with its text redacted (paths under your home as ~, no repo names, remote URLs or tokens): \"ask\" shows it on the board as it would go out and only your yes sends it; \"always\" sends it without asking, and says so under messages, once you arm it with kelpie issue report --always in your own terminal (until then it asks); \"never\" keeps it on this machine, though kelpie issue report <id> still sends one when you ask. Signed with this install's key; config.toml only.");
     key("report.url", format!("{:?}", report_url.value), report_url.layer,
         "Where reports go: the project's reports endpoint, unless you run your own kelpie hub for them; config.toml only.");
     key("report.inbox_token", if report_inbox.value { "set".to_string() } else { "none".to_string() }, report_inbox.layer,
         "For kelpie's maintainers: the token kelpie-hub admin token --name <name> minted. With it the keeper fetches the reports the hub lets through every 10 minutes, files each as a kelpie issue and acknowledges it, and kelpie doctor counts the ones waiting in quarantine; never in a repo config, and never shown.");
+    key("issues.propose", propose_issues.value.to_string(), propose_issues.layer,
+        "Whether the lead proposes saving a kelpie issue when kelpie itself cost something (an error, a workaround, a missing capability), one per turn at most, and saves it on your yes; false keeps the lead from proposing or filing them, and it files one only when you ask it to. Takes effect when the lead next restarts (L on the board); config.toml only.");
     lines.push("[keys]  (config.toml only)\n  The board's keys, as name = \"key\" by action: a plain character for an action whose key is one (esc, ctrl+c, ⏎, the arrows and tab stay), and one not taken by another action where both act; moving two at once in the table works. An entry that breaks a rule is ignored, and named below. Help, hints and messages show the key in effect.".to_string());
     lines.extend(board_keys.describe(&key_errors).into_iter().map(|line| format!("  {line}")));
     lines.push(format!("[[routines]]  (config.toml or a repo config)\n  Checks kelpie runs on a schedule, each as a task that reports, plans or fixes, one table each with the keys {}; a repo config's run in its repo, one in config.toml names its repo. Listed below are config.toml's and this repo's; kelpie routines lists every one with its next run, and docs/reference/configuration.md shows each key.", crate::routines::KEYS.join(", ")));
@@ -1254,7 +1269,7 @@ mod tests {
     #[test]
     fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
         let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kelpie/config.toml", &MACHINE_KEYS);
-        let all = "board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report";
+        let all = "board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report, issues";
         assert_eq!(warned("colour = 1
 "), [format!("/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: {all}")]);
         assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: {all}")]);
@@ -1386,6 +1401,19 @@ mod tests {
     }
 
     #[test]
+    fn the_lead_proposes_kelpie_issues_unless_config_toml_turns_it_off() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).propose_issues, Setting { value: true, layer: Layer::Default });
+        let off = settings(&Worktree::default(), &machine("[issues]\npropose = false\n"));
+        assert_eq!(off.propose_issues, Setting { value: false, layer: Layer::Machine });
+        assert!(parse_machine("[issues]\npropose = \"no\"\n", "config.toml").unwrap_err().contains("issues.propose: must be true or false"));
+        assert!(unknown_machine("[issues]\nask = true\n").contains("issues.ask: unknown key; known keys here: propose"));
+        assert!(unknown_machine("[issues]\npropose = false\n").is_empty());
+        assert!(parse_repo("[issues]\npropose = false\n", "app.toml").unwrap_err().contains("issues: applies to every repo, so it lives in config.toml; set [issues] propose in"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
+        assert!(shown.contains("issues.propose = false  (machine config)\n  Whether the lead proposes saving a kelpie issue") && shown.contains("Takes effect when the lead next restarts"), "{shown}");
+    }
+
+    #[test]
     fn the_keeper_is_on_unless_config_toml_turns_it_off() {
         assert_eq!(settings(&Worktree::default(), &Machine::default()).keeper, Setting { value: true, layer: Layer::Default });
         let off = settings(&Worktree::default(), &machine("[keeper]\nenabled = false\n"));
@@ -1485,7 +1513,7 @@ mod tests {
         assert!(parse_machine("[report]\nsignals = \"yes\"\n", "config.toml").unwrap_err().contains("report.signals: must be true or false"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
         assert!(shown.contains("report.signals = true  (default)\n  Whether kelpie sends its maintainers error signals") && shown.contains("Never an error message, path, repo, task or host name"), "{shown}");
-        assert!(shown.contains("report.text = \"ask\"  (default)\n  What happens to a bug kelpie filed about itself"), "{shown}");
+        assert!(shown.contains("report.text = \"ask\"  (default)\n  What happens to a kelpie bug you or the lead filed"), "{shown}");
     }
 
     #[test]

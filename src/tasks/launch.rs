@@ -878,7 +878,7 @@ mod tests {
         assert_eq!(deny[0], "Bash(git push:*)");
         assert_eq!(deny[1..=user_only.len()], user_only.iter().map(String::as_str).collect::<Vec<_>>()[..], "every user-only command, in kelpie's own spelling");
         assert_eq!(deny[user_only.len() + 1..user_only.len() + 6], ["Bash(herdr pane send-keys:*)", "Bash(herdr pane send-text:*)", "Bash(herdr pane run:*)", "Bash(herdr agent send-keys:*)", "Bash(herdr agent prompt:*)"]);
-        for command in ["approve", "push", "choose", "after", "ci dismiss"] {
+        for command in ["approve", "push", "choose", "after", "ci dismiss", "issue report"] {
             assert!(deny.contains(&format!("Bash(/bin/kelpie {command}:*)").as_str()), "{command}");
         }
         let allow: Vec<&str> = on["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();

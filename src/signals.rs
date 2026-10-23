@@ -277,10 +277,10 @@ pub fn doctor(state: &Path, settings: &crate::config::Report, now: u64) -> Check
     let name = "maintainers".to_string();
     let armed = crate::hub::report::armed(state);
     let text = match settings.text() {
-        crate::config::ReportText::Ask => "bug reports kelpie files about itself are shown and asked each time ([report] text = \"ask\")",
-        crate::config::ReportText::Always if armed => "bug reports kelpie files about itself go out redacted without asking, each one said under messages ([report] text = \"always\", armed)",
+        crate::config::ReportText::Ask => "kelpie bugs you or the lead file are shown and asked each time ([report] text = \"ask\")",
+        crate::config::ReportText::Always if armed => "kelpie bugs you or the lead file go out redacted without asking, each one said under messages ([report] text = \"always\", armed)",
         crate::config::ReportText::Always => "[report] text = \"always\" is set but not armed, so bug reports are still shown and asked each time",
-        crate::config::ReportText::Never => "bug reports kelpie files about itself stay on this machine ([report] text = \"never\")",
+        crate::config::ReportText::Never => "kelpie bugs you or the lead file stay on this machine ([report] text = \"never\")",
     };
     let unarmed = settings.text() == crate::config::ReportText::Always && !armed;
     let arm = || vec![format!("run {} in your own terminal to send them without asking", crate::hub::report::ARM_COMMAND)];
@@ -469,7 +469,7 @@ mod tests {
         assert!(crate::messages::load_in(&state).is_empty());
         let off = crate::config::Report { signals: Some(false), ..Default::default() };
         let check = doctor(&state, &off, NOW);
-        assert!(check.level == Level::Ok && check.fact.starts_with("error signals off ([report] signals = false); bug reports kelpie files about itself are shown and asked each time"), "{}", check.fact);
+        assert!(check.level == Level::Ok && check.fact.starts_with("error signals off ([report] signals = false); kelpie bugs you or the lead file are shown and asked each time"), "{}", check.fact);
     }
 
     #[test]

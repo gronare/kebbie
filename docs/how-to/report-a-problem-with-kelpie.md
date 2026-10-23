@@ -4,7 +4,14 @@ Keep what kelpie got wrong, or could not do, on your machine, see after an updat
 
 ## Save it
 
-The lead proposes saving an issue when kelpie cost something in a session: an error, a workaround, a missing capability. Say yes and it saves one. A task tells the lead instead of asking you.
+The lead proposes saving an issue when kelpie cost something in a session: an error, a workaround, a missing capability. It asks in one line, at most once a turn, and saves one only when you say yes. A task tells the lead instead of asking you. Once saved, an issue is the keeper's to look after: the lead leaves kelpie issues out of its briefings and of what it asks you to decide, and takes up closing or retrying one when you ask about it.
+
+To keep the lead from proposing them at all, set this in config.toml; it takes effect when the lead next restarts (`L` on the board), and the lead then saves one only when you ask it to:
+
+```toml
+[issues]
+propose = false
+```
 
 To save one yourself:
 
@@ -28,15 +35,15 @@ kelpie issue show <id>
 
 ## After an update
 
-You do nothing. After `kelpie update`, the keeper rechecks each of your open issues that was filed on older code, one at a time in the background. A read-only Claude reads the issue, every commit since the build it was filed on with its full message, and kelpie's source as it is now, and answers fixed, not fixed or unclear. It answers fixed only when a commit plainly addresses the issue and the code shows it.
+You do nothing. After `kelpie update`, the keeper rechecks each of your open issues that was filed on older code, one at a time in the background. Older code means a commit this install's history holds and the new build descends from; an issue filed on a build the history cannot place, such as one built outside git, is not rechecked, and you close it yourself. A read-only Claude reads the issue, every commit since the build it was filed on with its full message, and kelpie's source as it is now, and answers fixed, not fixed or unclear. It answers fixed only when a commit plainly addresses the issue and the code shows it.
 
 - **Fixed:** kelpie closes the issue as `fixed` and records `fixed in <version> (<sha>), checked automatically` in it.
 - **Not fixed or unclear:** the issue stays open, and is not checked again until the next update.
-- **No answer** (Claude failed, or gave none within 15 minutes): the issue stays open, with one line in the keeper's log.
+- **No answer** (Claude failed, or gave none within 15 minutes): the issue stays open, with one line in `keeper.log` in the state directory, also when an open board runs the routines with `[keeper] enabled = false`.
 
-Nobody asks you anything. The board shows one line under Work as soon as the first recheck closes an issue, such as `✓ kelpie 0.26.3 fixed 2 of your issues`, with the titles below it, and adds to it as the other rechecks finish. `i` lists them all and clears the line, once any questions are answered; a fix that lands later shows again. The line also goes by itself three days after the last fix, and an issue you reopen leaves it. If a recheck closes one while `kelpie update` still runs, the update's output lists it too. `kelpie issues --all` shows every closed issue with its last recorded line.
+Nobody asks you anything. The board shows one line under Work as soon as the first recheck closes an issue, such as `✓ kelpie 0.26.3 fixed 2 of your issues`, with the titles below it, and adds to it as the other rechecks finish. `i` lists them all and clears the line, once any questions are answered; a fix that lands later shows again. The line also goes by itself three days after the last fix, and an issue you reopen leaves it. `kelpie issues --all` shows every closed issue with its last recorded line.
 
-When a fixed issue comes back, reopen it rather than filing a new one; the lead does this when what you hit matches a closed issue:
+When a fixed issue comes back, reopen it rather than filing a new one; the lead proposes this when what you hit matches a closed issue. A reopened bug is offered for sending again, even one sent or kept here before:
 
 ```bash
 kelpie issue reopen <id>         # records "came back on <version>"
@@ -49,11 +56,11 @@ kelpie issue retry <id>          # worth trying again
 kelpie issue close <id> fixed    # or wontfix, duplicate
 ```
 
-With `gh` installed and logged in, the update also finds the issues you sent on GitHub, links them, and marks one `retry` once it is closed there.
+With `gh` installed and logged in, the update also finds the issues you sent on GitHub, links them, and marks one `retry` once it is closed there, unless the issue came back after that.
 
 ## Send it to kelpie's maintainers
 
-When kelpie or the lead saves a bug about kelpie, the board's header counts it, such as `! 2 bugs to send · B`. The list itself stays hidden until you press `B`: it opens under Work, below the tasks, under **Send to kelpie's maintainers?**, with the first bug selected. `↑` `↓` or a click pick one, and `⏎` or a second click shows the report exactly as it would go out and asks `y / n`. A long one scrolls with `↓` and `pgdn`, and `y` counts only once you have read to its end. `esc` goes back to the tasks with the list left open, and `B` hides it again; the board remembers whether it shows.
+When you or the lead saves a bug about kelpie, the board's header counts it, such as `! 2 bugs to send · B`. The list itself stays hidden until you press `B`: it opens under Work, below the tasks, under **Send to kelpie's maintainers?**, with the first bug selected. `↑` `↓` or a click pick one, and `⏎` or a second click shows the report exactly as it would go out and asks `y / n`. A long one scrolls with `↓` and `pgdn`, and `y` counts only once you have read to its end. `esc` goes back to the tasks with the list left open, and `B` hides it again; the board remembers whether it shows.
 
 - `y` sends it, as long as the issue is unchanged since you read it; an edit in between sends nothing and asks you to read it again. kelpie answers the reports endpoint's proof-of-work challenge (about a second), signs the report with this install's key and records the report's id in the issue, so it is never sent twice.
 - `n` keeps it on this machine only, and the board stops offering it. `n` in the list does the same for the selected bug without opening it.
@@ -67,7 +74,7 @@ From a terminal:
 kelpie issue report <id>
 ```
 
-It prints the same text and asks `y/N`. Only you can send: kelpie refuses it, and the board's `y`, to the lead, tasks and sandboxed processes. Wishes are not offered; open one on GitHub yourself if you like, as below. A bug already sent with `kelpie issue send`, linked to a GitHub issue, closed or kept here is not offered either.
+It prints the same text and asks `y/N`. Only you can send: kelpie refuses it, and the board's `y`, to the lead, tasks and sandboxed processes. Wishes are not offered; open one on GitHub yourself if you like, as below. A bug already sent with `kelpie issue send`, linked to a GitHub issue, closed or kept here is not offered either, until it is reopened.
 
 The install key is made on the first report and kept in `report/install-key.json` in the state directory, readable by you alone. The project's maintainers see that key as the report's sender; a key they have not seen before waits until they let it through, so the first report from a new install may take a while to be read.
 

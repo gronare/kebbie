@@ -262,6 +262,10 @@ impl Log {
     }
 }
 
+pub fn log_line(state: &Path, text: &str) {
+    Log(state.join(LOG)).line(text);
+}
+
 pub fn stamp(at: u64) -> String {
     let days = (at / 86_400) as i64;
     let seconds = at % 86_400;

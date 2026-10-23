@@ -28,6 +28,10 @@ Do this right after naming the machine when setting kelpie up, and whenever `kel
 1. Tell the user, in these words or close: kelpie sends its maintainers error signals when kelpie itself fails (a panic, and some internal errors), at most once a day. A signal holds only kelpie's version and commit, the OS and CPU architecture, the component (a fixed name from kelpie's code, such as `keeper.push`), the error kind (`panic`, `internal-error` or `corrupt-state`) and a count; never an error message, a path, or a repo, task or host name. Each send is a line under messages on the board. Bug reports with text are shown on the board and sent only on their `y` (`report.text = "ask"`).
 2. Ask whether to keep signals on. On no, write `signals = false` under `[report]` in config.toml. For bug reports you may write `text = "never"`; never write `text = "always"` yourself: when the user wants reports sent without asking, tell them to run `kelpie issue report --always` in their own terminal and to set `text = "always"`. Done when `kelpie config` shows `report.signals` and `report.text` as the user chose, and `kelpie doctor`'s `maintainers` line reads `ok`.
 
+## Keep the lead from proposing kelpie issues
+
+When the user wants the lead to stop proposing kelpie issues, write `propose = false` under `[issues]` in config.toml; `propose = true`, or no key, has it propose one at most per turn and save it on the user's yes. Tell the user it takes effect when the lead next restarts, with `L` on the board. Done when `kelpie config` shows `issues.propose` as the user chose.
+
 ## Change a setting
 
 1. Run `kelpie config --repo <main checkout>` and find the key. Done when you know the key, its value in effect and the file it comes from.

@@ -61,7 +61,7 @@ Some of kelpie's work runs on a clock rather than on a command:
 - queued tasks start once every task they wait for has ended as done, every 15 seconds (see [`kelpie after`](../reference/commands.md#kelpie-after-name)),
 - with a hub joined and a phone paired, the board goes to the hub sealed to each phone when it changes, checked every 15 seconds, and at least once a minute (see [See your board on your phone](../how-to/see-your-board-on-your-phone.md)),
 - error signals counted since the last send go to kelpie's maintainers, checked every hour and sent at most once a day (see [Error signals](../how-to/report-a-problem-with-kelpie.md#error-signals)),
-- with `[report] text = "always"` armed, bugs kelpie filed about itself go to kelpie's maintainers, every minute,
+- with `[report] text = "always"` armed, kelpie bugs you or the lead filed go to kelpie's maintainers, every minute,
 - with `[report] inbox_token` set, on the machine of whoever runs the hub that takes the reports, the reports the hub let through are filed as kelpie issues, every 10 minutes (see [Receiving reports](../how-to/report-a-problem-with-kelpie.md#receiving-reports)).
 
 The keeper runs all of them, each on its own interval, and sleeps in between. It has no terminal and logs to `keeper.log` in the state directory. A lock file in the state directory keeps it to one per machine; the kernel releases the lock when the keeper exits, so a crashed one never blocks the next. A routine that fails is retried later each time, up to every 15 minutes, and its error is logged once.
