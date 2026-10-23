@@ -116,7 +116,35 @@ pub struct Machine {
     pub keeper: Option<bool>,
     pub recover: Option<bool>,
     pub machine_name: Option<String>,
+    pub report: Report,
     pub worktree: Worktree,
+}
+
+pub const DEFAULT_REPORT_URL: &str = "https://kelpie.gronare.com";
+pub const INBOX_TOKEN_PREFIX: &str = "kha_";
+
+// The inbox token reads every allowed report on the hub, so Debug never prints it.
+#[derive(Clone, Default, PartialEq)]
+pub struct Report {
+    pub url: Option<String>,
+    pub enabled: Option<bool>,
+    pub inbox_token: Option<String>,
+}
+
+impl std::fmt::Debug for Report {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Report").field("url", &self.url).field("enabled", &self.enabled).field("inbox_token", &self.inbox_token.as_ref().map(|_| "set")).finish()
+    }
+}
+
+impl Report {
+    pub fn url(&self) -> &str {
+        self.url.as_deref().unwrap_or(DEFAULT_REPORT_URL)
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -180,6 +208,9 @@ pub struct Settings {
     pub keeper: Setting<bool>,
     pub recover: Setting<bool>,
     pub machine_name: Setting<String>,
+    pub report_url: Setting<String>,
+    pub report_enabled: Setting<bool>,
+    pub report_inbox: Setting<bool>,
 }
 
 pub struct Loaded {
@@ -391,6 +422,18 @@ fn enabled_in(table: &Table, name: &str) -> Result<Option<bool>> {
     section.get("enabled").map(|value| value.as_bool().ok_or_else(|| format!("{name}.enabled: must be true or false"))).transpose()
 }
 
+fn report(table: &Table) -> Result<Report> {
+    let Some(report) = subtable(table, "report", "report")? else { return Ok(Report::default()) };
+    unknown_keys(report, "report.", &["url", "enabled", "inbox_token"])?;
+    let url = text(report, "url", "report.url")?.map(|url| crate::hub::hub_url(&url).map_err(|error| format!("report.url: {error}"))).transpose()?;
+    let enabled = report.get("enabled").map(|value| value.as_bool().ok_or("report.enabled: must be true or false")).transpose()?;
+    let inbox_token = match report.get("inbox_token") {
+        None => None,
+        Some(value) => Some(value.as_str().map(str::trim).filter(|token| token.starts_with(INBOX_TOKEN_PREFIX) && token.len() > INBOX_TOKEN_PREFIX.len()).ok_or("report.inbox_token: must be the kha_ token kelpie-hub admin token --name <name> printed")?.to_string()),
+    };
+    Ok(Report { url, enabled, inbox_token })
+}
+
 fn machine_name(table: &Table) -> Result<Option<String>> {
     let Some(machine) = subtable(table, "machine", "machine")? else { return Ok(None) };
     unknown_keys(machine, "machine.", &["name"])?;
@@ -539,7 +582,7 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     if table.contains_key("docs") {
         return Err(fail(format!("docs.required: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }
-    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "keys", "ci", "routines"]).map_err(fail)?;
+    unknown_keys(&table, "", &["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "keys", "ci", "routines", "report"]).map_err(fail)?;
     let worktree = layers(&table).map_err(fail)?;
     if worktree.dev_route.is_some() {
         return Err(fail(format!("worktree.dev_route: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
@@ -548,7 +591,7 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
         return Err(fail(format!("worktree.stage_on_main: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, worktree })
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, report: report(&table).map_err(fail)?, worktree })
 }
 
 const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
@@ -557,7 +600,7 @@ const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("machine", "[machine] name"), ("keys", "[keys]")] {
+    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("machine", "[machine] name"), ("keys", "[keys]"), ("report", "[report] url, enabled and inbox_token")] {
         if table.contains_key(key) {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
@@ -616,6 +659,9 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         keeper: or_default(pick(None, machine.keeper.as_ref()), true),
         recover: or_default(pick(None, machine.recover.as_ref()), true),
         machine_name: pick(None, machine.machine_name.as_ref()).unwrap_or_else(|| Setting { value: short_hostname(), layer: Layer::Default }),
+        report_url: or_default(pick(None, machine.report.url.as_ref()), DEFAULT_REPORT_URL.to_string()),
+        report_enabled: or_default(pick(None, machine.report.enabled.as_ref()), true),
+        report_inbox: or_default(pick(None, machine.report.inbox_token.as_ref().map(|_| &true)), false),
     }
 }
 
@@ -656,6 +702,10 @@ pub fn machine() -> String {
     load_machine(&path()).ok().and_then(|machine| machine.machine_name).unwrap_or_else(short_hostname)
 }
 
+pub fn report_settings() -> Result<Report> {
+    Ok(load_machine(&path())?.report)
+}
+
 pub fn channel() -> Result<Channel> {
     Ok(load_machine(&path())?.channel.unwrap_or_default())
 }
@@ -665,7 +715,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name } = &loaded.settings;
+    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, report_url, report_enabled, report_inbox } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -744,6 +794,12 @@ pub fn describe(loaded: &Loaded) -> String {
         "Whether kelpie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
     key("machine.name", format!("{:?}", machine_name.value), machine_name.layer,
         "The name this kelpie claims vault notes under: a task started from a vault note writes it with the task's name into the note's kelpie frontmatter key, and kelpie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
+    key("report.enabled", report_enabled.value.to_string(), report_enabled.layer,
+        "Whether the board offers to send a bug kelpie filed about itself to kelpie's maintainers, showing the text as it would go out (paths under your home as ~, no repo names, remote URLs or tokens); only your yes sends it, signed with this install's key. false hides the offer; kelpie issue report <id> still sends one; config.toml only.");
+    key("report.url", format!("{:?}", report_url.value), report_url.layer,
+        "Where reports go: the project's reports endpoint, unless you run your own kelpie hub for them; config.toml only.");
+    key("report.inbox_token", if report_inbox.value { "set".to_string() } else { "none".to_string() }, report_inbox.layer,
+        "For kelpie's maintainers: the token kelpie-hub admin token --name <name> minted. With it the keeper fetches the reports the hub lets through every 10 minutes, files each as a kelpie issue and acknowledges it, and kelpie doctor counts the ones waiting in quarantine; never in a repo config, and never shown.");
     lines.push("[keys]  (config.toml only)\n  The board's keys, as name = \"key\" by action: a plain character for an action whose key is one (esc, ctrl+c, ⏎, the arrows and tab stay), and one not taken by another action where both act; moving two at once in the table works. An entry that breaks a rule is ignored, and named below. Help, hints and messages show the key in effect.".to_string());
     lines.extend(board_keys.describe(&key_errors).into_iter().map(|line| format!("  {line}")));
     lines.push(format!("[[routines]]  (config.toml or a repo config)\n  Checks kelpie runs on a schedule, each as a task that reports, plans or fixes, one table each with the keys {}; a repo config's run in its repo, one in config.toml names its repo. Listed below are config.toml's and this repo's; kelpie routines lists every one with its next run, and docs/reference/configuration.md shows each key.", crate::routines::KEYS.join(", ")));
@@ -1020,8 +1076,8 @@ mod tests {
     #[test]
     fn unknown_keys_and_bad_values_name_the_file_and_the_key() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines");
-        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines");
+        assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report");
+        assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report");
         assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
@@ -1145,6 +1201,28 @@ mod tests {
         assert!(default.contains("update.channel = \"release\"  (default)\n  What kelpie update installs"), "{default}");
         let main = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &machine("[update]\nchannel = \"main\"\n")) });
         assert!(main.contains("update.channel = \"main\"  (machine config)"), "{main}");
+    }
+
+    #[test]
+    fn reports_go_to_the_projects_endpoint_unless_config_toml_says_otherwise_and_the_inbox_token_is_never_shown() {
+        let defaults = settings(&Worktree::default(), &Machine::default());
+        assert_eq!((defaults.report_url.value.as_str(), defaults.report_enabled.value, defaults.report_inbox.value), (DEFAULT_REPORT_URL, true, false));
+        let config = machine("[report]\nurl = \"https://hub.example.com/\"\nenabled = false\ninbox_token = \"kha_secret-token-1234\"\n");
+        assert_eq!((config.report.url(), config.report.enabled(), config.report.inbox_token.as_deref()), ("https://hub.example.com", false, Some("kha_secret-token-1234")));
+        assert!(!format!("{config:?}").contains("kha_secret"), "Debug hides the token");
+        let dir = crate::sh::test_dir("config-report");
+        let file = dir.join("config.toml");
+        std::fs::write(&file, "[report]\ninbox_token = \"kha_secret-token-1234\"\n").unwrap();
+        let loaded = Loaded { machine: file.clone(), repo: None, settings: settings(&Worktree::default(), &load_machine(&file).unwrap()) };
+        let shown = describe(&loaded);
+        assert!(shown.contains("report.inbox_token = set  (machine config)") && shown.contains(&format!("report.url = {DEFAULT_REPORT_URL:?}  (default)")), "{shown}");
+        assert!(!shown.contains("kha_secret"), "{shown}");
+        let refused = parse_repo("[report]\ninbox_token = \"kha_x1234567\"\n", "app.toml").unwrap_err();
+        assert!(refused.contains("report: applies to every repo, so it lives in config.toml"), "a repo config never holds the token: {refused}");
+        assert!(parse_machine("[report]\nurl = \"http://hub.example.com\"\n", "config.toml").unwrap_err().contains("report.url"));
+        assert!(parse_machine("[report]\ninbox_token = \"khm_machine\"\n", "config.toml").unwrap_err().contains("report.inbox_token"));
+        assert!(parse_machine("[report]\nsecret = 1\n", "config.toml").is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

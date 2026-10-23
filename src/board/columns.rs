@@ -207,6 +207,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
     if tasks.is_empty() {
         lines.push(Line::from(Span::styled(format!("No tasks. {} starts one, or pick one from the backlog.", keys::key(Act::New)), style(MUTED))));
     }
+    lines.extend(super::bug_report::offer_lines(&app.offers, !app.questions.is_empty(), width));
     let leftovers: Vec<String> = app.checkouts.iter().filter(|checkout| checkout.changed > 0)
         .map(|checkout| format!("{}: {} changed outside tasks", checkout.name, plural(checkout.changed, "file"))).collect();
     if !leftovers.is_empty() {

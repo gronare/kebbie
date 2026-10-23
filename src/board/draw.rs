@@ -118,6 +118,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Normal => {}
         Mode::Options(index) => modal_hits = draw_options(frame, app, *index),
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),
+        Mode::Report { id, scroll, read, nudged } => {
+            let (id, nudged) = (id.clone(), *nudged);
+            let (drawn, seen) = super::bug_report::draw_report(frame, app, &id, *scroll, *read, nudged);
+            app.mode = Mode::Report { id, scroll: drawn, read: seen, nudged };
+        }
         Mode::Card { .. } => modal_hits = draw_card(frame, app),
         Mode::Fullscreen { .. } => draw_fullscreen(frame, app),
         Mode::Help(scroll) => {

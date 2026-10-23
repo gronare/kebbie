@@ -280,6 +280,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   limit), and open it in the browser for you to check and submit; nothing is sent
                                   without your Submit (kelpie update looks the issues up with gh and asks the lead
                                   which ones the new commits likely fix)
+  kelpie issue report <id>        show a bug kelpie filed as it would go to kelpie's maintainers (paths under your home
+                                  as ~, no repo names, remote URLs or tokens) and send it on your y, signed with this
+                                  install's key; the board offers each new one under Work ([report] enabled = false
+                                  hides the offer); sent once, and the issue keeps the report's id
   kelpie update                   update everything to this machine's channel ([update] channel: release, the
                                   highest vX.Y.Z tag whose release binary is published, or main, origin's default
                                   branch): the herdr plugin (the release's binary; built from source only on main and
@@ -594,7 +598,7 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
     match action {
         Some("add") => {
             let body = issues::read_body(&arguments.positionals[2..], arguments.flag("-"));
-            issues::add_in(&dir, &caller(), &issues::Filing { kind: arguments.value("--kind"), title: arguments.value("--title"), body: &body }, env!("KELPIE_BUILT_FROM"), messages::now())
+            issues::add_in(&dir, &caller(), &issues::Filing { kind: arguments.value("--kind"), title: arguments.value("--title"), body: &body }, env!("KELPIE_BUILT_FROM"), config::report_settings().is_ok_and(|report| report.enabled()), messages::now())
         }
         Some("show") => issues::show_in(&dir, id()?),
         Some("close") => issues::close_in(&dir, &caller(), id()?, arguments.positional(3)),
@@ -604,7 +608,8 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
             let opener = board::images::image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
             issues::send_in(&dir, &caller(), id()?, opener, &issues::open_url, messages::now())
         }
-        _ => Err("kelpie issue knows add, show <id>, close <id> fixed|wontfix|duplicate, retry <id>, link <id> <number|url> and send <id>".to_string()),
+        Some("report") => hub::report::cli(id()?),
+        _ => Err("kelpie issue knows add, show <id>, close <id> fixed|wontfix|duplicate, retry <id>, link <id> <number|url>, send <id> and report <id>".to_string()),
     }
 }
 

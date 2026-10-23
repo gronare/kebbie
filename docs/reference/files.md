@@ -48,6 +48,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `update-check.json` | The last update check. |
 | `update-override.json` | The `--from` override, while it holds. |
 | `notify.log` | Notify command failures. |
+| `report/` | Reports to kelpie's maintainers: `install-key.json` holds this install's signing key, made on the first report, mode 0600; with `[report] inbox_token` set, `inbox.json` holds the reports filed here by their report id, how many wait in quarantine on the hub, and the last fetch and its error. `kelpie hub leave` leaves it. |
 | `hub/` | The kelpie hub this machine joined: `identity.json` holds the hub's address, the machine's id and name there, its token, its signing and encryption keys, the secret its notices' collapse tags come from, and each paired phone's id and public keys; `relay.json` the board's last revision, when it went out, its fingerprint, the last error and the notices sent. `kelpie hub leave` removes the folder. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md). |
 | `keeper.lock` | Held by the running keeper, with its pid, binary and start time. |
 | `keeper.json` | The keeper's routines, each with its last run and error, and the stale sessions it last saw. |
@@ -100,9 +101,12 @@ What happened: …
 | `kind` | `bug` or `wish`. |
 | `status` | `open`, `retry`, `fixed`, `wontfix` or `duplicate`. |
 | `version`, `commit` | The kelpie it was filed on. `commit` is empty for a build outside git. |
-| `by` | `user` or `lead`. |
+| `by` | `user`, `lead`, or `report` for one filed from a report. |
 | `github` | The linked GitHub issue. Optional. |
-| `sent` | The date of the last `kelpie issue send`. Optional. |
+| `sent` | The date of the last `kelpie issue send` or `kelpie issue report`. Optional. |
+| `report` | The report id it went to kelpie's maintainers under. Set once; the issue is never sent again. Optional. |
+| `declined` | The date you answered `n` to sending it. The board offers it no more. Optional. |
+| `source` | `report <id>` for an issue the keeper filed from a report another install sent, under the id `r<id>`. Such an issue shows as `[report <id>, untrusted]`, its text fenced; it is never offered for sending, and `kelpie update` never names it to the lead. Optional. |
 
 ## The verdict file
 

@@ -26,9 +26,14 @@ struct TestHub {
 
 impl TestHub {
     fn start() -> TestHub {
+        TestHub::start_with(|_| {})
+    }
+
+    fn start_with(configure: impl FnOnce(&mut Config)) -> TestHub {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
         let mut config = Config::new(crate::sh::test_dir("hub-data"));
         config.anonymous_devices = true;
+        configure(&mut config);
         let hub = Hub::open(config).unwrap();
         let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -335,4 +340,87 @@ fn a_redirect_to_another_host_is_refused_until_the_user_moves_the_hub() {
     assert_eq!(identity::load(&state).unwrap().unwrap().url, hub.url);
     let rev = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().posted.unwrap();
     assert_eq!(hub.boards(&phone)[0].0, rev);
+}
+
+fn reported_bug(state: &Path) -> String {
+    let issue = crate::issues::Issue {
+        id: "a1b2c3".to_string(), title: "push in greenhouse hid git's error".to_string(), kind: "bug".to_string(), status: "open".to_string(),
+        version: "0.26.0".to_string(), commit: "e58e84a".to_string(), filed: "2026-10-23".to_string(), by: "lead".to_string(),
+        body: "Ran kelpie push in /Users/carl/work/greenhouse; origin git@github.com:acme/greenhouse.git refused and kelpie said nothing.".to_string(),
+        ..Default::default()
+    };
+    crate::issues::save(&crate::issues::dir(state), &issue).unwrap();
+    issue.id
+}
+
+#[test]
+fn a_bug_the_user_sends_reaches_the_maintainers_kelpie_as_one_issue_once_its_key_is_allowed() {
+    use crate::hub::{inbox, report};
+    use crate::permit::Caller;
+    let hub = TestHub::start_with(|config| config.report_difficulty = 8);
+    let user = crate::sh::test_dir("report-user");
+    let id = reported_bug(&user);
+    let scrub = report::Scrub::new(Some("/Users/carl".to_string()), vec!["greenhouse".to_string()]);
+    let read = report::payload(&crate::issues::find(&crate::issues::dir(&user), &id).unwrap(), &scrub).digest();
+    assert!(report::send_in(&user, &Caller::Lead, &id, &hub.url, &scrub, &read, now()).unwrap_err().contains("the user's call"));
+    let sent = report::send_in(&user, &Caller::User, &id, &hub.url, &scrub, &read, now()).unwrap();
+    let filed = crate::issues::find(&crate::issues::dir(&user), &id).unwrap();
+    let number = filed.report.clone().expect("the issue keeps the report's id");
+    assert!(sent.contains(&format!("as report {number}")), "{sent}");
+    assert!(report::offers(&user, true).is_empty(), "a sent report is offered no more");
+    let again = report::send_in(&user, &Caller::User, &id, &hub.url, &scrub, &read, now()).unwrap_err();
+    assert!(again.contains(&format!("already, as report {number}")), "{again}");
+
+    let maintainer = crate::sh::test_dir("report-maintainer");
+    let token = hub.hub.mint_admin_token("maintainer").unwrap().unwrap();
+    let settings = crate::config::Report { url: Some(hub.url.clone()), enabled: None, inbox_token: Some(token.clone()) };
+    assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "an unknown install's report waits in quarantine");
+    let check = inbox::doctor(&maintainer, &settings, now()).unwrap();
+    assert!(check.level == crate::doctor::Level::Warn && check.fact.contains("1 reports wait in quarantine: kelpie-hub admin reports --quarantine"), "{}", check.fact);
+
+    let key = report::install_key(&user).unwrap().public();
+    hub.hub.store().set_key_status(&key, kelpie_hub::store::KeyStatus::Allowed, now()).unwrap();
+    let notes = inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let arrived = crate::issues::load(&crate::issues::dir(&maintainer));
+    assert_eq!(arrived.len(), 1);
+    let issue = &arrived[0];
+    assert_eq!((issue.title.as_str(), issue.kind.as_str(), issue.source.as_deref(), issue.version.as_str()), ("push in <repo> hid git's error", "bug", Some(format!("report {number}").as_str()), "0.26.0 (e58e84a)"));
+    assert!(issue.body.starts_with("Ran kelpie push in ~/work/<repo>; origin <remote> refused") && issue.body.ends_with(&format!("OS: {}", crate::issues::os())), "{}", issue.body);
+    for private in ["/Users/carl", "greenhouse", "acme"] {
+        assert!(!issue.body.contains(private) && !issue.title.contains(private), "{private} reached the maintainer: {issue:?}");
+    }
+    assert!(report::offers(&maintainer, true).is_empty(), "a report from elsewhere is never offered back");
+    assert!(hub.hub.store().reports(kelpie_hub::store::KeyStatus::Allowed, 0, true, 10).unwrap().is_empty(), "the routine acked it");
+    assert_eq!(inbox::doctor(&maintainer, &settings, now()).unwrap().level, crate::doctor::Level::Ok);
+
+    let database = rusqlite::Connection::open(hub.hub.config().database()).unwrap();
+    database.execute("UPDATE reports SET acked_at = NULL", []).unwrap();
+    assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "a report whose ack was lost is acked again, not filed again");
+    assert_eq!(crate::issues::load(&crate::issues::dir(&maintainer)).len(), 1);
+    assert!(hub.hub.store().reports(kelpie_hub::store::KeyStatus::Allowed, 0, true, 10).unwrap().is_empty());
+
+    database.execute("UPDATE reports SET acked_at = NULL", []).unwrap();
+    std::fs::remove_file(maintainer.join("report/inbox.json")).unwrap();
+    inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
+    assert_eq!(crate::issues::load(&crate::issues::dir(&maintainer)).len(), 1, "a crash before the ledger was written files the report no second time");
+}
+
+#[test]
+fn the_reports_routine_runs_every_ten_minutes_and_doctor_says_nothing_without_a_token() {
+    assert!(crate::keeper::routines().iter().any(|routine| routine.name == "reports" && routine.every == 600));
+    let state = crate::sh::test_dir("report-no-token");
+    assert!(crate::hub::inbox::doctor(&state, &crate::config::Report::default(), now()).is_none());
+}
+
+#[test]
+fn a_hub_that_asks_for_more_work_than_kelpie_does_gets_nothing() {
+    let hub = TestHub::start_with(|config| config.report_difficulty = crate::hub::report::MAX_WORK + 1);
+    let user = crate::sh::test_dir("report-greedy");
+    let id = reported_bug(&user);
+    let scrub = crate::hub::report::Scrub::default();
+    let read = crate::hub::report::payload(&crate::issues::find(&crate::issues::dir(&user), &id).unwrap(), &scrub).digest();
+    let refused = crate::hub::report::send_in(&user, &crate::permit::Caller::User, &id, &hub.url, &scrub, &read, now()).unwrap_err();
+    assert!(refused.contains("more than kelpie does") && refused.contains("nothing was sent"), "{refused}");
+    assert!(crate::issues::find(&crate::issues::dir(&user), &id).unwrap().report.is_none());
 }

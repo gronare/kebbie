@@ -1,3 +1,4 @@
+mod bug_report;
 mod card;
 mod columns;
 mod confirm;
@@ -103,6 +104,7 @@ enum Mode {
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
+    Report { id: String, scroll: u16, read: bool, nudged: bool },
     Help(keys_window::Scroll),
 }
 
@@ -150,6 +152,7 @@ struct App {
     in_messages: bool,
     message_back: usize,
     questions: Vec<Message>,
+    offers: Vec<bug_report::Offer>,
     usage: Option<Usage>,
     ongoing: Vec<Ongoing>,
     details: HashMap<PathBuf, std::rc::Rc<Detail>>,
@@ -430,6 +433,7 @@ impl App {
             }
             working @ Mode::Working { .. } => self.mode = working,
             Mode::Questions(window) => self.handle_questions(window, key),
+            Mode::Report { id, scroll, read, .. } => self.confirm_report(id, scroll, read, key, cancels),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
             Mode::ConfirmDone { path, name, .. } => self.confirm_done(path, name, key, cancels),
             Mode::ConfirmDismiss { path, name, .. } => self.confirm_dismiss(path, name, key, cancels),
@@ -810,7 +814,7 @@ impl App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), sources, fetch_failures: Vec::new(), away: false,
-            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), usage: None, ongoing: Vec::new(),
+            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), offers: Vec::new(), usage: None, ongoing: Vec::new(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
@@ -894,6 +898,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         }
                         app.message_back = app.message_back.min(app.messages.len().saturating_sub(1));
                         app.questions = snapshot.questions;
+                        app.offers = snapshot.offers;
                         app.usage = snapshot.usage;
                         app.ongoing = snapshot.ongoing;
                         app.lead_chat = snapshot.lead_chat;

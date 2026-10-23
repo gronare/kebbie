@@ -167,6 +167,9 @@ impl App {
 
     pub(super) fn open_questions(&mut self, at: Option<usize>) {
         if self.questions.is_empty() {
+            if self.open_report() {
+                return;
+            }
             self.subject = Some(super::notices::Subject::plain("inbox"));
             self.show(Notice::new(Tone::NotNow, "No questions are waiting").ok());
             return;

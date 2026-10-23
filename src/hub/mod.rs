@@ -1,8 +1,10 @@
 pub mod board;
 pub mod http;
 pub mod identity;
+pub mod inbox;
 pub mod pair;
 pub mod relay;
+pub mod report;
 #[cfg(test)]
 mod tests;
 
@@ -125,7 +127,7 @@ pub fn tick() -> Result<()> {
     relay::relay(&state, &board, now).map(|_| ())
 }
 
-fn interactive() -> bool {
+pub fn interactive() -> bool {
     // SAFETY: isatty only reads the descriptor number.
     unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 }
 }
