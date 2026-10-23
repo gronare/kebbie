@@ -202,7 +202,7 @@ impl Act {
 
 // One table for every key on the board: the handlers, the option menus, ? help, the hint line and the mouse all read it.
 pub const TABLE: &[Binding] = &[
-    Binding { act: Act::Options, on: BOARD, help: "options for the selected task or backlog item", hint: Hint::Both },
+    Binding { act: Act::Options, on: BOARD, help: "options for the selected task or backlog item; an ongoing note's card", hint: Hint::Both },
     Binding { act: Act::Options, on: &[Areas], help: "actions for the selected area (in the detail: run the selected action)", hint: Hint::Both },
     Binding { act: Act::Switch, on: BOARD, help: "switch between work and backlog", hint: Hint::No },
     Binding { act: Act::Options, on: &[Routines], help: "options for the selected routine (on a narrow board: open it, then options)", hint: Hint::No },

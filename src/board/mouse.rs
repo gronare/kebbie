@@ -71,7 +71,7 @@ impl App {
                         let again = self.column == Column::Backlog && self.backlog_selected == index && !self.in_messages;
                         (self.column, self.backlog_selected, self.in_messages) = (Column::Backlog, index, false);
                         if again {
-                            self.mode = Mode::Options(0);
+                            self.open_options();
                         }
                     }
                     (Some(Hit::Messages(None)), Mode::Normal) if self.fold == Fold::Open => self.in_messages = true,

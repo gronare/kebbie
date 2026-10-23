@@ -29,6 +29,8 @@ Rules:
 | Key | Type | Default | Where | Meaning |
 | --- | --- | --- | --- | --- |
 | `board.backlog.sources` | list of `"local"`, `"vault"`, `"linear"` | `["local"]` | config.toml only | Where the board's Backlog column finds work. The first source is where the lead files new ideas. `[]` turns the backlog off. See [Backlog sources](#backlog-sources). |
+| `board.backlog.ongoing` | `"top"`, `"bottom"`, `"hidden"` | `"top"` | config.toml only | Where the Backlog column shows ONGOING, the vault notes in progress: above the backlog items, below them, or not at all. Hidden, a note another machine claims still asks before it starts here. |
+| `board.groups` | list of `"needs-you"`, `"working"`, `"to-review"`, `"ready-to-push"`, `"ci-running"`, `"waiting-for-work"`, `"queued"` | that order | config.toml only | The order of the Work column's groups. Groups the list leaves out follow in the default order, so `["ready-to-push"]` moves only Ready to push to the top. A name not in the list is an error that names the valid ones. |
 | `worktree.setup_skill` | string | `"kelpie:set-up-worktree"` | either | The skill a task's Claude runs first to make its worktree runnable. `plugin:skill` for a plugin's skill; a bare name for one in `~/.claude/skills` or the repo's `.claude/skills`. |
 | `worktree.setup_command` | string | none | either | The repo's own command that prepares a worktree, run from inside it by the setup skill. A command naming a path applies only in a repo that has that file. Where it does not apply, and when unset, the skill runs `bin/setup-worktree` if the repo has one. |
 | `worktree.dev_server` | string | none | either | The command the board's `w` runs in a server tab of the task's Space, with `PORT` set to the worktree's port. Unset, there is no `w`. |
@@ -239,8 +241,12 @@ allow = ["Bash(npx playwright:*)"]
 
 ```toml
 # ~/.config/kelpie/config.toml
+[board]
+groups = ["needs-you", "ready-to-push"]
+
 [board.backlog]
 sources = ["local", "vault"]
+ongoing = "bottom"
 
 [worktree]
 dev_url = "https://{worktree}.test"

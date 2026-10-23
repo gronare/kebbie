@@ -159,8 +159,10 @@ impl App {
                 }
                 choices
             }
-            Column::Backlog if self.backlog_selected < self.ongoing.len() => ongoing_choices(&self.ongoing[self.backlog_selected]),
-            Column::Backlog => backlog_choices(&self.sources),
+            Column::Backlog => match self.backlog_row(self.backlog_selected) {
+                Some(super::BacklogRow::Ongoing(note)) => ongoing_choices(&self.ongoing[note]),
+                _ => backlog_choices(&self.sources),
+            },
         }
     }
 }
@@ -236,10 +238,7 @@ pub(super) fn draw_options(frame: &mut Frame, app: &App, index: usize) -> Vec<(R
                 }
             }
     } else {
-            let title = match app.backlog_selected.checked_sub(app.ongoing.len()) {
-                Some(_) => app.selected_entry().map(|entry| entry.title).unwrap_or_default(),
-                None => app.ongoing.get(app.backlog_selected).map(|note| note.title.clone()).unwrap_or_default(),
-            };
+            let title = app.selected_ongoing().map(|note| note.title).or_else(|| app.selected_entry().map(|entry| entry.title)).unwrap_or_default();
             let title: String = title.chars().take(52).collect();
             let count = app.choices().len();
             let area = modal(frame, title, options_lines(app.choices(), index, 56), 62);
@@ -483,7 +482,7 @@ mod tests {
         item.report.as_mut().unwrap().text = format!("mock at {long} and the PR https://github.com/acme/web/pull/7, also https://docs.example.org/guide");
         let mut app = test_app(vec![item]);
         with_detail(&mut app);
-        app.ongoing = vec![Ongoing { key: "Projects/search filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None }];
+        app.ongoing = vec![Ongoing { key: "Projects/search filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() }];
         app
     }
 

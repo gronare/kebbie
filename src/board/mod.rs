@@ -13,6 +13,7 @@ pub(crate) mod keys_window;
 mod link;
 mod message_log;
 mod mouse;
+mod note_card;
 mod notices;
 mod options;
 mod paste;
@@ -43,7 +44,7 @@ use ratatui_image::protocol::Protocol;
 use crate::area_page::{self, Effect};
 use crate::routine_page;
 use crate::backlog::{self, Backlog, Entry};
-use crate::config::{self, Source};
+use crate::config::{self, OngoingAt, Source};
 use crate::fetch::Fetcher;
 use crate::herdr;
 use crate::keys::{self, Act, Ctx};
@@ -55,7 +56,7 @@ use crate::repo::name_of;
 use crate::evidence;
 use crate::report;
 use crate::sh::Result;
-use crate::status::{Checkout, Item};
+use crate::status::{Checkout, Group, Item};
 use crate::tasks;
 use crate::usage::Usage;
 use crate::{lead, update};
@@ -105,6 +106,7 @@ enum Mode {
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
     Report { id: String, scroll: u16, read: bool, nudged: bool },
+    NoteCard { key: String, scroll: u16, nudged: bool },
     Help(keys_window::Scroll),
 }
 
@@ -157,6 +159,8 @@ struct App {
     fixed_seen: u64,
     usage: Option<Usage>,
     ongoing: Vec<Ongoing>,
+    groups: Vec<Group>,
+    ongoing_at: OngoingAt,
     details: HashMap<PathBuf, std::rc::Rc<Detail>>,
     detail_requests: Option<Sender<DetailRequest>>,
     detail_results: Option<Receiver<(PathBuf, Detail)>>,
@@ -189,13 +193,22 @@ struct App {
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
 
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum BacklogRow {
+    Ongoing(usize),
+    Entry(usize),
+}
+
+#[derive(Clone, Default)]
 struct Ongoing {
     key: String,
     title: String,
     area: String,
     task: Option<String>,
     claim: Option<crate::vault::Claim>,
+    status: String,
+    summary: String,
+    opening: String,
 }
 
 impl App {
@@ -211,8 +224,42 @@ impl App {
         self.tasks.get(self.work_selected).filter(|_| self.shown(Column::Work, self.work_selected)).cloned()
     }
 
+    // The Backlog column's rows top to bottom; backlog_selected and Hit::Entry index into this.
+    fn backlog_rows(&self) -> Vec<BacklogRow> {
+        let ongoing = (0..self.ongoing.len()).map(BacklogRow::Ongoing);
+        let entries = (0..self.backlog.entries.len()).map(BacklogRow::Entry);
+        match self.ongoing_at {
+            OngoingAt::Top => ongoing.chain(entries).collect(),
+            OngoingAt::Bottom => entries.chain(ongoing).collect(),
+            OngoingAt::Hidden => entries.collect(),
+        }
+    }
+
+    fn backlog_row(&self, index: usize) -> Option<BacklogRow> {
+        self.backlog_rows().get(index).copied()
+    }
+
     fn selected_entry(&self) -> Option<Entry> {
-        self.backlog.entries.get(self.backlog_selected.checked_sub(self.ongoing.len())?).filter(|_| self.shown(Column::Backlog, self.backlog_selected)).cloned()
+        let Some(BacklogRow::Entry(entry)) = self.backlog_row(self.backlog_selected) else { return None };
+        self.backlog.entries.get(entry).filter(|_| self.shown(Column::Backlog, self.backlog_selected)).cloned()
+    }
+
+    fn selected_ongoing(&self) -> Option<Ongoing> {
+        let Some(BacklogRow::Ongoing(note)) = self.backlog_row(self.backlog_selected) else { return None };
+        self.ongoing.get(note).filter(|_| self.shown(Column::Backlog, self.backlog_selected)).cloned()
+    }
+
+    fn open_options(&mut self) {
+        if self.column != Column::Backlog || !self.open_note_card() {
+            self.mode = Mode::Options(0);
+        }
+    }
+
+    fn set_tasks(&mut self, items: Vec<Item>) {
+        let rank = |item: &Item| self.groups.iter().position(|group| *group == item.group()).unwrap_or(usize::MAX);
+        let mut tasks: Vec<Item> = items.into_iter().filter(Item::is_task).collect();
+        tasks.sort_by_key(rank);
+        self.tasks = tasks;
     }
 
     fn filter_of(&self, column: Column) -> Option<&str> {
@@ -225,9 +272,10 @@ impl App {
         let has = |text: &str| text.to_lowercase().contains(&wanted);
         match column {
             Column::Work => self.tasks.get(index).is_some_and(|item| has(&item.name) || has(&item.place)),
-            Column::Backlog => match index.checked_sub(self.ongoing.len()) {
-                None => self.ongoing.get(index).is_some_and(|note| has(&note.title) || has(&note.area)),
-                Some(entry) => self.backlog.entries.get(entry).is_some_and(|entry| has(&entry.title) || has(&entry.area)),
+            Column::Backlog => match self.backlog_row(index) {
+                Some(BacklogRow::Ongoing(note)) => self.ongoing.get(note).is_some_and(|note| has(&note.title) || has(&note.area)),
+                Some(BacklogRow::Entry(entry)) => self.backlog.entries.get(entry).is_some_and(|entry| has(&entry.title) || has(&entry.area)),
+                None => false,
             },
         }
     }
@@ -257,7 +305,7 @@ impl App {
     }
 
     fn backlog_len(&self) -> usize {
-        self.ongoing.len() + self.backlog.entries.len()
+        self.backlog_rows().len()
     }
 
     fn repo_named(&self, name: &str) -> Option<PathBuf> {
@@ -360,7 +408,7 @@ impl App {
         let column = self.column;
         let (selected, length) = match column {
             Column::Work => (self.work_selected, self.tasks.len()),
-            Column::Backlog => (self.backlog_selected, self.ongoing.len() + self.backlog.entries.len()),
+            Column::Backlog => (self.backlog_selected, self.backlog_len()),
         };
         let mut at = selected;
         let next = loop {
@@ -452,6 +500,7 @@ impl App {
             working @ Mode::Working { .. } => self.mode = working,
             Mode::Questions(window) => self.handle_questions(window, key),
             Mode::Report { id, scroll, read, .. } => self.confirm_report(id, scroll, read, key, cancels),
+            Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
             Mode::ConfirmDone { path, name, .. } => self.confirm_done(path, name, key, cancels),
             Mode::ConfirmDismiss { path, name, .. } => self.confirm_dismiss(path, name, key, cancels),
@@ -522,7 +571,7 @@ impl App {
                     Column::Backlog => self.backlog_len() > 0 && self.shown(Column::Backlog, self.backlog_selected),
                 };
                 if has_selection {
-                    self.mode = Mode::Options(0);
+                    self.open_options();
                 }
             }
             Act::Refresh => self.refresh_backlog(),
@@ -559,7 +608,7 @@ impl App {
         if !self.shown(self.column, if self.column == Column::Work { self.work_selected } else { self.backlog_selected }) {
             return;
         }
-        if self.column == Column::Backlog && let Some(note) = self.ongoing.get(self.backlog_selected).cloned().filter(|_| act == Act::Go) {
+        if self.column == Column::Backlog && let Some(note) = self.selected_ongoing().filter(|_| act == Act::Go) {
             match &note.task {
                 Some(task) => {
                     if let Some(index) = self.tasks.iter().position(|item| &peers::address(&item.name, &item.place) == task) {
@@ -833,7 +882,7 @@ impl App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), sources, fetch_failures: Vec::new(), away: false,
-            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), offers: Vec::new(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(),
+            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), offers: Vec::new(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
@@ -898,7 +947,10 @@ pub fn run(overlay: bool) -> Result<String> {
                 match update {
                     Ok(snapshot) => {
                         let previous = app.selected_task().map(|item| (item.name, item.place));
-                        app.tasks = snapshot.items.into_iter().filter(Item::is_task).collect();
+                        if let Ok((groups, ongoing_at)) = config::board_layout() {
+                            (app.groups, app.ongoing_at) = (groups, ongoing_at);
+                        }
+                        app.set_tasks(snapshot.items);
                         app.areas.tasks = app.tasks.clone();
                         app.routines.tasks = app.tasks.clone();
                         app.checkouts = snapshot.checkouts;
@@ -1050,7 +1102,7 @@ mod tests {
         }
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
         item.server = true;
-        let menus = [task_choices(Some(&item), Some("bin/dev"), Some("bin/jobs")), backlog_choices(&[Source::Local]), ongoing_choices(&Ongoing { key: String::new(), title: String::new(), area: String::new(), task: None, claim: None })];
+        let menus = [task_choices(Some(&item), Some("bin/dev"), Some("bin/jobs")), backlog_choices(&[Source::Local]), ongoing_choices(&Ongoing { key: String::new(), title: String::new(), area: String::new(), task: None, claim: None, ..Ongoing::default() })];
         for choice in menus.iter().flatten() {
             let act = choice.act.expect("a built-in choice names its action");
             assert_eq!(choice.key, map.char(act), "{}'s letter is the table's", choice.label);

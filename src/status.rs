@@ -30,6 +30,20 @@ pub enum Group {
 }
 
 impl Group {
+    pub const ALL: [Group; 7] = [Group::NeedsYou, Group::Working, Group::ToReview, Group::ReadyToPush, Group::CiRunning, Group::Idle, Group::Queued];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Group::NeedsYou => "needs-you",
+            Group::Working => "working",
+            Group::ToReview => "to-review",
+            Group::ReadyToPush => "ready-to-push",
+            Group::CiRunning => "ci-running",
+            Group::Idle => "waiting-for-work",
+            Group::Queued => "queued",
+        }
+    }
+
     pub fn title(self) -> &'static str {
         match self {
             Group::NeedsYou => "NEEDS YOU",

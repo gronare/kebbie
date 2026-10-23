@@ -129,6 +129,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             let (drawn, seen) = super::bug_report::draw_report(frame, app, &id, *scroll, *read, nudged);
             app.mode = Mode::Report { id, scroll: drawn, read: seen, nudged };
         }
+        Mode::NoteCard { key, scroll, nudged } => {
+            let (key, nudged) = (key.clone(), *nudged);
+            let drawn = super::note_card::draw_note_card(frame, app, &key, *scroll, nudged);
+            app.mode = Mode::NoteCard { key, scroll: drawn, nudged };
+        }
         Mode::Card { .. } => modal_hits = draw_card(frame, app),
         Mode::Fullscreen { .. } => draw_fullscreen(frame, app),
         Mode::Help(scroll) => {

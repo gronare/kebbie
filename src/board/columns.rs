@@ -8,7 +8,8 @@ use crate::status::{Checkout, Group, Item};
 use crate::tasks;
 use super::card::card_hint;
 use super::detail::unfolded_lines;
-use super::{App, Column, Hit};
+use crate::config::OngoingAt;
+use super::{App, BacklogRow, Column, Hit};
 use super::widgets::{BLUE, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, column_title, group_line, options_hint, plural, row, style, wrap};
 
 pub(super) fn group_color(group: Group) -> Color {
@@ -220,14 +221,12 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
     (lines, selected_line, rows)
 }
 
-fn ongoing_rows(app: &App, focused: bool, width: usize, lines: &mut Vec<Line<'static>>, rows: &mut Rows) -> Option<usize> {
-    if app.ongoing.is_empty() {
-        return None;
-    }
+fn ongoing_rows(app: &App, order: &[BacklogRow], focused: bool, width: usize, lines: &mut Vec<Line<'static>>, rows: &mut Rows) -> Option<usize> {
     let mut selected_line = None;
     let today = backlog::today();
     lines.push(Line::from(vec![Span::styled("ONGOING", bold(TEAL)), Span::styled(format!("  {}", app.ongoing.len()), style(FAINT)), Span::styled("  vault notes in progress", style(MUTED))]));
-    for (index, note) in app.ongoing.iter().enumerate() {
+    for (note_index, note) in app.ongoing.iter().enumerate() {
+        let index = row_index(order, BacklogRow::Ongoing(note_index));
         if !app.shown(Column::Backlog, index) {
             continue;
         }
@@ -238,13 +237,16 @@ fn ongoing_rows(app: &App, focused: bool, width: usize, lines: &mut Vec<Line<'st
         let (icon, facts) = match (&note.task, &note.claim) {
             (Some(task), _) => (Span::styled("↳", style(TEAL)), format!("task {task}")),
             (None, Some(claim)) => (Span::styled("◇", style(if claim.stale(today) { MUTED } else { BLUE })), claim.shown(today)),
-            (None, None) => (Span::styled("○", style(PEACH)), "no task · ⏎ resume".to_string()),
+            (None, None) => (Span::styled("○", style(PEACH)), "no task · ⏎ details".to_string()),
         };
         rows.push((lines.len(), lines.len() + 1, Hit::Entry(index)));
         lines.push(row(selected, focused, icon, &note.title, None, &facts, width));
     }
-    lines.push(Line::default());
     selected_line
+}
+
+fn row_index(order: &[BacklogRow], wanted: BacklogRow) -> usize {
+    order.iter().position(|row| *row == wanted).unwrap_or(usize::MAX)
 }
 
 pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usize, Rows) {
@@ -255,11 +257,16 @@ pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usi
     };
     let mut lines = column_title("BACKLOG", right, focused, width);
     let mut rows = Vec::new();
-    let mut selected_line = ongoing_rows(app, focused, width, &mut lines, &mut rows).unwrap_or(0);
-    let offset = app.ongoing.len();
+    let order = app.backlog_rows();
+    let mut selected_line = 0;
+    if app.ongoing_at == OngoingAt::Top && !app.ongoing.is_empty() {
+        selected_line = ongoing_rows(app, &order, focused, width, &mut lines, &mut rows).unwrap_or(0);
+        lines.push(Line::default());
+    }
     let mut current: Option<&str> = None;
-    for (index, entry) in app.backlog.entries.iter().enumerate() {
-        if !app.shown(Column::Backlog, index + offset) {
+    for (entry_index, entry) in app.backlog.entries.iter().enumerate() {
+        let index = row_index(&order, BacklogRow::Entry(entry_index));
+        if !app.shown(Column::Backlog, index) {
             continue;
         }
         if current != Some(entry.priority.as_str()) {
@@ -270,7 +277,7 @@ pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usi
             lines.push(group_line(&entry.priority.to_uppercase(), count, priority_color(&entry.priority)));
             current = Some(&entry.priority);
         }
-        let selected = index + offset == app.backlog_selected;
+        let selected = index == app.backlog_selected;
         if selected {
             selected_line = lines.len();
         }
@@ -291,11 +298,17 @@ pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usi
         } else {
             lines.push(row(selected, focused, icon, &entry.title, None, &entry.age, width));
         }
-        rows.push((start, lines.len(), Hit::Entry(index + offset)));
+        rows.push((start, lines.len(), Hit::Entry(index)));
     }
     if app.backlog.entries.is_empty() {
         let empty = backlog::empty_text(&app.sources);
         lines.push(Line::from(Span::styled(empty, style(MUTED))));
+    }
+    if app.ongoing_at == OngoingAt::Bottom && !app.ongoing.is_empty() {
+        lines.push(Line::default());
+        if let Some(line) = ongoing_rows(app, &order, focused, width, &mut lines, &mut rows) {
+            selected_line = line;
+        }
     }
     (lines, selected_line, rows)
 }
@@ -308,6 +321,7 @@ mod tests {
     use crate::status::Checkout;
     use crate::board::input::Purpose;
     use crate::board::{Column, Mode, Ongoing};
+    use ratatui::crossterm::event::KeyCode;
 
     #[test]
     fn a_suggested_name_keeps_letters_with_diacritics() {
@@ -330,12 +344,12 @@ mod tests {
         let claim = |since: &str, updated: &str| crate::vault::Claim { machine: "devbox".to_string(), task: "billing".to_string(), repo: "web".to_string(), since: format!("{since}T08:00:00Z"), updated: updated.to_string() };
         let mut app = test_app(vec![served("search-filters")]);
         app.ongoing = vec![
-            Ongoing { key: "Projects/web-billing.md".to_string(), title: "web billing".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(2), &day(2))) },
-            Ongoing { key: "Projects/web-old.md".to_string(), title: "web old".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(30), &day(20))) },
+            Ongoing { key: "Projects/web-billing.md".to_string(), title: "web billing".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(2), &day(2))), ..Ongoing::default() },
+            Ongoing { key: "Projects/web-old.md".to_string(), title: "web old".to_string(), area: "web".to_string(), task: None, claim: Some(claim(&day(30), &day(20))), ..Ongoing::default() },
         ];
         let (rows, _) = render(&mut app, 200, 50);
         let screen = rows.join("\n");
-        assert!(screen.contains("working on devbox · billing") && !screen.contains("no task · ⏎ resume"), "{screen}");
+        assert!(screen.contains("working on devbox · billing") && !screen.contains("no task · ⏎ details"), "{screen}");
         assert!(screen.contains("working on devbox · billing · stale 20 d"), "a claim quiet for more than 14 days shows as stale: {screen}");
         app.column = Column::Backlog;
         app.backlog_selected = 0;
@@ -362,14 +376,14 @@ mod tests {
     fn ongoing_notes_head_the_backlog_with_their_task_or_a_resume() {
         let mut app = test_app(vec![served("search-filters")]);
         app.ongoing = vec![
-            Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None },
-            Ongoing { key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None },
+            Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() },
+            Ongoing { key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None, ..Ongoing::default() },
         ];
         let (rows, _) = render(&mut app, 84, 50);
         let screen = rows.join("\n");
         let (_, backlog) = find(&rows, "BACKLOG")[0];
         let (_, ongoing) = find(&rows, "ONGOING")[0];
-        assert!(backlog < ongoing && screen.contains("task search-filters@web") && screen.contains("no task · ⏎ resume"), "{screen}");
+        assert!(backlog < ongoing && screen.contains("task search-filters@web") && screen.contains("no task · ⏎ details"), "{screen}");
         assert!(screen.contains("note    vault: Projects/search-filters.md"), "the task shows its note: {screen}");
         app.column = Column::Backlog;
         app.backlog_selected = 1;
@@ -380,5 +394,132 @@ mod tests {
         app.backlog_selected = 0;
         app.act(Act::Go);
         assert!(app.column == Column::Work && app.work_selected == 0, "a note with a task goes to it");
+    }
+
+    fn two_notes_and_two_entries(app: &mut crate::board::App) {
+        app.ongoing = vec![
+            Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() },
+            Ongoing { key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None, ..Ongoing::default() },
+        ];
+        let entry = |title: &str, reference: &str| crate::backlog::Entry { source: "vault".to_string(), title: title.to_string(), priority: "high".to_string(), area: "web".to_string(), reference: reference.to_string(), summary: String::new(), age: String::new() };
+        app.backlog.entries = vec![entry("nightly import", "Projects/nightly.md"), entry("price alerts", "Projects/alerts.md")];
+    }
+
+    #[test]
+    fn work_groups_follow_the_configured_order_and_the_rest_keep_theirs() {
+        let mut working = crate::status::tests::task(Some("working"), None, 0);
+        working.name = "busy-one".to_string();
+        let mut blocked = crate::status::tests::task(Some("blocked"), None, 0);
+        blocked.name = "stuck-one".to_string();
+        let items = vec![blocked, working, served("ready-one")];
+        let groups: Vec<Group> = items.iter().map(Item::group).collect();
+        assert!(groups.windows(2).all(|pair| pair[0] < pair[1]), "three groups in today's order: {groups:?}");
+        let mut app = test_app(Vec::new());
+        app.groups = crate::config::group_order(&[groups[2]]);
+        app.set_tasks(items);
+        let (rows, _) = render(&mut app, 84, 40);
+        let at = |group: Group| find(&rows, group.title())[0].1;
+        assert!(at(groups[2]) < at(groups[0]) && at(groups[0]) < at(groups[1]), "the listed group first, the others after it in today's order:\n{}", rows.join("\n"));
+        assert_eq!(app.selected_task().map(|item| item.name).as_deref(), Some("ready-one"), "the top row is the first task");
+    }
+
+    #[test]
+    fn ongoing_at_the_bottom_follows_the_backlog_and_keys_clicks_and_filters_act_on_the_row_shown() {
+        let mut app = test_app(vec![served("search-filters")]);
+        two_notes_and_two_entries(&mut app);
+        app.ongoing_at = crate::config::OngoingAt::Bottom;
+        app.column = Column::Backlog;
+        let (rows, _) = render(&mut app, 84, 50);
+        let (_, ongoing) = find(&rows, "ONGOING")[0];
+        let (_, alerts) = find(&rows, "price alerts")[0];
+        assert!(find(&rows, "HIGH")[0].1 < alerts && alerts < ongoing && ongoing < find(&rows, "docs refresh")[0].1, "{}", rows.join("\n"));
+        app.backlog_selected = 0;
+        assert_eq!(app.choices()[0].label, "Start as task");
+        app.act(Act::Go);
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogName(entry), .. } if entry.reference == "Projects/nightly.md"), "the top row is the first backlog entry");
+        app.mode = Mode::Normal;
+        let (rows, _) = render(&mut app, 84, 50);
+        let (x, y) = find(&rows, "docs refresh")[0];
+        click(&mut app, x as u16, y as u16);
+        assert_eq!(app.selected_ongoing().map(|note| note.key).as_deref(), Some("Projects/docs-refresh.md"), "a click selects the note it lands on");
+        let (rows, _) = render(&mut app, 84, 50);
+        let (x, y) = find(&rows, "docs refresh")[0];
+        click(&mut app, x as u16, y as u16);
+        assert!(matches!(&app.mode, Mode::NoteCard { key, .. } if key == "Projects/docs-refresh.md"), "a second click opens its card");
+        app.mode = Mode::Normal;
+        app.set_filter("docs".to_string());
+        app.act(Act::Go);
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogName(entry), label, .. } if entry.reference == "Projects/docs-refresh.md" && label.starts_with("Resume")), "filtering selects the note shown");
+        app.mode = Mode::Normal;
+        app.set_filter("alerts".to_string());
+        let (rows, _) = render(&mut app, 84, 50);
+        assert!(!rows.join("\n").contains("docs refresh"), "{}", rows.join("\n"));
+        app.act(Act::Go);
+        assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogName(entry), .. } if entry.reference == "Projects/alerts.md"));
+        app.mode = Mode::Normal;
+        app.set_filter(String::new());
+        app.backlog_selected = 2;
+        app.act(Act::Go);
+        assert!(app.column == Column::Work && app.work_selected == 0, "the first note, below the entries, goes to its task");
+    }
+
+    #[test]
+    fn hidden_ongoing_leaves_only_the_backlog() {
+        let mut app = test_app(vec![served("search-filters")]);
+        two_notes_and_two_entries(&mut app);
+        app.ongoing_at = crate::config::OngoingAt::Hidden;
+        app.column = Column::Backlog;
+        let (rows, _) = render(&mut app, 84, 50);
+        let screen = rows.join("\n");
+        assert!(!screen.contains("ONGOING") && !screen.contains("docs refresh") && screen.contains("price alerts"), "{screen}");
+        app.move_selection(1);
+        app.move_selection(1);
+        assert_eq!(app.backlog_selected, 1, "the selection stops at the last entry");
+        assert_eq!(app.selected_entry().map(|entry| entry.reference).as_deref(), Some("Projects/alerts.md"));
+    }
+
+    #[test]
+    fn enter_on_an_ongoing_note_opens_a_card_with_what_the_note_is_about() {
+        let body = "# Search filters that remember\n\n## Problem\nFilters reset on every visit, see https://example.com/issues/12 for the report.\n\n## Lösning\nKeep price and size in the URL.\n\n## Beslut\nNot for the card.\n";
+        let mut app = test_app(vec![served("search-filters")]);
+        let title = "search filters that remember price and size across visits and devices";
+        let claim = crate::vault::Claim { machine: "devbox".to_string(), task: "billing".to_string(), repo: "web".to_string(), since: "2026-10-19T08:00:00Z".to_string(), updated: "2026-10-20".to_string() };
+        app.ongoing = vec![Ongoing {
+            key: "Projects/search-filters.md".to_string(), title: title.to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: Some(claim),
+            status: "active".to_string(), summary: "Filters survive a reload.".to_string(), opening: super::super::note_card::opening(body),
+        }];
+        app.column = Column::Backlog;
+        let (rows, _) = render(&mut app, 84, 50);
+        assert!(!rows.join("\n").contains(title), "the row cuts the title");
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&app.mode, Mode::NoteCard { key, .. } if key == "Projects/search-filters.md"));
+        let (rows, buffer) = render(&mut app, 120, 50);
+        let screen: String = rows.iter().map(|row| row.trim().trim_matches('│').trim()).collect::<Vec<_>>().join("\n");
+        for wanted in [title, "area      web", "status    active", "summary   Filters survive a reload.", "works on  devbox · billing · since 2026-10-19", "task      search-filters@web · runs here", "note      vault: Projects/search-filters.md", "Problem", "Lösning", "Keep price and size in the URL.", "g go to its task"] {
+            assert!(screen.contains(wanted), "{wanted:?} in:\n{screen}");
+        }
+        assert!(!screen.contains("Not for the card") && !screen.contains("Search filters that remember\n"), "the card shows the opening sections, not the heading or the rest:\n{screen}");
+        assert_whole_link(&buffer, "https://example.com/issues/12", 1, "a URL in the note");
+        press(&mut app, key(KeyCode::Char('g')));
+        assert!(app.column == Column::Work && app.work_selected == 0 && matches!(app.mode, Mode::Normal), "g in the card does what the note offers");
+    }
+
+    #[test]
+    fn a_long_note_scrolls_in_its_card() {
+        let mut app = test_app(Vec::new());
+        let body: String = (1..=60).map(|line| format!("line {line} of the problem\n")).collect();
+        app.ongoing = vec![Ongoing { key: "Projects/long.md".to_string(), title: "long".to_string(), area: "web".to_string(), opening: super::super::note_card::opening(&format!("## Problem\n{body}")), ..Ongoing::default() }];
+        app.column = Column::Backlog;
+        press(&mut app, key(KeyCode::Enter));
+        let (rows, _) = render(&mut app, 100, 30);
+        assert!(!rows.join("\n").contains("line 60 ") && rows.join("\n").contains("scroll"), "{}", rows.join("\n"));
+        for _ in 0..100 {
+            press(&mut app, key(KeyCode::Down));
+            render(&mut app, 100, 30);
+        }
+        let (rows, _) = render(&mut app, 100, 30);
+        assert!(rows.join("\n").contains("line 60 of the problem"), "{}", rows.join("\n"));
+        press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal));
     }
 }

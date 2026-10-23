@@ -4,6 +4,7 @@ use toml::{Table, Value};
 
 use crate::repo::{main_checkout, name_of, slot_number, worktree_port};
 use crate::sh::Result;
+use crate::status::Group;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Source {
@@ -68,6 +69,30 @@ impl AlsoNoticed {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum OngoingAt {
+    #[default]
+    Top,
+    Bottom,
+    Hidden,
+}
+
+impl OngoingAt {
+    pub const ALL: [OngoingAt; 3] = [OngoingAt::Top, OngoingAt::Bottom, OngoingAt::Hidden];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            OngoingAt::Top => "top",
+            OngoingAt::Bottom => "bottom",
+            OngoingAt::Hidden => "hidden",
+        }
+    }
+}
+
+pub fn group_order(listed: &[Group]) -> Vec<Group> {
+    listed.iter().copied().chain(Group::ALL.into_iter().filter(|group| !listed.contains(group))).collect()
+}
+
 pub const PERMISSION_MODES: [&str; 6] = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
 
 pub fn permission_mode(name: &str) -> Result<&str> {
@@ -111,6 +136,8 @@ pub struct Worktree {
 pub struct Machine {
     pub keys: Vec<(String, String)>,
     pub sources: Option<Vec<Source>>,
+    pub groups: Option<Vec<Group>>,
+    pub ongoing: Option<OngoingAt>,
     pub channel: Option<Channel>,
     pub restart: Restart,
     pub keeper: Option<bool>,
@@ -208,6 +235,8 @@ pub struct Setting<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub sources: Setting<Vec<Source>>,
+    pub groups: Setting<Vec<Group>>,
+    pub ongoing: Setting<OngoingAt>,
     pub setup_skill: Setting<String>,
     pub setup_command: Setting<Option<String>>,
     pub dev_server: Setting<Option<String>>,
@@ -408,12 +437,39 @@ fn backlog_sources(backlog: &Table) -> Result<Option<Vec<Source>>> {
     Ok(Some(found))
 }
 
-fn board(table: &Table) -> Result<Option<Vec<Source>>> {
-    let Some(board) = subtable(table, "board", "board")? else { return Ok(None) };
-    unknown_keys(board, "board.", &["backlog"])?;
-    let Some(backlog) = subtable(board, "backlog", "board.backlog")? else { return Ok(None) };
-    unknown_keys(backlog, "board.backlog.", &["sources"])?;
-    backlog_sources(backlog)
+fn groups(value: &Value) -> Result<Vec<Group>> {
+    let mut found = Vec::new();
+    for name in strings(value, "board.groups")? {
+        let group = Group::ALL.into_iter().find(|group| group.key() == name)
+            .ok_or(format!("board.groups: \"{name}\" is not a group; use {}", Group::ALL.map(|group| format!("\"{}\"", group.key())).join(", ")))?;
+        if found.contains(&group) {
+            return Err(format!("board.groups: \"{name}\" is listed twice"));
+        }
+        found.push(group);
+    }
+    Ok(found)
+}
+
+fn ongoing_at(backlog: &Table) -> Result<Option<OngoingAt>> {
+    let Some(name) = text(backlog, "ongoing", "board.backlog.ongoing")? else { return Ok(None) };
+    OngoingAt::ALL.into_iter().find(|at| at.key() == name).map(Some)
+        .ok_or(format!("board.backlog.ongoing: \"{name}\" is not a place; use \"top\", \"bottom\" or \"hidden\""))
+}
+
+#[derive(Default)]
+struct Board {
+    sources: Option<Vec<Source>>,
+    groups: Option<Vec<Group>>,
+    ongoing: Option<OngoingAt>,
+}
+
+fn board(table: &Table) -> Result<Board> {
+    let Some(board) = subtable(table, "board", "board")? else { return Ok(Board::default()) };
+    unknown_keys(board, "board.", &["groups", "backlog"])?;
+    let groups = board.get("groups").map(groups).transpose()?;
+    let Some(backlog) = subtable(board, "backlog", "board.backlog")? else { return Ok(Board { groups, ..Board::default() }) };
+    unknown_keys(backlog, "board.backlog.", &["sources", "ongoing"])?;
+    Ok(Board { sources: backlog_sources(backlog)?, groups, ongoing: ongoing_at(backlog)? })
 }
 
 fn update(table: &Table) -> Result<Option<Channel>> {
@@ -631,7 +687,8 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
         return Err(fail(format!("worktree.stage_on_main: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources: board(&table).map_err(fail)?, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, report: report(&table).map_err(fail)?, worktree })
+    let Board { sources, groups, ongoing } = board(&table).map_err(fail)?;
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, report: report(&table).map_err(fail)?, worktree })
 }
 
 const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
@@ -640,7 +697,7 @@ const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    for (key, setting) in [("board", "[board.backlog] sources"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("machine", "[machine] name"), ("keys", "[keys]"), ("report", "[report] url, signals, text and inbox_token")] {
+    for (key, setting) in [("board", "[board] groups and [board.backlog] sources and ongoing"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("machine", "[machine] name"), ("keys", "[keys]"), ("report", "[report] url, signals, text and inbox_token")] {
         if table.contains_key(key) {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
@@ -671,6 +728,8 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
     let optional = |setting: Option<Setting<String>>| or_default(setting.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None);
     Settings {
         sources: or_default(pick(None, machine.sources.as_ref()), vec![Source::Local]),
+        groups: pick(None, machine.groups.as_ref()).map_or(Setting { value: Group::ALL.to_vec(), layer: Layer::Default }, |setting| Setting { value: group_order(&setting.value), layer: setting.layer }),
+        ongoing: or_default(pick(None, machine.ongoing.as_ref()), OngoingAt::default()),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),
         setup_command: optional(pick(repo.setup_command.as_ref(), machine.worktree.setup_command.as_ref())),
         dev_server: optional(pick(repo.dev_server.as_ref(), machine.worktree.dev_server.as_ref())),
@@ -728,6 +787,11 @@ pub fn sources() -> Result<Vec<Source>> {
     Ok(resolve(None)?.settings.sources.value)
 }
 
+pub fn board_layout() -> Result<(Vec<Group>, OngoingAt)> {
+    let settings = resolve(None)?.settings;
+    Ok((settings.groups.value, settings.ongoing.value))
+}
+
 pub fn restart_settings() -> Result<(bool, u64)> {
     let settings = resolve(None)?.settings;
     Ok((settings.auto_restart.value, settings.idle_minutes.value))
@@ -759,7 +823,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, report_url, report_signals, report_text, report_inbox } = &loaded.settings;
+    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, report_url, report_signals, report_text, report_inbox } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -782,6 +846,11 @@ pub fn describe(loaded: &Loaded) -> String {
     };
     key("board.backlog.sources", quoted(&names), sources.layer,
         "Where the board's Backlog tab finds work: \"local\" (backlog.md next to the machine config), \"vault\" and \"linear\", in any combination; config.toml only.");
+    key("board.backlog.ongoing", format!("{:?}", ongoing.value.key()), ongoing.layer,
+        "Where the Backlog column shows ONGOING, the vault notes in progress: \"top\" above the backlog, \"bottom\" below it, \"hidden\" not at all; config.toml only.");
+    let order: Vec<&str> = groups.value.iter().map(|group| group.key()).collect();
+    key("board.groups", quoted(&order), groups.layer,
+        &format!("The order of the Work column's groups, by name: {}; groups the list leaves out follow in this default order, so a partial list moves only the ones it names; config.toml only.", quoted(&Group::ALL.map(Group::key))));
     key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer,
         "The skill a task's Claude runs first to make its worktree runnable.");
     key("worktree.setup_command", setup_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), setup_command.layer,
@@ -1124,7 +1193,7 @@ mod tests {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
         assert_eq!(error("colour = 1\n"), "/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report");
         assert_eq!(error("[backlog]\nsources = []\n"), "/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report");
-        assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources");
+        assert_eq!(error("[board.backlog]\nsource = []\n"), "/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources, ongoing");
         assert_eq!(error("[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
         assert!(error("[board.backlog]\nsources = [\"vault\", \"vault\"]\n").contains("listed twice"));
@@ -1134,7 +1203,7 @@ mod tests {
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
         assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
         let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
-        assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board.backlog] sources in "));
+        assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board] groups and [board.backlog] sources and ongoing in "));
         assert_eq!(repo_error("colour = 1\n"), "/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, docs, routines");
         assert_eq!(repo_error("[worktree]\nport = 3000\n"), "/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release");
     }
@@ -1171,6 +1240,30 @@ mod tests {
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&default).contains("notify.command = none  (default)\n  The shell command kelpie runs"));
         assert!(describe(&default).contains("config.toml only."));
+    }
+
+    #[test]
+    fn board_groups_take_the_listed_order_and_the_rest_follow_by_default() {
+        let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
+        let set = settings(&Worktree::default(), &machine("[board]\ngroups = [\"ready-to-push\", \"waiting-for-work\"]\n"));
+        assert_eq!(set.groups.value, [Group::ReadyToPush, Group::Idle, Group::NeedsYou, Group::Working, Group::ToReview, Group::CiRunning, Group::Queued]);
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).groups.value, Group::ALL, "no list keeps today's order");
+        assert_eq!(error("[board]\ngroups = [\"needs-me\"]\n"), "/home/u/.config/kelpie/config.toml: board.groups: \"needs-me\" is not a group; use \"needs-you\", \"working\", \"to-review\", \"ready-to-push\", \"ci-running\", \"waiting-for-work\", \"queued\"");
+        assert!(error("[board]\ngroups = [\"queued\", \"queued\"]\n").contains("board.groups: \"queued\" is listed twice"));
+        assert!(error("[board]\ncolumns = []\n").contains("board.columns: unknown key; known keys here: groups, backlog"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
+        assert!(shown.contains("board.groups = [\"ready-to-push\", \"waiting-for-work\", \"needs-you\", \"working\", \"to-review\", \"ci-running\", \"queued\"]  (machine config)\n  The order of the Work column's groups"), "{shown}");
+    }
+
+    #[test]
+    fn ongoing_sits_on_top_unless_config_toml_moves_or_hides_it() {
+        let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).ongoing.value, OngoingAt::Top);
+        assert_eq!(machine("[board.backlog]\nongoing = \"bottom\"\n").ongoing, Some(OngoingAt::Bottom));
+        assert_eq!(machine("[board.backlog]\nongoing = \"hidden\"\n").ongoing, Some(OngoingAt::Hidden));
+        assert_eq!(error("[board.backlog]\nongoing = \"left\"\n"), "/home/u/.config/kelpie/config.toml: board.backlog.ongoing: \"left\" is not a place; use \"top\", \"bottom\" or \"hidden\"");
+        let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
+        assert!(shown.contains("board.backlog.ongoing = \"top\"  (default)\n  Where the Backlog column shows ONGOING"), "{shown}");
     }
 
     #[test]

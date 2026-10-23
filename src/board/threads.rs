@@ -42,7 +42,8 @@ fn load_ongoing() -> Vec<Ongoing> {
     notes.into_iter().map(|note| {
         let task = links.iter().find(|(_, items)| items.contains(&note.key)).map(|(address, _)| address.clone());
         let claim = claims.get(&note.key).filter(|claim| claim.elsewhere(&machine)).cloned();
-        Ongoing { key: note.key, title: note.title, area: note.area, task, claim }
+        let opening = index.body(&note.key).map(|body| super::note_card::opening(&body)).unwrap_or_default();
+        Ongoing { key: note.key, title: note.title, area: note.area, task, claim, status: note.status, summary: note.summary, opening }
     }).collect()
 }
 

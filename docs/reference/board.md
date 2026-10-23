@@ -10,8 +10,8 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 | --- | --- |
 | Status line, top | The page tabs, `1 Work  2 Areas  3 Routines`, with `⚠N` on Routines while N routine runs wait for you with findings. Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `chat hidden` while the lead's chat is hidden; `↑ kelpie <version> · U updates` when a newer version is out. |
 | Lead line, under the status line | While the lead counts as stale: `↻ The lead runs <old>; <new> is installed · <what happens to it> · L restarts it now`, `· L restarts it` alone with `restart.auto` off, or the error of a restart that failed. See [Restarting the lead after an update](../explanation/updates-and-restarts.md#restarting-the-lead-after-an-update). |
-| Work, left | Tasks from every repo with a worktree pool, grouped. A task's halves in other repos sit next to each other. |
-| Backlog, right | An ONGOING section of vault project notes in progress (status active or draft) when the vault is on, then the items from the configured sources, by priority. |
+| Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). A task's halves in other repos sit next to each other. |
+| Backlog, right | An ONGOING section of vault project notes in progress (status active or draft) when the vault is on, and the items from the configured sources, by priority. ONGOING sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md). |
 | Messages, bottom | What sessions tell each other, newest last. |
 
 In a narrow pane the two columns stack, and the status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
@@ -107,6 +107,7 @@ kelpie's messages reach a Claude that kelpie started on Claude Code 2.1.224 or l
 | --- | --- | --- |
 | `g` | Start the item as a task, with the item as its prompt. Asks for a name, suggested from the title. | On an item. |
 | `g` | Go to the task working on this note, or resume the note as a new task. | On an ONGOING note. |
+| `⏎` | The note's card: its whole title, area, status and summary, who works on it (machine, task and since when), its task and whether it runs here, and its opening sections (Problem and Lösning in a task note), from the local vault index. `↓` `↑` `pgdn` `pgup` scroll it, `g` or `⏎` does what `g` does on the row, `esc` closes it. A click on the selected note opens it too. | On an ONGOING note. |
 | `l` | Start the item as a task later: a name, then a time. It waits under Queued until then, as with [`kelpie start --at`](commands.md#kelpie-start-name-prompt). | On an item. |
 | `R` | Ask the lead to refresh the backlog. | On an item. |
 | `n` | Add an item to the local backlog: a title, then a priority. | `"local"` is a source. |
