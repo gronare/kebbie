@@ -2,7 +2,7 @@
 # saved-carts: asks where carts are kept, writes the store on the answer, and changes how long carts are kept on a review comment.
 . "$KDEMO_DIR/react/lib.sh"
 text=$1
-commit() { git add -A && git commit -qm "$1"; }
+commit() { git add src/cart/store.ts && git commit -qm "$1" -m "$2"; }
 case "$text" in
   "Saved carts:"*)
     sleep 0.8
@@ -40,7 +40,7 @@ export async function loadCart(shopperId: string): Promise<CartItem[]> {
 }
 TS
     say "● Write(src/cart/store.ts)" "  ⎿  Wrote 14 lines"
-    commit "Keep a signed-in shopper's cart in the database"
+    commit "Keep a signed-in shopper's cart in the database" "A cart lived only in the session, so it was gone on another device or after a restart. A signed-in shopper's cart is now saved in the database and loaded again until it expires."
     sleep 1
     say "● Bash(git commit -m \"Keep a signed-in shopper's cart in the database\")"
     kelpie report --state ready --next "review src/cart/store.ts" "Carts are kept in the database for 7 days after the last visit" >/dev/null
@@ -55,7 +55,7 @@ TS
     sleep 2.5
     perl -pi -e 's/KEEP_DAYS = 7;/KEEP_DAYS = 30;/' src/cart/store.ts
     say "● Update(src/cart/store.ts)" "  ⎿  - export const KEEP_DAYS = 7;" "     + export const KEEP_DAYS = 30;"
-    commit "Keep saved carts for 30 days"
+    commit "Keep saved carts for 30 days" "Seven days dropped carts shoppers meant to come back to after payday. Saved carts now expire 30 days after the last visit."
     sleep 2.5
     say "● Bash(git commit -m \"Keep saved carts for 30 days\")"
     cat > card.md <<CARD

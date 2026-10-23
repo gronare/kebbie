@@ -20,7 +20,7 @@ TS
     say "● Write(src/search/price.ts)"
     more "  ⎿  Wrote 6 lines"
     sleep 2
-    git add -A && git commit -qm "Filter search results by fixed price ranges"
+    git add src/search/price.ts && git commit -qm "Filter search results by fixed price ranges" -m "Shoppers asked to narrow by price as well as size. Four fixed ranges, under 25 up to over 100, sit beside the size filter; a range is one click and reads the same on every page."
     kelpie report --state ready --next "push it" "Price and size filters on the search page; prices in four fixed ranges" >/dev/null
     say "● Ready: price and size filters, prices in four fixed ranges."
     mode idle

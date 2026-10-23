@@ -13,10 +13,30 @@ import textwrap
 import time
 import tty
 
-if {"-p", "--print", "--version", "plugin", "mcp"} & set(sys.argv[1:]):
+demo = os.environ.get("KDEMO_DIR", "/tmp/kelpie-demo")
+
+
+# kelpie's rules check asks a reviewer for a verdict on stdin; the demo's is $KDEMO_DIR/verdicts/<branch>, or a pass.
+def rules_verdict():
+    brief = "" if sys.stdin.isatty() else sys.stdin.read()
+    if "this is a rules check" not in brief:
+        return
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
+    short = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    try:
+        verdict = open(os.path.join(demo, "verdicts", branch)).read().replace("{sha}", short)
+    except OSError:
+        verdict = "verdict: ok\n"
+    time.sleep(1)
+    sys.stdout.write(verdict)
+
+
+if {"-p", "--print"} & set(sys.argv[1:]):
+    rules_verdict()
+    sys.exit(0)
+if {"--version", "plugin", "mcp"} & set(sys.argv[1:]):
     sys.exit(0)
 
-demo = os.environ.get("KDEMO_DIR", "/tmp/kelpie-demo")
 here = os.path.basename(os.getcwd())
 script_file = os.path.join(demo, "screens", here)
 mode_file = os.path.join(demo, "modes", here)
