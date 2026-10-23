@@ -34,7 +34,7 @@ You do nothing. After `kelpie update`, the keeper rechecks each of your open iss
 - **Not fixed or unclear:** the issue stays open, and is not checked again until the next update.
 - **No answer** (Claude failed, or gave none within 15 minutes): the issue stays open, with one line in the keeper's log.
 
-Nobody asks you anything. The board shows one line under Work as soon as the first recheck closes an issue, such as `✓ kelpie 0.26.3 fixed 2 of your issues`, with the titles below it, and adds to it as the other rechecks finish. `i` lists them all and clears the line, once any questions and report offers are dealt with; a fix that lands later shows again. The line also goes by itself three days after the last fix, and an issue you reopen leaves it. If a recheck closes one while `kelpie update` still runs, the update's output lists it too. `kelpie issues --all` shows every closed issue with its last recorded line.
+Nobody asks you anything. The board shows one line under Work as soon as the first recheck closes an issue, such as `✓ kelpie 0.26.3 fixed 2 of your issues`, with the titles below it, and adds to it as the other rechecks finish. `i` lists them all and clears the line, once any questions are answered; a fix that lands later shows again. The line also goes by itself three days after the last fix, and an issue you reopen leaves it. If a recheck closes one while `kelpie update` still runs, the update's output lists it too. `kelpie issues --all` shows every closed issue with its last recorded line.
 
 When a fixed issue comes back, reopen it rather than filing a new one; the lead does this when what you hit matches a closed issue:
 
@@ -53,10 +53,10 @@ With `gh` installed and logged in, the update also finds the issues you sent on 
 
 ## Send it to kelpie's maintainers
 
-When kelpie or the lead saves a bug about kelpie, the board lists it under Work, below the tasks, under **Send to kelpie's maintainers?**. Press `i` (after any questions waiting): the board shows the report exactly as it would go out and asks `y / n`. A long one scrolls with `↓` and `pgdn`, and `y` counts only once you have read to its end.
+When kelpie or the lead saves a bug about kelpie, the board's header counts it, such as `! 2 bugs to send · B`. The list itself stays hidden until you press `B`: it opens under Work, below the tasks, under **Send to kelpie's maintainers?**, with the first bug selected. `↑` `↓` or a click pick one, and `⏎` or a second click shows the report exactly as it would go out and asks `y / n`. A long one scrolls with `↓` and `pgdn`, and `y` counts only once you have read to its end. `esc` goes back to the tasks with the list left open, and `B` hides it again; the board remembers whether it shows.
 
 - `y` sends it, as long as the issue is unchanged since you read it; an edit in between sends nothing and asks you to read it again. kelpie answers the reports endpoint's proof-of-work challenge (about a second), signs the report with this install's key and records the report's id in the issue, so it is never sent twice.
-- `n` keeps it on this machine only, and the board stops offering it.
+- `n` keeps it on this machine only, and the board stops offering it. `n` in the list does the same for the selected bug without opening it.
 - `esc` decides later.
 
 The report holds the title, the text, kelpie's version and commit, and the OS and architecture. Before you see it, kelpie replaces paths under any home (`/Users`, `/home`, `/var/home`) with `~` and your user name in any other path with `<user>`, the names of the repos it works in with `<repo>` (also inside names like `<repo>-api`), remote and other URLs with `<remote>` or `<url>`, email addresses, host names and IP addresses with `<email>`, `<host>` and `<ip>`, branch names such as `feature/…` with `<branch>`, and anything shaped like a token, a key id, a long hex string that is not one of kelpie's own commits, or a secret assignment with `<token>` or `<redacted>`. Terminal escapes and control characters are removed. No environment, file or repo content is added. Read it anyway: the text is what the lead or you wrote.
@@ -67,7 +67,7 @@ From a terminal:
 kelpie issue report <id>
 ```
 
-It prints the same text and asks `y/N`. Only you can send: kelpie refuses it, and the board's `y`, to the lead, tasks and sandboxed processes. Wishes are not offered; send one with `kelpie issue send` below.
+It prints the same text and asks `y/N`. Only you can send: kelpie refuses it, and the board's `y`, to the lead, tasks and sandboxed processes. Wishes are not offered; send one with `kelpie issue send` below. A bug already sent with `kelpie issue send`, linked to a GitHub issue, closed or kept here is not offered either.
 
 The install key is made on the first report and kept in `report/install-key.json` in the state directory, readable by you alone. The project's maintainers see that key as the report's sender; a key they have not seen before waits until they let it through, so the first report from a new install may take a while to be read.
 

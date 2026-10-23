@@ -60,6 +60,7 @@ kelpie keeps one phase per task, and only what changes it writes it: its start, 
 | `h` | Hide the lead's chat, or show it again: the board takes the whole width while the chat runs on. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
 | `i` | The inbox: the questions waiting on you, opened at the first. Works on the Areas page too. |
 | `m` | Messages: once shows them on one line, again opens them, again hides them. |
+| `B` | Bugs kelpie filed about itself, to send to kelpie's maintainers: shows the list under Work with the first one selected, and hides it again. Hidden at first; while any wait, the header counts them, such as `! 2 bugs to send · B`. The board remembers whether it shows. See [Send it to kelpie's maintainers](../how-to/report-a-problem-with-kelpie.md#send-it-to-kelpies-maintainers). |
 | `n` | New task: a name, then an optional prompt. Starts in the background. In the Backlog column, a new item. |
 | `/` | Filter the selected column: type part of a name, `⏎` keeps the filter, `esc` clears it. |
 | `R` | Ask the lead to refresh the backlog. |
@@ -198,6 +199,18 @@ An answer that takes a comment opens the comment box in place of the row, under 
 | `esc`, `q` | Back to the tasks. |
 | `m` | Hide the panel. |
 
+### Bugs to send
+
+`B` shows the list and selects its first bug; `↓` from the last task also goes into it.
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓`, `j` `k` | Pick a bug. `↑` on the first goes back to the tasks. |
+| `⏎` | Show the report as it would go out and ask `y / n`. In that window `↓` and `pgdn` scroll, `y` sends once you have read to the end, `n` keeps it on this machine only, `esc` decides later. |
+| `n` | Keep the selected bug on this machine only, without opening it. |
+| `esc`, `q` | Back to the tasks; the list stays. |
+| `B` | Hide the list. |
+
 ## Areas page
 
 Press `2` to open it and `1` to go back. It needs the vault: it lists the vault's system notes (`Areas/*.md`) with their repos. `kelpie areas` prints the same.
@@ -268,7 +281,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `reset`, `drop`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `reports`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `reset`, `drop`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.
@@ -282,5 +295,6 @@ The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messag
 | Click a row | Select it. Click again for its options. |
 | Click an option, a commit or a key in the status line | Use it. |
 | Click the messages line | Open it. |
+| Click a bug to send | Select it. Click again to show its report. |
 | Scroll | Move through whatever is under the pointer. |
 | Click outside a window | Close it, except the routine steps, which keep what you typed. |

@@ -140,7 +140,7 @@ fn wanted_lines(wanted: &str, color: Color, highlighted: bool, width: usize) -> 
     }).collect()
 }
 
-type Rows = Vec<(usize, usize, Hit)>;
+pub(super) type Rows = Vec<(usize, usize, Hit)>;
 
 const ROUTINE_MARKER: &str = " routine";
 
@@ -150,7 +150,7 @@ fn running_dot(item: &Item) -> bool {
 
 pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line<'static>>, usize, Rows) {
     let open = app.column == Column::Work;
-    let focused = open && !app.in_messages;
+    let focused = open && !app.in_messages && !app.offer_panel.focused;
     let right = match app.filter_of(Column::Work) {
         Some(filter) => format!("{} / {filter}", plural((0..app.tasks.len()).filter(|index| app.shown(Column::Work, *index)).count(), "task")),
         None => format!("{}{}", plural(app.tasks.len(), "task"), free_worktrees(&app.checkouts)),
@@ -208,8 +208,11 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
     if tasks.is_empty() {
         lines.push(Line::from(Span::styled(format!("No tasks. {} starts one, or pick one from the backlog.", keys::key(Act::New)), style(MUTED))));
     }
-    lines.extend(super::bug_report::offer_lines(&app.offers, !app.questions.is_empty(), width));
-    lines.extend(super::bug_report::fixed_lines(app.fixed.as_ref(), !app.questions.is_empty(), !app.offers.is_empty(), width));
+    let (offers, offer_rows, offer_selected) = super::bug_report::offer_lines(app, width, lines.len());
+    rows.extend(offer_rows);
+    selected_line = offer_selected.unwrap_or(selected_line);
+    lines.extend(offers);
+    lines.extend(super::bug_report::fixed_lines(app.fixed.as_ref(), !app.questions.is_empty(), width));
     let leftovers: Vec<String> = app.checkouts.iter().filter(|checkout| checkout.changed > 0)
         .map(|checkout| format!("{}: {} changed outside tasks", checkout.name, plural(checkout.changed, "file"))).collect();
     if !leftovers.is_empty() {

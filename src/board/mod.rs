@@ -121,6 +121,7 @@ enum Hit {
     Question(usize),
     Answer(usize),
     Messages(Option<usize>),
+    Offer(usize),
     Key(KeyCode),
 }
 
@@ -155,6 +156,8 @@ struct App {
     message_back: usize,
     questions: Vec<Message>,
     offers: Vec<bug_report::Offer>,
+    offer_panel: bug_report::OfferPanel,
+    reporter: bug_report::Reporter,
     fixed: Option<crate::issue_recheck::Fixed>,
     fixed_seen: u64,
     usage: Option<Usage>,
@@ -556,11 +559,21 @@ impl App {
         if self.in_messages {
             return self.handle_messages(key);
         }
+        if self.offer_panel.focused {
+            return self.handle_offers(key);
+        }
         let ctx = self.ctx();
         let Some(act) = keys::map().act(ctx, &key) else { return };
         match act {
             Act::Messages => self.press_m(),
-            Act::Move => self.move_selection(if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) { -1 } else { 1 }),
+            Act::Reports => self.press_reports(),
+            Act::Move => {
+                let (down, before) = (!matches!(key.code, KeyCode::Up | KeyCode::Char('k')), self.work_selected);
+                self.move_selection(if down { 1 } else { -1 });
+                if down && ctx == Ctx::Work && self.work_selected == before && self.offers_visible() {
+                    self.focus_offers(0);
+                }
+            }
             Act::Switch => self.column = if self.column == Column::Work { Column::Backlog } else { Column::Work },
             Act::Back | Act::Close => self.at_top(Some(act)),
             Act::Help => self.mode = Mode::Help(Default::default()),
@@ -882,7 +895,7 @@ impl App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), sources, fetch_failures: Vec::new(), away: false,
-            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), offers: Vec::new(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(),
+            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
@@ -908,6 +921,8 @@ pub fn run(overlay: bool) -> Result<String> {
     let height = ratatui::crossterm::terminal::size().map_or(50, |(_, height)| height);
     app.fold_file = fold_file();
     (app.fold, app.seen) = load_fold(app.fold_file.as_deref(), height);
+    app.offer_panel.file = bug_report::panel_file();
+    app.offer_panel.shown = bug_report::load_shown(app.offer_panel.file.as_deref());
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
         match parts.next() {
@@ -970,6 +985,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.message_back = app.message_back.min(app.messages.len().saturating_sub(1));
                         app.questions = snapshot.questions;
                         app.offers = snapshot.offers;
+                        app.offers_changed();
                         app.fixed = snapshot.fixed.filter(|fixed| fixed.last > app.fixed_seen);
                         app.usage = snapshot.usage;
                         app.ongoing = snapshot.ongoing;

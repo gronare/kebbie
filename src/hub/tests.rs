@@ -18,8 +18,8 @@ use crate::status::tests::task;
 
 const WAIT: Duration = Duration::from_secs(15);
 
-struct TestHub {
-    url: String,
+pub(crate) struct TestHub {
+    pub(crate) url: String,
     hub: Arc<Hub>,
     runtime: tokio::runtime::Runtime,
 }
@@ -29,7 +29,7 @@ impl TestHub {
         TestHub::start_with(|_| {})
     }
 
-    fn start_with(configure: impl FnOnce(&mut Config)) -> TestHub {
+    pub(crate) fn start_with(configure: impl FnOnce(&mut Config)) -> TestHub {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
         let mut config = Config::new(crate::sh::test_dir("hub-data"));
         config.anonymous_devices = true;

@@ -91,6 +91,7 @@ const WORK: Sheet = Sheet {
         group("WAITING ON YOU", &[
             bind(&[Act::Inbox], "inbox: questions, one at a time", "inbox"),
             bind(&[Act::Messages], "messages", "messages"),
+            bind(&[Act::Reports], "bugs to send to kelpie's maintainers", "bug reports"),
             bind(&[Act::Away], "away mode", "away mode"),
         ]),
         group("THE BOARD", &[

@@ -6,7 +6,7 @@ pub mod pair;
 pub mod relay;
 pub mod report;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::io::Write;
 use std::path::Path;

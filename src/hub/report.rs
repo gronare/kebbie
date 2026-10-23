@@ -325,7 +325,7 @@ pub fn preview(report: &BugReport) -> String {
 }
 
 pub fn offered(issue: &Issue) -> bool {
-    issue.is_open() && issue.kind == "bug" && issue.report.is_none() && issue.declined.is_none() && issue.source.is_none()
+    issue.is_open() && issue.kind == "bug" && issue.report.is_none() && issue.declined.is_none() && issue.source.is_none() && issue.github.is_none() && issue.sent.is_none()
 }
 
 pub fn offers(state: &Path, enabled: bool) -> Vec<Issue> {
@@ -645,7 +645,9 @@ mod tests {
         let declined = Issue { id: "dddddd".to_string(), declined: Some("2026-10-23".to_string()), ..bug("declined", "") };
         let incoming = Issue { id: "eeeeee".to_string(), source: Some("report 9".to_string()), ..bug("from a report", "") };
         let closed = Issue { id: "ffffff".to_string(), status: "fixed".to_string(), ..bug("closed", "") };
-        for issue in [bug("offered", ""), wish, sent, declined, incoming, closed] {
+        let on_github = Issue { id: "aaaaab".to_string(), github: Some(format!("{}/issues/7", issues::REPOSITORY)), ..bug("on GitHub", "") };
+        let opened_for_github = Issue { id: "aaaaac".to_string(), sent: Some("2026-10-23".to_string()), ..bug("opened for GitHub", "") };
+        for issue in [bug("offered", ""), wish, sent, declined, incoming, closed, on_github, opened_for_github] {
             issues::save(&dir, &issue).unwrap();
         }
         assert_eq!(offers(&state, true).iter().map(|issue| issue.title.as_str()).collect::<Vec<_>>(), ["offered"]);

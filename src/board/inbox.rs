@@ -167,7 +167,7 @@ impl App {
 
     pub(super) fn open_questions(&mut self, at: Option<usize>) {
         if self.questions.is_empty() {
-            if self.open_report() || self.open_fixed() {
+            if self.open_fixed() {
                 return;
             }
             self.subject = Some(super::notices::Subject::plain("inbox"));

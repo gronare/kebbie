@@ -20,7 +20,8 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
     let questions = app.questions.len();
     let mut spans = vec![Span::styled("kelpie", bold(MAUVE)), Span::raw(if compact { "  " } else { "   " })];
     if compact {
-        for (shown, color, lit) in [(format!("● {needs}"), PEACH, needs > 0), (format!("◐ {working}"), BLUE, working > 0), (format!("◇ {review}"), TEAL, review > 0), (format!("✓ {ready}"), GREEN, ready > 0), (format!("⧗ {ci}"), YELLOW, ci > 0), (format!("? {questions}"), YELLOW, questions > 0), (format!("↻ {}", app.stale.len()), MAUVE, !app.stale.is_empty()), ("☾".to_string(), MAUVE, app.away)] {
+        let offers = super::bug_report::indicator(app.offers.len(), true);
+        for (shown, color, lit) in [(format!("● {needs}"), PEACH, needs > 0), (format!("◐ {working}"), BLUE, working > 0), (format!("◇ {review}"), TEAL, review > 0), (format!("✓ {ready}"), GREEN, ready > 0), (format!("⧗ {ci}"), YELLOW, ci > 0), (format!("? {questions}"), YELLOW, questions > 0), (offers.clone().unwrap_or_default(), YELLOW, offers.is_some()), (format!("↻ {}", app.stale.len()), MAUVE, !app.stale.is_empty()), ("☾".to_string(), MAUVE, app.away)] {
             if lit {
                 spans.extend(pill(shown, color, true));
             }
@@ -37,6 +38,9 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
         spans.extend(pill(format!("⧗ {ci} CI running"), YELLOW, true));
     }
     spans.extend(pill(format!("? {}", plural(questions, "question")), YELLOW, questions > 0));
+    if let Some(offers) = super::bug_report::indicator(app.offers.len(), false) {
+        spans.extend(pill(offers, YELLOW, true));
+    }
     if !app.stale.is_empty() {
         spans.extend(pill(format!("↻ {} stale", app.stale.len()), MAUVE, true));
     }

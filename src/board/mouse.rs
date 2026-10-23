@@ -51,8 +51,9 @@ impl App {
                     return None;
                 }
                 match hit {
-                    Some(Hit::Task(_)) if normal => (self.column, self.in_messages) = (Column::Work, false),
-                    Some(Hit::Entry(_)) if normal => (self.column, self.in_messages) = (Column::Backlog, false),
+                    Some(Hit::Task(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused) = (Column::Work, false, false),
+                    Some(Hit::Entry(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused) = (Column::Backlog, false, false),
+                    Some(Hit::Offer(_)) if normal && !self.offer_panel.focused => self.focus_offers(self.offer_panel.selected),
                     Some(Hit::Messages(_)) if normal && self.fold == Fold::Open => self.in_messages = true,
                     _ => {}
                 }
@@ -61,17 +62,24 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 match (hit, &mut self.mode) {
                     (Some(Hit::Task(index)), Mode::Normal) => {
-                        let again = self.column == Column::Work && self.work_selected == index && !self.in_messages;
-                        (self.column, self.work_selected, self.in_messages) = (Column::Work, index, false);
+                        let again = self.column == Column::Work && self.work_selected == index && !self.in_messages && !self.offer_panel.focused;
+                        (self.column, self.work_selected, self.in_messages, self.offer_panel.focused) = (Column::Work, index, false, false);
                         if again {
                             self.mode = Mode::Options(0);
                         }
                     }
                     (Some(Hit::Entry(index)), Mode::Normal) => {
                         let again = self.column == Column::Backlog && self.backlog_selected == index && !self.in_messages;
-                        (self.column, self.backlog_selected, self.in_messages) = (Column::Backlog, index, false);
+                        (self.column, self.backlog_selected, self.in_messages, self.offer_panel.focused) = (Column::Backlog, index, false, false);
                         if again {
                             self.open_options();
+                        }
+                    }
+                    (Some(Hit::Offer(index)), Mode::Normal) => {
+                        let again = self.offer_panel.focused && self.offer_panel.selected == index;
+                        self.focus_offers(index);
+                        if again {
+                            self.open_report();
                         }
                     }
                     (Some(Hit::Messages(None)), Mode::Normal) if self.fold == Fold::Open => self.in_messages = true,
@@ -86,6 +94,7 @@ impl App {
                     }
                     (Some(Hit::Key(code)), Mode::Normal) => {
                         self.in_messages &= code == keys::map().code(Act::Messages);
+                        self.offer_panel.focused &= code == keys::map().code(Act::Reports);
                         return Some(KeyEvent::from(code));
                     }
                     (Some(Hit::Choice(index)), Mode::Options(_)) => {

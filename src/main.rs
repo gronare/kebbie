@@ -293,8 +293,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   the ones they plainly fix)
   kelpie issue report <id>        show a bug kelpie filed as it would go to kelpie's maintainers (paths under your home
                                   as ~, no repo names, remote URLs or tokens) and send it on your y, signed with this
-                                  install's key; the board offers each new one under Work ([report] text = \"never\"
-                                  hides the offer); sent once, and the issue keeps the report's id
+                                  install's key; the board counts each new one in its header and B lists them ([report]
+                                  text = \"never\" hides the offer); sent once, and the issue keeps the report's id
   kelpie issue report --always | --ask
                                   in your own terminal: let kelpie send its bug reports without asking, redacted,
                                   each send a line under messages (with [report] text = \"always\" in config.toml);

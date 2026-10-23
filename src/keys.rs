@@ -23,6 +23,7 @@ pub enum Act {
     Lead,
     HideChat,
     Messages,
+    Reports,
     Help,
     Inbox,
     New,
@@ -89,8 +90,8 @@ const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 
 impl Act {
-    pub const EVERY: [Act; 45] = [
-        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 46] = [
+        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Reports, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
@@ -106,6 +107,7 @@ impl Act {
             Act::Lead => "lead",
             Act::HideChat => "hide_chat",
             Act::Messages => "messages",
+            Act::Reports => "reports",
             Act::Help => "help",
             Act::Inbox => "inbox",
             Act::New => "new",
@@ -160,6 +162,7 @@ impl Act {
             Act::RoutinesPage => Default::Char('3'),
             Act::HideChat => Default::Char('h'),
             Act::Messages => Default::Char('m'),
+            Act::Reports => Default::Char('B'),
             Act::Help => Default::Char('?'),
             Act::Inbox => Default::Char('i'),
             Act::New => Default::Char('n'),
@@ -216,6 +219,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::HideChat, on: BOARD, help: "hide or show the lead's chat: hidden, it runs on and the board takes the whole width (on the board in the lead Space)", hint: Hint::Full },
     Binding { act: Act::Inbox, on: ALL, help: "inbox: the questions waiting on you, one at a time with tab to the next; ↑ ↓ j k (and ← → in a plan) pick an answer and ⏎ sends it, pgup pgdn scroll the question or the plan, or its letter (a c r x, 1-9, w) answers directly; an answer with a comment opens the comment box, esc back to the answers; o opens a plan file, g goes to the task's Space", hint: Hint::Both },
     Binding { act: Act::Messages, on: BOARD, help: "messages at the bottom: one line, then open with ↑ ↓ moving through them and ⏎ reading one (esc back to the tasks), then hidden", hint: Hint::Full },
+    Binding { act: Act::Reports, on: BOARD, help: "bugs kelpie filed about itself, to send to kelpie's maintainers: shows or hides the list under Work (hidden at first; the header counts them); in it ↑ ↓ pick one, ⏎ shows the text and asks y / n, n keeps it here only, esc back to the tasks", hint: Hint::No },
     Binding { act: Act::Filter, on: BOARD, help: "filter the selected column: type part of a name, ⏎ keeps it, esc clears it", hint: Hint::No },
     Binding { act: Act::New, on: &[Work], help: "new task", hint: Hint::No },
     Binding { act: Act::New, on: &[Backlog], help: "in the Backlog column: a new item in the local backlog (a new task without the local source)", hint: Hint::No },
