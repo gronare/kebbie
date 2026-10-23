@@ -13,7 +13,7 @@ pub enum Level {
     Fail,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Check {
     pub level: Level,
     pub name: String,
@@ -671,6 +671,15 @@ pub fn render(checks: &[Check]) -> String {
     lines.push(String::new());
     lines.push(format!("{} failed, {} warnings, {} ok", count(Level::Fail), count(Level::Warn), count(Level::Ok)));
     lines.join("\n")
+}
+
+pub fn summary(checks: &[Check]) -> String {
+    let open: Vec<Check> = checks.iter().filter(|check| check.level != Level::Ok).cloned().collect();
+    let count = |level: Level| checks.iter().filter(|check| check.level == level).count();
+    let rendered = render(&open);
+    let lines: Vec<&str> = rendered.lines().collect();
+    let total = format!("kelpie doctor: {} failed, {} warnings, {} ok", count(Level::Fail), count(Level::Warn), count(Level::Ok));
+    lines[..lines.len().saturating_sub(2)].iter().map(|line| line.to_string()).chain([total]).collect::<Vec<_>>().join("\n")
 }
 
 pub fn failed(checks: &[Check]) -> bool {

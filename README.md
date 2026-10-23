@@ -22,20 +22,17 @@ A kelpie is the working dog that keeps a herd moving while the drover directs. h
 
 ## Install
 
-You need macOS or Linux with `git`, `herdr` 0.9.0 or later, Claude Code, `jq` and `curl`; the review split also needs `fzf` 0.71+ and `nvim` 0.10+, and the history split `tig`.
-
-A release tag installs a prebuilt binary for macOS (Apple silicon and Intel) and Linux (x86_64 and arm64). Any other checkout, such as the default branch herdr clones without `--ref`, is built with `cargo`. Without Rust, name the latest release tag:
+You need macOS or Linux with `git`, `herdr` 0.9.0+, Claude Code, `jq` and `curl`; the review split also needs `fzf` 0.71+ and `nvim` 0.10+, and the history split `tig`.
 
 ```bash
-herdr plugin install --ref vX.Y.Z gronare/kelpie   # herdr clones the tag and installs its binary
+herdr plugin install --ref "$(curl -fsSL https://api.github.com/repos/gronare/kelpie/releases/latest | jq -r .tag_name)" gronare/kelpie
 # restart herdr, then:
-ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie
-claude plugin marketplace add ~/.local/share/kelpie/current
-claude plugin install kelpie@kelpie
-kelpie doctor
+~/.local/share/kelpie/current/target/release/kelpie setup
 ```
 
-Add the keys to your herdr config, press `prefix+space` and tell the lead what you want done. [Your first task](docs/tutorial.md) walks through it step by step.
+The first command installs the latest release and its prebuilt binary (macOS on Apple silicon or Intel, Linux on x86_64 or arm64). `kelpie setup` links `kelpie` into `~/.local/bin`, installs the Claude Code plugin, asks before it adds kelpie's keys to your herdr config, and ends with what `kelpie doctor` still wants fixed. It is safe to run again.
+
+Press `prefix+space` and tell the lead what you want done. [Your first task](docs/tutorial.md) walks through it step by step.
 
 ## Documentation
 

@@ -21,29 +21,30 @@ On Linux, see [Requirements](reference/requirements.md) for each tool's install 
 
 ## 2. Install kelpie
 
-Install the herdr plugin at the latest release tag, shown on [the releases page](https://github.com/gronare/kelpie/releases). herdr clones that tag and installs its prebuilt binary:
+Install the herdr plugin at the latest release. The `curl` part asks GitHub for the latest release tag, and herdr clones that tag and installs its prebuilt binary:
 
 ```bash
-herdr plugin install --ref vX.Y.Z gronare/kelpie
+herdr plugin install --ref "$(curl -fsSL https://api.github.com/repos/gronare/kelpie/releases/latest | jq -r .tag_name)" gronare/kelpie
 ```
 
-Without `--ref`, herdr clones the default branch, which kelpie builds with `cargo` (install Rust with `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`); that takes a minute or two.
+herdr shows what the plugin will run and asks you to confirm.
 
 Restart herdr. On startup the plugin creates `~/.local/share/kelpie/current`, a link to where herdr installed it.
 
-Put the `kelpie` command on your `PATH`:
+## 3. Run setup
 
 ```bash
-mkdir -p ~/.local/bin
-ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie
+~/.local/share/kelpie/current/target/release/kelpie setup
 ```
 
-Install the Claude Code plugin from the same folder, so it always matches the binary:
+Setup prints one line per step, each starting with `done`, `already`, `skipped` (with the reason) or `to do`:
 
-```bash
-claude plugin marketplace add ~/.local/share/kelpie/current
-claude plugin install kelpie@kelpie
-```
+- it links `~/.local/bin/kelpie` to the binary, and tells you the line to add to your shell profile when `~/.local/bin` is not on your `PATH`;
+- it installs the Claude Code plugin from the same folder, so the plugin always matches the binary;
+- it shows the four keys it adds to the end of herdr's `config.toml` and writes them only on your `y`: `prefix+space` goes to the lead, `prefix+tab` moves between the board and the lead's chat, `prefix+t` opens the board, `prefix+u` updates kelpie. A key you already use for something else is left alone and named;
+- it reloads herdr's config so the keys work, or tells you to restart herdr when it cannot.
+
+It ends with the warnings and failures from `kelpie doctor`. You can run setup again at any time; it changes only what is missing.
 
 kelpie sends its maintainers error signals when kelpie itself crashes or hits some internal errors: only its version and commit, your OS and CPU architecture, the part of kelpie that failed, the kind of failure and a count, at most once a day, each send shown under messages on the board. A bug report with text is shown to you and sent only on your `y`. To turn the signals off, put this in `~/.config/kelpie/config.toml`:
 
@@ -53,38 +54,6 @@ signals = false   # no error signals; text = "ask" (the default) still asks befo
 ```
 
 [Error signals](how-to/report-a-problem-with-kelpie.md#error-signals) says exactly what one holds.
-
-## 3. Add the keys
-
-Open herdr's `config.toml` and add these four keys:
-
-```toml
-[[keys.command]]
-key = "prefix+space"
-type = "plugin_action"
-command = "kelpie.lead"
-description = "kelpie: go to the lead, or back"
-
-[[keys.command]]
-key = "prefix+tab"
-type = "plugin_action"
-command = "kelpie.focus"
-description = "kelpie: between the board and the lead's chat"
-
-[[keys.command]]
-key = "prefix+t"
-type = "plugin_action"
-command = "kelpie.board"
-description = "kelpie board"
-
-[[keys.command]]
-key = "prefix+u"
-type = "plugin_action"
-command = "kelpie.update"
-description = "kelpie: update and reload"
-```
-
-Restart herdr so it reads them.
 
 ## 4. Check the machine
 

@@ -254,6 +254,10 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
                                   (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)
+  kelpie setup [--yes]            put kelpie on PATH (~/.local/bin/kelpie), install or update its Claude Code plugin
+                                  and add its keys to herdr's config.toml where missing, appending and asking first
+                                  (--yes does not ask, and never writes through a link); says whether herdr needs a
+                                  restart and ends with kelpie doctor's warnings; safe to run again
   kelpie setup vault              install the optional vault plugin in Claude Code (marketplace, plugin, its options),
                                   showing each claude command and running it only on your y
   kelpie setup codex [--uninstall]
@@ -584,7 +588,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("issue") => issue(arguments, name),
         Some("setup") if name == Some("vault") => setup::vault(),
         Some("setup") if name == Some("codex") => setup::codex(arguments.flag("--uninstall")),
-        Some("setup") => Err("kelpie setup knows vault and codex: kelpie setup vault, kelpie setup codex [--uninstall]".to_string()),
+        Some("setup") if name.is_none() => setup::install(arguments.flag("--yes")),
+        Some("setup") => Err("kelpie setup knows vault and codex: kelpie setup, kelpie setup vault, kelpie setup codex [--uninstall]".to_string()),
         Some("restart") => restart::now_cli(arguments.flag("--all")),
         Some("keeper") if arguments.flag("--status") => keeper::status_cli(),
         Some("keeper") if arguments.flag("--stop") => keeper::stop(),

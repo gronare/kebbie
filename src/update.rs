@@ -218,11 +218,11 @@ pub fn marketplace(claude_dir: &Path, id: &str) -> Marketplace {
 
 pub const IN_PLACE_FIX: &str = "claude plugin marketplace remove kelpie && claude plugin marketplace add ~/.local/share/kelpie/current && claude plugin install kelpie@kelpie";
 
-fn same_folder(one: &Path, other: &Path) -> bool {
+pub fn same_folder(one: &Path, other: &Path) -> bool {
     one.canonicalize().ok().is_some_and(|one| other.canonicalize().ok().as_ref() == Some(&one))
 }
 
-fn claude_plugin(claude_dir: &Path, claude: &str, root: Option<&Path>, follows_github: bool) -> String {
+pub fn claude_plugin(claude_dir: &Path, claude: &str, root: Option<&Path>, follows_github: bool) -> String {
     let installed: Value = std::fs::read_to_string(claude_dir.join("plugins/installed_plugins.json")).ok()
         .and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
     let Some(id) = installed["plugins"].as_object().and_then(|plugins| plugins.keys().find(|id| id.starts_with("kelpie@")).cloned()) else {
