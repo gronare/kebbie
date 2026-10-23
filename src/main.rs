@@ -51,6 +51,7 @@ mod sh;
 mod state;
 mod setup;
 mod shell_write;
+mod signals;
 mod status;
 mod task_note;
 mod tasks;
@@ -292,8 +293,12 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   the ones they plainly fix)
   kelpie issue report <id>        show a bug kelpie filed as it would go to kelpie's maintainers (paths under your home
                                   as ~, no repo names, remote URLs or tokens) and send it on your y, signed with this
-                                  install's key; the board offers each new one under Work ([report] enabled = false
+                                  install's key; the board offers each new one under Work ([report] text = \"never\"
                                   hides the offer); sent once, and the issue keeps the report's id
+  kelpie issue report --always | --ask
+                                  in your own terminal: let kelpie send its bug reports without asking, redacted,
+                                  each send a line under messages (with [report] text = \"always\" in config.toml);
+                                  --ask asks again before every one
   kelpie update                   update everything to this machine's channel ([update] channel: release, the
                                   highest vX.Y.Z tag whose release binary is published, or main, origin's default
                                   branch): the herdr plugin (the release's binary; built from source only on main and
@@ -608,7 +613,7 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
     match action {
         Some("add") => {
             let body = issues::read_body(&arguments.positionals[2..], arguments.flag("-"));
-            issues::add_in(&dir, &caller(), &issues::Filing { kind: arguments.value("--kind"), title: arguments.value("--title"), body: &body }, env!("KELPIE_BUILT_FROM"), config::report_settings().is_ok_and(|report| report.enabled()), messages::now())
+            issues::add_in(&dir, &caller(), &issues::Filing { kind: arguments.value("--kind"), title: arguments.value("--title"), body: &body }, env!("KELPIE_BUILT_FROM"), config::report_settings().map_or(config::ReportText::Ask, |report| report.text()), messages::now())
         }
         Some("show") => issues::show_in(&dir, id()?),
         Some("close") => issues::close_in(&dir, &caller(), id()?, arguments.positional(3)),
@@ -621,8 +626,10 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
             let opener = board::images::image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
             issues::send_in(&dir, &caller(), id()?, opener, &issues::open_url, messages::now())
         }
+        Some("report") if arguments.flag("--always") => hub::report::arm_cli(true),
+        Some("report") if arguments.flag("--ask") => hub::report::arm_cli(false),
         Some("report") => hub::report::cli(id()?),
-        _ => Err("kelpie issue knows add, list, show <id>, close <id> fixed|wontfix|duplicate, reopen <id>, retry <id>, link <id> <number|url>, send <id> and report <id>".to_string()),
+        _ => Err("kelpie issue knows add, list, show <id>, close <id> fixed|wontfix|duplicate, reopen <id>, retry <id>, link <id> <number|url>, send <id>, report <id> and report --always | --ask".to_string()),
     }
 }
 
@@ -654,6 +661,7 @@ fn main() -> ExitCode {
         usage::record(&input);
         return ExitCode::SUCCESS;
     }
+    signals::install_panic_hook();
     if matches!(arguments.positional(0), Some("board" | "start" | "after" | "land" | "push" | "done" | "move" | "update" | "ci" | "routine" | "routines")) {
         login_env::import();
     }

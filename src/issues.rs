@@ -152,7 +152,7 @@ pub struct Filing<'a> {
     pub body: &'a str,
 }
 
-pub fn add_in(dir: &Path, caller: &Caller, filing: &Filing, built: &str, offer_reports: bool, now: u64) -> Result<String> {
+pub fn add_in(dir: &Path, caller: &Caller, filing: &Filing, built: &str, reports: crate::config::ReportText, now: u64) -> Result<String> {
     let by = may_write(caller, "Filing a kelpie issue")?;
     let kind = filing.kind.map(str::trim).filter(|kind| KINDS.contains(kind)).ok_or("kelpie issue add needs --kind bug or --kind wish")?;
     let title = filing.title.map(|title| title.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|title| !title.is_empty()).ok_or("kelpie issue add needs --title \"<what kelpie did or lacks>\"")?;
@@ -170,7 +170,12 @@ pub fn add_in(dir: &Path, caller: &Caller, filing: &Filing, built: &str, offer_r
         ..Issue::default()
     };
     save(dir, &issue)?;
-    let offered = if issue.kind == "bug" && offer_reports { " · the board offers to send it to kelpie's maintainers" } else { "" };
+    let offered = match reports {
+        _ if issue.kind != "bug" => "",
+        crate::config::ReportText::Ask => " · the board offers to send it to kelpie's maintainers",
+        crate::config::ReportText::Always => " · with [report] text = \"always\" armed, kelpie sends it to kelpie's maintainers, redacted, and says so under messages; otherwise the board offers it",
+        crate::config::ReportText::Never => "",
+    };
     Ok(format!("Filed kelpie issue {} ({}): {} · kelpie issue show {0} shows it{offered}", issue.id, issue.kind, issue.title))
 }
 
@@ -461,7 +466,7 @@ mod tests {
     #[test]
     fn an_issue_is_one_file_that_reads_back_as_written() {
         let dir = crate::sh::test_dir("issues-file");
-        let added = add_in(&dir, &Caller::Lead, &filing("kelpie push hid \"git\"'s error", "What happened: nothing.\n\nExpected: the error."), "869bc49 2026-10-21", true, NOW).unwrap();
+        let added = add_in(&dir, &Caller::Lead, &filing("kelpie push hid \"git\"'s error", "What happened: nothing.\n\nExpected: the error."), "869bc49 2026-10-21", crate::config::ReportText::Ask, NOW).unwrap();
         let issues = load(&dir);
         assert_eq!(issues.len(), 1);
         let issue = &issues[0];
@@ -480,25 +485,25 @@ mod tests {
     fn only_the_user_and_the_lead_file_and_change_issues() {
         let dir = crate::sh::test_dir("issues-who");
         for caller in [Caller::Task("billing@app".to_string()), Caller::Agent] {
-            let refused = add_in(&dir, &caller, &filing("t", ""), "", true, NOW).unwrap_err();
+            let refused = add_in(&dir, &caller, &filing("t", ""), "", crate::config::ReportText::Ask, NOW).unwrap_err();
             assert!(refused.contains("the user's or the lead's") && refused.contains("kelpie tell lead"), "{refused}");
         }
         assert!(load(&dir).is_empty());
-        add_in(&dir, &Caller::User, &filing("mine", ""), "", true, NOW).unwrap();
+        add_in(&dir, &Caller::User, &filing("mine", ""), "", crate::config::ReportText::Ask, NOW).unwrap();
         let issue = load(&dir).remove(0);
         assert_eq!(issue.by, "user");
         assert!(issue.commit.is_empty(), "a build outside git files no commit");
         assert!(close_in(&dir, &Caller::Task("a@b".to_string()), &issue.id, Some("fixed")).is_err());
-        assert!(add_in(&dir, &Caller::User, &Filing { kind: Some("idea"), title: Some("x"), body: "" }, "", true, NOW).unwrap_err().contains("--kind"));
-        assert!(add_in(&dir, &Caller::User, &Filing { kind: Some("wish"), title: Some("  "), body: "" }, "", true, NOW).unwrap_err().contains("--title"));
+        assert!(add_in(&dir, &Caller::User, &Filing { kind: Some("idea"), title: Some("x"), body: "" }, "", crate::config::ReportText::Ask, NOW).unwrap_err().contains("--kind"));
+        assert!(add_in(&dir, &Caller::User, &Filing { kind: Some("wish"), title: Some("  "), body: "" }, "", crate::config::ReportText::Ask, NOW).unwrap_err().contains("--title"));
     }
 
     #[test]
     fn issues_list_open_by_default_and_every_status_with_all() {
         let dir = crate::sh::test_dir("issues-list");
         let user = Caller::User;
-        add_in(&dir, &user, &filing("first", ""), "aaaaaaa 2026-10-01", true, NOW).unwrap();
-        add_in(&dir, &user, &Filing { kind: Some("wish"), title: Some("second"), body: "" }, "aaaaaaa 2026-10-01", true, NOW + 1).unwrap();
+        add_in(&dir, &user, &filing("first", ""), "aaaaaaa 2026-10-01", crate::config::ReportText::Ask, NOW).unwrap();
+        add_in(&dir, &user, &Filing { kind: Some("wish"), title: Some("second"), body: "" }, "aaaaaaa 2026-10-01", crate::config::ReportText::Ask, NOW + 1).unwrap();
         let ids: Vec<String> = load(&dir).iter().map(|issue| issue.id.clone()).collect();
         let first = load(&dir).into_iter().find(|issue| issue.title == "first").unwrap().id;
         let second = ids.iter().find(|id| **id != first).unwrap().clone();
@@ -565,7 +570,7 @@ mod tests {
     #[test]
     fn sending_prints_the_text_and_url_opens_it_and_marks_the_issue_sent() {
         let dir = crate::sh::test_dir("issues-send");
-        add_in(&dir, &Caller::Lead, &filing("hid an error", "the text"), "869bc49 2026-10-21", true, NOW).unwrap();
+        add_in(&dir, &Caller::Lead, &filing("hid an error", "the text"), "869bc49 2026-10-21", crate::config::ReportText::Ask, NOW).unwrap();
         let id = load(&dir)[0].id.clone();
         let opened = std::cell::RefCell::new(Vec::new());
         let open = |program: &str, url: &str| { opened.borrow_mut().push((program.to_string(), url.to_string())); Ok(()) };

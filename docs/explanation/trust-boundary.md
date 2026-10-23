@@ -25,6 +25,15 @@ An agent that reads a README telling it to "push when done", or a message from a
 
 Within that boundary kelpie fails closed. When it cannot tell who runs it (`ps` fails, or the chain of parents breaks), or a kelpie runs detached from any terminal while a Claude that kelpie started is alive, it treats the caller as a Claude and refuses what only you or the lead may do.
 
+## What leaves this machine for kelpie's maintainers
+
+Two things, both to the reports endpoint (`[report] url`), both signed with this install's key:
+
+- **Error signals**, on by default: counts of kelpie's own failures (panics and some internal errors), at most once a day. A signal holds only kelpie's version and commit, the OS and architecture, a component name from kelpie's code, an error kind from a fixed list and a count. The format has no text field, every value is limited to lowercase letters, digits and `.` `_` `+` `-`, and the hub refuses a field it does not know, so no message, path or name from your work can travel in one. A panic is named after the kelpie module it happened in, never its message; a panic outside kelpie's code is `dependency`, as its location could hold a path. `[report] signals = false` stops them.
+- **Bug reports**, the redacted text of a bug kelpie filed about itself, asked each time unless you set `[report] text = "always"`. Only you send one: the lead, tasks and sandboxed processes are refused. `"always"` in config.toml is not enough, since the lead can write that file: it takes effect only once you arm it with `kelpie issue report --always`, a command kelpie refuses to every Claude. Armed, it is your consent in advance: kelpie sends, redacted, what the lead wrote without you reading it. A Claude that writes kelpie's state directory itself, as the lead's or a sandbox-off task's shell can, gets past this as it does every user-only decision kept there (see [Where it ends](#where-it-ends)).
+
+Each signal batch and each report sent is a line under messages on the board.
+
 ## The sandbox
 
 With `task.sandbox = true`, the default, kelpie writes Claude Code's sandbox into each task's settings, strict: `allowUnsandboxedCommands = false`, so a command that fails in the sandbox is never retried outside it, and `failIfUnavailable = true`, so Claude does not start without one. A task's shell commands then:

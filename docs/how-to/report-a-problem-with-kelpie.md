@@ -1,6 +1,6 @@
 # Report a problem with kelpie
 
-Keep what kelpie got wrong, or could not do, on your machine, see after an update which of it may be fixed, and send one to kelpie's maintainers when you choose.
+Keep what kelpie got wrong, or could not do, on your machine, see after an update which of it may be fixed, and send one to kelpie's maintainers when you choose. Separately, kelpie counts its own crashes and internal errors and sends the maintainers those counts, with no text at all.
 
 ## Save it
 
@@ -71,7 +71,38 @@ It prints the same text and asks `y/N`. Only you can send: kelpie refuses it, an
 
 The install key is made on the first report and kept in `report/install-key.json` in the state directory, readable by you alone. The project's maintainers see that key as the report's sender; a key they have not seen before waits until they let it through, so the first report from a new install may take a while to be read.
 
-`[report] enabled = false` in config.toml hides the offer; `kelpie issue report <id>` still works. `[report] url` sends reports to another endpoint, such as a [kelpie hub](https://github.com/gronare/kelpie-hub) you run. See [Configuration](../reference/configuration.md).
+Every report sent, from the board, from `kelpie issue report` or unasked, adds a line under messages on the board: `Sent bug report <id> to kelpie's maintainers: kelpie issue <id>, "<title>"`.
+
+`[report] text` in config.toml decides how bugs go out:
+
+- `"ask"`, the default: as above, every time.
+- `"always"`: kelpie sends each bug it files about itself within a minute, redacted the same way, without asking. Each send is a line under messages, so you still see what went. The key alone does nothing: run `kelpie issue report --always` in your own terminal to arm it, and `kelpie issue report --ask` to go back to being asked. The lead can write config.toml but cannot arm it; `kelpie doctor` says when the key is set and not armed.
+- `"never"`: the board never offers one; `kelpie issue report <id>` still sends one when you ask.
+
+`[report] url` sends reports to another endpoint, such as a [kelpie hub](https://github.com/gronare/kelpie-hub) you run. See [Configuration](../reference/configuration.md).
+
+## Error signals
+
+When kelpie itself fails, it counts it: a panic anywhere in kelpie, and some internal errors, where a check in kelpie's code that should never fail did or one of its own state files does not read back. Your errors are not counted: a bad config, the network being down or `gh` missing stay on your screen.
+
+Once a day at most, the keeper sends the counts since the last send. Each signal holds exactly:
+
+- kelpie's version and commit,
+- the OS and CPU architecture, such as `macos aarch64`,
+- the component: a fixed name from kelpie's own code, such as `keeper.push` or `board.draw`; a panic outside kelpie's code is `dependency`,
+- the error kind: `panic`, `internal-error` or `corrupt-state`,
+- how many times it happened.
+
+Never an error message, a path, a repo, task, branch or host name, or anything from your work: the format has no field for text, and the hub refuses one that carries any. It is signed with the same install key as reports. Each send adds a line under messages on the board, such as `Sent an error signal to kelpie's maintainers: keeper.push internal-error (×3); with kelpie 0.26.3 (16983b9) on macos aarch64 and nothing else.`
+
+Signals are on by default. To turn them off, in config.toml:
+
+```toml
+[report]
+signals = false   # sends no error signals and drops what was counted
+```
+
+`kelpie doctor`'s `maintainers` line shows both choices, and `kelpie config` lists `report.signals` and `report.text`. A config with the older `[report] enabled = false` keeps both off.
 
 ### Receiving reports
 

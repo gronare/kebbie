@@ -352,7 +352,7 @@ pub fn install_key(state: &Path) -> Result<InstallKey> {
             let kept: KeyFile = serde_json::from_str(&text).map_err(|error| format!("{}: {error}", file.display()))?;
             let key = InstallKey::from_bytes(kept.secret.0);
             if key.public() != kept.public.0 {
-                return Err(format!("{}: the public key does not match the secret one; move the file away and kelpie makes a new one", file.display()));
+                return Err(crate::signals::internal("report.install-key", kelpie_hub_protocol::SignalKind::CorruptState, format!("{}: the public key does not match the secret one; move the file away and kelpie makes a new one", file.display())));
             }
             Ok(key)
         }
@@ -373,6 +373,33 @@ fn refused(error: HubError) -> String {
     }
 }
 
+pub const UNASKED_EVERY: u64 = 60;
+
+fn deliver(state: &Path, issue: &mut Issue, report: BugReport, url: &str, now: u64) -> Result<String> {
+    let key = install_key(state)?;
+    let client = Client::new(&super::hub_url(url)?, None, CALL);
+    let challenge: ReportChallenge = client.get("/v1/reports/challenge").map_err(refused)?;
+    if challenge.difficulty > MAX_WORK {
+        return Err(format!("the reports endpoint asks for {} bits of work, more than kelpie does ({MAX_WORK}); nothing was sent", challenge.difficulty));
+    }
+    let counter = solve(&challenge.nonce.0, &report.digest(), challenge.difficulty);
+    let title = report.title.clone();
+    let upload = ReportUpload { signature: Bytes64(key.sign(&challenge.nonce.0, &report)), key: Bytes32(key.public()), report, challenge, counter };
+    let accepted: ReportAccepted = client.post("/v1/reports", &upload).map_err(refused)?;
+    let id = accepted.report.to_string();
+    issue.report = Some(id.clone());
+    issue.sent = Some(issues::today(now));
+    issues::save(&issues::dir(state), issue)?;
+    let _ = crate::messages::log_for_user_in(state, &sent_line(&id, &issue.id, &title), SENT_KIND);
+    Ok(id)
+}
+
+pub const SENT_KIND: &str = "report-sent";
+
+pub fn sent_line(report: &str, issue: &str, title: &str) -> String {
+    format!("Sent bug report {report} to kelpie's maintainers: kelpie issue {issue}, \"{title}\", redacted as kelpie issue show {issue} and kelpie issue report {issue} show it.")
+}
+
 // The digest is of the report the user read; anything else that would go out instead is refused.
 pub fn send_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub, read: &[u8; 32], now: u64) -> Result<String> {
     crate::permit::user_only_as(caller, "Sending a report to kelpie's maintainers")?;
@@ -388,19 +415,75 @@ pub fn send_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub
     if report.digest() != *read {
         return Err(format!("kelpie issue {} changed since you read it, so nothing was sent; read it again with kelpie issue report {0}", issue.id));
     }
-    let key = install_key(state)?;
-    let client = Client::new(&super::hub_url(url)?, None, CALL);
-    let challenge: ReportChallenge = client.get("/v1/reports/challenge").map_err(refused)?;
-    if challenge.difficulty > MAX_WORK {
-        return Err(format!("the reports endpoint asks for {} bits of work, more than kelpie does ({MAX_WORK}); nothing was sent", challenge.difficulty));
+    let sent = deliver(state, &mut issue, report, url, now)?;
+    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent kelpie issue {} to kelpie's maintainers as report {sent}", issue.id)).next("It stays logged here; kelpie update tells the lead when a new version may fix it.").ok()
+}
+
+const ARMED: &str = "always-armed";
+pub const ARM_COMMAND: &str = "kelpie issue report --always";
+pub const DISARM_COMMAND: &str = "kelpie issue report --ask";
+
+// The lead can write config.toml, so text = "always" alone sends nothing; it waits for the user's own arming, which only a user-only command writes.
+pub fn armed(state: &Path) -> bool {
+    dir(state).join(ARMED).exists()
+}
+
+pub fn board_offers(settings: &crate::config::Report, state: &Path) -> bool {
+    match settings.text() {
+        crate::config::ReportText::Ask => true,
+        crate::config::ReportText::Always => !armed(state),
+        crate::config::ReportText::Never => false,
     }
-    let counter = solve(&challenge.nonce.0, &report.digest(), challenge.difficulty);
-    let upload = ReportUpload { signature: Bytes64(key.sign(&challenge.nonce.0, &report)), key: Bytes32(key.public()), report, challenge, counter };
-    let accepted: ReportAccepted = client.post("/v1/reports", &upload).map_err(refused)?;
-    issue.report = Some(accepted.report.to_string());
-    issue.sent = Some(issues::today(now));
-    issues::save(&dir, &issue)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent kelpie issue {} to kelpie's maintainers as report {}", issue.id, accepted.report)).next("It stays logged here; kelpie update tells the lead when a new version may fix it.").ok()
+}
+
+pub fn arm_in(state: &Path, caller: &Caller, on: bool, text: crate::config::ReportText, now: u64) -> Result<String> {
+    let file = dir(state).join(ARMED);
+    if !on {
+        crate::permit::user_only_as(caller, "Choosing how reports go to kelpie's maintainers")?;
+        if file.exists() {
+            std::fs::remove_file(&file).map_err(|error| format!("{}: {error}", file.display()))?;
+        }
+        return Ok("kelpie shows each bug report and asks before sending it.".to_string());
+    }
+    crate::permit::user_only_as(caller, "Letting kelpie send reports to its maintainers without asking")?;
+    crate::state::write(&file, issues::today(now))?;
+    Ok(if text == crate::config::ReportText::Always {
+        format!("kelpie now sends each bug it files about itself to kelpie's maintainers without asking, redacted, and each send is a line under messages. {DISARM_COMMAND} stops it.")
+    } else {
+        format!("Armed, but [report] text is \"{}\" in config.toml; with text = \"always\" there, kelpie sends bug reports without asking. {DISARM_COMMAND} disarms it.", text.key())
+    })
+}
+
+pub fn arm_cli(on: bool) -> Result<String> {
+    let text = crate::config::report_settings()?.text();
+    arm_in(&crate::lead::state_dir()?, &crate::permit::caller(), on, text, crate::messages::now())
+}
+
+// Only text = "always" in config.toml together with the user's arming sends a report nobody was asked about; it goes out redacted like any other.
+pub fn send_unasked_in(state: &Path, text: crate::config::ReportText, url: &str, scrub: &dyn Fn() -> Scrub, now: u64) -> Result<Vec<String>> {
+    if text != crate::config::ReportText::Always || !armed(state) {
+        return Ok(Vec::new());
+    }
+    let waiting = offers(state, true);
+    if waiting.is_empty() {
+        return Ok(Vec::new());
+    }
+    let scrub = scrub();
+    let mut notes = Vec::new();
+    for mut issue in waiting {
+        let report = payload(&issue, &scrub);
+        let sent = deliver(state, &mut issue, report, url, now)?;
+        notes.push(format!("reports: sent kelpie issue {} as report {sent}, as [report] text = \"always\" says", issue.id));
+    }
+    Ok(notes)
+}
+
+pub fn send_unasked_tick(state: &Path) -> Result<Vec<String>> {
+    let settings = crate::config::report_settings()?;
+    if settings.text() != crate::config::ReportText::Always {
+        return Ok(Vec::new());
+    }
+    crate::signals::one_sender(state, || send_unasked_in(state, settings.text(), settings.url(), &Scrub::current, crate::messages::now()))
 }
 
 pub fn decline_in(state: &Path, caller: &Caller, id: &str, now: u64) -> Result<String> {

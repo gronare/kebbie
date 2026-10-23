@@ -21,6 +21,13 @@ Every write in this skill lands in one of those two files, or in a team repo the
 1. Name the machine first. When `kelpie config` shows `machine.name` with the default layer, it is unset; skip this step when it is set. Ask the user for a name, saying it is how their phone shows this machine and how their other machines working on the same vault see it, and offer the host's short name as the default. Give each machine its own, such as `mac` or `devbox`; `localhost` is refused. Write `[machine] name = "<name>"` in config.toml as in step 3 of Change a setting. Done when `kelpie config` shows `machine.name` from the machine config.
 2. Run `kelpie doctor` and work through each `warn` and `fail` with its `fix:` line, changing settings as below. Done when nothing says `fail`.
 
+## Tell the user what goes to kelpie's maintainers
+
+Do this right after naming the machine when setting kelpie up, and whenever `kelpie config` shows `report.signals` at `(default)`:
+
+1. Tell the user, in these words or close: kelpie sends its maintainers error signals when kelpie itself fails (a panic, and some internal errors), at most once a day. A signal holds only kelpie's version and commit, the OS and CPU architecture, the component (a fixed name from kelpie's code, such as `keeper.push`), the error kind (`panic`, `internal-error` or `corrupt-state`) and a count; never an error message, a path, or a repo, task or host name. Each send is a line under messages on the board. Bug reports with text are shown on the board and sent only on their `y` (`report.text = "ask"`).
+2. Ask whether to keep signals on. On no, write `signals = false` under `[report]` in config.toml. For bug reports you may write `text = "never"`; never write `text = "always"` yourself: when the user wants reports sent without asking, tell them to run `kelpie issue report --always` in their own terminal and to set `text = "always"`. Done when `kelpie config` shows `report.signals` and `report.text` as the user chose, and `kelpie doctor`'s `maintainers` line reads `ok`.
+
 ## Change a setting
 
 1. Run `kelpie config --repo <main checkout>` and find the key. Done when you know the key, its value in effect and the file it comes from.

@@ -285,7 +285,7 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
 
 // A pass of a review that read the rules skill is the rules check too, kept as the approval's fingerprint, so the task is not checked twice.
 fn save(state: &Path, address: &str, recorded: &str, read_rules: bool, fingerprint: impl FnOnce() -> Result<String>) -> Result<Verdict> {
-    let verdict = parse_verdict(recorded).ok_or("the recorded verdict does not parse")?;
+    let verdict = parse_verdict(recorded).ok_or_else(|| crate::signals::internal("review.verdict", kelpie_hub_protocol::SignalKind::InternalError, "the recorded verdict does not parse"))?;
     crate::state::write(&verdict_file(state, address), recorded)?;
     if verdict.ok && read_rules {
         tasks::record_approval(state, address, &fingerprint()?)?;

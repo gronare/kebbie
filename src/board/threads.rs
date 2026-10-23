@@ -158,6 +158,8 @@ pub(super) fn spawn_routine_runner(overlay: bool) {
                     crate::tasks::follow_tick(&state);
                     crate::tasks::landed_tick(&state);
                     let _ = crate::hub::tick();
+                    let _ = crate::signals::tick(&state);
+                    let _ = crate::hub::report::send_unasked_tick(&state);
                     crate::issue_recheck::tick(&state);
                 }
             }

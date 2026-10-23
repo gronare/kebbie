@@ -45,6 +45,15 @@ claude plugin marketplace add ~/.local/share/kelpie/current
 claude plugin install kelpie@kelpie
 ```
 
+kelpie sends its maintainers error signals when kelpie itself crashes or hits some internal errors: only its version and commit, your OS and CPU architecture, the part of kelpie that failed, the kind of failure and a count, at most once a day, each send shown under messages on the board. A bug report with text is shown to you and sent only on your `y`. To turn the signals off, put this in `~/.config/kelpie/config.toml`:
+
+```toml
+[report]
+signals = false   # no error signals; text = "ask" (the default) still asks before any bug report
+```
+
+[Error signals](how-to/report-a-problem-with-kelpie.md#error-signals) says exactly what one holds.
+
 ## 3. Add the keys
 
 Open herdr's `config.toml` and add these four keys:

@@ -614,6 +614,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.push(keeper(keeper_on, crate::keeper::holder(&env.kelpie_state).as_ref(), crate::messages::now()));
     checks.push(crate::hub::doctor(&env.kelpie_state, crate::hub::configured_name(&env.config).as_deref(), crate::messages::now(), crate::hub::reach));
     if let Ok(machine) = config::load_machine(&env.config) {
+        checks.push(crate::signals::doctor(&env.kelpie_state, &machine.report, crate::messages::now()));
         checks.extend(crate::hub::inbox::doctor(&env.kelpie_state, &machine.report, crate::messages::now()));
     }
     let data_home = env.data_home.clone().unwrap_or_else(|| env.home.join(".local/share"));

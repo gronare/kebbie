@@ -52,6 +52,8 @@ Some of kelpie's work runs on a clock rather than on a command:
 - due [routines](routines.md) start their runs as tasks, every minute.
 - tasks that follow main are rebased when it moves, every minute (see [`kelpie follow`](../reference/commands.md#kelpie-follow-name-onoff)).
 - queued tasks start once every task they wait for has ended as done, every 15 seconds (see [`kelpie after`](../reference/commands.md#kelpie-after-name)).
+- error signals counted since the last send go to kelpie's maintainers, checked every hour and sent at most once a day (see [Error signals](../how-to/report-a-problem-with-kelpie.md#error-signals)),
+- with `[report] text = "always"`, bugs kelpie filed about itself go to kelpie's maintainers, every minute.
 
 The keeper runs all of them, each on its own interval, and sleeps in between. It has no terminal and logs to `keeper.log` in the state directory. A lock file in the state directory keeps it to one per machine; the kernel releases the lock when the keeper exits, so a crashed one never blocks the next. A routine that fails is retried later each time, up to every 15 minutes, and its error is logged once.
 

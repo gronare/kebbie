@@ -393,7 +393,7 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kelpie_as_one_issue_once_its_key
 
     let maintainer = crate::sh::test_dir("report-maintainer");
     let token = hub.hub.mint_admin_token("maintainer").unwrap().unwrap();
-    let settings = crate::config::Report { url: Some(hub.url.clone()), enabled: None, inbox_token: Some(token.clone()) };
+    let settings = crate::config::Report { url: Some(hub.url.clone()), inbox_token: Some(token.clone()), ..Default::default() };
     assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "an unknown install's report waits in quarantine");
     let check = inbox::doctor(&maintainer, &settings, now()).unwrap();
     assert!(check.level == crate::doctor::Level::Warn && check.fact.contains("1 reports wait in quarantine: kelpie-hub admin reports --quarantine"), "{}", check.fact);
@@ -605,4 +605,81 @@ fn a_phone_paired_while_the_rename_is_on_its_way_is_kept() {
     super::sync_name(&state, Some("studio")).unwrap();
     let after = identity::load(&state).unwrap().unwrap();
     assert_eq!((after.name.as_str(), after.devices.len()), ("studio", 1));
+}
+
+#[test]
+fn with_text_always_a_bug_goes_out_unasked_redacted_and_each_send_is_a_line_under_messages() {
+    use crate::hub::report;
+    let hub = TestHub::start_with(|config| config.report_difficulty = 8);
+    let user = crate::sh::test_dir("report-always");
+    let id = reported_bug(&user);
+    let scrub = || report::Scrub::new(Some("/Users/carl".to_string()), vec!["greenhouse".to_string()]);
+    let always = crate::config::ReportText::Always;
+    assert!(report::send_unasked_in(&user, always, &hub.url, &|| panic!("unarmed, nothing is scrubbed"), now()).unwrap().is_empty(), "text = always alone sends nothing");
+    for caller in [crate::permit::Caller::Lead, crate::permit::Caller::Task("a@b".to_string()), crate::permit::Caller::Agent, crate::permit::Caller::Sandboxed, crate::permit::Caller::LeadSandboxed] {
+        assert!(report::arm_in(&user, &caller, true, always, now()).unwrap_err().contains("is the user's call"), "{caller:?}");
+    }
+    assert!(!report::armed(&user) && report::send_unasked_in(&user, always, &hub.url, &scrub, now()).unwrap().is_empty(), "no Claude can arm it");
+    assert!(report::send_unasked_in(&user, crate::config::ReportText::Ask, &hub.url, &scrub, now()).unwrap().is_empty());
+    assert!(report::arm_in(&user, &crate::permit::Caller::User, true, always, now()).unwrap().contains("without asking"));
+    let notes = report::send_unasked_in(&user, always, &hub.url, &scrub, now()).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let number = crate::issues::find(&crate::issues::dir(&user), &id).unwrap().report.expect("the issue keeps the report's id");
+    let stored = hub.hub.store().reports(kelpie_hub::store::KeyStatus::Quarantine, 0, false, 10).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].report.title, "push in <repo> hid git's error");
+    assert!(!stored[0].report.text.contains("/Users/carl") && !stored[0].report.text.contains("acme"), "{}", stored[0].report.text);
+    let line = crate::messages::load_in(&user).pop().unwrap();
+    assert_eq!((line.from.as_str(), line.to.as_str(), line.kind.as_deref()), ("kelpie", crate::messages::USER_LABEL, Some(report::SENT_KIND)));
+    assert_eq!(line.text, report::sent_line(&number, &id, "push in <repo> hid git's error"));
+    assert!(line.text.starts_with(&format!("Sent bug report {number} to kelpie's maintainers: kelpie issue {id}, \"push in <repo> hid git's error\"")), "{}", line.text);
+    assert!(report::send_unasked_in(&user, always, &hub.url, &|| panic!("nothing waits, so nothing is scrubbed"), now()).unwrap().is_empty(), "a sent bug goes once");
+    report::arm_in(&user, &crate::permit::Caller::User, false, always, now()).unwrap();
+    assert!(!report::armed(&user), "kelpie issue report --ask disarms it");
+}
+
+#[test]
+fn a_bug_the_user_sends_is_a_line_under_messages_too() {
+    use crate::hub::report;
+    let hub = TestHub::start_with(|config| config.report_difficulty = 8);
+    let user = crate::sh::test_dir("report-line");
+    let id = reported_bug(&user);
+    let scrub = report::Scrub::default();
+    let read = report::payload(&crate::issues::find(&crate::issues::dir(&user), &id).unwrap(), &scrub).digest();
+    report::send_in(&user, &crate::permit::Caller::User, &id, &hub.url, &scrub, &read, now()).unwrap();
+    let line = crate::messages::load_in(&user).pop().unwrap();
+    assert!(line.kind.as_deref() == Some(report::SENT_KIND) && line.text.starts_with("Sent bug report ") && line.text.contains(&format!("kelpie issue {id}")), "{line:?}");
+}
+
+#[test]
+fn error_signals_reach_the_hub_as_counts_signed_with_the_install_key() {
+    use kelpie_hub_protocol::{Name, SignalKind};
+    let hub = TestHub::start_with(|config| config.report_difficulty = 8);
+    let user = crate::sh::test_dir("signals-hub");
+    for _ in 0..3 {
+        crate::signals::record_in(&user, &Name::new("keeper.push").unwrap(), SignalKind::InternalError);
+    }
+    let url = hub.url.clone();
+    let notes = crate::signals::tick_in(&user, true, now(), &mut |signals| crate::signals::send(&user, &url, signals)).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let rows = hub.hub.store().signal_rows(0).unwrap();
+    assert_eq!(rows.iter().map(|row| (row.component.as_str(), row.kind.as_str(), row.count, row.vetted)).collect::<Vec<_>>(), [("keeper.push", "internal-error", 3, false)]);
+    assert_eq!((rows[0].os.as_str(), rows[0].arch.as_str(), rows[0].version.as_str()), (std::env::consts::OS, std::env::consts::ARCH, env!("CARGO_PKG_VERSION")));
+    let key = crate::hub::report::install_key(&user).unwrap().public();
+    hub.hub.store().set_key_status(&key, kelpie_hub::store::KeyStatus::Allowed, now()).unwrap();
+    crate::signals::record_in(&user, &Name::new("keeper.push").unwrap(), SignalKind::InternalError);
+    crate::signals::tick_in(&user, true, now() + crate::signals::DAY, &mut |signals| crate::signals::send(&user, &url, signals)).unwrap();
+    assert!(hub.hub.store().signal_rows(0).unwrap().iter().any(|row| row.vetted && row.count == 1), "the key a report was allowed for counts its signals as vetted");
+}
+
+#[test]
+fn the_board_offers_a_bug_with_text_ask_and_with_always_until_it_is_armed() {
+    use crate::config::{Report, ReportText};
+    let state = crate::sh::test_dir("report-board-offers");
+    for (text, offers) in [(None, true), (Some(ReportText::Ask), true), (Some(ReportText::Always), true), (Some(ReportText::Never), false)] {
+        assert_eq!(crate::hub::report::board_offers(&Report { text, ..Default::default() }, &state), offers, "{text:?} unarmed");
+    }
+    crate::hub::report::arm_in(&state, &crate::permit::Caller::User, true, ReportText::Always, now()).unwrap();
+    assert!(!crate::hub::report::board_offers(&Report { text: Some(ReportText::Always), ..Default::default() }, &state), "armed, kelpie sends it without the offer");
+    assert!(crate::hub::report::board_offers(&Report { text: Some(ReportText::Ask), ..Default::default() }, &state), "an arming left behind changes nothing under ask");
 }

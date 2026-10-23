@@ -707,6 +707,10 @@ fn fyi_or_live_in(dir: &Path, text: &str, kind: Option<&str>, live: &mut dyn FnM
     log_for_lead_in(dir, text, kind)
 }
 
+pub fn log_for_user_in(dir: &Path, text: &str, kind: &str) -> Result<()> {
+    append_in(dir, &json!({ "id": new_id(kind), "at": now(), "from": "kelpie", "to": USER_LABEL, "text": text, "state": "logged", "kind": kind }), ROTATE_BYTES)
+}
+
 fn log_for_lead_in(dir: &Path, text: &str, kind: Option<&str>) -> Result<()> {
     append_in(dir, &json!({ "id": new_id("fyi"), "at": now(), "from": "kelpie", "to": LEAD_LABEL, "text": text, "state": "logged", "kind": kind, "fyi": true }), ROTATE_BYTES)
 }

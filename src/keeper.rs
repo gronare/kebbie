@@ -53,6 +53,8 @@ pub fn routines() -> Vec<Routine> {
         Routine { name: "routines", every: crate::routines::EVERY, run: |ctx| { ctx.notes.extend(crate::routines::tick(&crate::lead::state_dir()?)); Ok(()) } },
         Routine { name: "hub", every: crate::hub::EVERY, run: |_| crate::hub::tick() },
         Routine { name: "reports", every: crate::hub::inbox::EVERY, run: |ctx| { ctx.notes.extend(crate::hub::inbox::tick(&crate::lead::state_dir()?)?); Ok(()) } },
+        Routine { name: "signals", every: crate::signals::EVERY, run: |ctx| { ctx.notes.extend(crate::signals::tick(&crate::lead::state_dir()?)?); Ok(()) } },
+        Routine { name: "outbox", every: crate::hub::report::UNASKED_EVERY, run: |ctx| { ctx.notes.extend(crate::hub::report::send_unasked_tick(&crate::lead::state_dir()?)?); Ok(()) } },
     ]
 }
 
@@ -407,7 +409,7 @@ pub fn start() -> Result<String> {
 
 pub fn stop_in(dir: &Path, timeout: Duration) -> Result<String> {
     let Some(running) = holder(dir) else { return Ok("keeper: not running".to_string()) };
-    let pid = running.pid.ok_or("keeper: one runs, but its lock names no pid")?;
+    let pid = running.pid.ok_or_else(|| crate::signals::internal("keeper.lock", kelpie_hub_protocol::SignalKind::CorruptState, "keeper: one runs, but its lock names no pid"))?;
     // SAFETY: a signal to the pid that holds the keeper's lock, read from that lock.
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
     if wait_for(|| holder(dir).is_none(), timeout) {

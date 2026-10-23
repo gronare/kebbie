@@ -22,7 +22,7 @@ pub(super) struct Offer {
 
 pub(super) fn load_offers() -> Vec<Offer> {
     let Ok(state) = crate::lead::state_dir() else { return Vec::new() };
-    let enabled = crate::config::report_settings().is_ok_and(|settings| settings.enabled());
+    let enabled = crate::config::report_settings().is_ok_and(|settings| report::board_offers(&settings, &state));
     offers_in(&state, enabled, &Scrub::current)
 }
 
@@ -173,7 +173,7 @@ mod tests {
         filed(&state, "b2c3d4", "wish", "a dark theme");
         let offers = offers_in(&state, true, &scrub);
         assert_eq!(offers.iter().map(|offer| offer.id.as_str()).collect::<Vec<_>>(), ["a1b2c3"], "a wish is not offered");
-        assert!(offers_in(&state, false, &|| panic!("nothing is scrubbed when the offer is off")).is_empty(), "[report] enabled = false hides it");
+        assert!(offers_in(&state, false, &|| panic!("nothing is scrubbed when the offer is off")).is_empty(), "[report] text other than \"ask\" hides it");
 
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         app.offers = offers;
