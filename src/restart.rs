@@ -711,6 +711,10 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
     run_counted(mode, memory, only, &mut |_, _| {})
 }
 
+fn ours(pane: &Pane, process: Option<&Process>, lead_space: Option<&str>) -> bool {
+    (lead_space.is_some() && pane.workspace.as_deref() == lead_space) || process.and_then(|process| process.cwd.as_deref()).or(pane.cwd.as_deref()).and_then(tasks::task_at).is_some()
+}
+
 pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted: &mut dyn FnMut(usize, usize)) -> Result<Vec<Line>> {
     let (auto, idle_minutes) = config::restart_settings()?;
     let mode = match mode {
@@ -727,9 +731,15 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
     let mut live: HashMap<String, u32> = HashMap::new();
     let mut installed: Option<String> = None;
     let mut lines = Vec::new();
-    let panes: Vec<Pane> = herdr::agents()?.iter().filter_map(Pane::from_agent).filter(|pane| only.is_none_or(|only| pane.session.as_deref() == Some(only))).collect();
+    let panes: Vec<(Pane, Option<Process>)> = herdr::agents()?.iter().filter_map(Pane::from_agent).filter(|pane| only.is_none_or(|only| pane.session.as_deref() == Some(only)))
+        .map(|pane| {
+            let process = (pane.agent == Agent::Claude).then(|| herdr::process_info(&pane.pane).ok().as_ref().and_then(claude_process)).flatten();
+            (pane, process)
+        })
+        .filter(|(pane, process)| ours(pane, process.as_ref(), lead_space.as_deref()))
+        .collect();
     let total = panes.len();
-    for (index, pane) in panes.into_iter().enumerate() {
+    for (index, (pane, process)) in panes.into_iter().enumerate() {
         counted(index, total);
         let line = |verdict: &Verdict| Line { label: pane.label.clone(), said: verdict.words(auto), stale: verdict.stale() };
         if pane.agent != Agent::Claude {
@@ -740,7 +750,6 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
             lines.push(line(&Verdict::Skip("its session id is unknown".to_string())));
             continue;
         };
-        let process = herdr::process_info(&pane.pane).ok().as_ref().and_then(claude_process);
         let Some(process) = process else {
             lines.push(line(&Verdict::Skip("its Claude process cannot be read".to_string())));
             continue;
@@ -875,6 +884,16 @@ pub fn now_cli(all: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_lead_and_task_sessions_are_kebbies_to_restart() {
+        let pane = |workspace: &str, cwd: &str| Pane::from_agent(&json!({ "agent": "claude", "pane_id": "p1", "workspace_id": workspace, "cwd": cwd, "agent_session": { "value": "s1" } }));
+        let own = pane("w-lead", "/tmp/elsewhere").expect("a claude pane");
+        assert!(ours(&own, None, Some("w-lead")), "the lead Space's Claude is kebbie's");
+        let other = pane("w-other", "/tmp/elsewhere").expect("a claude pane");
+        assert!(!ours(&other, None, Some("w-lead")), "a Claude of the user's own outside a task is left alone");
+        assert!(!ours(&other, None, None), "with no lead Space nothing outside a task is kebbie's");
+    }
     use crate::agent::claude::{lacks_role, resume_args, with_role};
 
     fn entry(at: u64, exe: &str, reasons: &[&str], kebbie: Option<&str>, started: Option<&str>) -> Value {

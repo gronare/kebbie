@@ -639,7 +639,7 @@ fn routes_prints_a_caddy_site_per_worktree_of_the_repos_that_opt_in() {
     assert!(stdout(&run(&["-C", app.to_str().unwrap(), "list"])).contains("port 3001 · "));
 }
 
-// Five Claude sessions in herdr, all started before kebbie update, as the fake herdr shows them: billing idle, Notes focused, api mid-turn, worker idle with a background Bash running, and one herdr names no session for.
+// Five Claude sessions in the billing task's worktree, all started before kebbie update, as the fake herdr shows them: billing idle, Notes focused, api mid-turn, worker idle with a background Bash running, and one herdr names no session for; and mine, the user's own idle Claude in a plain folder.
 struct Sessions {
     sleeper: std::process::Child,
     claude: PathBuf,
@@ -665,33 +665,39 @@ fn sessions(lab: &Lab) -> Sessions {
     executable(&bin.join("cargo"), "#!/bin/sh\nexit 0\n");
     let sleeper = Command::new("sleep").arg("120").spawn().unwrap();
     let pid = sleeper.id();
-    let work = lab.root.join("work");
-    fs::create_dir_all(&work).unwrap();
-    let slug: String = work.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect();
-    let transcripts = lab.home.join(".claude/projects").join(slug);
+    let (_, work) = lab.task_fixture();
+    let own = lab.root.join("own");
+    fs::create_dir_all(&own).unwrap();
+    let transcripts_of = |dir: &Path| lab.home.join(".claude/projects").join(dir.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect::<String>());
+    let transcripts = transcripts_of(&work);
     fs::create_dir_all(&transcripts).unwrap();
+    fs::create_dir_all(transcripts_of(&own)).unwrap();
+    let old_turn = "{\"type\":\"user\",\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"message\":{\"content\":\"hi\"}}\n";
     for session in ["s-billing", "s-notes", "s-api"] {
-        fs::write(transcripts.join(format!("{session}.jsonl")), "{\"type\":\"user\",\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"message\":{\"content\":\"hi\"}}\n").unwrap();
+        fs::write(transcripts.join(format!("{session}.jsonl")), old_turn).unwrap();
     }
+    fs::write(transcripts_of(&own).join("s-mine.jsonl"), old_turn).unwrap();
     fs::write(transcripts.join("s-worker.jsonl"), "{\"type\":\"user\",\"timestamp\":\"2099-01-01T00:00:00.000Z\",\"message\":{\"content\":[]},\"toolUseResult\":{\"stdout\":\"\",\"backgroundTaskId\":\"b1\"}}\n").unwrap();
     let answers = lab.root.join("answers");
     fs::create_dir_all(&answers).unwrap();
-    let work = work.display();
-    let agent = |name: Option<&str>, session: Option<&str>, pane: &str, status: &str, focused: bool| {
+    let agent = |name: Option<&str>, session: Option<&str>, pane: &str, status: &str, focused: bool, cwd: &Path| {
         let name = name.map(|name| format!("\"name\":\"{name}\",")).unwrap_or_default();
         let session = session.map(|session| format!("\"agent_session\":{{\"value\":\"{session}\"}},")).unwrap_or_default();
-        format!("{{{name}{session}\"agent\":\"claude\",\"display_agent\":\"Notes\",\"pane_id\":\"{pane}\",\"workspace_id\":\"w1\",\"agent_status\":\"{status}\",\"interactive_ready\":true,\"focused\":{focused},\"cwd\":\"{work}\"}}")
+        format!("{{{name}{session}\"agent\":\"claude\",\"display_agent\":\"Notes\",\"pane_id\":\"{pane}\",\"workspace_id\":\"w1\",\"agent_status\":\"{status}\",\"interactive_ready\":true,\"focused\":{focused},\"cwd\":\"{}\"}}", cwd.display())
     };
     let agents = [
-        agent(Some("billing"), Some("s-billing"), "p_billing", "idle", false),
-        agent(None, Some("s-notes"), "p_notes", "idle", true),
-        agent(Some("api"), Some("s-api"), "p_api", "working", false),
-        agent(Some("worker"), Some("s-worker"), "p_worker", "done", false),
-        agent(Some("ghost"), None, "p_ghost", "idle", false),
+        agent(Some("billing"), Some("s-billing"), "p_billing", "idle", false, &work),
+        agent(None, Some("s-notes"), "p_notes", "idle", true, &work),
+        agent(Some("api"), Some("s-api"), "p_api", "working", false, &work),
+        agent(Some("worker"), Some("s-worker"), "p_worker", "done", false, &work),
+        agent(Some("ghost"), None, "p_ghost", "idle", false, &work),
+        agent(Some("mine"), Some("s-mine"), "p_mine", "idle", false, &own),
     ];
     fs::write(answers.join("agent-list.json"), format!("{{\"result\":{{\"agents\":[{}]}}}}", agents.join(","))).unwrap();
     fs::write(answers.join("workspace-list.json"), r#"{"result":{"workspaces":[]}}"#).unwrap();
-    fs::write(answers.join("process.json"), format!(r#"{{"result":{{"process_info":{{"foreground_process_group_id":{pid},"shell_pid":1,"foreground_processes":[{{"argv0":"claude","argv":["claude","--model","opus","--resume","old-id","an old prompt"],"cwd":"{work}","pid":{pid}}}]}}}}}}"#)).unwrap();
+    let process = |cwd: &Path| format!(r#"{{"result":{{"process_info":{{"foreground_process_group_id":{pid},"shell_pid":1,"foreground_processes":[{{"argv0":"claude","argv":["claude","--model","opus","--resume","old-id","an old prompt"],"cwd":"{}","pid":{pid}}}]}}}}}}"#, cwd.display());
+    fs::write(answers.join("process.json"), process(&work)).unwrap();
+    fs::write(answers.join("process-p_mine.json"), process(&own)).unwrap();
     fs::write(answers.join("shell.json"), r#"{"result":{"process_info":{"foreground_process_group_id":1,"shell_pid":1,"foreground_processes":[]}}}"#).unwrap();
     let root = lab.root.join("install");
     fs::create_dir_all(&root).unwrap();
@@ -701,7 +707,7 @@ fn sessions(lab: &Lab) -> Sessions {
     let script = format!(
         "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\n\
          case \"$1 $2\" in\n\
-         'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
+         'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; elif [ -f \"$d/answers/process-$4.json\" ]; then cat \"$d/answers/process-$4.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
          'pane send-keys') touch \"$d/ended-$3\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
          'pane read') if [ -f \"$d/ended-$3\" ]; then echo 'you@host $'; else printf '%s\\n' '────────────────────' '❯ ' '────────────────────'; fi; exit 0;;\n\
          'agent start'|'pane run') echo '{{\"result\":{{}}}}'; exit 0;;\n\
@@ -748,10 +754,13 @@ fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_f
         "keeper: off ([keeper] enabled = false); an open board runs the routines",
     ], "{said}");
     let start = lab.herdr_calls().into_iter().find(|call| call[..2] == ["agent", "start"]).unwrap();
-    assert_eq!(start[2..], ["billing", "--kind", "claude", "--pane", "p_billing", "--", "--model", "opus", "--resume", "s-billing"].map(str::to_string), "the same flags, the old conversation and prompt dropped");
+    let roles = lab.state.join("roles");
+    let (settings, role) = (roles.join("billing@app.settings.json").display().to_string(), roles.join("billing@app.md").display().to_string());
+    assert_eq!(start[2..], ["billing", "--kind", "claude", "--pane", "p_billing", "--", "--model", "opus", "--settings", &settings, "--append-system-prompt-file", &role, "--resume", "s-billing"].map(str::to_string), "the same flags with the task's role, the old conversation and prompt dropped");
     for pane in ["p_notes", "p_api", "p_worker", "p_ghost"] {
         assert!(!lab.touched(pane), "{pane} is focused, busy, working in the background or unknown, and must not be restarted");
     }
+    assert!(!said.contains("mine") && !lab.touched("p_mine"), "the user's own Claude outside a task is neither counted nor restarted: {said}");
     let log = fs::read_to_string(lab.state.join("messages.jsonl")).unwrap();
     let question: Vec<serde_json::Value> = log.lines().filter_map(|line| serde_json::from_str(line).ok()).filter(|record: &serde_json::Value| record["kind"] == "restart").collect();
     assert_eq!(question.len(), 1, "{log}");
@@ -788,16 +797,11 @@ fn with_auto_off_update_restarts_nothing_and_kebbie_restart_still_does() {
 fn a_claude_started_in_a_worktree_from_another_folder_resumes_in_the_worktree() {
     let lab = Lab::new("restart-worktree");
     let sessions = sessions(&lab);
-    let work = lab.root.join("work");
-    let worktree = lab.root.join("wt1.work");
-    fs::create_dir_all(&worktree).unwrap();
-    let slug = |dir: &Path| -> String { dir.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect() };
-    let transcripts = lab.home.join(".claude/projects").join(slug(&worktree));
-    fs::create_dir_all(&transcripts).unwrap();
-    fs::copy(lab.home.join(".claude/projects").join(slug(&work)).join("s-billing.jsonl"), transcripts.join("s-billing.jsonl")).unwrap();
+    let worktree = lab.root.join("wt1.app");
+    let main = lab.root.join("app");
     let answers = lab.root.join("answers");
-    let process = fs::read_to_string(answers.join("process.json")).unwrap().replace(&format!("\"cwd\":\"{}\"", work.display()), &format!("\"cwd\":\"{}\"", worktree.display()));
-    fs::write(answers.join("process.json"), process).unwrap();
+    let agents = fs::read_to_string(answers.join("agent-list.json")).unwrap().replace(&format!("\"cwd\":\"{}\"", worktree.display()), &format!("\"cwd\":\"{}\"", main.display()));
+    fs::write(answers.join("agent-list.json"), agents).unwrap();
     fs::write(&lab.config, "[update]\nchannel = \"main\"\n").unwrap();
     let output = lab.with_sessions(&sessions, &["restart", "--all"]);
     assert!(stdout(&output).contains("billing: restarted"), "{}\n{}", stdout(&output), stderr(&output));
@@ -1490,7 +1494,7 @@ fn idle_lead(lab: &Lab) {
     let script = format!(
         "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\n\
          case \"$1 $2\" in\n\
-         'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
+         'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; elif [ -f \"$d/answers/process-$4.json\" ]; then cat \"$d/answers/process-$4.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
          'pane send-keys') touch \"$d/ended-$3\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
          'pane read') if [ -f \"$d/ended-$3\" ]; then echo 'you@host $'; else printf '%s\\n' '────────────────────' '❯ ' '────────────────────'; fi; exit 0;;\n\
          'agent start'|'pane run') echo '{{\"result\":{{}}}}'; exit 0;;\n\
