@@ -241,18 +241,19 @@ fn trailing_comment(line: &str) -> &str {
     ""
 }
 
-// Only the name line changes, so the rest of the file keeps every byte, comment and order it had.
-fn with_machine_name(file: &Path, text: &str, name: &str) -> Result<String> {
-    let line = format!("name = {}", quoted(name));
+// Only the key's line changes, so the rest of the file keeps every byte, comment and order it had.
+fn with_key(file: &Path, text: &str, section: &str, key: &str, value: &str, written: fn(&crate::config::Machine) -> Option<&String>) -> Result<String> {
+    let line = format!("{key} = {}", quoted(value));
     let starts = table_lines(text);
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let header = |index: usize| starts.get(index).copied().unwrap_or(false) && lines[index].trim_start().starts_with('[');
-    let machine = (0..lines.len()).find(|index| header(*index) && lines[*index].split('#').next().unwrap_or_default().trim() == "[machine]");
-    let changed = match machine {
+    let table = format!("[{section}]");
+    let found = (0..lines.len()).find(|index| header(*index) && lines[*index].split('#').next().unwrap_or_default().trim() == table);
+    let changed = match found {
         Some(start) => {
             let end = (start + 1..lines.len()).find(|index| header(*index)).unwrap_or(lines.len());
             let mut owned: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
-            match (start + 1..end).find(|index| starts.get(*index).copied().unwrap_or(false) && key_of(lines[*index]) == Some("name")) {
+            match (start + 1..end).find(|index| starts.get(*index).copied().unwrap_or(false) && key_of(lines[*index]) == Some(key)) {
                 Some(at) => owned[at] = line + trailing_comment(lines[at]) + line_ending(lines[at]),
                 None => {
                     let ending = match line_ending(lines[start]) { "" => { owned[start].push('\n'); "\n" } ending => ending };
@@ -269,14 +270,23 @@ fn with_machine_name(file: &Path, text: &str, name: &str) -> Result<String> {
             if !text.trim().is_empty() {
                 text.push('\n');
             }
-            text + "[machine]\n" + &line + "\n"
+            text + &table + "\n" + &line + "\n"
         }
     };
-    let by_hand = format!("{}: [machine] name is set in a form kelpie does not rewrite; edit it by hand", file.display());
-    match crate::config::parse_machine(&changed, &file.display().to_string()).map(|machine| machine.machine_name) {
-        Ok(Some(written)) if written == name => Ok(changed),
+    let by_hand = format!("{}: [{section}] {key} is set in a form kelpie does not rewrite; edit it by hand", file.display());
+    match crate::config::parse_machine(&changed, &file.display().to_string()) {
+        Ok(machine) if written(&machine).map(String::as_str) == Some(value) => Ok(changed),
         _ => Err(by_hand),
     }
+}
+
+fn with_machine_name(file: &Path, text: &str, name: &str) -> Result<String> {
+    with_key(file, text, "machine", "name", name, |machine| machine.machine_name.as_ref())
+}
+
+pub fn set_hub_url_in(file: &Path, url: &str) -> Result<()> {
+    let url = crate::hub::hub_url(url)?;
+    rewrite(file, true, |text| with_key(file, text, "hub", "url", &url, |machine| machine.hub_url.as_ref()))
 }
 
 pub fn check_machine_name_in(file: &Path, name: &str) -> Result<()> {

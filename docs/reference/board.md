@@ -10,6 +10,7 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 | --- | --- |
 | Status line, top | The page tabs, `1 Work  2 Areas  3 Routines`, with `⚠N` on Routines while N routine runs wait for you with findings. Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; `! N bugs to send · B` while kelpie bugs you or the lead filed wait for you to send them; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `☾ away` in away mode; `chat hidden` while the lead's chat is hidden; `↑ kelpie <version> · U updates` when a newer version is out. |
 | Lead line, under the status line | While the lead counts as stale: `↻ The lead runs <old>; <new> is installed · <what happens to it> · L restarts it now`, `· L restarts it` alone with `restart.auto` off, or the error of a restart that failed. See [Restarting the lead after an update](../explanation/updates-and-restarts.md#restarting-the-lead-after-an-update). |
+| Hub line, under it | While the hub refuses the board for a lapsed subscription: `Your kelpie hub subscription isn't active: <link> · H hub`. |
 | Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). A task's halves in other repos sit next to each other. Under the tasks: the bugs to send while `B` shows them, `✓ kelpie <version> fixed N of your issues` with their titles after an update's recheck fixed some (`i` lists them and clears it), and the main checkouts with files changed outside any task. |
 | Backlog, right | An ONGOING section of vault project notes in progress (status active or draft) when the vault is on, and the items from the configured sources, by priority. ONGOING sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md). |
 | Messages, bottom | What sessions tell each other, newest last. |
@@ -61,6 +62,7 @@ kelpie keeps one phase per task, and only what changes it writes it: its start, 
 | `i` | The inbox: the questions waiting on you, opened at the first. Works on the Areas page too. |
 | `m` | Messages: once shows them on one line, again opens them, again hides them. |
 | `B` | kelpie bugs you or the lead filed, to send to kelpie's maintainers: shows the list under Work with the first one selected, and hides it again. Hidden at first; while any wait, the header counts them, such as `! 2 bugs to send · B`. The board remembers whether it shows. See [Send it to kelpie's maintainers](../how-to/report-a-problem-with-kelpie.md#send-it-to-kelpies-maintainers). |
+| `H` | The [hub](#the-hub-window) window, to see this board on your phone. |
 | `n` | New task: a name, then an optional prompt. Starts in the background. In the Backlog column, a new item. |
 | `/` | Filter the selected column: type part of a name, `⏎` keeps the filter, `esc` clears it. |
 | `R` | Ask the lead to refresh the backlog. |
@@ -211,6 +213,20 @@ An answer that takes a comment opens the comment box in place of the row, under 
 | `esc`, `q` | Back to the tasks; the list stays. |
 | `B` | Hide the list. |
 
+### The hub window
+
+`H` opens it. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md).
+
+Not connected, it asks which hub: `k` or `⏎` the kelpie hub, `o` your own, whose address you type and `⏎` tests before it is saved as [`hub.url`](configuration.md#keys). With `hub.url` set, `⏎` connects there. With `machine.name` unset, it asks for the name once, with the host's short name filled in. It then shows the link, the code the page shows and a QR code of the link, black on white, opens the link in your browser (not over SSH), and waits for you to approve the machine there; a terminal too short for the QR code says so. `esc` stops waiting. The outcome shows in one line.
+
+Connected, it shows the hub, the machine's name and id, each paired phone or browser with when it paired, and a lapsed subscription's line with its link.
+
+| Key | Action |
+| --- | --- |
+| `a` | Add a phone or browser: a link and its QR code, then the six digits to compare. `y` admits it when the phone shows the same, `n` refuses it. |
+| `l` | Leave the hub, after `y`: each phone loses the board, and the keys and the token go. |
+| `esc`, `q` | Close the window. |
+
 ## Areas page
 
 Press `2` to open it and `1` to go back. It needs the vault: it lists the vault's system notes (`Areas/*.md`) with their repos. `kelpie areas` prints the same.
@@ -281,7 +297,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `reports`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `reports`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

@@ -53,7 +53,7 @@ Your machine
 - [Turn off automatic restarts](how-to/turn-off-automatic-restarts.md): restart stale sessions yourself.
 - [Show plan usage on the board](how-to/show-plan-usage.md): the status line command.
 - [Show task state in herdr's sidebar](how-to/show-task-state-in-the-sidebar.md): the sidebar sync.
-- [See your board on your phone](how-to/see-your-board-on-your-phone.md): join a kelpie hub, pair your phone, get notified.
+- [See your board on your phone](how-to/see-your-board-on-your-phone.md): connect a kelpie hub, add your phone, get notified.
 - [Fix common problems](how-to/troubleshoot.md): `kelpie doctor` and what each message means.
 - [Report a problem with kelpie](how-to/report-a-problem-with-kelpie.md): save it on the machine, send it to kelpie's maintainers, and see it rechecked after an update.
 

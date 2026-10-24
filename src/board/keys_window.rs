@@ -99,6 +99,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Refresh], "refresh the backlog", "refresh"),
             bind(&[Act::Update], "update kelpie and its plugins", "update"),
             bind(&[Act::RestartLead], "restart the lead on the new kelpie", "restart lead"),
+            bind(&[Act::Hub], "the hub: this board on your phone", "phone · hub"),
         ]),
         WINDOWS,
         group("THE SELECTED TASK", &[

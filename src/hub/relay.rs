@@ -31,6 +31,8 @@ pub struct Relay {
     pub primed: bool,
     #[serde(default)]
     pub notices: BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_inactive: Option<String>,
 }
 
 fn file(state: &Path) -> PathBuf {
@@ -169,6 +171,7 @@ pub fn seal_notice(identity: &Identity, pending: &Pending, board_rev: u64, now: 
 }
 
 fn failed(state: &Path, relay: &mut Relay, error: &HubError, now: u64) -> String {
+    relay.plan_inactive = matches!(error, HubError::PlanInactive { .. }).then(|| error.to_string());
     relay.error = Some(error.to_string());
     relay.error_at = Some(now);
     let _ = save(state, relay);
@@ -210,6 +213,7 @@ pub fn relay(state: &Path, board: &Board, now: u64) -> Result<Outcome> {
         relay.fingerprint = Some(print);
         relay.error = None;
         relay.error_at = None;
+        relay.plan_inactive = None;
         outcome.posted = Some(stored.rev);
     }
     let current = notices(board);

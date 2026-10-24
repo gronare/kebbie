@@ -44,6 +44,10 @@ impl App {
                 editor.text.insert_str(&text);
                 None
             }
+            Mode::Hub(window) if window.typing() => {
+                window.paste(&text);
+                None
+            }
             Mode::Questions(window) if window.typing => {
                 window.comment.insert_str(&text);
                 None

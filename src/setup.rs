@@ -124,7 +124,32 @@ pub fn install(yes: bool) -> Result<String> {
     let asking = if yes { Asking::Yes } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) { Asking::Terminal } else { Asking::Closed };
     let stdin = std::io::stdin();
     install_on(&machine, asking, &mut stdin.lock(), &mut std::io::stdout())?;
+    let connected = crate::hub::identity::load(&state).ok().flatten().is_some();
+    let offered = hub_offer(asking, connected, &mut stdin.lock(), &mut std::io::stdout())?;
+    println!("{}", offered.unwrap_or_else(|| hub_connected(crate::hub::cli(Some("connect"), &[], None))));
     Ok(crate::doctor::summary(&crate::doctor::checks(&crate::doctor::Env::current())))
+}
+
+const HUB_STEP: &str = "kelpie hub";
+
+// None means the user said yes; the connect reads the terminal itself, so it runs after this lock on stdin is gone.
+pub fn hub_offer(asking: Asking, connected: bool, input: &mut impl BufRead, output: &mut impl Write) -> Result<Option<String>> {
+    if connected {
+        return Ok(Some(line("already", HUB_STEP, "connected; kelpie hub status shows it")));
+    }
+    Ok(match asking {
+        Asking::Closed => Some(line("skipped", HUB_STEP, "no terminal to ask in: kelpie hub connect shows the board on your phone")),
+        Asking::Yes => Some(line("skipped", HUB_STEP, "kelpie hub connect shows the board on your phone when you want it")),
+        Asking::Terminal if !yes("Connect a hub now, to see the board on your phone? (kelpie hub connect)", input, output)? => Some(line("skipped", HUB_STEP, "kelpie hub connect, or H on the board, connects one later")),
+        Asking::Terminal => None,
+    })
+}
+
+pub fn hub_connected(result: Result<String>) -> String {
+    match result {
+        Ok(said) => line("done", HUB_STEP, said.replace('\n', " ")),
+        Err(error) => line("failed", HUB_STEP, error),
+    }
 }
 
 pub fn install_on(machine: &Machine, asking: Asking, input: &mut impl BufRead, output: &mut impl Write) -> Result<()> {
@@ -317,6 +342,26 @@ pub fn codex_in(home: &Path, kelpie: &str, uninstall: bool, input: &mut impl Buf
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_offers_a_hub_last_and_connects_only_on_a_yes_in_a_terminal() {
+        let offer = |asking: Asking, connected: bool, answers: &str| {
+            let mut output = Vec::new();
+            let offered = hub_offer(asking, connected, &mut answers.as_bytes(), &mut output).unwrap();
+            (offered, String::from_utf8(output).unwrap())
+        };
+        let (offered, asked) = offer(Asking::Terminal, false, "y\n");
+        assert_eq!(offered, None, "a yes runs kelpie hub connect");
+        assert!(asked.contains("Connect a hub now") && asked.contains("(kelpie hub connect)"), "{asked}");
+        for (asking, answers) in [(Asking::Terminal, "n\n"), (Asking::Terminal, ""), (Asking::Closed, "y\n"), (Asking::Yes, "y\n")] {
+            let (offered, asked) = offer(asking, false, answers);
+            assert!(offered.as_deref().is_some_and(|line| line.starts_with("skipped") && line.contains("kelpie hub connect")), "{asking:?}: {offered:?}");
+            assert!(asking == Asking::Terminal || asked.is_empty(), "only a terminal is asked");
+        }
+        let (offered, asked) = offer(Asking::Terminal, true, "y\n");
+        assert!(offered.unwrap().starts_with("already") && asked.is_empty(), "a connected machine is not asked");
+        assert!(hub_connected(Ok("Connected to x as mac\nset: y".to_string())).starts_with("done") && hub_connected(Err("Cancelled".to_string())).starts_with("failed"));
+    }
 
     #[test]
     fn setup_codex_writes_only_on_a_yes_and_says_what_it_leaves_alone() {

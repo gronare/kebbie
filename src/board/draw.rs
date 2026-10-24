@@ -25,7 +25,7 @@ use super::options::draw_options;
 use super::push::draw_push;
 use super::keys_window;
 use super::status_bar::{hint_hits, hint_lines, status_line};
-use super::widgets::{MAUVE, MUTED, PEACH, RED, TEXT, modal, render_column, style};
+use super::widgets::{MAUVE, MUTED, PEACH, RED, TEXT, YELLOW, modal, render_column, style};
 
 pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     app.hits.clear();
@@ -35,8 +35,10 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let area = full.inner(Margin { horizontal: 2, vertical: 1 });
     let fold = if app.page == Page::Work { app.fold } else { Fold::Hidden };
     let lead_line = app.lead_line().filter(|_| app.page == Page::Work);
+    let hub_line = app.hub_banner.clone().filter(|_| app.page == Page::Work).map(|plan| format!("{plan} · {} hub", keys::map().label(keys::Act::Hub)));
+    let banners = [lead_line.map(|line| (line, MAUVE, keys::Act::RestartLead)), hub_line.map(|line| (line, YELLOW, keys::Act::Hub))].into_iter().flatten().collect::<Vec<_>>();
     let [top, _, lead_area, body, messages_area, bottom] = Layout::vertical([
-        Constraint::Length(1), Constraint::Length(1), Constraint::Length(if lead_line.is_some() { 2 } else { 0 }), Constraint::Min(3), Constraint::Length(messages_height(fold, full.height)), Constraint::Length(1),
+        Constraint::Length(1), Constraint::Length(1), Constraint::Length(if banners.is_empty() { 0 } else { banners.len() as u16 + 1 }), Constraint::Min(3), Constraint::Length(messages_height(fold, full.height)), Constraint::Length(1),
     ]).areas(area);
     let (line, tabs) = header(app, top.width);
     frame.render_widget(Paragraph::new(line), top);
@@ -64,10 +66,10 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let mut tab_hits = tab_hits;
-    if let Some(line) = lead_line {
-        let row = Rect { height: 1, ..lead_area };
-        frame.render_widget(Paragraph::new(Span::styled(line, style(MAUVE))), row);
-        tab_hits.push((row, Hit::Key(keys::map().code(keys::Act::RestartLead))));
+    for (index, (line, color, act)) in banners.into_iter().enumerate() {
+        let row = Rect { y: lead_area.y + index as u16, height: 1, ..lead_area };
+        frame.render_widget(Paragraph::new(Span::styled(line, style(color))), row);
+        tab_hits.push((row, Hit::Key(keys::map().code(act))));
     }
     tab_hits.extend(hint_hits(&status, bottom, app.selected_s_opens(), app.lead_chat.is_some()));
     frame.render_widget(Paragraph::new(status), bottom);
@@ -124,6 +126,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Normal => {}
         Mode::Options(index) => modal_hits = draw_options(frame, app, *index),
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),
+        Mode::Hub(window) => super::hub_window::draw(frame, window),
         Mode::Report { id, scroll, read, nudged } => {
             let (id, nudged) = (id.clone(), *nudged);
             let (drawn, seen) = super::bug_report::draw_report(frame, app, &id, *scroll, *read, nudged);

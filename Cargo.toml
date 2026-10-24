@@ -9,9 +9,10 @@ repository = "https://github.com/gronare/kelpie"
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-kelpie-hub-api = { git = "https://github.com/gronare/kelpie-hub", rev = "98d83271a237d6ab44f54ced0704e0af5ba732f3" }
-kelpie-hub-protocol = { git = "https://github.com/gronare/kelpie-hub", rev = "98d83271a237d6ab44f54ced0704e0af5ba732f3" }
+kelpie-hub-api = { git = "https://github.com/gronare/kelpie-hub", rev = "349f96497f0c23e9eef88e02c096295aedae16da" }
+kelpie-hub-protocol = { git = "https://github.com/gronare/kelpie-hub", rev = "349f96497f0c23e9eef88e02c096295aedae16da" }
 libc = "0.2"
+qrcodegen = "1.8"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 ratatui-textarea = "0.9"
@@ -26,8 +27,8 @@ unicode-width = "0.2"
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
-kelpie-hub = { git = "https://github.com/gronare/kelpie-hub", rev = "98d83271a237d6ab44f54ced0704e0af5ba732f3" }
-kelpie-hub-fakes = { git = "https://github.com/gronare/kelpie-hub", rev = "98d83271a237d6ab44f54ced0704e0af5ba732f3" }
+kelpie-hub = { git = "https://github.com/gronare/kelpie-hub", rev = "349f96497f0c23e9eef88e02c096295aedae16da" }
+kelpie-hub-fakes = { git = "https://github.com/gronare/kelpie-hub", rev = "349f96497f0c23e9eef88e02c096295aedae16da" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
 
 [profile.release]

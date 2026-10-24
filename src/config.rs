@@ -143,12 +143,14 @@ pub struct Machine {
     pub keeper: Option<bool>,
     pub recover: Option<bool>,
     pub machine_name: Option<String>,
+    pub hub_url: Option<String>,
     pub report: Report,
     pub propose_issues: Option<bool>,
     pub worktree: Worktree,
 }
 
-pub const DEFAULT_REPORT_URL: &str = "https://kelpie.gronare.com";
+pub const DEFAULT_HUB_URL: &str = "https://kelpie.gronare.com";
+pub const DEFAULT_REPORT_URL: &str = DEFAULT_HUB_URL;
 pub const INBOX_TOKEN_PREFIX: &str = "kha_";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -265,6 +267,7 @@ pub struct Settings {
     pub keeper: Setting<bool>,
     pub recover: Setting<bool>,
     pub machine_name: Setting<String>,
+    pub hub_url: Setting<String>,
     pub report_url: Setting<String>,
     pub report_signals: Setting<bool>,
     pub report_text: Setting<ReportText>,
@@ -357,9 +360,9 @@ fn warn_once<T>(value: T, unknown: &[String]) -> T {
     value
 }
 
-const MACHINE_KEYS: [&str; 16] = ["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "keys", "ci", "routines", "report", "issues"];
+const MACHINE_KEYS: [&str; 17] = ["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "hub", "keys", "ci", "routines", "report", "issues"];
 const REPO_KEYS: [&str; 7] = ["actions", "worktree", "task", "review", "ci", "docs", "routines"];
-const SECTION_KEYS: [(&str, &[&str]); 16] = [
+const SECTION_KEYS: [(&str, &[&str]); 17] = [
     ("board", &["groups", "backlog"]),
     ("board.backlog", &["sources", "ongoing"]),
     ("update", &["channel"]),
@@ -369,6 +372,7 @@ const SECTION_KEYS: [(&str, &[&str]); 16] = [
     ("report", &["url", "signals", "text", "enabled", "inbox_token"]),
     ("issues", &["propose"]),
     ("machine", &["name"]),
+    ("hub", &["url"]),
     ("worktree", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"]),
     ("task", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox"]),
     ("review", &["model"]),
@@ -584,6 +588,11 @@ fn report(table: &Table) -> Result<Report> {
     Ok(Report { url, enabled, signals, text, inbox_token })
 }
 
+fn hub_url(table: &Table) -> Result<Option<String>> {
+    let Some(hub) = subtable(table, "hub", "hub")? else { return Ok(None) };
+    text(hub, "url", "hub.url")?.map(|url| crate::hub::hub_url(&url).map_err(|error| format!("hub.url: {error}"))).transpose()
+}
+
 fn machine_name(table: &Table) -> Result<Option<String>> {
     let Some(machine) = subtable(table, "machine", "machine")? else { return Ok(None) };
     let Some(value) = machine.get("name") else { return Ok(None) };
@@ -728,9 +737,6 @@ fn table(text: &str, source: &str) -> Result<Table> {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    if table.contains_key("hub") {
-        return Err(fail("hub: kelpie hub join sets the hub and keeps it in kelpie's state with the machine's keys; remove [hub] here".to_string()));
-    }
     if table.contains_key("docs") {
         return Err(fail(format!("docs.required: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
     }
@@ -743,7 +749,7 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
     let Board { sources, groups, ongoing } = board(&table).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, worktree })
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, channel: update(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, hub_url: hub_url(&table).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, worktree })
 }
 
 const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
@@ -752,7 +758,7 @@ const MACHINE_WIDE: &str = "applies to every repo, so it lives in config.toml";
 pub fn parse_repo(text: &str, source: &str) -> Result<Worktree> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    for (key, setting) in [("board", "[board] groups and [board.backlog] sources and ongoing"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("machine", "[machine] name"), ("keys", "[keys]"), ("report", "[report] url, signals, text and inbox_token"), ("issues", "[issues] propose")] {
+    for (key, setting) in [("board", "[board] groups and [board.backlog] sources and ongoing"), ("notify", "[notify] command"), ("update", "[update] channel"), ("vault", "[vault] command"), ("restart", "[restart] idle_minutes and auto"), ("keeper", "[keeper] enabled"), ("recover", "[recover] enabled"), ("machine", "[machine] name"), ("hub", "[hub] url"), ("keys", "[keys]"), ("report", "[report] url, signals, text and inbox_token"), ("issues", "[issues] propose")] {
         if table.contains_key(key) {
             return Err(fail(format!("{key}: {MACHINE_WIDE}; set {setting} in {}", path().display())));
         }
@@ -812,6 +818,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         keeper: or_default(pick(None, machine.keeper.as_ref()), true),
         recover: or_default(pick(None, machine.recover.as_ref()), true),
         machine_name: pick(None, machine.machine_name.as_ref()).unwrap_or_else(|| Setting { value: short_hostname(), layer: Layer::Default }),
+        hub_url: or_default(pick(None, machine.hub_url.as_ref()), DEFAULT_HUB_URL.to_string()),
         report_url: or_default(pick(None, machine.report.url.as_ref()), DEFAULT_REPORT_URL.to_string()),
         report_signals: or_default(pick(None, machine.report.signals.as_ref().or(machine.report.enabled.as_ref())), true),
         report_text: or_default(pick(None, machine.report.text.as_ref().or((machine.report.enabled == Some(false)).then_some(&ReportText::Never))), ReportText::Ask),
@@ -889,7 +896,7 @@ fn quoted(items: &[&str]) -> String {
 }
 
 pub fn describe(loaded: &Loaded) -> String {
-    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, report_url, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
+    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, report_url, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -972,7 +979,9 @@ pub fn describe(loaded: &Loaded) -> String {
     key("recover.enabled", recover.value.to_string(), recover.layer,
         "Whether kelpie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
     key("machine.name", format!("{:?}", machine_name.value), machine_name.layer,
-        "The machine's one name: your phone shows it through the hub, and kelpie claims vault notes under it; kelpie hub join uses it, sets it from --name or asks for it when unset. A task started from a vault note writes it with the task's name into the note's kelpie frontmatter key, and kelpie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
+        "The machine's one name: your phone shows it through the hub, and kelpie claims vault notes under it; kelpie hub connect and kelpie hub join use it, set it from --name or ask for it when unset. A task started from a vault note writes it with the task's name into the note's kelpie frontmatter key, and kelpie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
+    key("hub.url", format!("{:?}", hub_url.value), hub_url.layer,
+        "The hub kelpie hub connect and the board's hub window connect this machine to: the kelpie hub unless set, or your own kelpie hub at an https address (http only on this machine). Choosing your own hub there sets it; the hub a machine is connected to stays in kelpie's state with its keys, so changing this key later moves nothing (kelpie hub move does). config.toml only.");
     key("report.signals", report_signals.value.to_string(), report_signals.layer,
         "Whether kelpie sends its maintainers error signals: when kelpie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kelpie's version and commit, the OS and CPU architecture, the component (a fixed name from kelpie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Each send is a line under messages on the board; false sends none and drops what was counted; config.toml only.");
     key("report.text", format!("{:?}", report_text.value.key()), report_text.layer,
@@ -1269,7 +1278,7 @@ mod tests {
     #[test]
     fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
         let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kelpie/config.toml", &MACHINE_KEYS);
-        let all = "board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, keys, ci, routines, report, issues";
+        let all = "board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, routines, report, issues";
         assert_eq!(warned("colour = 1
 "), [format!("/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: {all}")]);
         assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: {all}")]);

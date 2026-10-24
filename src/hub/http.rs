@@ -12,6 +12,7 @@ pub const LONG_POLL: Duration = Duration::from_secs(35);
 #[derive(Clone, Debug, PartialEq)]
 pub enum HubError {
     Status { status: u16, code: String },
+    PlanInactive { url: Option<String> },
     Transport(String),
     Redirect(String),
 }
@@ -20,6 +21,7 @@ impl HubError {
     pub fn status(&self) -> Option<u16> {
         match self {
             HubError::Status { status, .. } => Some(*status),
+            HubError::PlanInactive { .. } => Some(402),
             _ => None,
         }
     }
@@ -34,6 +36,8 @@ impl fmt::Display for HubError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HubError::Status { status, code } => write!(formatter, "the hub answered {status} {code}"),
+            HubError::PlanInactive { url: Some(url) } => write!(formatter, "Your kelpie hub subscription isn't active: {url}"),
+            HubError::PlanInactive { url: None } => formatter.write_str("Your kelpie hub subscription isn't active"),
             HubError::Transport(message) => write!(formatter, "could not reach the hub: {message}"),
             HubError::Redirect(message) => write!(formatter, "the hub's redirect was not followed: {message}"),
         }
@@ -111,7 +115,11 @@ impl Client {
             if (200..300).contains(&status) {
                 return Ok(text);
             }
-            let code = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|value| value["error"].as_str().map(str::to_string)).unwrap_or_else(|| response.status().canonical_reason().unwrap_or("error").to_string());
+            let body = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
+            let code = body["error"].as_str().map(str::to_string).unwrap_or_else(|| response.status().canonical_reason().unwrap_or("error").to_string());
+            if status == 402 && code == kelpie_hub_api::PLAN_INACTIVE {
+                return Err(HubError::PlanInactive { url: body["url"].as_str().map(str::to_string) });
+            }
             return Err(HubError::Status { status, code });
         }
         Err(HubError::Redirect(format!("more than {MAX_HOPS} redirects")))

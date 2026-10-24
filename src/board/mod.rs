@@ -6,6 +6,7 @@ mod detail;
 mod draw;
 mod editor;
 mod header;
+mod hub_window;
 pub(crate) mod images;
 mod inbox;
 mod input;
@@ -108,6 +109,7 @@ enum Mode {
     Report { id: String, scroll: u16, read: bool, nudged: bool },
     NoteCard { key: String, scroll: u16, nudged: bool },
     Help(keys_window::Scroll),
+    Hub(Box<hub_window::Window>),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -193,6 +195,8 @@ struct App {
     subject: Option<notices::Subject>,
     shown: Option<notices::Subject>,
     toast: Option<notices::Toast>,
+    hub_paths: Option<hub_window::Paths>,
+    hub_banner: Option<String>,
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
@@ -503,6 +507,7 @@ impl App {
             }
             working @ Mode::Working { .. } => self.mode = working,
             Mode::Questions(window) => self.handle_questions(window, key),
+            Mode::Hub(window) => self.handle_hub(window, key),
             Mode::Report { id, scroll, read, .. } => self.confirm_report(id, scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
@@ -568,6 +573,7 @@ impl App {
         match act {
             Act::Messages => self.press_m(),
             Act::Reports => self.press_reports(),
+            Act::Hub => self.open_hub(),
             Act::Move => {
                 let (down, before) = (!matches!(key.code, KeyCode::Up | KeyCode::Char('k')), self.work_selected);
                 self.move_selection(if down { 1 } else { -1 });
@@ -900,7 +906,7 @@ impl App {
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
-            filter: None, ctrl_c: None, notice: None, lead_chat: None, lead_versions: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), subject: None, shown: None, toast: None,
+            filter: None, ctrl_c: None, notice: None, lead_chat: None, lead_versions: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
         }
     }
 }
@@ -950,6 +956,7 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             app.poll_answer();
             app.take_working_result();
+            app.poll_hub();
             if !matches!(app.mode, Mode::Message(_)) {
                 app.update_shown = false;
             }
@@ -1000,6 +1007,7 @@ pub fn run(overlay: bool) -> Result<String> {
                             save_fold(app.fold_file.as_deref(), app.fold, app.seen);
                         }
                         app.follow_questions();
+                        app.hub_banner = crate::lead::state_location().ok().and_then(|state| crate::hub::relay::load(&state).plan_inactive);
                         app.error = None;
                     }
                     Err(error) => app.error = Some(error),

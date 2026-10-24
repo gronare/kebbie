@@ -50,7 +50,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `hub` | Whether the machine joined a kelpie hub; when it has, the hub's address and the machine's name, how many phones are paired and when the board last went out, warning when the hub does not answer, no phone is paired or the last post failed. |
 | `maintainers` | Whether error signals go to kelpie's maintainers (`report.signals`), when they last went and whether that failed, and what happens to kelpie's own bug reports (`report.text`); a warning while `"always"` is set but not armed. |
 | `reports` | With `report.inbox_token` set only: the reports endpoint, how many reports were filed here, the last fetch and its error, and how many reports wait in quarantine on the hub. |
-| `machine` | With the vault on or a hub joined only: the name the phone and the other machines on the vault see, a warning while `machine.name` is unset. |
+| `machine` | With the vault on or a hub connected only: the name the phone and the other machines on the vault see, a warning while `machine.name` is unset. |
 | `notify` | Whether `notify.command` is set. It is never run. |
 | `sandbox` | Whether tasks run in the sandbox: on and ready, on with what is missing on Linux (a `fail`, since tasks then do not start), or off with `task.sandbox = false` (a `warn` that says a task's shell can pass as you). |
 | `vault` | The vault plugin: on, missing (fine, it is optional) or too old. |

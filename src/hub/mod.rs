@@ -1,8 +1,10 @@
 pub mod board;
+pub mod connect;
 pub mod http;
 pub mod identity;
 pub mod inbox;
 pub mod pair;
+pub mod qr;
 pub mod relay;
 pub mod report;
 #[cfg(test)]
@@ -87,32 +89,44 @@ fn linked(config: &Path) -> bool {
     std::fs::symlink_metadata(config).is_ok_and(|metadata| metadata.file_type().is_symlink())
 }
 
-pub fn join_named(state: &Path, config: &Path, url: &str, code: &str, given: Option<&str>, ask: Option<&AskName>, now: u64) -> Result<String> {
-    if let Some(joined) = identity::load(state)? {
-        return Err(already(&joined));
-    }
-    let configured = crate::config::load_machine(config)?.machine_name;
-    let named = name_for_join(configured.as_deref(), given, ask)?;
+pub fn checked_name(config: &Path, configured: Option<&str>, given: Option<&str>, ask: Option<&AskName>) -> Result<Named> {
+    let named = name_for_join(configured, given, ask)?;
     if let Named::Chosen(name) = &named {
         crate::config::valid_machine_name(name)?;
         if !linked(config) {
             crate::routine_file::check_machine_name_in(config, name)?;
         }
     }
-    let joined = join(state, url, code, named.name(), now)?;
-    let notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Joined {} as {}", joined.url, joined.name)).next("kelpie hub pair pairs your phone; the keeper posts the board once a device is paired.");
-    let set = format!("[machine] name = {:?}", joined.name);
+    Ok(named)
+}
+
+pub fn name_detail(config: &Path, named: Named, configured: Option<String>, name: &str) -> Option<(&'static str, String)> {
+    let set = format!("[machine] name = {name:?}");
     match named {
-        Named::Configured(_) => notice,
+        Named::Configured(_) => None,
         Named::Chosen(_) if linked(config) => {
             let after = configured.map_or(String::new(), |configured| format!("; until then the hub shows it as {configured:?} after the next post, the name that file sets"));
-            notice.detail("not set", format!("{} is a link, so kelpie writes no per-machine key through it; set {set} there or in a config.toml of this machine's own{after}", crate::config::shown(config)))
+            Some(("not set", format!("{} is a link, so kelpie writes no per-machine key through it; set {set} there or in a config.toml of this machine's own{after}", crate::config::shown(config))))
         }
-        Named::Chosen(name) => match crate::routine_file::set_machine_name_in(config, &name) {
-            Ok(()) => notice.detail("set", format!("{set} in {}", config.display())),
-            Err(error) => notice.detail("not set", format!("{set} in {}: {error}; set it by hand so the vault and the phone use one name", config.display())),
-        },
-        Named::Host(_) => notice.detail("named", format!("after the host; set [machine] name in {} and the hub shows the new name after the next post", config.display())),
+        Named::Chosen(chosen) => Some(match crate::routine_file::set_machine_name_in(config, &chosen) {
+            Ok(()) => ("set", format!("{set} in {}", config.display())),
+            Err(error) => ("not set", format!("{set} in {}: {error}; set it by hand so the vault and the phone use one name", config.display())),
+        }),
+        Named::Host(_) => Some(("named", format!("after the host; set [machine] name in {} and the hub shows the new name after the next post", config.display()))),
+    }
+}
+
+pub fn join_named(state: &Path, config: &Path, url: &str, code: &str, given: Option<&str>, ask: Option<&AskName>, now: u64) -> Result<String> {
+    if let Some(joined) = identity::load(state)? {
+        return Err(already(&joined));
+    }
+    let configured = crate::config::load_machine(config)?.machine_name;
+    let named = checked_name(config, configured.as_deref(), given, ask)?;
+    let joined = join(state, url, code, named.name(), now)?;
+    let notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Joined {} as {}", joined.url, joined.name)).next("kelpie hub add-device adds your phone; the keeper posts the board once a device is paired.");
+    match name_detail(config, named, configured, &joined.name) {
+        Some((label, text)) => notice.detail(label, text),
+        None => notice,
     }.ok()
 }
 
@@ -176,13 +190,13 @@ fn ago(at: Option<u64>, now: u64) -> String {
 
 pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<String> {
     let Some(identity) = identity::load(state)? else {
-        return Ok("Not joined to a hub. kelpie hub join <url> <join code> shows this machine's board on your phone.".to_string());
+        return Ok("Not connected to a hub. kelpie hub connect, or H on the board, shows this machine's board on your phone.".to_string());
     };
     let relay = relay::load(state);
     let mut lines = vec![format!("hub:      {}", identity.url), format!("machine:  {} ({})", identity.name, identity.machine)];
     lines.extend(rename_line(&identity, configured).map(|line| format!("name:     {line}")));
     if identity.devices.is_empty() {
-        lines.push("devices:  none; kelpie hub pair pairs your phone".to_string());
+        lines.push("devices:  none; kelpie hub add-device adds your phone".to_string());
     }
     for device in &identity.devices {
         lines.push(format!("device:   {} paired {}", device.id, ago(Some(device.paired_at), now)));
@@ -201,7 +215,7 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
 
 // Nothing here proves the new address is the same hub, so no token goes there until the user has chosen it.
 pub fn move_to(state: &Path, url: &str) -> Result<String> {
-    let mut identity = identity::load(state)?.ok_or("this machine has not joined a hub; kelpie hub join <url> <join code> first")?;
+    let mut identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kelpie hub connect first")?;
     let url = hub_url(url)?;
     reach(&url).map_err(|error| format!("{url} does not answer as a kelpie hub: {error}; nothing changed"))?;
     let before = std::mem::replace(&mut identity.url, url);
@@ -254,6 +268,14 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             sync_name(&state, configured.as_deref())?;
             status_text(&state, configured.as_deref(), now)
         }
+        Some("connect") => {
+            crate::permit::user_only("connecting a hub")?;
+            connect::cli(&state, &crate::config::path(), name, interactive(), now)
+        }
+        Some("add-device") => {
+            crate::permit::user_only("adding a device")?;
+            connect::add_device_cli(&state, interactive(), now)
+        }
         Some("join") => {
             crate::permit::user_only("joining a hub")?;
             let (Some(url), Some(code)) = (rest.first(), rest.get(1)) else { return Err("kelpie hub join needs the hub's address and a join code: kelpie hub join https://hub.example.com <join code>".to_string()) };
@@ -279,14 +301,14 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             let url = rest.first().ok_or("kelpie hub move needs the hub's new address: kelpie hub move https://hub.example.com")?;
             move_to(&state, url)
         }
-        Some(other) => Err(format!("kelpie hub knows join, pair, move, status and leave, not {other}")),
+        Some(other) => Err(format!("kelpie hub knows connect, add-device, join, pair, move, status and leave, not {other}")),
     }
 }
 
 pub fn config_line(state: Option<&Path>) -> String {
     let identity = state.and_then(|state| identity::load(state).ok().flatten());
     let value = identity.map_or("none".to_string(), |identity| format!("{:?}", identity.url));
-    format!("hub.url = {value}  (kelpie hub join)\n  The hub this machine posts its board to, sealed to the phones it paired with; kelpie hub join sets it, kelpie hub leave forgets it, kelpie hub move moves it. Kept in kelpie's state with the machine's keys, not in config.toml.")
+    format!("hub.connected = {value}  (kelpie hub connect)\n  The hub this machine posts its board to, sealed to the phones it paired with; kelpie hub connect or join sets it, kelpie hub leave forgets it, kelpie hub move moves it. Kept in kelpie's state with the machine's keys, not in config.toml.")
 }
 
 fn check(level: Level, name: &str, fact: impl Into<String>, fix: Vec<String>) -> Check {
@@ -296,7 +318,7 @@ fn check(level: Level, name: &str, fact: impl Into<String>, fix: Vec<String>) ->
 pub fn doctor(state: &Path, configured: Option<&str>, now: u64, reach: impl FnOnce(&str) -> std::result::Result<(), String>) -> Check {
     let name = "hub";
     let Ok(Some(identity)) = identity::load(state) else {
-        return check(Level::Ok, name, "not joined; kelpie hub join <url> <join code> shows the board on your phone", Vec::new());
+        return check(Level::Ok, name, "not connected; kelpie hub connect shows the board on your phone", Vec::new());
     };
     let relay = relay::load(state);
     let posted = relay.posted_at.map_or("no board posted yet".to_string(), |at| format!("board rev {} posted {}", relay.rev, ago(Some(at), now)));
@@ -305,7 +327,10 @@ pub fn doctor(state: &Path, configured: Option<&str>, now: u64, reach: impl FnOn
         return check(Level::Warn, name, format!("{fact}; not reachable: {error}"), vec!["check the address and your network; kelpie hub status shows the last error".to_string()]);
     }
     if identity.devices.is_empty() {
-        return check(Level::Warn, name, format!("{fact}; no phone paired, so no board goes out"), vec!["kelpie hub pair".to_string()]);
+        return check(Level::Warn, name, format!("{fact}; no phone paired, so no board goes out"), vec!["kelpie hub add-device".to_string()]);
+    }
+    if let Some(plan) = &relay.plan_inactive {
+        return check(Level::Warn, name, format!("{fact}; {plan}"), vec!["everything on this machine keeps working; the phone gets the board again once the subscription is active".to_string()]);
     }
     if let Some(error) = &relay.error {
         return check(Level::Warn, name, format!("{fact}; last post failed {}: {error}", ago(relay.error_at, now)), vec!["kelpie hub status; the keeper retries by itself".to_string()]);

@@ -24,6 +24,7 @@ pub enum Act {
     HideChat,
     Messages,
     Reports,
+    Hub,
     Help,
     Inbox,
     New,
@@ -90,8 +91,8 @@ const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 
 impl Act {
-    pub const EVERY: [Act; 46] = [
-        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Reports, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 47] = [
+        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Reports, Act::Hub, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
@@ -108,6 +109,7 @@ impl Act {
             Act::HideChat => "hide_chat",
             Act::Messages => "messages",
             Act::Reports => "reports",
+            Act::Hub => "hub",
             Act::Help => "help",
             Act::Inbox => "inbox",
             Act::New => "new",
@@ -163,6 +165,7 @@ impl Act {
             Act::HideChat => Default::Char('h'),
             Act::Messages => Default::Char('m'),
             Act::Reports => Default::Char('B'),
+            Act::Hub => Default::Char('H'),
             Act::Help => Default::Char('?'),
             Act::Inbox => Default::Char('i'),
             Act::New => Default::Char('n'),
@@ -220,6 +223,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Inbox, on: ALL, help: "inbox: the questions waiting on you, one at a time with tab to the next; ↑ ↓ j k (and ← → in a plan) pick an answer and ⏎ sends it, pgup pgdn scroll the question or the plan, or its letter (a c r x, 1-9, w) answers directly; an answer with a comment opens the comment box, esc back to the answers; o opens a plan file, g goes to the task's Space", hint: Hint::Both },
     Binding { act: Act::Messages, on: BOARD, help: "messages at the bottom: one line, then open with ↑ ↓ moving through them and ⏎ reading one (esc back to the tasks), then hidden", hint: Hint::Full },
     Binding { act: Act::Reports, on: BOARD, help: "kelpie bugs you or the lead filed, to send to kelpie's maintainers: shows or hides the list under Work (hidden at first; the header counts them); in it ↑ ↓ pick one, ⏎ shows the text and asks y / n, n keeps it here only, esc back to the tasks", hint: Hint::No },
+    Binding { act: Act::Hub, on: BOARD, help: "the kelpie hub, to see this board on your phone: not connected, choose the kelpie hub or your own and connect through the browser (a link, a code to check and a QR code); connected, the hub, this machine's name and its paired devices, a to add a phone or browser (a QR code, then six digits to compare and y), l to leave", hint: Hint::No },
     Binding { act: Act::Filter, on: BOARD, help: "filter the selected column: type part of a name, ⏎ keeps it, esc clears it", hint: Hint::No },
     Binding { act: Act::New, on: &[Work], help: "new task", hint: Hint::No },
     Binding { act: Act::New, on: &[Backlog], help: "in the Backlog column: a new item in the local backlog (a new task without the local source)", hint: Hint::No },
@@ -554,9 +558,10 @@ mod tests {
         assert!(!keys.hints(Work, true).1.iter().any(|(_, word, _)| *word == "chat"), "the short hint line leaves it out");
         assert!(keys.help(&[Work, Backlog], true).iter().any(|(key, text)| key == "h" && text.starts_with("hide or show the lead's chat")));
         assert!(!keys.help(&[Work, Backlog], false).iter().any(|(key, _)| key == "h"));
-        let (moved, errors) = Keys::with(&entries(&[("hide_chat", "H")]));
+        let (moved, errors) = Keys::with(&entries(&[("hide_chat", "J")]));
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(moved.act(Work, &KeyEvent::from(KeyCode::Char('H'))), Some(Act::HideChat));
+        assert_eq!(moved.act(Work, &KeyEvent::from(KeyCode::Char('J'))), Some(Act::HideChat));
+        assert_eq!(Keys::with(&entries(&[("hide_chat", "H")])).1, ["keys.hide_chat: H is taken by hub"]);
         assert_eq!(Keys::with(&entries(&[("hide_chat", "g")])).1, ["keys.hide_chat: g is taken by go"]);
     }
 

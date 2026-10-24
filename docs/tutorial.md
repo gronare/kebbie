@@ -43,6 +43,7 @@ Setup prints one line per step, each starting with `done`, `already`, `skipped` 
 - it installs the Claude Code plugin from the same folder, so the plugin always matches the binary;
 - it shows the four keys it adds to the end of herdr's `config.toml` and writes them only on your `y`: `prefix+space` goes to the lead, `prefix+tab` moves between the board and the lead's chat, `prefix+t` opens the board, `prefix+u` updates kelpie. A key you already use for something else is left alone and named;
 - it reloads herdr's config so the keys work, or tells you to restart herdr when it cannot.
+- last, it asks whether to connect a kelpie hub now, to see the board on your phone, and runs `kelpie hub connect` only on your `y` (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)); you can do it later with `H` on the board.
 
 It ends with the warnings and failures from `kelpie doctor`. You can run setup again at any time; it changes only what is missing.
 

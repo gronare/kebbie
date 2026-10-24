@@ -59,7 +59,7 @@ Some of kelpie's work runs on a clock rather than on a command:
 - due [routines](routines.md) start their runs as tasks, every minute,
 - tasks that follow main are rebased when it moves, every minute (see [`kelpie follow`](../reference/commands.md#kelpie-follow-name-onoff)),
 - queued tasks start once every task they wait for has ended as done, every 15 seconds (see [`kelpie after`](../reference/commands.md#kelpie-after-name)),
-- with a hub joined and a phone paired, the board goes to the hub sealed to each phone when it changes, checked every 15 seconds, and at least once a minute (see [See your board on your phone](../how-to/see-your-board-on-your-phone.md)),
+- with a hub connected and a phone paired, the board goes to the hub sealed to each phone when it changes, checked every 15 seconds, and at least once a minute (see [See your board on your phone](../how-to/see-your-board-on-your-phone.md)),
 - error signals counted since the last send go to kelpie's maintainers, checked every hour and sent at most once a day (see [Error signals](../how-to/report-a-problem-with-kelpie.md#error-signals)),
 - with `[report] text = "always"` armed, kelpie bugs you or the lead filed go to kelpie's maintainers, every minute,
 - with `[report] inbox_token` set, on the machine of whoever runs the hub that takes the reports, the reports the hub let through are filed as kelpie issues, every 10 minutes (see [Receiving reports](../how-to/report-a-problem-with-kelpie.md#receiving-reports)).

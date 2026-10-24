@@ -16,12 +16,12 @@ use super::identity;
 use super::relay::{self, HEARTBEAT};
 use crate::status::tests::task;
 
-const WAIT: Duration = Duration::from_secs(15);
+pub(crate) const WAIT: Duration = Duration::from_secs(15);
 
 pub(crate) struct TestHub {
     pub(crate) url: String,
-    hub: Arc<Hub>,
-    runtime: tokio::runtime::Runtime,
+    pub(crate) hub: Arc<Hub>,
+    pub(crate) runtime: tokio::runtime::Runtime,
 }
 
 impl TestHub {
@@ -84,7 +84,7 @@ fn a_machine_joins_and_keeps_its_keys_to_itself() {
     assert_eq!((joined.url.as_str(), joined.name.as_str()), (hub.url.as_str(), "mac"));
     assert!(joined.token().starts_with("khm_"));
     let shown = super::status_text(&state, Some("mac"), now()).unwrap();
-    assert!(shown.contains(&hub.url) && shown.contains("mac") && shown.contains("kelpie hub pair"), "{shown}");
+    assert!(shown.contains(&hub.url) && shown.contains("mac") && shown.contains("kelpie hub add-device"), "{shown}");
     let (signing, encryption) = joined.secret().to_bytes();
     let file = std::fs::read_to_string(state.join("hub/identity.json")).unwrap();
     for secret in [joined.token().to_string(), format!("{:?}", kelpie_hub_api::Bytes32(signing)), format!("{:?}", kelpie_hub_api::Bytes32(encryption))] {
@@ -303,11 +303,11 @@ fn doctor_says_whether_the_hub_is_joined_reachable_and_posting() {
     let alone = crate::sh::test_dir("hub-doctor-none");
     let check = super::doctor(&alone, Some("mac"), now(), |_| Ok(()));
     assert_eq!(check.level, crate::doctor::Level::Ok);
-    assert!(check.fact.contains("not joined"), "{}", check.fact);
+    assert!(check.fact.contains("not connected") && check.fact.contains("kelpie hub connect"), "{}", check.fact);
     let state = hub.joined("mac");
     let lonely = super::doctor(&state, Some("mac"), now(), super::reach);
     assert_eq!(lonely.level, crate::doctor::Level::Warn);
-    assert!(lonely.fact.contains("no phone paired") && lonely.fix == ["kelpie hub pair"], "{}", lonely.fact);
+    assert!(lonely.fact.contains("no phone paired") && lonely.fix == ["kelpie hub add-device"], "{}", lonely.fact);
     hub.pair(&state, true).0.unwrap();
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
     let posting = super::doctor(&state, Some("mac"), now(), super::reach);
@@ -315,14 +315,20 @@ fn doctor_says_whether_the_hub_is_joined_reachable_and_posting() {
     assert!(posting.fact.contains(&hub.url) && posting.fact.contains("1 paired") && posting.fact.contains("board rev ") && posting.fact.contains(" posted "), "{}", posting.fact);
     let down = super::doctor(&state, Some("mac"), now(), |_| Err("connection refused".to_string()));
     assert!(down.level == crate::doctor::Level::Warn && down.fact.contains("not reachable: connection refused"), "{}", down.fact);
-    assert!(super::config_line(Some(&state)).starts_with(&format!("hub.url = {:?}  (kelpie hub join)", hub.url)));
-    assert!(super::config_line(Some(&alone)).starts_with("hub.url = none"));
+    assert!(super::config_line(Some(&state)).starts_with(&format!("hub.connected = {:?}  (kelpie hub connect)", hub.url)));
+    assert!(super::config_line(Some(&alone)).starts_with("hub.connected = none"));
 }
 
 #[test]
-fn the_hub_is_set_by_joining_never_in_config_toml() {
-    let refused = crate::config::parse_machine("[hub]\nurl = \"https://hub.example.com\"\n", "config.toml").unwrap_err();
-    assert!(refused.contains("kelpie hub join sets the hub"), "{refused}");
+fn hub_url_in_config_toml_names_the_hub_to_connect_to_and_defaults_to_the_kelpie_hub() {
+    let set = crate::config::parse_machine("[hub]\nurl = \"https://hub.example.com/\"\n", "config.toml").unwrap();
+    assert_eq!(set.hub_url.as_deref(), Some("https://hub.example.com"));
+    let unset = crate::config::settings(&crate::config::Worktree::default(), &crate::config::Machine::default()).hub_url;
+    assert_eq!((unset.value.as_str(), unset.layer), (crate::config::DEFAULT_HUB_URL, crate::config::Layer::Default));
+    assert!(crate::config::parse_machine("[hub]\nurl = \"http://hub.example.com\"\n", "config.toml").unwrap_err().contains("hub.url"));
+    assert!(crate::config::parse_repo("[hub]\nurl = \"https://hub.example.com\"\n", "app.toml").unwrap_err().contains("set [hub] url in"));
+    let (_, unknown) = crate::config::check_machine(&{ let file = crate::sh::test_dir("hub-url-keys").join("config.toml"); std::fs::write(&file, "[hub]\nurl = \"https://hub.example.com\"\nadress = \"x\"\n").unwrap(); file }).unwrap();
+    assert!(unknown.len() == 1 && unknown[0].contains("hub.adress: unknown key; known keys here: url"), "{unknown:?}");
 }
 
 #[test]
@@ -392,7 +398,7 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kelpie_as_one_issue_once_its_key
     assert!(again.contains(&format!("already, as report {number}")), "{again}");
 
     let maintainer = crate::sh::test_dir("report-maintainer");
-    let token = hub.hub.mint_admin_token("maintainer").unwrap().unwrap();
+    let token = hub.hub.mint_admin_token("maintainer", kelpie_hub::store::AdminScope::Reports).unwrap().unwrap();
     let settings = crate::config::Report { url: Some(hub.url.clone()), inbox_token: Some(token.clone()), ..Default::default() };
     assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "an unknown install's report waits in quarantine");
     let check = inbox::doctor(&maintainer, &settings, now()).unwrap();
@@ -682,4 +688,192 @@ fn the_board_offers_a_bug_with_text_ask_and_with_always_until_it_is_armed() {
     crate::hub::report::arm_in(&state, &crate::permit::Caller::User, true, ReportText::Always, now()).unwrap();
     assert!(!crate::hub::report::board_offers(&Report { text: Some(ReportText::Always), ..Default::default() }, &state), "armed, kelpie sends it without the offer");
     assert!(crate::hub::report::board_offers(&Report { text: Some(ReportText::Ask), ..Default::default() }, &state), "an arming left behind changes nothing under ask");
+}
+
+pub(crate) fn open_hub(configure: impl FnOnce(&mut Config)) -> TestHub {
+    TestHub::start_with(|config| {
+        config.connect_interval = 0;
+        config.rate = kelpie_hub::RateLimit { burst: 10_000, per_minute: 100_000 };
+        configure(config);
+    })
+}
+
+pub(crate) fn member(hub: &TestHub) -> kelpie_hub_fakes::browser::Browser {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let handle = format!("carl{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let mut browser = kelpie_hub_fakes::browser::Browser::new(&hub.url, kelpie_hub::DEV_ORIGIN, &handle);
+    hub.runtime.block_on(browser.sign_up_with_invite(&hub.hub.mint_invite().unwrap())).unwrap();
+    browser
+}
+
+fn named_config(name: &str) -> PathBuf {
+    let config = crate::sh::test_dir("hub-connect-config").join("config.toml");
+    std::fs::write(&config, format!("[machine]\nname = \"{name}\"\n")).unwrap();
+    config
+}
+
+fn connected(hub: &TestHub, browser: &mut kelpie_hub_fakes::browser::Browser) -> PathBuf {
+    let state = crate::sh::test_dir("hub-connected");
+    let mut pending = super::connect::start(&hub.url, "mac").unwrap();
+    hub.runtime.block_on(browser.approve_connect(&pending.link(), false)).unwrap();
+    let answer = pending.wait(&mut |_| true).unwrap();
+    assert_eq!(answer.pairing, None);
+    super::connect::finish(&state, &pending, &answer, None, || Ok(()), now()).unwrap();
+    state
+}
+
+#[test]
+fn a_machine_connects_through_the_browser_which_then_shows_its_board_without_digits() {
+    let hub = open_hub(|_| {});
+    let config = named_config("mac");
+    let state = crate::sh::test_dir("hub-connect");
+    let prepared = super::connect::prepare(&state, &config, None, Some(&|_: &str| panic!("a configured name is not asked for"))).unwrap();
+    let mut pending = super::connect::start(&hub.url, prepared.named.name()).unwrap();
+    let link = pending.link();
+    assert!(link.starts_with(&format!("{}#k=", pending.started.verification_uri_complete)) && link.contains(pending.user_code()) && link.contains("&m="), "{link}");
+    let mut browser = member(&hub);
+    let shown = hub.runtime.block_on(browser.connect_request(pending.user_code())).unwrap();
+    assert_eq!(shown.name, "mac");
+    let approval = hub.runtime.block_on(browser.approve_connect(&link, true)).unwrap();
+    let answer = pending.wait(&mut |_| panic!("an approved connect answers the first poll")).unwrap();
+    assert!(answer.pairing.is_some(), "the token answer names the browser's pairing");
+    let machine_state = state.clone();
+    let machine = std::thread::spawn(move || super::connect::finish(&machine_state, &pending, &answer, None, || Ok(()), now()));
+    let paired = hub.runtime.block_on(browser.show_board(approval, WAIT)).unwrap();
+    let said = machine.join().unwrap().unwrap();
+    assert_eq!(said, format!("Connected to {} as mac; the browser that approved it shows its board.", hub.url));
+    assert_eq!(super::connect::name_line(&config, prepared, "mac"), None, "a configured name leaves config.toml alone");
+    let identity = identity::load(&state).unwrap().unwrap();
+    assert_eq!((identity.url.as_str(), identity.name.as_str(), identity.machine.clone()), (hub.url.as_str(), "mac", paired));
+    assert!(identity.token().starts_with("khm_"));
+    let device = browser.device.as_ref().unwrap();
+    assert_eq!(identity.devices.iter().map(|known| (known.id.clone(), known.keys)).collect::<Vec<_>>(), [(device.device.clone().unwrap(), device.public())]);
+    let posted = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().posted.unwrap();
+    let boards = hub.runtime.block_on(device.boards()).unwrap();
+    assert_eq!(boards[0].rev, posted, "the browser reads the board the machine sealed to it");
+    let again = super::connect::prepare(&state, &config, None, None).err().unwrap();
+    assert!(again.contains("kelpie hub leave first"), "{again}");
+}
+
+#[test]
+fn a_connect_waits_while_pending_slows_down_when_asked_and_ends_on_a_denial_or_an_expired_code() {
+    let hub = TestHub::start_with(|config| config.connect_interval = 5);
+    let mut pending = super::connect::start(&hub.url, "mac").unwrap();
+    assert!(matches!(pending.poll().unwrap(), super::connect::Polled::Pending));
+    assert!(matches!(pending.poll().unwrap(), super::connect::Polled::SlowDown));
+    assert_eq!(pending.interval, 10, "slow_down adds five seconds");
+    let mut slept = Vec::new();
+    let stopped = pending.wait(&mut |wait| {
+        slept.push(wait);
+        false
+    }).err().unwrap();
+    assert_eq!((stopped.as_str(), slept), (super::connect::STOPPED, vec![Duration::from_secs(15)]), "the wait sleeps the grown interval");
+
+    let hub = open_hub(|_| {});
+    let mut pending = super::connect::start(&hub.url, "mac").unwrap();
+    let mut browser = member(&hub);
+    hub.runtime.block_on(browser.deny_connect(pending.user_code())).unwrap();
+    let denied = pending.wait(&mut |_| true).err().unwrap();
+    assert!(denied.starts_with("Cancelled in the browser"), "{denied}");
+
+    let hub = open_hub(|config| config.connect_ttl = 0);
+    let mut pending = super::connect::start(&hub.url, "mac").unwrap();
+    let expired = pending.wait(&mut |_| true).err().unwrap();
+    assert!(expired.contains("code expired"), "{expired}");
+    let state = crate::sh::test_dir("hub-connect-expired");
+    assert!(identity::load(&state).unwrap().is_none());
+}
+
+#[test]
+fn an_own_hub_is_tested_before_it_is_saved_once_and_never_through_a_linked_config() {
+    let hub = open_hub(|_| {});
+    let dir = crate::sh::test_dir("hub-own");
+    let config = dir.join("config.toml");
+    std::fs::write(&config, "# mine\n[machine]\nname = \"mac\"\n").unwrap();
+    let web = serving(|_| "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 15\r\nconnection: close\r\n\r\n<html>hi</html>".to_string());
+    let refused = super::connect::own_hub(&config, &web).err().unwrap();
+    assert!(refused.contains("does not answer as a kelpie hub") && refused.contains("nothing changed"), "{refused}");
+    assert!(super::connect::own_hub(&config, "http://hub.example.com").err().unwrap().contains("takes https"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "# mine\n[machine]\nname = \"mac\"\n", "a hub that fails the test is not saved");
+    let chosen = super::connect::choose_hub(&config, Some(&|| Ok(Some(format!("{}/", hub.url))))).unwrap();
+    assert_eq!(chosen.url, hub.url);
+    assert_eq!(chosen.note.as_deref(), Some(format!("[hub] url = {:?} set in {}", hub.url, config.display()).as_str()));
+    let written = std::fs::read_to_string(&config).unwrap();
+    assert_eq!(written, format!("# mine\n[machine]\nname = \"mac\"\n\n[hub]\nurl = {:?}\n", hub.url));
+    let again = super::connect::choose_hub(&config, Some(&|| panic!("a set [hub] url is not asked again"))).unwrap();
+    assert_eq!((again.url, again.note), (hub.url.clone(), None));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), written, "written once");
+    let kelpie = super::connect::choose_hub(&dir.join("fresh.toml"), Some(&|| Ok(None))).unwrap();
+    assert_eq!(kelpie.url, crate::config::DEFAULT_HUB_URL);
+    assert!(!dir.join("fresh.toml").exists(), "the kelpie hub needs no key");
+
+    let shared = dir.join("dotfiles.toml");
+    std::fs::write(&shared, "[keeper]\nenabled = true\n").unwrap();
+    let linked = dir.join("linked.toml");
+    std::os::unix::fs::symlink(&shared, &linked).unwrap();
+    let chosen = super::connect::own_hub(&linked, &hub.url).unwrap();
+    let note = chosen.note.unwrap();
+    assert!(note.contains("is a link") && note.contains(&format!("[hub] url = {:?}", hub.url)), "{note}");
+    assert_eq!(std::fs::read_to_string(&shared).unwrap(), "[keeper]\nenabled = true\n");
+}
+
+fn add_device(hub: &TestHub, state: &Path, browser: &mut kelpie_hub_fakes::browser::Browser, phone_shows: impl Fn(&str) -> String + Send + 'static, answer: bool) -> (crate::sh::Result<Id>, Result<Id, PairError>) {
+    let (link_out, link_in) = mpsc::channel::<String>();
+    let (digits_out, digits_in) = mpsc::channel::<String>();
+    let machine_state = state.to_path_buf();
+    let machine = std::thread::spawn(move || {
+        super::pair::add_device(&machine_state, WAIT, |added| link_out.send(added.url.clone()).unwrap(), |digits| answer && digits_in.recv_timeout(WAIT).is_ok_and(|phone| phone == digits), None, now())
+    });
+    let link = link_in.recv_timeout(WAIT).unwrap();
+    assert!(link.starts_with("http://localhost:8470/add?code="), "{link}");
+    let phone = hub.runtime.block_on(browser.add_this_phone(&link, WAIT, async move |digits: String| {
+        let _ = digits_out.send(phone_shows(&digits));
+        true
+    }));
+    (machine.join().unwrap(), phone)
+}
+
+#[test]
+fn a_device_added_from_the_machine_is_admitted_only_on_the_users_y_to_matching_digits() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected(&hub, &mut browser);
+    let (declined, _) = add_device(&hub, &state, &mut browser, |digits| digits.to_string(), false);
+    assert!(declined.unwrap_err().contains("the digits did not match"));
+    let (differ, _) = add_device(&hub, &state, &mut browser, |_| "000000".to_string(), true);
+    assert!(differ.unwrap_err().contains("nothing was paired"), "digits that differ admit nothing, whatever the phone tapped");
+    assert!(identity::load(&state).unwrap().unwrap().devices.is_empty());
+    let (added, phone) = add_device(&hub, &state, &mut browser, |digits| digits.to_string(), true);
+    let device = added.unwrap();
+    assert_eq!(phone.unwrap(), identity::load(&state).unwrap().unwrap().machine);
+    assert_eq!(identity::load(&state).unwrap().unwrap().devices.iter().map(|known| known.id.clone()).collect::<Vec<_>>(), [device]);
+}
+
+#[test]
+fn a_lapsed_plan_is_said_on_status_doctor_and_add_device_and_nothing_local_stops() {
+    const BILLING: &str = "https://billing.example.com/start";
+    let hub = open_hub(|config| {
+        config.plans = true;
+        config.billing_url = Some(BILLING.to_string());
+    });
+    let mut browser = member(&hub);
+    let account = hub.runtime.block_on(browser.account()).unwrap().account;
+    hub.hub.store().set_plan(&account, kelpie_hub_api::PlanStatus::Active, None).unwrap();
+    let state = connected(&hub, &mut browser);
+    let (added, _) = add_device(&hub, &state, &mut browser, |digits| digits.to_string(), true);
+    added.unwrap();
+    hub.hub.store().set_plan(&account, kelpie_hub_api::PlanStatus::Inactive, None).unwrap();
+    let said = format!("Your kelpie hub subscription isn't active: {BILLING}");
+    let failed = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap_err();
+    assert_eq!(failed, said);
+    assert_eq!(relay::load(&state).plan_inactive.as_deref(), Some(said.as_str()));
+    assert!(super::status_text(&state, Some("mac"), now()).unwrap().contains(&said));
+    let check = super::doctor(&state, Some("mac"), now(), |_| Ok(()));
+    assert!(check.level == crate::doctor::Level::Warn && check.fact.contains(&said) && check.fix[0].contains("keeps working"), "{}", check.fact);
+    let refused = super::pair::add_device(&state, WAIT, |_| panic!("no link without a plan"), |_| true, None, now()).unwrap_err();
+    assert_eq!(refused, said);
+    assert_eq!(identity::load(&state).unwrap().unwrap().devices.len(), 1, "the paired device stays");
+    hub.hub.store().set_plan(&account, kelpie_hub_api::PlanStatus::Active, None).unwrap();
+    relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now() + HEARTBEAT).unwrap();
+    assert_eq!(relay::load(&state).plan_inactive, None, "a post that goes through clears it");
 }
