@@ -188,8 +188,6 @@ fn finish_in(claude_dir: &Path, state: &Path, tracker: &mut Option<Tracker>) -> 
     let mut lines = vec![claude_plugin(claude_dir, &setup::claude_bin(), root.as_deref(), channel == Channel::Main && running.is_none())];
     count(tracker, "plugins", 1, plugins);
     lines.extend(vault_plugin(claude_dir, &setup::claude_bin()));
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-    lines.extend(crate::old_name::update_line(&crate::old_name::places_now(&home, claude_dir, &setup::claude_bin(), &herdr::bin(), &setup::herdr_config_path(&home))));
     count(tracker, "plugins", plugins, plugins);
     step(tracker, progress::PLUGINS, if vault_installed { "Updated the Claude Code and vault plugins" } else { "Updated the Claude Code plugin" }, true);
     step(tracker, progress::RESTART, "Restarting sessions", false);

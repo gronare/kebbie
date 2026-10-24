@@ -5,9 +5,6 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
-- kelpie is now kebbie: the command, the herdr and Claude Code plugins, its folders and its environment variables all take the new name, and the hub is at https://hub.kebbie.dev
-- An install from before the rename moves over in four steps, in the how-to Move from kelpie to kebbie: one herdr reinstall by hand, then kebbie moves ~/.local/state/kelpie and ~/.config/kelpie on its first run and kebbie setup switches the rest, asking before each
-- The KELPIE_ environment variables you set still work under their old names for now, and kebbie says once which to rename; a notify command gets both names
 - The hub window shows the devices that see your board by name, with when each was paired and last seen, and r removes one
 - In the hub window, n names a device on this machine and m renames this machine
 - The hub window says the board is being sent without a ticking clock, and asks you to update the hub when it is too old to list devices
@@ -21,7 +18,6 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### Fixed
 - L on the board restarts the lead whenever you press it, and its result goes by like the board's other results
-- A lead or board still running in the state folder from before the rename moves into the lead's own folder, the lead keeping its conversation
 - prefix+space brings the board back in the lead Space after you quit it or closed its pane, and creates the lead Space with its board when there is none, never a second board
 - The lead and other sessions restart onto each new kebbie again; a restart for an earlier update no longer holds them back
 - The update's summary lists what was written since the kebbie you had, names only the bugs this update fixed, keeps its restarts up to date while open, and the board restarts itself onto the new kebbie when you close it

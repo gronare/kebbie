@@ -94,7 +94,7 @@ pub fn invocation(command: &str, notice: &Notice) -> Invocation {
         ("KEBBIE_TASK", notice.task.clone().unwrap_or_default()),
         ("KEBBIE_REPO", notice.repo.clone().unwrap_or_default()),
         ("KEBBIE_TEXT", notice.text.clone()),
-    ].into_iter().flat_map(|(name, value)| [(name.to_string(), value.clone()), (name.replacen("KEBBIE_", "KELPIE_", 1), value)]).collect();
+    ].into_iter().map(|(name, value)| (name.to_string(), value)).collect();
     Invocation {
         program: "sh".to_string(),
         args: vec!["-c".to_string(), command.to_string(), PROGRAM_NAME.to_string(), notice.text.clone()],
@@ -281,16 +281,14 @@ mod tests {
         let built = invocation("curl -d \"$KEBBIE_TEXT\" ntfy.sh/mine", &notice(Event::NeedsYou, "billing@app", "billing@app needs you: answer which queue"));
         assert_eq!(built.program, "sh");
         assert_eq!(built.args, ["-c", "curl -d \"$KEBBIE_TEXT\" ntfy.sh/mine", "kebbie-notify", "billing@app needs you: answer which queue"]);
-        let new: Vec<(String, String)> = built.env.iter().filter(|(name, _)| name.starts_with("KEBBIE_")).cloned().collect();
-        assert_eq!(new, [
+        assert_eq!(built.env, [
             ("KEBBIE_EVENT".to_string(), "needs-you".to_string()),
             ("KEBBIE_TASK".to_string(), "billing".to_string()),
             ("KEBBIE_REPO".to_string(), "app".to_string()),
             ("KEBBIE_TEXT".to_string(), "billing@app needs you: answer which queue".to_string()),
         ]);
-        assert!(built.env.contains(&("KELPIE_TEXT".to_string(), "billing@app needs you: answer which queue".to_string())), "a command written for the old name still gets its text");
         let summary = invocation("x", &Notice { event: Event::Summary, task: None, repo: None, text: "3 tasks ready".to_string() });
-        assert_eq!(summary.env[..3], [("KEBBIE_EVENT".to_string(), "summary".to_string()), ("KELPIE_EVENT".to_string(), "summary".to_string()), ("KEBBIE_TASK".to_string(), String::new())]);
+        assert_eq!(summary.env[..2], [("KEBBIE_EVENT".to_string(), "summary".to_string()), ("KEBBIE_TASK".to_string(), String::new())]);
         assert_eq!(Notice::from(Event::Question, "lead", "x".to_string()).task, None);
         assert_eq!(Event::of_state("ready"), Some(Event::Ready));
         assert_eq!(Event::of_state("working"), None);

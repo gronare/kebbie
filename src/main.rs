@@ -29,7 +29,6 @@ mod menu;
 mod messages;
 mod notice;
 mod notify;
-mod old_name;
 mod peers;
 mod phase;
 mod permit;
@@ -681,7 +680,6 @@ fn doctor() -> ExitCode {
 }
 
 fn main() -> ExitCode {
-    old_name::on_start();
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.len() > 2 && argv[0] == "notify" && argv[1] == notify::DELIVER {
         notify::deliver(&argv[2..]);

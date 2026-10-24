@@ -94,7 +94,6 @@ pub struct Machine {
     pub herdr: String,
     pub herdr_config: PathBuf,
     pub follows_github: bool,
-    pub codex_home: Option<PathBuf>,
 }
 
 const EXAMPLE: &str = include_str!("../examples/herdr-config.toml");
@@ -120,7 +119,6 @@ pub fn install(yes: bool) -> Result<String> {
         herdr: crate::herdr::bin(),
         herdr_config: herdr_config_path(&home),
         follows_github: channel == crate::config::Channel::Main && crate::release::read_override(&state).is_none(),
-        codex_home: crate::agent::codex::home(),
         home,
     };
     let asking = if yes { Asking::Yes } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) { Asking::Terminal } else { Asking::Closed };
@@ -156,28 +154,11 @@ pub fn hub_connected(result: Result<String>) -> String {
 
 pub fn install_on(machine: &Machine, asking: Asking, input: &mut impl BufRead, output: &mut impl Write) -> Result<()> {
     let say = |output: &mut dyn Write, line: String| writeln!(output, "{line}").map_err(|error| error.to_string());
-    let old = crate::old_name::leftovers(&old_places(machine), crate::old_name::herdr_list(&machine.herdr).as_deref());
-    let (switched, rewrote) = crate::old_name::switch_over(&old, asking, input, output)?;
-    for line in switched {
-        say(output, line)?;
-    }
     say(output, link_binary(&machine.home, &machine.path))?;
     say(output, claude_plugin(machine))?;
     let (keys, wrote) = herdr_keys(&machine.herdr_config, asking, input, output)?;
     say(output, keys)?;
-    say(output, herdr_restart(machine, wrote || rewrote))
-}
-
-fn old_places(machine: &Machine) -> crate::old_name::Places {
-    crate::old_name::Places {
-        home: machine.home.clone(),
-        data_home: machine.data_home.clone(),
-        claude_dir: machine.claude_dir.clone(),
-        claude: machine.claude.clone(),
-        herdr: machine.herdr.clone(),
-        herdr_config: machine.herdr_config.clone(),
-        codex_home: machine.codex_home.clone(),
-    }
+    say(output, herdr_restart(machine, wrote))
 }
 
 fn line(verb: &str, step: &str, detail: impl std::fmt::Display) -> String {
@@ -522,7 +503,6 @@ mod tests {
             herdr: "false".to_string(),
             herdr_config: home.join(".config/herdr/config.toml"),
             follows_github: false,
-            codex_home: Some(home.join(".codex")),
             home,
         };
         (machine, log)

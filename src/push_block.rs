@@ -8,8 +8,6 @@ use crate::sh::Result;
 
 pub const TOKEN_VAR: &str = "KEBBIE_PUSH_TOKEN";
 const BLOCKED: &str = "kebbie-blocks-push:";
-// What a worktree blocked before the rename still carries; install takes it out so no slot runs or rewrites through it.
-const OLD_BLOCK: (&str, &str) = ("kelpie-hooks", "kelpie-blocks-push:");
 const REFUSAL: &str = "kebbie: a task's worktree does not push. The user pushes from the board, or the lead with kebbie push for a task the user gave push permission. The block stops an accidental push, not a determined one.";
 const FOR_A_PR: &str = "To push this branch for a pull request, run in your own terminal: git -C %s push origin %s\\n";
 
@@ -108,8 +106,6 @@ pub fn install(worktree: &Path, state: &Path) -> Result<Block> {
     let original = original_hooks(worktree)?;
     let dir = hooks_dir(worktree)?;
     let _ = fs::remove_dir_all(&dir);
-    let _ = fs::remove_dir_all(dir.with_file_name(OLD_BLOCK.0));
-    let _ = git(worktree, &["config", "--worktree", "--unset-all", &format!("url.{}.pushInsteadOf", OLD_BLOCK.1)]);
     fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     let script = hook_script(&original, state, &main_checkout(worktree)?);
     for name in HOOKS {
@@ -345,11 +341,6 @@ mod tests {
         assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("repo hook refuses"), "{}", String::from_utf8_lossy(&output.stderr));
         install(slot, state).unwrap();
         assert_eq!(git(slot, &["config", "--worktree", "--get-all", "core.hooksPath"]).unwrap().lines().count(), 1, "installing again replaces the block");
-        let old_hooks = hooks_dir(slot).unwrap().with_file_name(OLD_BLOCK.0);
-        fs::create_dir_all(&old_hooks).unwrap();
-        git(slot, &["config", "--worktree", &format!("url.{}.pushInsteadOf", OLD_BLOCK.1), ""]).unwrap();
-        install(slot, state).unwrap();
-        assert!(!old_hooks.exists() && git(slot, &["config", "--worktree", "--get-all", &format!("url.{}.pushInsteadOf", OLD_BLOCK.1)]).is_err(), "a block from before the rename is taken out");
         fs::remove_dir_all(&fixture.base).unwrap();
     }
 

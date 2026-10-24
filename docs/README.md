@@ -49,7 +49,6 @@ The vault
 Your machine
 
 - [Switch update channel](how-to/switch-update-channel.md): releases or every push to main.
-- [Move from kelpie to kebbie](how-to/move-from-kelpie.md): an install made under the old name, in four steps.
 - [Try unreleased code](how-to/try-unreleased-code.md): `--from` a branch or checkout, `--stable` back.
 - [Turn off automatic restarts](how-to/turn-off-automatic-restarts.md): restart stale sessions yourself.
 - [Show plan usage on the board](how-to/show-plan-usage.md): the status line command.

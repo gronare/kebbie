@@ -1310,11 +1310,11 @@ fn going_to_the_lead_starts_a_quit_board_after_the_focus_and_never_a_second_one(
 }
 
 #[test]
-fn going_to_the_lead_moves_a_board_running_in_the_old_state_folder_into_the_leads_folder() {
+fn going_to_the_lead_moves_a_board_running_in_another_folder_into_the_leads_folder() {
     let lab = Lab::new("lead-board-old-dir");
     lead_space(&lab, false, false, "w_lead:p1");
     let answers = lab.root.join("answers");
-    let old = lab.root.join("kelpie-lead");
+    let old = lab.root.join("other-lead");
     fs::write(answers.join("pane-process-info.json"), format!(r#"{{"result":{{"process_info":{{"shell_pid":1,"foreground_processes":[{{"pid":2,"argv":["/opt/kebbie","board"],"cwd":"{}"}}]}}}}}}"#, old.display())).unwrap();
     fs::write(answers.join("pane-send-keys.json"), r#"{"result":{}}"#).unwrap();
     let herdr = lab.herdr.clone();

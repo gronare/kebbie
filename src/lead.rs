@@ -424,7 +424,7 @@ fn start_board_at_shell(board: &str) -> Result<bool> {
     Ok(true)
 }
 
-// The folder a running board works in when it is not the lead's own, as after the rename moved the state dir.
+// The folder a running board works in when it is not the lead's own, as after the state dir moved.
 fn board_elsewhere(board: &str) -> Option<String> {
     let info = herdr::process_info(board).ok()?;
     let process = &info["foreground_processes"][0];

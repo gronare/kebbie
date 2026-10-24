@@ -121,7 +121,7 @@ fn base(path: &str) -> &str {
 pub const NO_ROLE: &str = "it runs without its task role";
 pub const OUTSIDE_LEAD_DIR: &str = "it runs outside the lead's folder";
 
-// A lead started before the rename runs in the old state folder, which kebbie no longer reads.
+// A lead started in another folder than the lead's own works on state kebbie no longer reads.
 pub fn outside_lead_dir(cwd: Option<&Path>, own: &Path) -> bool {
     let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     cwd.is_some_and(|cwd| !real(cwd).starts_with(real(own)))
@@ -1199,9 +1199,9 @@ mod tests {
     }
 
     #[test]
-    fn a_lead_running_in_the_old_state_folder_counts_as_behind_and_one_in_its_own_folder_does_not() {
+    fn a_lead_running_in_another_folder_counts_as_behind_and_one_in_its_own_folder_does_not() {
         let own = Path::new("/h/.local/state/kebbie/lead");
-        assert!(outside_lead_dir(Some(Path::new("/h/.local/state/kelpie/lead")), own), "the folder from before the rename");
+        assert!(outside_lead_dir(Some(Path::new("/h/.local/state/other/lead")), own), "another folder");
         assert!(!outside_lead_dir(Some(own), own));
         assert!(!outside_lead_dir(None, own), "an unreadable cwd is no reason to restart");
     }

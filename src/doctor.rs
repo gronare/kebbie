@@ -371,20 +371,6 @@ pub fn status_line(settings: &Value) -> Check {
     warn("status line", fact, one(fix))
 }
 
-pub fn old_name(found: &[crate::old_name::Leftover], vars: &[String], status_line: &str) -> Option<Check> {
-    let mut facts: Vec<String> = found.iter().map(|leftover| leftover.what.clone()).collect();
-    let mut fixes: Vec<String> = if found.is_empty() { Vec::new() } else { vec!["kebbie setup, which asks before each".to_string()] };
-    if !vars.is_empty() {
-        facts.push(format!("{} still set", vars.join(", ")));
-        fixes.push(format!("rename them where you set them: {}", vars.iter().map(|name| name.replacen("KELPIE_", "KEBBIE_", 1)).collect::<Vec<_>>().join(", ")));
-    }
-    if status_line.contains("kelpie") {
-        facts.push(format!("Claude Code's statusLine runs {status_line:?}"));
-        fixes.push(format!("in ~/.claude/settings.json: {STATUS_LINE}"));
-    }
-    (!facts.is_empty()).then(|| warn("kelpie leftovers", facts.join("; "), fixes))
-}
-
 pub fn push_block(repo: &Path) -> Check {
     match crate::push_block::unsupported(repo) {
         Ok(None) => ok("push block", format!("task worktrees of {} block git push", repo.display())),
@@ -598,7 +584,6 @@ pub fn checks(env: &Env) -> Vec<Check> {
         }
         checks.push(self::tool(&tool, found.as_deref(), output.as_deref()));
     }
-    let all_plugins = herdr.as_ref().and_then(|herdr| crate::old_name::herdr_list(&herdr.to_string_lossy()));
     let list = herdr.and_then(|herdr| run(&herdr.to_string_lossy(), &["plugin", "list", "--json", "--plugin", "kebbie"], None).ok());
     let (check, plugin) = herdr_plugin(list.as_deref());
     checks.push(check);
@@ -619,9 +604,6 @@ pub fn checks(env: &Env) -> Vec<Check> {
         checks.push(plugin_source(&crate::update::marketplace(&env.claude_dir, &id), channel));
     }
     checks.push(status_line(&claude_settings));
-    let old = crate::old_name::Places { home: env.home.clone(), data_home: env.data_home.clone(), claude_dir: env.claude_dir.clone(), claude: "claude".to_string(), herdr: "herdr".to_string(), herdr_config: crate::setup::herdr_config_path(&env.home), codex_home: Some(env.codex_dir.clone()) };
-    let vars: Vec<(String, String)> = std::env::vars_os().filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?))).collect();
-    checks.extend(old_name(&crate::old_name::leftovers(&old, all_plugins.as_deref()), &crate::old_name::adopted(&vars, |_| true).named, claude_settings["statusLine"]["command"].as_str().unwrap_or_default()));
     checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
     checks.push(kebbie_on_path(&env.home, &env.path));
     let needed = crate::profiles::list_in(&env.profiles_dir).0.iter().any(|profile| profile.agent == crate::agent::Agent::Codex);

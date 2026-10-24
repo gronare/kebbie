@@ -9,7 +9,7 @@ use crate::sh::Result;
 pub const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 pub const KINDS: [&str; 2] = ["bug", "wish"];
 pub const CLOSED: [&str; 3] = ["fixed", "wontfix", "duplicate"];
-const MARKER: &str = "kelpie-issue:";
+const MARKER: &str = "kebbie-issue:";
 const CAME_BACK: &str = "came back on";
 // GitHub answers 414 to a longer new-issue URL.
 pub const URL_LIMIT: usize = 7000;
@@ -397,7 +397,7 @@ pub fn send_in(dir: &Path, caller: &Caller, id: &str, opener: Option<&str>, open
     issue.sent = Some(today(now));
     save(dir, &issue)?;
     Ok(format!(
-        "Title: {}\n\n{}\n\nThe kebbie repo is public: check the text for project names, paths and secrets before you submit.\n{url}\n{opened}\nOnce it is on GitHub, kebbie update finds it by its kelpie-issue line, or kebbie issue link {} <number> ties it now.",
+        "Title: {}\n\n{}\n\nThe kebbie repo is public: check the text for project names, paths and secrets before you submit.\n{url}\n{opened}\nOnce it is on GitHub, kebbie update finds it by its kebbie-issue line, or kebbie issue link {} <number> ties it now.",
         issue.title, github_body(&issue, &issue.body, &os), issue.id,
     ))
 }
@@ -611,7 +611,7 @@ mod tests {
         assert!(!body.contains(['&', ' ', '\n', '?', '#']), "{body}");
         let body = decoded(body);
         assert!(body.contains("**Kind:** bug") && body.contains("**kebbie:** 0.24.0 (869bc49)") && body.contains("**OS:** macos aarch64"), "{body}");
-        assert!(body.contains("Got: nothing & no error?\nå") && body.ends_with("\n\nkelpie-issue: a1b2c3"), "{body}");
+        assert!(body.contains("Got: nothing & no error?\nå") && body.ends_with("\n\nkebbie-issue: a1b2c3"), "{body}");
     }
 
     #[test]
@@ -620,7 +620,7 @@ mod tests {
         let url = send_url(&issue("a1b2c3", "869bc49", &long), "linux x86_64");
         assert!(url.len() <= URL_LIMIT && url.len() > URL_LIMIT - 40, "{}", url.len());
         let body = decoded(url.split_once("&body=").unwrap().1);
-        assert!(body.contains("(shortened; full text in kebbie issue show a1b2c3)") && body.ends_with("kelpie-issue: a1b2c3"), "{}", &body[body.len() - 120..]);
+        assert!(body.contains("(shortened; full text in kebbie issue show a1b2c3)") && body.ends_with("kebbie-issue: a1b2c3"), "{}", &body[body.len() - 120..]);
         assert!(!send_url(&issue("a1b2c3", "", "short"), "linux").contains("shortened"));
     }
 
@@ -807,8 +807,8 @@ mod tests {
         save(&dir, &issue("cccccc", "", "")).unwrap();
         let gh = fake_gh(&state, r#"case "$*" in
   "auth status"*) exit 0 ;;
-  *"kelpie-issue: aaaaaa"*) echo '{"items":[{"number":3,"html_url":"https://github.com/gronare/kebbie/issues/3","state":"open"}]}' ;;
-  *"kelpie-issue: cccccc"*) echo '{"items":[]}' ;;
+  *"kebbie-issue: aaaaaa"*) echo '{"items":[{"number":3,"html_url":"https://github.com/gronare/kebbie/issues/3","state":"open"}]}' ;;
+  *"kebbie-issue: cccccc"*) echo '{"items":[]}' ;;
   "api repos/gronare/kebbie/issues/7") echo '{"number":7,"state":"closed"}' ;;
   *) exit 1 ;;
 esac
@@ -816,7 +816,7 @@ esac
         let lines = sync_github(&dir, &gh);
         assert_eq!(lines, ["aaaaaa: linked to https://github.com/gronare/kebbie/issues/3", "bbbbbb: closed on GitHub, so worth retrying"]);
         let log = fs::read_to_string(state.join("gh.log")).unwrap();
-        assert!(log.contains("api -X GET search/issues -f q=\"kelpie-issue: aaaaaa\" repo:gronare/kebbie"), "{log}");
+        assert!(log.contains("api -X GET search/issues -f q=\"kebbie-issue: aaaaaa\" repo:gronare/kebbie"), "{log}");
         let issues = load(&dir);
         assert_eq!(issues.iter().map(|issue| (issue.id.as_str(), issue.status.as_str(), issue.link_label())).collect::<Vec<_>>(), [("aaaaaa", "open", Some("#3".to_string())), ("bbbbbb", "retry", Some("#7".to_string())), ("cccccc", "open", None)]);
     }

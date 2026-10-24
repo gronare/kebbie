@@ -7,10 +7,9 @@ origin_file="$binary.origin"
 PATH="${PATH:+$PATH:}$HOME/.cargo/bin"
 export PATH
 
-# Users' KELPIE_ names count until they rename them.
-KEBBIE_CHANNEL=${KEBBIE_CHANNEL:-${KELPIE_CHANNEL:-}}
-KEBBIE_CONFIG=${KEBBIE_CONFIG:-${KELPIE_CONFIG:-}}
-KEBBIE_RELEASES_URL=${KEBBIE_RELEASES_URL:-${KELPIE_RELEASES_URL:-}}
+KEBBIE_CHANNEL=${KEBBIE_CHANNEL:-}
+KEBBIE_CONFIG=${KEBBIE_CONFIG:-}
+KEBBIE_RELEASES_URL=${KEBBIE_RELEASES_URL:-}
 
 say() { printf 'kebbie build: %s\n' "$*" >&2; }
 

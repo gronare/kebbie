@@ -73,7 +73,7 @@ impl Identity {
 
     // An opaque tag per task, so a newer notice replaces the older one and the push service never learns the task's name.
     pub fn collapse_tag(&self, address: &str) -> String {
-        let digest = Sha256::new().chain_update(b"kelpie collapse\0").chain_update(self.collapse.0).chain_update(address.as_bytes()).finalize();
+        let digest = Sha256::new().chain_update(b"kebbie collapse\0").chain_update(self.collapse.0).chain_update(address.as_bytes()).finalize();
         digest[..16].iter().map(|byte| format!("{byte:02x}")).collect()
     }
 

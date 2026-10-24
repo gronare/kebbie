@@ -67,7 +67,6 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `restart/` | The restarts: `updated`, when `kebbie update` last ran; `asked.json`, the sessions the board asked you about; `restarted.json`, the restarts done; and one lock per session while it restarts. |
 | `lead-session`, `lead-previous` | The lead's Claude session id, so it resumes its conversation, and the Space you were in before `kebbie lead`, to go back to. |
 | `notify-sent.json` | When each kind of notification last went out, for the limit of one per event a minute. |
-| `old-name-notes` | The notes about kelpie's old names kebbie has already shown once. |
 | `keeper.lock` | Held by the running keeper, with its pid, binary and start time. |
 | `keeper.json` | The keeper's routines, each with its last run and error, and the stale sessions it last saw. |
 | `keeper.log` | What the keeper did: starts, exits, routine errors and restarts. Past 256 KB it moves to `keeper.log.1`. |
@@ -117,7 +116,7 @@ What happened: …
 
 | Key | Value |
 | --- | --- |
-| `id` | Six hex characters, kept for the issue's life. The `kelpie-issue: <id>` line in a sent issue is how `kebbie update` finds it on GitHub. |
+| `id` | Six hex characters, kept for the issue's life. The `kebbie-issue: <id>` line in a sent issue is how `kebbie update` finds it on GitHub. |
 | `kind` | `bug` or `wish`. |
 | `status` | `open`, `retry`, `fixed`, `wontfix` or `duplicate`. |
 | `version`, `commit` | The kebbie it was filed on. `commit` is empty for a build outside git. |

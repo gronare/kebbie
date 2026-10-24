@@ -25,8 +25,6 @@
 | `XDG_STATE_HOME` | `~/.local/state` | Base for the state directory. |
 | `XDG_DATA_HOME` | `~/.local/share` | Where herdr's startup writes the `current` link. kebbie reads the link under `~/.local/share`, so `kebbie doctor` warns when this is set elsewhere. |
 
-Each of these read under its name from before the rename, `KELPIE_` in place of `KEBBIE_`, while the `KEBBIE_` one is unset; kebbie says once which ones to rename, and `kebbie doctor` lists them. See [Move from kelpie to kebbie](../how-to/move-from-kelpie.md).
-
 The vault index is located from the vault plugin's options, or from `VAULT_PATH`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_PREFIX` and `VAULT_CACHE_DIR` as notes-vault-mcp takes them.
 
 ## Set by kebbie
@@ -39,8 +37,6 @@ For `notify.command`:
 | `KEBBIE_TASK` | The task's name |
 | `KEBBIE_REPO` | The task's repo |
 | `KEBBIE_TEXT` | The notification's one line |
-
-Each also comes as `KELPIE_EVENT`, `KELPIE_TASK`, `KELPIE_REPO` and `KELPIE_TEXT`, for a command written before the rename.
 
 For every command a Codex task runs:
 
