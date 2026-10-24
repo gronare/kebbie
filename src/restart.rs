@@ -119,6 +119,13 @@ fn base(path: &str) -> &str {
 }
 
 pub const NO_ROLE: &str = "it runs without its task role";
+pub const OUTSIDE_LEAD_DIR: &str = "it runs outside the lead's folder";
+
+// A lead started before the rename runs in the old state folder, which kebbie no longer reads.
+pub fn outside_lead_dir(cwd: Option<&Path>, own: &Path) -> bool {
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    cwd.is_some_and(|cwd| !real(cwd).starts_with(real(own)))
+}
 
 // ps prints the elapsed time as [[dd-]hh:]mm:ss.
 pub fn parse_etime(text: &str) -> Option<u64> {
@@ -750,6 +757,9 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
         if process.argv.as_deref().is_some_and(|argv| pane.agent.lacks_role(argv)) && cwd.as_deref().and_then(tasks::task_at).is_some() {
             reasons.push(NO_ROLE.to_string());
         }
+        if lead && lead::lead_dir().is_ok_and(|own| outside_lead_dir(cwd.as_deref(), &own)) {
+            reasons.push(OUTSIDE_LEAD_DIR.to_string());
+        }
         let (kebbie, started_on) = if reasons.iter().any(|reason| reason == KEBBIE_UPDATE) {
             let address = if lead { Some(crate::status::LEAD_LABEL.to_string()) } else { cwd.as_deref().and_then(tasks::task_at).and_then(|(repo, slot)| Some(crate::peers::address(slot.task.as_deref()?, &crate::repo::name_of(&repo)))) };
             let started_on = address.and_then(|address| crate::known::load_in(&crate::lead::roles_dir().ok()?, &address)).and_then(|record| record.started);
@@ -1186,6 +1196,14 @@ mod tests {
         assert_eq!(background_running(lines(&resumed), 50, 200), ["agent2"], "a message to a finished agent sets it working again");
         let quoted = [launched(at, json!({ "backgroundTaskId": "bash4" })), json!({ "type": "api-request", "timestamp": at, "content": notification("bash4", Some("completed")) })];
         assert_eq!(background_running(lines(&quoted), 50, 200), ["bash4"], "a request body quoting history is not a notification");
+    }
+
+    #[test]
+    fn a_lead_running_in_the_old_state_folder_counts_as_behind_and_one_in_its_own_folder_does_not() {
+        let own = Path::new("/h/.local/state/kebbie/lead");
+        assert!(outside_lead_dir(Some(Path::new("/h/.local/state/kelpie/lead")), own), "the folder from before the rename");
+        assert!(!outside_lead_dir(Some(own), own));
+        assert!(!outside_lead_dir(None, own), "an unreadable cwd is no reason to restart");
     }
 
     #[test]

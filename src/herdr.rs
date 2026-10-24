@@ -212,6 +212,10 @@ pub fn zoom(pane_id: &str, on: bool) -> Result<()> {
     call(&["pane", "zoom", "--pane", pane_id, if on { "--on" } else { "--off" }]).map(|_| ())
 }
 
+pub fn swap_panes(source: &str, target: &str) -> Result<()> {
+    call(&["pane", "swap", "--source-pane", source, "--target-pane", target]).map(|_| ())
+}
+
 pub fn close_pane(pane_id: &str) -> Result<()> {
     call(&["pane", "close", pane_id]).map(|_| ())
 }

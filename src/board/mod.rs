@@ -349,13 +349,12 @@ impl App {
         self.mode = Mode::Working { label, result };
     }
 
+    // A restart the user asks for always runs; only the lead's own state refuses it.
     fn restart_lead(&mut self) {
-        if self.lead_line().is_none() {
-            return self.say("The lead runs the installed kebbie; nothing to restart".to_string());
-        }
         let restarter = self.lead_restarter.clone();
         self.subject = Some(notices::Subject::plain("lead"));
-        self.in_background("Restarting the lead on the new kebbie…".to_string(), move || restarter());
+        let label = if self.lead_line().is_some() { "Restarting the lead on the new kebbie…" } else { "Restarting the lead…" };
+        self.in_background(label.to_string(), move || restarter());
     }
 
     fn lead_line(&self) -> Option<String> {
@@ -1230,8 +1229,24 @@ mod tests {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows.join("\n").contains("↻ The lead"), "nothing pending, no line");
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = asked.clone();
+        app.lead_restarter = std::sync::Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok("Restarted the lead with its current role and settings, resuming its conversation.".to_string())
+        });
         app.handle_normal(key(KeyCode::Char('L')));
-        assert!(matches!(app.mode, Mode::Normal) && app.notice.as_ref().is_some_and(|(text, _)| text.contains("nothing to restart")), "L does nothing while the lead is current");
+        assert!(matches!(app.mode, Mode::Working { .. }), "L restarts a lead kebbie counts as current too");
+        for _ in 0..200 {
+            app.take_working_result();
+            if !matches!(app.mode, Mode::Working { .. }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(app.notice.is_none() && app.toast.as_ref().is_some_and(|toast| toast.notice.headline.starts_with("Restarted the lead")), "the result goes by as a toast like the board's other results");
+        app.toast = None;
         app.stale = vec!["lead: restarts when idle".to_string()];
         for width in [80, 120] {
             let (rows, _) = render(&mut app, width, 30);

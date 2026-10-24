@@ -94,14 +94,15 @@ fn go() -> Result<String> {
                 herdr::focus_workspace(&previous)?;
                 return Ok("Back to where you were.".to_string());
             }
+            repair(&lead)?;
             Ok("Already in the lead.".to_string())
         }
         Some(lead) => {
             if let Some(focused) = focused {
                 crate::state::write(&previous_file, focused)?;
             }
-            repair(&lead)?;
             herdr::focus_workspace(&lead)?;
+            repair(&lead)?;
             Ok("In the lead.".to_string())
         }
         None => {
@@ -244,6 +245,21 @@ fn transcript_elsewhere(projects: &Path, id: &str) -> Option<Transcript> {
     found.next().is_none().then(|| (modified, id.to_string()))
 }
 
+// claude --resume of a conversation kept under another folder's project goes on writing there, under the old folder, so the transcript and its session folder move into the lead's own project first.
+fn adopt_transcript(home: &Path, id: &str, dir: &Path) -> Result<()> {
+    let projects = home.join("projects");
+    let own = Agent::Claude.transcripts_dir(home, dir);
+    let Some(from) = fs::read_dir(&projects).ok().into_iter().flatten().flatten().map(|project| project.path()).find(|project| *project != own && project.join(format!("{id}.jsonl")).is_file()) else { return Ok(()) };
+    fs::create_dir_all(&own).map_err(|error| format!("{}: {error}", own.display()))?;
+    for name in [format!("{id}.jsonl"), id.to_string()] {
+        let (old, new) = (from.join(&name), own.join(&name));
+        if old.exists() && !new.exists() {
+            fs::rename(&old, &new).map_err(|error| format!("{}: {error}", old.display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn lead_session(transcripts: &[Transcript], recorded: Option<&str>) -> Option<String> {
     let newest = transcripts.iter().map(|(modified, _)| *modified).max()?;
     recorded.filter(|id| transcripts.iter().any(|(modified, stem)| stem == id && *modified == newest)).map(str::to_string)
@@ -339,9 +355,12 @@ fn restart_locked(anyway: bool) -> Result<String> {
     own.dedup();
     let home = Agent::Claude.home();
     let mut transcripts: Vec<Transcript> = home.iter().flat_map(|home| own.iter().flat_map(|dir| transcripts_in(&Agent::Claude.transcripts_dir(home, dir)))).collect();
-    let moved = home.zip(recorded.as_deref()).filter(|(_, id)| !transcripts.iter().any(|(_, stem)| stem == id)).and_then(|(home, id)| transcript_elsewhere(&home.join("projects"), id));
+    let moved = home.as_ref().zip(recorded.as_deref()).filter(|(_, id)| !transcripts.iter().any(|(_, stem)| stem == id)).and_then(|(home, id)| transcript_elsewhere(&home.join("projects"), id));
     transcripts.extend(moved.clone());
     let previous = lead_session(&transcripts, recorded.as_deref());
+    if let (Some(id), Some(home), Some((_, from))) = (&previous, &home, &moved) && id == from {
+        adopt_transcript(home, id, &dir)?;
+    }
     let how = match (&previous, &moved) {
         (Some(id), Some((_, from))) if id == from => "resuming its conversation, started before the lead had its own folder",
         (Some(_), _) => "resuming its conversation",
@@ -363,6 +382,9 @@ fn restart_locked(anyway: bool) -> Result<String> {
 fn repair(lead: &str) -> Result<()> {
     let places = places(lead)?;
     let board = places.board.ok_or("The lead Space has lost its board pane; close the Space and open the lead again")?;
+    if places.chat.is_none() && lead_chat(lead).as_deref() == Some(board.as_str()) {
+        return board_beside(&board);
+    }
     start_board_at_shell(&board)?;
     close_messages(places.messages.as_deref())?;
     match places.chat {
@@ -373,16 +395,56 @@ fn repair(lead: &str) -> Result<()> {
     Ok(())
 }
 
+// A lone pane in the lead Space may be the lead's Claude with its board pane closed, which only herdr's agent list tells apart.
+fn lead_chat(lead: &str) -> Option<String> {
+    let agents = herdr::agents().ok()?;
+    lead_agent(&agents, lead)?["pane_id"].as_str().map(str::to_string)
+}
+
+// herdr splits only to the right, so the new pane trades places with the chat to put the board on the left.
+fn board_beside(chat: &str) -> Result<()> {
+    let board = herdr::split_right(chat, &lead_dir()?, "0.68")?;
+    herdr::swap_panes(&board, chat)?;
+    herdr::run_in_pane(&board, &board_command()?)
+}
+
+// The board always runs in the lead's folder of the current state dir, whatever folder its pane's shell was left in.
 fn board_command() -> Result<String> {
-    Ok(format!("{} board", crate::sh::quote(&executable()?.to_string_lossy())))
+    Ok(format!("{} && {} board", cd_line(&lead_dir()?), crate::sh::quote(&executable()?.to_string_lossy())))
 }
 
 fn start_board_at_shell(board: &str) -> Result<bool> {
-    if runs_kebbie(board, "board") || herdr::foreground(board)?.is_some() {
+    if runs_kebbie(board, "board") {
+        return board_elsewhere(board).map_or(Ok(false), |_| restart_board(board).map(|_| true));
+    }
+    if herdr::foreground(board)?.is_some() {
         return Ok(false);
     }
     herdr::run_in_pane(board, &board_command()?)?;
     Ok(true)
+}
+
+// The folder a running board works in when it is not the lead's own, as after the rename moved the state dir.
+fn board_elsewhere(board: &str) -> Option<String> {
+    let info = herdr::process_info(board).ok()?;
+    let process = &info["foreground_processes"][0];
+    let pid = process["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok())?;
+    if pid == std::process::id() || pid == std::os::unix::process::parent_id() {
+        return None;
+    }
+    let cwd = process["cwd"].as_str()?.to_string();
+    crate::restart::outside_lead_dir(Some(Path::new(&cwd)), &lead_dir().ok()?).then_some(cwd)
+}
+
+fn restart_board(board: &str) -> Result<()> {
+    for _ in 0..10 {
+        if herdr::foreground(board)?.is_none() {
+            return herdr::run_in_pane(board, &board_command()?);
+        }
+        herdr::send_keys(board, &["ctrl+c"])?;
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    Err("board: did not quit on ctrl-c; quit it and open the lead again".to_string())
 }
 
 const REVIVE_TRIES: usize = 30;
@@ -461,15 +523,8 @@ pub fn renew_board() -> Result<String> {
     if started > built {
         return Ok("board: up to date".to_string());
     }
-    for _ in 0..10 {
-        if herdr::foreground(&board)?.is_none() {
-            herdr::run_in_pane(&board, &board_command()?)?;
-            return Ok("board: restarted on the new kebbie".to_string());
-        }
-        herdr::send_keys(&board, &["ctrl+c"])?;
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-    Err("board: did not quit on ctrl-c; quit it and open the lead again".to_string())
+    restart_board(&board)?;
+    Ok("board: restarted on the new kebbie".to_string())
 }
 
 // The board shows the messages, so a messages pane under it in a lead Space goes; a pane of the user's own there stays.

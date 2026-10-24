@@ -20,5 +20,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - One bar shows the whole update, from fetching to the restarts, weighed by how long each step took last time, and the summary comes once it is full
 
 ### Fixed
+- L on the board restarts the lead whenever you press it, and its result goes by like the board's other results
+- A lead or board still running in the state folder from before the rename moves into the lead's own folder, the lead keeping its conversation
+- prefix+space brings the board back in the lead Space after you quit it or closed its pane, and creates the lead Space with its board when there is none, never a second board
 - The lead and other sessions restart onto each new kebbie again; a restart for an earlier update no longer holds them back
 - The update's summary lists what was written since the kebbie you had, names only the bugs this update fixed, keeps its restarts up to date while open, and the board restarts itself onto the new kebbie when you close it

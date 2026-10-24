@@ -2,7 +2,7 @@
 
 ![The Areas page: areas with their repos, actions and vault log](../assets/clips/areas-page.gif)
 
-The board runs in the lead Space, as a popup over any Space with `prefix+t`, or in the current pane with `kebbie board`. `?` on the board lists every key.
+The board runs in the lead Space, as a popup over any Space with `prefix+t`, or in the current pane with `kebbie board`. A board you quit in the lead Space starts again the next time `prefix+space` takes you there. `?` on the board lists every key.
 
 ## Layout
 
@@ -68,7 +68,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 | `R` | Ask the lead to refresh the backlog. |
 | `A` | Away mode on or off. |
 | `U` | Run `kebbie update` in a window that shows each step, with a bar while kebbie builds or downloads; `esc` hides it while the update goes on, and `U` opens it again. Done, it shows what's new and fixed from kebbie's release notes and what restarts; `d` shows the details, any other key closes it. See [What an update shows](../explanation/updates-and-restarts.md#what-an-update-shows). |
-| `L` | Restart the lead on the installed kebbie now, resuming its conversation, while the lead line shows. Refused with the plain reason while the lead works, asks, holds text you have not sent or has background work running; press it again later. |
+| `L` | Restart the lead on the installed kebbie now, resuming its conversation, whether or not the lead line shows. The result goes by like the board's other results. Refused with the plain reason while the lead works, asks, holds text you have not sent or has background work running; press it again later. |
 | `?` | The keys window: every key on the page you are on, one short line each, grouped by what you want to do, under the title `keys · work`, `keys · areas` or `keys · routines`. On a screen about 114 columns wide or more it is two columns; narrower, up to three keys a row, scrolling with `↑` `↓` and `pgup` `pgdn` when it does not fit. A moved key shows as you set it, and `↑` and the version beside `U` when there is a newer one. Any other key closes it. |
 | `esc` | One step back: close a window, a menu or the filter. At the top, close the board when it is a popup; on the full board it does nothing. |
 | `q` | Close the current view, like `esc`. At the top, close the popup; on the full board it says that `ctrl+c` twice quits. |

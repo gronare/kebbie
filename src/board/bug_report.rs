@@ -183,7 +183,7 @@ impl App {
             (true, false) if self.offers.is_empty() => self.set_shown(false),
             (_, false) if self.offers.is_empty() => {
                 self.set_shown(true);
-                self.say("No bugs wait to be sent to kebbie's maintainers".to_string());
+                self.show(Ok("No bugs wait to be sent to kebbie's maintainers".to_string()));
             }
             _ => self.focus_offers(0),
         }

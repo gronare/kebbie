@@ -1255,6 +1255,9 @@ fn a_lead_restart_puts_the_chat_panes_shell_in_the_leads_folder_before_claude_st
     let start = position(&calls, &["agent", "start", "lead", "--kind", "claude", "--pane", "w_lead:p2"]);
     assert!(cd < start, "{calls:?}");
     assert!(calls[start].windows(2).any(|pair| pair == ["--resume", "9f1c2d3e-0000-4000-8000-000000000001"]), "{calls:?}");
+    let own: String = dir.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect();
+    assert!(claude.join("projects").join(own).join("9f1c2d3e-0000-4000-8000-000000000001.jsonl").is_file(), "the conversation moves into the lead's own project, so Claude resumes it in the lead's folder");
+    assert!(!claude.join("projects/-Users-ada/9f1c2d3e-0000-4000-8000-000000000001.jsonl").exists(), "and leaves no second copy for --resume to choose between");
 }
 
 #[test]
@@ -1287,6 +1290,107 @@ fn herdrs_startup_starts_the_board_in_a_restored_lead_space_and_leaves_the_chat_
     let running = lab.run(&["lead", "--revive-board", "--wait"]);
     assert!(running.status.success() && stdout(&running).is_empty(), "{}", stderr(&running));
     assert!(changes(&lab).is_empty(), "a board already running is left alone: {:?}", changes(&lab));
+}
+
+#[test]
+fn going_to_the_lead_starts_a_quit_board_after_the_focus_and_never_a_second_one() {
+    let lab = Lab::new("lead-quit-board");
+    let (dir, claude) = lead_at_shell(&lab, false);
+    let lead = lab.command().env("KEBBIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).args(["lead"]).output().unwrap();
+    assert_eq!(stdout(&lead), "In the lead.", "{}", stderr(&lead));
+    let calls = changes(&lab);
+    let boards: Vec<_> = calls.iter().filter(|call| call[..3] == ["pane", "run", "w_lead:p1"] && call[3].ends_with("kebbie' board")).collect();
+    assert_eq!(boards.len(), 1, "{calls:?}");
+    assert!(position(&calls, &["workspace", "focus", "w_lead"]) < position(&calls, &["pane", "run", "w_lead:p1"]), "the Space shows before the board starts: {calls:?}");
+
+    lead_space(&lab, false, false, "w_lead:p1");
+    let running = lab.run(&["lead"]);
+    assert_eq!(stdout(&running), "In the lead.", "{}", stderr(&running));
+    assert_eq!(changes(&lab), [["workspace", "focus", "w_lead"]], "a board already running is left alone");
+}
+
+#[test]
+fn going_to_the_lead_moves_a_board_running_in_the_old_state_folder_into_the_leads_folder() {
+    let lab = Lab::new("lead-board-old-dir");
+    lead_space(&lab, false, false, "w_lead:p1");
+    let answers = lab.root.join("answers");
+    let old = lab.root.join("kelpie-lead");
+    fs::write(answers.join("pane-process-info.json"), format!(r#"{{"result":{{"process_info":{{"shell_pid":1,"foreground_processes":[{{"pid":2,"argv":["/opt/kebbie","board"],"cwd":"{}"}}]}}}}}}"#, old.display())).unwrap();
+    fs::write(answers.join("pane-send-keys.json"), r#"{"result":{}}"#).unwrap();
+    let herdr = lab.herdr.clone();
+    let script = fs::read_to_string(&herdr).unwrap();
+    let quit_on_ctrl_c = format!("if [ \"$1-$2\" = pane-send-keys ]; then printf '%s' '{{\"result\":{{\"process_info\":{{\"shell_pid\":1,\"foreground_processes\":[{{\"pid\":1,\"argv\":[\"-zsh\"]}}]}}}}}}' > '{}'; fi\n", answers.join("pane-process-info.json").display());
+    fs::write(&herdr, script.replacen("\n", &format!("\n{quit_on_ctrl_c}"), 1)).unwrap();
+    for ok in ["pane-run", "agent-start"] {
+        fs::write(answers.join(format!("{ok}.json")), r#"{"result":{}}"#).unwrap();
+    }
+    let own = lab.root.join("lead");
+    let lead = lab.command().env("KEBBIE_LEAD_DIR", &own).env("CLAUDE_CONFIG_DIR", lab.root.join("claude")).args(["lead"]).output().unwrap();
+    assert_eq!(stdout(&lead), "In the lead.", "{}", stderr(&lead));
+    let calls = changes(&lab);
+    let ctrl_c = position(&calls, &["pane", "send-keys", "w_lead:p1", "ctrl+c"]);
+    let run = position(&calls, &["pane", "run", "w_lead:p1"]);
+    assert!(ctrl_c < run, "{calls:?}");
+    assert!(calls[run][3].starts_with(&format!("cd '{}' && ", own.display())) && calls[run][3].ends_with("kebbie' board"), "{calls:?}");
+    assert_eq!(calls.iter().filter(|call| call[..2] == ["pane", "run"] && call[3].ends_with(" board")).count(), 1, "one board, never a second: {calls:?}");
+}
+
+#[test]
+fn going_to_the_lead_puts_a_closed_board_pane_back_left_of_the_chat_and_starts_no_second_claude() {
+    let lab = Lab::new("lead-closed-board");
+    lead_space(&lab, false, false, "w_lead:p2");
+    let answers = lab.root.join("answers");
+    fs::write(answers.join("pane-list.json"), r#"{"result":{"panes":[{"pane_id":"w_lead:p2","focused":false}]}}"#).unwrap();
+    fs::write(answers.join("pane-layout.json"), r#"{"result":{"layout":{"zoomed":false,"focused_pane_id":"w_lead:p2","panes":[{"pane_id":"w_lead:p2","rect":{"x":0,"y":0}}]}}}"#).unwrap();
+    fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"pid":2,"argv":["claude"]}]}}}"#).unwrap();
+    fs::write(answers.join("agent-list.json"), r#"{"result":{"agents":[{"name":"lead","agent":"claude","workspace_id":"w_lead","pane_id":"w_lead:p2"}]}}"#).unwrap();
+    fs::write(answers.join("pane-split.json"), r#"{"result":{"pane":{"pane_id":"w_lead:p3"}}}"#).unwrap();
+    for ok in ["pane-swap", "pane-run"] {
+        fs::write(answers.join(format!("{ok}.json")), r#"{"result":{}}"#).unwrap();
+    }
+    let lead = lab.command().env("KEBBIE_LEAD_DIR", lab.root.join("lead")).args(["lead"]).output().unwrap();
+    assert_eq!(stdout(&lead), "In the lead.", "{}", stderr(&lead));
+    let calls: Vec<_> = changes(&lab).into_iter().filter(|call| call[..2] != ["agent", "list"]).collect();
+    assert_eq!(calls.len(), 4, "{calls:?}");
+    assert_eq!(calls[0], ["workspace", "focus", "w_lead"]);
+    assert_eq!(calls[1][..6], ["pane", "split", "w_lead:p2", "--direction", "right", "--ratio"]);
+    assert_eq!(calls[2], ["pane", "swap", "--source-pane", "w_lead:p3", "--target-pane", "w_lead:p2"]);
+    assert_eq!(calls[3][..3], ["pane", "run", "w_lead:p3"]);
+    assert!(calls[3][3].ends_with("kebbie' board"), "{calls:?}");
+}
+
+#[test]
+fn going_to_the_lead_without_a_lead_space_creates_it_with_its_board_and_goes_there() {
+    let lab = Lab::new("lead-gone");
+    let answers = lab.root.join("answers");
+    fs::write(answers.join("workspace-list.json"), r#"{"result":{"workspaces":[{"workspace_id":"w_task","label":"billing","focused":true}]}}"#).unwrap();
+    fs::write(answers.join("workspace-create.json"), r#"{"result":{"workspace":{"workspace_id":"w_lead"},"root_pane":{"pane_id":"w_lead:p1"}}}"#).unwrap();
+    fs::write(answers.join("pane-split.json"), r#"{"result":{"pane":{"pane_id":"w_lead:p2"}}}"#).unwrap();
+    fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"pid":1,"argv":["-zsh"]}]}}}"#).unwrap();
+    for ok in ["pane-run", "agent-start", "workspace-focus"] {
+        fs::write(answers.join(format!("{ok}.json")), r#"{"result":{}}"#).unwrap();
+    }
+    let _ = fs::remove_file(&lab.herdr_log);
+    let lead = lab.command().env("KEBBIE_LEAD_DIR", lab.root.join("lead")).env("CLAUDE_CONFIG_DIR", lab.root.join("claude")).args(["lead"]).output().unwrap();
+    assert!(stdout(&lead).starts_with("Lead Space created"), "{}", stderr(&lead));
+    let calls = changes(&lab);
+    let board = calls.iter().filter(|call| call[..3] == ["pane", "run", "w_lead:p1"] && call[3].ends_with("kebbie' board")).count();
+    assert_eq!(board, 1, "{calls:?}");
+    assert_eq!(calls.iter().filter(|call| call[..2] == ["workspace", "create"]).count(), 1, "{calls:?}");
+    position(&calls, &["agent", "start", "lead", "--kind", "claude", "--pane", "w_lead:p2"]);
+    position(&calls, &["workspace", "focus", "w_lead"]);
+}
+
+#[test]
+fn going_back_from_the_lead_starts_nothing_there() {
+    let lab = Lab::new("lead-back");
+    lead_at_shell(&lab, true);
+    let answers = lab.root.join("answers");
+    fs::write(answers.join("workspace-list.json"), r#"{"result":{"workspaces":[{"workspace_id":"w_lead","label":"lead","focused":true},{"workspace_id":"w_task","label":"billing","focused":false}]}}"#).unwrap();
+    fs::write(lab.state.join("lead-previous"), "w_task\n").unwrap();
+    let back = lab.run(&["lead"]);
+    assert_eq!(stdout(&back), "Back to where you were.", "{}", stderr(&back));
+    assert_eq!(changes(&lab), [["workspace", "focus", "w_task"]], "a quit board in the lead waits for the next visit");
 }
 
 fn routine_status(lab: &Lab) -> serde_json::Value {

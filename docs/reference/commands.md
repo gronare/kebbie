@@ -237,7 +237,7 @@ See [Routines](../explanation/routines.md) for what a run does, and [`[[routines
 
 | Command | What it does |
 | --- | --- |
-| `kebbie lead` | Go to the lead Space, creating it, or back to where you were. |
+| `kebbie lead` | Go to the lead Space, or back to the Space you came from when you are in it. herdr's `kebbie.lead` action, `prefix+space`, runs it. Without a lead Space it creates one with its board and the lead's chat. Going there starts the board again when it was quit, and puts its pane back left of the chat when that was closed; a board that runs is left alone, so there is never a second one. Going back starts nothing. |
 | `kebbie lead --restart [--anyway]` | Restart an idle lead's Claude on its current role and settings, resuming its conversation. Refuses with `Not restarted: <reason>` while the lead works, waits on a question, holds text you have not sent, has background work running (unless `--anyway`) or another kebbie restarts it. After `kebbie update` the keeper runs it by itself once the lead is free, unless `restart.auto` is off. |
 | `kebbie lead --first` | Only move the lead Space to the top of herdr's Spaces. |
 | `kebbie lead --revive-board` | Run by herdr's startup hook. Returns at once; in the background it waits up to a minute for herdr to restore the lead Space, then starts the board in its board pane if that pane sits at a shell prompt. Never touches the lead's chat. Logs to `lead.log`. |
