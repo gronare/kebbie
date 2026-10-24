@@ -72,7 +72,7 @@ fn running(progress: Option<&Progress>, overall: &Cell<Overall>, now: u64, width
             let mut bar = overall.get();
             let shown = bar.advance(progress, now);
             overall.set(bar);
-            let mut lines = vec![Line::from(Span::styled(progress::overall_line(shown, width), style(MAUVE))), Line::default()];
+            let mut lines = vec![Line::default(), Line::from(Span::styled(progress::overall_line(shown, width), style(MAUVE))), Line::default()];
             lines.extend(step_lines(progress, now, width));
             lines
         }

@@ -871,6 +871,9 @@ impl Settle {
 }
 
 const RESTART_STATE: &str = "KEBBIE_BOARD_STATE";
+// Set only by a board that execs without leaving the alternate screen; a board older than that leaves it, so the new one must enter it again.
+const SCREEN_KEPT: &str = "KEBBIE_BOARD_SCREEN_KEPT";
+const RENEW_HOLD: Duration = Duration::from_secs(5);
 
 fn built(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().filter(|metadata| metadata.len() > 0).and_then(|metadata| metadata.modified().ok())
@@ -917,10 +920,17 @@ impl Rebuild {
         };
         let task = app.selected_task().map(|item| item.name).unwrap_or_default();
         let state = format!("{column}\t{}\t{task}", app.backlog_selected);
-        restore_terminal();
-        let error = Command::new(path).args(std::env::args_os().skip(1)).env(RESTART_STATE, state).exec();
+        let _ = ratatui::crossterm::terminal::disable_raw_mode();
+        let error = renewal(path, &state).exec();
+        let _ = ratatui::crossterm::terminal::enable_raw_mode();
         format!("Restarting on the rebuilt kebbie failed: {error}")
     }
+}
+
+fn renewal(path: &Path, state: &str) -> Command {
+    let mut command = Command::new(path);
+    command.args(std::env::args_os().skip(1)).env(RESTART_STATE, state).env(SCREEN_KEPT, "1");
+    command
 }
 
 impl App {
@@ -971,11 +981,12 @@ pub fn run(overlay: bool) -> Result<String> {
     let mut rebuild = Rebuild::new();
     let mut fetcher = Fetcher::new();
     let mut resize = Settle::default();
-    let mut terminal = init_terminal();
+    let renewed = std::env::var_os(RESTART_STATE).is_some() && std::env::var_os(SCREEN_KEPT).is_some();
+    let mut terminal = if renewed { terminal::continue_terminal() } else { init_terminal() };
+    let mut hold = renewed.then(|| Instant::now() + RENEW_HOLD);
     let graphics = GraphicsEnv::current();
     (app.graphics, app.cell_guessed) = graphics.startup();
     app.viewer = image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
-    let _ = terminal.clear();
     let result = (|| -> Result<()> {
         while !app.quit {
             if let Mode::EditMessage(editor) = &mut app.mode {
@@ -1056,18 +1067,20 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             app.fetch_failures = fetcher.failures();
             app.away = permit::away_since().is_some();
-            if app.may_restart() && ((std::mem::take(&mut app.restart_after_update) && rebuild.changed()) || rebuild.ready()) {
-                let error = rebuild.restart(&app);
-                terminal = init_terminal();
-                app.show_as(Err(error), true);
-            }
             if matches!(app.graphics, Graphics::Pending { wanted: true }) {
                 (app.graphics, app.cell_guessed) = graphics.resolve(Picker::from_query_stdio().ok());
                 app.images.clear();
             }
             let size = ratatui::crossterm::terminal::size().unwrap_or_default();
-            if resize.draw_now(size, Instant::now()) {
+            if hold.is_some_and(|until| app.loaded || Instant::now() >= until) {
+                hold = None;
+            }
+            if hold.is_none() && resize.draw_now(size, Instant::now()) {
                 terminal.draw(|frame| draw(frame, &mut app)).map_err(|error| error.to_string())?;
+            }
+            if app.may_restart() && ((std::mem::take(&mut app.restart_after_update) && rebuild.changed()) || rebuild.ready()) {
+                let error = rebuild.restart(&app);
+                app.show_as(Err(error), true);
             }
             if event::poll(Duration::from_millis(250)).map_err(|error| error.to_string())? {
                 match event::read().map_err(|error| error.to_string())? {
@@ -1385,5 +1398,13 @@ mod tests {
         app.page = Page::Areas;
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows.join("\n").contains("context is"), "the Work page only");
+    }
+
+    #[test]
+    fn a_board_renewing_onto_a_rebuilt_binary_tells_it_the_alternate_screen_is_still_on() {
+        let command = renewal(Path::new("/bin/kebbie"), "work\t0\ttask");
+        let envs: HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(envs.get(std::ffi::OsStr::new(SCREEN_KEPT)), Some(&Some(std::ffi::OsStr::new("1"))), "without it the new board enters the alternate screen again and herdr erases the pane");
+        assert_eq!(envs.get(std::ffi::OsStr::new(RESTART_STATE)), Some(&Some(std::ffi::OsStr::new("work\t0\ttask"))));
     }
 }
