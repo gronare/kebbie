@@ -297,7 +297,7 @@ mod tests {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     fn worktree() -> PathBuf {
-        let dir = std::env::temp_dir().canonicalize().unwrap().join(format!("kelpie-shell-write-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))).join("wt1.app");
+        let dir = std::env::temp_dir().canonicalize().unwrap().join(format!("kebbie-shell-write-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))).join("wt1.app");
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
         dir

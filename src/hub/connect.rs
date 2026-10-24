@@ -2,8 +2,8 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use kelpie_hub_api::{CONNECT_DENIED, CONNECT_EXPIRED, CONNECT_PENDING, CONNECT_SLOW_DOWN, CONNECT_UNKNOWN, ConnectPoll, ConnectStart, ConnectStarted, Connected, HubInfo};
-use kelpie_hub_protocol::{ConnectSecret, SecretKeys};
+use kebbie_hub_api::{CONNECT_DENIED, CONNECT_EXPIRED, CONNECT_PENDING, CONNECT_SLOW_DOWN, CONNECT_UNKNOWN, ConnectPoll, ConnectStart, ConnectStarted, Connected, HubInfo};
+use kebbie_hub_protocol::{ConnectSecret, SecretKeys};
 
 use super::http::{CALL, Client, HubError};
 use super::identity::{self, Identity};
@@ -16,13 +16,13 @@ const SLOW_DOWN_STEP: u64 = 5;
 pub const STOPPED: &str = "stopped; this machine is not connected";
 
 pub fn hub_name(url: &str) -> String {
-    if url == crate::config::DEFAULT_HUB_URL { format!("the kelpie hub ({url})") } else { url.to_string() }
+    if url == crate::config::DEFAULT_HUB_URL { format!("the kebbie hub ({url})") } else { url.to_string() }
 }
 
-// Nothing answers GET /v1/hub with a HubInfo but a kelpie hub, and hub_url already holds the address to https.
+// Nothing answers GET /v1/hub with a HubInfo but a kebbie hub, and hub_url already holds the address to https.
 pub fn probe(address: &str) -> Result<String> {
     let url = super::hub_url(address)?;
-    Client::new(&url, None, Duration::from_secs(10)).get::<HubInfo>("/v1/hub").map_err(|error| format!("{url} does not answer as a kelpie hub: {error}; nothing changed"))?;
+    Client::new(&url, None, Duration::from_secs(10)).get::<HubInfo>("/v1/hub").map_err(|error| format!("{url} does not answer as a kebbie hub: {error}; nothing changed"))?;
     Ok(url)
 }
 
@@ -35,12 +35,12 @@ pub fn configured_hub(config: &Path) -> Result<Option<String>> {
     Ok(crate::config::load_machine(config)?.hub_url)
 }
 
-// A config.toml linked in from dotfiles is shared with other machines, so kelpie writes no key through it and says where to set it.
+// A config.toml linked in from dotfiles is shared with other machines, so kebbie writes no key through it and says where to set it.
 pub fn own_hub(config: &Path, address: &str) -> Result<Chosen> {
     let url = probe(address)?;
     let set = format!("[hub] url = {url:?}");
     let note = if super::linked(config) {
-        format!("{} is a link, so kelpie writes no key through it; set {set} there or in a config.toml of this machine's own to connect there again", crate::config::shown(config))
+        format!("{} is a link, so kebbie writes no key through it; set {set} there or in a config.toml of this machine's own to connect there again", crate::config::shown(config))
     } else {
         crate::routine_file::set_hub_url_in(config, &url).map_or_else(|error| format!("{set} not set in {}: {error}", config.display()), |()| format!("{set} set in {}", config.display()))
     };
@@ -49,7 +49,7 @@ pub fn own_hub(config: &Path, address: &str) -> Result<Chosen> {
 
 pub type AskHub = dyn Fn() -> Result<Option<String>>;
 
-// None from the question means the kelpie hub; an address means the user's own, which is tested before anything is saved.
+// None from the question means the kebbie hub; an address means the user's own, which is tested before anything is saved.
 pub fn choose_hub(config: &Path, ask: Option<&dyn Fn() -> Result<Option<String>>>) -> Result<Chosen> {
     if let Some(url) = configured_hub(config)? {
         return Ok(Chosen { url, note: None });
@@ -166,14 +166,14 @@ pub fn finish(state: &Path, pending: &Pending, connected: &Connected, stop: Stop
     let identity = pending.save(state, connected, now)?;
     let connected_line = format!("Connected to {} as {}", hub_name(&identity.url), identity.name);
     let Some(pairing) = &connected.pairing else {
-        return Ok(format!("{connected_line}; kelpie hub add-device or H on the board adds your phone."));
+        return Ok(format!("{connected_line}; kebbie hub add-device or H on the board adds your phone."));
     };
     Ok(match pair::admit_browser(state, pairing, pending.secret(), pair::TIMEOUT, stop, now) {
         Ok(_) => {
             let posted = post().err().map_or(String::new(), |error| format!(" The first board did not go out yet: {error}."));
             format!("{connected_line}; the browser that approved it shows its board.{posted}")
         }
-        Err(error) => format!("{connected_line}; the browser was not added ({error}), and kelpie hub add-device adds it."),
+        Err(error) => format!("{connected_line}; the browser was not added ({error}), and kebbie hub add-device adds it."),
     })
 }
 
@@ -204,7 +204,7 @@ fn read_line(prompt: &str) -> Result<String> {
 }
 
 fn ask_hub() -> Result<Option<String>> {
-    let answer = read_line(&format!("Connect to the kelpie hub ({}) or your own hub? [K/o] ", crate::config::DEFAULT_HUB_URL))?;
+    let answer = read_line(&format!("Connect to the kebbie hub ({}) or your own hub? [K/o] ", crate::config::DEFAULT_HUB_URL))?;
     if !answer.to_lowercase().starts_with('o') {
         return Ok(None);
     }
@@ -247,7 +247,7 @@ pub fn cli(state: &Path, config: &Path, given: Option<&str>, interactive: bool, 
 
 pub fn add_device_cli(state: &Path, interactive: bool, now: u64) -> Result<String> {
     if !interactive {
-        return Err("kelpie hub add-device asks you to compare six digits with the phone, so it runs in your own terminal".to_string());
+        return Err("kebbie hub add-device asks you to compare six digits with the phone, so it runs in your own terminal".to_string());
     }
     let device = pair::add_device(state, pair::TIMEOUT, |added| {
         println!("On your phone or in a browser, open this link (or scan the code) and add it:\n{}", added.url);
@@ -265,8 +265,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_kelpie_hub_is_named_and_any_other_hub_goes_by_its_address() {
-        assert_eq!(hub_name(crate::config::DEFAULT_HUB_URL), format!("the kelpie hub ({})", crate::config::DEFAULT_HUB_URL));
+    fn the_kebbie_hub_is_named_and_any_other_hub_goes_by_its_address() {
+        assert_eq!(hub_name(crate::config::DEFAULT_HUB_URL), format!("the kebbie hub ({})", crate::config::DEFAULT_HUB_URL));
         assert_eq!(hub_name("https://hub.example.com"), "https://hub.example.com");
     }
 }

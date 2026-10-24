@@ -48,7 +48,7 @@ pub(super) fn covers(approved: &str, current: &str) -> bool {
     !current.is_empty() && approved.ends_with(&current)
 }
 
-// FNV-1a: stable across Rust versions, unlike DefaultHasher, so an approval survives a kelpie upgrade.
+// FNV-1a: stable across Rust versions, unlike DefaultHasher, so an approval survives a kebbie upgrade.
 struct Fnv(u64);
 
 impl Default for Fnv {
@@ -92,7 +92,7 @@ pub fn approve(cwd: &Path, name: Option<&str>) -> Result<String> {
     approve_as(&crate::permit::caller(), cwd, name)
 }
 
-// Read from the Claude above, not the folder, which kelpie -C or a cd sets to anything.
+// Read from the Claude above, not the folder, which kebbie -C or a cd sets to anything.
 fn approve_as(caller: &crate::permit::Caller, cwd: &Path, name: Option<&str>) -> Result<String> {
     use crate::permit::Caller;
     if !matches!(caller, Caller::Lead | Caller::User) {
@@ -124,7 +124,7 @@ pub fn rules_check(cwd: &Path) -> Result<Option<String>> {
     let sha = git(&slot.path, &["rev-parse", "--short", "HEAD"])?;
     Ok(Some(format!(
         "{address}{READY_AT}{sha}: check its commits against `{rules}` (git -C {} log -p {upstream}..HEAD). When they hold, run \
-         kelpie -C {} approve {task}; when one breaks a rule, kelpie tell {address} which commit and what to fix.",
+         kebbie -C {} approve {task}; when one breaks a rule, kebbie tell {address} which commit and what to fix.",
         slot.path.display(), repo.display()
     )))
 }
@@ -194,7 +194,7 @@ mod tests {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let below = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         commit(&slot.path, "e", "fifth");
-        let state = std::env::temp_dir().join(format!("kelpie-approvals-absorbed-{}", std::process::id()));
+        let state = std::env::temp_dir().join(format!("kebbie-approvals-absorbed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&state);
         record_approval(&state, "billing@app", &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
         git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), &below]).unwrap();
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn an_approval_holds_only_for_the_fingerprint_it_recorded_and_is_gone_once_forgotten() {
-        let state = std::env::temp_dir().join(format!("kelpie-approvals-{}", std::process::id()));
+        let state = std::env::temp_dir().join(format!("kebbie-approvals-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&state);
         assert!(!approval_holds(&state, "billing@app", "abc"));
         record_approval(&state, "billing@app", "abc").unwrap();
@@ -227,7 +227,7 @@ mod tests {
         use crate::permit::Caller;
         for caller in [Caller::Task("billing@app".to_string()), Caller::Agent] {
             let refused = approve_as(&caller, Path::new("/nowhere"), Some("billing")).unwrap_err();
-            assert!(refused.contains("lead's check") && refused.contains(&crate::permit::describe(&caller)), "a task's kelpie -C <worktree> approve is refused too: {refused}");
+            assert!(refused.contains("lead's check") && refused.contains(&crate::permit::describe(&caller)), "a task's kebbie -C <worktree> approve is refused too: {refused}");
         }
         for caller in [Caller::Lead, Caller::User] {
             assert!(!approve_as(&caller, Path::new("/nowhere"), Some("billing")).unwrap_err().contains("lead's check"));

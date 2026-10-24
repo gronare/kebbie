@@ -2,10 +2,10 @@
 
 See how much of your Claude plan's five-hour session and weekly limit you have used, in the board's status line.
 
-1. Make kelpie your status line command in `~/.claude/settings.json`:
+1. Make kebbie your status line command in `~/.claude/settings.json`:
 
    ```json
-   "statusLine": { "type": "command", "command": "~/.local/share/kelpie/current/target/release/kelpie statusline" }
+   "statusLine": { "type": "command", "command": "~/.local/share/kebbie/current/target/release/kebbie statusline" }
    ```
 
    It prints nothing, so Claude Code shows no extra line.

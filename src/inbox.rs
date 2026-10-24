@@ -10,7 +10,7 @@ use crate::typing::Refused;
 
 const SOCKET_VAR: &str = "CLAUDE_CODE_MESSAGING_SOCKET";
 const TOKEN_VAR: &str = "CLAUDE_CODE_MESSAGING_TOKEN";
-const SENDER: &str = "kelpie";
+const SENDER: &str = "kebbie";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Inbox {
@@ -58,7 +58,7 @@ pub fn record_in(dir: &Path, address: &str, socket: Option<&str>, token: Option<
     }
 }
 
-// kelpie's SessionStart hook: Claude Code exports the socket and token to hooks before SessionStart runs.
+// kebbie's SessionStart hook: Claude Code exports the socket and token to hooks before SessionStart runs.
 pub fn hook(address: &str, input: &str) -> String {
     let input: Value = serde_json::from_str(input).unwrap_or_default();
     let socket = std::env::var(SOCKET_VAR).ok();
@@ -145,14 +145,14 @@ pub fn prompt(target: &str, text: &str, address: &str) -> std::result::Result<Vi
     }
 }
 
-// Without accept, a bypassPermissions session holds kelpie's messages for the user's approval.
-pub fn with_inbox(settings: &str, kelpie: &str, address: &str) -> String {
-    let mut written: Value = serde_json::from_str(settings).expect("kelpie writes its own settings as JSON");
+// Without accept, a bypassPermissions session holds kebbie's messages for the user's approval.
+pub fn with_inbox(settings: &str, kebbie: &str, address: &str) -> String {
+    let mut written: Value = serde_json::from_str(settings).expect("kebbie writes its own settings as JSON");
     written["crossSessionInbound"] = json!("accept");
     if address != crate::status::LEAD_LABEL && let Some(deny) = written["permissions"]["deny"].as_array_mut() {
-        deny.push(json!(format!("Bash({kelpie} hook:*)")));
+        deny.push(json!(format!("Bash({kebbie} hook:*)")));
     }
-    written["hooks"]["SessionStart"] = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook inbox {}", crate::sh::quote(kelpie), crate::sh::quote(address)) }] }]);
+    written["hooks"]["SessionStart"] = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook inbox {}", crate::sh::quote(kebbie), crate::sh::quote(address)) }] }]);
     written.to_string()
 }
 
@@ -162,12 +162,12 @@ pub(crate) mod tests {
     use std::io::Read;
     use std::os::unix::net::UnixListener;
 
-    const PROBED: &str = "{\"type\":\"auth\",\"token\":\"tok-1\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[from kelpie] probe line one\\n  Second line\"},\"from\":\"kelpie\"}\n";
+    const PROBED: &str = "{\"type\":\"auth\",\"token\":\"tok-1\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[from kebbie] probe line one\\n  Second line\"},\"from\":\"kebbie\"}\n";
 
     // A socket path is capped near 104 bytes, longer than a test's temp folder can leave room for.
     pub(crate) fn short_socket() -> PathBuf {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let socket = PathBuf::from(format!("/tmp/kelpie-{}-{}.sock", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        let socket = PathBuf::from(format!("/tmp/kebbie-{}-{}.sock", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
         let _ = std::fs::remove_file(&socket);
         socket
     }
@@ -188,11 +188,11 @@ pub(crate) mod tests {
 
     #[test]
     fn the_frame_is_the_auth_line_then_the_user_line_claude_code_took_in_the_probe() {
-        assert_eq!(frame("[from kelpie] probe line one\n  Second line", Some("tok-1")), PROBED);
+        assert_eq!(frame("[from kebbie] probe line one\n  Second line", Some("tok-1")), PROBED);
         for line in PROBED.lines() {
             serde_json::from_str::<Value>(line).unwrap();
         }
-        assert_eq!(frame("hi \"there\"", None), "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi \\\"there\\\"\"},\"from\":\"kelpie\"}\n", "no auth line without a token; quotes escaped");
+        assert_eq!(frame("hi \"there\"", None), "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi \\\"there\\\"\"},\"from\":\"kebbie\"}\n", "no auth line without a token; quotes escaped");
         let message: Value = serde_json::from_str(frame("a\u{2028}b", None).trim_end()).unwrap();
         assert_eq!(message["message"]["content"], "a\u{2028}b");
         assert_eq!(frame("one\ntwo", None).matches('\n').count(), 1, "the text's line breaks stay inside its one JSON line");
@@ -207,10 +207,10 @@ pub(crate) mod tests {
         let dir = crate::sh::test_dir("inbox-send");
         let (socket, reader) = listen(&dir);
         record_in(&dir, "billing@app", Some(&socket.to_string_lossy()), Some("tok-1"), Some("s-1")).unwrap();
-        let via = prompt_in(&dir, "w1:p1", "[from kelpie] probe line one\n  Second line", "billing@app", &same("s-1"), &mut |_, _, _| panic!("nothing is typed when the inbox takes it"));
+        let via = prompt_in(&dir, "w1:p1", "[from kebbie] probe line one\n  Second line", "billing@app", &same("s-1"), &mut |_, _, _| panic!("nothing is typed when the inbox takes it"));
         assert_eq!(via, Ok(Via::Inbox));
         assert_eq!(reader.join().unwrap(), PROBED);
-        assert!(crate::typing::watching_in(&dir, "billing@app", "[from kelpie] probe line one\n  Second line"), "a message the inbox took is checked against the transcript, as a typed one is");
+        assert!(crate::typing::watching_in(&dir, "billing@app", "[from kebbie] probe line one\n  Second line"), "a message the inbox took is checked against the transcript, as a typed one is");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -284,12 +284,12 @@ pub(crate) mod tests {
     fn the_settings_accept_messages_from_other_sessions_and_record_the_inbox_at_session_start() {
         let settings = with_inbox(r#"{"hooks":{"Stop":[]},"permissions":{"allow":[]}}"#, "/bin/kel pie", "billing@app");
         let written: Value = serde_json::from_str(&settings).unwrap();
-        assert_eq!(written["crossSessionInbound"], "accept", "a bypassPermissions receiver holds a message from kelpie for approval otherwise");
+        assert_eq!(written["crossSessionInbound"], "accept", "a bypassPermissions receiver holds a message from kebbie for approval otherwise");
         assert_eq!(written["hooks"]["SessionStart"][0]["hooks"][0]["command"], "'/bin/kel pie' hook inbox 'billing@app'");
         assert!(written["hooks"]["Stop"].is_array() && written["permissions"]["allow"].is_array(), "the rest is kept");
-        let task: Value = serde_json::from_str(&with_inbox(r#"{"permissions":{"deny":["Bash(git push:*)"]}}"#, "/bin/kelpie", "billing@app")).unwrap();
-        assert_eq!(task["permissions"]["deny"], json!(["Bash(git push:*)", "Bash(/bin/kelpie hook:*)"]), "a task's Bash cannot run kelpie's hooks; Claude Code runs them without Bash");
-        let lead: Value = serde_json::from_str(&with_inbox(r#"{"permissions":{"allow":[]}}"#, "/bin/kelpie", "lead")).unwrap();
+        let task: Value = serde_json::from_str(&with_inbox(r#"{"permissions":{"deny":["Bash(git push:*)"]}}"#, "/bin/kebbie", "billing@app")).unwrap();
+        assert_eq!(task["permissions"]["deny"], json!(["Bash(git push:*)", "Bash(/bin/kebbie hook:*)"]), "a task's Bash cannot run kebbie's hooks; Claude Code runs them without Bash");
+        let lead: Value = serde_json::from_str(&with_inbox(r#"{"permissions":{"allow":[]}}"#, "/bin/kebbie", "lead")).unwrap();
         assert!(lead["permissions"]["deny"].is_null());
     }
 }

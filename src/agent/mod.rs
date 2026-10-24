@@ -56,7 +56,7 @@ impl Agent {
             return Ok(agent);
         }
         let known = Agent::ALL.map(|agent| format!("\"{}\"", agent.key())).join(", ");
-        Err(format!("\"{name}\" is not an agent kelpie runs; use {known}"))
+        Err(format!("\"{name}\" is not an agent kebbie runs; use {known}"))
     }
 
     // The kind herdr starts it as and reports for its pane.
@@ -71,9 +71,9 @@ impl Agent {
         Agent::ALL.into_iter().find(|agent| herdr_agent["agent"] == agent.kind())
     }
 
-    pub fn task_settings(self, kelpie: &str, address: &str, gate: Option<&str>, dirs: Option<&crate::sandbox::TaskDirs>, profile: &Profile, sandbox: bool) -> String {
+    pub fn task_settings(self, kebbie: &str, address: &str, gate: Option<&str>, dirs: Option<&crate::sandbox::TaskDirs>, profile: &Profile, sandbox: bool) -> String {
         match self {
-            Agent::Claude => claude::with_profile(&crate::inbox::with_inbox(&claude::settings(kelpie, address, gate, dirs, sandbox.then_some(&profile.sandbox)), kelpie, address), profile),
+            Agent::Claude => claude::with_profile(&crate::inbox::with_inbox(&claude::settings(kebbie, address, gate, dirs, sandbox.then_some(&profile.sandbox)), kebbie, address), profile),
             Agent::Codex => serde_json::json!({ "agent": "codex" }).to_string(),
         }
     }
@@ -178,13 +178,13 @@ impl Agent {
         }
     }
 
-    // kelpie review runs Claude whatever the reviewer profile says; the profile refuses agent = "codex".
+    // kebbie review runs Claude whatever the reviewer profile says; the profile refuses agent = "codex".
     pub fn reviewer_command(self, reviewer: &Reviewer) -> (&'static str, Vec<String>) {
         ("claude", claude::reviewer_args(reviewer))
     }
 
-    pub fn reviewer_settings(self, kelpie: &str, sandbox: bool) -> String {
-        claude::reviewer_settings(kelpie, sandbox)
+    pub fn reviewer_settings(self, kebbie: &str, sandbox: bool) -> String {
+        claude::reviewer_settings(kebbie, sandbox)
     }
 }
 
@@ -196,10 +196,10 @@ mod tests {
     fn an_agent_is_named_by_its_key_and_its_pane_by_the_kind_herdr_reports() {
         assert_eq!(Agent::named("claude"), Ok(Agent::Claude));
         assert_eq!(Agent::named("codex"), Ok(Agent::Codex));
-        assert_eq!(Agent::named("vim").unwrap_err(), "\"vim\" is not an agent kelpie runs; use \"claude\", \"codex\"");
+        assert_eq!(Agent::named("vim").unwrap_err(), "\"vim\" is not an agent kebbie runs; use \"claude\", \"codex\"");
         assert_eq!(Agent::of(&serde_json::json!({ "agent": "claude" })), Some(Agent::Claude));
         assert_eq!(Agent::of(&serde_json::json!({ "agent": "codex" })), Some(Agent::Codex));
-        assert_eq!(Agent::of(&serde_json::json!({ "agent": "gemini" })), None, "a pane of an agent kelpie has no adapter for is not kelpie's");
+        assert_eq!(Agent::of(&serde_json::json!({ "agent": "gemini" })), None, "a pane of an agent kebbie has no adapter for is not kebbie's");
         assert_eq!(Agent::Codex.kind(), "codex", "herdr agent start --kind codex");
     }
 }

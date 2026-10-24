@@ -157,11 +157,11 @@ mod tests {
         git(&["add", FILE]);
         git(&["commit", "--quiet", "-m", "one"]);
         let built = git(&["rev-parse", "--short=7", "HEAD"]);
-        std::fs::write(root.join(FILE), format!("{before}- The lead restarts onto each new kelpie again\n")).unwrap();
+        std::fs::write(root.join(FILE), format!("{before}- The lead restarts onto each new kebbie again\n")).unwrap();
         git(&["commit", "--quiet", "-am", "two"]);
         let head = git(&["rev-parse", "HEAD"]);
         let notes = for_update(&root, &[built, head.clone()], Some("0.27.0"), "0.27.0", true);
-        assert_eq!((notes.new, notes.fixed), (Vec::<String>::new(), vec!["The lead restarts onto each new kelpie again".to_string()]), "the binary's commit is where the update came from, though the checkout was at the new one before the pull");
+        assert_eq!((notes.new, notes.fixed), (Vec::<String>::new(), vec!["The lead restarts onto each new kebbie again".to_string()]), "the binary's commit is where the update came from, though the checkout was at the new one before the pull");
         assert_eq!(for_update(&root, &[head], Some("0.27.0"), "0.27.0", true), Notes::default(), "the head alone would hide it");
     }
 

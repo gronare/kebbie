@@ -226,7 +226,7 @@ fn socket() -> Result<PathBuf> {
 pub fn move_workspace(workspace_id: &str, insert_index: usize) -> Result<()> {
     let path = socket()?;
     let mut stream = UnixStream::connect(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let request = json!({ "id": "kelpie", "method": "workspace.move", "params": { "workspace_id": workspace_id, "insert_index": insert_index } });
+    let request = json!({ "id": "kebbie", "method": "workspace.move", "params": { "workspace_id": workspace_id, "insert_index": insert_index } });
     writeln!(stream, "{request}").map_err(|error| error.to_string())?;
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line).map_err(|error| error.to_string())?;
@@ -276,7 +276,7 @@ mod tests {
     #[test]
     fn every_herdr_call_goes_through_argv_and_a_missing_herdr_is_one_error() {
         let source = include_str!("herdr.rs");
-        assert!(!source.contains("\"sh\"") && !source.contains("-c\""), "no shell between kelpie and herdr");
+        assert!(!source.contains("\"sh\"") && !source.contains("-c\""), "no shell between kebbie and herdr");
         let text = text(&serde_json::json!("x"));
         assert_eq!(text.as_deref(), Some("x"));
         assert_eq!(super::text(&serde_json::json!(5)), None);

@@ -29,11 +29,11 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
     if ahead_behind(&slot.path, &upstream)?.0 == 0 {
         return Notice::new(Tone::NotNow, "Nothing to land: it has no commits").detail("task", task).err();
     }
-    if !rebase_or_hand_over(&slot, &upstream, "kelpie tried to land this task")? {
+    if !rebase_or_hand_over(&slot, &upstream, "kebbie tried to land this task")? {
         return Notice::new(Tone::Moving, format!("Not landed yet: it conflicts with {main}")).next("Its Claude resolves the rebase and reports back; push it then.").detail("task", task).err();
     }
     let commits = git(&slot.path, &["log", "--oneline", &format!("{upstream}..HEAD")])?;
-    Notice::new(Tone::Done, format!("Rebased onto {main} and ready to push")).next(format!("Push it with: kelpie push {task}")).detail("commits", commits).ok()
+    Notice::new(Tone::Done, format!("Rebased onto {main} and ready to push")).next(format!("Push it with: kebbie push {task}")).detail("commits", commits).ok()
 }
 
 fn main_of(upstream: &str) -> &str {
@@ -51,7 +51,7 @@ pub fn rebase(cwd: &Path) -> Result<String> {
     if ahead_behind(&slot.path, &upstream)?.1 == 0 {
         return Notice::new(Tone::Done, format!("Already on top of {main}")).detail("task", task).ok();
     }
-    if !rebase_or_hand_over(&slot, &upstream, "The user asked kelpie to rebase this task")? {
+    if !rebase_or_hand_over(&slot, &upstream, "The user asked kebbie to rebase this task")? {
         return Notice::new(Tone::Moving, format!("It conflicts with {main}")).next("Its Claude resolves the rebase and reports back.").detail("task", task).ok();
     }
     Notice::new(Tone::Done, format!("Rebased onto {main}")).next("Nothing was pushed.").detail("task", task).ok()
@@ -127,7 +127,7 @@ fn rebase_or_hand_over(slot: &Slot, upstream: &str, why: &str) -> Result<bool> {
     }
     let task = task_of(slot);
     if let Err(cannot) = hand_over(slot, &conflict_prompt(why, upstream)) {
-        return Notice::new(Tone::Failed, format!("It conflicts with {}, and kelpie could not pass the rebase to its Claude", main_of(upstream)))
+        return Notice::new(Tone::Failed, format!("It conflicts with {}, and kebbie could not pass the rebase to its Claude", main_of(upstream)))
             .you("Rebase it yourself in its worktree.").detail("task", task).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
     }
     Ok(false)
@@ -138,18 +138,18 @@ pub(super) fn conflict_prompt(why: &str, upstream: &str) -> String {
         "{why} and rebasing onto {upstream} conflicts (already fetched). Rebase this branch onto {upstream} with git rebase {upstream} (no -i), \
          resolve each conflict keeping the intent of both sides (read the upstream commits that touched the file), run the tests for the files \
          involved, and continue until the rebase is finished. When a conflict is a choice of intent rather than mechanics, both sides wanting \
-         different behaviour from the same code, do not pick one: ask the user with kelpie ask, with the options and your recommendation, and \
+         different behaviour from the same code, do not pick one: ask the user with kebbie ask, with the options and your recommendation, and \
          resolve it by their answer. Do not push. Then report ready, saying in a few lines what conflicted and how you resolved it. When a \
-         push started this, kelpie pushes the resolved commits as soon as their rules are checked; report needs-you only when a test stays red."
+         push started this, kebbie pushes the resolved commits as soon as their rules are checked; report needs-you only when a test stays red."
     )
 }
 
 fn overlap_prompt(by: By, upstream: &str, touched: &[Touched]) -> String {
     let files: Vec<String> = touched.iter().map(|touched| format!("- {}: {}", touched.file, touched.commits.join("; "))).collect();
     format!(
-        "{} asked kelpie to push this task. kelpie fetched and rebased it onto {upstream} without conflicts, but the commits it was rebased over \
+        "{} asked kebbie to push this task. kebbie fetched and rebased it onto {upstream} without conflicts, but the commits it was rebased over \
          changed files this task changes too:\n{}\nRun the tests that cover those files and fix what broke with a new commit. Do not push. When \
-         the tests pass, report ready: kelpie pushes the task for {} then, once the lead has checked a fix against the rules. Report needs-you \
+         the tests pass, report ready: kebbie pushes the task for {} then, once the lead has checked a fix against the rules. Report needs-you \
          only when a test stays red. {WAITING_BEHIND}",
         capitalized(by.word()), files.join("\n"), by.word()
     )
@@ -186,7 +186,7 @@ pub fn tidy(cwd: &Path, name: Option<&str>, note: &str) -> Result<String> {
     if !note.trim().is_empty() {
         prompt.push_str(&format!(" From the user: {}", note.trim()));
     }
-    crate::typing::prompt(&pane, &prompt, task).map_err(|refused| Notice::new(Tone::NotNow, "Not tidied: kelpie typed nothing").next("Tidy again once its input box is clear.").detail("task", task).detail("why", format!("its Claude {}", refused.reason())).to_string())?;
+    crate::typing::prompt(&pane, &prompt, task).map_err(|refused| Notice::new(Tone::NotNow, "Not tidied: kebbie typed nothing").next("Tidy again once its input box is clear.").detail("task", task).detail("why", format!("its Claude {}", refused.reason())).to_string())?;
     Notice::new(Tone::Moving, "Its Claude tidies the commits").next("It reports back when they are reshaped.").detail("task", task).ok()
 }
 
@@ -271,7 +271,7 @@ pub(super) fn queued_notice(state: &Path, address: &str, task: &str) -> Result<S
         Some((head, what)) => format!("{place}; {} at the head waits for its Claude to {what}", head.task),
         None => place,
     };
-    Notice::new(Tone::Moving, format!("In the push line: {place}")).next("kelpie rebases and pushes it when its turn comes; the pushes before it go out first.").detail("task", task).ok()
+    Notice::new(Tone::Moving, format!("In the push line: {place}")).next("kebbie rebases and pushes it when its turn comes; the pushes before it go out first.").detail("task", task).ok()
 }
 
 fn head_waits(work: Work) -> Option<&'static str> {
@@ -318,7 +318,7 @@ pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, thro
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
     let waiting = intent::load(state, &address);
     if waiting.is_some() && *caller != Caller::User {
-        return Notice::new(Tone::NotNow, "Already being pushed").next("It is in the push line; kelpie pushes it when its turn comes.").detail("task", &task).err();
+        return Notice::new(Tone::NotNow, "Already being pushed").next("It is in the push line; kebbie pushes it when its turn comes.").detail("task", &task).err();
     }
     let now = messages::now();
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
@@ -350,7 +350,7 @@ pub(super) fn cancel_as(state: &Path, caller: &Caller, repo: &Path, slot: &Slot)
         return Notice::new(Tone::Failed, "Not taken out: the user asked for this push").you("Ask the user; only they take their push back.").detail("task", task).err();
     }
     let Some(_turnstile) = super::line::Turnstile::try_take(state, repo) else {
-        return Notice::new(Tone::NotNow, "Not taken out: kelpie is pushing it now").next("Try again in a moment; if it went out, it is under CI running.").detail("task", task).err();
+        return Notice::new(Tone::NotNow, "Not taken out: kebbie is pushing it now").next("Try again in a moment; if it went out, it is under CI running.").detail("task", task).err();
     };
     if intent::load(state, &address).is_none() {
         return Notice::new(Tone::NotNow, "Not in the push line any more").detail("task", task).err();
@@ -394,7 +394,7 @@ pub(super) fn push_task_with(state: &Path, caller: &Caller, repo: &Path, slot: &
     }
 }
 
-// The default branch moved on the remote after kelpie fetched it.
+// The default branch moved on the remote after kebbie fetched it.
 pub(super) fn rejected(error: &str) -> bool {
     ["non-fast-forward", "(fetch first)", "stale info"].iter().any(|sign| error.contains(sign))
 }
@@ -427,30 +427,30 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
         Updated::Clean => {}
         Updated::Conflict => {
             record(Work::Conflict, recorded)?;
-            let why = format!("{} asked kelpie to push this task", capitalized(pusher));
+            let why = format!("{} asked kebbie to push this task", capitalized(pusher));
             let prompt = format!("{} {WAITING_BEHIND}", conflict_prompt(&why, &upstream));
             if let Err(cannot) = hand_over(slot, &prompt).and_then(|_| intent::note_hand_over(state, &address)) {
                 intent::forget(state, &address);
-                return Notice::new(Tone::Failed, format!("Not pushed: it conflicts with {}, and kelpie could not pass the rebase to its Claude", main_of(&upstream)))
+                return Notice::new(Tone::Failed, format!("Not pushed: it conflicts with {}, and kebbie could not pass the rebase to its Claude", main_of(&upstream)))
                     .you("Push again; if this repeats, rebase it yourself in its worktree.").detail("task", &task).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
             }
             crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushHanded);
-            tell_lead(&format!("{} pushed {address}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kelpie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line meanwhile, for up to {} minutes.", capitalized(pusher), by.word(), super::line::CEILING / 60), Some("push"));
+            tell_lead(&format!("{} pushed {address}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kebbie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line meanwhile, for up to {} minutes.", capitalized(pusher), by.word(), super::line::CEILING / 60), Some("push"));
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: it conflicts with {}", main_of(&upstream)))
-                .next(format!("Its Claude resolves the conflict, the reviewer checks the result against the rules, then kelpie pushes it{}.", for_whom(pusher))).detail("task", &task).to_string()));
+                .next(format!("Its Claude resolves the conflict, the reviewer checks the result against the rules, then kebbie pushes it{}.", for_whom(pusher))).detail("task", &task).to_string()));
         }
         Updated::Overlap(touched) => {
             let files: Vec<&str> = touched.iter().map(|touched| touched.file.as_str()).collect();
             record(Work::Tests, fingerprint(&slot.path, &upstream)?)?;
             if let Err(cannot) = hand_over(slot, &overlap_prompt(by, &upstream, &touched)).and_then(|_| intent::note_hand_over(state, &address)) {
                 intent::forget(state, &address);
-                return Notice::new(Tone::Failed, format!("Not pushed: {} changed the same files, and kelpie could not pass their tests to its Claude", main_of(&upstream)))
+                return Notice::new(Tone::Failed, format!("Not pushed: {} changed the same files, and kebbie could not pass their tests to its Claude", main_of(&upstream)))
                     .you("Run the tests for those files in its worktree, then push again.").detail("task", &task).detail("files", files.join(" · "))
                     .detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
             }
             crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushHanded);
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: {} changed the same files, so their tests run first", main_of(&upstream)))
-                .next(format!("Its Claude runs those tests now; kelpie pushes it{} as soon as it reports ready.", for_whom(pusher))).detail("task", &task).detail("files", files.join(" · ")).to_string()));
+                .next(format!("Its Claude runs those tests now; kebbie pushes it{} as soon as it reports ready.", for_whom(pusher))).detail("task", &task).detail("files", files.join(" · ")).to_string()));
         }
     }
     intent::forget(state, &address);
@@ -497,7 +497,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
         crate::ci::arm(state, &address, log.as_ref().map(|log| matches!(log, Ok(Some(_)))));
     }
     let ci = match &watch {
-        crate::ci::Begin::Watching => format!("kelpie watches {short}"),
+        crate::ci::Begin::Watching => format!("kebbie watches {short}"),
         crate::ci::Begin::NotWatched(reason) => format!("not watched: {reason}"),
         crate::ci::Begin::Off => String::new(),
     };
@@ -505,10 +505,10 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
     let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged);
     if !keep_open {
         if matches!(watch, crate::ci::Begin::Watching) {
-            if let Err(error) = messages::log_for_lead(&format!("{} pushed {address}: {} to {target}. kelpie watches CI for {short} and closes the task once every run is green; you hear what landed then.", capitalized(pusher), plural(count, "commit")), None) {
+            if let Err(error) = messages::log_for_lead(&format!("{} pushed {address}: {} to {target}. kebbie watches CI for {short} and closes the task once every run is green; you hear what landed then.", capitalized(pusher), plural(count, "commit")), None) {
                 eprintln!("Could not tell the lead about the push: {error}");
             }
-            let notice = Notice::new(Tone::Done, headline(false)).next("CI runs now; kelpie closes the task when it is green.").detail("task", &task).detail("commit", short).detail("log", &logged);
+            let notice = Notice::new(Tone::Done, headline(false)).next("CI runs now; kebbie closes the task when it is green.").detail("task", &task).detail("commit", short).detail("log", &logged);
             return Ok(notice.detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string());
         }
         let ready = note_ready(vault.as_ref(), state, &address, &task);
@@ -540,7 +540,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, pusher: &
         Rest::NotRebased(error) => {
             crate::phase::record(state, &address, "push", &crate::phase::Event::PushFailed);
             return Ok(said(Notice::new(Tone::You, headline(true))).next(format!("The rest could not be rebased onto {main} afterwards."))
-                .you(format!("Rebase the rest (kelpie land {task}).")).detail("error", error).to_string());
+                .you(format!("Rebase the rest (kebbie land {task}).")).detail("error", error).to_string());
         }
     };
     crate::phase::record(state, &address, "push", &crate::phase::Event::KeptOpen { rest, clean, head: git(&slot.path, &["rev-parse", "HEAD"]).ok().as_deref() });
@@ -604,7 +604,7 @@ impl Pusher {
             Caller::Lead => {
                 crate::permit::lead_may_push(self.permit, self.reviewed)?;
                 if !self.approved {
-                    return Err("its commits have no rules approval that matches them: wait for the reviewer's rules check, or check them and run kelpie approve".to_string());
+                    return Err("its commits have no rules approval that matches them: wait for the reviewer's rules check, or check them and run kebbie approve".to_string());
                 }
                 Ok("the lead")
             }
@@ -625,19 +625,19 @@ struct Landed<'a> {
     waits: bool,
 }
 
-// logged is None without the vault, else whether kelpie wrote the repo's log line itself; with the vault kelpie settles the note.
+// logged is None without the vault, else whether kebbie wrote the repo's log line itself; with the vault kebbie settles the note.
 fn pushed_notice(landed: &Landed) -> String {
     let Landed { pusher, address, target, commits, closed, note, logged, waits } = *landed;
     let count = commits.lines().count();
     let mut text = format!("{} pushed {address}: {} to {target} ({}).", capitalized(pusher), plural(count, "commit"), commits.lines().collect::<Vec<_>>().join("; "));
     text.push_str(match (closed, waits) {
         (true, _) => " The task is done and closed.",
-        (false, true) => " The task stays open until its note has its solution and decisions; kelpie asked it to write them.",
+        (false, true) => " The task stays open until its note has its solution and decisions; kebbie asked it to write them.",
         (false, false) => " The task stays open with the rest of its branch.",
     });
     match logged {
-        Some(true) => return text + " kelpie wrote the repo's log line in the vault from these commits.",
-        Some(false) => return text + " kelpie could not write the repo's log line: write it in the vault with what landed and these shas.",
+        Some(true) => return text + " kebbie wrote the repo's log line in the vault from these commits.",
+        Some(false) => return text + " kebbie could not write the repo's log line: write it in the vault with what landed and these shas.",
         None => {}
     }
     text.push_str(" Write the repo's log line in the vault with what landed and these shas");
@@ -650,7 +650,7 @@ fn pushed_notice(landed: &Landed) -> String {
     text
 }
 
-// Only a push kelpie logged itself leaves the lead nothing to do now; without that, the notice asks it to write the log line.
+// Only a push kebbie logged itself leaves the lead nothing to do now; without that, the notice asks it to write the log line.
 fn tell_lead_pushed(landed: &Landed) {
     let told = if landed.logged != Some(true) { messages::tell_lead(&pushed_notice(landed), Some("push")) } else { messages::log_for_lead(&pushed_notice(landed), Some("push")) };
     if let Err(error) = told {
@@ -673,7 +673,7 @@ fn keep_going(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &
 // The rest of the branch goes on top of the new default branch, and an approval of the whole branch holds for the rest.
 fn rebase_rest(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, was_approved: bool) -> Result<Rest> {
     fetch(repo)?;
-    let clean = rebase_or_hand_over(slot, upstream, "kelpie pushed this task's first commits")?;
+    let clean = rebase_or_hand_over(slot, upstream, "kebbie pushed this task's first commits")?;
     let rest = ahead_behind(&slot.path, upstream)?.0;
     if clean && was_approved && rest > 0 {
         record_approval(state, address, &fingerprint(&slot.path, upstream)?)?;
@@ -718,7 +718,7 @@ mod tests {
         assert_eq!(check(Caller::User, None, false, false), Ok("the user"));
         assert_eq!(check(Caller::Lead, Some(Permit::Task), false, true), Ok("the lead"));
         assert!(check(Caller::Lead, None, true, true).unwrap_err().contains("no push permission"));
-        assert!(check(Caller::Lead, Some(Permit::Task), true, false).unwrap_err().contains("kelpie approve"));
+        assert!(check(Caller::Lead, Some(Permit::Task), true, false).unwrap_err().contains("kebbie approve"));
         assert!(check(Caller::Lead, Some(Permit::Repo), false, true).unwrap_err().contains("reviewer passed"));
         assert_eq!(check(Caller::Lead, Some(Permit::Repo), true, true), Ok("the lead"));
         for agent in [Caller::Task("billing@app".to_string()), Caller::Agent] {
@@ -737,15 +737,15 @@ mod tests {
     }
 
     #[test]
-    fn with_the_vault_on_the_lead_hears_kelpie_logged_the_push_and_is_not_asked_to_log_it() {
+    fn with_the_vault_on_the_lead_hears_kebbie_logged_the_push_and_is_not_asked_to_log_it() {
         let commits = "a1b2c3d Add refunds";
         let kept = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(true), waits: false });
-        assert!(kept.contains("kelpie wrote the repo's log line") && !kept.contains("Write the repo's log line"), "{kept}");
-        assert!(!kept.contains("area note") && !failed_text(commits).contains("area note"), "kelpie logs the push itself; the notice carries no chore for the lead's area note: {kept}");
+        assert!(kept.contains("kebbie wrote the repo's log line") && !kept.contains("Write the repo's log line"), "{kept}");
+        assert!(!kept.contains("area note") && !failed_text(commits).contains("area note"), "kebbie logs the push itself; the notice carries no chore for the lead's area note: {kept}");
         let waits = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: false, note: Some("Projects/billing.md"), logged: Some(true), waits: true });
         assert!(waits.contains("stays open until its note has its solution and decisions"), "{waits}");
         let failed = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(false), waits: false });
-        assert!(failed.contains("kelpie could not write the repo's log line: write it in the vault with what landed and these shas") && !failed.contains("kelpie wrote"), "a log append that failed leaves the line to the lead: {failed}");
+        assert!(failed.contains("kebbie could not write the repo's log line: write it in the vault with what landed and these shas") && !failed.contains("kebbie wrote"), "a log append that failed leaves the line to the lead: {failed}");
     }
 
     fn failed_text(commits: &str) -> String {
@@ -753,13 +753,13 @@ mod tests {
     }
 
     #[test]
-    fn a_push_notice_reaches_the_lead_live_only_when_kelpie_could_not_write_the_log_line() {
+    fn a_push_notice_reaches_the_lead_live_only_when_kebbie_could_not_write_the_log_line() {
         let source = include_str!("push.rs");
         let tell = &source[source.find("fn tell_lead_pushed").unwrap()..];
         let tell = &tell[..tell.find("\n}\n").unwrap()];
         assert!(tell.contains("landed.logged != Some(true) { messages::tell_lead(") && tell.contains("messages::log_for_lead(&pushed_notice(landed), Some(\"push\"))"), "{tell}");
         let deliver = &source[source.find("\nfn deliver(").unwrap()..];
-        assert!(deliver[..deliver.find("\n}\n").unwrap()].contains("messages::log_for_lead(&format!(\"{} pushed {address}: {} to {target}. kelpie watches CI"), "the push under CI watch is a notice for the digest, not a turn of the lead's");
+        assert!(deliver[..deliver.find("\n}\n").unwrap()].contains("messages::log_for_lead(&format!(\"{} pushed {address}: {} to {target}. kebbie watches CI"), "the push under CI watch is a notice for the digest, not a turn of the lead's");
     }
 
     #[test]
@@ -886,7 +886,7 @@ mod tests {
         let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/review.sh");
         let review = |args: &[&str]| {
             let output = std::process::Command::new("sh").arg(&script).args(args).current_dir(&slot.path)
-                .env("KELPIE_STATE_DIR", &state).env("HERDR_BIN_PATH", &herdr).env("HERDR_PANE_ID", "p_claude").output().unwrap();
+                .env("KEBBIE_STATE_DIR", &state).env("HERDR_BIN_PATH", &herdr).env("HERDR_PANE_ID", "p_claude").output().unwrap();
             assert!(output.status.success(), "review.sh {args:?}: {}", String::from_utf8_lossy(&output.stderr));
             String::from_utf8_lossy(&output.stdout).into_owned()
         };
@@ -1051,10 +1051,10 @@ mod tests {
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let (texts, hand) = handed();
         let Prepared::Handed(said) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("the rebase conflicts") };
-        assert!(said.contains("conflicts with") && said.contains("then kelpie pushes it"), "{said}");
+        assert!(said.contains("conflicts with") && said.contains("then kebbie pushes it"), "{said}");
         assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), head);
         let typed = texts.borrow()[0].clone();
-        assert!(typed.contains("kelpie ask") && typed.contains("recommendation") && typed.contains("Do not push") && typed.contains("kelpie pushes the resolved commits"), "{typed}");
+        assert!(typed.contains("kebbie ask") && typed.contains("recommendation") && typed.contains("Do not push") && typed.contains("kebbie pushes the resolved commits"), "{typed}");
         let recorded = intent::load(&pushing.state, &pushing.address).unwrap();
         assert_eq!((recorded.by, recorded.work, recorded.fingerprint), (By::User, Work::Conflict, fingerprint(&slot.path, &upstream).unwrap()));
         let failing = |_: &Slot, _: &str| Err("the log is locked".to_string());

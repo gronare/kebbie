@@ -37,7 +37,7 @@ pub fn for_stdout(text: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    const LINK: &str = "https://kelpie.example.com/connect?code=K7QF-M2XD#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&m=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    const LINK: &str = "https://kebbie.example.com/connect?code=K7QF-M2XD#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&m=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
     fn modules(rows: &[String]) -> Vec<Vec<bool>> {
         rows.iter().flat_map(|row| {

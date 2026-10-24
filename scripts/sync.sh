@@ -21,9 +21,9 @@ programs=$(echo "$panes" | jq -r '.result.panes[] | select(.agent != "claude") |
   done | jq -Rn '[inputs | split("\t") | { (.[0]): { name: .[1], idle: (.[2] == "idle") } }] | add // {}')
 
 # The board's w key runs worktree.dev_server in a tab named worktree.server_name, and b runs worktree.dev_worker in one named worktree.worker_name.
-kelpie="${KELPIE_BIN:-$(dirname "$0")/../target/release/kelpie}"
-server_name=$("$kelpie" config --get worktree.server_name 2>/dev/null) || server_name=server
-worker_name=$("$kelpie" config --get worktree.worker_name 2>/dev/null) || worker_name=worker
+kebbie="${KEBBIE_BIN:-${KELPIE_BIN:-$(dirname "$0")/../target/release/kebbie}}"
+server_name=$("$kebbie" config --get worktree.server_name 2>/dev/null) || server_name=server
+worker_name=$("$kebbie" config --get worktree.worker_name 2>/dev/null) || worker_name=worker
 jq -rn --argjson panes "$panes" --argjson tabs "$tabs" --argjson programs "$programs" --arg server "$server_name" --arg worker "$worker_name" '
   def busy($label): [$tabs.result.tabs[] | select(.label == $label) | .tab_id] as $ids
     | any(.[]; .tab_id as $tab | any($ids[]; . == $tab) and ($programs[.pane_id] | . != null and (.idle | not)));

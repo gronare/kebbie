@@ -44,16 +44,16 @@ pub(crate) fn forget(state: &Path, address: &str) {
 
 pub(crate) fn outside_as(state: &Path, caller: &Caller, reason: &str) -> Result<String> {
     let Caller::Task(address) = caller else {
-        return Err("kelpie ci outside is the task's word on its own red CI, run by its Claude; the user dismisses a red CI with kelpie ci dismiss".to_string());
+        return Err("kebbie ci outside is the task's word on its own red CI, run by its Claude; the user dismisses a red CI with kebbie ci dismiss".to_string());
     };
     if reason.trim().is_empty() {
-        return Err("kelpie ci outside needs the reason: kelpie ci outside \"<what failed, outside the code>\"".to_string());
+        return Err("kebbie ci outside needs the reason: kebbie ci outside \"<what failed, outside the code>\"".to_string());
     }
     let watch = red(state, address).ok_or_else(|| format!("{address} has no red CI to speak of"))?;
     let mut record = read(state, address);
     record["outside"] = json!({ "reason": reason.trim(), "sha": watch.sha, "at": messages::now() });
     crate::state::write(&file(state, address), record.to_string())?;
-    let text = format!("{address} says the red CI on {} is outside the code: {}. Only the user can dismiss it (kelpie ci dismiss).", watch.short(), reason.trim());
+    let text = format!("{address} says the red CI on {} is outside the code: {}. Only the user can dismiss it (kebbie ci dismiss).", watch.short(), reason.trim());
     if let Err(error) = messages::tell_lead(&text, Some("ci")) {
         eprintln!("Could not tell the lead: {error}");
     }
@@ -91,7 +91,7 @@ pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option
     }
     super::after::red_ci_superseded(state, &address);
     crate::phase::record(state, &address, "dismiss", &crate::phase::Event::Dismissed { kept_open: super::landed::kept_open(state, &address) });
-    let then = if super::landed::kept_open(state, &address) { "It stays open, as the user chose when pushing it." } else { "kelpie closes the task once its commits are on the default branch." };
+    let then = if super::landed::kept_open(state, &address) { "It stays open, as the user chose when pushing it." } else { "kebbie closes the task once its commits are on the default branch." };
     let text = format!("The user dismissed the red CI of {address} on {}: {why}. {then}", watch.short());
     if let Err(error) = messages::tell_lead(&text, Some("ci")) {
         eprintln!("Could not tell the lead: {error}");
@@ -139,7 +139,7 @@ mod tests {
         crate::ci::save(&state, &red_watch(&dir, &address)).unwrap();
         crate::tasks::landed::keep_open(&state, &address, true);
         let kept = dismiss_as(&state, &Caller::User, &dir, Some("billing"), Some("a flake")).unwrap();
-        assert!(kept.contains("It stays open, as the user chose") && !kept.contains("kelpie closes"), "{kept}");
+        assert!(kept.contains("It stays open, as the user chose") && !kept.contains("kebbie closes"), "{kept}");
         cleanup(dir, origin, &slot);
     }
 }

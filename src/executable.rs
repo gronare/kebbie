@@ -31,7 +31,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kelpie-executable-{name}-{:?}", std::thread::current().id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-executable-{name}-{:?}", std::thread::current().id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn the_guard_catches_a_fake_written_or_copied_in_place_and_lets_folders_and_data_through() {
-        let source = "fn production() {\n    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();\n}\n#[cfg(test)]\nmod tests {\n    fs::write(&fake, \"#!/bin/sh\\n\").unwrap();\n    fs::set_permissions(&fake, fs::Permissions::from_mode(0o700)).unwrap();\n    fs::create_dir_all(&locked).unwrap();\n    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();\n    fs::copy(KELPIE, &binary).unwrap();\n    fs::copy(dir.join(\"s.jsonl\"), &to).unwrap();\n}\n";
+        let source = "fn production() {\n    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();\n}\n#[cfg(test)]\nmod tests {\n    fs::write(&fake, \"#!/bin/sh\\n\").unwrap();\n    fs::set_permissions(&fake, fs::Permissions::from_mode(0o700)).unwrap();\n    fs::create_dir_all(&locked).unwrap();\n    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();\n    fs::copy(KEBBIE, &binary).unwrap();\n    fs::copy(dir.join(\"s.jsonl\"), &to).unwrap();\n}\n";
         assert_eq!(offenders(source, false), [7, 10]);
         assert_eq!(offenders("fs::write(dirs.git_dir(), x).unwrap();\nfs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).unwrap();\n", true), Vec::<usize>::new());
         assert_eq!(offenders("fs::write(bin.join(tool), x).unwrap();\nfs::set_permissions(bin.join(tool), fs::Permissions::from_mode(0o755)).unwrap();\n", true), [2]);

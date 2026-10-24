@@ -8,20 +8,20 @@ use crate::peers::Session;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 
-const FROM: &str = "kelpie";
+const FROM: &str = "kebbie";
 const ROLE_CAP: usize = 6000;
 const DROPPED_CHARS: usize = 160;
 
-// What a session's conversation has been given of kelpie: its role (without the peer list), the skills by description and the commands by their usage.
+// What a session's conversation has been given of kebbie: its role (without the peer list), the skills by description and the commands by their usage.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Snapshot {
-    pub kelpie: String,
+    pub kebbie: String,
     pub role: String,
     pub skills: BTreeMap<String, String>,
     pub commands: BTreeMap<String, String>,
 }
 
-// started is the kelpie the session's process runs with, None when it began before kelpie kept this; known is what it has been told since.
+// started is the kebbie the session's process runs with, None when it began before kebbie kept this; known is what it has been told since.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
     pub started: Option<String>,
@@ -31,7 +31,7 @@ pub struct Record {
 impl Record {
     fn to_json(&self) -> Value {
         let known = &self.known;
-        json!({ "started": self.started, "known": { "kelpie": known.kelpie, "role": known.role, "skills": known.skills, "commands": known.commands } })
+        json!({ "started": self.started, "known": { "kebbie": known.kebbie, "role": known.role, "skills": known.skills, "commands": known.commands } })
     }
 
     fn from_json(value: &Value) -> Option<Record> {
@@ -39,22 +39,22 @@ impl Record {
         let map = |value: &Value| value.as_object().map(|entries| entries.iter().filter_map(|(name, text)| Some((name.clone(), text.as_str()?.to_string()))).collect());
         Some(Record {
             started: value["started"].as_str().map(str::to_string),
-            known: Snapshot { kelpie: known["kelpie"].as_str()?.to_string(), role: known["role"].as_str()?.to_string(), skills: map(&known["skills"])?, commands: map(&known["commands"])? },
+            known: Snapshot { kebbie: known["kebbie"].as_str()?.to_string(), role: known["role"].as_str()?.to_string(), skills: map(&known["skills"])?, commands: map(&known["commands"])? },
         })
     }
 }
 
-pub fn this_kelpie() -> String {
-    crate::version(env!("KELPIE_BUILT_FROM"))
+pub fn this_kebbie() -> String {
+    crate::version(env!("KEBBIE_BUILT_FROM"))
 }
 
-// Each command in kelpie's usage, by its words up to its first argument, with its whole entry.
+// Each command in kebbie's usage, by its words up to its first argument, with its whole entry.
 pub fn commands(usage: &str) -> BTreeMap<String, String> {
     let mut found: BTreeMap<String, String> = BTreeMap::new();
     let mut current: Option<String> = None;
     for line in usage.lines() {
-        if let Some(entry) = line.strip_prefix("  kelpie ") {
-            let name: Vec<&str> = std::iter::once("kelpie").chain(entry.split("  ").next().unwrap_or_default().split_whitespace().take_while(|word| !word.starts_with(['<', '[', '-', '"']))).collect();
+        if let Some(entry) = line.strip_prefix("  kebbie ") {
+            let name: Vec<&str> = std::iter::once("kebbie").chain(entry.split("  ").next().unwrap_or_default().split_whitespace().take_while(|word| !word.starts_with(['<', '[', '-', '"']))).collect();
             let name = name.join(" ");
             found.insert(name.clone(), line.trim().to_string());
             current = Some(name);
@@ -74,13 +74,13 @@ pub fn skills(root: &Path) -> BTreeMap<String, String> {
         let text = std::fs::read_to_string(entry.path().join("SKILL.md")).ok()?;
         let front = text.strip_prefix("---\n")?.split("\n---").next()?;
         let description = front.lines().find_map(|line| line.strip_prefix("description:")).unwrap_or_default().trim();
-        Some((format!("kelpie:{}", entry.file_name().to_string_lossy()), description.to_string()))
+        Some((format!("kebbie:{}", entry.file_name().to_string_lossy()), description.to_string()))
     }).collect()
 }
 
 fn snapshot(role: &str) -> Snapshot {
     Snapshot {
-        kelpie: this_kelpie(),
+        kebbie: this_kebbie(),
         role: role.to_string(),
         skills: crate::lead::install_root().map(|root| skills(&root)).unwrap_or_default(),
         commands: commands(crate::USAGE),
@@ -148,39 +148,39 @@ pub fn changes(old: &Snapshot, new: &Snapshot) -> Option<String> {
 }
 
 fn since(record: Option<&Record>) -> String {
-    record.and_then(|record| record.started.clone()).unwrap_or_else(|| "an earlier kelpie than kelpie records".to_string())
+    record.and_then(|record| record.started.clone()).unwrap_or_else(|| "an earlier kebbie than kebbie records".to_string())
 }
 
 // The message to a running session after an update: what changed since what it knows, and where its whole role is now.
 pub fn update_message(record: Option<&Record>, new: &Snapshot, role_file: &Path) -> Option<String> {
     let read = format!("Your role as it is now is in {}: read it, and work from it rather than from the role you started with.", role_file.display());
     match record {
-        None => Some(format!("kelpie was updated to {} while you ran, and kelpie has no record of the version you started on, so your role and skills may be older than what is installed. {read} `{} --help` lists the commands. The skills now: {}.", new.kelpie, crate::peers::kelpie_command().unwrap_or_else(|_| "kelpie".to_string()), new.skills.keys().cloned().collect::<Vec<_>>().join(", "))),
-        Some(record) => changes(&record.known, new).map(|changes| format!("kelpie was updated from {} to {} while you ran. What changed for you:\n\n{changes}\n\n{read}", record.known.kelpie, new.kelpie)),
+        None => Some(format!("kebbie was updated to {} while you ran, and kebbie has no record of the version you started on, so your role and skills may be older than what is installed. {read} `{} --help` lists the commands. The skills now: {}.", new.kebbie, crate::peers::kebbie_command().unwrap_or_else(|_| "kebbie".to_string()), new.skills.keys().cloned().collect::<Vec<_>>().join(", "))),
+        Some(record) => changes(&record.known, new).map(|changes| format!("kebbie was updated from {} to {} while you ran. What changed for you:\n\n{changes}\n\n{read}", record.known.kebbie, new.kebbie)),
     }
 }
 
-// The message to a session kelpie resumed: its role was replaced under a conversation that began with another.
+// The message to a session kebbie resumed: its role was replaced under a conversation that began with another.
 pub fn resumed_message(record: Option<&Record>, new: &Snapshot) -> Option<String> {
-    let replaced = format!("You were resumed with the role of {}, which replaces the one this conversation began with ({}). Work from your role as it is now, not from habits earlier in this conversation.", new.kelpie, since(record));
+    let replaced = format!("You were resumed with the role of {}, which replaces the one this conversation began with ({}). Work from your role as it is now, not from habits earlier in this conversation.", new.kebbie, since(record));
     match record {
         None => Some(replaced),
-        Some(record) if record.started.as_deref() == Some(new.kelpie.as_str()) && record.known == *new => None,
+        Some(record) if record.started.as_deref() == Some(new.kebbie.as_str()) && record.known == *new => None,
         Some(record) => Some(match changes(&record.known, new) {
             Some(changes) => format!("{replaced} What is new since what you were told:\n\n{changes}"),
-            None => format!("{replaced} kelpie told you earlier what changed in it."),
+            None => format!("{replaced} kebbie told you earlier what changed in it."),
         }),
     }
 }
 
-// A line for the session's prompt hook while it runs an older kelpie than is installed.
+// A line for the session's prompt hook while it runs an older kebbie than is installed.
 pub fn stale_line(record: Option<&Record>, installed: &str, role_file: &Path, restart: &str) -> Option<String> {
     let record = record?;
     if record.started.as_deref() == Some(installed) {
         return None;
     }
-    let told = if record.known.kelpie == installed { format!("kelpie has sent you what changed for you, and your role as it is now is in {}", role_file.display()) } else { "What changed for you reaches you as a message from kelpie".to_string() };
-    Some(format!("kelpie: you started on {}; {installed} is installed. {told}; {restart}.", since(Some(record))))
+    let told = if record.known.kebbie == installed { format!("kebbie has sent you what changed for you, and your role as it is now is in {}", role_file.display()) } else { "What changed for you reaches you as a message from kebbie".to_string() };
+    Some(format!("kebbie: you started on {}; {installed} is installed. {told}; {restart}.", since(Some(record))))
 }
 
 fn file_in(dir: &Path, address: &str) -> PathBuf {
@@ -195,13 +195,13 @@ fn save_in(dir: &Path, address: &str, record: &Record) -> Result<()> {
     crate::state::write(&file_in(dir, address), record.to_json().to_string())
 }
 
-// kelpie started or resumed a session with this role; a resumed one is told, once it is free, what its new role brings.
+// kebbie started or resumed a session with this role; a resumed one is told, once it is free, what its new role brings.
 pub fn began(address: &str, role: &str, resumed: bool) {
     let done = crate::lead::roles_dir().and_then(|dir| began_in(&dir, address, &snapshot(role), resumed, &mut |text| {
         if address == LEAD_LABEL { messages::log_for_lead(text, Some(messages::NOTICE_KIND)) } else { messages::hold_for(FROM, address, text, None, Some(messages::NOTICE_KIND)) }
     }));
     if let Err(error) = done {
-        eprintln!("Could not record which kelpie {address} runs: {error}");
+        eprintln!("Could not record which kebbie {address} runs: {error}");
     }
 }
 
@@ -210,10 +210,10 @@ pub fn began_in(dir: &Path, address: &str, now: &Snapshot, resumed: bool, hold: 
     if resumed && let Some(text) = resumed_message(old.as_ref(), now) {
         hold(&text)?;
     }
-    save_in(dir, address, &Record { started: Some(now.kelpie.clone()), known: now.clone() })
+    save_in(dir, address, &Record { started: Some(now.kebbie.clone()), known: now.clone() })
 }
 
-// The role kelpie would give this session now, written to its role file: the file, and the role without its peer list.
+// The role kebbie would give this session now, written to its role file: the file, and the role without its peer list.
 fn role_now(session: &Session, cwd: Option<&Path>) -> Result<Option<(PathBuf, String)>> {
     if session.address == LEAD_LABEL {
         return crate::lead::role_file().map(Some);
@@ -221,16 +221,16 @@ fn role_now(session: &Session, cwd: Option<&Path>) -> Result<Option<(PathBuf, St
     cwd.map_or(Ok(None), crate::tasks::task_role_now)
 }
 
-// Each running session that knows an older kelpie than this one is told what changed for it, held while it is mid-turn.
+// Each running session that knows an older kebbie than this one is told what changed for it, held while it is mid-turn.
 pub fn announce() -> Result<Vec<String>> {
     let dir = crate::lead::roles_dir()?;
     let sessions = crate::peers::sessions()?;
-    if !sessions.iter().any(|session| due(&dir, session, &this_kelpie())) || !installed_is_me() {
+    if !sessions.iter().any(|session| due(&dir, session, &this_kebbie())) || !installed_is_me() {
         return Ok(Vec::new());
     }
     let agents = crate::herdr::agents()?;
     let cwd_of = |session: &Session| agents.iter().find(|agent| agent["pane_id"].as_str() == session.pane.as_deref()).and_then(|agent| agent["cwd"].as_str()).map(PathBuf::from);
-    announce_in(&dir, &sessions, &this_kelpie(), &mut |session| {
+    announce_in(&dir, &sessions, &this_kebbie(), &mut |session| {
         let Some((file, role)) = role_now(session, cwd_of(session).as_deref())? else { return Ok(None) };
         Ok(Some((file, snapshot(&role))))
     }, &mut |session, text| {
@@ -239,18 +239,18 @@ pub fn announce() -> Result<Vec<String>> {
     })
 }
 
-// The kelpie on PATH, which a keeper left running on an older binary is not.
+// The kebbie on PATH, which a keeper left running on an older binary is not.
 pub fn installed() -> String {
-    crate::peers::kelpie_command().ok().and_then(|kelpie| crate::sh::run(&kelpie, &["--version"], None).ok()).map(|version| version.trim().to_string()).filter(|version| !version.is_empty()).unwrap_or_else(this_kelpie)
+    crate::peers::kebbie_command().ok().and_then(|kebbie| crate::sh::run(&kebbie, &["--version"], None).ok()).map(|version| version.trim().to_string()).filter(|version| !version.is_empty()).unwrap_or_else(this_kebbie)
 }
 
-// A keeper left running on an older binary than is installed must not tell sessions its own, older kelpie.
+// A keeper left running on an older binary than is installed must not tell sessions its own, older kebbie.
 fn installed_is_me() -> bool {
-    crate::peers::kelpie_command().ok().and_then(|kelpie| crate::sh::run(&kelpie, &["--version"], None).ok()).is_some_and(|version| version.trim() == this_kelpie())
+    crate::peers::kebbie_command().ok().and_then(|kebbie| crate::sh::run(&kebbie, &["--version"], None).ok()).is_some_and(|version| version.trim() == this_kebbie())
 }
 
 fn due(dir: &Path, session: &Session, installed: &str) -> bool {
-    session.pane.is_some() && load_in(dir, &session.address).is_none_or(|record| record.known.kelpie != installed)
+    session.pane.is_some() && load_in(dir, &session.address).is_none_or(|record| record.known.kebbie != installed)
 }
 
 type Now<'a> = dyn FnMut(&Session) -> Result<Option<(PathBuf, Snapshot)>> + 'a;
@@ -271,7 +271,7 @@ pub fn announce_in(dir: &Path, sessions: &[Session], installed: &str, now: &mut 
 
 pub fn lead_restart(auto: bool, key: &str) -> String {
     if auto {
-        format!("kelpie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press {key} on the board")
+        format!("kebbie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press {key} on the board")
     } else {
         format!("restart.auto is off, so nothing restarts you on its own: the user presses {key} on the board, which resumes this conversation on it")
     }
@@ -281,20 +281,20 @@ pub fn stale_for(address: &str) -> Option<String> {
     let dir = crate::lead::roles_dir().ok()?;
     let auto = crate::config::restart_settings().map_or(true, |(auto, _)| auto);
     let restart = if address == LEAD_LABEL { lead_restart(auto, &crate::keys::map().label(crate::keys::Act::RestartLead)) } else { "a restart brings it in".to_string() };
-    stale_line(load_in(&dir, address).as_ref(), &this_kelpie(), &dir.join(format!("{address}.md")), &restart)
+    stale_line(load_in(&dir, address).as_ref(), &this_kebbie(), &dir.join(format!("{address}.md")), &restart)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn snap(kelpie: &str, role: &str, skills: &[(&str, &str)], commands: &[(&str, &str)]) -> Snapshot {
+    fn snap(kebbie: &str, role: &str, skills: &[(&str, &str)], commands: &[(&str, &str)]) -> Snapshot {
         let map = |pairs: &[(&str, &str)]| pairs.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect();
-        Snapshot { kelpie: kelpie.to_string(), role: role.to_string(), skills: map(skills), commands: map(commands) }
+        Snapshot { kebbie: kebbie.to_string(), role: role.to_string(), skills: map(skills), commands: map(commands) }
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kelpie-known-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-known-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -302,37 +302,37 @@ mod tests {
 
     #[test]
     fn the_usage_gives_each_command_with_its_whole_entry() {
-        let usage = "kelpie: herding\n\n  kelpie tell <to> <text>         message another session\n                                  held while it waits\n  kelpie issue show|retry <id>    print one\n  kelpie lead                     go to the lead\n";
+        let usage = "kebbie: herding\n\n  kebbie tell <to> <text>         message another session\n                                  held while it waits\n  kebbie issue show|retry <id>    print one\n  kebbie lead                     go to the lead\n";
         let found = commands(usage);
-        assert_eq!(found["kelpie tell"], "kelpie tell <to> <text> message another session held while it waits");
-        assert_eq!(found["kelpie issue show|retry"], "kelpie issue show|retry <id> print one");
-        assert!(found.contains_key("kelpie lead"));
+        assert_eq!(found["kebbie tell"], "kebbie tell <to> <text> message another session held while it waits");
+        assert_eq!(found["kebbie issue show|retry"], "kebbie issue show|retry <id> print one");
+        assert!(found.contains_key("kebbie lead"));
         let real = commands(crate::USAGE);
-        assert!(real.contains_key("kelpie issue add") && real.contains_key("kelpie restart") && real.contains_key("kelpie update"), "{:?}", real.keys());
+        assert!(real.contains_key("kebbie issue add") && real.contains_key("kebbie restart") && real.contains_key("kebbie update"), "{:?}", real.keys());
     }
 
     #[test]
     fn the_skills_are_read_with_their_descriptions() {
         let dir = scratch("skills");
         std::fs::create_dir_all(dir.join("skills/propose-change")).unwrap();
-        std::fs::write(dir.join("skills/propose-change/SKILL.md"), "---\nname: propose-change\ndescription: Propose saving a kelpie issue.\n---\n\nbody\ndescription: not this\n").unwrap();
-        assert_eq!(skills(&dir), BTreeMap::from([("kelpie:propose-change".to_string(), "Propose saving a kelpie issue.".to_string())]));
-        assert!(skills(Path::new(env!("CARGO_MANIFEST_DIR"))).contains_key("kelpie:propose-change"));
+        std::fs::write(dir.join("skills/propose-change/SKILL.md"), "---\nname: propose-change\ndescription: Propose saving a kebbie issue.\n---\n\nbody\ndescription: not this\n").unwrap();
+        assert_eq!(skills(&dir), BTreeMap::from([("kebbie:propose-change".to_string(), "Propose saving a kebbie issue.".to_string())]));
+        assert!(skills(Path::new(env!("CARGO_MANIFEST_DIR"))).contains_key("kebbie:propose-change"));
     }
 
     #[test]
     fn an_update_tells_the_new_commands_skills_and_role_text_in_full() {
-        let old = snap("kelpie 0.22.4", "Report each turn.\n\nAsk the user.", &[("kelpie:review", "Review a task.")], &[("kelpie tell", "kelpie tell <to> <text> message"), ("kelpie old", "kelpie old gone")]);
-        let new = snap("kelpie 0.24.0", "Report each turn.\n\nAsk through kelpie ask.\n\nFile what you notice.", &[("kelpie:review", "Review a task."), ("kelpie:propose-change", "Propose saving a kelpie issue.")], &[("kelpie tell", "kelpie tell <to> <text> message, held"), ("kelpie issue add", "kelpie issue add --kind bug save one")]);
+        let old = snap("kebbie 0.22.4", "Report each turn.\n\nAsk the user.", &[("kebbie:review", "Review a task.")], &[("kebbie tell", "kebbie tell <to> <text> message"), ("kebbie old", "kebbie old gone")]);
+        let new = snap("kebbie 0.24.0", "Report each turn.\n\nAsk through kebbie ask.\n\nFile what you notice.", &[("kebbie:review", "Review a task."), ("kebbie:propose-change", "Propose saving a kebbie issue.")], &[("kebbie tell", "kebbie tell <to> <text> message, held"), ("kebbie issue add", "kebbie issue add --kind bug save one")]);
         let text = changes(&old, &new).unwrap();
-        assert!(text.contains("New commands:\n- kelpie issue add --kind bug save one"), "{text}");
-        assert!(text.contains("Changed commands:\n- kelpie tell <to> <text> message, held"), "{text}");
-        assert!(text.contains("Removed commands:\nkelpie old"), "{text}");
-        assert!(text.contains("New skills:\n- kelpie:propose-change: Propose saving a kelpie issue."), "{text}");
-        assert!(text.contains("New or changed in your role:\n\nAsk through kelpie ask.\n\nFile what you notice."), "{text}");
+        assert!(text.contains("New commands:\n- kebbie issue add --kind bug save one"), "{text}");
+        assert!(text.contains("Changed commands:\n- kebbie tell <to> <text> message, held"), "{text}");
+        assert!(text.contains("Removed commands:\nkebbie old"), "{text}");
+        assert!(text.contains("New skills:\n- kebbie:propose-change: Propose saving a kebbie issue."), "{text}");
+        assert!(text.contains("New or changed in your role:\n\nAsk through kebbie ask.\n\nFile what you notice."), "{text}");
         assert!(text.contains("Dropped from your role (each replaced by the text above or gone):\n- Ask the user."), "{text}");
         assert!(!text.contains("Report each turn"), "unchanged text is not repeated: {text}");
-        assert_eq!(changes(&new, &snap("kelpie 0.24.1", &new.role, &[("kelpie:review", "Review a task."), ("kelpie:propose-change", "Propose saving a kelpie issue.")], &[("kelpie tell", "kelpie tell <to> <text> message, held"), ("kelpie issue add", "kelpie issue add --kind bug save one")])), None, "a new version with nothing new for the session says nothing");
+        assert_eq!(changes(&new, &snap("kebbie 0.24.1", &new.role, &[("kebbie:review", "Review a task."), ("kebbie:propose-change", "Propose saving a kebbie issue.")], &[("kebbie tell", "kebbie tell <to> <text> message, held"), ("kebbie issue add", "kebbie issue add --kind bug save one")])), None, "a new version with nothing new for the session says nothing");
     }
 
     #[test]
@@ -342,39 +342,39 @@ mod tests {
         let text = changes(&snap("a", "", &[], &[]), &snap("b", &role, &[], &[])).unwrap();
         assert!(text.contains("(and 3 more; read your role file for them)"), "{}", &text[text.len() - 200..]);
         let message = update_message(Some(&Record { started: Some("a".to_string()), known: snap("a", "", &[], &[]) }), &snap("b", &role, &[], &[]), Path::new("/state/roles/lead.md")).unwrap();
-        assert!(message.starts_with("kelpie was updated from a to b while you ran. What changed for you:") && message.ends_with("Your role as it is now is in /state/roles/lead.md: read it, and work from it rather than from the role you started with."), "{message}");
+        assert!(message.starts_with("kebbie was updated from a to b while you ran. What changed for you:") && message.ends_with("Your role as it is now is in /state/roles/lead.md: read it, and work from it rather than from the role you started with."), "{message}");
     }
 
     #[test]
     fn a_session_without_a_record_is_told_to_read_its_role_and_the_skills() {
-        let message = update_message(None, &snap("kelpie 0.24.0", "role", &[("kelpie:propose-change", "p"), ("kelpie:review", "r")], &[]), Path::new("/r/lead.md")).unwrap();
-        assert!(message.contains("no record of the version you started on") && message.contains("/r/lead.md") && message.contains("kelpie:propose-change, kelpie:review"), "{message}");
+        let message = update_message(None, &snap("kebbie 0.24.0", "role", &[("kebbie:propose-change", "p"), ("kebbie:review", "r")], &[]), Path::new("/r/lead.md")).unwrap();
+        assert!(message.contains("no record of the version you started on") && message.contains("/r/lead.md") && message.contains("kebbie:propose-change, kebbie:review"), "{message}");
     }
 
     #[test]
     fn a_resumed_session_is_told_its_role_was_replaced_and_what_is_new() {
         let dir = scratch("resume");
-        let old = snap("kelpie 0.22.4", "Ask the user.", &[], &[]);
-        let new = snap("kelpie 0.24.0", "Ask through kelpie ask.", &[("kelpie:propose-change", "p")], &[]);
+        let old = snap("kebbie 0.22.4", "Ask the user.", &[], &[]);
+        let new = snap("kebbie 0.24.0", "Ask through kebbie ask.", &[("kebbie:propose-change", "p")], &[]);
         let mut held = Vec::new();
         began_in(&dir, "lead", &old, false, &mut |text| { held.push(text.to_string()); Ok(()) }).unwrap();
         assert!(held.is_empty(), "a fresh start is told nothing");
-        assert_eq!(load_in(&dir, "lead").unwrap().started.as_deref(), Some("kelpie 0.22.4"), "the start version is recorded");
+        assert_eq!(load_in(&dir, "lead").unwrap().started.as_deref(), Some("kebbie 0.22.4"), "the start version is recorded");
         began_in(&dir, "lead", &new, true, &mut |text| { held.push(text.to_string()); Ok(()) }).unwrap();
         assert_eq!(held.len(), 1);
-        assert!(held[0].starts_with("You were resumed with the role of kelpie 0.24.0, which replaces the one this conversation began with (kelpie 0.22.4).") && held[0].contains("What is new since what you were told:") && held[0].contains("Ask through kelpie ask.") && held[0].contains("kelpie:propose-change"), "{}", held[0]);
-        assert_eq!(load_in(&dir, "lead").unwrap(), Record { started: Some("kelpie 0.24.0".to_string()), known: new.clone() });
+        assert!(held[0].starts_with("You were resumed with the role of kebbie 0.24.0, which replaces the one this conversation began with (kebbie 0.22.4).") && held[0].contains("What is new since what you were told:") && held[0].contains("Ask through kebbie ask.") && held[0].contains("kebbie:propose-change"), "{}", held[0]);
+        assert_eq!(load_in(&dir, "lead").unwrap(), Record { started: Some("kebbie 0.24.0".to_string()), known: new.clone() });
         began_in(&dir, "lead", &new, true, &mut |text| { held.push(text.to_string()); Ok(()) }).unwrap();
-        assert_eq!(held.len(), 1, "a resume on the same kelpie and role is told nothing");
+        assert_eq!(held.len(), 1, "a resume on the same kebbie and role is told nothing");
     }
 
     #[test]
     fn a_resumed_session_already_told_hears_only_that_its_role_was_replaced() {
-        let new = snap("kelpie 0.24.0", "Ask through kelpie ask.", &[], &[]);
-        let told = Record { started: Some("kelpie 0.22.4".to_string()), known: new.clone() };
+        let new = snap("kebbie 0.24.0", "Ask through kebbie ask.", &[], &[]);
+        let told = Record { started: Some("kebbie 0.22.4".to_string()), known: new.clone() };
         let text = resumed_message(Some(&told), &new).unwrap();
-        assert!(text.ends_with("kelpie told you earlier what changed in it."), "{text}");
-        assert!(resumed_message(None, &new).unwrap().contains("(an earlier kelpie than kelpie records)"));
+        assert!(text.ends_with("kebbie told you earlier what changed in it."), "{text}");
+        assert!(resumed_message(None, &new).unwrap().contains("(an earlier kebbie than kebbie records)"));
     }
 
     fn session(address: &str, pane: Option<&str>) -> Session {
@@ -384,21 +384,21 @@ mod tests {
     #[test]
     fn an_update_tells_each_running_session_once_what_changed_since_it_started() {
         let dir = scratch("announce");
-        let old = snap("kelpie 0.22.4", "Ask the user.", &[], &[("kelpie tell", "kelpie tell <to>")]);
-        let new = snap("kelpie 0.24.0", "Ask the user.", &[("kelpie:propose-change", "Propose saving a kelpie issue.")], &[("kelpie tell", "kelpie tell <to>"), ("kelpie issue add", "kelpie issue add --kind bug")]);
+        let old = snap("kebbie 0.22.4", "Ask the user.", &[], &[("kebbie tell", "kebbie tell <to>")]);
+        let new = snap("kebbie 0.24.0", "Ask the user.", &[("kebbie:propose-change", "Propose saving a kebbie issue.")], &[("kebbie tell", "kebbie tell <to>"), ("kebbie issue add", "kebbie issue add --kind bug")]);
         began_in(&dir, "lead", &old, false, &mut |_| Ok(())).unwrap();
         began_in(&dir, "billing@app", &new, false, &mut |_| Ok(())).unwrap();
         let sessions = [session("lead", Some("p1")), session("billing@app", Some("p2")), session("search@app", Some("p3")), session("gone@app", None)];
         let mut sent: Vec<(String, String)> = Vec::new();
-        let run = |sent: &mut Vec<(String, String)>| announce_in(&dir, &sessions, "kelpie 0.24.0", &mut |session| Ok(Some((PathBuf::from(format!("/r/{}.md", session.address)), new.clone()))), &mut |session, text| {
+        let run = |sent: &mut Vec<(String, String)>| announce_in(&dir, &sessions, "kebbie 0.24.0", &mut |session| Ok(Some((PathBuf::from(format!("/r/{}.md", session.address)), new.clone()))), &mut |session, text| {
             sent.push((session.address.clone(), text.to_string()));
             Ok(vec![format!("Told {}.", session.address)])
         }).unwrap();
-        assert_eq!(run(&mut sent), ["Told lead.", "Told search@app."], "a session on the installed kelpie and one without a pane are not told");
-        assert!(sent[0].1.starts_with("kelpie was updated from kelpie 0.22.4 to kelpie 0.24.0 while you ran.") && sent[0].1.contains("- kelpie issue add --kind bug") && sent[0].1.contains("- kelpie:propose-change: Propose saving a kelpie issue.") && sent[0].1.contains("/r/lead.md"), "{}", sent[0].1);
-        assert!(sent[1].1.contains("no record of the version you started on"), "a session from before kelpie kept records is told to read its role: {}", sent[1].1);
+        assert_eq!(run(&mut sent), ["Told lead.", "Told search@app."], "a session on the installed kebbie and one without a pane are not told");
+        assert!(sent[0].1.starts_with("kebbie was updated from kebbie 0.22.4 to kebbie 0.24.0 while you ran.") && sent[0].1.contains("- kebbie issue add --kind bug") && sent[0].1.contains("- kebbie:propose-change: Propose saving a kebbie issue.") && sent[0].1.contains("/r/lead.md"), "{}", sent[0].1);
+        assert!(sent[1].1.contains("no record of the version you started on"), "a session from before kebbie kept records is told to read its role: {}", sent[1].1);
         let lead = load_in(&dir, "lead").unwrap();
-        assert_eq!((lead.started.as_deref(), &lead.known), (Some("kelpie 0.22.4"), &new), "the start version stays, what it knows moves on");
+        assert_eq!((lead.started.as_deref(), &lead.known), (Some("kebbie 0.22.4"), &new), "the start version stays, what it knows moves on");
         assert_eq!(load_in(&dir, "search@app").unwrap().started, None);
         assert!(run(&mut sent).is_empty(), "each is told once");
     }
@@ -406,17 +406,17 @@ mod tests {
     #[test]
     fn the_prompt_hook_line_shows_the_session_its_own_staleness() {
         let role = Path::new("/r/lead.md");
-        let old = snap("kelpie 0.22.4", "", &[], &[]);
-        let fresh = Record { started: Some("kelpie 0.24.0".to_string()), known: snap("kelpie 0.24.0", "", &[], &[]) };
-        assert_eq!(stale_line(Some(&fresh), "kelpie 0.24.0", role, "a restart brings it in"), None);
-        assert_eq!(stale_line(None, "kelpie 0.24.0", role, "a restart brings it in"), None);
-        let untold = Record { started: Some("kelpie 0.22.4".to_string()), known: old };
-        assert_eq!(stale_line(Some(&untold), "kelpie 0.24.0", role, "a restart brings it in").unwrap(), "kelpie: you started on kelpie 0.22.4; kelpie 0.24.0 is installed. What changed for you reaches you as a message from kelpie; a restart brings it in.");
+        let old = snap("kebbie 0.22.4", "", &[], &[]);
+        let fresh = Record { started: Some("kebbie 0.24.0".to_string()), known: snap("kebbie 0.24.0", "", &[], &[]) };
+        assert_eq!(stale_line(Some(&fresh), "kebbie 0.24.0", role, "a restart brings it in"), None);
+        assert_eq!(stale_line(None, "kebbie 0.24.0", role, "a restart brings it in"), None);
+        let untold = Record { started: Some("kebbie 0.22.4".to_string()), known: old };
+        assert_eq!(stale_line(Some(&untold), "kebbie 0.24.0", role, "a restart brings it in").unwrap(), "kebbie: you started on kebbie 0.22.4; kebbie 0.24.0 is installed. What changed for you reaches you as a message from kebbie; a restart brings it in.");
         let told = Record { known: fresh.known.clone(), ..untold };
-        assert_eq!(stale_line(Some(&told), "kelpie 0.24.0", role, "a restart brings it in").unwrap(), "kelpie: you started on kelpie 0.22.4; kelpie 0.24.0 is installed. kelpie has sent you what changed for you, and your role as it is now is in /r/lead.md; a restart brings it in.");
-        let lead = |auto: bool| stale_line(Some(&told), "kelpie 0.24.0", role, &lead_restart(auto, "L")).unwrap();
-        assert!(lead(true).ends_with("; kelpie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press L on the board."), "{}", lead(true));
+        assert_eq!(stale_line(Some(&told), "kebbie 0.24.0", role, "a restart brings it in").unwrap(), "kebbie: you started on kebbie 0.22.4; kebbie 0.24.0 is installed. kebbie has sent you what changed for you, and your role as it is now is in /r/lead.md; a restart brings it in.");
+        let lead = |auto: bool| stale_line(Some(&told), "kebbie 0.24.0", role, &lead_restart(auto, "L")).unwrap();
+        assert!(lead(true).ends_with("; kebbie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press L on the board."), "{}", lead(true));
         assert!(lead(false).ends_with("; restart.auto is off, so nothing restarts you on its own: the user presses L on the board, which resumes this conversation on it."), "{}", lead(false));
-        assert!(!lead(true).contains("kelpie lead --restart") && !lead(false).contains("another pane"));
+        assert!(!lead(true).contains("kebbie lead --restart") && !lead(false).contains("another pane"));
     }
 }

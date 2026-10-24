@@ -9,7 +9,7 @@ use crate::sh::Result;
 pub const FILE: &str = "update-check.json";
 pub const EVERY: u64 = 6 * 60 * 60;
 pub const PENDING_EVERY: u64 = 15 * 60;
-pub const KELPIE: &str = "kelpie";
+pub const KEBBIE: &str = "kebbie";
 pub const VAULT: &str = "vault";
 pub const PIN: &str = "notes-vault-mcp";
 
@@ -93,13 +93,13 @@ impl Places {
 }
 
 pub fn install_root() -> Option<PathBuf> {
-    let list = crate::sh::run(&crate::herdr::bin(), &["plugin", "list", "--json", "--plugin", "kelpie"], None).ok();
+    let list = crate::sh::run(&crate::herdr::bin(), &["plugin", "list", "--json", "--plugin", "kebbie"], None).ok();
     let from_herdr = list.and_then(|list| serde_json::from_str::<Value>(&list).ok()).and_then(|list| {
         let plugins = list["result"]["plugins"].as_array()?.clone();
-        plugins.iter().find(|plugin| plugin["plugin_id"] == "kelpie").and_then(|plugin| plugin["plugin_root"].as_str()).filter(|root| !root.is_empty()).map(PathBuf::from)
+        plugins.iter().find(|plugin| plugin["plugin_id"] == "kebbie").and_then(|plugin| plugin["plugin_root"].as_str()).filter(|root| !root.is_empty()).map(PathBuf::from)
     });
     from_herdr.or_else(|| {
-        let current = PathBuf::from(std::env::var("HOME").ok()?).join(".local/share/kelpie/current");
+        let current = PathBuf::from(std::env::var("HOME").ok()?).join(".local/share/kebbie/current");
         current.exists().then_some(current)
     })
 }
@@ -112,7 +112,7 @@ fn cargo_version(text: &str) -> Option<String> {
     text.parse::<toml::Table>().ok()?.get("package")?.get("version")?.as_str().map(str::to_string)
 }
 
-fn kelpie_version(read: impl Fn(&str) -> Option<String>) -> Option<String> {
+fn kebbie_version(read: impl Fn(&str) -> Option<String>) -> Option<String> {
     read(".claude-plugin/plugin.json").as_deref().and_then(plugin_version).or_else(|| read("Cargo.toml").as_deref().and_then(cargo_version))
 }
 
@@ -127,7 +127,7 @@ fn read_json(path: &Path) -> Option<Value> {
 }
 
 pub fn parse_binary_version(text: &str) -> Option<(String, Option<String>)> {
-    let rest = text.lines().next()?.trim().strip_prefix("kelpie ")?;
+    let rest = text.lines().next()?.trim().strip_prefix("kebbie ")?;
     let (version, built) = rest.split_once(' ').map_or((rest, None), |(version, built)| (version, Some(built)));
     crate::doctor::version(version)?;
     let sha = built.and_then(|built| built.trim_start_matches('(').split([' ', ')']).next()).filter(|sha| !sha.is_empty() && sha.chars().all(|character| character.is_ascii_hexdigit()));
@@ -140,14 +140,14 @@ pub fn binary_version(binary: &Path) -> Option<(String, Option<String>)> {
 }
 
 // What runs is the binary, so a checkout moved ahead without a rebuild shows as the binary's version with the checkout's beside it.
-fn installed_kelpie(root: Option<&Path>) -> Component {
-    let Some(root) = root else { return Component::new(KELPIE, None) };
-    let (installed, built) = binary_version(&root.join("target/release/kelpie")).map_or((None, None), |(version, built)| (Some(version), built));
-    Component { built, checkout: kelpie_version(|file| std::fs::read_to_string(root.join(file)).ok()), ..Component::new(KELPIE, installed) }
+fn installed_kebbie(root: Option<&Path>) -> Component {
+    let Some(root) = root else { return Component::new(KEBBIE, None) };
+    let (installed, built) = binary_version(&root.join("target/release/kebbie")).map_or((None, None), |(version, built)| (Some(version), built));
+    Component { built, checkout: kebbie_version(|file| std::fs::read_to_string(root.join(file)).ok()), ..Component::new(KEBBIE, installed) }
 }
 
 pub fn installed(places: &Places) -> Vec<Component> {
-    let mut components = vec![installed_kelpie(places.root.as_deref())];
+    let mut components = vec![installed_kebbie(places.root.as_deref())];
     if let Some((_, version, root)) = crate::vault_cli::installed(&places.claude_dir) {
         components.push(Component::new(VAULT, Some(version)));
         components.push(Component::new(PIN, pin(&crate::vault_cli::hooks_of(&root))));
@@ -184,13 +184,13 @@ fn show(dir: &Path, reference: &str, file: &str) -> Option<String> {
 }
 
 // The release channel's latest is a tag whose binary is published, so the notice names it and nothing pushed after it.
-fn latest_kelpie(root: &Path, channel: Channel, binaries: Option<&crate::release::Binaries>) -> Result<(Option<String>, Option<String>)> {
+fn latest_kebbie(root: &Path, channel: Channel, binaries: Option<&crate::release::Binaries>) -> Result<(Option<String>, Option<String>)> {
     if channel == Channel::Release {
         let latest = crate::release::latest_published(root, &binaries.cloned().unwrap_or_else(|| crate::release::Binaries::of(root)))?;
         return Ok((latest.tag, latest.unpublished));
     }
     let head = fetched_default(root)?;
-    kelpie_version(|file| show(root, &head, file)).map(|version| (Some(version), None)).ok_or_else(|| format!("no version on {head}"))
+    kebbie_version(|file| show(root, &head, file)).map(|version| (Some(version), None)).ok_or_else(|| format!("no version on {head}"))
 }
 
 fn marketplace_dir(claude_dir: &Path, name: &str) -> PathBuf {
@@ -213,15 +213,15 @@ fn latest_vault(claude_dir: &Path, id: &str) -> Result<(String, Option<String>)>
 
 pub fn check(places: &Places) -> Vec<Component> {
     let mut components = installed(places);
-    let kelpie = &mut components[0];
-    match places.root.as_deref().ok_or_else(|| "cannot tell where kelpie is installed".to_string()).and_then(|root| latest_kelpie(root, places.channel, places.binaries.as_ref())) {
-        Ok((Some(latest), unpublished)) => (kelpie.latest, kelpie.unpublished) = (Some(latest), unpublished),
-        Ok((None, unpublished)) => (kelpie.error, kelpie.unpublished) = (Some(crate::release::not_published(unpublished.as_deref().unwrap_or_default())), unpublished),
-        Err(error) => kelpie.error = Some(error),
+    let kebbie = &mut components[0];
+    match places.root.as_deref().ok_or_else(|| "cannot tell where kebbie is installed".to_string()).and_then(|root| latest_kebbie(root, places.channel, places.binaries.as_ref())) {
+        Ok((Some(latest), unpublished)) => (kebbie.latest, kebbie.unpublished) = (Some(latest), unpublished),
+        Ok((None, unpublished)) => (kebbie.error, kebbie.unpublished) = (Some(crate::release::not_published(unpublished.as_deref().unwrap_or_default())), unpublished),
+        Err(error) => kebbie.error = Some(error),
     }
     if let Some((id, _, _)) = crate::vault_cli::installed(&places.claude_dir) {
         let latest = latest_vault(&places.claude_dir, &id);
-        for component in components.iter_mut().filter(|component| component.name != KELPIE) {
+        for component in components.iter_mut().filter(|component| component.name != KEBBIE) {
             match &latest {
                 Ok((version, pin)) => component.latest = if component.name == VAULT { Some(version.clone()) } else { pin.clone() },
                 Err(error) => component.error = Some(error.clone()),
@@ -236,11 +236,11 @@ pub fn render(components: &[Component], running: Option<&str>) -> String {
     let mut lines: Vec<String> = components.iter().map(|component| format!("{:<width$}  {}", component.label(), state(component))).collect();
     if let Some(running) = running {
         lines.push(String::new());
-        lines.push(format!("kelpie is {running}; kelpie update --stable returns to it."));
+        lines.push(format!("kebbie is {running}; kebbie update --stable returns to it."));
     }
     if components.iter().any(Component::newer) {
         lines.push(String::new());
-        lines.push("kelpie update brings everything to the latest.".to_string());
+        lines.push("kebbie update brings everything to the latest.".to_string());
     }
     lines.join("\n")
 }
@@ -337,9 +337,9 @@ pub fn notice(components: &[Component], running: Option<&crate::release::Overrid
 
 pub fn doctor_line(state: &Path, channel: Channel, installed: &[Component]) -> (bool, String) {
     if let Some(running) = crate::release::read_override(state) {
-        return (false, format!("kelpie is {}; kelpie update --stable returns to it", running.describe(channel)));
+        return (false, format!("kebbie is {}; kebbie update --stable returns to it", running.describe(channel)));
     }
-    let Some(cache) = read_cache(state).filter(|cache| cache.channel.as_deref() == Some(channel.key())) else { return (true, format!("not checked yet on the {} channel; kelpie update --check, or kelpie checks every 6 hours", channel.key())) };
+    let Some(cache) = read_cache(state).filter(|cache| cache.channel.as_deref() == Some(channel.key())) else { return (true, format!("not checked yet on the {} channel; kebbie update --check, or kebbie checks every 6 hours", channel.key())) };
     let components = with_installed(cache.components, installed);
     let age = match crate::messages::age(cache.checked_at).as_str() {
         "now" => "just now".to_string(),
@@ -347,10 +347,10 @@ pub fn doctor_line(state: &Path, channel: Channel, installed: &[Component]) -> (
     };
     let newer: Vec<String> = components.iter().filter_map(|component| Some(format!("{} {} → {}", component.label(), component.installed.as_deref()?, component.target()?))).collect();
     if !newer.is_empty() {
-        return (false, format!("{} (checked {age}); kelpie update", newer.join(", ")));
+        return (false, format!("{} (checked {age}); kebbie update", newer.join(", ")));
     }
     if components.iter().any(|component| component.latest.is_none()) {
-        return (true, format!("the last check could not read every latest version (checked {age}); kelpie update --check says why"));
+        return (true, format!("the last check could not read every latest version (checked {age}); kebbie update --check says why"));
     }
     (true, format!("everything is the latest (checked {age})"))
 }
@@ -372,7 +372,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kelpie-update-check-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-update-check-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -405,22 +405,22 @@ mod tests {
     }
 
     fn fake_binary(root: &Path, said: &str) {
-        let binary = root.join("target/release/kelpie");
+        let binary = root.join("target/release/kebbie");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         crate::executable::write(&binary, format!("#!/bin/sh\n[ \"$1\" = --version ] && echo '{said}'\n")).unwrap();
     }
 
     fn fake_install(dir: &Path, with_vault: bool) -> Places {
-        let origin = dir.join("kelpie-origin");
+        let origin = dir.join("kebbie-origin");
         std::fs::create_dir_all(&origin).unwrap();
         run_git(&origin, &["init", "--quiet", "-b", "main"]);
         write(&origin.join(".gitignore"), "target/\n");
-        write(&origin.join(".claude-plugin/plugin.json"), r#"{"name":"kelpie","version":"0.18.1"}"#);
-        commit_all(&origin, "kelpie 0.18.1");
+        write(&origin.join(".claude-plugin/plugin.json"), r#"{"name":"kebbie","version":"0.18.1"}"#);
+        commit_all(&origin, "kebbie 0.18.1");
         run_git(dir, &["clone", "--quiet", origin.to_str().unwrap(), "root"]);
-        fake_binary(&dir.join("root"), "kelpie 0.18.1 (abc1234 2026-10-01)");
-        write(&origin.join(".claude-plugin/plugin.json"), r#"{"name":"kelpie","version":"0.18.10"}"#);
-        commit_all(&origin, "kelpie 0.18.10");
+        fake_binary(&dir.join("root"), "kebbie 0.18.1 (abc1234 2026-10-01)");
+        write(&origin.join(".claude-plugin/plugin.json"), r#"{"name":"kebbie","version":"0.18.10"}"#);
+        commit_all(&origin, "kebbie 0.18.10");
         let claude_dir = dir.join("claude");
         if with_vault {
             let market = dir.join("market-origin");
@@ -450,57 +450,57 @@ mod tests {
         let heads = (run_git(&root, &["rev-parse", "HEAD"]), run_git(&market, &["rev-parse", "HEAD"]));
         let components = check(&places);
         let shown: Vec<(&str, Option<&str>, Option<&str>)> = components.iter().map(|component| (component.name.as_str(), component.installed.as_deref(), component.latest.as_deref())).collect();
-        assert_eq!(shown, [("kelpie", Some("0.18.1"), Some("0.18.10")), ("vault", Some("0.2.16"), Some("0.2.17")), ("notes-vault-mcp", Some("0.6.0"), Some("0.6.1"))]);
+        assert_eq!(shown, [("kebbie", Some("0.18.1"), Some("0.18.10")), ("vault", Some("0.2.16"), Some("0.2.17")), ("notes-vault-mcp", Some("0.6.0"), Some("0.6.1"))]);
         let text = render(&components, None);
-        assert!(text.contains("kelpie           0.18.1 installed (abc1234), 0.18.10 available"), "{text}");
+        assert!(text.contains("kebbie           0.18.1 installed (abc1234), 0.18.10 available"), "{text}");
         assert!(text.contains("vault plugin     0.2.16 installed, 0.2.17 available"), "{text}");
         assert!(text.contains("notes-vault-mcp  0.6.0 installed, 0.6.1 available"), "{text}");
-        assert!(text.ends_with("kelpie update brings everything to the latest."), "{text}");
+        assert!(text.ends_with("kebbie update brings everything to the latest."), "{text}");
         assert_eq!((run_git(&root, &["rev-parse", "HEAD"]), run_git(&market, &["rev-parse", "HEAD"])), heads, "no merge, no checkout");
         assert!(run_git(&root, &["status", "--porcelain"]).is_empty() && run_git(&market, &["status", "--porcelain"]).is_empty());
-        assert_eq!(notice(&components, None), [("kelpie".to_string(), "0.18.10".to_string()), ("vault".to_string(), "0.2.17".to_string())]);
+        assert_eq!(notice(&components, None), [("kebbie".to_string(), "0.18.10".to_string()), ("vault".to_string(), "0.2.17".to_string())]);
     }
 
     #[test]
-    fn check_without_the_vault_plugin_reports_kelpie_alone_and_a_failed_fetch_is_unknown() {
+    fn check_without_the_vault_plugin_reports_kebbie_alone_and_a_failed_fetch_is_unknown() {
         let dir = scratch("alone");
         let places = fake_install(&dir, false);
         run_git(places.root.as_deref().unwrap(), &["pull", "--quiet", "--ff-only"]);
         let moved = check(&places);
-        assert_eq!(render(&moved, None), "kelpie  0.18.1 installed (abc1234), 0.18.10 in the checkout: rebuild\n\nkelpie update brings everything to the latest.", "a checkout moved ahead without a rebuild is the binary's version, not the files'");
-        assert_eq!(notice(&moved, None), [("kelpie".to_string(), "0.18.10".to_string())], "so the board offers the update that rebuilds it");
-        fake_binary(places.root.as_deref().unwrap(), "kelpie 0.18.10 (def5678 2026-10-02)");
+        assert_eq!(render(&moved, None), "kebbie  0.18.1 installed (abc1234), 0.18.10 in the checkout: rebuild\n\nkebbie update brings everything to the latest.", "a checkout moved ahead without a rebuild is the binary's version, not the files'");
+        assert_eq!(notice(&moved, None), [("kebbie".to_string(), "0.18.10".to_string())], "so the board offers the update that rebuilds it");
+        fake_binary(places.root.as_deref().unwrap(), "kebbie 0.18.10 (def5678 2026-10-02)");
         let components = check(&places);
         assert_eq!(components.len(), 1);
-        assert_eq!(render(&components, None), "kelpie  0.18.10 installed (def5678), the latest");
+        assert_eq!(render(&components, None), "kebbie  0.18.10 installed (def5678), the latest");
         run_git(places.root.as_deref().unwrap(), &["remote", "set-url", "origin", dir.join("missing").to_str().unwrap()]);
         let components = check(&places);
         assert!(components[0].latest.is_none() && components[0].error.is_some(), "{components:?}");
         assert!(notice(&components, None).is_empty(), "a failed check shows nothing");
-        assert!(render(&components, None).starts_with("kelpie  0.18.10 installed (def5678), latest unknown: git fetch"), "{}", render(&components, None));
+        assert!(render(&components, None).starts_with("kebbie  0.18.10 installed (def5678), latest unknown: git fetch"), "{}", render(&components, None));
     }
 
     #[test]
     fn the_cache_fetches_at_most_every_six_hours_and_rereads_what_is_installed() {
         let state = scratch("cache");
         let fetched = std::cell::Cell::new(0);
-        let component = |installed: &str, latest: &str| Component { name: KELPIE.to_string(), installed: Some(installed.to_string()), latest: Some(latest.to_string()), ..Component::default() };
+        let component = |installed: &str, latest: &str| Component { name: KEBBIE.to_string(), installed: Some(installed.to_string()), latest: Some(latest.to_string()), ..Component::default() };
         let fetch = || { fetched.set(fetched.get() + 1); vec![component("0.18.1", "0.18.2")] };
         let start = 1_000_000;
-        let installed = || vec![Component::new(KELPIE, Some("0.18.1".to_string()))];
+        let installed = || vec![Component::new(KEBBIE, Some("0.18.1".to_string()))];
         assert!(current(&state, start, Channel::Main, installed(), fetch)[0].newer());
         assert_eq!(fetched.get(), 1);
         assert_eq!(read_cache(&state).unwrap().checked_at, start);
         assert!(current(&state, start + EVERY - 1, Channel::Main, installed(), fetch)[0].newer());
         assert_eq!(fetched.get(), 1, "a second board within 6 h reads the cache");
-        let updated = current(&state, start + 60, Channel::Main, vec![Component::new(KELPIE, Some("0.18.2".to_string()))], fetch);
+        let updated = current(&state, start + 60, Channel::Main, vec![Component::new(KEBBIE, Some("0.18.2".to_string()))], fetch);
         assert!(!updated[0].newer() && fetched.get() == 1, "an update made elsewhere clears the notice without a fetch");
         current(&state, start + EVERY, Channel::Main, installed(), fetch);
         assert_eq!(fetched.get(), 2, "after 6 h it fetches again");
         assert_eq!(read_cache(&state).unwrap().checked_at, start + EVERY);
         forget(&state);
         current(&state, start + EVERY + 1, Channel::Main, installed(), fetch);
-        assert_eq!(fetched.get(), 3, "kelpie update forgets the cache");
+        assert_eq!(fetched.get(), 3, "kebbie update forgets the cache");
         current(&state, start + EVERY + 2, Channel::Release, installed(), fetch);
         assert_eq!(fetched.get(), 4, "a check made for the other channel is no check");
         assert!(cached(&state, Channel::Release, &installed())[0].newer() && fetched.get() == 4, "the board reads what the keeper found and fetches nothing");
@@ -512,52 +512,52 @@ mod tests {
         let dir = scratch("release");
         let mut places = fake_install(&dir, false);
         places.channel = Channel::Release;
-        let origin = dir.join("kelpie-origin");
+        let origin = dir.join("kebbie-origin");
         let tagged = check(&places);
         assert_eq!(tagged[0].error.as_deref(), Some("origin has no vX.Y.Z release tag yet"), "main's 0.18.10 is not a release");
         assert!(notice(&tagged, None).is_empty());
         run_git(&origin, &["tag", "v0.18.2", "HEAD~1"]);
         run_git(&origin, &["tag", "v0.18.10-rc1"]);
         run_git(&origin, &["tag", "nightly"]);
-        write(&origin.join(".claude-plugin/plugin.json"), r#"{"name":"kelpie","version":"0.19.0"}"#);
-        commit_all(&origin, "kelpie 0.19.0 on main, not released");
+        write(&origin.join(".claude-plugin/plugin.json"), r#"{"name":"kebbie","version":"0.19.0"}"#);
+        commit_all(&origin, "kebbie 0.19.0 on main, not released");
         let draft = check(&places);
-        assert_eq!((draft[0].latest.as_deref(), draft[0].error.as_deref()), (None, Some("kelpie 0.18.2 is not published yet; try again in a while")), "a tag whose release binary is not downloadable is never offered");
+        assert_eq!((draft[0].latest.as_deref(), draft[0].error.as_deref()), (None, Some("kebbie 0.18.2 is not published yet; try again in a while")), "a tag whose release binary is not downloadable is never offered");
         assert!(notice(&draft, None).is_empty());
         publish(&dir, "v0.18.2");
         let components = check(&places);
         assert_eq!((components[0].installed.as_deref(), components[0].latest.as_deref()), (Some("0.18.1"), Some("v0.18.2")));
-        assert_eq!(notice(&components, None), [("kelpie".to_string(), "v0.18.2".to_string())], "the tag, never what main carries");
-        assert!(render(&components, None).starts_with("kelpie  0.18.1 installed (abc1234), v0.18.2 available"), "{}", render(&components, None));
+        assert_eq!(notice(&components, None), [("kebbie".to_string(), "v0.18.2".to_string())], "the tag, never what main carries");
+        assert!(render(&components, None).starts_with("kebbie  0.18.1 installed (abc1234), v0.18.2 available"), "{}", render(&components, None));
         run_git(&origin, &["tag", "v0.18.3"]);
         let pending = check(&places);
-        assert_eq!(notice(&pending, None), [("kelpie".to_string(), "v0.18.2".to_string())], "a newer draft leaves the published release on offer");
-        assert!(render(&pending, None).starts_with("kelpie  0.18.1 installed (abc1234), v0.18.2 available; kelpie 0.18.3 is not published yet; try again in a while"), "{}", render(&pending, None));
+        assert_eq!(notice(&pending, None), [("kebbie".to_string(), "v0.18.2".to_string())], "a newer draft leaves the published release on offer");
+        assert!(render(&pending, None).starts_with("kebbie  0.18.1 installed (abc1234), v0.18.2 available; kebbie 0.18.3 is not published yet; try again in a while"), "{}", render(&pending, None));
         places.channel = Channel::Main;
         assert_eq!(check(&places)[0].latest.as_deref(), Some("0.19.0"), "main compares against origin's default branch");
     }
 
     fn publish(dir: &Path, tag: &str) {
         let target = crate::release::target_triple(std::env::consts::OS, std::env::consts::ARCH).unwrap();
-        write(&dir.join("releases").join(tag).join(format!("kelpie-{}-{target}.tar.gz", tag.trim_start_matches('v'))), "binary");
+        write(&dir.join("releases").join(tag).join(format!("kebbie-{}-{target}.tar.gz", tag.trim_start_matches('v'))), "binary");
     }
 
     #[test]
     fn a_release_checkout_on_an_unpublished_tag_offers_no_rebuild() {
-        let on_draft = Component { name: KELPIE.to_string(), installed: Some("0.24.0".to_string()), built: Some("e70d5d5".to_string()), checkout: Some("0.25.0".to_string()), latest: Some("v0.24.0".to_string()), unpublished: Some("v0.25.0".to_string()), error: None };
-        assert!(!on_draft.newer() && notice(std::slice::from_ref(&on_draft), None).is_empty(), "never ↑ kelpie 0.25.0 while 0.25.0 is a draft");
-        assert_eq!(render(std::slice::from_ref(&on_draft), None), "kelpie  0.24.0 installed (e70d5d5), the latest; kelpie 0.25.0 is not published yet; try again in a while");
+        let on_draft = Component { name: KEBBIE.to_string(), installed: Some("0.24.0".to_string()), built: Some("e70d5d5".to_string()), checkout: Some("0.25.0".to_string()), latest: Some("v0.24.0".to_string()), unpublished: Some("v0.25.0".to_string()), error: None };
+        assert!(!on_draft.newer() && notice(std::slice::from_ref(&on_draft), None).is_empty(), "never ↑ kebbie 0.25.0 while 0.25.0 is a draft");
+        assert_eq!(render(std::slice::from_ref(&on_draft), None), "kebbie  0.24.0 installed (e70d5d5), the latest; kebbie 0.25.0 is not published yet; try again in a while");
         let nothing_published = Component { latest: None, error: Some(crate::release::not_published("v0.25.0")), ..on_draft.clone() };
         assert!(notice(&[nothing_published], None).is_empty());
         let main = Component { latest: Some("0.25.0".to_string()), unpublished: None, ..on_draft };
-        assert_eq!(notice(&[main], None), [("kelpie".to_string(), "0.25.0".to_string())], "a main checkout ahead of its binary is rebuilt");
+        assert_eq!(notice(&[main], None), [("kebbie".to_string(), "0.25.0".to_string())], "a main checkout ahead of its binary is rebuilt");
     }
 
     #[test]
     fn an_unpublished_release_is_looked_for_again_after_fifteen_minutes() {
         let state = scratch("pending");
         let fetched = std::cell::Cell::new(0);
-        let pending = Component { name: KELPIE.to_string(), latest: Some("v0.24.0".to_string()), unpublished: Some("v0.25.0".to_string()), ..Component::default() };
+        let pending = Component { name: KEBBIE.to_string(), latest: Some("v0.24.0".to_string()), unpublished: Some("v0.25.0".to_string()), ..Component::default() };
         let fetch = || { fetched.set(fetched.get() + 1); vec![pending.clone()] };
         current(&state, 1_000, Channel::Release, Vec::new(), fetch);
         current(&state, 1_000 + PENDING_EVERY - 1, Channel::Release, Vec::new(), fetch);
@@ -568,9 +568,9 @@ mod tests {
 
     #[test]
     fn the_installed_version_is_what_the_binary_says() {
-        assert_eq!(parse_binary_version("kelpie 0.24.0 (e70d5d5 2026-10-20)\n"), Some(("0.24.0".to_string(), Some("e70d5d5".to_string()))));
-        assert_eq!(parse_binary_version("kelpie 0.24.0\n"), Some(("0.24.0".to_string(), None)), "a build outside git names no commit");
-        assert_eq!(parse_binary_version("usage: kelpie <command>"), None);
+        assert_eq!(parse_binary_version("kebbie 0.24.0 (e70d5d5 2026-10-20)\n"), Some(("0.24.0".to_string(), Some("e70d5d5".to_string()))));
+        assert_eq!(parse_binary_version("kebbie 0.24.0\n"), Some(("0.24.0".to_string(), None)), "a build outside git names no commit");
+        assert_eq!(parse_binary_version("usage: kebbie <command>"), None);
         assert_eq!(parse_binary_version(""), None);
         let own = std::env::current_exe().unwrap();
         assert!(binary_version(&own.with_file_name("no-such-binary")).is_none());
@@ -581,11 +581,11 @@ mod tests {
         let state = scratch("override");
         std::fs::write(state.join(crate::release::OVERRIDE_FILE), r#"{"branch":"try-this","sha":"abcdef0123"}"#).unwrap();
         let running = crate::release::read_override(&state).unwrap();
-        let kelpie = Component { name: KELPIE.to_string(), installed: Some("0.20.0".to_string()), latest: Some("v0.20.0".to_string()), ..Component::default() };
-        let text = render(std::slice::from_ref(&kelpie), Some(&running.describe(Channel::Release)));
-        assert!(text.contains("kelpie is running try-this @ abcdef0, not the release channel; kelpie update --stable returns to it."), "{text}");
-        assert_eq!(notice(&[kelpie], Some(&running)), [("running".to_string(), "try-this, not the channel".to_string())]);
-        assert_eq!(doctor_line(&state, Channel::Release, &[]), (false, "kelpie is running try-this @ abcdef0, not the release channel; kelpie update --stable returns to it".to_string()));
+        let kebbie = Component { name: KEBBIE.to_string(), installed: Some("0.20.0".to_string()), latest: Some("v0.20.0".to_string()), ..Component::default() };
+        let text = render(std::slice::from_ref(&kebbie), Some(&running.describe(Channel::Release)));
+        assert!(text.contains("kebbie is running try-this @ abcdef0, not the release channel; kebbie update --stable returns to it."), "{text}");
+        assert_eq!(notice(&[kebbie], Some(&running)), [("running".to_string(), "try-this, not the channel".to_string())]);
+        assert_eq!(doctor_line(&state, Channel::Release, &[]), (false, "kebbie is running try-this @ abcdef0, not the release channel; kebbie update --stable returns to it".to_string()));
     }
 
     #[test]
@@ -600,12 +600,12 @@ mod tests {
     #[test]
     fn doctor_reads_the_cache_and_names_what_is_newer() {
         let state = scratch("doctor");
-        let installed = vec![Component::new(KELPIE, Some("0.18.1".to_string())), Component::new(VAULT, Some("0.2.17".to_string()))];
+        let installed = vec![Component::new(KEBBIE, Some("0.18.1".to_string())), Component::new(VAULT, Some("0.2.17".to_string()))];
         assert!(doctor_line(&state, Channel::Main, &installed).1.starts_with("not checked yet"));
         let latest = |name: &str, version: &str| Component { name: name.to_string(), installed: None, latest: Some(version.to_string()), ..Component::default() };
-        write_cache(&state, crate::messages::now(), Channel::Main, &[latest(KELPIE, "0.18.2"), latest(VAULT, "0.2.17")]);
-        assert_eq!(doctor_line(&state, Channel::Main, &installed), (false, "kelpie 0.18.1 → 0.18.2 (checked just now); kelpie update".to_string()));
-        write_cache(&state, crate::messages::now(), Channel::Main, &[latest(KELPIE, "0.18.1"), latest(VAULT, "0.2.17")]);
+        write_cache(&state, crate::messages::now(), Channel::Main, &[latest(KEBBIE, "0.18.2"), latest(VAULT, "0.2.17")]);
+        assert_eq!(doctor_line(&state, Channel::Main, &installed), (false, "kebbie 0.18.1 → 0.18.2 (checked just now); kebbie update".to_string()));
+        write_cache(&state, crate::messages::now(), Channel::Main, &[latest(KEBBIE, "0.18.1"), latest(VAULT, "0.2.17")]);
         assert_eq!(doctor_line(&state, Channel::Main, &installed), (true, "everything is the latest (checked just now)".to_string()));
     }
 
@@ -618,12 +618,12 @@ mod tests {
     }
 
     #[test]
-    fn kelpies_version_is_the_plugin_manifests_and_the_cargo_manifest_stands_in() {
+    fn kebbies_version_is_the_plugin_manifests_and_the_cargo_manifest_stands_in() {
         let read = |files: &'static [(&'static str, &'static str)]| move |name: &str| files.iter().find(|(file, _)| *file == name).map(|(_, text)| text.to_string());
-        assert_eq!(kelpie_version(read(&[(".claude-plugin/plugin.json", r#"{"version":"0.19.0"}"#), ("Cargo.toml", "[package]\nversion = \"0.18.0\"\n")])), Some("0.19.0".to_string()));
-        assert_eq!(kelpie_version(read(&[("Cargo.toml", "[package]\nname = \"kelpie\"\nversion = \"0.18.0\"\n")])), Some("0.18.0".to_string()));
-        assert_eq!(kelpie_version(read(&[(".claude-plugin/plugin.json", "not json")])), None);
-        assert_eq!(kelpie_version(read(&[])), None);
+        assert_eq!(kebbie_version(read(&[(".claude-plugin/plugin.json", r#"{"version":"0.19.0"}"#), ("Cargo.toml", "[package]\nversion = \"0.18.0\"\n")])), Some("0.19.0".to_string()));
+        assert_eq!(kebbie_version(read(&[("Cargo.toml", "[package]\nname = \"kebbie\"\nversion = \"0.18.0\"\n")])), Some("0.18.0".to_string()));
+        assert_eq!(kebbie_version(read(&[(".claude-plugin/plugin.json", "not json")])), None);
+        assert_eq!(kebbie_version(read(&[])), None);
         let manifest: toml::Table = include_str!("../Cargo.toml").parse().unwrap();
         let plugin: Value = serde_json::from_str(include_str!("../.claude-plugin/plugin.json")).unwrap();
         let herdr: toml::Table = include_str!("../herdr-plugin.toml").parse().unwrap();
@@ -637,9 +637,9 @@ mod tests {
         let state = scratch("broken");
         std::fs::write(cache_file(&state), "not json").unwrap();
         assert!(read_cache(&state).is_none());
-        std::fs::write(cache_file(&state), r#"{"components":[{"name":"kelpie"},{"installed":"x"}]}"#).unwrap();
+        std::fs::write(cache_file(&state), r#"{"components":[{"name":"kebbie"},{"installed":"x"}]}"#).unwrap();
         assert!(read_cache(&state).is_none(), "no checked_at, no cache");
-        std::fs::write(cache_file(&state), r#"{"checked_at":5,"components":[{"name":"kelpie"},{"installed":"x"}]}"#).unwrap();
+        std::fs::write(cache_file(&state), r#"{"checked_at":5,"components":[{"name":"kebbie"},{"installed":"x"}]}"#).unwrap();
         let cache = read_cache(&state).unwrap();
         assert_eq!((cache.checked_at, cache.components.len()), (5, 1), "a component without a name is dropped");
         let _ = std::fs::remove_dir_all(state);

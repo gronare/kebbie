@@ -101,7 +101,7 @@ impl Notice {
         Some(notice)
     }
 
-    // Any text read as a notice: kelpie's own as written, anything else (a git or herdr error) under a plain headline with the text as its detail.
+    // Any text read as a notice: kebbie's own as written, anything else (a git or herdr error) under a plain headline with the text as its detail.
     pub fn read(text: &str, failed: bool) -> Notice {
         if let Some(notice) = Notice::parse(text) {
             return notice;

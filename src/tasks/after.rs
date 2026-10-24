@@ -173,7 +173,7 @@ pub(super) fn forget_unwaited_watch(state: &Path, address: &str) {
 }
 
 fn refusal(task: &str) -> String {
-    Notice::new(Tone::NotNow, "It is queued").next(format!("kelpie after {task} --now starts it; --drop drops the wait.")).detail("task", task).to_string()
+    Notice::new(Tone::NotNow, "It is queued").next(format!("kebbie after {task} --now starts it; --drop drops the wait.")).detail("task", task).to_string()
 }
 
 // By address: a wait's own start has claimed its file away, and its other halves are other addresses.
@@ -317,11 +317,11 @@ pub(super) fn red_ci_superseded(state: &Path, address: &str) -> Vec<String> {
 
 const SUBJECTS_SHOWN: usize = 20;
 
-// The subjects are the other task's words, so they are quoted apart from kelpie's own sentence.
+// The subjects are the other task's words, so they are quoted apart from kebbie's own sentence.
 fn landed_lines(address: &str, end: Option<&Message>) -> String {
     let lines: Vec<&str> = end.and_then(|end| end.landed.as_deref()).map(|landed| landed.lines().map(str::trim).filter(|line| !line.is_empty()).collect()).unwrap_or_default();
     if lines.is_empty() {
-        return format!("This task waited for {address}, which is done; kelpie did not record its commits.");
+        return format!("This task waited for {address}, which is done; kebbie did not record its commits.");
     }
     let mut text = format!("This task waited for {address}, which is done. Its commits (subjects as that task wrote them):");
     for line in lines.iter().take(SUBJECTS_SHOWN) {
@@ -347,8 +347,8 @@ fn not_done(state: &DepState) -> &'static str {
 pub(crate) fn intro(wait: &Wait, facts: &Facts, anyway: Option<By>) -> String {
     wait.after.iter().map(|dep| match facts.state(&dep.address, wait.at) {
         DepState::Done => landed_lines(&dep.address, facts.ends.get(&dep.address)),
-        DepState::Ended(how) => format!("This task waited for {}, which was {how}; {} started it anyway.", dep.address, anyway.map_or("kelpie", By::word)),
-        state => format!("This task waited for {}, which was not done ({}) when {} started it anyway: build on main as it is, and expect {} to land later.", dep.address, not_done(&state), anyway.map_or("kelpie", By::word), dep.address),
+        DepState::Ended(how) => format!("This task waited for {}, which was {how}; {} started it anyway.", dep.address, anyway.map_or("kebbie", By::word)),
+        state => format!("This task waited for {}, which was not done ({}) when {} started it anyway: build on main as it is, and expect {} to land later.", dep.address, not_done(&state), anyway.map_or("kebbie", By::word), dep.address),
     }).collect::<Vec<_>>().join("\n")
 }
 
@@ -368,19 +368,19 @@ fn launch(state: &Path, wait: &Wait, intro: &str, begin: Begin, tell: &mut dyn F
     match started {
         Ok(begun) => Ok(begun.said),
         Err(error) => {
-            let reason = format!("kelpie could not start it: {}", Notice::read(&error, true).details.iter().find(|(label, _)| label == "error").map_or(error.clone(), |(_, error)| error.clone()));
+            let reason = format!("kebbie could not start it: {}", Notice::read(&error, true).details.iter().find(|(label, _)| label == "error").map_or(error.clone(), |(_, error)| error.clone()));
             let _ = save(state, &Wait { blocked: Some(reason.clone()), ..wait.clone() });
             tell(Told::Blocked { address: wait.address(), repo: wait.repo.clone(), text: blocked_text(wait, &reason) });
-            Notice::new(Tone::Failed, "kelpie could not start it").detail("task", wait.address()).detail("error", error).err()
+            Notice::new(Tone::Failed, "kebbie could not start it").detail("task", wait.address()).detail("error", error).err()
         }
     }
 }
 
 fn blocked_text(wait: &Wait, reason: &str) -> String {
-    format!("{} did not start: {reason}. It waits for you under Needs you: start it anyway (kelpie after {} --now) or drop the wait (kelpie after {} --drop).", wait.address(), wait.task, wait.task)
+    format!("{} did not start: {reason}. It waits for you under Needs you: start it anyway (kebbie after {} --now) or drop the wait (kebbie after {} --drop).", wait.address(), wait.task, wait.task)
 }
 
-// A start that never returned, kelpie having stopped mid-way, leaves its claim behind: the task runs, or the wait is the user's again.
+// A start that never returned, kebbie having stopped mid-way, leaves its claim behind: the task runs, or the wait is the user's again.
 fn sweep_claims(state: &Path, tell: &mut dyn FnMut(Told)) -> Vec<String> {
     let Ok(entries) = fs::read_dir(dir(state)) else { return Vec::new() };
     let mut notes = Vec::new();
@@ -392,7 +392,7 @@ fn sweep_claims(state: &Path, tell: &mut dyn FnMut(Told)) -> Vec<String> {
         }
         let wait = fs::read_to_string(entry.path()).ok().and_then(|text| serde_json::from_str(&text).ok()).and_then(|value| Wait::from_json(&value)).filter(|wait| wait.address() == address);
         if let Some(wait) = wait.filter(|wait| !open_in(&wait.repo).contains(&wait.address())) {
-            let reason = "kelpie was interrupted while starting it".to_string();
+            let reason = "kebbie was interrupted while starting it".to_string();
             if save(state, &Wait { blocked: Some(reason.clone()), ..wait.clone() }).is_err() {
                 continue;
             }
@@ -416,7 +416,7 @@ pub(crate) fn tick_in(state: &Path, log: &[Message], now: u64, begin: Begin, tel
         let address = wait.address();
         if facts.open.contains(&address) {
             forget(state, &address);
-            let text = format!("{address} was started while it was queued, so kelpie dropped its wait; it runs as it was started.");
+            let text = format!("{address} was started while it was queued, so kebbie dropped its wait; it runs as it was started.");
             tell(Told::Dropped { text: text.clone() });
             notes.push(format!("after: {text}"));
             continue;
@@ -496,7 +496,7 @@ fn task_part(address: &str) -> &str {
 
 pub(crate) fn plan(me: &str, prompt: &str, asked: &[&str], known: &Known) -> Result<Plan> {
     if prompt.trim().is_empty() {
-        return Err(format!("{me} needs its prompt to wait: kelpie start {} \"<prompt>\" --after <task>", task_part(me)));
+        return Err(format!("{me} needs its prompt to wait: kebbie start {} \"<prompt>\" --after <task>", task_part(me)));
     }
     let mut deps: Vec<Dep> = Vec::new();
     for asked in asked {
@@ -532,7 +532,7 @@ pub(crate) fn plan(me: &str, prompt: &str, asked: &[&str], known: &Known) -> Res
         return Err(format!("{mine} is already running ({}), so it cannot wait", running.address));
     }
     if let Some(queued) = known.waits.iter().find(|wait| wait.task == mine) {
-        return Err(format!("{mine} is already queued ({}): kelpie after {mine} shows what it waits for", queued.address()));
+        return Err(format!("{mine} is already queued ({}): kebbie after {mine} shows what it waits for", queued.address()));
     }
     Ok(if deps.is_empty() { Plan::Now } else { Plan::Queue(deps) })
 }
@@ -632,7 +632,7 @@ fn halves(state: &Path, name: &str) -> Result<Vec<Wait>> {
     let task = slug(name)?;
     let found: Vec<Wait> = all(state).into_iter().filter(|wait| wait.task == task).collect();
     if found.is_empty() {
-        return Notice::new(Tone::NotNow, "It is not queued").next("kelpie after lists what is.").detail("task", &task).err();
+        return Notice::new(Tone::NotNow, "It is not queued").next("kebbie after lists what is.").detail("task", &task).err();
     }
     Ok(found)
 }
@@ -808,7 +808,7 @@ pub fn list(name: Option<&str>) -> Result<String> {
         parts.extend(at.map(|at| format!("at {at}")));
         let mut line = format!("{}  {}", wait.address(), parts.join(", not before "));
         if let Some(blocked) = &wait.blocked {
-            line.push_str(&format!("\n  blocked: {blocked}; kelpie after {} --now starts it, --drop drops the wait", wait.task));
+            line.push_str(&format!("\n  blocked: {blocked}; kebbie after {} --now starts it, --drop drops the wait", wait.task));
         }
         line
     }).collect();
@@ -853,16 +853,16 @@ pub fn at(name: &str, text: &str) -> Result<String> {
 pub fn after(words: &[String], now_flag: bool, drop_flag: bool, at_flag: Option<&str>) -> Result<String> {
     if let Some(text) = at_flag {
         return match (words.first(), now_flag || drop_flag) {
-            (_, true) => Err("kelpie after takes one of --now, --drop and --at".to_string()),
+            (_, true) => Err("kebbie after takes one of --now, --drop and --at".to_string()),
             (Some(name), false) => at(name, text),
-            (None, false) => Err("kelpie after --at needs the queued task's name".to_string()),
+            (None, false) => Err("kebbie after --at needs the queued task's name".to_string()),
         };
     }
     match (words.first(), now_flag, drop_flag) {
-        (_, true, true) => Err("kelpie after takes --now or --drop, not both".to_string()),
+        (_, true, true) => Err("kebbie after takes --now or --drop, not both".to_string()),
         (Some(name), true, false) => now(name),
         (Some(name), false, true) => drop(name),
-        (None, true, false) | (None, false, true) => Err("kelpie after --now and --drop need the queued task's name".to_string()),
+        (None, true, false) | (None, false, true) => Err("kebbie after --now and --drop need the queued task's name".to_string()),
         (name, false, false) => list(name.map(String::as_str)),
     }
 }
@@ -886,7 +886,7 @@ mod tests {
 
     fn end(address: &str, at: u64, how: &str, landed: Option<&str>) -> Message {
         let task = address.split('@').next().unwrap();
-        Message { id: format!("end-{address}-{at}"), at, from: "kelpie".to_string(), to: address.to_string(), text: format!("{task} ended ({how})"), held: false, report: None, ended: true, question: None, about: None, kind: None, landed: landed.map(str::to_string), why: None, forced: false, fyi: false }
+        Message { id: format!("end-{address}-{at}"), at, from: "kebbie".to_string(), to: address.to_string(), text: format!("{task} ended ({how})"), held: false, report: None, ended: true, question: None, about: None, kind: None, landed: landed.map(str::to_string), why: None, forced: false, fyi: false }
     }
 
     fn facts(ends: &[Message], open: &[&str]) -> Facts {
@@ -970,7 +970,7 @@ mod tests {
         assert_eq!(prompt_title("Fix the login redirect. It loops on Safari.").as_deref(), Some("Fix the login redirect"));
         assert_eq!(prompt_title("\n  Bring the Queued row in line with the other rows of the board, title and all\nmore").as_deref(), Some("Bring the Queued row in line"), "a title cut to its words does not end on a dangling one");
         assert_eq!(prompt_title("   "), None);
-        assert_eq!(crate::status::readable("kelpie — Queued row says what it waits for", "kelpie"), "Queued row says what it waits for", "a vault note's title drops its repo");
+        assert_eq!(crate::status::readable("kebbie — Queued row says what it waits for", "kebbie"), "Queued row says what it waits for", "a vault note's title drops its repo");
         let state = crate::sh::test_dir("after-title");
         let known = known(&["billing@api"], Vec::new(), &[]);
         let asked = |title| Asked { name: "web-billing", prompt: "use the rounding field. Then bill.", after: &["billing@api"], mode: None, profile: None, backlog: None, title, why: Some("it needs the rounding field"), starts_at: None };
@@ -1051,7 +1051,7 @@ mod tests {
         save(&state, &wait_for("web-billing", "web", &["billing@api"])).unwrap();
         let (started, _) = ticked(&state, &[end("billing@api", 200, "done", Some("abc1234 Add invoice rounding\ndef5678 Round in the API\n"))], 210);
         assert_eq!(started[0].prompt, "This task waited for billing@api, which is done. Its commits (subjects as that task wrote them):\n> abc1234 Add invoice rounding\n> def5678 Round in the API\n\nUse the rounding field");
-        assert_eq!(intro(&wait_for("x", "web", &["billing@api"]), &facts(&[end("billing@api", 200, "done", None)], &[]), None), "This task waited for billing@api, which is done; kelpie did not record its commits.");
+        assert_eq!(intro(&wait_for("x", "web", &["billing@api"]), &facts(&[end("billing@api", 200, "done", None)], &[]), None), "This task waited for billing@api, which is done; kebbie did not record its commits.");
         let many: String = (1..=25).map(|n| format!("abc{n:04} Step {n}\n")).collect();
         let shown = intro(&wait_for("x", "web", &["billing@api"]), &facts(&[end("billing@api", 200, "done", Some(&many))], &[]), None);
         assert_eq!(shown.lines().filter(|line| line.starts_with("> ")).count(), 20);
@@ -1296,7 +1296,7 @@ mod tests {
         assert!(started.is_empty());
         let blocked = load(&state, "web-billing@web").unwrap().blocked.unwrap();
         assert_eq!(blocked, "billing@api was dropped, so web-billing did not start");
-        assert!(matches!(told.as_slice(), [Told::Blocked { text, .. }] if text.contains("waits for you under Needs you") && text.contains("kelpie after web-billing --now") && text.contains("--drop")));
+        assert!(matches!(told.as_slice(), [Told::Blocked { text, .. }] if text.contains("waits for you under Needs you") && text.contains("kebbie after web-billing --now") && text.contains("--drop")));
         fs::remove_dir_all(state).unwrap();
     }
 
@@ -1309,7 +1309,7 @@ mod tests {
         let address = format!("routine-{}@api", std::process::id());
         messages::log_end(task_part(&address), "api", "dropped", None, Some(super::super::finish::ROUTINE_OK)).unwrap();
         assert_eq!(latest_ends(&messages::load()).remove(&address).unwrap().kind.as_deref(), Some("routine-ok"), "the end line carries the mark");
-        assert!(include_str!("../routines.rs").contains("crate::tasks::drop_routine_ok(cwd)"), "kelpie routine ok closes with the mark");
+        assert!(include_str!("../routines.rs").contains("crate::tasks::drop_routine_ok(cwd)"), "kebbie routine ok closes with the mark");
     }
 
     #[test]
@@ -1367,7 +1367,7 @@ mod tests {
         save(&state, &wait_for("web-billing", "web", &["billing@api"])).unwrap();
         let mut told = Vec::new();
         let notes = tick_in(&state, &[end("billing@api", 200, "done", None)], 210, &mut |_, _, _| Err("herdr is not running".to_string()), &mut |said| told.push(said));
-        assert_eq!(load(&state, "web-billing@web").unwrap().blocked.as_deref(), Some("kelpie could not start it: herdr is not running"));
+        assert_eq!(load(&state, "web-billing@web").unwrap().blocked.as_deref(), Some("kebbie could not start it: herdr is not running"));
         assert!(!claimed_file(&state, "web-billing@web").exists());
         assert!(matches!(told.as_slice(), [Told::Blocked { .. }]) && notes[0].contains("herdr is not running"), "{notes:?}");
         fs::remove_dir_all(state).unwrap();
@@ -1388,7 +1388,7 @@ mod tests {
         crate::state::write(&claimed_file(&state, &fresh.address()), fresh.to_json().to_string()).unwrap();
         let (started, told) = ticked(&state, &[], 500);
         assert!(started.is_empty());
-        assert_eq!(load(&state, &lost.address()).unwrap().blocked.as_deref(), Some("kelpie was interrupted while starting it"), "the lost wait is the user's again, under Needs you");
+        assert_eq!(load(&state, &lost.address()).unwrap().blocked.as_deref(), Some("kebbie was interrupted while starting it"), "the lost wait is the user's again, under Needs you");
         assert!(matches!(told.as_slice(), [Told::Blocked { address, .. }] if *address == lost.address()));
         assert!(load(&state, &running.address()).is_none() && !claimed_file(&state, &running.address()).exists(), "a claim whose task runs is just cleared");
         assert!(claimed_file(&state, &fresh.address()).exists(), "a start still under way keeps its claim");
@@ -1401,9 +1401,9 @@ mod tests {
         let state = state_of(&dir);
         save(&state, &Wait { task: "search".to_string(), repo: dir.clone(), ..wait_for("search", "web", &["other@web"]) }).unwrap();
         let search = peers::address("search", &name_of(&dir));
-        assert_eq!(queued_refusal(&state, &search).unwrap_err(), "– It is queued\n  next: kelpie after search --now starts it; --drop drops the wait.\n  task: search");
+        assert_eq!(queued_refusal(&state, &search).unwrap_err(), "– It is queued\n  next: kebbie after search --now starts it; --drop drops the wait.\n  task: search");
         assert!(queued_refusal(&state, "search@elsewhere").is_ok() && queued_refusal(&state, &peers::address("billing", &name_of(&dir))).is_ok(), "begin refuses by address");
-        assert!(queued_name_refusal(&state, "Search").unwrap_err().contains("kelpie after search --now starts it"), "kelpie start refuses the name in every repo");
+        assert!(queued_name_refusal(&state, "Search").unwrap_err().contains("kebbie after search --now starts it"), "kebbie start refuses the name in every repo");
         let main = include_str!("../main.rs");
         let start = &main[main.find("Some(\"start\") => {").unwrap()..];
         assert!(start.find("tasks::refuse_queued_name(name)?").unwrap() < start.find("tasks::start(repo").unwrap());
@@ -1559,8 +1559,8 @@ mod tests {
 
     #[test]
     fn a_tasks_settings_deny_changing_a_wait() {
-        let written: Value = serde_json::from_str(&crate::agent::claude::settings("/bin/kelpie", "billing@app", None, None, None)).unwrap();
-        assert!(written["permissions"]["deny"].as_array().unwrap().contains(&json!("Bash(/bin/kelpie after:*)")));
+        let written: Value = serde_json::from_str(&crate::agent::claude::settings("/bin/kebbie", "billing@app", None, None, None)).unwrap();
+        assert!(written["permissions"]["deny"].as_array().unwrap().contains(&json!("Bash(/bin/kebbie after:*)")));
     }
 
     #[test]
@@ -1630,7 +1630,7 @@ mod tests {
         let starting = &starting[..starting.find("- **Holding tasks to the rules**").unwrap()];
         assert!(starting.contains("--after <task[@repo]>") && starting.contains("never hold the order yourself"));
         assert!(starting.contains("on your own initiative") && starting.contains("say so in your next summary"));
-        assert!(starting.contains("kelpie after <task> --now") && starting.contains("on their word"), "a blocked wait is the user's");
+        assert!(starting.contains("kebbie after <task> --now") && starting.contains("on their word"), "a blocked wait is the user's");
     }
 
     #[test]

@@ -23,7 +23,7 @@ pub struct Menu {
     pub cut: bool,
 }
 
-// Options that take the user's own words, which kelpie never types; they are answered in the task's Space.
+// Options that take the user's own words, which kebbie never types; they are answered in the task's Space.
 pub fn takes_text(label: &str) -> bool {
     TEXT_OPTIONS.iter().any(|text| label.contains(text))
 }
@@ -128,19 +128,19 @@ fn indented(text: &str) -> String {
 pub fn relay_text(address: &str, screen: &str) -> (String, String) {
     let Some(menu) = parse(screen) else {
         let tail = tail(screen);
-        let text = format!("{address} waits on its Claude's own prompt, which kelpie could not read as a menu. {READ_FROM_SCREEN} Its screen ends:\n{}\nThe answer is in its Space (g on the board); tell the user.", indented(&tail));
+        let text = format!("{address} waits on its Claude's own prompt, which kebbie could not read as a menu. {READ_FROM_SCREEN} Its screen ends:\n{}\nThe answer is in its Space (g on the board); tell the user.", indented(&tail));
         return (hash(&[address, &tail]), text);
     };
     let id = fingerprint(address, &menu);
     let options: Vec<String> = menu.options.iter().enumerate().map(|(index, label)| {
         let focus = if index == menu.focused { "  (focused)" } else { "" };
-        let text = if takes_text(label) { "  (takes text: answered in its Space, not with kelpie choose)" } else { "" };
+        let text = if takes_text(label) { "  (takes text: answered in its Space, not with kebbie choose)" } else { "" };
         format!("  {}. {label}{focus}{text}", index + 1)
     }).collect();
-    let numbers = if menu.numbered { "" } else { " (the menu shows no numbers; kelpie numbered them)" };
+    let numbers = if menu.numbered { "" } else { " (the menu shows no numbers; kebbie numbered them)" };
     let more = if menu.cut { "\n  (more above; see its Space)" } else { "" };
     let text = format!(
-        "{address} waits on its Claude's own prompt (prompt {id}). {READ_FROM_SCREEN}\nQuestion:{more}\n{}\nOptions{numbers}:\n{}\nPut the question and the options to the user with your recommendation, and answer only on a choice the user types in your chat: kelpie choose {address} <number> --prompt {id}",
+        "{address} waits on its Claude's own prompt (prompt {id}). {READ_FROM_SCREEN}\nQuestion:{more}\n{}\nOptions{numbers}:\n{}\nPut the question and the options to the user with your recommendation, and answer only on a choice the user types in your chat: kebbie choose {address} <number> --prompt {id}",
         indented(&menu.question), options.join("\n")
     );
     (id, text)
@@ -240,15 +240,15 @@ pub fn choose_with(caller: &Caller, state: &Path, panes: &[Pane], choice: &str, 
     }
     let Some((pane, menu)) = found else {
         if !unread.is_empty() {
-            return Err(format!("The prompt {id} was not found: kelpie {}; try again", unread.join("; ")));
+            return Err(format!("The prompt {id} was not found: kebbie {}; try again", unread.join("; ")));
         }
-        return Err(format!("The prompt {id} is not on the task's screen any more: the prompt changed or is gone; read it again (kelpie tells the lead about a new one)"));
+        return Err(format!("The prompt {id} is not on the task's screen any more: the prompt changed or is gone; read it again (kebbie tells the lead about a new one)"));
     };
     let choice: usize = choice.parse().ok().filter(|choice| (1..=menu.options.len()).contains(choice))
-        .ok_or_else(|| format!("kelpie choose takes the option's number, 1 to {}", menu.options.len()))?;
+        .ok_or_else(|| format!("kebbie choose takes the option's number, 1 to {}", menu.options.len()))?;
     let label = &menu.options[choice - 1];
     if takes_text(label) {
-        return Err(format!("\"{choice}. {label}\" takes the user's own words, which kelpie never types; it is answered in {}'s Space", pane.address));
+        return Err(format!("\"{choice}. {label}\" takes the user's own words, which kebbie never types; it is answered in {}'s Space", pane.address));
     }
     let chose = format!("{choice}. {label}");
     let pressed = match keys(&menu, choice) {
@@ -281,7 +281,7 @@ pub fn choose_with(caller: &Caller, state: &Path, panes: &[Pane], choice: &str, 
 }
 
 pub fn choose(task: Option<&str>, choice: Option<&str>, id: Option<&str>) -> Result<String> {
-    const USAGE: &str = "kelpie choose <task> <number> --prompt <id>: the option's number and the prompt's id as kelpie told the lead";
+    const USAGE: &str = "kebbie choose <task> <number> --prompt <id>: the option's number and the prompt's id as kebbie told the lead";
     let (Some(task), Some(choice), Some(id)) = (task, choice, id) else { return Err(USAGE.to_string()) };
     let sessions = crate::peers::sessions()?;
     let found = crate::peers::resolve(task, "", &sessions)?;
@@ -376,7 +376,7 @@ mod tests {
         run(&blocked);
         assert_eq!(told.borrow().len(), 1, "the keeper's repeated passes tell it once");
         let id = fingerprint("billing@ios", &parse(PERMISSION).unwrap());
-        assert!(told.borrow()[0].contains(&format!("kelpie choose billing@ios <number> --prompt {id}")) && told.borrow()[0].contains("  1. Yes  (focused)"), "{}", told.borrow()[0]);
+        assert!(told.borrow()[0].contains(&format!("kebbie choose billing@ios <number> --prompt {id}")) && told.borrow()[0].contains("  1. Yes  (focused)"), "{}", told.borrow()[0]);
         *screen.borrow_mut() = PERMISSION.replace("logo.png", "icon.png");
         run(&blocked);
         assert_eq!(told.borrow().len(), 2, "a new prompt in the same task is told");

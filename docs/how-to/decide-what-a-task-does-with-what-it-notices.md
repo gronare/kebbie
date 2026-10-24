@@ -4,23 +4,23 @@ A task's Claude notices things outside its task: a bug nearby, a stale doc, a re
 
 | Value | The task |
 | --- | --- |
-| `"backlog"` (default) | Leaves them alone and files each one: in the vault's backlog with the vault plugin, else in the local backlog with `kelpie backlog add`. |
+| `"backlog"` (default) | Leaves them alone and files each one: in the vault's backlog with the vault plugin, else in the local backlog with `kebbie backlog add`. |
 | `"fix"` | Fixes a small one beside the code it is changing, in a commit of its own, and files the rest. |
-| `"ask"` | Puts each one to you with `kelpie ask` before it changes anything for it: fix it, file it or leave it. |
+| `"ask"` | Puts each one to you with `kebbie ask` before it changes anything for it: fix it, file it or leave it. |
 
-1. Set it in `~/.config/kelpie/config.toml` for every repo:
+1. Set it in `~/.config/kebbie/config.toml` for every repo:
 
    ```toml
    [task]
    also_noticed = "fix"
    ```
 
-   Or in a repo config for one repo, `~/.config/kelpie/repos/app.toml`, which wins.
+   Or in a repo config for one repo, `~/.config/kebbie/repos/app.toml`, which wins.
 
 2. Check the value in effect:
 
    ```bash
-   kelpie config
+   kebbie config
    ```
 
 New tasks follow it from their start.

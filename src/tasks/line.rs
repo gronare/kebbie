@@ -16,7 +16,7 @@ pub(crate) const CEILING: u64 = 30 * 60;
 pub(super) type Read<'a> = &'a dyn Fn(&Intent, &Slot) -> Option<String>;
 pub(super) type Push<'a> = &'a mut dyn FnMut(&Intent, &Slot) -> Result<Sent>;
 
-// Held while one driver works a repo's line, so the keeper, a board and kelpie push never send two pushes of one repo at once.
+// Held while one driver works a repo's line, so the keeper, a board and kebbie push never send two pushes of one repo at once.
 pub(super) struct Turnstile(std::fs::File, std::path::PathBuf);
 
 thread_local! {
@@ -154,7 +154,7 @@ pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Messag
 
 fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push: Push) -> Turn {
     let Ok(slot) = find_task(&head.repo, Some(&head.task), &head.repo) else {
-        let why = format!("{} is gone, so kelpie dropped the push {} asked for", head.address, head.by.word());
+        let why = format!("{} is gone, so kebbie dropped the push {} asked for", head.address, head.by.word());
         intent::forget(state, &head.address);
         phase::forget(state, &head.address);
         tell_lead(&format!("{why}."));
@@ -199,12 +199,12 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push
         Err(error) if rejected(&error) => {
             let checked = default_branch(&head.repo).and_then(|upstream| fingerprint(&slot.path, &upstream)).unwrap_or_else(|_| head.fingerprint.clone());
             let _ = intent::save(state, &Intent { work: Work::Turn, fingerprint: checked, at: now, ..head.clone() });
-            Turn::Retry(format!("the push {} asked for was rejected while the default branch kept moving; it stays at the head of the line and kelpie tries again next round", head.by.word()))
+            Turn::Retry(format!("the push {} asked for was rejected while the default branch kept moving; it stays at the head of the line and kebbie tries again next round", head.by.word()))
         }
         Err(error) => {
             intent::forget(state, &head.address);
             phase::record(state, &head.address, "push", &Event::PushFailed);
-            let text = format!("kelpie could not finish the push of {} that {} asked for: {error}", head.address, head.by.word());
+            let text = format!("kebbie could not finish the push of {} that {} asked for: {error}", head.address, head.by.word());
             tell_lead(&text);
             Turn::Out(text)
         }
@@ -216,7 +216,7 @@ fn leave(state: &Path, head: &Intent, why: &str) -> Turn {
     intent::forget(state, &head.address);
     intent::record_left(state, &head.address, why);
     phase::update(state, &head.address, "push", |current| (!matches!(current, Some(Phase::NeedsYou(_)))).then_some(Phase::NeedsYou(Why::LeftLine)));
-    tell_lead(&format!("kelpie took {} out of the push line, unpushed: {why}. It waits for the user under Needs you; a push from there puts it at the end of the line.", head.address));
+    tell_lead(&format!("kebbie took {} out of the push line, unpushed: {why}. It waits for the user under Needs you; a push from there puts it at the end of the line.", head.address));
     Turn::Out(format!("out of the push line: {why}"))
 }
 
@@ -253,9 +253,9 @@ mod tests {
         let state = state_of(&dir);
         let current = fingerprint(&slot.path, &upstream).unwrap();
         let address = format!("billing@{}", crate::repo::name_of(&dir));
-        let hand = |held: bool| { let mut message = report("h1", 150, "ready"); (message.from, message.to, message.text, message.report, message.held, message.kind) = ("kelpie".to_string(), address.clone(), "run the tests".to_string(), None, held, Some(messages::HAND_KIND.to_string())); message };
+        let hand = |held: bool| { let mut message = report("h1", 150, "ready"); (message.from, message.to, message.text, message.report, message.held, message.kind) = ("kebbie".to_string(), address.clone(), "run the tests".to_string(), None, held, Some(messages::HAND_KIND.to_string())); message };
         let ready = |at: u64| { let mut message = report("r1", at, "ready"); message.from = address.clone(); message };
-        let read_at = |seconds: u64| json!({ "type": "user", "timestamp": format!("1970-01-01T00:{:02}:{:02}.000Z", seconds / 60, seconds % 60), "message": { "content": "[from kelpie] run the tests" } }).to_string();
+        let read_at = |seconds: u64| json!({ "type": "user", "timestamp": format!("1970-01-01T00:{:02}:{:02}.000Z", seconds / 60, seconds % 60), "message": { "content": "[from kebbie] run the tests" } }).to_string();
         let pushes = |log: Vec<Message>, transcript: Option<String>| {
             save(&state, &Intent { hand: Some("h1".to_string()), ..intent(By::User, &dir, &current) }).unwrap();
             let mut pushed = false;
@@ -274,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn kelpie_pushes_for_the_recorded_pusher_once_and_changed_commits_once_the_lead_approves_them() {
+    fn kebbie_pushes_for_the_recorded_pusher_once_and_changed_commits_once_the_lead_approves_them() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let state = state_of(&dir);
         let current = fingerprint(&slot.path, &upstream).unwrap();
@@ -347,7 +347,7 @@ mod tests {
 
     type Typed = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
 
-    // The push a turn really makes, onto the temp origin, with what kelpie hands the task's Claude written down instead of typed.
+    // The push a turn really makes, onto the temp origin, with what kebbie hands the task's Claude written down instead of typed.
     fn real_push(state: &Path) -> (Typed, impl FnMut(&Intent, &Slot) -> Result<Sent> + '_) {
         let typed: Typed = Default::default();
         let kept = typed.clone();
@@ -394,9 +394,9 @@ mod tests {
         let before = head(&beta);
         let (typed, mut push) = real_push(&state);
         let driven = drive(&state, &dir, Some(&second), &[], 1000, &|_, _| None, &mut push);
-        assert!(driven.mine.is_none() && !landed(&origin, &upstream).contains("fourth"), "kelpie push of beta leaves alpha's turn to the keeper and says where beta stands: {driven:?}");
+        assert!(driven.mine.is_none() && !landed(&origin, &upstream).contains("fourth"), "kebbie push of beta leaves alpha's turn to the keeper and says where beta stands: {driven:?}");
         let driven = drive(&state, &dir, Some(&first), &[], 1000, &|_, _| None, &mut push);
-        assert!(matches!(&driven.mine, Some(Ok(said)) if said == "pushed 1"), "kelpie push pushes its own task at the head of the line: {driven:?}");
+        assert!(matches!(&driven.mine, Some(Ok(said)) if said == "pushed 1"), "kebbie push pushes its own task at the head of the line: {driven:?}");
         assert!(landed(&origin, &upstream).starts_with("fourth\nsomeone else's work\n"));
         assert_eq!(head(&beta), before, "beta is never rebased before its turn");
         assert_eq!(phase_of(&state, &second), Some(Phase::Pushing { ahead: 0 }), "beta moved up");
@@ -559,7 +559,7 @@ mod tests {
         super::super::push::join(&state, &Caller::User, &dir, &alpha, Through::All).unwrap();
         assert!(cancel(Caller::Lead).unwrap_err().contains("the user asked for this push"));
         let held = Turnstile::try_take(&state, &dir).unwrap();
-        assert!(cancel(Caller::User).unwrap_err().contains("kelpie is pushing it now"));
+        assert!(cancel(Caller::User).unwrap_err().contains("kebbie is pushing it now"));
         drop(held);
         assert!(load(&state, &first).is_some(), "refused, it keeps its place");
         assert!(cancel(Caller::User).unwrap().contains("Taken out of the push line") && load(&state, &first).is_none());

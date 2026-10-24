@@ -199,14 +199,14 @@ mod tests {
     fn the_push_dialog_parts_the_card_tests_commits_and_message_under_their_own_headers() {
         let text = |lines: &[Line]| lines.iter().map(|line| line.spans.iter().map(|span| span.content.to_string()).collect::<String>()).collect::<Vec<_>>().join("\n");
         let commits = vec![tasks::Commit { sha: "1111111aaaa".to_string(), message: "Add refunds\n\nso a customer gets money back".to_string() }, tasks::Commit { sha: "2222222bbbb".to_string(), message: "Show refunds".to_string() }];
-        let card = report::Card { sha: "abcdef0123".to_string(), text: "Refunds show on the **billing** page.\n\n![the refund row](/tmp/kelpie-shots/refund.png)\nTo check: 30 days.".to_string(), file: PathBuf::from("/state/cards/billing@web.md") };
+        let card = report::Card { sha: "abcdef0123".to_string(), text: "Refunds show on the **billing** page.\n\n![the refund row](/tmp/kebbie-shots/refund.png)\nTo check: 30 days.".to_string(), file: PathBuf::from("/state/cards/billing@web.md") };
         let tests = evidence::Shown { mark: evidence::Mark::Covered, text: "cargo test · 412 passed · at abcdef0".to_string() };
         let (lines, first) = push_lines(Some(&(card, true)), Some(&tests), &commits, 0, 60);
         let screen = text(&lines);
         let rule = |head: &str| format!("{head} {}", "─".repeat(60 - head.chars().count() - 1));
         assert!(screen.starts_with(&format!("{}\n  Refunds show on the billing page.\n\n  To check: 30 days.\n  ▣ refund.png  the refund row\n\n", rule("CARD ✓ current at abcdef0"))), "{screen}");
         assert!(lines[1].spans.iter().any(|span| span.content == "billing" && span.style.add_modifier.contains(ratatui::style::Modifier::BOLD)), "**billing** is bold without its stars");
-        assert!(!screen.contains("/tmp/kelpie-shots"), "an image shows by its file name: {screen}");
+        assert!(!screen.contains("/tmp/kebbie-shots"), "an image shows by its file name: {screen}");
         assert!(screen.contains(&format!("{}\n  ✓ cargo test · 412 passed · at abcdef0\n\n{}\n", rule("TESTS"), rule("COMMITS 2"))), "{screen}");
         assert!(text(&lines[first..first + 1]).contains("▸ 1111111 Add refunds"), "the first commit is where the mouse hits are counted from");
         assert!(screen.ends_with(&format!("{}\n  ▎ Add refunds\n  ▎ \n  ▎ so a customer gets money back", rule("MESSAGE 1111111"))), "{screen}");

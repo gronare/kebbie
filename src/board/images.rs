@@ -142,7 +142,7 @@ pub(super) type Decoded = (PathBuf, Option<image::DynamicImage>);
 pub(super) fn spawn_decoder() -> Option<(Sender<PathBuf>, Receiver<Decoded>)> {
     let (request_tx, request_rx) = mpsc::channel::<PathBuf>();
     let (image_tx, image_rx) = mpsc::channel();
-    thread::Builder::new().name("kelpie-images".to_string()).spawn(move || {
+    thread::Builder::new().name("kebbie-images".to_string()).spawn(move || {
         while let Ok(path) = request_rx.recv() {
             let decoded = decode_image(&path);
             if image_tx.send((path, decoded)).is_err() {
@@ -218,7 +218,7 @@ impl App {
 
     pub(super) fn open_image(&mut self, file: &Path) {
         if self.viewer.is_some() && !openable(file) {
-            return self.say(format!("{} is not an image file kelpie opens", file.display()));
+            return self.say(format!("{} is not an image file kebbie opens", file.display()));
         }
         self.open_file(file);
     }
@@ -256,7 +256,7 @@ pub(super) struct GraphicsEnv {
 impl GraphicsEnv {
     pub(super) fn current() -> Self {
         GraphicsEnv {
-            forced: std::env::var("KELPIE_IMAGES").ok(),
+            forced: std::env::var("KEBBIE_IMAGES").ok(),
             tty: std::io::IsTerminal::is_terminal(&std::io::stdin()),
             herdr: std::env::var("TERM_PROGRAM").is_ok_and(|program| program == "herdr"),
         }
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(image_shown(Some(ProtocolType::Iterm2), true), Shown::Sharp);
         assert_eq!(image_shown(Some(ProtocolType::Halfblocks), true), Shown::Preview);
         assert_eq!(image_shown(Some(ProtocolType::Kitty), false), Shown::Path, "an image that fails to decode");
-        assert_eq!(image_shown(None, true), Shown::Path, "KELPIE_IMAGES=off or no tty");
+        assert_eq!(image_shown(None, true), Shown::Path, "KEBBIE_IMAGES=off or no tty");
     }
 
     #[test]
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn an_image_too_large_or_not_an_image_is_not_decoded() {
-        let dir = std::env::temp_dir().join(format!("kelpie-decode-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-decode-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("fake.png");
         std::fs::write(&fake, b"\x89PNG\r\n\x1a\nnot really").unwrap();

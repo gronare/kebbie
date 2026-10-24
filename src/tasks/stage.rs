@@ -20,7 +20,7 @@ use super::line::Turnstile;
 use super::pool::{Slot, find_task, task_of};
 use super::push::{HandOver, authorize_as, committed, conflict_prompt, hand_over, leave_line};
 
-// A task on local main: its address and the patch-ids of the commits kelpie picked for it, which survive main being rebased.
+// A task on local main: its address and the patch-ids of the commits kebbie picked for it, which survive main being rebased.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Entry {
     pub address: String,
@@ -142,7 +142,7 @@ pub(super) fn take_off_before_discard(state: &Path, caller: &Caller, repo: &Path
     }
     unstage_in(state, caller, repo, slot, &|repo| crate::update::rebuild_staged(repo, false)).map(Some).map_err(|error| {
         let why = Notice::parse(&error).map_or(error.clone(), |notice| notice.headline);
-        Notice::new(Tone::You, format!("Not dropped: it is on local main, and kelpie could not take it off ({why})")).you(format!("Run kelpie unstage {} first.", task_of(slot))).detail("task", task_of(slot)).to_string()
+        Notice::new(Tone::You, format!("Not dropped: it is on local main, and kebbie could not take it off ({why})")).you(format!("Run kebbie unstage {} first.", task_of(slot))).detail("task", task_of(slot)).to_string()
     })
 }
 
@@ -179,13 +179,13 @@ fn restage_in(state: &Path, log: &[messages::Message], now: u64, opted: &dyn Fn(
                     match pending.waits {
                         None => {
                             let _ = save_pending(state, &address, &Pending { waits: Some(now), ..pending.clone() });
-                            tell_user(&format!("kelpie waits to put {address} on local main again, its conflict resolved: {why}. It goes on by itself once that is settled, for up to {} minutes.", WAIT_CEILING / 60));
+                            tell_user(&format!("kebbie waits to put {address} on local main again, its conflict resolved: {why}. It goes on by itself once that is settled, for up to {} minutes.", WAIT_CEILING / 60));
                             notes.push(format!("stage: {address} waits: {why}"));
                         }
                         Some(since) if now.saturating_sub(since) >= WAIT_CEILING => {
                             let _ = fs::remove_file(pending_file(state, &address));
                             phase::record(state, &address, "stage", &Event::StageGaveUp);
-                            tell_user(&format!("kelpie gave up putting {address} on local main again after {} minutes: {why}. Stage it yourself once that is settled.", WAIT_CEILING / 60));
+                            tell_user(&format!("kebbie gave up putting {address} on local main again after {} minutes: {why}. Stage it yourself once that is settled.", WAIT_CEILING / 60));
                             notes.push(format!("stage: {address} gave up: {why}"));
                         }
                         Some(_) => {}
@@ -196,7 +196,7 @@ fn restage_in(state: &Path, log: &[messages::Message], now: u64, opted: &dyn Fn(
                     let _ = fs::remove_file(pending_file(state, &address));
                 }
                 if let (Err(error), false) = (&outcome, waits) {
-                    tell_lead(&format!("kelpie could not put {address} on local main again after its Claude resolved the conflict: {error}"));
+                    tell_lead(&format!("kebbie could not put {address} on local main again after its Claude resolved the conflict: {error}"));
                 }
                 if !waits {
                     notes.push(format!("stage: {address}: {}", outcome.unwrap_or_else(|error| error)));
@@ -208,7 +208,7 @@ fn restage_in(state: &Path, log: &[messages::Message], now: u64, opted: &dyn Fn(
     notes
 }
 
-// The commits on local main that are neither on origin nor a staged task's: the user's own, which kelpie never rewrites.
+// The commits on local main that are neither on origin nor a staged task's: the user's own, which kebbie never rewrites.
 fn foreign(repo: &Path, upstream: &str, entries: &[Entry]) -> Result<Vec<String>> {
     let mut own = Vec::new();
     for sha in commits(repo, &format!("{upstream}..HEAD"))? {
@@ -221,7 +221,7 @@ fn foreign(repo: &Path, upstream: &str, entries: &[Entry]) -> Result<Vec<String>
 }
 
 fn foreign_note(local: &str, own: &[String]) -> String {
-    format!("local {local} has your own commits {}; push {local} with them, or take the staged tasks off with kelpie unstage first, then stage again", own.join(", "))
+    format!("local {local} has your own commits {}; push {local} with them, or take the staged tasks off with kebbie unstage first, then stage again", own.join(", "))
 }
 
 // With tasks staged, main is rebased onto what went out, unless it holds commits of the user's own; then it is left alone and the user told.
@@ -231,7 +231,7 @@ pub(super) fn follow_staged(repo: &Path, upstream: &str, entries: &[Entry]) -> R
     let own = foreign(repo, upstream, entries)?;
     if !own.is_empty() {
         let note = foreign_note(local, &own);
-        tell_lead(&format!("{name}: kelpie left local {local} as it is after a push: {note}."));
+        tell_lead(&format!("{name}: kebbie left local {local} as it is after a push: {note}."));
         return Ok(format!("{name} left as is: {note}"));
     }
     if !uncommitted(repo)?.is_empty() {
@@ -298,7 +298,7 @@ fn replay(repo: &Path, upstream: &str, drop: &[String], add: &[String]) -> Resul
             if let Err(error) = git_writing(repo, &["reset", "--quiet", "--keep", &before]) {
                 let at = git(repo, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
                 let short = &before[..7.min(before.len())];
-                return Notice::new(Tone::Failed, format!("{} is left at {at}, part-way: kelpie could not put it back to {short}", name_of(repo)))
+                return Notice::new(Tone::Failed, format!("{} is left at {at}, part-way: kebbie could not put it back to {short}", name_of(repo)))
                     .you(format!("A file in the main checkout changed meanwhile. Save that change, then run git reset --keep {short} in {} to put main back as it was.", repo.display())).detail("error", error).err();
             }
             return Ok(Err(stuck));
@@ -322,7 +322,7 @@ fn checkout_ready(repo: &Path, local: &str, refused: &str) -> Result<()> {
         return Notice::new(Tone::NotNow, format!("{refused}: a rebase, merge or cherry-pick is under way in {name}")).you("Finish or abort it first.").err();
     }
     if !git(repo, &["rev-list", "--merges", &format!("{}..HEAD", default_branch(repo)?)])?.is_empty() {
-        return Notice::new(Tone::NotNow, format!("{refused}: {local} has a merge on it, which kelpie does not rewrite")).you(format!("Push or reset {local} yourself first.")).err();
+        return Notice::new(Tone::NotNow, format!("{refused}: {local} has a merge on it, which kebbie does not rewrite")).you(format!("Push or reset {local} yourself first.")).err();
     }
     Ok(())
 }
@@ -363,7 +363,7 @@ pub(super) fn stage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, 
     }
     let pusher = authorize_as(caller, repo, slot, &upstream, Through::All, refused)?;
     let Some(turnstile) = Turnstile::try_take(state, repo) else {
-        return Notice::new(Tone::NotNow, format!("{refused}: kelpie is pushing in {} now", name_of(repo))).next("Try again in a moment.").detail("task", &task).err();
+        return Notice::new(Tone::NotNow, format!("{refused}: kebbie is pushing in {} now", name_of(repo))).next("Try again in a moment.").detail("task", &task).err();
     };
     if let Some(waiting) = intent::load(state, &address) {
         if waiting.work == Work::Ci {
@@ -405,14 +405,14 @@ pub(super) fn stage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, 
             return Notice::new(Tone::Failed, format!("{refused} again: the tasks staged after it build on its earlier commits")).you("Take those off local main first.").detail("task", &task).detail("staged", others.join(" · ")).err();
         }
         Err(Stuck::Added) => {
-            let why = format!("The user asked kelpie to put this task's commits on the local {local} branch of the main checkout, to try them before pushing, on top of {}", if others.is_empty() { "what is there".to_string() } else { super::and_list(&others) });
-            let prompt = format!("{} When you report ready, kelpie puts it on local {local} again.", conflict_prompt(&why, &local));
+            let why = format!("The user asked kebbie to put this task's commits on the local {local} branch of the main checkout, to try them before pushing, on top of {}", if others.is_empty() { "what is there".to_string() } else { super::and_list(&others) });
+            let prompt = format!("{} When you report ready, kebbie puts it on local {local} again.", conflict_prompt(&why, &local));
             let by = By::of(caller).unwrap_or(By::User);
             if let Err(cannot) = hand_over(slot, &prompt).and_then(|_| save_pending(state, &address, &Pending { repo: repo.to_path_buf(), task: task.clone(), by, at: messages::now(), waits: None })) {
-                return Notice::new(Tone::Failed, format!("{refused}: it conflicts with local {local}, and kelpie could not pass the rebase to its Claude")).you(format!("Rebase it onto {local} yourself in its worktree.")).detail("task", &task).detail("error", cannot).err();
+                return Notice::new(Tone::Failed, format!("{refused}: it conflicts with local {local}, and kebbie could not pass the rebase to its Claude")).you(format!("Rebase it onto {local} yourself in its worktree.")).detail("task", &task).detail("error", cannot).err();
             }
             tell_lead(&format!("{} asked to put {address} on local {local}; it conflicts with what is staged there, so its Claude rebases it onto {local}. {local} is as it was.", capitalized(pusher)));
-            return Notice::new(Tone::Moving, format!("{refused}: it conflicts with local {local}")).next(format!("Its Claude rebases it onto {local}; when it reports ready, kelpie puts it on {local} again. {local} is as it was.")).detail("task", &task).ok();
+            return Notice::new(Tone::Moving, format!("{refused}: it conflicts with local {local}")).next(format!("Its Claude rebases it onto {local}; when it reports ready, kebbie puts it on {local} again. {local} is as it was.")).detail("task", &task).ok();
         }
     }
     for sha in commits(repo, &format!("{upstream}..HEAD"))?.iter().rev().take(add.len()) {
@@ -430,7 +430,7 @@ pub(super) fn stage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, 
     phase::record(state, &address, "stage", &Event::Staged { head: head.as_deref() });
     tell_lead(&format!("{} put {address} on local {local} to try it, unpushed; it stays open until main is pushed.", capitalized(pusher)));
     let order: Vec<&str> = entries.iter().map(|entry| entry.task.as_str()).collect();
-    let mut notice = Notice::new(Tone::Done, format!("On local {local}: {}", plural(add.len(), "commit"))).next(format!("Try it from the main checkout. Push {local} when it is right, and kelpie closes it once its commits are on origin; or take it off with kelpie unstage {task}."))
+    let mut notice = Notice::new(Tone::Done, format!("On local {local}: {}", plural(add.len(), "commit"))).next(format!("Try it from the main checkout. Push {local} when it is right, and kebbie closes it once its commits are on origin; or take it off with kebbie unstage {task}."))
         .detail("task", &task).detail("staged", order.join(" · ")).detail("checkout", follow);
     drop(turnstile);
     if let Some(built) = rebuild(repo) {
@@ -453,7 +453,7 @@ pub(super) fn unstage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot
     let held = Turnstile::held_here(state, repo);
     let turnstile = if held { None } else { Turnstile::try_take(state, repo) };
     if !held && turnstile.is_none() {
-        return Notice::new(Tone::NotNow, format!("{refused}: kelpie is pushing in {} now", name_of(repo))).next("Try again in a moment.").detail("task", &task).err();
+        return Notice::new(Tone::NotNow, format!("{refused}: kebbie is pushing in {} now", name_of(repo))).next("Try again in a moment.").detail("task", &task).err();
     }
     checkout_ready(repo, &local, refused)?;
     let own = foreign(repo, &upstream, &entries)?;
@@ -503,7 +503,7 @@ pub(super) fn refuse_push(state: &Path, repo: &Path, address: &str, task: &str) 
         return Ok(());
     }
     let local = default_branch(repo).map(|upstream| local_of(&upstream).to_string()).unwrap_or_else(|_| "main".to_string());
-    Notice::new(Tone::NotNow, format!("Not pushed: it is on local {local}; push {local}")).next(format!("Push {local} from the main checkout or the Areas page, and kelpie closes it once its commits are on origin; or take it off with kelpie unstage {task}.")).detail("task", task).err()
+    Notice::new(Tone::NotNow, format!("Not pushed: it is on local {local}; push {local}")).next(format!("Push {local} from the main checkout or the Areas page, and kebbie closes it once its commits are on origin; or take it off with kebbie unstage {task}.")).detail("task", task).err()
 }
 
 // The lead's line shows on the board's messages too, so what it says reaches the user there.
@@ -745,7 +745,7 @@ mod tests {
         let followed = super::super::follow_upstream(&staging.dir, &staging.upstream, &load(&staging.state, &staging.dir)).unwrap();
         assert!(followed.contains("has your own commits"), "{followed}");
         assert_eq!(git(&staging.dir, &["rev-parse", "HEAD"]).unwrap(), before);
-        assert!(super::super::follow_upstream(&std::env::temp_dir().join("kelpie-no-such-checkout"), &staging.upstream, &entries).unwrap().contains("left as is"), "housekeeping after a push never fails it");
+        assert!(super::super::follow_upstream(&std::env::temp_dir().join("kebbie-no-such-checkout"), &staging.upstream, &entries).unwrap().contains("left as is"), "housekeeping after a push never fails it");
     }
 
     #[test]
@@ -770,7 +770,7 @@ mod tests {
         assert_eq!(on_main(&staging), ["beta"], "no copy of it is left behind as commits nobody staged");
         std::fs::write(staging.dir.join("a"), "edited").unwrap();
         let refused = take_off_before_discard(&staging.state, &Caller::User, &staging.dir, &staging.beta).unwrap_err();
-        assert!(refused.contains("kelpie unstage beta first"), "{refused}");
+        assert!(refused.contains("kebbie unstage beta first"), "{refused}");
         assert_eq!(take_off_before_discard(&staging.state, &Caller::User, &staging.dir, &staging.alpha).unwrap(), None, "an unstaged task has nothing to take off");
         let source = include_str!("finish.rs");
         let discard = &source[source.find("\nfn discard(").unwrap()..];
@@ -783,7 +783,7 @@ mod tests {
         let state = crate::lead::state_dir().unwrap();
         stage_in(&state, &Caller::User, &staging.dir, &staging.alpha, true, &no_hand_over, &built).unwrap();
         let refused = super::super::move_work(&staging.dir, "newer", &[], None, false).unwrap_err();
-        assert!(refused.contains("alpha is staged") && refused.contains("kelpie unstage"), "{refused}");
+        assert!(refused.contains("alpha is staged") && refused.contains("kebbie unstage"), "{refused}");
         forget(&state, &address(&staging, "alpha"));
         let held = Turnstile::try_take(&state, &staging.dir).unwrap();
         assert!(Turnstile::held_here(&state, &staging.dir) && Turnstile::try_take(&state, &staging.dir).is_none());

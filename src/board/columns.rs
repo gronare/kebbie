@@ -54,7 +54,7 @@ fn status_icon(item: &Item) -> Span<'static> {
     }
 }
 
-// A task can outlive its Space or its Claude; kelpie start brings them back.
+// A task can outlive its Space or its Claude; kebbie start brings them back.
 pub(super) fn absence(item: &Item) -> Option<&'static str> {
     if item.queued.is_some() {
         return None;
@@ -328,14 +328,14 @@ mod tests {
 
     #[test]
     fn a_suggested_name_keeps_letters_with_diacritics() {
-        assert_eq!(suggested_name("kelpie – återanvänd worktree tar med förra uppgiftens databas"), "kelpie-ateranvand-worktree-tar");
+        assert_eq!(suggested_name("kebbie – återanvänd worktree tar med förra uppgiftens databas"), "kebbie-ateranvand-worktree-tar");
         assert_eq!(crate::tasks::slug("Föräldraledighet över jul").unwrap(), "foraldraledighet-over-jul");
     }
 
     #[test]
     fn free_worktrees_are_counted_per_repo() {
         let checkout = |name: &str, free_slots| Checkout { name: name.to_string(), changed: 0, free_slots, busy_slots: 0 };
-        assert_eq!(free_worktrees(&[checkout("kelpie", 1), checkout("web", 0), checkout("api", 2)]), " · free worktrees: kelpie 1, api 2");
+        assert_eq!(free_worktrees(&[checkout("kebbie", 1), checkout("web", 0), checkout("api", 2)]), " · free worktrees: kebbie 1, api 2");
         assert_eq!(free_worktrees(&[checkout("web", 0)]), "");
     }
 
@@ -358,7 +358,7 @@ mod tests {
         app.backlog_selected = 0;
         assert_eq!(app.choices()[0].label, "Start here too");
         app.act(Act::Go);
-        assert!(matches!(&app.mode, Mode::ConfirmClaimed { entry, about, machine, nudged: false } if machine == "devbox" && entry.reference == "Projects/web-billing.md" && about.starts_with("kelpie working on devbox · billing since")), "go asks first");
+        assert!(matches!(&app.mode, Mode::ConfirmClaimed { entry, about, machine, nudged: false } if machine == "devbox" && entry.reference == "Projects/web-billing.md" && about.starts_with("kebbie working on devbox · billing since")), "go asks first");
         let (rows, _) = render(&mut app, 200, 50);
         assert!(rows.join("\n").contains("Start it here and take the note over from devbox?"), "{}", rows.join("\n"));
         press(&mut app, key(KeyCode::Char('n')));

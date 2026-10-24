@@ -142,7 +142,7 @@ pub(super) fn draw_notice(frame: &mut Frame, notice: &Notice, subject: Option<&S
     let lines = notice_lines(&shown_for(notice, subject), width.saturating_sub(4) as usize);
     let area = centered(full, width, lines.len() as u16 + 4);
     frame.render_widget(Clear, area);
-    let title = subject.map_or(" kelpie ".to_string(), Subject::title);
+    let title = subject.map_or(" kebbie ".to_string(), Subject::title);
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
         .title(Span::styled(title, bold(MAUVE))).style(Style::new().bg(MANTLE));
     let inner = block.inner(area);
@@ -197,14 +197,14 @@ mod tests {
         let mut app = test_app(vec![titled("push-finishes-itself", "Push finishes itself")]);
         app.about("push", "push-finishes-itself");
         let notice = Notice::new(Tone::You, "Not pushed: it conflicts with main, and no Claude is there").next("Nothing moves until it is resolved.")
-            .you("Start its Claude, then push again.").detail("task", "push-finishes-itself").detail("folder", "~/projects/wt3.kelpie");
+            .you("Start its Claude, then push again.").detail("task", "push-finishes-itself").detail("folder", "~/projects/wt3.kebbie");
         app.show(notice.ok());
         assert!(matches!(app.mode, Mode::Message(_)) && app.toast.is_none());
         let (rows, _) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         assert!(screen.contains(" push · Push finishes itself "), "the task's title, not its branch: {screen}");
         assert!(screen.contains("! Not pushed: it conflicts with main") && screen.contains("next    Nothing moves") && screen.contains("you     Start its Claude"), "{screen}");
-        assert!(screen.contains("folder  ~/projects/wt3.kelpie") && !screen.contains("task    push-finishes-itself"), "the title names the task, so its detail goes: {screen}");
+        assert!(screen.contains("folder  ~/projects/wt3.kebbie") && !screen.contains("task    push-finishes-itself"), "the title names the task, so its detail goes: {screen}");
         assert!(screen.contains("its Space") && screen.contains("push again") && screen.contains("any other key closes"), "{screen}");
         let (x, y) = find(&rows, "Not pushed")[0];
         let (_, you) = find(&rows, "you     ")[0];
@@ -217,7 +217,7 @@ mod tests {
     fn a_notice_that_asks_nothing_goes_by_as_a_toast_that_takes_no_key_and_leaves_by_itself() {
         let mut app = test_app(vec![titled("billing", "Refund mails"), titled("search", "Search filters")]);
         app.about("push", "billing");
-        app.show(Notice::new(Tone::Done, "Pushed 3 commits to main").next("CI runs now; kelpie closes the task when it is green.").detail("commit", "e70d5d5").ok());
+        app.show(Notice::new(Tone::Done, "Pushed 3 commits to main").next("CI runs now; kebbie closes the task when it is green.").detail("commit", "e70d5d5").ok());
         assert!(matches!(app.mode, Mode::Normal), "no window to close");
         let (rows, _) = render(&mut app, 120, 30);
         let (x, y) = find(&rows, "✓ Pushed 3 commits to main")[0];
@@ -233,8 +233,8 @@ mod tests {
 
     #[test]
     fn a_url_or_a_long_path_in_a_notice_wraps_whole_and_the_url_is_one_link() {
-        let url = "https://github.com/gronare/kelpie/actions/runs/18734523412/job/53412345678";
-        let path = "/Users/someone/projects/kelpie/target/debug/build/kelpie-0123456789abcdef/out/notes.md";
+        let url = "https://github.com/gronare/kebbie/actions/runs/18734523412/job/53412345678";
+        let path = "/Users/someone/projects/kebbie/target/debug/build/kebbie-0123456789abcdef/out/notes.md";
         let mut app = test_app(vec![titled("billing", "Refund mails")]);
         app.show(Notice::new(Tone::You, "CI failed").next(format!("Its log: {url}")).detail("file", path).ok());
         let (rows, buffer) = render(&mut app, 60, 30);
@@ -248,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_and_text_kelpie_did_not_write_stay_open_and_only_a_push_offers_push_again() {
+    fn a_failure_and_text_kebbie_did_not_write_stay_open_and_only_a_push_offers_push_again() {
         let mut app = test_app(vec![titled("billing", "Refund mails")]);
         app.show(Err("git push failed:\n ! [remote rejected] main -> main (pre-receive hook declined)".to_string()));
         let Mode::Message(text) = &app.mode else { panic!("a failure stays") };

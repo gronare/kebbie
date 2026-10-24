@@ -85,7 +85,7 @@ pub fn resolve<'a>(to: &str, from: &str, sessions: &'a [Session]) -> Result<Vec<
     };
     let found: Vec<&Session> = found.into_iter().filter(|session| session.address != from).collect();
     if found.is_empty() {
-        return Err(format!("No session \"{to}\" to tell (other than you); kelpie peers lists them"));
+        return Err(format!("No session \"{to}\" to tell (other than you); kebbie peers lists them"));
     }
     Ok(found)
 }
@@ -120,11 +120,11 @@ pub fn peers(cwd: &Path) -> Result<String> {
 }
 
 // The stable link when it leads to this binary, so a task's settings survive reinstalls.
-pub fn kelpie_command() -> Result<String> {
+pub fn kebbie_command() -> Result<String> {
     let exe = own_exe()?;
     let exe = exe.canonicalize().map_err(|error| format!("{}: {error}", exe.display()))?;
     let home = std::env::var("HOME").unwrap_or_default();
-    let stable = PathBuf::from(home).join(".local/share/kelpie/current/target/release/kelpie");
+    let stable = PathBuf::from(home).join(".local/share/kebbie/current/target/release/kebbie");
     Ok(if stable.canonicalize().ok() == Some(exe.clone()) { stable } else { exe }.to_string_lossy().to_string())
 }
 
@@ -149,7 +149,7 @@ pub struct Place<'a> {
     pub sandboxed: bool,
 }
 
-// A sandboxed task's file tools reach its temp folder but not kelpie's state; without the sandbox the plan stays in kelpie's state.
+// A sandboxed task's file tools reach its temp folder but not kebbie's state; without the sandbox the plan stays in kebbie's state.
 pub fn plan_file(sandboxed: bool, me: &str, tmp: impl FnOnce() -> Result<PathBuf>, state: impl FnOnce() -> Result<PathBuf>) -> Result<PathBuf> {
     if sandboxed { Ok(tmp()?.join("plan.md")) } else { Ok(state()?.join("plans").join(format!("{me}.md"))) }
 }
@@ -170,7 +170,7 @@ pub fn worktree_values(place: &Place) -> Result<Vec<(&'static str, String)>> {
     ])
 }
 
-// Claude runs the setup skill; Codex has no kelpie skill, so it runs the repo's own setup command itself.
+// Claude runs the setup skill; Codex has no kebbie skill, so it runs the repo's own setup command itself.
 fn prepare_line(agent: crate::agent::Agent, setup_skill: &str, command: Option<&str>, note: &str) -> String {
     if agent == crate::agent::Agent::Claude {
         let setup = command.map_or(String::new(), |command| format!(" It prepares the worktree with the repo's own command `{command}` (worktree.setup_command)."));
@@ -181,52 +181,52 @@ fn prepare_line(agent: crate::agent::Agent, setup_skill: &str, command: Option<&
 }
 
 fn rules_line(rules_skill: &str) -> String {
-    format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, kelpie refuses a commit without a subject, a blank line and a body, and a read-only reviewer checks your commits against it.")
+    format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, kebbie refuses a commit without a subject, a blank line and a body, and a read-only reviewer checks your commits against it.")
 }
 
-// Codex has no kelpie skill, so its line names the docs and not the skill.
+// Codex has no kebbie skill, so its line names the docs and not the skill.
 pub fn docs_line(agent: crate::agent::Agent, required: bool) -> String {
     match (required, agent) {
         (false, _) => String::new(),
-        (true, crate::agent::Agent::Claude) => "\n\nThis repo keeps its docs in step with its code (`docs.required`): when your change alters what a user sees or does, run the skill `kelpie:keep-docs` and update the docs in this task. The reviewer fails a branch that changes such behaviour and documents nothing.".to_string(),
+        (true, crate::agent::Agent::Claude) => "\n\nThis repo keeps its docs in step with its code (`docs.required`): when your change alters what a user sees or does, run the skill `kebbie:keep-docs` and update the docs in this task. The reviewer fails a branch that changes such behaviour and documents nothing.".to_string(),
         (true, _) => "\n\nThis repo keeps its docs in step with its code (`docs.required`): when your change alters what a user sees or does, update the page that describes it in this task, found from the index in docs/README.md, or the README when there is none. The reviewer fails a branch that changes such behaviour and documents nothing.".to_string(),
     }
 }
 
-// The plan step of roles/task.md: the task's note when kelpie keeps one, else with the vault as a backlog source a note there, else a plan file outside the worktree (plan_file); never a file in the worktree, where it would land in the repo.
-pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, kelpie: &str, task: &str, plans: &Path) -> String {
+// The plan step of roles/task.md: the task's note when kebbie keeps one, else with the vault as a backlog source a note there, else a plan file outside the worktree (plan_file); never a file in the worktree, where it would land in the repo.
+pub fn plan_step(sources: &[crate::config::Source], note: Option<&str>, kebbie: &str, task: &str, plans: &Path) -> String {
     if let Some(note) = note {
-        return format!("Write your plan into your note `{note}` with the vault tools, and put it to the user with `{kelpie} ask --plan vault:{note} \"<one line on what the plan does>\"`; the board shows them the note.");
+        return format!("Write your plan into your note `{note}` with the vault tools, and put it to the user with `{kebbie} ask --plan vault:{note} \"<one line on what the plan does>\"`; the board shows them the note.");
     }
     if sources.contains(&crate::config::Source::Vault) {
         return format!(
-            "Write your plan into this task's note in the vault with the vault tools: the note you were started from, or else a new task note under `Projects/` with status `active`, tied to this task with `{kelpie} link {task} Projects/<note>.md`. \
-             Put it to the user with `{kelpie} ask --plan vault:Projects/<note>.md \"<one line on what the plan does>\"`; the board shows them the note.",
+            "Write your plan into this task's note in the vault with the vault tools: the note you were started from, or else a new task note under `Projects/` with status `active`, tied to this task with `{kebbie} link {task} Projects/<note>.md`. \
+             Put it to the user with `{kebbie} ask --plan vault:Projects/<note>.md \"<one line on what the plan does>\"`; the board shows them the note.",
         );
     }
     let plans = plans.display();
-    format!("Write your plan as markdown to `{plans}`, kelpie's place for it outside your worktree, and put it to the user with `{kelpie} ask --plan {plans} \"<one line on what the plan does>\"`; the board shows them the file.")
+    format!("Write your plan as markdown to `{plans}`, kebbie's place for it outside your worktree, and put it to the user with `{kebbie} ask --plan {plans} \"<one line on what the plan does>\"`; the board shows them the file.")
 }
 
-pub fn vault_section(note: Option<&str>, kelpie: &str) -> String {
+pub fn vault_section(note: Option<&str>, kebbie: &str) -> String {
     let Some(note) = note else { return String::new() };
     format!(
         "\n\n## Your note in the vault\n\n\
-         This task's note is `{note}` in the vault: kelpie opened it when the task started and keeps it tied to this task. Read and write it with the vault MCP tools.\n\n\
+         This task's note is `{note}` in the vault: kebbie opened it when the task started and keeps it tied to this task. Read and write it with the vault MCP tools.\n\n\
          1. Before your first change to a file, write the note's Problem section: what is wrong or missing, for whom, and what done looks like, in your own clear words, from the user's prompt and what you read. Rewrite the prompt rather than pasting it: the user writes rough notes, the vault keeps clear ones. Edits, and shell commands that write a file in the worktree, wait until Problem is written.\n\
          2. Keep its solution section (what changes, from the user's side) and its decisions section (each choice made, with its reason) current as the work goes, in the note's own headings.\n\
-         3. kelpie writes the repo's log line after each push from your commit subjects, so write subjects that read well on their own.\n\n\
-         `{kelpie} done` waits until the solution and decisions are written, then closes the note; a reset puts it back in the backlog."
+         3. kebbie writes the repo's log line after each push from your commit subjects, so write subjects that read well on their own.\n\n\
+         `{kebbie} done` waits until the solution and decisions are written, then closes the note; a reset puts it back in the backlog."
     )
 }
 
 // The {noticed} section of roles/task.md; vault is whether the task's Claude has the vault plugin's tools.
-pub fn noticed_section(choice: AlsoNoticed, vault: bool, kelpie: &str) -> String {
+pub fn noticed_section(choice: AlsoNoticed, vault: bool, kebbie: &str) -> String {
     let intro = "As you work you will notice things outside this task: a bug nearby, a stale doc, a refactor worth doing.";
     let file = if vault {
         "file it in the vault's backlog with the vault's `backlog_add` tool: its area, one line, a priority and this task as the source".to_string()
     } else {
-        format!("file it with `{kelpie} backlog add --priority <priority> \"<Title> — <summary> (<area>)\"`")
+        format!("file it with `{kebbie} backlog add --priority <priority> \"<Title> — <summary> (<area>)\"`")
     };
     let failed = "`not filed` when filing fails, so the lead files it";
     match choice {
@@ -243,7 +243,7 @@ pub fn noticed_section(choice: AlsoNoticed, vault: bool, kelpie: &str) -> String
         ),
         AlsoNoticed::Ask => format!(
             "{intro} Put each to the user before you change anything for it, one question each: \
-             `{kelpie} ask --option \"fix: fix it in this task, as a commit of its own\" --option \"file: file it for later\" --option \"leave: leave it as it is\" --recommend <n> \"<what you noticed, and where>\"`. \
+             `{kebbie} ask --option \"fix: fix it in this task, as a commit of its own\" --option \"file: file it for later\" --option \"leave: leave it as it is\" --recommend <n> \"<what you noticed, and where>\"`. \
              Until the answer comes, your commits hold this task's change alone. On fix, commit it apart from the task's commits; on file, {file}. \
              List each under **Also noticed** on your sign-off card, one line each: what it is and what the user chose, or {failed}. \
              This is done when everything you noticed has the user's answer, is handled by it, and is listed."
@@ -269,14 +269,14 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let repo = name_of(place.repo);
     let me = address(task, &repo);
     let peers = peers.to_string();
-    let kelpie = kelpie_command()?;
+    let kebbie = kebbie_command()?;
     let plans = plan_file(place.sandboxed, &me, || crate::tasks::task_tmp(place.worktree), crate::lead::state_dir)?;
-    let plan = plan_step(&crate::config::sources().unwrap_or_default(), place.note, &kelpie, task, &plans);
-    let vault = vault_section(place.note, &kelpie);
+    let plan = plan_step(&crate::config::sources().unwrap_or_default(), place.note, &kebbie, task, &plans);
+    let vault = vault_section(place.note, &kebbie);
     let settings = crate::config::resolve(Some(place.repo))?.settings;
-    let noticed = noticed_section(settings.also_noticed.value, crate::vault_cli::detect().is_some(), &kelpie);
+    let noticed = noticed_section(settings.also_noticed.value, crate::vault_cli::detect().is_some(), &kebbie);
     let docs = docs_line(place.agent, settings.docs_required.value);
-    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("kelpie", kelpie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs)];
+    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs)];
     values.extend(worktree_values(place)?);
     Ok(values)
 }
@@ -290,13 +290,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_tasks_role_file_carries_its_profiles_section_after_kelpies_role() {
+    fn a_tasks_role_file_carries_its_profiles_section_after_kebbies_role() {
         let dir = crate::sh::test_dir("role-profile");
         let file = dir.join("billing@app.md");
         let section = "\n\n## Your profile: designer\n\nMeasure in the browser.\n";
         write_role(&file, include_str!("../roles/task.md"), &[("agent", "Claude"), ("task", "billing"), ("repo", "app")], section).unwrap();
         let written = std::fs::read_to_string(&file).unwrap();
-        assert!(written.starts_with("# You are a kelpie task\n\nYou are the Claude for the task **billing** in the repo **app**"), "{}", &written[..200]);
+        assert!(written.starts_with("# You are a kebbie task\n\nYou are the Claude for the task **billing** in the repo **app**"), "{}", &written[..200]);
         assert!(written.ends_with(section), "the profile's section closes the role");
         write_role(&file, "role", &[], "").unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "role", "the built-in task adds nothing");
@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn every_use_of_kelpies_own_path_goes_through_own_exe() {
+    fn every_use_of_kebbies_own_path_goes_through_own_exe() {
         let folder = |name: &str| std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name)).unwrap().map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap()).collect::<String>();
         let (board, tasks) = (folder("board"), folder("tasks"));
         for (name, source) in [("board/", board.as_str()), ("tasks/", tasks.as_str()), ("review.rs", include_str!("review.rs")), ("notify.rs", include_str!("notify.rs")), ("lead.rs", include_str!("lead.rs")), ("restart.rs", include_str!("restart.rs")), ("main.rs", include_str!("main.rs"))] {
@@ -315,8 +315,8 @@ mod tests {
 
     #[test]
     fn a_binary_replaced_while_running_is_found_at_its_own_path() {
-        assert_eq!(replaced_binary(Path::new("/k/target/release/kelpie (deleted)")), PathBuf::from("/k/target/release/kelpie"));
-        assert_eq!(replaced_binary(Path::new("/k/target/release/kelpie")), PathBuf::from("/k/target/release/kelpie"));
+        assert_eq!(replaced_binary(Path::new("/k/target/release/kebbie (deleted)")), PathBuf::from("/k/target/release/kebbie"));
+        assert_eq!(replaced_binary(Path::new("/k/target/release/kebbie")), PathBuf::from("/k/target/release/kebbie"));
     }
 
     fn session(address: &str, status: Option<&str>) -> Session {
@@ -363,14 +363,14 @@ mod tests {
         for (own, machine, skill) in [
             (own.clone(), machine.clone(), "app-tools:set-up-worktree"),
             (Worktree::default(), machine, "my-tools:set-up-worktree"),
-            (Worktree::default(), Machine::default(), "kelpie:set-up-worktree"),
+            (Worktree::default(), Machine::default(), "kebbie:set-up-worktree"),
         ] {
             let skill_value = settings(&own, &machine).setup_skill.value;
-            let prepare = prepare_line(crate::agent::Agent::Claude, &skill_value, None, "/src/app/.git/worktrees/wt2.app/kelpie-setup.md");
+            let prepare = prepare_line(crate::agent::Agent::Claude, &skill_value, None, "/src/app/.git/worktrees/wt2.app/kebbie-setup.md");
             let role = fill(template, &[("path", "/src/wt2.app"), ("slot", "wt2.app"), ("main", "/src/app"), ("prepare", &prepare)]);
             assert!(role.contains(&format!("run the skill `{skill}` and follow it")), "{role}");
             assert!(role.contains("You are in `/src/wt2.app`, worktree wt2.app of `/src/app`"));
-            assert!(role.contains("a note in `/src/app/.git/worktrees/wt2.app/kelpie-setup.md`"));
+            assert!(role.contains("a note in `/src/app/.git/worktrees/wt2.app/kebbie-setup.md`"));
         }
     }
 
@@ -379,7 +379,7 @@ mod tests {
         use crate::config::{Machine, Worktree, parse_repo, settings};
         let template = include_str!("../roles/task.md");
         let own = parse_repo("[worktree]\nsetup_command = \"script/prepare_worktree\"\n", "app.toml").unwrap();
-        let role = |own: &Worktree| fill(template, &[("prepare", &prepare_line(crate::agent::Agent::Claude, "kelpie:set-up-worktree", settings(own, &Machine::default()).setup_command.value.as_deref(), "/n.md"))]);
+        let role = |own: &Worktree| fill(template, &[("prepare", &prepare_line(crate::agent::Agent::Claude, "kebbie:set-up-worktree", settings(own, &Machine::default()).setup_command.value.as_deref(), "/n.md"))]);
         let set = role(&own);
         assert!(set.contains("on what it did. It prepares the worktree with the repo's own command `script/prepare_worktree` (worktree.setup_command). The main checkout"), "{set}");
         let unset = role(&Worktree::default());
@@ -390,11 +390,11 @@ mod tests {
     #[test]
     fn a_codex_tasks_role_names_codex_and_runs_the_repos_setup_command_itself() {
         let template = include_str!("../roles/task.md");
-        let codex = |command: Option<&str>| fill(template, &[("agent", "Codex"), ("prepare", &prepare_line(crate::agent::Agent::Codex, "kelpie:set-up-worktree", command, "/n.md")), ("rules", "")]);
+        let codex = |command: Option<&str>| fill(template, &[("agent", "Codex"), ("prepare", &prepare_line(crate::agent::Agent::Codex, "kebbie:set-up-worktree", command, "/n.md")), ("rules", "")]);
         let set = codex(Some("script/prepare_worktree"));
         assert!(set.contains("You are the Codex for the task") && !set.contains("You are the Claude"), "{set}");
         assert!(set.contains("run the repo's own setup command `script/prepare_worktree` from the worktree") && set.contains("a short note in `/n.md`"), "{set}");
-        assert!(!set.contains("kelpie:set-up-worktree") && !set.contains("{rules}"), "a skill Codex cannot run is not named: {set}");
+        assert!(!set.contains("kebbie:set-up-worktree") && !set.contains("{rules}"), "a skill Codex cannot run is not named: {set}");
         assert!(codex(None).contains("install its dependencies and create what it needs with the repo's own tools"));
         let claude = fill(template, &[("agent", "Claude")]);
         assert!(claude.contains("You are the Claude for the task"));
@@ -409,7 +409,7 @@ mod tests {
         for (own, machine, skill) in [
             (own.clone(), machine.clone(), "app-rules"),
             (Worktree::default(), machine, "my-rules"),
-            (Worktree::default(), Machine::default(), "kelpie:work-rules"),
+            (Worktree::default(), Machine::default(), "kebbie:work-rules"),
         ] {
             let role = fill(template, &[("rules", &rules_line(&settings(&own, &machine).rules_skill.value))]);
             assert!(role.contains(&format!("Then run the skill `{skill}` and follow it for the rest of this task")), "{role}");
@@ -423,11 +423,11 @@ mod tests {
         use crate::config::{Machine, Worktree, parse_repo, settings};
         let template = include_str!("../roles/task.md");
         let role = |own: &Worktree, agent: Agent| fill(template, &[("rules", ""), ("vault", ""), ("docs", &docs_line(agent, settings(own, &Machine::default()).docs_required.value))]);
-        let on = parse_repo("[docs]\nrequired = true\n", "kelpie.toml").unwrap();
+        let on = parse_repo("[docs]\nrequired = true\n", "kebbie.toml").unwrap();
         let claude = role(&on, Agent::Claude);
-        assert!(claude.contains("read-only to you.\n\nThis repo keeps its docs in step with its code (`docs.required`)") && claude.contains("run the skill `kelpie:keep-docs`"), "{claude}");
+        assert!(claude.contains("read-only to you.\n\nThis repo keeps its docs in step with its code (`docs.required`)") && claude.contains("run the skill `kebbie:keep-docs`"), "{claude}");
         let codex = role(&on, Agent::Codex);
-        assert!(codex.contains("`docs.required`") && !codex.contains("kelpie:keep-docs"), "a skill Codex cannot run is not named: {codex}");
+        assert!(codex.contains("`docs.required`") && !codex.contains("kebbie:keep-docs"), "a skill Codex cannot run is not named: {codex}");
         let off = role(&Worktree::default(), Agent::Claude);
         assert!(!off.contains("docs.required") && !off.contains("keep-docs") && !off.contains("{docs}"), "{off}");
     }
@@ -435,23 +435,23 @@ mod tests {
     #[test]
     fn the_role_isolates_a_probe_from_the_users_state_and_packages() {
         let role = fill(include_str!("../roles/task.md"), &[]);
-        for setting in ["KELPIE_STATE_DIR=<temp>/kelpie", "`GEM_HOME` and `BUNDLE_PATH`", "`NPM_CONFIG_PREFIX`", "a virtualenv", "`HERDR_BIN_PATH=false`", "HERDR_SOCKET_PATH=<temp>/herdr.sock"] {
+        for setting in ["KEBBIE_STATE_DIR=<temp>/kebbie", "`GEM_HOME` and `BUNDLE_PATH`", "`NPM_CONFIG_PREFIX`", "a virtualenv", "`HERDR_BIN_PATH=false`", "HERDR_SOCKET_PATH=<temp>/herdr.sock"] {
             assert!(role.contains(setting), "{setting}");
         }
     }
 
     #[test]
-    fn the_role_asks_the_user_through_kelpie_one_question_at_a_time() {
-        let role = fill(include_str!("../roles/task.md"), &[("kelpie", "/bin/kelpie")]);
-        for needed in ["/bin/kelpie ask --option", "--recommend <n>", "one question per", "on the kelpie board", "`[from you] <answer>`", "`[from you]` at the very start of a line is the user's answer", "indents every following line", "End an option with ` +comment`", "A mock or a design to approve goes the same way", "ask with `--plan`"] {
+    fn the_role_asks_the_user_through_kebbie_one_question_at_a_time() {
+        let role = fill(include_str!("../roles/task.md"), &[("kebbie", "/bin/kebbie")]);
+        for needed in ["/bin/kebbie ask --option", "--recommend <n>", "one question per", "on the kebbie board", "`[from you] <answer>`", "`[from you]` at the very start of a line is the user's answer", "indents every following line", "End an option with ` +comment`", "A mock or a design to approve goes the same way", "ask with `--plan`"] {
             assert!(role.contains(needed), "{needed}");
         }
     }
 
     #[test]
     fn the_role_sends_how_to_the_lead_lets_a_small_task_build_and_asks_the_user_in_their_words() {
-        let role = fill(include_str!("../roles/task.md"), &[("kelpie", "/bin/kelpie")]);
-        for needed in ["`/bin/kelpie tell lead \"<question>\"`", "whether or not the user is present", "builds without a plan approval and without questions", "one question at a time", "One plain sentence of context", "by its title, not its branch", "what the user gets with it", "No flags, commit ids, file names or internal terms"] {
+        let role = fill(include_str!("../roles/task.md"), &[("kebbie", "/bin/kebbie")]);
+        for needed in ["`/bin/kebbie tell lead \"<question>\"`", "whether or not the user is present", "builds without a plan approval and without questions", "one question at a time", "One plain sentence of context", "by its title, not its branch", "what the user gets with it", "No flags, commit ids, file names or internal terms"] {
             assert!(role.contains(needed), "{needed}");
         }
         assert!(!role.contains("Ask what you need decided before you plan"), "a task no longer asks before every plan");
@@ -460,19 +460,19 @@ mod tests {
     #[test]
     fn the_plan_goes_in_the_vault_note_with_the_vault_and_in_the_tasks_temp_folder_without_it() {
         use crate::config::Source;
-        let (tmp, state) = (|| Ok(PathBuf::from("/src/app/.git/worktrees/1/kelpie-tmp")), || Ok(PathBuf::from("/state")));
-        assert_eq!(plan_file(true, "billing@web", tmp, state).unwrap(), Path::new("/src/app/.git/worktrees/1/kelpie-tmp/plan.md"), "a sandboxed task's file tools are denied kelpie's state");
+        let (tmp, state) = (|| Ok(PathBuf::from("/src/app/.git/worktrees/1/kebbie-tmp")), || Ok(PathBuf::from("/state")));
+        assert_eq!(plan_file(true, "billing@web", tmp, state).unwrap(), Path::new("/src/app/.git/worktrees/1/kebbie-tmp/plan.md"), "a sandboxed task's file tools are denied kebbie's state");
         assert_eq!(plan_file(false, "billing@web", tmp, state).unwrap(), Path::new("/state/plans/billing@web.md"), "without the sandbox the plan stays where 0.25.0 kept it");
         let source = include_str!("peers.rs");
         let values = &source[source.find("\nfn role_values(").unwrap()..];
         assert!(values[..values.find("\n}\n").unwrap()].contains("plan_file(place.sandboxed,"), "the role names the plan file plan_file picks");
-        let plans = Path::new("/src/app/.git/worktrees/1/kelpie-tmp/plan.md");
-        let vault = plan_step(&[Source::Linear, Source::Vault], None, "/bin/kelpie", "billing", plans);
-        assert!(vault.contains("into this task's note in the vault") && vault.contains("/bin/kelpie link billing Projects/<note>.md") && vault.contains("/bin/kelpie ask --plan vault:Projects/<note>.md"), "{vault}");
-        let file = plan_step(&[Source::Local], None, "/bin/kelpie", "billing", plans);
-        let note = plan_step(&[Source::Local], Some("Projects/kelpie-billing.md"), "/bin/kelpie", "billing", plans);
-        assert!(note.contains("into your note `Projects/kelpie-billing.md`") && note.contains("--plan vault:Projects/kelpie-billing.md"), "{note}");
-        assert!(file.contains("to `/src/app/.git/worktrees/1/kelpie-tmp/plan.md`, kelpie's place for it outside your worktree") && file.contains("/bin/kelpie ask --plan /src/app/.git/worktrees/1/kelpie-tmp/plan.md"), "{file}");
+        let plans = Path::new("/src/app/.git/worktrees/1/kebbie-tmp/plan.md");
+        let vault = plan_step(&[Source::Linear, Source::Vault], None, "/bin/kebbie", "billing", plans);
+        assert!(vault.contains("into this task's note in the vault") && vault.contains("/bin/kebbie link billing Projects/<note>.md") && vault.contains("/bin/kebbie ask --plan vault:Projects/<note>.md"), "{vault}");
+        let file = plan_step(&[Source::Local], None, "/bin/kebbie", "billing", plans);
+        let note = plan_step(&[Source::Local], Some("Projects/kebbie-billing.md"), "/bin/kebbie", "billing", plans);
+        assert!(note.contains("into your note `Projects/kebbie-billing.md`") && note.contains("--plan vault:Projects/kebbie-billing.md"), "{note}");
+        assert!(file.contains("to `/src/app/.git/worktrees/1/kebbie-tmp/plan.md`, kebbie's place for it outside your worktree") && file.contains("/bin/kebbie ask --plan /src/app/.git/worktrees/1/kebbie-tmp/plan.md"), "{file}");
         assert!(!file.contains("vault"), "{file}");
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
         assert!(role.contains(&format!("2. A plan to approve: {file} The user approves it")) && !role.contains("{plan}"), "{role}");
@@ -480,10 +480,10 @@ mod tests {
 
     #[test]
     fn the_vault_section_shows_only_for_a_task_with_a_note() {
-        let off = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(None, "/bin/kelpie"))]);
+        let off = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(None, "/bin/kebbie"))]);
         assert!(!off.contains("vault") && !off.contains("{vault}"), "without the vault plugin no vault concept shows");
-        let on = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(Some("Projects/kelpie-billing.md"), "/bin/kelpie"))]);
-        for needed in ["## Your note in the vault", "`Projects/kelpie-billing.md`", "write the note's Problem section", "Rewrite the prompt rather than pasting it", "decisions section", "`/bin/kelpie done` waits until the solution and decisions are written"] {
+        let on = fill(include_str!("../roles/task.md"), &[("vault", &vault_section(Some("Projects/kebbie-billing.md"), "/bin/kebbie"))]);
+        for needed in ["## Your note in the vault", "`Projects/kebbie-billing.md`", "write the note's Problem section", "Rewrite the prompt rather than pasting it", "decisions section", "`/bin/kebbie done` waits until the solution and decisions are written"] {
             assert!(on.contains(needed), "{needed}: {on}");
         }
         assert!(on.find("## Your note in the vault").unwrap() < on.find("## Probes").unwrap());
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn what_a_task_does_with_what_it_notices_follows_the_setting_and_the_vault() {
-        let role = |choice, vault| fill(include_str!("../roles/task.md"), &[("noticed", &noticed_section(choice, vault, "/bin/kelpie"))]);
+        let role = |choice, vault| fill(include_str!("../roles/task.md"), &[("noticed", &noticed_section(choice, vault, "/bin/kebbie"))]);
         for vault in [true, false] {
             for choice in AlsoNoticed::ALL {
                 let role = role(choice, vault);
@@ -499,7 +499,7 @@ mod tests {
                 assert!(role.contains("under **Also noticed** on your sign-off card") && role.contains("the **Also noticed** list when you noticed anything outside the task"), "{role}");
                 assert!(role.contains("`not filed` when filing fails, so the lead files it"), "{role}");
                 let filed_in_vault = role.contains("the vault's `backlog_add` tool");
-                let filed_locally = role.contains("`/bin/kelpie backlog add --priority <priority>");
+                let filed_locally = role.contains("`/bin/kebbie backlog add --priority <priority>");
                 assert_eq!((filed_in_vault, filed_locally), (vault, !vault), "{choice:?} with the vault {vault}: {role}");
             }
         }
@@ -508,7 +508,7 @@ mod tests {
         let fix = role(AlsoNoticed::Fix, false);
         assert!(fix.contains("fix it in this session as a commit of its own, apart from the task's commits") && fix.contains("Anything bigger, file it with"), "{fix}");
         let ask = role(AlsoNoticed::Ask, false);
-        assert!(ask.contains("/bin/kelpie ask --option \"fix: fix it in this task, as a commit of its own\" --option \"file: file it for later\" --option \"leave: leave it as it is\" --recommend <n>"), "{ask}");
+        assert!(ask.contains("/bin/kebbie ask --option \"fix: fix it in this task, as a commit of its own\" --option \"file: file it for later\" --option \"leave: leave it as it is\" --recommend <n>"), "{ask}");
         assert!(ask.contains("before you change anything for it") && ask.contains("has the user's answer"), "{ask}");
         let placed = role(AlsoNoticed::Backlog, false);
         assert!(placed.find("## Questions").unwrap() < placed.find("## What you notice").unwrap() && placed.find("## What you notice").unwrap() < placed.find("## Reports").unwrap());

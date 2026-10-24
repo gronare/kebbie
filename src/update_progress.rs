@@ -10,8 +10,8 @@ use serde_json::Value;
 
 pub const FILE: &str = "update-progress.json";
 pub const DIR: &str = "update-progress";
-pub const ENV: &str = "KELPIE_UPDATE_PROGRESS";
-pub const BUILD_ENV: &str = "KELPIE_PROGRESS_DIR";
+pub const ENV: &str = "KEBBIE_UPDATE_PROGRESS";
+pub const BUILD_ENV: &str = "KEBBIE_PROGRESS_DIR";
 
 pub const FETCH: usize = 0;
 pub const BUILD: usize = 1;
@@ -376,7 +376,7 @@ pub fn watch(mut tracker: Tracker, dir: PathBuf, root: PathBuf, build_label: Str
                 }
             };
             if let Some((tag, size, path)) = read("download").as_deref().and_then(download) {
-                started(&mut tracker, &format!("Downloading kelpie {}", tag.trim_start_matches('v')));
+                started(&mut tracker, &format!("Downloading kebbie {}", tag.trim_start_matches('v')));
                 let got = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                 tracker.meter(Meter::Download { what: tag, got, total: size });
             } else if let Some(jsonl) = read("cargo.jsonl") {
@@ -461,9 +461,9 @@ mod tests {
 
     fn progress() -> Progress {
         let dir = crate::sh::test_dir("progress");
-        let mut tracker = Tracker::start(&dir.join(FILE), "Fetching main", "Build kelpie", 100);
+        let mut tracker = Tracker::start(&dir.join(FILE), "Fetching main", "Build kebbie", 100);
         tracker.done(FETCH, "Fetched main (3 new commits)");
-        tracker.begin(BUILD, "Building kelpie", 100);
+        tracker.begin(BUILD, "Building kebbie", 100);
         tracker.meter(Meter::Build { done: 212, total: Some(348), compiling: Some("serde".to_string()) });
         load(&tracker.path).unwrap()
     }
@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn the_steps_show_done_current_and_pending_with_a_bar_and_the_time_on_the_running_one() {
         let shown: Vec<String> = lines(&progress(), 202, 60).into_iter().map(|(_, text)| text).collect();
-        assert_eq!(shown, ["✓ Fetched main (3 new commits)", "▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 1:42", "  Claude Code and vault plugins", "  Restart sessions"]);
+        assert_eq!(shown, ["✓ Fetched main (3 new commits)", "▸ Building kebbie  ████████████░░░░░░░░  212/348 crates 1:42", "  Claude Code and vault plugins", "  Restart sessions"]);
         let narrow = lines(&progress(), 202, 40)[BUILD].1.clone();
         assert!(narrow.ends_with("212/348 crates 1:42") && narrow.chars().count() <= 40, "a narrow width shortens the bar first: {narrow}");
     }
@@ -492,8 +492,8 @@ mod tests {
         let jsonl = [r#"{"reason":"compiler-artifact","package_id":"a","fresh":true}"#, r#"{"reason":"build-script-executed","package_id":"b"}"#, r#"{"reason":"compiler-artifact","package_id":"c","fresh":false}"#, r#"{"reason":"build-finished","success":true}"#].join("\n");
         assert_eq!(artifacts(&jsonl), 2, "only finished units count, not build-script runs");
         assert_eq!(compiling("   Compiling serde v1.0.219\n   Compiling serde_json v1.0.140\nwarning: x\n"), Some("serde_json".to_string()));
-        assert_eq!(compiling("kelpie build: building from source"), None);
-        assert_eq!(download("v0.28.0 9800000 /tmp/x/kelpie.tar.gz"), Some(("v0.28.0".to_string(), Some(9_800_000), PathBuf::from("/tmp/x/kelpie.tar.gz"))));
+        assert_eq!(compiling("kebbie build: building from source"), None);
+        assert_eq!(download("v0.28.0 9800000 /tmp/x/kebbie.tar.gz"), Some(("v0.28.0".to_string(), Some(9_800_000), PathBuf::from("/tmp/x/kebbie.tar.gz"))));
         assert_eq!(download("v0.28.0 0 /tmp/x").map(|(_, total, _)| total), Some(None), "no content length, no total");
     }
 
@@ -522,13 +522,13 @@ mod tests {
         started.meter = None;
         let mut tty = Printer::new(true);
         let first = tty.frame(&started, 100, 60);
-        assert!(first.starts_with("\r\x1b[K░") && first.contains("  0%\n\r\x1b[K▸ Fetching main  0:00\n\r\x1b[K  Building kelpie\n"), "{first:?}");
+        assert!(first.starts_with("\r\x1b[K░") && first.contains("  0%\n\r\x1b[K▸ Fetching main  0:00\n\r\x1b[K  Building kebbie\n"), "{first:?}");
         let building = progress();
         let drawn = tty.frame(&building, 202, 60);
-        assert!(drawn.starts_with("\x1b[5A\r\x1b[K█") && drawn.contains("\r\x1b[K✓ Fetched main (3 new commits)\n\r\x1b[K▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 1:42\n"), "the cursor goes back up over the block and draws it anew: {drawn:?}");
+        assert!(drawn.starts_with("\x1b[5A\r\x1b[K█") && drawn.contains("\r\x1b[K✓ Fetched main (3 new commits)\n\r\x1b[K▸ Building kebbie  ████████████░░░░░░░░  212/348 crates 1:42\n"), "the cursor goes back up over the block and draws it anew: {drawn:?}");
         let mut pipe = Printer::new(false);
         assert_eq!(pipe.frame(&started, 100, 60), "▸ Fetching main  0:00\n");
-        assert_eq!(pipe.frame(&building, 150, 60), "✓ Fetched main (3 new commits)\n▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 0:50\n");
+        assert_eq!(pipe.frame(&building, 150, 60), "✓ Fetched main (3 new commits)\n▸ Building kebbie  ████████████░░░░░░░░  212/348 crates 0:50\n");
         assert_eq!(pipe.frame(&building, 202, 60), "", "nothing is redrawn into a pipe");
     }
 
@@ -591,10 +591,10 @@ mod tests {
     fn the_watcher_moves_from_the_fetch_to_the_build_once_cargo_writes_and_meters_it() {
         let state = crate::sh::test_dir("progress-watch");
         let dir = prepare_dir(&state);
-        let tracker = Tracker::start(&file(&state), "Fetching main", "Build kelpie", 100);
-        let watch = watch(tracker, dir.clone(), state.clone(), "Building kelpie".to_string(), || 100);
+        let tracker = Tracker::start(&file(&state), "Fetching main", "Build kebbie", 100);
+        let watch = watch(tracker, dir.clone(), state.clone(), "Building kebbie".to_string(), || 100);
         std::fs::write(dir.join("cargo.jsonl"), "{\"reason\":\"compiler-artifact\"}\n").unwrap();
-        std::fs::write(dir.join("cargo.log"), "   Compiling kelpie v0.27.0\n").unwrap();
+        std::fs::write(dir.join("cargo.log"), "   Compiling kebbie v0.27.0\n").unwrap();
         let started = std::time::Instant::now();
         while load(&file(&state)).and_then(|progress| progress.meter).is_none() {
             assert!(started.elapsed() < Duration::from_secs(10), "the watcher never metered the build");
@@ -602,7 +602,7 @@ mod tests {
         }
         let tracker = watch.stop();
         assert_eq!(tracker.progress.steps[FETCH].state, State::Done);
-        assert_eq!((tracker.progress.steps[BUILD].label.as_str(), tracker.progress.steps[BUILD].state), ("Building kelpie", State::Current));
-        assert_eq!(tracker.progress.meter, Some(Meter::Build { done: 1, total: None, compiling: Some("kelpie".to_string()) }), "no Cargo.toml here, so no total and the crate compiling");
+        assert_eq!((tracker.progress.steps[BUILD].label.as_str(), tracker.progress.steps[BUILD].state), ("Building kebbie", State::Current));
+        assert_eq!(tracker.progress.meter, Some(Meter::Build { done: 1, total: None, compiling: Some("kebbie".to_string()) }), "no Cargo.toml here, so no total and the crate compiling");
     }
 }

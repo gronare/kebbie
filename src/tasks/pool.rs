@@ -161,7 +161,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     let config::Settings { setup_skill, setup_command, .. } = config::resolve(Some(&repo))?.settings;
     let prepare = config::setup_command_in(setup_command.value, &repo).map_or(String::new(), |command| format!(", which prepares it with {command}"));
     if slots(&repo)?.iter().any(|slot| slot.task.as_deref() == Some(task.as_str())) {
-        return Err(format!("{task} already has a worktree; use kelpie start {task} to go there"));
+        return Err(format!("{task} already has a worktree; use kebbie start {task} to go there"));
     }
     fetch(&repo)?;
     let upstream = default_branch(&repo)?;
@@ -171,13 +171,13 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     let staged = super::stage::load(&state_dir()?, &repo);
     if !existing && !staged.is_empty() {
         let tasks: Vec<String> = staged.into_iter().map(|entry| entry.task).collect();
-        return Err(format!("{} on local {local}, and kelpie move would take their commits along; push {local}, or take them off with kelpie unstage, first", super::and_list(&tasks).to_string() + if tasks.len() == 1 { " is staged" } else { " are staged" }));
+        return Err(format!("{} on local {local}, and kebbie move would take their commits along; push {local}, or take them off with kebbie unstage, first", super::and_list(&tasks).to_string() + if tasks.len() == 1 { " is staged" } else { " are staged" }));
     }
     if !existing && current != local {
-        return Err(format!("The main checkout is on {current}, not {local}; to move that work, use its branch name: kelpie move {current}"));
+        return Err(format!("The main checkout is on {current}, not {local}; to move that work, use its branch name: kebbie move {current}"));
     }
 
-    let message = format!("kelpie move {task}");
+    let message = format!("kebbie move {task}");
     if !files.is_empty() {
         let mut args = vec!["stash", "push", "--include-untracked", "--message", message.as_str(), "--"];
         args.extend(files.iter().map(String::as_str));
@@ -231,14 +231,14 @@ mod tests {
         write(&worktree.join("dist/keep.js"), 1);
         git(worktree, &["add", "--force", ".gitignore", "dist/keep.js"]).unwrap();
         git(worktree, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "dist"]).unwrap();
-        write(&worktree.join("target/debug/kelpie"), 3000);
+        write(&worktree.join("target/debug/kebbie"), 3000);
         write(&worktree.join("node_modules/.cache/babel"), 10);
         write(&worktree.join("node_modules/left-pad/index.js"), 1);
         write(&worktree.join("dist/bundle.js"), 5);
         write(&worktree.join("build/out.o"), 5);
         let all = ["target", "node_modules/.cache", "dist", "build"].map(str::to_string);
         assert_eq!(clean_build_output(worktree, &all), [("node_modules/.cache".to_string(), 10)], "target only where there is a Cargo.toml; dist holds a tracked file; build is not ignored");
-        assert!(worktree.join("target/debug/kelpie").exists() && worktree.join("dist/bundle.js").exists() && worktree.join("build/out.o").exists() && worktree.join("node_modules/left-pad/index.js").exists());
+        assert!(worktree.join("target/debug/kebbie").exists() && worktree.join("dist/bundle.js").exists() && worktree.join("build/out.o").exists() && worktree.join("node_modules/left-pad/index.js").exists());
         std::fs::write(worktree.join("Cargo.toml"), "[package]\n").unwrap();
         assert_eq!(clean_build_output(worktree, &[]), [], "[] keeps everything");
         assert_eq!(clean_build_output(worktree, &all), [("target".to_string(), 3000)]);
@@ -258,7 +258,7 @@ mod tests {
         upstream_commit(&dir, ".gitignore", "target/\n", "ignore target");
         upstream_commit(&dir, "Cargo.toml", "[package]\n", "a Rust repo");
         git(&slot.path, &["rebase", "--quiet", &upstream]).unwrap();
-        write(&slot.path.join("target/release/kelpie"), 2_500_000);
+        write(&slot.path.join("target/release/kebbie"), 2_500_000);
         let freed = release(&dir, &slot, &upstream).unwrap();
         assert_eq!(freed.as_deref(), Some("removed target/ (2.5 MB)"));
         assert!(!slot.path.join("target").exists() && slot.path.join("Cargo.toml").exists());

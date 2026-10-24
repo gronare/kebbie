@@ -135,7 +135,7 @@ impl App {
         let settings = settings_of(item);
         let Some(command) = settings.as_ref().and_then(|settings| process.command(settings)) else {
             self.about(process.key(), &item.name);
-            self.show(Notice::new(Tone::You, format!("{} has no {} set", item.place, process.key())).you(format!("Set worktree.{} for {}; kelpie config shows where.", process.key(), item.place)).ok());
+            self.show(Notice::new(Tone::You, format!("{} has no {} set", item.place, process.key())).you(format!("Set worktree.{} for {}; kebbie config shows where.", process.key(), item.place)).ok());
             return;
         };
         let tab = process.tab(settings.as_ref());
@@ -172,7 +172,7 @@ impl App {
             let _ = herdr::focus_workspace(workspace);
             if let Err(error) = focus_pane(&pane) {
                 self.about("review", &item.name);
-                self.show(Notice::new(Tone::NotNow, "The review is open in its Space, but kelpie could not focus it").detail("error", &error).ok());
+                self.show(Notice::new(Tone::NotNow, "The review is open in its Space, but kebbie could not focus it").detail("error", &error).ok());
                 return;
             }
             if self.overlay {

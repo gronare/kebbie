@@ -36,14 +36,14 @@ pub struct Profile {
 }
 
 pub fn dir() -> PathBuf {
-    std::env::var("KELPIE_PROFILES_DIR").map(PathBuf::from).unwrap_or_else(|_| config::dir().join("profiles"))
+    std::env::var("KEBBIE_PROFILES_DIR").map(PathBuf::from).unwrap_or_else(|_| config::dir().join("profiles"))
 }
 
 pub fn built_in(name: &str) -> Option<Profile> {
     let (about, fits) = match name {
-        TASK => ("kelpie's own task: its role, hooks and permissions, nothing added", "any task no other profile fits"),
-        REVIEWER => ("The read-only reviewer that kelpie review runs", "kelpie review, never a task"),
-        OPS => ("kelpie's own task whose ssh, scp and rsync run outside the sandbox, so they reach other machines, and this one as you", "work on other machines over ssh"),
+        TASK => ("kebbie's own task: its role, hooks and permissions, nothing added", "any task no other profile fits"),
+        REVIEWER => ("The read-only reviewer that kebbie review runs", "kebbie review, never a task"),
+        OPS => ("kebbie's own task whose ssh, scp and rsync run outside the sandbox, so they reach other machines, and this one as you", "work on other machines over ssh"),
         _ => return None,
     };
     let sandbox = if name == OPS { Policy { excluded: crate::sandbox::OPS_COMMANDS.map(str::to_string).to_vec(), ..Policy::default() } } else { Policy::default() };
@@ -72,7 +72,7 @@ pub fn load_in(dir: &Path, wanted: &str) -> Result<Profile> {
     let base = built_in(wanted);
     match std::fs::read_to_string(&file) {
         Ok(text) => parse(&text, wanted, &file, base),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => base.ok_or_else(|| format!("No profile \"{wanted}\": {} is not there; kelpie profiles lists them", file.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => base.ok_or_else(|| format!("No profile \"{wanted}\": {} is not there; kebbie profiles lists them", file.display())),
         Err(error) => Err(format!("{}: {error}", file.display())),
     }
 }
@@ -96,7 +96,7 @@ pub fn for_running_task(dir: &Path, given: Option<&str>, recorded: Option<&str>,
 
 pub fn for_task(dir: &Path, wanted: &str) -> Result<Profile> {
     if wanted == REVIEWER {
-        return Err(format!("\"{REVIEWER}\" is kelpie review's profile, not a task's; kelpie profiles lists the others"));
+        return Err(format!("\"{REVIEWER}\" is kebbie review's profile, not a task's; kebbie profiles lists the others"));
     }
     load_in(dir, wanted)
 }
@@ -121,7 +121,7 @@ fn text(table: &Table, key: &str, source: &str) -> Result<Option<String>> {
     }
 }
 
-// Claude Code lets a deny rule win over any allow, but kelpie away and decide are guarded by who calls them, so a rule naming one is refused outright.
+// Claude Code lets a deny rule win over any allow, but kebbie away and decide are guarded by who calls them, so a rule naming one is refused outright.
 pub fn releases_guard(rule: &str) -> bool {
     let Some(inner) = rule.trim().strip_prefix("Bash") else { return false };
     let inner = inner.trim();
@@ -131,7 +131,7 @@ pub fn releases_guard(rule: &str) -> bool {
     let Some(command) = inner.strip_prefix('(').and_then(|rest| rest.strip_suffix(')')) else { return false };
     let words: Vec<&str> = command.split(|character: char| character.is_whitespace() || character == ':').filter(|word| !word.is_empty()).collect();
     let Some((program, rest)) = words.split_first() else { return true };
-    if program.rsplit('/').next() != Some("kelpie") && !program.contains('*') {
+    if program.rsplit('/').next() != Some("kebbie") && !program.contains('*') {
         return false;
     }
     let mut rest = rest.iter();
@@ -149,7 +149,7 @@ pub fn releases_guard(rule: &str) -> bool {
     command.is_none_or(|command| command.contains('*') || GUARDED.contains(&command))
 }
 
-// Claude Code's permission rules, plugins and sandbox lists have no Codex counterpart kelpie can set, so a Codex profile is refused them rather than silently running without them.
+// Claude Code's permission rules, plugins and sandbox lists have no Codex counterpart kebbie can set, so a Codex profile is refused them rather than silently running without them.
 fn claude_only(table: &Table) -> Option<String> {
     let keys = ["deny", "allow", "claude"].into_iter().find(|key| table.contains_key(*key)).map(str::to_string);
     let sandbox = table.get("sandbox").and_then(toml::Value::as_table).and_then(|sandbox| sandbox.keys().find(|key| *key != "enabled").map(|key| format!("sandbox.{key}")));
@@ -180,7 +180,7 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
         profile.agent = Agent::named(&agent).map_err(|error| format!("{source}: agent: {error}"))?;
     }
     if reviewer && profile.agent != Agent::Claude {
-        return Err(format!("{source}: agent: kelpie review runs Claude; a task's profile can name \"{}\"", profile.agent.key()));
+        return Err(format!("{source}: agent: kebbie review runs Claude; a task's profile can name \"{}\"", profile.agent.key()));
     }
     if profile.agent == Agent::Codex && let Some(key) = claude_only(&table) {
         return Err(format!("{source}: {key}: Claude Code's, which a Codex task does not read; drop it from a profile with agent = \"codex\""));
@@ -214,7 +214,7 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
     profile.deny = strings(&table, "deny", &source)?;
     profile.allow = strings(&table, "allow", &source)?;
     if let Some(rule) = profile.allow.iter().find(|rule| releases_guard(rule)) {
-        return Err(format!("{source}: allow: \"{rule}\" would let the task run kelpie {}, which stay the user's and the lead's; name the commands it may run instead", GUARDED.join(", ")));
+        return Err(format!("{source}: allow: \"{rule}\" would let the task run kebbie {}, which stay the user's and the lead's; name the commands it may run instead", GUARDED.join(", ")));
     }
     if let Some(claude) = table.get("claude") {
         let claude = claude.as_table().ok_or(format!("{source}: claude: must be a table"))?;
@@ -230,7 +230,7 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
     Ok(profile)
 }
 
-// A profile's lists of hosts and writable folders replace kelpie's own; its commands outside the sandbox add to the base's.
+// A profile's lists of hosts and writable folders replace kebbie's own; its commands outside the sandbox add to the base's.
 fn sandbox_policy(value: &toml::Value, source: &str, policy: &mut Policy) -> Result<()> {
     let table = value.as_table().ok_or(format!("{source}: sandbox: must be a table"))?;
     config::unknown_keys(table, "sandbox.", &SANDBOX_KEYS).map_err(|error| format!("{source}: {error}"))?;
@@ -273,7 +273,7 @@ pub fn list_in(dir: &Path) -> (Vec<Profile>, Vec<String>) {
     (found, errors)
 }
 
-// What the task's role says of its profile, after kelpie's own role; the built-in task adds nothing.
+// What the task's role says of its profile, after kebbie's own role; the built-in task adds nothing.
 pub fn role_section(profile: &Profile) -> Result<String> {
     let mut parts = Vec::new();
     if !profile.skills.is_empty() {
@@ -345,8 +345,8 @@ pub fn print(json: bool) -> Result<String> {
 
 fn codex_availability() -> Option<String> {
     let path: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
-    let kelpie = crate::peers::kelpie_command().ok()?;
-    Some(crate::agent::codex::availability(&path, crate::agent::codex::home().as_deref(), &kelpie).line())
+    let kebbie = crate::peers::kebbie_command().ok()?;
+    Some(crate::agent::codex::availability(&path, crate::agent::codex::home().as_deref(), &kebbie).line())
 }
 
 #[cfg(test)]
@@ -383,7 +383,7 @@ mod tests {
     fn a_profile_names_claude_or_codex_or_is_refused_with_its_file_and_key() {
         let dir = folder("profile-refused", &[]);
         let refused = |text: &str| { std::fs::write(dir.join("x.toml"), text).unwrap(); load_in(&dir, "x").unwrap_err() };
-        assert!(refused("agent = \"gemini\"\n").contains("agent: \"gemini\" is not an agent kelpie runs"));
+        assert!(refused("agent = \"gemini\"\n").contains("agent: \"gemini\" is not an agent kebbie runs"));
         assert!(refused("permission_mode = \"yolo\"\n").contains("x.toml: permission_mode: \"yolo\" is not a Claude Code permission mode"), "the same check as task.permission_mode");
         assert!(refused("effort = \"huge\"\n").contains("effort: \"huge\" is not an effort level; use \"low\", \"medium\", \"high\", \"xhigh\", \"max\""));
         assert!(refused("colour = \"red\"\n").contains("x.toml: colour: unknown key; known keys here: about, for, agent, model, effort, role, skills, permission_mode, deny, allow, claude"));
@@ -404,19 +404,19 @@ mod tests {
     }
 
     #[test]
-    fn an_allow_that_would_release_a_guarded_kelpie_command_is_refused_when_the_profile_loads() {
-        for released in ["Bash(kelpie push:*)", "Bash(/home/ada/.local/share/kelpie/current/target/release/kelpie approve:*)", "Bash(kelpie choose:*)", "Bash(kelpie away on)", "Bash(kelpie decide:*)", "Bash(kelpie after:*)", "Bash(kelpie:*)", "Bash(kelpie *)", "Bash(kelpie -C /x push:*)", "Bash", "Bash(*)", "Bash(:*)", "Bash(*push:*)"] {
+    fn an_allow_that_would_release_a_guarded_kebbie_command_is_refused_when_the_profile_loads() {
+        for released in ["Bash(kebbie push:*)", "Bash(/home/ada/.local/share/kebbie/current/target/release/kebbie approve:*)", "Bash(kebbie choose:*)", "Bash(kebbie away on)", "Bash(kebbie decide:*)", "Bash(kebbie after:*)", "Bash(kebbie:*)", "Bash(kebbie *)", "Bash(kebbie -C /x push:*)", "Bash", "Bash(*)", "Bash(:*)", "Bash(*push:*)"] {
             assert!(releases_guard(released), "{released}");
         }
-        for released in ["Bash(kelpie --repo app push:*)", "Bash(kelpie --no-focus approve:*)", "Bash(kelpie -x tell:*)"] {
-            assert!(releases_guard(released), "a flag kelpie's guard cannot place hides the command after it: {released}");
+        for released in ["Bash(kebbie --repo app push:*)", "Bash(kebbie --no-focus approve:*)", "Bash(kebbie -x tell:*)"] {
+            assert!(releases_guard(released), "a flag kebbie's guard cannot place hides the command after it: {released}");
         }
-        for kept in ["Bash(kelpie -C /src/app tell:*)", "Bash(kelpie tell:*)", "Bash(kelpie ask:*)", "Bash(npx playwright:*)", "Read", "WebFetch(domain:example.com)", "Bash(git log:*)"] {
+        for kept in ["Bash(kebbie -C /src/app tell:*)", "Bash(kebbie tell:*)", "Bash(kebbie ask:*)", "Bash(npx playwright:*)", "Read", "WebFetch(domain:example.com)", "Bash(git log:*)"] {
             assert!(!releases_guard(kept), "{kept}");
         }
-        let dir = folder("profile-allow", &[("x.toml", "allow = [\"Bash(npm test:*)\", \"Bash(kelpie push:*)\"]\n")]);
+        let dir = folder("profile-allow", &[("x.toml", "allow = [\"Bash(npm test:*)\", \"Bash(kebbie push:*)\"]\n")]);
         let refused = load_in(&dir, "x").unwrap_err();
-        assert!(refused.contains("x.toml: allow: \"Bash(kelpie push:*)\" would let the task run kelpie push, stage, unstage, approve, choose, away, decide, after"), "{refused}");
+        assert!(refused.contains("x.toml: allow: \"Bash(kebbie push:*)\" would let the task run kebbie push, stage, unstage, approve, choose, away, decide, after"), "{refused}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -428,12 +428,12 @@ mod tests {
         assert_eq!(chosen(Some("quick"), Some("billing"), Some("designer")), "quick", "--profile wins");
         let dir = folder("profile-for-task", &[]);
         assert_eq!(for_task(&dir, TASK).unwrap(), built_in(TASK).unwrap(), "the built-in task needs no file");
-        assert!(for_task(&dir, REVIEWER).unwrap_err().contains("kelpie review's profile, not a task's"));
+        assert!(for_task(&dir, REVIEWER).unwrap_err().contains("kebbie review's profile, not a task's"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn the_built_in_task_adds_nothing_to_kelpies_role() {
+    fn the_built_in_task_adds_nothing_to_kebbies_role() {
         let task = built_in(TASK).unwrap();
         assert_eq!(role_section(&task).unwrap(), "");
         assert_eq!((task.model, task.effort, task.permission_mode, task.agent), (None, None, None, Agent::Claude));
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(load_in(&dir, REVIEWER).unwrap(), built_in(REVIEWER).unwrap());
         std::fs::write(dir.join("reviewer.toml"), "model = \"opus\"\neffort = \"max\"\n").unwrap();
         let reviewer = load_in(&dir, REVIEWER).unwrap();
-        assert_eq!((reviewer.model.as_deref(), reviewer.effort.as_deref(), reviewer.about.as_str()), (Some("opus"), Some("max"), "The read-only reviewer that kelpie review runs"));
+        assert_eq!((reviewer.model.as_deref(), reviewer.effort.as_deref(), reviewer.about.as_str()), (Some("opus"), Some("max"), "The read-only reviewer that kebbie review runs"));
         for key in ["permission_mode = \"bypassPermissions\"\n", "allow = [\"Edit\"]\n", "skills = [\"x\"]\n"] {
             std::fs::write(dir.join("reviewer.toml"), key).unwrap();
             assert!(load_in(&dir, REVIEWER).unwrap_err().contains("the reviewer only reads, so its profile takes about, for, agent, model, effort, role"), "{key}");
@@ -455,15 +455,15 @@ mod tests {
     }
 
     #[test]
-    fn kelpie_profiles_lists_the_built_in_ones_then_each_file_and_names_a_broken_one() {
+    fn kebbie_profiles_lists_the_built_in_ones_then_each_file_and_names_a_broken_one() {
         let dir = folder("profile-list", &[("designer.toml", "about = \"UI work\"\nfor = \"UI, CSS\"\nmodel = \"opus\"\n"), ("broken.toml", "agent = \"gemini\"\n"), ("notes.txt", "x")]);
         let (profiles, errors) = list_in(&dir);
         assert_eq!(profiles.iter().map(|profile| profile.name.as_str()).collect::<Vec<_>>(), ["task", "reviewer", "ops", "designer"]);
         assert_eq!(errors.len(), 1);
-        let shown = describe(&profiles, &errors, Some("codex-cli 0.163.0 at /bin/codex · kelpie's plugin installed"));
+        let shown = describe(&profiles, &errors, Some("codex-cli 0.163.0 at /bin/codex · kebbie's plugin installed"));
         assert!(shown.starts_with("task  (built in)\n  for: any task no other profile fits\n"), "{shown}");
         assert!(shown.contains(&format!("designer  ({})\n  for: UI, CSS\n  about: UI work\n  runs: claude · model opus", dir.join("designer.toml").display())), "{shown}");
-        assert!(shown.contains("ignored: ") && shown.contains("broken.toml: agent: \"gemini\" is not an agent kelpie runs"), "{shown}");
+        assert!(shown.contains("ignored: ") && shown.contains("broken.toml: agent: \"gemini\" is not an agent kebbie runs"), "{shown}");
         assert!(!shown.contains("  codex: "), "Codex's line shows only under a profile that runs it: {shown}");
         assert!(shown.contains("ops  (built in)\n  for: work on other machines over ssh\n") && shown.contains("outside the sandbox: ssh *, scp *, rsync *"), "{shown}");
         let json = to_json(&profiles[3]);
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn the_lead_chooses_a_tasks_profile_by_what_each_is_for() {
         let lead = include_str!("../roles/lead.md");
-        assert!(lead.contains("`kelpie profiles` lists the profiles") && lead.contains("`for`") && lead.contains("`--profile <name>`"), "the lead knows the profiles and passes one");
+        assert!(lead.contains("`kebbie profiles` lists the profiles") && lead.contains("`for`") && lead.contains("`--profile <name>`"), "the lead knows the profiles and passes one");
     }
 
     #[test]
@@ -494,7 +494,7 @@ mod tests {
         let (profile, said) = for_running_task(&dir, None, Some("designer"), None).unwrap();
         assert_eq!(profile, built_in(TASK).unwrap(), "work keeps going");
         let said = said.unwrap();
-        assert!(said.contains("its profile \"designer\" did not load") && said.contains("designer.toml: agent: \"gemini\" is not an agent kelpie runs"), "{said}");
+        assert!(said.contains("its profile \"designer\" did not load") && said.contains("designer.toml: agent: \"gemini\" is not an agent kebbie runs"), "{said}");
         std::fs::remove_file(dir.join("designer.toml")).unwrap();
         assert!(for_running_task(&dir, None, Some("designer"), None).unwrap().1.unwrap().contains("No profile \"designer\""));
         assert!(for_running_task(&dir, Some("designer"), Some("task"), None).is_err(), "a profile asked for by name is refused, not swapped");
@@ -507,8 +507,8 @@ mod tests {
         let dir = folder("profile-codex", &[("coder.toml", "about = \"Codex on GPT\"\nfor = \"a second opinion\"\nagent = \"codex\"\nmodel = \"gpt-5.5\"\neffort = \"xhigh\"\npermission_mode = \"acceptEdits\"\n[sandbox]\nenabled = true\n")]);
         let coder = load_in(&dir, "coder").unwrap();
         assert_eq!((coder.agent, coder.model.as_deref(), coder.effort.as_deref(), coder.sandbox.enabled), (Agent::Codex, Some("gpt-5.5"), Some("xhigh"), Some(true)));
-        let shown = describe(&[built_in(TASK).unwrap(), coder.clone()], &[], Some("codex-cli 0.163.0 at /bin/codex · kelpie's plugin installed"));
-        assert!(shown.contains("coder  (") && shown.contains("  runs: codex · model gpt-5.5 · effort xhigh · mode acceptEdits\n  codex: codex-cli 0.163.0 at /bin/codex · kelpie's plugin installed"), "{shown}");
+        let shown = describe(&[built_in(TASK).unwrap(), coder.clone()], &[], Some("codex-cli 0.163.0 at /bin/codex · kebbie's plugin installed"));
+        assert!(shown.contains("coder  (") && shown.contains("  runs: codex · model gpt-5.5 · effort xhigh · mode acceptEdits\n  codex: codex-cli 0.163.0 at /bin/codex · kebbie's plugin installed"), "{shown}");
         assert!(shown.starts_with("task  (built in)\n") && shown.contains("nothing added\n  runs: claude\ncoder"), "the built-in profiles stay Claude: {shown}");
         assert_eq!(to_json(&coder)["agent"], "codex");
         let refused = |text: &str| { std::fs::write(dir.join("x.toml"), format!("agent = \"codex\"\n{text}")).unwrap(); load_in(&dir, "x").unwrap_err() };
@@ -516,7 +516,7 @@ mod tests {
             assert!(refused(text).contains(&format!("x.toml: {key}: Claude Code's, which a Codex task does not read")), "{key}: {}", refused(text));
         }
         std::fs::write(dir.join("reviewer.toml"), "agent = \"codex\"\n").unwrap();
-        assert!(load_in(&dir, REVIEWER).unwrap_err().contains("agent: kelpie review runs Claude"), "the reviewer stays Claude");
+        assert!(load_in(&dir, REVIEWER).unwrap_err().contains("agent: kebbie review runs Claude"), "the reviewer stays Claude");
         let ops = { std::fs::write(dir.join("ops.toml"), "agent = \"codex\"\n").unwrap(); load_in(&dir, OPS).unwrap() };
         assert_eq!(ops.agent, Agent::Codex, "a file may move a built-in profile to Codex; only its own keys are checked");
         std::fs::remove_dir_all(dir).unwrap();
@@ -532,12 +532,12 @@ mod tests {
         assert_eq!(load_in(&dir, "loose").unwrap().sandbox.enabled, Some(false));
         let web = load_in(&dir, "web").unwrap().sandbox;
         assert_eq!((web.enabled, web.domains(), web.writes(), web.excluded), (None, vec!["registry.yarnpkg.com".to_string()], vec!["~/.gradle".to_string()], vec!["docker compose *".to_string()]));
-        assert_eq!(built_in(TASK).unwrap().sandbox.domains(), crate::sandbox::DOMAINS.map(str::to_string).to_vec(), "kelpie's list until a profile names its own");
+        assert_eq!(built_in(TASK).unwrap().sandbox.domains(), crate::sandbox::DOMAINS.map(str::to_string).to_vec(), "kebbie's list until a profile names its own");
         let ops = load_in(&dir, OPS).unwrap();
         assert_eq!((ops.model.as_deref(), ops.sandbox.excluded), (Some("opus"), vec!["ssh *".to_string(), "scp *".to_string(), "rsync *".to_string(), "kubectl *".to_string()]), "a file adds to the built-in ops");
         let refused = |text: &str| { std::fs::write(dir.join("x.toml"), text).unwrap(); load_in(&dir, "x").unwrap_err() };
         assert!(refused("[sandbox]\nexcluded_commands = [\"tmux *\"]\n").contains("x.toml: sandbox.excluded_commands: \"tmux *\" would run tmux outside the sandbox"));
-        assert!(refused("[sandbox]\nexcluded_commands = [\"kelpie push *\"]\n").contains("would run kelpie outside the sandbox"));
+        assert!(refused("[sandbox]\nexcluded_commands = [\"kebbie push *\"]\n").contains("would run kebbie outside the sandbox"));
         assert!(refused("[sandbox]\nallow_write = [\"~/.config\"]\n").contains("sandbox.allow_write: \"~/.config\" would let a task's shell write"));
         assert!(refused("[sandbox]\nenabled = \"no\"\n").contains("sandbox.enabled: must be true or false"));
         assert!(refused("[sandbox]\nnetwork = true\n").contains("sandbox.network: unknown key"));

@@ -73,7 +73,7 @@ pub fn toggle_task(address: &str) -> Result<String> {
     let on = !task_file(&state, address).exists();
     set_task_in(&state, address, on)?;
     let (told, shown) = if on {
-        (format!("The user gave you push permission for {address}: you may push it with kelpie push once it is rules-approved and through any review it is in."), crate::notice::Notice::new(crate::notice::Tone::Done, "The lead may push it now").next("Done, drop and reset take the permission back.").detail("task", address).to_string())
+        (format!("The user gave you push permission for {address}: you may push it with kebbie push once it is rules-approved and through any review it is in."), crate::notice::Notice::new(crate::notice::Tone::Done, "The lead may push it now").next("Done, drop and reset take the permission back.").detail("task", address).to_string())
     } else {
         (format!("The user took back push permission for {address}: route it to them again."), crate::notice::Notice::new(crate::notice::Tone::Done, "Only you push it now").detail("task", address).to_string())
     };
@@ -87,7 +87,7 @@ pub fn toggle_repo(repo: &str) -> Result<String> {
     let on = !repo_file(&state, repo).exists();
     set_repo_in(&state, repo, on)?;
     let (told, shown) = if on {
-        (format!("The user gave you push permission for the repo {repo}: you may push any task in it whose reviewer passed its current code (kelpie review, verdict ok)."), format!("The lead may push reviewed tasks in {repo} now."))
+        (format!("The user gave you push permission for the repo {repo}: you may push any task in it whose reviewer passed its current code (kebbie review, verdict ok)."), format!("The lead may push reviewed tasks in {repo} now."))
     } else {
         (format!("The user took back push permission for the repo {repo}; tasks with their own permission keep it."), format!("Only you push {repo}'s tasks now, but those you gave their own permission."))
     };
@@ -106,7 +106,7 @@ pub fn lead_may_push(permit: Option<Permit>, reviewed: bool) -> std::result::Res
     match permit {
         Some(Permit::Task) => Ok(()),
         Some(Permit::Repo) if reviewed => Ok(()),
-        Some(Permit::Repo) => Err("the repo's push permission covers a task only once its reviewer passed its current code: send it to review (kelpie review) and push after a verdict ok".to_string()),
+        Some(Permit::Repo) => Err("the repo's push permission covers a task only once its reviewer passed its current code: send it to review (kebbie review) and push after a verdict ok".to_string()),
         None => Err("the user has given no push permission for it or its repo: it waits for the user under Ready to push".to_string()),
     }
 }
@@ -137,13 +137,13 @@ pub fn set_away_in(state: &Path, on: bool, now: u64) -> Result<Option<u64>> {
     }
 }
 
-// `kelpie away on|off` and the board's key: the user's word only, and the lead is told either way.
+// `kebbie away on|off` and the board's key: the user's word only, and the lead is told either way.
 pub fn away(word: Option<&str>) -> Result<String> {
     let on = match word {
         Some("on") => true,
         Some("off") => false,
-        None => return Ok(if away_since().is_some() { crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is on").next("kelpie away off when you are back.").to_string() } else { crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is off").to_string() }),
-        Some(other) => return Err(format!("kelpie away takes on or off, not \"{other}\"")),
+        None => return Ok(if away_since().is_some() { crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is on").next("kebbie away off when you are back.").to_string() } else { crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is off").to_string() }),
+        Some(other) => return Err(format!("kebbie away takes on or off, not \"{other}\"")),
     };
     user_only("switching away mode")?;
     let Some(since) = set_away_in(&state_dir()?, on, messages::now())? else {
@@ -154,7 +154,7 @@ pub fn away(word: Option<&str>) -> Result<String> {
         let open: Vec<String> = crate::questions::open_now(&log).into_iter().filter(|question| question.question.as_ref().is_some_and(|question| !question.waits))
             .map(|question| format!("\n- {}", crate::questions::question_copy(question, true))).collect();
         let open = if open.is_empty() { String::new() } else { format!("\nQuestions waiting on the board now:{}", open.concat()) };
-        tell_lead(&format!("The user is away from now on. Work by the away rules in your role: answer how-questions yourself with kelpie decide, keep what-questions for the user with kelpie defer, push only what their permissions allow, and keep what you decide for the summary they get back.{open}"));
+        tell_lead(&format!("The user is away from now on. Work by the away rules in your role: answer how-questions yourself with kebbie decide, keep what-questions for the user with kebbie defer, push only what their permissions allow, and keep what you decide for the summary they get back.{open}"));
         return crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is on").next("The lead decides how-questions itself, keeps what-questions for you, and pushes only what you permitted.").ok();
     }
     let log = messages::load();
@@ -177,7 +177,7 @@ pub fn return_brief(log: &[Message], since: u64, waiting: &[Message]) -> String 
     )
 }
 
-// Who runs this kelpie, read from its ancestors: a Claude that kelpie started carries its role in its --settings file.
+// Who runs this kebbie, read from its ancestors: a Claude that kebbie started carries its role in its --settings file.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Caller {
     User,
@@ -188,7 +188,7 @@ pub enum Caller {
     LeadSandboxed,
 }
 
-// The subcommands kelpie refuses to a task by who calls it: a task's settings deny each, and never take one out of the sandbox.
+// The subcommands kebbie refuses to a task by who calls it: a task's settings deny each, and never take one out of the sandbox.
 pub const USER_ONLY: [&str; 27] = ["approve", "push", "stage", "unstage", "setup", "choose", "after", "ci dismiss", "ci outside", "away", "decide", "defer", "answered", "notify", "follow", "release", "review --withdraw", "issue add", "issue hold","issue close", "issue retry", "issue reopen", "issue link", "issue send", "issue report", "issue recheck", "review --run"];
 
 fn role_of(args: &str) -> Option<Caller> {
@@ -213,7 +213,7 @@ fn role_of(args: &str) -> Option<Caller> {
     })
 }
 
-// A Codex kelpie started names its task in the environment it sets for the commands Codex runs; any other Codex is an agent.
+// A Codex kebbie started names its task in the environment it sets for the commands Codex runs; any other Codex is an agent.
 fn codex_role(args: &str) -> Caller {
     let marker = format!("{}=\"", crate::agent::codex::TASK_VAR);
     let address = args.find("shell_environment_policy.set=").and_then(|at| args[at..].find(&marker).map(|found| at + found + marker.len())).and_then(|start| args[start..].split_once('"').map(|(address, _)| address.to_string()));
@@ -223,18 +223,18 @@ fn codex_role(args: &str) -> Caller {
     }
 }
 
-// A Claude kelpie started before it wrote settings files carries the JSON inline: the lead's has the messages --unread prompt hook, a task's the kelpie hook command, and a task's role file names it.
+// A Claude kebbie started before it wrote settings files carries the JSON inline: the lead's has the messages --unread prompt hook, a task's the kebbie hook command, and a task's role file names it.
 fn inline_role(words: &[&str]) -> Caller {
     let args = words.join(" ");
     if args.contains("' hook\"") {
         let role = words.iter().position(|word| *word == "--append-system-prompt-file").and_then(|index| words.get(index + 1));
         let address = role.and_then(|file| Path::new(file).file_stem()).map(|stem| stem.to_string_lossy().to_string()).filter(|stem| stem.contains('@'));
-        return Caller::Task(address.unwrap_or_else(|| "started before kelpie wrote settings files".to_string()));
+        return Caller::Task(address.unwrap_or_else(|| "started before kebbie wrote settings files".to_string()));
     }
     if args.contains("' messages --unread\"") { Caller::Lead } else { Caller::Agent }
 }
 
-// The strictest Claude in the chain decides, so a Claude a task starts with the lead's settings is still the task; a chain kelpie cannot read, or one cut loose from any terminal while a kelpie-started Claude is alive, is an agent.
+// The strictest Claude in the chain decides, so a Claude a task starts with the lead's settings is still the task; a chain kebbie cannot read, or one cut loose from any terminal while a kebbie-started Claude is alive, is an agent.
 pub fn caller_in(processes: &[(u32, u32, String)], pid: u32) -> Caller {
     let mut roles = Vec::new();
     let mut hosted = false;
@@ -304,7 +304,7 @@ pub fn caller() -> Caller {
     confined_as(found, crate::sandbox::confined)
 }
 
-// A sandboxed task can start a chain that reads as the user or the lead, never one that writes kelpie's state.
+// A sandboxed task can start a chain that reads as the user or the lead, never one that writes kebbie's state.
 pub fn confined_as(found: Caller, sandboxed: impl FnOnce() -> bool) -> Caller {
     match found {
         Caller::User => if sandboxed() { Caller::Sandboxed } else { found },
@@ -331,7 +331,7 @@ pub fn describe(caller: &Caller) -> String {
         Caller::Task(address) => format!("the task {address}"),
         Caller::Agent => "an agent session (Claude or Codex)".to_string(),
         Caller::Sandboxed => "a sandboxed process".to_string(),
-        Caller::LeadSandboxed => format!("the lead, whose shell runs in a Claude Code sandbox your own settings turn on (add \"{} *\" to sandbox.excludedCommands in ~/.claude/settings.json, or run it from your own terminal),", crate::peers::kelpie_command().unwrap_or_else(|_| "kelpie".to_string())),
+        Caller::LeadSandboxed => format!("the lead, whose shell runs in a Claude Code sandbox your own settings turn on (add \"{} *\" to sandbox.excludedCommands in ~/.claude/settings.json, or run it from your own terminal),", crate::peers::kebbie_command().unwrap_or_else(|_| "kebbie".to_string())),
     }
 }
 
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn a_task_permission_wins_over_the_repo_and_both_go_when_switched_off() {
-        let state = std::env::temp_dir().join(format!("kelpie-permits-{}", std::process::id()));
+        let state = std::env::temp_dir().join(format!("kebbie-permits-{}", std::process::id()));
         let _ = fs::remove_dir_all(&state);
         assert_eq!(in_state(&state, "billing@app", "app"), None);
         set_repo_in(&state, "app", true).unwrap();
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn away_mode_records_when_the_user_left_and_reports_it_on_the_way_back() {
-        let state = std::env::temp_dir().join(format!("kelpie-away-{}", std::process::id()));
+        let state = std::env::temp_dir().join(format!("kebbie-away-{}", std::process::id()));
         let _ = fs::remove_dir_all(&state);
         fs::create_dir_all(&state).unwrap();
         assert_eq!(away_since_in(&state), None);
@@ -385,8 +385,8 @@ mod tests {
     fn the_return_brief_lists_the_pushes_the_leads_calls_and_the_kept_questions_since_the_user_left() {
         let line = |at: u64, from: &str, to: &str, text: &str, kind: Option<&str>| json!({ "id": format!("{at}"), "at": at, "from": from, "to": to, "text": text, "state": "delivered", "kind": kind });
         let log = messages::fold(&[
-            line(50, "kelpie", "lead", "the user pushed search@app: 1 commit", Some("push")),
-            line(150, "kelpie", "lead", "the lead pushed billing@app: 2 commits to main (a1b2c3d Add refunds)", Some("push")),
+            line(50, "kebbie", "lead", "the user pushed search@app: 1 commit", Some("push")),
+            line(150, "kebbie", "lead", "the lead pushed billing@app: 2 commits to main (a1b2c3d Add refunds)", Some("push")),
             line(160, "lead", "billing@app", "Use the existing retry queue.", Some("decision")),
             line(170, "lead", "billing@app", "Carry on.", None),
         ].iter().map(|value| value.to_string()).collect::<Vec<_>>().join("\n"));
@@ -406,30 +406,30 @@ mod tests {
     }
 
     #[test]
-    fn the_caller_is_read_from_the_claude_kelpie_started_above_it() {
+    fn the_caller_is_read_from_the_claude_kebbie_started_above_it() {
         let lead = "/Users/ada/.local/bin/claude --append-system-prompt-file /state/roles/lead.md --settings /state/roles/lead.settings.json";
         let task = "claude --permission-mode acceptEdits --settings /state/roles/billing@app.settings.json --append-system-prompt-file /state/roles/billing@app.md --session-id 1";
         let reviewer = "claude -p --settings /state/roles/billing@app.review.settings.json";
-        let table = |claude: &str| processes(&format!("  1     0 /sbin/launchd\n 40     1 /usr/bin/herdr server\n 50    40 {claude}\n 60    50 /bin/zsh -c kelpie push billing\n 70    60 /bin/kelpie push billing\n"));
+        let table = |claude: &str| processes(&format!("  1     0 /sbin/launchd\n 40     1 /usr/bin/herdr server\n 50    40 {claude}\n 60    50 /bin/zsh -c kebbie push billing\n 70    60 /bin/kebbie push billing\n"));
         assert_eq!(caller_in(&table(lead), 70), Caller::Lead);
         assert_eq!(caller_in(&table(task), 70), Caller::Task("billing@app".to_string()));
         assert_eq!(caller_in(&table(reviewer), 70), Caller::Agent);
-        assert_eq!(caller_in(&table("node /opt/node_modules/@anthropic-ai/claude-code/cli.js"), 70), Caller::Agent, "a Claude kelpie did not start is an agent");
+        assert_eq!(caller_in(&table("node /opt/node_modules/@anthropic-ai/claude-code/cli.js"), 70), Caller::Agent, "a Claude kebbie did not start is an agent");
         assert_eq!(caller_in(&table("/bin/zsh -l"), 70), Caller::User, "the user's own shell, also when herdr was started from a Claude and its panes inherit CLAUDECODE");
-        let disguised = processes(&format!("  1 0 launchd\n 50 1 {task}\n 55 50 claude -p --settings /state/roles/lead.settings.json\n 70 55 kelpie push billing\n"));
+        let disguised = processes(&format!("  1 0 launchd\n 50 1 {task}\n 55 50 claude -p --settings /state/roles/lead.settings.json\n 70 55 kebbie push billing\n"));
         assert_eq!(caller_in(&disguised, 70), Caller::Task("billing@app".to_string()), "a task cannot pass as the lead by starting a Claude with the lead's settings");
-        assert_eq!(caller_in(&processes(" 70 70 /bin/kelpie board\n"), 70), Caller::Agent, "a loop in the table ends the walk unread");
-        assert_eq!(caller_in(&processes("garbage\n"), 70), Caller::Agent, "a table without kelpie in it proves no user");
+        assert_eq!(caller_in(&processes(" 70 70 /bin/kebbie board\n"), 70), Caller::Agent, "a loop in the table ends the walk unread");
+        assert_eq!(caller_in(&processes("garbage\n"), 70), Caller::Agent, "a table without kebbie in it proves no user");
         assert_eq!(caller_in(&[], 70), Caller::Agent, "an empty ps answer proves no user");
     }
 
     #[test]
     fn a_claude_started_with_inline_settings_json_reads_as_the_lead_or_its_task() {
-        let kelpie = "/Users/ada/.local/share/kelpie/current/kelpie";
-        let lead_json = serde_json::json!({ "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' messages --unread") }] }] }, "permissions": { "allow": [format!("Bash({kelpie} push:*)")] } });
-        let hook = serde_json::json!([{ "hooks": [{ "type": "command", "command": format!("'{kelpie}' hook") }] }]);
+        let kebbie = "/Users/ada/.local/share/kebbie/current/kebbie";
+        let lead_json = serde_json::json!({ "hooks": { "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": format!("'{kebbie}' messages --unread") }] }] }, "permissions": { "allow": [format!("Bash({kebbie} push:*)")] } });
+        let hook = serde_json::json!([{ "hooks": [{ "type": "command", "command": format!("'{kebbie}' hook") }] }]);
         let task_json = serde_json::json!({ "permissions": { "deny": ["Bash(git push:*)"] }, "hooks": { "UserPromptSubmit": hook, "Stop": hook } });
-        let table = |claude: String| processes(&format!("  1     0 /sbin/launchd\n 50     1 {claude}\n 60    50 /bin/zsh -c kelpie push billing\n 70    60 /bin/kelpie push billing\n"));
+        let table = |claude: String| processes(&format!("  1     0 /sbin/launchd\n 50     1 {claude}\n 60    50 /bin/zsh -c kebbie push billing\n 70    60 /bin/kebbie push billing\n"));
         let lead = format!("claude --append-system-prompt-file /state/roles/lead.md --settings {lead_json}");
         let task = format!("claude --permission-mode acceptEdits --settings {task_json} --append-system-prompt-file /state/roles/billing@app.md");
         assert_eq!(caller_in(&table(lead), 70), Caller::Lead, "the user's lead from before settings files still pushes, decides and defers");
@@ -450,15 +450,15 @@ mod tests {
     }
 
     #[test]
-    fn a_codex_kelpie_started_is_its_task_and_any_other_codex_an_agent_so_neither_passes_as_the_user() {
+    fn a_codex_kebbie_started_is_its_task_and_any_other_codex_an_agent_so_neither_passes_as_the_user() {
         let profile = crate::profiles::Profile { agent: crate::agent::Agent::Codex, ..crate::profiles::built_in(crate::profiles::TASK).unwrap() };
-        let args = crate::agent::codex::start_args(None, &profile, "billing@app", true, Some(Path::new("/src/app/.git/worktrees/1/kelpie-tmp")), &crate::tasks::Session::New("x".to_string()));
+        let args = crate::agent::codex::start_args(None, &profile, "billing@app", true, Some(Path::new("/src/app/.git/worktrees/1/kebbie-tmp")), &crate::tasks::Session::New("x".to_string()));
         let codex = format!("/Users/ada/.local/bin/codex {}", args.join(" "));
-        let table = |agent: &str| processes(&format!("  1     0 /sbin/launchd\n 40     1 /usr/bin/herdr server\n 50    40 {agent}\n 60    50 /bin/zsh -c kelpie push billing\n 70    60 /bin/kelpie push billing\n"));
+        let table = |agent: &str| processes(&format!("  1     0 /sbin/launchd\n 40     1 /usr/bin/herdr server\n 50    40 {agent}\n 60    50 /bin/zsh -c kebbie push billing\n 70    60 /bin/kebbie push billing\n"));
         assert_eq!(caller_in(&table(&codex), 70), Caller::Task("billing@app".to_string()));
         assert_eq!(caller_in(&table("codex"), 70), Caller::Agent, "the user's own Codex runs no user-only command either");
         assert_eq!(caller_in(&table("node /opt/node_modules/@openai/codex/bin/codex.js --model gpt-5.5"), 70), Caller::Agent, "the npm install runs as node");
-        assert_eq!(role_of("codex -c 'shell_environment_policy.set={KELPIE_ADDRESS=\"billing@app\"}'"), Some(Caller::Agent), "the address alone, without kelpie's plugin, is no task");
+        assert_eq!(role_of("codex -c 'shell_environment_policy.set={KEBBIE_ADDRESS=\"billing@app\"}'"), Some(Caller::Agent), "the address alone, without kebbie's plugin, is no task");
     }
 
     #[test]
@@ -474,35 +474,35 @@ mod tests {
         let lead = "claude --settings /state/roles/lead.settings.json";
         let agent = "claude --settings /state/roles/x.settings.json";
         let task = "claude --settings /state/roles/billing@app.settings.json";
-        let chain = |middle: &str, top: &str| processes(&format!("  1 0 launchd\n 10 1 {top}\n 20 10 {middle}\n 30 20 kelpie push billing\n"));
+        let chain = |middle: &str, top: &str| processes(&format!("  1 0 launchd\n 10 1 {top}\n 20 10 {middle}\n 30 20 kebbie push billing\n"));
         assert_eq!(caller_in(&chain(lead, agent), 30), Caller::Agent, "a lead started by an agent is an agent");
         assert_eq!(caller_in(&chain(agent, lead), 30), Caller::Agent, "an agent started by the lead is an agent");
         assert_eq!(caller_in(&chain(lead, task), 30), Caller::Task("billing@app".to_string()));
         assert_eq!(caller_in(&chain(agent, task), 30), Caller::Task("billing@app".to_string()));
         assert_eq!(caller_in(&chain("/bin/zsh", lead), 30), Caller::Lead);
         assert_eq!(caller_in(&chain(task, lead), 30), Caller::Task("billing@app".to_string()), "a task under the lead's shell is still the task");
-        assert_eq!(caller_in(&processes(" 30 29 kelpie push\n"), 30), Caller::Agent, "a parent missing from the table is ancestry kelpie cannot read");
-        assert_eq!(caller_in(&processes(" 30 30 kelpie push\n"), 30), Caller::Agent);
+        assert_eq!(caller_in(&processes(" 30 29 kebbie push\n"), 30), Caller::Agent, "a parent missing from the table is ancestry kebbie cannot read");
+        assert_eq!(caller_in(&processes(" 30 30 kebbie push\n"), 30), Caller::Agent);
     }
 
     #[test]
-    fn a_kelpie_detached_from_the_claude_that_started_it_is_not_the_user() {
+    fn a_kebbie_detached_from_the_claude_that_started_it_is_not_the_user() {
         let task = "claude --settings /state/roles/billing@app.settings.json";
-        let orphaned = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 70 1 /bin/kelpie approve billing\n"));
-        assert_ne!(caller_in(&orphaned, 70), Caller::User, "with a task's Claude alive on the machine, a parentless kelpie must not pass as the user");
-        let through_sh = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 60 1 /bin/zsh -c kelpie approve billing\n 70 60 /bin/kelpie approve billing\n"));
+        let orphaned = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 70 1 /bin/kebbie approve billing\n"));
+        assert_ne!(caller_in(&orphaned, 70), Caller::User, "with a task's Claude alive on the machine, a parentless kebbie must not pass as the user");
+        let through_sh = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 60 1 /bin/zsh -c kebbie approve billing\n 70 60 /bin/kebbie approve billing\n"));
         assert_eq!(caller_in(&through_sh, 70), Caller::Agent, "a detached shell running a command line is no terminal");
-        let bundled = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 60 1 /bin/zsh -lc kelpie\n 70 60 /bin/kelpie approve billing\n"));
+        let bundled = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 60 1 /bin/zsh -lc kebbie\n 70 60 /bin/kebbie approve billing\n"));
         assert_eq!(caller_in(&bundled, 70), Caller::Agent, "-lc is still a command line");
         let lead = "claude --settings /state/roles/lead.settings.json";
-        let alone = processes(&format!("  1 0 /sbin/launchd\n 50 1 {lead}\n 70 1 /bin/kelpie away on\n"));
+        let alone = processes(&format!("  1 0 /sbin/launchd\n 50 1 {lead}\n 70 1 /bin/kebbie away on\n"));
         assert_eq!(caller_in(&alone, 70), Caller::Agent, "the lead alive is enough");
-        assert_eq!(caller_in(&processes("  1 0 /sbin/launchd\n 70 1 /bin/kelpie away on\n"), 70), Caller::User, "with no kelpie Claude alive there is no agent to suspect");
+        assert_eq!(caller_in(&processes("  1 0 /sbin/launchd\n 70 1 /bin/kebbie away on\n"), 70), Caller::User, "with no kebbie Claude alive there is no agent to suspect");
         for host in ["-zsh", "/bin/zsh -l", "/bin/bash", "login -pf ada", "tmux: server", "/usr/sbin/sshd: ada@ttys001"] {
-            let terminal = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 40 1 /Applications/Ghostty.app/Contents/MacOS/ghostty\n 60 40 {host}\n 70 60 /bin/kelpie approve billing\n"));
+            let terminal = processes(&format!("  1 0 /sbin/launchd\n 50 1 {task}\n 40 1 /Applications/Ghostty.app/Contents/MacOS/ghostty\n 60 40 {host}\n 70 60 /bin/kebbie approve billing\n"));
             assert_eq!(caller_in(&terminal, 70), Caller::User, "the user's terminal under {host} stays the user while tasks run");
         }
-        let board = processes(&format!("  1 0 /sbin/launchd\n 40 1 /usr/local/bin/herdr server\n 50 40 {task}\n 70 40 /plugin/target/release/kelpie board --overlay\n"));
+        let board = processes(&format!("  1 0 /sbin/launchd\n 40 1 /usr/local/bin/herdr server\n 50 40 {task}\n 70 40 /plugin/target/release/kebbie board --overlay\n"));
         assert_eq!(caller_in(&board, 70), Caller::User, "the board herdr opens as a plugin pane is the user's");
     }
 
@@ -517,8 +517,8 @@ mod tests {
     }
 
     #[test]
-    fn the_permit_files_never_leave_their_folder_for_an_address_kelpie_made() {
-        let state = std::env::temp_dir().join(format!("kelpie-permit-paths-{}", std::process::id()));
+    fn the_permit_files_never_leave_their_folder_for_an_address_kebbie_made() {
+        let state = std::env::temp_dir().join(format!("kebbie-permit-paths-{}", std::process::id()));
         let _ = fs::remove_dir_all(&state);
         set_task_in(&state, "billing@app", true).unwrap();
         set_repo_in(&state, "app", true).unwrap();
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     fn an_away_file_that_holds_no_time_is_not_away_mode() {
-        let state = std::env::temp_dir().join(format!("kelpie-away-garbage-{}", std::process::id()));
+        let state = std::env::temp_dir().join(format!("kebbie-away-garbage-{}", std::process::id()));
         let _ = fs::remove_dir_all(&state);
         fs::create_dir_all(&state).unwrap();
         fs::write(away_file(&state), "garbage").unwrap();
@@ -553,11 +553,11 @@ mod tests {
         assert_eq!(confined_as(Caller::Agent, || panic!("an agent needs no probe")), Caller::Agent);
         let refused = user_only_as(&confined_as(Caller::User, || true), "switching away mode").unwrap_err();
         assert_eq!(refused, "switching away mode is the user's call, from the board or their own terminal; a sandboxed process cannot");
-        let tmux = processes("  1 0 /sbin/launchd\n 40 1 tmux new -d kelpie push billing\n 60 40 /bin/zsh\n 70 60 /bin/kelpie push billing\n");
+        let tmux = processes("  1 0 /sbin/launchd\n 40 1 tmux new -d kebbie push billing\n 60 40 /bin/zsh\n 70 60 /bin/kebbie push billing\n");
         assert_eq!(caller_in(&tmux, 70), Caller::User, "a tmux server a task started reads as a terminal");
         assert_eq!(confined_as(caller_in(&tmux, 70), || true), Caller::Sandboxed, "so the capability decides");
         let source = include_str!("permit.rs");
         let body = &source[source.find("\npub fn caller() -> Caller {").unwrap()..];
-        assert!(body[..body.find("\n}\n").unwrap()].contains("confined_as(found, crate::sandbox::confined)"), "every caller kelpie reads passes the capability probe");
+        assert!(body[..body.find("\n}\n").unwrap()].contains("confined_as(found, crate::sandbox::confined)"), "every caller kebbie reads passes the capability probe");
     }
 }

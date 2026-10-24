@@ -88,7 +88,7 @@ fn fast_forward_main(repo: &Path, upstream: &str) -> Result<String> {
     }
     match line::Turnstile::try_take(&state, repo) {
         Some(_turnstile) => follow_upstream(repo, upstream, &staged),
-        None => Ok(format!("{} left as is: kelpie is pushing in it now", name_of(repo))),
+        None => Ok(format!("{} left as is: kebbie is pushing in it now", name_of(repo))),
     }
 }
 
@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn kelpie_carries_no_commit_style_rules() {
+    fn kebbie_carries_no_commit_style_rules() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let banned = [["auto", "squash"].concat(), ["co-authored", "-by"].concat(), ["fix", "up"].concat(), ["merge", " commit"].concat(), ["co", "authored"].concat(), ["attri", "bution"].concat()];
         let mut files = vec![root.join("README.md")];
@@ -165,25 +165,25 @@ mod tests {
         let stop = |active: bool| crate::report::hook(&serde_json::json!({ "hook_event_name": "Stop", "cwd": slot.path, "stop_hook_active": active }).to_string());
         crate::phase::record(&state, &address, "start", &Event::Started { prompted: true });
         prompt("Add a refund column");
-        assert_eq!(phase(), Some(Phase::Working), "the prompt kelpie typed for the user is taken up");
+        assert_eq!(phase(), Some(Phase::Working), "the prompt kebbie typed for the user is taken up");
         assert!(stop(false).contains("\"block\""), "a stop without a report is sent back once");
         assert_eq!(phase(), Some(Phase::Working));
         stop(true);
         assert_eq!(phase(), Some(Phase::NeedsYou(Why::Unreported)), "and the stop after it, still without one, waits for the user");
         prompt(&crate::messages::delivered("lead", "fix the second commit"));
-        prompt(&crate::messages::delivered("kelpie", "kelpie was updated"));
-        assert_eq!(phase(), Some(Phase::NeedsYou(Why::Unreported)), "the inbox's raw content from the lead or kelpie moves nothing");
+        prompt(&crate::messages::delivered("kebbie", "kebbie was updated"));
+        assert_eq!(phase(), Some(Phase::NeedsYou(Why::Unreported)), "the inbox's raw content from the lead or kebbie moves nothing");
         prompt("go on");
         assert_eq!(phase(), Some(Phase::Working), "the user's own prompt does");
         let refused = crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, "refunds done").unwrap_err();
-        assert!(refused.contains("Not reported ready") && refused.contains("fourth: no body"), "a commit without a body is refused before kelpie hears the report: {refused}");
+        assert!(refused.contains("Not reported ready") && refused.contains("fourth: no body"), "a commit without a body is refused before kebbie hears the report: {refused}");
         assert_eq!(phase(), Some(Phase::Working), "the refused report moves nothing");
         git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]).unwrap();
         crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, "refunds done").unwrap();
         assert_eq!(crate::rules_check::shown_in(&state, &address, |_| true), Some(crate::rules_check::Shown::Checking), "the ready report asks for the rules check");
         assert!(crate::trusted_spawn::SPAWNED.with(|spawned| spawned.borrow().is_empty()), "and starts nothing from the task's own process");
         assert_eq!(phase(), Some(Phase::Ready { head: Some(git(&slot.path, &["rev-parse", "HEAD"]).unwrap()) }));
-        prompt(&crate::messages::delivered("kelpie", "kelpie was updated"));
+        prompt(&crate::messages::delivered("kebbie", "kebbie was updated"));
         assert!(matches!(phase(), Some(Phase::Ready { .. })), "an update notice leaves it ready");
         crate::report::report(&slot.path, Some("working"), Some("nothing"), None, "one more test").unwrap();
         assert_eq!(phase(), Some(Phase::Working));

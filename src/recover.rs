@@ -119,7 +119,7 @@ pub fn classify(record: &Value) -> Option<ApiError> {
         "rate_limit" | "server_error" | "overloaded" => transient(text),
         _ if is_quota && status == Some(429) => quota(&text),
         _ if status.is_some_and(|status| status >= 500 || status == 408 || status == 429) || PASSING.iter().any(|word| lower.contains(word)) => transient(text),
-        _ => ApiError::Fatal { kind: "an API error kelpie does not know", text },
+        _ => ApiError::Fatal { kind: "an API error kebbie does not know", text },
     })
 }
 
@@ -295,7 +295,7 @@ pub enum Zone {
     Utc,
 }
 
-// Claude Code names the zone it wrote the time in; kelpie reads it only as this machine's own zone or UTC.
+// Claude Code names the zone it wrote the time in; kebbie reads it only as this machine's own zone or UTC.
 pub fn zone_of(named: Option<&str>, local: Option<&str>) -> Option<Zone> {
     match named {
         None => Some(Zone::Local),
@@ -435,7 +435,7 @@ pub fn decide(address: &str, old: Option<&Record>, tail: &Tail, now: u64, reset:
         ApiError::Transient { reason, text, .. } => scheduled(record(Kind::Retrying, reason.to_string(), text, Some(failure.at + DELAYS[attempts]), None)),
         ApiError::Quota { text, .. } if attempts >= RESUMES => Act::Stop(record(Kind::Stuck, format!("the usage limit, still after {RESUMES} resumes"), text, None, None)),
         ApiError::Quota { text, .. } => match reset {
-            None => Act::Stop(record(Kind::Stuck, "the usage limit, with no reset time kelpie can read".to_string(), text, None, None)),
+            None => Act::Stop(record(Kind::Stuck, "the usage limit, with no reset time kebbie can read".to_string(), text, None, None)),
             Some(reset) => scheduled(record(Kind::Allowance, "the usage limit".to_string(), text, Some(reset.max(failure.at) + MARGIN), Some(reset))),
         },
     }
@@ -499,7 +499,7 @@ pub struct Task {
     pub transcript: Option<PathBuf>,
 }
 
-// Only the Claudes kelpie started in its pooled worktrees: never the lead, never the user's own sessions.
+// Only the Claudes kebbie started in its pooled worktrees: never the lead, never the user's own sessions.
 fn tasks() -> Result<(Vec<String>, Vec<Task>)> {
     let workspaces = crate::herdr::workspaces()?;
     let agents: Vec<Value> = crate::herdr::agents()?.into_iter().filter(|agent| agent["agent"] == crate::agent::Agent::Claude.kind()).collect();
@@ -576,11 +576,11 @@ fn apply(state: &Path, task: &Task, old: Option<&Record>, act: Act) {
         }
         Act::Send(mut record) => {
             let text = resume_text(&record);
-            if let Ok(via) = crate::inbox::prompt(&task.pane, &messages::delivered("kelpie", &text), &task.address) {
+            if let Ok(via) = crate::inbox::prompt(&task.pane, &messages::delivered("kebbie", &text), &task.address) {
                 record.attempts += 1;
                 record.sent_for = Some(record.error_id.clone());
                 if let Ok(_lock) = messages::Lock::take(true) {
-                    let _ = messages::append(&json!({ "id": messages::new_id("recover"), "at": messages::now(), "from": "kelpie", "to": task.address, "text": text, "state": "delivered", "kind": "recover", "via": via.word() }));
+                    let _ = messages::append(&json!({ "id": messages::new_id("recover"), "at": messages::now(), "from": "kebbie", "to": task.address, "text": text, "state": "delivered", "kind": "recover", "via": via.word() }));
                 }
             }
             if old != Some(&record) {
@@ -600,7 +600,7 @@ fn apply(state: &Path, task: &Task, old: Option<&Record>, act: Act) {
 }
 
 pub fn stuck_line(record: &Record) -> String {
-    format!("{} stopped by {} and waits under Needs you; kelpie does not resume it. Claude Code said: {}", record.address, record.reason, record.text.split_whitespace().collect::<Vec<_>>().join(" "))
+    format!("{} stopped by {} and waits under Needs you; kebbie does not resume it. Claude Code said: {}", record.address, record.reason, record.text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 #[cfg(test)]
@@ -643,7 +643,7 @@ mod tests {
         assert!(matches!(kind(error("rate_limit", 429, "You've hit your session limit · resets 5pm (UTC)")), Some(ApiError::Quota { window: Some(Window::Session), clock: Some(_), .. })));
         assert!(matches!(kind(error("rate_limit", 429, "You've hit your weekly limit · resets Oct 23, 9am · progress saved")), Some(ApiError::Quota { window: Some(Window::Week), .. })));
         assert!(matches!(kind(error("rate_limit", 429, "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.")), Some(ApiError::Quota { window: None, clock: None, .. })));
-        for (code, status, expected) in [("authentication_failed", 401, "a login problem"), ("oauth_org_not_allowed", 403, "a login problem"), ("billing_error", 400, "a billing problem"), ("invalid_request", 400, "an invalid request"), ("model_not_found", 404, "a model that is not available"), ("unknown", 418, "an API error kelpie does not know")] {
+        for (code, status, expected) in [("authentication_failed", 401, "a login problem"), ("oauth_org_not_allowed", 403, "a login problem"), ("billing_error", 400, "a billing problem"), ("invalid_request", 400, "an invalid request"), ("model_not_found", 404, "a model that is not available"), ("unknown", 418, "an API error kebbie does not know")] {
             assert!(matches!(kind(error(code, status, "words")), Some(ApiError::Fatal { kind, .. }) if kind == expected), "{code}");
         }
         let mut refused = error("invalid_request", 400, "Claude declined this request.");
@@ -688,7 +688,7 @@ mod tests {
         assert_eq!(zone_of(Some("Europe/Stockholm"), Some("Europe/Stockholm")), Some(Zone::Local));
         assert_eq!(zone_of(None, Some("Europe/Stockholm")), Some(Zone::Local));
         assert_eq!(zone_of(Some("UTC"), Some("Europe/Stockholm")), Some(Zone::Utc));
-        assert_eq!(zone_of(Some("America/New_York"), Some("Europe/Stockholm")), None, "a zone kelpie cannot read gives no time");
+        assert_eq!(zone_of(Some("America/New_York"), Some("Europe/Stockholm")), None, "a zone kebbie cannot read gives no time");
     }
 
     #[test]
@@ -711,7 +711,7 @@ mod tests {
         let failed = error("server_error", 529, "API Error: Repeated 529 Overloaded errors.");
         let tail = observe(&lines(&[user("fix it", "2026-10-20T18:59:00.000Z"), failed.clone()]));
         assert_eq!(tail.failure.as_ref().map(|failure| (failure.id.as_str(), failure.at)), Some(("e-server_error-529", AT_S)));
-        let typed = observe(&lines(&[failed.clone(), user("[from kelpie] carry on", "2026-10-20T19:01:00.000Z")]));
+        let typed = observe(&lines(&[failed.clone(), user("[from kebbie] carry on", "2026-10-20T19:01:00.000Z")]));
         assert!(typed.failure.is_none() && typed.prompted && !typed.replied, "a newer prompt is being worked on");
         let queued = json!({ "type": "attachment", "attachment": { "type": "queued_command", "prompt": "go on" } });
         assert!(observe(&lines(&[failed.clone(), queued])).failure.is_none());
@@ -770,7 +770,7 @@ mod tests {
         assert_eq!(resume_text(&record), "Your plan's usage allowance has reset. Carry on where you left off.");
         let far = Record { reset_at: Some(AT_S + 3 * 86_400), ..record.clone() };
         assert_eq!(far.note_at(AT_S, &|_| 0), "out of allowance until Fri 19:00");
-        assert!(matches!(decide("api@web", None, &limited, AT_S, None), Act::Stop(stuck) if stuck.reason == "the usage limit, with no reset time kelpie can read"));
+        assert!(matches!(decide("api@web", None, &limited, AT_S, None), Act::Stop(stuck) if stuck.reason == "the usage limit, with no reset time kebbie can read"));
         let past = AT_S - 600;
         assert!(matches!(decide("api@web", None, &limited, AT_S + 60, Some(past)), Act::Send(made) if made.next_at == Some(AT_S + MARGIN)), "never sooner than a minute after the error");
     }

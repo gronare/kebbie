@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use kelpie_hub_protocol::Id;
+use kebbie_hub_protocol::Id;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::{Color, Style};
@@ -165,7 +165,7 @@ impl Window {
         };
         let url = url.to_string();
         let waiting = format!("Waiting for you to approve it in the browser at {}…", host(&url));
-        self.view = View::Running(spawn("kelpie hub · connect", waiting, move |events, stop, _| {
+        self.view = View::Running(spawn("kebbie hub · connect", waiting, move |events, stop, _| {
             let now = crate::messages::now();
             let name = prepared.named.name().to_string();
             let result = (|| {
@@ -186,12 +186,12 @@ impl Window {
 
     fn test_own(&mut self, address: String) {
         let config = self.paths.config.clone();
-        self.view = View::Running(spawn("kelpie hub · connect", format!("Testing {address}…"), move |_, _, _| Event::Tested(connect::own_hub(&config, &address))));
+        self.view = View::Running(spawn("kebbie hub · connect", format!("Testing {address}…"), move |_, _, _| Event::Tested(connect::own_hub(&config, &address))));
     }
 
     fn add_device(&mut self) {
         let paths = self.paths.clone();
-        self.view = View::Running(spawn("kelpie hub · add a device", "Waiting for your phone or browser to open the link…".to_string(), move |events, stop, answers| {
+        self.view = View::Running(spawn("kebbie hub · add a device", "Waiting for your phone or browser to open the link…".to_string(), move |events, stop, answers| {
             let now = crate::messages::now();
             let result = pair::add_device(&paths.state, pair::TIMEOUT, |added| {
                 let _ = events.send(Event::Shown { link: added.url.clone(), code: None });
@@ -208,7 +208,7 @@ impl Window {
 
     fn remove_device(&mut self, row: Row) {
         let paths = self.paths.clone();
-        self.view = View::Running(spawn("kelpie hub · remove a device", format!("Removing {}…", row.name), move |_, _, _| {
+        self.view = View::Running(spawn("kebbie hub · remove a device", format!("Removing {}…", row.name), move |_, _, _| {
             Event::Done(devices::remove(&paths.state, &row.id).map(|said| {
                 let posted = (paths.post)().err().map_or(String::new(), |error| format!(" The board did not go out again yet: {error}."));
                 format!("{said}{posted}")
@@ -218,7 +218,7 @@ impl Window {
 
     fn leave(&mut self) {
         let state = self.paths.state.clone();
-        self.view = View::Running(spawn("kelpie hub · disconnect", "Taking your devices off and forgetting the keys…".to_string(), move |_, _, _| Event::Done(crate::hub::leave(&state))));
+        self.view = View::Running(spawn("kebbie hub · disconnect", "Taking your devices off and forgetting the keys…".to_string(), move |_, _, _| Event::Done(crate::hub::leave(&state))));
     }
 
     pub(super) fn poll(&mut self) {
@@ -579,7 +579,7 @@ fn choose(configured: Option<&String>, error: Option<&String>) -> Vec<Line<'stat
         Some(url) => lines.push(text(format!("Connect to {}, as [hub] url says.", host(url)))),
         None => {
             lines.push(heading("Choose a hub"));
-            lines.push(option("k", format!("kelpie hub ({}): sign in or sign up in your browser", host(DEFAULT_HUB_URL))));
+            lines.push(option("k", format!("kebbie hub ({}): sign in or sign up in your browser", host(DEFAULT_HUB_URL))));
             lines.push(option("o", "your own hub, at its address".to_string()));
         }
     }
@@ -587,21 +587,21 @@ fn choose(configured: Option<&String>, error: Option<&String>) -> Vec<Line<'stat
     lines.push(Line::default());
     lines.push(match configured {
         Some(_) => keys(&[("⏎", "connect"), ("esc", "close")]),
-        None => keys(&[("k", "kelpie hub"), ("o", "your own"), ("esc", "close")]),
+        None => keys(&[("k", "kebbie hub"), ("o", "your own"), ("esc", "close")]),
     });
     lines
 }
 
 pub(super) fn draw(frame: &mut Frame, window: &Window) {
     let (title, lines) = match &window.view {
-        View::Choose { typing: Some(buffer), .. } => ("kelpie hub · your own", vec![text("Your hub's address, like https://hub.example.com:"), typed(buffer), Line::default(), keys(&[("⏎", "test it and save it as [hub] url"), ("esc", "back")])]),
-        View::Choose { configured, error, .. } => ("kelpie hub", choose(configured.as_ref(), error.as_ref())),
-        View::Name { buffer, url, .. } => ("kelpie hub · name this machine", vec![text(format!("The name {} and your devices show for this machine:", host(url))), typed(buffer), Line::default(), keys(&[("⏎", "connect and save it as [machine] name"), ("esc", "close")])]),
+        View::Choose { typing: Some(buffer), .. } => ("kebbie hub · your own", vec![text("Your hub's address, like https://hub.example.com:"), typed(buffer), Line::default(), keys(&[("⏎", "test it and save it as [hub] url"), ("esc", "back")])]),
+        View::Choose { configured, error, .. } => ("kebbie hub", choose(configured.as_ref(), error.as_ref())),
+        View::Name { buffer, url, .. } => ("kebbie hub · name this machine", vec![text(format!("The name {} and your devices show for this machine:", host(url))), typed(buffer), Line::default(), keys(&[("⏎", "connect and save it as [machine] name"), ("esc", "close")])]),
         View::Running(flow) => (flow.title, running(frame, flow, window.paths.truecolor)),
-        View::Overview(pick) => ("kelpie hub", overview(window, *pick)),
-        View::Label { buffer, .. } => ("kelpie hub · name a device", vec![text("The name this machine shows for the device (the hub has no way to rename it):"), typed(buffer), Line::default(), keys(&[("⏎", "save it on this machine"), ("esc", "back")])]),
-        View::Rename { buffer, error } => ("kelpie hub · rename this machine", [text("The name the hub and your devices show for this machine:"), typed(buffer)].into_iter().chain(error.iter().map(|error| Line::from(Span::styled(error.clone(), style(RED))))).chain([Line::default(), keys(&[("⏎", "save it as [machine] name"), ("esc", "back")])]).collect()),
-        View::Said(said) => ("kelpie hub", said.lines().map(text).chain([Line::default(), keys(&[("any key", "goes on")])]).collect()),
+        View::Overview(pick) => ("kebbie hub", overview(window, *pick)),
+        View::Label { buffer, .. } => ("kebbie hub · name a device", vec![text("The name this machine shows for the device (the hub has no way to rename it):"), typed(buffer), Line::default(), keys(&[("⏎", "save it on this machine"), ("esc", "back")])]),
+        View::Rename { buffer, error } => ("kebbie hub · rename this machine", [text("The name the hub and your devices show for this machine:"), typed(buffer)].into_iter().chain(error.iter().map(|error| Line::from(Span::styled(error.clone(), style(RED))))).chain([Line::default(), keys(&[("⏎", "save it as [machine] name"), ("esc", "back")])]).collect()),
+        View::Said(said) => ("kebbie hub", said.lines().map(text).chain([Line::default(), keys(&[("any key", "goes on")])]).collect()),
     };
     modal(frame, title.to_string(), lines, WIDTH);
 }
@@ -636,8 +636,8 @@ impl App {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use kelpie_hub_api::AdmittedDevice;
-    use kelpie_hub_protocol::{Prefix, SecretKeys};
+    use kebbie_hub_api::AdmittedDevice;
+    use kebbie_hub_protocol::{Prefix, SecretKeys};
 
     use super::*;
     use crate::board::test_support::*;
@@ -698,7 +698,7 @@ mod tests {
         let mut paths = paths("[machine]\nname = \"mac\"\n");
         paths.fetch = fetch;
         let now = crate::messages::now();
-        let mut machine = identity::Identity::new("https://kelpie.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_test".to_string(), &SecretKeys::generate(), now).unwrap();
+        let mut machine = identity::Identity::new("https://kebbie.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_test".to_string(), &SecretKeys::generate(), now).unwrap();
         let (laptop, phone) = (Id::new(Prefix::Device).unwrap(), Id::new(Prefix::Device).unwrap());
         for id in [&laptop, &phone] {
             machine.admit(identity::Device { id: id.clone(), keys: SecretKeys::generate().public(), paired_at: now, label: None });
@@ -722,22 +722,22 @@ mod tests {
     }
 
     #[test]
-    fn not_connected_the_window_offers_the_kelpie_hub_or_your_own_with_the_keys_in_the_keys_windows_colours() {
+    fn not_connected_the_window_offers_the_kebbie_hub_or_your_own_with_the_keys_in_the_keys_windows_colours() {
         let mut app = test_app(Vec::new());
         app.hub_paths = Some(paths(""));
         press(&mut app, key(KeyCode::Char('H')));
         let shown = screen(&mut app, 110, 40);
-        for line in ["Show this board on your phone or in a browser.", "Choose a hub", &format!("k  kelpie hub ({}): sign in or sign up in your browser", host(DEFAULT_HUB_URL)), "o  your own hub, at its address", "k kelpie hub · o your own · esc close"] {
+        for line in ["Show this board on your phone or in a browser.", "Choose a hub", &format!("k  kebbie hub ({}): sign in or sign up in your browser", host(DEFAULT_HUB_URL)), "o  your own hub, at its address", "k kebbie hub · o your own · esc close"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
-        assert_eq!(colour_of(&mut app, "k kelpie hub ·"), MAUVE);
+        assert_eq!(colour_of(&mut app, "k kebbie hub ·"), MAUVE);
         assert_eq!(colour_of(&mut app, "Choose a hub"), PEACH);
         press(&mut app, key(KeyCode::Char('o')));
         for character in "https://hub.example.com".chars() {
             press(&mut app, key(KeyCode::Char(character)));
         }
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("kelpie hub · your own") && shown.contains("https://hub.example.com▏") && shown.contains("⏎ test it and save it as [hub] url · esc back"), "{shown}");
+        assert!(shown.contains("kebbie hub · your own") && shown.contains("https://hub.example.com▏") && shown.contains("⏎ test it and save it as [hub] url · esc back"), "{shown}");
         press(&mut app, key(KeyCode::Esc));
         assert!(screen(&mut app, 110, 40).contains("o  your own hub"), "esc goes back to the choice");
         press(&mut app, key(KeyCode::Esc));
@@ -749,7 +749,7 @@ mod tests {
         assert!(shown.contains("Connect to hub.example.com, as [hub] url says.") && shown.contains("⏎ connect · esc close") && !shown.contains("your own"), "{shown}");
         press(&mut app, key(KeyCode::Enter));
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("kelpie hub · name this machine") && shown.contains(&format!("{}▏", crate::config::short_hostname())), "an unset name is asked for once, with the host's: {shown}");
+        assert!(shown.contains("kebbie hub · name this machine") && shown.contains(&format!("{}▏", crate::config::short_hostname())), "an unset name is asked for once, with the host's: {shown}");
     }
 
     #[test]
@@ -757,7 +757,7 @@ mod tests {
         let mut app = test_app(Vec::new());
         let link = "http://localhost:8470/connect?code=K7QF-M2XD#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&m=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string();
         let shown_link = link.clone();
-        let flow = spawn("kelpie hub · connect", "Waiting for the browser…".to_string(), move |events, _, answers| {
+        let flow = spawn("kebbie hub · connect", "Waiting for the browser…".to_string(), move |events, _, answers| {
             let _ = events.send(Event::Shown { link: shown_link, code: Some("K7QF-M2XD".to_string()) });
             let _ = events.send(Event::Digits("123456".to_string()));
             Event::Done(Ok(format!("answered {}", answers.recv().unwrap_or(false))))
@@ -798,7 +798,7 @@ mod tests {
         let joined = joined(cached, relay::Relay { posted_at: Some(now - 150), rev: 3, ..Default::default() });
         let mut app = opened(&joined);
         let shown = screen(&mut app, 110, 40);
-        for line in ["Connected to kelpie.example.com as mac", "● Board is being sent", "Devices that see this board", "Safari on Mac  paired today · seen 2 min ago", "iPhone         paired today · notifications on", "a add · n name device · m rename machine · r remove · l disconnect · esc close"] {
+        for line in ["Connected to kebbie.example.com as mac", "● Board is being sent", "Devices that see this board", "Safari on Mac  paired today · seen 2 min ago", "iPhone         paired today · notifications on", "a add · n name device · m rename machine · r remove · l disconnect · esc close"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
         assert!(!shown.contains(joined.phone.as_str()) && !shown.contains("https://") && !shown.contains("mch_"), "no ids and no scheme: {shown}");
@@ -811,11 +811,11 @@ mod tests {
     #[test]
     fn the_board_line_is_red_with_the_reason_when_posts_fail_and_amber_before_the_first() {
         let now = crate::messages::now();
-        let plan = "Your kelpie hub subscription isn't active: https://billing.example.com/start".to_string();
+        let plan = "Your kebbie hub subscription isn't active: https://billing.example.com/start".to_string();
         let mut app = opened(&joined(cached, relay::Relay { posted_at: Some(now - 600), plan_inactive: Some(plan.clone()), error: Some(plan.clone()), error_at: Some(now - 5), ..Default::default() }));
         let shown = screen(&mut app, 110, 40);
         assert!(shown.contains(&format!("● {plan}")) && shown.contains("Everything here keeps working"), "{shown}");
-        assert_eq!(colour_of(&mut app, "● Your kelpie hub"), RED);
+        assert_eq!(colour_of(&mut app, "● Your kebbie hub"), RED);
         app.hub_banner = Some(plan.clone());
         press(&mut app, key(KeyCode::Esc));
         assert!(screen(&mut app, 110, 40).contains(&format!("{plan} · H hub")), "the board shows a lapsed plan too");
@@ -848,7 +848,7 @@ mod tests {
         let machine = identity::load(&joined.paths.state).unwrap().unwrap().machine;
         press(&mut app, key(KeyCode::Char('?')));
         let shown = screen(&mut app, 110, 40);
-        for line in ["Details", "Hub            https://kelpie.example.com", &format!("Machine id     {machine}"), &format!("Safari on Mac  {}", joined.laptop), &format!("iPhone         {}", joined.phone), "Devices listed by the hub 5 min ago", "? back · esc close"] {
+        for line in ["Details", "Hub            https://kebbie.example.com", &format!("Machine id     {machine}"), &format!("Safari on Mac  {}", joined.laptop), &format!("iPhone         {}", joined.phone), "Devices listed by the hub 5 min ago", "? back · esc close"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
         press(&mut app, key(KeyCode::Char('?')));
@@ -917,7 +917,7 @@ mod tests {
         assert_eq!(identity::load(&state).unwrap().unwrap().devices[0].id, device);
     }
     fn outdated(state: &Path, _: u64) -> Result<Listed> {
-        Ok(Listed { error: Some("this hub cannot list devices yet; update kelpie-hub".to_string()), outdated: true, ..devices::load(state) })
+        Ok(Listed { error: Some("this hub cannot list devices yet; update kebbie-hub".to_string()), outdated: true, ..devices::load(state) })
     }
 
     #[test]
@@ -950,7 +950,7 @@ mod tests {
         assert!(shown.contains("Kitchen iPad   paired today") && !shown.contains("Unnamed"), "{shown}");
         let saved = identity::load(&joined.paths.state).unwrap().unwrap();
         assert_eq!(saved.devices.iter().find(|device| device.id == joined.phone).and_then(|device| device.label.as_deref()), Some("Kitchen iPad"), "kept in identity.json, as the hub has no machine-side rename");
-        assert_eq!(devices::find(&devices::load(&joined.paths.state), &saved.devices, "kitchen ipad").unwrap(), joined.phone, "kelpie hub remove finds it by that name too");
+        assert_eq!(devices::find(&devices::load(&joined.paths.state), &saved.devices, "kitchen ipad").unwrap(), joined.phone, "kebbie hub remove finds it by that name too");
     }
 
     #[test]
@@ -969,7 +969,7 @@ mod tests {
         }
         press(&mut app, key(KeyCode::Enter));
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("Connected to kelpie.example.com as Studio Mac  renaming on the hub…"), "{shown}");
+        assert!(shown.contains("Connected to kebbie.example.com as Studio Mac  renaming on the hub…"), "{shown}");
         assert_eq!(crate::config::load_machine(&joined.paths.config).unwrap().machine_name.as_deref(), Some("Studio Mac"));
         let mut renamed = identity::load(&joined.paths.state).unwrap().unwrap();
         renamed.name = "Studio Mac".to_string();

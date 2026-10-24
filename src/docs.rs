@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 
 use crate::sh::Result;
 
-const ONLINE: &str = "https://github.com/gronare/kelpie/tree/main/docs";
+const ONLINE: &str = "https://github.com/gronare/kebbie/tree/main/docs";
 const SHOWN: usize = 12;
-const NOISE: [&str; 12] = ["the", "and", "how", "what", "does", "with", "for", "kelpie", "can", "use", "set", "you"];
+const NOISE: [&str; 12] = ["the", "and", "how", "what", "does", "with", "for", "kebbie", "can", "use", "set", "you"];
 
 struct Page {
     path: PathBuf,
@@ -22,7 +22,7 @@ pub fn render(root: Option<&Path>, words: &[String]) -> String {
     let Some(docs) = root.map(|root| root.join("docs")).filter(|docs| docs.join("README.md").is_file()) else {
         return missing(root);
     };
-    let header = format!("kelpie's docs: {}\nkelpie help lists every command and option.", docs.display());
+    let header = format!("kebbie's docs: {}\nkebbie help lists every command and option.", docs.display());
     if words.is_empty() {
         return format!("{header}\n\n{}", index(&docs));
     }
@@ -35,7 +35,7 @@ fn missing(root: Option<&Path>) -> String {
         .and_then(|remote| crate::release::github_repo(&remote))
         .map_or_else(|| ONLINE.to_string(), |repo| format!("https://github.com/{repo}/tree/main/docs"));
     let place = root.map(|root| format!(" (no docs/README.md in {})", root.display())).unwrap_or_default();
-    format!("kelpie's docs are not on this machine{place}: this kelpie runs without its checkout.\nkelpie help lists every command and option; the docs are online at {online}")
+    format!("kebbie's docs are not on this machine{place}: this kebbie runs without its checkout.\nkebbie help lists every command and option; the docs are online at {online}")
 }
 
 fn index(docs: &Path) -> String {
@@ -99,7 +99,7 @@ fn matches(docs: &Path, words: &[String]) -> String {
         (score > 0).then_some((score, page, hits))
     }).collect();
     if scored.is_empty() {
-        return format!("Nothing in kelpie's docs has \"{}\" in a title or heading; try the English words for it, as the docs are in English. The index is {}.", words.join(" "), docs.join("README.md").display());
+        return format!("Nothing in kebbie's docs has \"{}\" in a title or heading; try the English words for it, as the docs are in English. The index is {}.", words.join(" "), docs.join("README.md").display());
     }
     scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| section_rank(docs, &left.1.path).cmp(&section_rank(docs, &right.1.path))).then_with(|| left.1.path.cmp(&right.1.path)));
     let more = scored.len().saturating_sub(SHOWN);
@@ -154,13 +154,13 @@ mod tests {
     use super::*;
 
     fn install(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("kelpie-docs-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("kebbie-docs-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("docs/how-to")).unwrap();
         std::fs::create_dir_all(root.join("docs/reference")).unwrap();
-        std::fs::write(root.join("docs/README.md"), "# kelpie documentation\n\nStart here.\n\n## How-to guides\n\nTasks\n\n- [Run a task with Codex](how-to/run-a-task-with-codex.md): a profile with `agent = \"codex\"`.\n\n## Reference\n\n- [Commands](reference/commands.md): every command.\n").unwrap();
+        std::fs::write(root.join("docs/README.md"), "# kebbie documentation\n\nStart here.\n\n## How-to guides\n\nTasks\n\n- [Run a task with Codex](how-to/run-a-task-with-codex.md): a profile with `agent = \"codex\"`.\n\n## Reference\n\n- [Commands](reference/commands.md): every command.\n").unwrap();
         std::fs::write(root.join("docs/how-to/run-a-task-with-codex.md"), "# Run a task with Codex\n\nA task can run OpenAI's Codex CLI instead of Claude Code.\n\n## Before you start\n").unwrap();
-        std::fs::write(root.join("docs/reference/commands.md"), "# Commands\n\n`kelpie --help` prints the same list.\n\n## Setup and maintenance\n\n### `kelpie setup codex`\n").unwrap();
+        std::fs::write(root.join("docs/reference/commands.md"), "# Commands\n\n`kebbie --help` prints the same list.\n\n## Setup and maintenance\n\n### `kebbie setup codex`\n").unwrap();
         std::fs::create_dir_all(root.join("docs/explanation")).unwrap();
         std::fs::write(root.join("docs/reference/board.md"), "# Board\n\n![The board](assets/board.png)\n<img src=\"x.png\">\n\nThe board lists every task.\n\n## Keys\n\n| Key | What it does |\n| --- | --- |\n| `M` | Mark it read. |\n| `m` | Move it. |\n").unwrap();
         std::fs::write(root.join("docs/explanation/board.md"), "# Board\n\nWhy the board looks the way it does.\n").unwrap();
@@ -187,10 +187,10 @@ mod tests {
     fn without_words_it_names_the_docs_folder_and_lists_the_index_by_section() {
         let root = install("index");
         let text = render(Some(&root), &[]);
-        assert!(text.starts_with(&format!("kelpie's docs: {}\n", root.join("docs").display())), "{text}");
+        assert!(text.starts_with(&format!("kebbie's docs: {}\n", root.join("docs").display())), "{text}");
         assert!(text.contains("How-to guides\n Tasks\n  how-to/run-a-task-with-codex.md  Run a task with Codex: a profile with `agent = \"codex\"`."), "{text}");
         assert!(text.contains("Reference\n  reference/commands.md  Commands: every command."), "{text}");
-        assert!(text.contains("kelpie help lists every command"), "{text}");
+        assert!(text.contains("kebbie help lists every command"), "{text}");
     }
 
     #[test]
@@ -200,41 +200,41 @@ mod tests {
         let codex = root.join("docs/how-to/run-a-task-with-codex.md").display().to_string();
         let commands = root.join("docs/reference/commands.md").display().to_string();
         assert!(text.contains(&format!("{codex}\n  Run a task with Codex: A task can run OpenAI's Codex CLI instead of Claude Code.")), "{text}");
-        assert!(text.contains(&format!("{commands}\n  Commands: `kelpie --help` prints the same list.\n  § `kelpie setup codex`")), "a heading match names its heading: {text}");
+        assert!(text.contains(&format!("{commands}\n  Commands: `kebbie --help` prints the same list.\n  § `kebbie setup codex`")), "a heading match names its heading: {text}");
         assert!(text.find(&codex) < text.find(&commands), "a title match ranks above a heading match: {text}");
         assert!(!text.contains("README.md\n"), "the index itself is no answer: {text}");
         let none = render(Some(&root), &words("routines"));
-        assert!(none.contains("Nothing in kelpie's docs has \"routines\"") && none.contains("try the English words") && none.contains("README.md"), "{none}");
+        assert!(none.contains("Nothing in kebbie's docs has \"routines\"") && none.contains("try the English words") && none.contains("README.md"), "{none}");
     }
 
     #[test]
-    fn a_kelpie_without_its_docs_points_at_help_and_the_online_docs() {
-        let root = std::env::temp_dir().join(format!("kelpie-docs-bare-{}", std::process::id()));
+    fn a_kebbie_without_its_docs_points_at_help_and_the_online_docs() {
+        let root = std::env::temp_dir().join(format!("kebbie-docs-bare-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let text = render(Some(&root), &words("codex"));
-        assert!(text.contains("not on this machine") && text.contains("kelpie help") && text.ends_with(ONLINE), "{text}");
+        assert!(text.contains("not on this machine") && text.contains("kebbie help") && text.ends_with(ONLINE), "{text}");
         crate::update_check::git(&root, &["init", "-q"]).unwrap();
-        crate::update_check::git(&root, &["remote", "add", "origin", "git@github.com:someone/kelpie.git"]).unwrap();
-        assert!(render(Some(&root), &[]).ends_with("https://github.com/someone/kelpie/tree/main/docs"));
+        crate::update_check::git(&root, &["remote", "add", "origin", "git@github.com:someone/kebbie.git"]).unwrap();
+        assert!(render(Some(&root), &[]).ends_with("https://github.com/someone/kebbie/tree/main/docs"));
         assert!(render(None, &[]).ends_with(ONLINE));
     }
 
     #[test]
-    fn the_skill_and_both_roles_send_questions_about_kelpie_to_its_docs() {
-        let skill = include_str!("../skills/using-kelpie/SKILL.md");
+    fn the_skill_and_both_roles_send_questions_about_kebbie_to_its_docs() {
+        let skill = include_str!("../skills/using-kebbie/SKILL.md");
         let description = skill.lines().find_map(|line| line.strip_prefix("description: ")).unwrap();
         for trigger in ["set up", "command", "config key", "board key", "tasks", "the lead", "push line", "stage", "sandbox", "profiles", "Codex", "routines", "updates"] {
             assert!(description.contains(trigger), "the skill's description triggers on {trigger}");
         }
-        assert!(skill.contains("kelpie docs <words>") && skill.contains("kelpie help") && skill.contains("Done when the answer names the doc page"), "{skill}");
-        assert!(include_str!("../roles/lead.md").contains("run the skill `kelpie:using-kelpie`"));
-        assert!(include_str!("../roles/task.md").contains("`{kelpie} docs <words>` names the pages to read"));
-        assert!(crate::known::skills(Path::new(env!("CARGO_MANIFEST_DIR"))).contains_key("kelpie:using-kelpie"));
+        assert!(skill.contains("kebbie docs <words>") && skill.contains("kebbie help") && skill.contains("Done when the answer names the doc page"), "{skill}");
+        assert!(include_str!("../roles/lead.md").contains("run the skill `kebbie:using-kebbie`"));
+        assert!(include_str!("../roles/task.md").contains("`{kebbie} docs <words>` names the pages to read"));
+        assert!(crate::known::skills(Path::new(env!("CARGO_MANIFEST_DIR"))).contains_key("kebbie:using-kebbie"));
     }
 
     #[test]
-    fn kelpies_own_docs_answer_how_to_set_up_codex() {
+    fn kebbies_own_docs_answer_how_to_set_up_codex() {
         let text = render(Some(Path::new(env!("CARGO_MANIFEST_DIR"))), &words("set up codex"));
         assert!(text.lines().nth(3).is_some_and(|line| line.ends_with("docs/how-to/run-a-task-with-codex.md")), "{text}");
     }

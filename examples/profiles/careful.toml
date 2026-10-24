@@ -1,4 +1,4 @@
-# Copy to ~/.config/kelpie/profiles/careful.toml, with careful.md beside it.
+# Copy to ~/.config/kebbie/profiles/careful.toml, with careful.md beside it.
 about = "Risky changes: plan first, the strongest model, nothing destructive"
 for = "migrations, money, authentication, permissions, data deletion"
 model = "opus"

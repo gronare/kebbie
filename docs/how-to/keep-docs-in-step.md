@@ -2,26 +2,26 @@
 
 Hold every change to what users see or do until its README and `docs/` pages say so too. For a public repo, where the docs are how people learn the product, this keeps main and its documentation telling the same story.
 
-1. Turn it on in the repo's config, `~/.config/kelpie/repos/app.toml`:
+1. Turn it on in the repo's config, `~/.config/kebbie/repos/app.toml`:
 
    ```toml
    [docs]
    required = true
    ```
 
-   It is a repo config key only: each repo opts in on its own. `kelpie doctor`, run inside a repo that is public on GitHub, suggests it while it is off.
+   It is a repo config key only: each repo opts in on its own. `kebbie doctor`, run inside a repo that is public on GitHub, suggests it while it is off.
 
 2. Check the value in effect:
 
    ```bash
-   kelpie config --repo ~/code/app
+   kebbie config --repo ~/code/app
    ```
 
 New tasks in the repo follow it from their start.
 
 ## What a task does
 
-A task's Claude runs the [`kelpie:keep-docs`](../../skills/keep-docs/SKILL.md) skill when its change alters what a user sees or does. The skill says what counts, and which page of the README or `docs/` each change belongs on, by the [Diátaxis](https://diataxis.fr) quadrants this documentation follows. A task that runs Codex is told the same in its role, and finds the page from the index in `docs/README.md`, or the README when there is none.
+A task's Claude runs the [`kebbie:keep-docs`](../../skills/keep-docs/SKILL.md) skill when its change alters what a user sees or does. The skill says what counts, and which page of the README or `docs/` each change belongs on, by the [Diátaxis](https://diataxis.fr) quadrants this documentation follows. A task that runs Codex is told the same in its role, and finds the page from the index in `docs/README.md`, or the README when there is none.
 
 ## What the reviewer does
 
@@ -30,7 +30,7 @@ Both reviewers check the docs: the read-only rules check that starts when the ta
 ```
 verdict: changes
 
-- src/peers.rs:88 — documents nothing for the new `--json` option of `kelpie peers`; update docs/reference/commands.md (keep-docs).
+- src/peers.rs:88 — documents nothing for the new `--json` option of `kebbie peers`; update docs/reference/commands.md (keep-docs).
 ```
 
 The task updates the page, reports ready, and the reviewer reads the branch again. A refactor, a test or an internal rename passes without docs.

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use kelpie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Git, Group, Item, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Verdict, VerdictOutcome};
+use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Git, Group, Item, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, Verdict, VerdictOutcome};
 
 use crate::status;
 
@@ -118,7 +118,7 @@ pub fn routines(state: &Path, now: u64) -> Vec<RoutineSummary> {
 pub fn build(items: &[status::Item], checkouts: &[status::Checkout], routines: Vec<RoutineSummary>, away_since: Option<u64>) -> Board {
     Board {
         rev: 0,
-        kelpie: env!("CARGO_PKG_VERSION").to_string(),
+        kebbie: env!("CARGO_PKG_VERSION").to_string(),
         away_since,
         checkouts: checkouts.iter().map(|checkout| Checkout { repo: checkout.name.clone(), free_worktrees: count(checkout.free_slots), busy_worktrees: count(checkout.busy_slots) }).collect(),
         routines,

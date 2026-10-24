@@ -1,6 +1,6 @@
 ---
 name: review
-description: Review a task's branch independently and give a verdict with located findings. kelpie review runs it in a separate, read-only Claude.
+description: Review a task's branch independently and give a verdict with located findings. kebbie review runs it in a separate, read-only Claude.
 disable-model-invocation: true
 ---
 
@@ -15,7 +15,7 @@ You are a second pair of eyes on a branch someone else wrote. You read; you chan
 3. **Bugs.** Hunt for what breaks: wrong logic, the edge cases the code meets (empty, missing, duplicate, concurrent, very large), error paths that swallow or mislabel a failure, data that can be lost or written twice, a change that contradicts the stated intent. Follow a changed function to its callers with Grep. Done when every changed function has been checked for each of these.
 4. **Scope.** Your brief names the task's `task.also_noticed`: what it does with what it notices outside its task. Check every hunk against the intent from step 1 and that setting: a hunk serves the intent, the setting allows it, or it is a finding that names the commit carrying it. Done when every hunk has one of the three.
 5. **Rules.** Read the rules skill your brief points to and check every commit against each of its rules. Done when each commit has a verdict on each rule.
-6. **Tests.** For each behaviour the branch adds or fixes, find the test that would fail without it. A fix without such a test is a finding. Your brief lists the test runs kelpie recorded in the task: when the latest one failed, or none passed on the code under review, that is a finding too. Done when every behaviour has its test or its finding.
+6. **Tests.** For each behaviour the branch adds or fixes, find the test that would fail without it. A fix without such a test is a finding. Your brief lists the test runs kebbie recorded in the task: when the latest one failed, or none passed on the code under review, that is a finding too. Done when every behaviour has its test or its finding.
 7. **Docs.** Only when your brief has a docs check. Read the keep-docs skill it names, sort the hunks by its Surface step, and find each surface change's page by its Pages step. A surface change that the docs the commits touch leave undescribed is a finding in the brief's words. Done when every hunk is sorted and each surface change is described or has its finding.
 8. **Verdict.** Write the answer below. Done when every finding has a `file:line` you have seen with your own eyes.
 
@@ -25,7 +25,7 @@ Read, Grep and Glob for files; `git log`, `git diff` and `git show` for history,
 
 ## The verdict
 
-Your last message is the verdict and nothing else; kelpie saves it to a file and tells the lead. Its first line is exactly `verdict: ok` or `verdict: changes`. `ok` means nothing below needs fixing before the push; one bug or broken rule makes it `changes`.
+Your last message is the verdict and nothing else; kebbie saves it to a file and tells the lead. Its first line is exactly `verdict: ok` or `verdict: changes`. `ok` means nothing below needs fixing before the push; one bug or broken rule makes it `changes`.
 
 Then the findings, one per line starting with `- `, a continuation indented under it:
 

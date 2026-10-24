@@ -25,7 +25,7 @@ enum Skip {
 impl Skip {
     fn reason(self) -> &'static str {
         match self {
-            Skip::Config => "repo config does not load (kelpie doctor)",
+            Skip::Config => "repo config does not load (kebbie doctor)",
             Skip::NoPort => "no port",
             Skip::NoUrl => "no dev_url",
             Skip::Local => "dev_url is on localhost",
@@ -96,7 +96,7 @@ pub fn caddyfile(pooled: &[Pooled], left_out: usize, plain_http: bool) -> String
             Err(skip) => skipped.push((skip, &worktree.worktree)),
         }
     }
-    let command = if plain_http { "kelpie routes --plain-http" } else { "kelpie routes" };
+    let command = if plain_http { "kebbie routes --plain-http" } else { "kebbie routes" };
     let mut lines = vec![format!("# {command}: a site per pooled worktree with a port in the repos with worktree.dev_route; rerun it when the pool changes\n")];
     lines.extend(sites.iter().cloned());
     let count = match sites.len() { 1 => "1 site".to_string(), n => format!("{n} sites") };
@@ -178,7 +178,7 @@ mod tests {
         let shown = caddyfile(&pool(), 0, false);
         let expected = "https://app-1.dev.example.com {\n\treverse_proxy localhost:3001\n}\n\nhttps://app-2.dev.example.com:8443 {\n\treverse_proxy localhost:3002\n}\n";
         assert!(shown.contains(expected), "{shown}");
-        assert!(shown.starts_with("# kelpie routes:"), "{shown}");
+        assert!(shown.starts_with("# kebbie routes:"), "{shown}");
         assert!(shown.ends_with("# 2 sites; skipped 2: no port: wt3.app; no dev_url: wt1.api"), "{shown}");
         assert_eq!(shown, caddyfile(&pool(), 0, false), "the same pool prints the same file");
     }
@@ -188,7 +188,7 @@ mod tests {
         let shown = caddyfile(&pool(), 0, true);
         assert!(shown.contains("http://app-1.dev.example.com {\n\treverse_proxy localhost:3001\n}\n\nhttp://app-2.dev.example.com {\n\treverse_proxy localhost:3002\n}\n"), "{shown}");
         assert!(!shown.contains("https://") && !shown.contains(":8443"), "{shown}");
-        assert!(shown.starts_with("# kelpie routes --plain-http: "), "the file says how to print it again: {shown}");
+        assert!(shown.starts_with("# kebbie routes --plain-http: "), "the file says how to print it again: {shown}");
     }
 
     #[test]
@@ -202,7 +202,7 @@ mod tests {
         ];
         let shown = caddyfile(&pool, 0, false);
         assert_eq!(shown.matches(" {\n").count(), 1, "{shown}");
-        assert!(shown.ends_with("# 1 site; skipped 4: repo config does not load (kelpie doctor): wt1.api; dev_url is on localhost: wt1.app; dev_url names no http(s) host: wt4.app; host already routed to another worktree: wt3.app"), "{shown}");
+        assert!(shown.ends_with("# 1 site; skipped 4: repo config does not load (kebbie doctor): wt1.api; dev_url is on localhost: wt1.app; dev_url names no http(s) host: wt4.app; host already routed to another worktree: wt3.app"), "{shown}");
         assert!(caddyfile(&[], 0, true).ends_with("# 0 sites, none skipped"));
         assert!(caddyfile(&[], 2, true).ends_with("# 0 sites, none skipped; 2 repos without worktree.dev_route left out"));
     }

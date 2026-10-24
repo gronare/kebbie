@@ -166,7 +166,7 @@ pub(crate) struct Pending {
     pub after: Option<String>,
 }
 
-// Reads only: the board and kelpie status never claim or drop an intent.
+// Reads only: the board and kebbie status never claim or drop an intent.
 pub(crate) fn pending(state: &Path, address: &str) -> Option<Pending> {
     let intent = load(state, address)?;
     let line = line(state, &intent.repo);
@@ -268,7 +268,7 @@ pub(super) enum Next {
 // The push completes only on a ready report written after the intent, with the commits the intent was recorded for or ones the lead approved since; changed commits wait for that approval.
 pub(super) fn next(intent: &Intent, report: Option<&Message>, slot: Option<&Slot>, current: Option<&str>, approved: bool) -> Next {
     if slot.is_none() {
-        return Next::Drop(format!("{} is gone, so kelpie dropped the push {} asked for", intent.address, intent.by.word()));
+        return Next::Drop(format!("{} is gone, so kebbie dropped the push {} asked for", intent.address, intent.by.word()));
     }
     let ready = report.is_some_and(|report| report.at > intent.at && intent.seen.as_deref() != Some(report.id.as_str()) && report.report.as_ref().is_some_and(|report| report.state == "ready"));
     if !ready {
@@ -299,7 +299,7 @@ pub(super) mod tests {
 
     #[test]
     fn an_intent_names_the_user_or_the_lead_and_reads_back_as_written() {
-        let state = std::env::temp_dir().join(format!("kelpie-intents-{}", std::process::id()));
+        let state = std::env::temp_dir().join(format!("kebbie-intents-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&state);
         let mut written = intent(By::Lead, Path::new("/repos/app"), "abc");
         written.through = Through::First { count: 1, of: 2 };

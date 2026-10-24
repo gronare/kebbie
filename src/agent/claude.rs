@@ -42,7 +42,7 @@ pub enum Started {
 }
 
 impl Started {
-    // What Claude asks in its Space before it runs; the answer is the user's, so kelpie sends it no key.
+    // What Claude asks in its Space before it runs; the answer is the user's, so kebbie sends it no key.
     pub fn asks(&self) -> Option<&'static str> {
         match self {
             Started::AwaitsTrust => Some("whether you trust its folder"),
@@ -53,7 +53,7 @@ impl Started {
     }
 }
 
-// What kelpie reads on an agent's screen as it starts, and how herdr knows it.
+// What kebbie reads on an agent's screen as it starts, and how herdr knows it.
 pub(crate) struct Screens {
     pub kind: &'static str,
     pub name: &'static str,
@@ -255,35 +255,35 @@ fn trusted_in(claude: &Value, dir: &Path) -> bool {
     dir.ancestors().any(|folder| folder.to_str().is_some_and(|folder| claude["projects"][folder]["hasTrustDialogAccepted"] == true))
 }
 
-// The deny rules and env rewrite name the rule, the push block holds when they are slipped, and the sandbox keeps the shell from passing as the user; gate is the task's address when kelpie keeps its note, whose Problem its edits then wait for.
-pub(crate) fn settings(kelpie: &str, address: &str, gate: Option<&str>, dirs: Option<&TaskDirs>, sandbox: Option<&Policy>) -> String {
-    let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kelpie)) }] }]);
-    let allow = ["peers", "tell", "report", "ask", "routine ok"].map(|command| format!("Bash({kelpie} {command}:*)"));
-    let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kelpie), crate::sh::quote(address)) }] }]);
+// The deny rules and env rewrite name the rule, the push block holds when they are slipped, and the sandbox keeps the shell from passing as the user; gate is the task's address when kebbie keeps its note, whose Problem its edits then wait for.
+pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Option<&TaskDirs>, sandbox: Option<&Policy>) -> String {
+    let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kebbie)) }] }]);
+    let allow = ["peers", "tell", "report", "ask", "routine ok"].map(|command| format!("Bash({kebbie} {command}:*)"));
+    let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kebbie), crate::sh::quote(address)) }] }]);
     let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PostToolUse": evidence, "PostToolUseFailure": evidence });
     if let Some(address) = gate {
-        hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kelpie), crate::sh::quote(address)), "timeout": 40 }] }]);
+        hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kebbie), crate::sh::quote(address)), "timeout": 40 }] }]);
     }
     if let Some(dirs) = dirs.filter(|_| sandbox.is_some()) {
         let task = address.rsplit_once('@').map_or(address, |(task, _)| task);
-        let files = json!({ "matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": format!("{} hook files {} {} {}", crate::sh::quote(kelpie), crate::sh::quote(task), crate::sh::quote(&dirs.worktree.to_string_lossy()), crate::sh::quote(&dirs.tmp.to_string_lossy())) }] });
+        let files = json!({ "matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": format!("{} hook files {} {} {}", crate::sh::quote(kebbie), crate::sh::quote(task), crate::sh::quote(&dirs.worktree.to_string_lossy()), crate::sh::quote(&dirs.tmp.to_string_lossy())) }] });
         match hooks["PreToolUse"].as_array_mut() {
             Some(entries) => entries.push(files),
             None => hooks["PreToolUse"] = json!([files]),
         }
     }
-    // VAULT_STOP_HOOK=off silences the vault plugin's Stop hook: kelpie writes a task's log lines, and hooks inherit the session's env.
-    let mut env = json!({ "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kelpie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "", "VAULT_STOP_HOOK": "off" });
+    // VAULT_STOP_HOOK=off silences the vault plugin's Stop hook: kebbie writes a task's log lines, and hooks inherit the session's env.
+    let mut env = json!({ "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kebbie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "", "VAULT_STOP_HOOK": "off" });
     if let Some(dirs) = dirs {
         for name in TMP_VARS {
             env[name] = json!(dirs.tmp.to_string_lossy());
         }
     }
     let mut deny = vec!["Bash(git push:*)".to_string()];
-    deny.extend(crate::permit::USER_ONLY.iter().map(|command| format!("Bash({kelpie} {command}:*)")));
+    deny.extend(crate::permit::USER_ONLY.iter().map(|command| format!("Bash({kebbie} {command}:*)")));
     deny.extend(["herdr pane send-keys", "herdr pane send-text", "herdr pane run", "herdr agent send-keys", "herdr agent prompt"].map(|command| format!("Bash({command}:*)")));
     if sandbox.is_some() {
-        deny.extend(Protected::here().deny_rules(kelpie, dirs));
+        deny.extend(Protected::here().deny_rules(kebbie, dirs));
     }
     let mut written = json!({
         "env": env,
@@ -291,16 +291,16 @@ pub(crate) fn settings(kelpie: &str, address: &str, gate: Option<&str>, dirs: Op
         "hooks": hooks,
     });
     if let Some(policy) = sandbox {
-        written["sandbox"] = crate::sandbox::block(kelpie, policy, dirs, cfg!(target_os = "macos"));
+        written["sandbox"] = crate::sandbox::block(kebbie, policy, dirs, cfg!(target_os = "macos"));
     }
     written.to_string()
 }
 
 pub(crate) const TMP_VARS: [&str; 4] = ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"];
 
-// A profile's rules go after kelpie's own, so kelpie's deny rules, hooks and env stay whatever the profile says.
+// A profile's rules go after kebbie's own, so kebbie's deny rules, hooks and env stay whatever the profile says.
 pub(crate) fn with_profile(settings: &str, profile: &Profile) -> String {
-    let mut written: Value = serde_json::from_str(settings).expect("kelpie writes its own task settings as JSON");
+    let mut written: Value = serde_json::from_str(settings).expect("kebbie writes its own task settings as JSON");
     for (key, rules) in [("deny", &profile.deny), ("allow", &profile.allow)] {
         if let Some(list) = written["permissions"][key].as_array_mut() {
             list.extend(rules.iter().map(|rule| json!(rule)));
@@ -341,7 +341,7 @@ pub fn home() -> Option<PathBuf> {
     std::env::var("CLAUDE_CONFIG_DIR").map(PathBuf::from).ok().or_else(|| std::env::var("HOME").ok().map(|home| Path::new(&home).join(".claude")))
 }
 
-// What the user typed into the task's conversation, oldest first: its prompt and every later word, without tool results or kelpie's own wrappers.
+// What the user typed into the task's conversation, oldest first: its prompt and every later word, without tool results or kebbie's own wrappers.
 pub fn user_messages(transcript: &str) -> Vec<String> {
     user_messages_at(transcript).into_iter().map(|(_, text)| text).collect()
 }
@@ -373,7 +373,7 @@ fn base(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-// The process's own flags, without its conversation and prompt, then --resume <session>; an option kelpie cannot place is refused, since its next word could be a prompt that would be sent again.
+// The process's own flags, without its conversation and prompt, then --resume <session>; an option kebbie cannot place is refused, since its next word could be a prompt that would be sent again.
 pub fn resume_args(argv: &[String], session: &str) -> std::result::Result<Vec<String>, String> {
     let start = match argv {
         [program, ..] if base(program) == "claude" => 1,
@@ -429,7 +429,7 @@ pub fn resume_args(argv: &[String], session: &str) -> std::result::Result<Vec<St
                 index += 1;
             }
         } else {
-            return Err(format!("it runs with {flag}, an option kelpie does not know"));
+            return Err(format!("it runs with {flag}, an option kebbie does not know"));
         }
     }
     kept.extend(["--resume".to_string(), session.to_string()]);
@@ -443,7 +443,7 @@ fn value_of<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.iter().enumerate().find_map(|(index, word)| if word == flag { args.get(index + 1).map(String::as_str) } else { word.strip_prefix(&inline) })
 }
 
-// A task's Claude without the settings and role kelpie writes, or whose role file is gone, has none of kelpie's hooks and never reports.
+// A task's Claude without the settings and role kebbie writes, or whose role file is gone, has none of kebbie's hooks and never reports.
 pub fn lacks_role(argv: &[String]) -> bool {
     ROLE_FLAGS.iter().any(|flag| value_of(argv, flag).is_none_or(|file| !Path::new(file).is_file()))
 }
@@ -485,8 +485,8 @@ pub(crate) fn reviewer_args(reviewer: &super::Reviewer) -> Vec<String> {
     args
 }
 
-pub(crate) fn reviewer_settings(kelpie: &str, sandbox: bool) -> String {
-    let mut written = json!({ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook --review", crate::sh::quote(kelpie)) }] }] } });
+pub(crate) fn reviewer_settings(kebbie: &str, sandbox: bool) -> String {
+    let mut written = json!({ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook --review", crate::sh::quote(kebbie)) }] }] } });
     if sandbox {
         written["sandbox"] = crate::sandbox::reader_block();
     }
@@ -629,11 +629,11 @@ mod tests {
     }
 
     fn task_settings(sandbox: Option<&Policy>) -> Value {
-        serde_json::from_str(&settings("/opt/kelpie/kelpie", "billing@app", None, Some(&dirs()), sandbox)).unwrap()
+        serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", None, Some(&dirs()), sandbox)).unwrap()
     }
 
     fn dirs() -> TaskDirs {
-        TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1/kelpie-tmp"))
+        TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1/kebbie-tmp"))
     }
 
     fn strings(value: &Value) -> Vec<String> {
@@ -649,15 +649,15 @@ mod tests {
     }
 
     #[test]
-    fn a_sandboxed_task_runs_its_shell_in_the_strict_sandbox_with_kelpies_own_commands_outside_it() {
+    fn a_sandboxed_task_runs_its_shell_in_the_strict_sandbox_with_kebbies_own_commands_outside_it() {
         let written = task_settings(Some(&crate::profiles::built_in(crate::profiles::TASK).unwrap().sandbox));
         let sandbox = &written["sandbox"];
         assert_eq!((&sandbox["enabled"], &sandbox["allowUnsandboxedCommands"], &sandbox["failIfUnavailable"]), (&json!(true), &json!(false), &json!(true)), "no retry outside the sandbox, and no start without one");
-        assert_eq!(strings(&sandbox["excludedCommands"]), crate::sandbox::TASK_COMMANDS.map(|command| format!("/opt/kelpie/kelpie {command} *")).to_vec(), "matched on the absolute path the role names");
+        assert_eq!(strings(&sandbox["excludedCommands"]), crate::sandbox::TASK_COMMANDS.map(|command| format!("/opt/kebbie/kebbie {command} *")).to_vec(), "matched on the absolute path the role names");
         assert_eq!(strings(&sandbox["network"]["allowedDomains"]), crate::sandbox::DOMAINS.map(str::to_string).to_vec());
-        assert_eq!(strings(&sandbox["filesystem"]["allowWrite"]), ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache", "/src/app/.git/worktrees/1/kelpie-tmp"]);
+        assert_eq!(strings(&sandbox["filesystem"]["allowWrite"]), ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache", "/src/app/.git/worktrees/1/kebbie-tmp"]);
         let denied = strings(&sandbox["filesystem"]["denyWrite"]);
-        for path in ["/src/app/.git/worktrees/1/config.worktree", "/src/app/.git/worktrees/1/kelpie-hooks"] {
+        for path in ["/src/app/.git/worktrees/1/config.worktree", "/src/app/.git/worktrees/1/kebbie-hooks"] {
             assert!(denied.contains(&path.to_string()), "the push block stays out of the shell's reach: {path}");
         }
         for path in ["/src/wt1.app/.git", "/src/app/.git/worktrees/1/commondir", "/src/app/.git/worktrees/1/gitdir"] {
@@ -674,10 +674,10 @@ mod tests {
     }
 
     #[test]
-    fn the_ops_profile_takes_ssh_scp_and_rsync_out_of_the_sandbox_on_top_of_kelpies_own() {
+    fn the_ops_profile_takes_ssh_scp_and_rsync_out_of_the_sandbox_on_top_of_kebbies_own() {
         let ops = crate::profiles::built_in(crate::profiles::OPS).unwrap();
         let excluded = strings(&task_settings(Some(&ops.sandbox))["sandbox"]["excludedCommands"]);
-        assert_eq!(excluded[..crate::sandbox::TASK_COMMANDS.len()], crate::sandbox::TASK_COMMANDS.map(|command| format!("/opt/kelpie/kelpie {command} *")));
+        assert_eq!(excluded[..crate::sandbox::TASK_COMMANDS.len()], crate::sandbox::TASK_COMMANDS.map(|command| format!("/opt/kebbie/kebbie {command} *")));
         assert_eq!(excluded[crate::sandbox::TASK_COMMANDS.len()..], ["ssh *", "scp *", "rsync *"]);
     }
 
@@ -687,7 +687,7 @@ mod tests {
         for policy in [Policy::default(), ops.sandbox] {
             for pattern in strings(&task_settings(Some(&policy))["sandbox"]["excludedCommands"]) {
                 for command in crate::permit::USER_ONLY {
-                    for spelled in [format!("/opt/kelpie/kelpie {command}"), format!("/opt/kelpie/kelpie {command} billing"), format!("kelpie {command}")] {
+                    for spelled in [format!("/opt/kebbie/kebbie {command}"), format!("/opt/kebbie/kebbie {command} billing"), format!("kebbie {command}")] {
                         assert!(!excluded_matches(&pattern, &spelled), "{pattern} would run {spelled} outside the sandbox");
                     }
                 }
@@ -697,16 +697,16 @@ mod tests {
     }
 
     #[test]
-    fn every_kelpie_command_a_task_is_told_to_run_leaves_the_sandbox_or_is_the_users() {
+    fn every_kebbie_command_a_task_is_told_to_run_leaves_the_sandbox_or_is_the_users() {
         let told = [include_str!("../../roles/task.md"), include_str!("../peers.rs"), include_str!("../report.rs"), include_str!("../routines.rs")].concat();
-        let excluded = crate::sandbox::excluded("{kelpie}", &Policy::default());
+        let excluded = crate::sandbox::excluded("{kebbie}", &Policy::default());
         let mut seen = Vec::new();
-        for (at, _) in told.match_indices("{kelpie} ") {
+        for (at, _) in told.match_indices("{kebbie} ") {
             let words: Vec<&str> = told[at + 9..].split(|character: char| !character.is_ascii_lowercase() && character != '-').take(2).collect();
             let command = if ["routine", "backlog", "ci", "issue"].contains(&words[0]) { words.join(" ") } else { words[0].to_string() };
-            let line = format!("{{kelpie}} {command}");
+            let line = format!("{{kebbie}} {command}");
             let user_only = crate::permit::USER_ONLY.iter().any(|guarded| command == *guarded || command.starts_with(&format!("{guarded} ")));
-            assert!(excluded.iter().any(|pattern| excluded_matches(pattern, &line)) || user_only || ["done", "docs"].contains(&command.as_str()), "a task is told to run {line}, which the sandbox would cut off from kelpie's state");
+            assert!(excluded.iter().any(|pattern| excluded_matches(pattern, &line)) || user_only || ["done", "docs"].contains(&command.as_str()), "a task is told to run {line}, which the sandbox would cut off from kebbie's state");
             seen.push(command);
         }
         for command in ["report", "ask", "tell", "peers", "routine ok", "link", "backlog add"] {
@@ -720,8 +720,8 @@ mod tests {
         let deny = strings(&written["permissions"]["deny"]);
         let state = crate::lead::state_location().unwrap();
         let paths = [
-            format!("/{}/**", state.display()), "~/.config/kelpie/**".to_string(), "~/.config/herdr/**".to_string(), "~/.claude/settings*.json".to_string(), "~/.zshrc".to_string(), "~/.bashrc".to_string(),
-            "//opt/kelpie/kelpie".to_string(), "~/.claude.json".to_string(), "~/.claude/hooks/**".to_string(), "~/.claude/skills/**".to_string(), "~/.claude/agents/**".to_string(), "~/.claude/commands/**".to_string(),
+            format!("/{}/**", state.display()), "~/.config/kebbie/**".to_string(), "~/.config/herdr/**".to_string(), "~/.claude/settings*.json".to_string(), "~/.zshrc".to_string(), "~/.bashrc".to_string(),
+            "//opt/kebbie/kebbie".to_string(), "~/.claude.json".to_string(), "~/.claude/hooks/**".to_string(), "~/.claude/skills/**".to_string(), "~/.claude/agents/**".to_string(), "~/.claude/commands/**".to_string(),
             "~/.gitconfig".to_string(), "~/.config/git/**".to_string(), "~/.codex/**".to_string(), "~/.ssh/**".to_string(), "~/Library/LaunchAgents/**".to_string(), "~/.local/bin/**".to_string(),
             "//src/wt1.app/.claude/settings.json".to_string(), "//src/wt1.app/.claude/settings.local.json".to_string(), "//src/wt1.app/.claude/hooks/**".to_string(), "//src/wt1.app/.mcp.json".to_string(), "//src/wt1.app/.git".to_string(),
             "//src/app/.claude/**".to_string(), "//src/app/.mcp.json".to_string(), "//src/app/.git/config".to_string(), "//src/app/.git/hooks/**".to_string(), "//src/app/.git/worktrees/*/commondir".to_string(), "//src/app/.git/worktrees/1/config.worktree".to_string(),
@@ -731,13 +731,13 @@ mod tests {
         }
         assert!(!deny.iter().any(|rule| (rule.starts_with("Write(") || rule.starts_with("MultiEdit(")) && rule.contains('/')), "Claude Code never consults a Write or MultiEdit path rule: {deny:?}");
         assert!(!deny.iter().any(|rule| rule.starts_with("Edit(/") && !rule.starts_with("Edit(//")), "a single leading slash anchors at the settings file, not at /: {deny:?}");
-        assert!(!deny.contains(&"Edit(//src/wt1.app/**)".to_string()) && !deny.iter().any(|rule| rule.starts_with("Edit(//src/app/.git/worktrees/1/kelpie-tmp")), "the worktree and the temp folder stay the task's to write");
+        assert!(!deny.contains(&"Edit(//src/wt1.app/**)".to_string()) && !deny.iter().any(|rule| rule.starts_with("Edit(//src/app/.git/worktrees/1/kebbie-tmp")), "the worktree and the temp folder stay the task's to write");
     }
 
     #[test]
     fn with_the_sandbox_off_a_task_keeps_its_unsandboxed_settings_with_no_file_guard() {
         let off = task_settings(None);
-        assert_eq!(off.get("sandbox"), None, "kelpie writes no sandbox key, so the user's own settings decide");
+        assert_eq!(off.get("sandbox"), None, "kebbie writes no sandbox key, so the user's own settings decide");
         assert!(!strings(&off["permissions"]["deny"]).iter().any(|rule| rule.starts_with("Edit(") || rule.starts_with("Write(") || rule.starts_with("MultiEdit(")), "{:?}", off["permissions"]["deny"]);
         assert!(off["hooks"].get("PreToolUse").is_none(), "no file hook");
     }
@@ -747,19 +747,19 @@ mod tests {
         let written = task_settings(Some(&Policy::default()));
         let entries = written["hooks"]["PreToolUse"].as_array().unwrap();
         let files = entries.iter().find(|entry| entry["matcher"] == "Edit|Write|MultiEdit|NotebookEdit").unwrap();
-        assert_eq!(files["hooks"][0]["command"], "'/opt/kelpie/kelpie' hook files 'billing' '/src/wt1.app' '/src/app/.git/worktrees/1/kelpie-tmp'", "the task's name finds its halves in other repos");
-        let gated: Value = serde_json::from_str(&settings("/opt/kelpie/kelpie", "billing@app", Some("billing@app"), Some(&dirs()), Some(&Policy::default()))).unwrap();
+        assert_eq!(files["hooks"][0]["command"], "'/opt/kebbie/kebbie' hook files 'billing' '/src/wt1.app' '/src/app/.git/worktrees/1/kebbie-tmp'", "the task's name finds its halves in other repos");
+        let gated: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some("billing@app"), Some(&dirs()), Some(&Policy::default()))).unwrap();
         let matchers: Vec<&str> = gated["hooks"]["PreToolUse"].as_array().unwrap().iter().filter_map(|entry| entry["matcher"].as_str()).collect();
         assert_eq!(matchers, ["Edit|Write|MultiEdit|NotebookEdit|Bash", "Edit|Write|MultiEdit|NotebookEdit"], "the vault's gate and the file hook both run");
-        let off: Value = serde_json::from_str(&settings("/opt/kelpie/kelpie", "billing@app", Some("billing@app"), Some(&dirs()), None)).unwrap();
+        let off: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some("billing@app"), Some(&dirs()), None)).unwrap();
         assert_eq!(off["hooks"]["PreToolUse"].as_array().unwrap().len(), 1, "only the vault's gate without the sandbox");
     }
 
     #[test]
     fn a_task_across_repos_takes_every_halfs_worktree_as_its_own_in_the_deny_rules() {
         let mut dirs = dirs();
-        dirs.halves.push(TaskDirs::new(Path::new("/src/wt2.api"), Path::new("/src/api/.git/worktrees/2/kelpie-tmp")));
-        let deny = Protected { path: vec![PathBuf::from("/src")], install: Some(PathBuf::from("/src/wt2.api")), ..Protected::here() }.deny_rules("/opt/kelpie/kelpie", Some(&dirs));
+        dirs.halves.push(TaskDirs::new(Path::new("/src/wt2.api"), Path::new("/src/api/.git/worktrees/2/kebbie-tmp")));
+        let deny = Protected { path: vec![PathBuf::from("/src")], install: Some(PathBuf::from("/src/wt2.api")), ..Protected::here() }.deny_rules("/opt/kebbie/kebbie", Some(&dirs));
         for rule in ["Edit(//src/wt2.api/.claude/settings.json)", "Edit(//src/wt2.api/.mcp.json)", "Edit(//src/api/.git/config)", "Edit(//src/api/.claude/**)"] {
             assert!(deny.contains(&rule.to_string()), "{rule} in {deny:?}");
         }
@@ -768,11 +768,11 @@ mod tests {
 
     #[test]
     fn the_reviewer_reads_in_a_sandbox_with_nothing_outside_it() {
-        let on: Value = serde_json::from_str(&reviewer_settings("/opt/kelpie/kelpie", true)).unwrap();
+        let on: Value = serde_json::from_str(&reviewer_settings("/opt/kebbie/kebbie", true)).unwrap();
         assert_eq!((&on["sandbox"]["enabled"], &on["sandbox"]["allowUnsandboxedCommands"], &on["sandbox"]["failIfUnavailable"]), (&json!(true), &json!(false), &json!(true)));
         assert_eq!((&on["sandbox"]["excludedCommands"], &on["sandbox"]["network"]["allowedDomains"], &on["sandbox"]["filesystem"]["allowWrite"]), (&json!([]), &json!([]), &json!([])));
-        assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/opt/kelpie/kelpie' hook --review");
-        let off: Value = serde_json::from_str(&reviewer_settings("/opt/kelpie/kelpie", false)).unwrap();
+        assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/opt/kebbie/kebbie' hook --review");
+        let off: Value = serde_json::from_str(&reviewer_settings("/opt/kebbie/kebbie", false)).unwrap();
         assert_eq!(off.get("sandbox"), None);
     }
 }

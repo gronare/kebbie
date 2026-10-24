@@ -6,9 +6,11 @@ use std::path::{Path, PathBuf};
 use crate::repo::{git, main_checkout};
 use crate::sh::Result;
 
-pub const TOKEN_VAR: &str = "KELPIE_PUSH_TOKEN";
-const BLOCKED: &str = "kelpie-blocks-push:";
-const REFUSAL: &str = "kelpie: a task's worktree does not push. The user pushes from the board, or the lead with kelpie push for a task the user gave push permission. The block stops an accidental push, not a determined one.";
+pub const TOKEN_VAR: &str = "KEBBIE_PUSH_TOKEN";
+const BLOCKED: &str = "kebbie-blocks-push:";
+// What a worktree blocked before the rename still carries; install takes it out so no slot runs or rewrites through it.
+const OLD_BLOCK: (&str, &str) = ("kelpie-hooks", "kelpie-blocks-push:");
+const REFUSAL: &str = "kebbie: a task's worktree does not push. The user pushes from the board, or the lead with kebbie push for a task the user gave push permission. The block stops an accidental push, not a determined one.";
 const FOR_A_PR: &str = "To push this branch for a pull request, run in your own terminal: git -C %s push origin %s\\n";
 
 // Every hook git runs (githooks(5)), so a hook the repo gets after install, as husky, lefthook or pre-commit write them, runs too; not push-to-checkout, whose mere presence changes how git takes a push into the worktree.
@@ -27,7 +29,7 @@ fn quoted(text: &str) -> String {
     crate::sh::quote(text)
 }
 
-// One push's proof that kelpie runs it: the hook finds the file only while that push runs, and the value is never written where a task reads it.
+// One push's proof that kebbie runs it: the hook finds the file only while that push runs, and the value is never written where a task reads it.
 pub struct Token {
     file: PathBuf,
     pub value: String,
@@ -50,7 +52,7 @@ impl Drop for Token {
     }
 }
 
-// Every hook the repo has runs as before; pre-push first asks for the token of a push kelpie runs.
+// Every hook the repo has runs as before; pre-push first asks for the token of a push kebbie runs.
 pub fn hook_script(original: &Path, state: &Path, main: &Path) -> String {
     format!(
         "#!/bin/sh\nhook=$(basename \"$0\")\nrefuse() {{\n  echo {refusal} >&2\n  printf {for_a_pr} {main} \"$(git branch --show-current 2>/dev/null)\" >&2\n  exit 1\n}}\nif [ \"$hook\" = pre-push ]; then\n  token=\"${{{TOKEN_VAR}:-}}\"\n  case \"$token\" in\n    ''|*[!0123456789abcdef]*) refuse ;;\n  esac\n  if [ ${{#token}} -ne 32 ] || [ ! -f {tokens}/\"$token\" ]; then\n    refuse\n  fi\nfi\nif [ -x {original}/\"$hook\" ]; then\n  exec {original}/\"$hook\" \"$@\"\nfi\nexit 0\n",
@@ -59,7 +61,7 @@ pub fn hook_script(original: &Path, state: &Path, main: &Path) -> String {
     )
 }
 
-// The hooks the worktree ran before kelpie's: a hooksPath set anywhere but in its own worktree config, else the repo's hooks folder.
+// The hooks the worktree ran before kebbie's: a hooksPath set anywhere but in its own worktree config, else the repo's hooks folder.
 pub fn original_hooks(worktree: &Path) -> Result<PathBuf> {
     let scoped = git(worktree, &["config", "--show-scope", "--get-all", "core.hooksPath"]).unwrap_or_default();
     let set = scoped.lines().filter_map(|line| line.split_once('\t')).filter(|(scope, _)| !["worktree", "command"].contains(scope)).map(|(_, value)| value.trim()).next_back();
@@ -77,7 +79,7 @@ pub fn hooks_in_worktree(worktree: &Path) -> Result<Option<PathBuf>> {
 }
 
 fn hooks_dir(worktree: &Path) -> Result<PathBuf> {
-    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kelpie-hooks"))
+    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kebbie-hooks"))
 }
 
 #[derive(Debug, PartialEq)]
@@ -86,7 +88,7 @@ pub enum Block {
     Off(String),
 }
 
-// git's docs ask core.worktree and core.bare out of the shared config before extensions.worktreeConfig is turned on; kelpie leaves such a repo unblocked rather than move them.
+// git's docs ask core.worktree and core.bare out of the shared config before extensions.worktreeConfig is turned on; kebbie leaves such a repo unblocked rather than move them.
 pub fn unsupported(worktree: &Path) -> Result<Option<String>> {
     let common = PathBuf::from(git(worktree, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?).join("config");
     let common = common.to_string_lossy();
@@ -98,7 +100,7 @@ pub fn unsupported(worktree: &Path) -> Result<Option<String>> {
     )))
 }
 
-// The block lives in the worktree's own config, which the task's env cannot unset: a pre-push hook kelpie answers, and a push URL rewrite for git push --no-verify.
+// The block lives in the worktree's own config, which the task's env cannot unset: a pre-push hook kebbie answers, and a push URL rewrite for git push --no-verify.
 pub fn install(worktree: &Path, state: &Path) -> Result<Block> {
     if let Some(why) = unsupported(worktree)? {
         return Ok(Block::Off(why));
@@ -106,6 +108,8 @@ pub fn install(worktree: &Path, state: &Path) -> Result<Block> {
     let original = original_hooks(worktree)?;
     let dir = hooks_dir(worktree)?;
     let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(dir.with_file_name(OLD_BLOCK.0));
+    let _ = git(worktree, &["config", "--worktree", "--unset-all", &format!("url.{}.pushInsteadOf", OLD_BLOCK.1)]);
     fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     let script = hook_script(&original, state, &main_checkout(worktree)?);
     for name in HOOKS {
@@ -120,11 +124,11 @@ pub fn install(worktree: &Path, state: &Path) -> Result<Block> {
 
 pub fn warn_if_off(block: Block) {
     if let Block::Off(why) = block {
-        eprintln!("kelpie: {why}");
+        eprintln!("kebbie: {why}");
     }
 }
 
-// For kelpie's own push from a worktree: origin's URLs rewritten to where the main checkout pushes, a longer match than the block's rewrite.
+// For kebbie's own push from a worktree: origin's URLs rewritten to where the main checkout pushes, a longer match than the block's rewrite.
 pub fn unblock_args(worktree: &Path) -> Result<Vec<String>> {
     let main = main_checkout(worktree)?;
     let linked = git(worktree, &["rev-parse", "--absolute-git-dir"])? != git(worktree, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
@@ -160,7 +164,7 @@ mod tests {
     }
 
     fn fixture(name: &str) -> Fixture {
-        let base = std::env::temp_dir().join(format!("kelpie-push-block-{name}-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("kebbie-push-block-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let (main, origin, slot, state) = (base.join("app"), base.join("origin.git"), base.join("wt1.app"), base.join("state"));
         fs::create_dir_all(&main).unwrap();
@@ -174,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tasks_own_push_fails_in_every_form_while_kelpies_push_and_the_main_checkouts_go_through() {
+    fn a_tasks_own_push_fails_in_every_form_while_kebbies_push_and_the_main_checkouts_go_through() {
         let fixture = fixture("forms");
         let Fixture { main, origin, slot, state, .. } = &fixture;
         crate::executable::write(main.join(".git/hooks/pre-commit"), format!("#!/bin/sh\ntouch {}\n", quoted(&fixture.base.join("pre-commit-ran").to_string_lossy()))).unwrap();
@@ -196,20 +200,20 @@ mod tests {
         let url = git(slot, &["config", "remote.origin.url"]).unwrap();
         let past_the_rewrite = run(slot, &["-c", &format!("url.{url}.pushInsteadOf={url}"), "push", "origin", "HEAD:main"], &[]);
         assert!(!past_the_rewrite.status.success(), "a task that undoes the rewrite still meets the hook");
-        assert!(String::from_utf8_lossy(&past_the_rewrite.stderr).contains("kelpie push"), "{}", String::from_utf8_lossy(&past_the_rewrite.stderr));
+        assert!(String::from_utf8_lossy(&past_the_rewrite.stderr).contains("kebbie push"), "{}", String::from_utf8_lossy(&past_the_rewrite.stderr));
         let forged = run(slot, &["push", "origin", "HEAD:main"], &[(TOKEN_VAR, "0123456789abcdef0123456789abcdef")]);
-        assert!(!forged.status.success(), "a token kelpie did not issue opens nothing");
+        assert!(!forged.status.success(), "a token kebbie did not issue opens nothing");
         assert_eq!(git(origin, &["rev-parse", "main"]).unwrap(), before);
 
         let token = Token::new(state).unwrap();
         let mut args = unblock_args(slot).unwrap();
         args.extend(["push", "--quiet", "origin", "HEAD:main"].map(str::to_string));
-        let kelpies = run(slot, &args.iter().map(String::as_str).collect::<Vec<_>>(), &[(TOKEN_VAR, &token.value)]);
-        assert!(kelpies.status.success(), "{}", String::from_utf8_lossy(&kelpies.stderr));
+        let kebbies = run(slot, &args.iter().map(String::as_str).collect::<Vec<_>>(), &[(TOKEN_VAR, &token.value)]);
+        assert!(kebbies.status.success(), "{}", String::from_utf8_lossy(&kebbies.stderr));
         assert_eq!(git(origin, &["rev-parse", "main"]).unwrap(), git(slot, &["rev-parse", "HEAD"]).unwrap());
         let file = tokens_dir(state).join(&token.value);
         drop(token);
-        assert!(!file.exists(), "the token is gone once kelpie's push is done");
+        assert!(!file.exists(), "the token is gone once kebbie's push is done");
 
         git(main, &["merge", "--quiet", "--ff-only", "billing"]).unwrap();
         commit(main, "c");
@@ -243,7 +247,7 @@ mod tests {
         commit(slot, "b");
         let refused = crate::repo::push_from(slot, &["HEAD:refs/heads/billing"], state).unwrap_err();
         let main = fixture.main.canonicalize().unwrap_or(fixture.main.clone());
-        assert!(refused.contains("the repo's pre-push hook lives in the task's worktree") && refused.contains("the task may have written it") && refused.contains("kelpie did not run it"), "{refused}");
+        assert!(refused.contains("the repo's pre-push hook lives in the task's worktree") && refused.contains("the task may have written it") && refused.contains("kebbie did not run it"), "{refused}");
         assert!(refused.contains(&format!("git -C {} push origin billing", crate::sh::quote(&main.to_string_lossy()))) || refused.contains(&format!("git -C {} push origin billing", crate::sh::quote(&fixture.main.to_string_lossy()))), "the push it names is one the block lets through, from the main checkout: {refused}");
         assert!(!ran.exists(), "a hook the task could have written does not run as the user");
         assert!(git(origin, &["rev-parse", "--verify", "--quiet", "refs/heads/billing"]).is_err(), "and nothing was pushed without it");
@@ -268,7 +272,7 @@ mod tests {
         commit(slot, "b");
         crate::repo::push_from(slot, &["HEAD:refs/heads/billing"], state).unwrap();
         assert!(ran.exists(), "the repo's own pre-push hook runs");
-        assert!(!tampered.exists(), "a slot's kelpie-hooks, which another sandboxed task could reach, never run on the user's push");
+        assert!(!tampered.exists(), "a slot's kebbie-hooks, which another sandboxed task could reach, never run on the user's push");
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -290,13 +294,13 @@ mod tests {
         let ran = fixture.base.join("commit-msg-ran");
         crate::executable::write(slot.join(".husky/_/commit-msg"), format!("#!/bin/sh\ntouch {}\n", quoted(&ran.to_string_lossy()))).unwrap();
         commit(slot, "b");
-        assert!(ran.exists(), "a hook husky writes during npm install, after kelpie's install, still runs");
+        assert!(ran.exists(), "a hook husky writes during npm install, after kebbie's install, still runs");
         fs::remove_file(&ran).unwrap();
         crate::sandbox::mark(&crate::lead::state_location().unwrap(), slot, true).unwrap();
         fs::write(slot.join("c"), "c").unwrap();
         git(slot, &["add", "c"]).unwrap();
         git(slot, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "c"]).unwrap();
-        assert!(!ran.exists(), "kelpie's own git never runs a hook a sandboxed task's worktree holds");
+        assert!(!ran.exists(), "kebbie's own git never runs a hook a sandboxed task's worktree holds");
         let url = git(slot, &["config", "remote.origin.url"]).unwrap();
         let refused = run(slot, &["-c", &format!("url.{url}.pushInsteadOf={url}"), "push", "origin", "HEAD:main"], &[]);
         let said = String::from_utf8_lossy(&refused.stderr);
@@ -324,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn the_repos_own_pre_push_hook_still_runs_for_kelpies_push_and_can_refuse_it() {
+    fn the_repos_own_pre_push_hook_still_runs_for_kebbies_push_and_can_refuse_it() {
         let fixture = fixture("own-hook");
         let Fixture { main, slot, state, .. } = &fixture;
         fs::create_dir_all(main.join(".hooks")).unwrap();
@@ -341,6 +345,11 @@ mod tests {
         assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("repo hook refuses"), "{}", String::from_utf8_lossy(&output.stderr));
         install(slot, state).unwrap();
         assert_eq!(git(slot, &["config", "--worktree", "--get-all", "core.hooksPath"]).unwrap().lines().count(), 1, "installing again replaces the block");
+        let old_hooks = hooks_dir(slot).unwrap().with_file_name(OLD_BLOCK.0);
+        fs::create_dir_all(&old_hooks).unwrap();
+        git(slot, &["config", "--worktree", &format!("url.{}.pushInsteadOf", OLD_BLOCK.1), ""]).unwrap();
+        install(slot, state).unwrap();
+        assert!(!old_hooks.exists() && git(slot, &["config", "--worktree", "--get-all", &format!("url.{}.pushInsteadOf", OLD_BLOCK.1)]).is_err(), "a block from before the rename is taken out");
         fs::remove_dir_all(&fixture.base).unwrap();
     }
 
@@ -349,7 +358,7 @@ mod tests {
         assert_eq!(quoted("plain"), "'plain'");
         assert_eq!(quoted("it's here"), "'it'\\''s here'");
         assert_eq!(quoted("$(rm -rf /) `x` \"y\""), "'$(rm -rf /) `x` \"y\"'");
-        let base = std::env::temp_dir().join(format!("kelpie-hook-quoting-{}", std::process::id())).join("it's a dir");
+        let base = std::env::temp_dir().join(format!("kebbie-hook-quoting-{}", std::process::id())).join("it's a dir");
         let _ = fs::remove_dir_all(base.parent().unwrap());
         let (original, state, main) = (base.join("hooks"), base.join("state"), base.join("app"));
         fs::create_dir_all(&original).unwrap();
@@ -377,8 +386,8 @@ mod tests {
     }
 
     #[test]
-    fn the_pre_push_hook_takes_only_a_32_hex_token_that_kelpie_issued() {
-        let base = std::env::temp_dir().join(format!("kelpie-hook-token-{}", std::process::id()));
+    fn the_pre_push_hook_takes_only_a_32_hex_token_that_kebbie_issued() {
+        let base = std::env::temp_dir().join(format!("kebbie-hook-token-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let (original, state, main) = (base.join("hooks"), base.join("state"), base.join("app"));
         fs::create_dir_all(&main).unwrap();
@@ -415,13 +424,13 @@ mod tests {
         let before = git(origin, &["rev-parse", "main"]).unwrap();
         let url = git(slot, &["config", "remote.origin.url"]).unwrap();
         let refused = run(slot, &["-c", &format!("url.{url}.pushInsteadOf={url}"), "push", "origin", "HEAD:main"], &[]);
-        assert!(!refused.status.success() && String::from_utf8_lossy(&refused.stderr).contains("kelpie push"), "{}", String::from_utf8_lossy(&refused.stderr));
+        assert!(!refused.status.success() && String::from_utf8_lossy(&refused.stderr).contains("kebbie push"), "{}", String::from_utf8_lossy(&refused.stderr));
         assert_eq!(git(origin, &["rev-parse", "main"]).unwrap(), before);
         let token = Token::new(state).unwrap();
         let mut args = unblock_args(slot).unwrap();
         args.extend(["push", "--quiet", "origin", "HEAD:main"].map(str::to_string));
-        let kelpies = run(slot, &args.iter().map(String::as_str).collect::<Vec<_>>(), &[(TOKEN_VAR, &token.value)]);
-        assert!(kelpies.status.success(), "{}", String::from_utf8_lossy(&kelpies.stderr));
+        let kebbies = run(slot, &args.iter().map(String::as_str).collect::<Vec<_>>(), &[(TOKEN_VAR, &token.value)]);
+        assert!(kebbies.status.success(), "{}", String::from_utf8_lossy(&kebbies.stderr));
         fs::remove_dir_all(&fixture.base).unwrap();
     }
 
@@ -431,11 +440,11 @@ mod tests {
         let Fixture { slot, state, .. } = &fixture;
         install(slot, state).unwrap();
         commit(slot, "b");
-        for remote in ["https://github.com/gronare/kelpie.git", "git@github.com:gronare/kelpie.git", "ssh://git@github.com/gronare/kelpie.git", fixture.origin.to_str().unwrap()] {
+        for remote in ["https://github.com/gronare/kebbie.git", "git@github.com:gronare/kebbie.git", "ssh://git@github.com/gronare/kebbie.git", fixture.origin.to_str().unwrap()] {
             let output = run(slot, &["push", "--no-verify", remote, "HEAD:refs/heads/elsewhere"], &[]);
             assert!(!output.status.success(), "a push to {remote} by url got through");
             let said = String::from_utf8_lossy(&output.stderr);
-            assert!(said.contains("kelpie-blocks-push") || said.contains("kelpie"), "{said}");
+            assert!(said.contains("kebbie-blocks-push") || said.contains("kebbie"), "{said}");
         }
         assert!(!run(slot, &["push", "--no-verify", "--force", "origin", "HEAD:main"], &[]).status.success());
         assert!(!run(slot, &["push", "--no-verify", "--mirror", "origin"], &[]).status.success());

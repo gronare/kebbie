@@ -14,7 +14,7 @@ const WORKFLOW: &str = include_str!("../.github/workflows/release.yml");
 const NOTES: &str = "# Changes\n\nIntro.\n\n## Unreleased\n\n### What's new\n- The hub window names your devices, and r removes\n  one\n\n### Fixed\n- Update no longer stops on a newer config key\n\n## 0.27.0\n\n### What's new\n- Connect a hub from the board\n\n### Fixed\n";
 
 fn file(name: &str, text: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("kelpie-release-notes-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("kebbie-release-notes-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join("CHANGES.md");

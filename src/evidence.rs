@@ -232,7 +232,7 @@ pub fn forget(task: &str, repo: &Path) {
 
 fn git_with(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git").args(crate::repo::unhooked(Some(cwd), args)).current_dir(cwd).env("GIT_INDEX_FILE", index)
-        .env("GIT_AUTHOR_NAME", "kelpie").env("GIT_AUTHOR_EMAIL", "kelpie@localhost").env("GIT_COMMITTER_NAME", "kelpie").env("GIT_COMMITTER_EMAIL", "kelpie@localhost")
+        .env("GIT_AUTHOR_NAME", "kebbie").env("GIT_AUTHOR_EMAIL", "kebbie@localhost").env("GIT_COMMITTER_NAME", "kebbie").env("GIT_COMMITTER_EMAIL", "kebbie@localhost")
         .stdin(Stdio::null()).output().map_err(|error| format!("git: {error}"))?;
     if !output.status.success() {
         return Err(format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&output.stderr).trim()));
@@ -248,11 +248,11 @@ pub fn snapshot(worktree: &Path) -> Result<(String, bool, String)> {
         return Ok((head.clone(), false, head));
     }
     let real = PathBuf::from(git(worktree, &["rev-parse", "--path-format=absolute", "--git-path", "index"])?);
-    let index = real.with_file_name(format!("kelpie-evidence-{}.index", std::process::id()));
+    let index = real.with_file_name(format!("kebbie-evidence-{}.index", std::process::id()));
     let made = fs::copy(&real, &index).map_err(|error| format!("{}: {error}", index.display()))
         .and_then(|_| git_with(worktree, &index, &["add", "-A"]))
         .and_then(|_| git_with(worktree, &index, &["write-tree"]))
-        .and_then(|tree| git_with(worktree, &index, &["commit-tree", &tree, "-p", &head, "-m", "kelpie: the tree a test run ran on"]));
+        .and_then(|tree| git_with(worktree, &index, &["commit-tree", &tree, "-p", &head, "-m", "kebbie: the tree a test run ran on"]));
     let _ = fs::remove_file(&index);
     Ok((head, true, made?))
 }
@@ -384,9 +384,9 @@ pub fn for_path(path: &Path) -> Option<Shown> {
 // The reviewer's brief: the newest runs, each judged against the code under review.
 pub fn brief(runs: &[Run], judge: impl Fn(&Run) -> Shown) -> String {
     if runs.is_empty() {
-        return "kelpie recorded no test run in this task: say whether the change needed one.".to_string();
+        return "kebbie recorded no test run in this task: say whether the change needed one.".to_string();
     }
-    let mut lines = vec!["The test runs kelpie recorded in this task, newest first (✓ passed on the code under review, ○ passed on older code, ✗ failed); weigh them in the Tests step:".to_string()];
+    let mut lines = vec!["The test runs kebbie recorded in this task, newest first (✓ passed on the code under review, ○ passed on older code, ✗ failed); weigh them in the Tests step:".to_string()];
     for run in runs.iter().rev().take(5) {
         lines.push(format!("- {} · `{}`{}", judge(run).line(), run.command, if run.dirty { " · with uncommitted changes" } else { "" }));
     }
@@ -416,7 +416,7 @@ pub fn print(cwd: &Path, name: Option<&str>, as_json: bool) -> Result<String> {
         return serde_json::to_string_pretty(&json!({ "task": task.address, "runs": items })).map_err(|error| error.to_string());
     }
     if runs.is_empty() {
-        return Ok(format!("No test run recorded for {}: kelpie records the test commands its Claude runs (task.test_commands adds to the built-in list).", task.address));
+        return Ok(format!("No test run recorded for {}: kebbie records the test commands its Claude runs (task.test_commands adds to the built-in list).", task.address));
     }
     let mut lines = vec![format!("Test runs of {}, newest first:", task.address)];
     for run in runs.iter().rev() {
@@ -481,7 +481,7 @@ mod tests {
         for (output, text, failed) in cases {
             assert_eq!(summary(output), Some(Summary { text: text.to_string(), failed }), "{output}");
         }
-        assert_eq!(summary("Compiling kelpie\nerror[E0425]: cannot find value"), None);
+        assert_eq!(summary("Compiling kebbie\nerror[E0425]: cannot find value"), None);
     }
 
     fn repo() -> PathBuf {
@@ -557,7 +557,7 @@ mod tests {
     #[test]
     fn a_run_is_current_until_the_code_changes_and_a_run_before_the_commit_counts_for_it() {
         let dir = repo();
-        let state = std::env::temp_dir().join(format!("kelpie-evidence-state-{}", std::process::id()));
+        let state = std::env::temp_dir().join(format!("kebbie-evidence-state-{}", std::process::id()));
         let list = listed(&[]);
         fs::write(dir.join("a"), "two\n").unwrap();
         let before = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 1).unwrap();

@@ -385,7 +385,7 @@ task = "Bump {plugin}'s pin to {version}; commit."
 "#;
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("kelpie-actions-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-actions-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -438,10 +438,10 @@ task = "Bump {plugin}'s pin to {version}; commit."
     fn a_repo_config_takes_worktree_next_to_actions_and_names_bad_values() {
         let text = "[worktree]\ndev_server = \"npm run dev\"\n\n[[actions]]\nkey = \"B\"\ntitle = \"Build\"\nrun = \"cargo build\"\n";
         assert_eq!(parse(text, "app.toml"), (parse_actions(text, "app.toml").0, Vec::new()));
-        let (actions, errors) = parse(&format!("colour = 1\n{text}"), "/home/u/.config/kelpie/repos/app.toml");
+        let (actions, errors) = parse(&format!("colour = 1\n{text}"), "/home/u/.config/kebbie/repos/app.toml");
         assert_eq!((actions.len(), errors), (1, Vec::<String>::new()), "an unknown settings key is config.rs's warning, not an action error");
-        let (_, errors) = parse(&format!("[ci]\nwatch = \"yes\"\n{text}"), "/home/u/.config/kelpie/repos/app.toml");
-        assert_eq!(errors, ["/home/u/.config/kelpie/repos/app.toml: ci.watch: must be true or false"]);
+        let (_, errors) = parse(&format!("[ci]\nwatch = \"yes\"\n{text}"), "/home/u/.config/kebbie/repos/app.toml");
+        assert_eq!(errors, ["/home/u/.config/kebbie/repos/app.toml: ci.watch: must be true or false"]);
     }
 
     #[test]
@@ -535,10 +535,10 @@ task = "Bump {plugin}'s pin to {version}; commit."
     #[test]
     fn a_bump_file_stays_inside_the_repo() {
         let repo = scratch("escape");
-        std::fs::write(repo.parent().unwrap().join("kelpie-escape-outside.toml"), "version = \"0.5.0\"\n").unwrap();
-        let (actions, errors) = parse("[[actions]]\nkey = \"V\"\ntitle = \"V\"\nask = \"version\"\nbump = [\"../kelpie-escape-outside.toml\"]\n", "app.toml");
+        std::fs::write(repo.parent().unwrap().join("kebbie-escape-outside.toml"), "version = \"0.5.0\"\n").unwrap();
+        let (actions, errors) = parse("[[actions]]\nkey = \"V\"\ntitle = \"V\"\nask = \"version\"\nbump = [\"../kebbie-escape-outside.toml\"]\n", "app.toml");
         assert!(actions.is_empty() || !errors.is_empty(), "a path that leaves the repo is refused when the file is read: {actions:?}");
-        let _ = std::fs::remove_file(repo.parent().unwrap().join("kelpie-escape-outside.toml"));
+        let _ = std::fs::remove_file(repo.parent().unwrap().join("kebbie-escape-outside.toml"));
         let _ = std::fs::remove_dir_all(&repo);
     }
 

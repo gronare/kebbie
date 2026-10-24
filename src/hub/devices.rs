@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use kelpie_hub_api::{AdmittedDevice, AdmittedDevices};
-use kelpie_hub_protocol::Id;
+use kebbie_hub_api::{AdmittedDevice, AdmittedDevices};
+use kebbie_hub_protocol::Id;
 use serde::{Deserialize, Serialize};
 
 use super::http::{CALL, Client, HubError};
@@ -34,13 +34,13 @@ fn save(state: &Path, listed: &Listed) -> Result<()> {
 
 // The last list the hub gave stays, with the error beside it, so an unreachable hub still shows names and when they were true.
 pub fn fetch(state: &Path, now: u64) -> Result<Listed> {
-    let identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kelpie hub connect first")?;
+    let identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kebbie hub connect first")?;
     let mut listed = load(state);
     match Client::new(&identity.url, Some(identity.token()), CALL).get::<AdmittedDevices>("/v1/m/devices") {
         Ok(answer) => {
             listed = Listed { devices: answer.devices, fetched_at: Some(now), error: None, outdated: false };
         }
-        Err(error) if matches!(error.status(), Some(404 | 405)) => (listed.error, listed.outdated) = (Some("this hub cannot list devices yet; update kelpie-hub".to_string()), true),
+        Err(error) if matches!(error.status(), Some(404 | 405)) => (listed.error, listed.outdated) = (Some("this hub cannot list devices yet; update kebbie-hub".to_string()), true),
         Err(error) => (listed.error, listed.outdated) = (Some(error.to_string()), false),
     }
     save(state, &listed)?;
@@ -64,7 +64,7 @@ fn called(id: &Id, listed: &Listed, paired: &[identity::Device]) -> String {
 }
 
 pub fn label(state: &Path, device: &Id, name: &str) -> Result<String> {
-    let mut identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kelpie hub connect first")?;
+    let mut identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kebbie hub connect first")?;
     let known = identity.devices.iter_mut().find(|known| &known.id == device).ok_or("this machine has no such device")?;
     let name = name.trim();
     known.label = (!name.is_empty()).then(|| name.to_string());
@@ -91,12 +91,12 @@ pub fn find(listed: &Listed, paired: &[identity::Device], wanted: &str) -> Resul
             let known = if known.is_empty() { "this machine lists no devices".to_string() } else { format!("this machine's devices are {}", known.join(", ")) };
             Err(format!("no device named {wanted:?}; {known}"))
         }
-        _ => Err(format!("{} devices are named {wanted:?}; give the id instead, as kelpie hub status shows it", named.len())),
+        _ => Err(format!("{} devices are named {wanted:?}; give the id instead, as kebbie hub status shows it", named.len())),
     }
 }
 
 pub fn remove(state: &Path, device: &Id) -> Result<String> {
-    let identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kelpie hub connect first")?;
+    let identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kebbie hub connect first")?;
     let mut listed = load(state);
     let name = named(device, &listed, &identity.devices).unwrap_or_else(|| format!("device {}", short(device)));
     match Client::new(&identity.url, Some(identity.token()), CALL).delete(&format!("/v1/m/devices/{device}")) {

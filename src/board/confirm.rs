@@ -226,7 +226,7 @@ mod tests {
             press(&mut app, key(KeyCode::Char(character)));
         }
         press(&mut app, key(KeyCode::Enter));
-        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("\"soonish\" is not a time")), "a time kelpie cannot read is refused on the board");
+        assert!(matches!(&app.mode, Mode::Message(text) if text.contains("\"soonish\" is not a time")), "a time kebbie cannot read is refused on the board");
         app.mode = Mode::Normal;
         app.column = crate::board::Column::Backlog;
         app.backlog.entries = vec![crate::backlog::Entry { source: "vault".to_string(), title: "Nightly import".to_string(), priority: "high".to_string(), area: "web".to_string(), reference: "Projects/nightly.md".to_string(), summary: String::new(), age: String::new() }];

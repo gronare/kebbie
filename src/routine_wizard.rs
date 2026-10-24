@@ -376,7 +376,7 @@ mod tests {
     use super::*;
 
     fn repos() -> Vec<Repo> {
-        ["homelab-gitops", "greenhouse", "kelpie"].iter().map(|name| Repo { value: format!("~/{name}"), name: name.to_string(), shown: format!("~/{name}") }).collect()
+        ["homelab-gitops", "greenhouse", "kebbie"].iter().map(|name| Repo { value: format!("~/{name}"), name: name.to_string(), shown: format!("~/{name}") }).collect()
     }
 
     fn typed(wizard: &mut Wizard, text: &str) {
@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn five_steps_with_enter_all_the_way_make_the_table_the_check_shows() {
-        let mut wizard = Wizard::new("", "07:00", 0, "", repos(), vec!["backups".to_string()], PathBuf::from("/home/u/.config/kelpie/config.toml"));
+        let mut wizard = Wizard::new("", "07:00", 0, "", repos(), vec!["backups".to_string()], PathBuf::from("/home/u/.config/kebbie/config.toml"));
         enter(&mut wizard);
         assert_eq!(wizard.step, 0, "a routine needs a prompt");
         typed(&mut wizard, "Check every node, Longhorn volume and certificate.");
@@ -428,7 +428,7 @@ mod tests {
         assert!(screen(&wizard).contains("id cluster-health"), "{}", screen(&wizard));
         enter(&mut wizard);
         assert_eq!(screen(&wizard), [
-            "check", "Add to /home/u/.config/kelpie/config.toml?", "", "[[routines]]", "id = \"cluster-health\"", "title = \"Cluster health\"", "repo = \"~/homelab-gitops\"",
+            "check", "Add to /home/u/.config/kebbie/config.toml?", "", "[[routines]]", "id = \"cluster-health\"", "title = \"Cluster health\"", "repo = \"~/homelab-gitops\"",
             "at = \"07:00\"", "mode = \"report\"", "prompt = \"\"\"Check every node, Longhorn volume and certi…\"\"\"", "", "y add · g add and run now · ← back · esc cancel",
         ].join("\n"));
         assert!(matches!(wizard.key(KeyEvent::from(KeyCode::Char('g'))), Step::Write { run: true }));
@@ -442,11 +442,11 @@ mod tests {
     fn each_step_takes_only_an_answer_it_can_use() {
         let mut wizard = Wizard::new("Check CI", "", 0, "", repos(), vec!["ci".to_string()], PathBuf::from("/c/config.toml"));
         enter(&mut wizard);
-        typed(&mut wizard, "KEL");
-        assert_eq!(wizard.repo().as_deref(), Some("~/kelpie"), "typing filters the repos");
-        assert!(screen(&wizard).contains("▌kelpie"), "{}", screen(&wizard));
+        typed(&mut wizard, "KEB");
+        assert_eq!(wizard.repo().as_deref(), Some("~/kebbie"), "typing filters the repos");
+        assert!(screen(&wizard).contains("▌kebbie"), "{}", screen(&wizard));
         typed(&mut wizard, "x");
-        assert_eq!(wizard.repo().as_deref(), Some("KELx"), "a name no checkout has is taken as typed");
+        assert_eq!(wizard.repo().as_deref(), Some("KEBx"), "a name no checkout has is taken as typed");
         for _ in 0..4 {
             wizard.key(KeyEvent::from(KeyCode::Backspace));
         }
@@ -455,7 +455,7 @@ mod tests {
         enter(&mut wizard);
         typed(&mut wizard, "soon");
         enter(&mut wizard);
-        assert_eq!(wizard.step, 2, "a time kelpie cannot read keeps the step");
+        assert_eq!(wizard.step, 2, "a time kebbie cannot read keeps the step");
         assert!(screen(&wizard).contains("\"soon\" is not a time"), "{}", screen(&wizard));
         for _ in 0..4 {
             wizard.key(KeyEvent::from(KeyCode::Backspace));

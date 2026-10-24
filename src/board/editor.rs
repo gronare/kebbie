@@ -75,7 +75,7 @@ impl MessageEditor {
 
 // The user's editor on a commit message, in this pane; an empty result keeps the old message.
 fn edit_in_editor(terminal: &mut DefaultTerminal, message: &str) -> Result<Option<String>> {
-    let file = std::env::temp_dir().join(format!("kelpie-{}-COMMIT_EDITMSG", std::process::id()));
+    let file = std::env::temp_dir().join(format!("kebbie-{}-COMMIT_EDITMSG", std::process::id()));
     let help = "\n\n# Edit the commit message. Lines starting with # are ignored; an empty message cancels.\n";
     std::fs::write(&file, format!("{message}{help}")).map_err(|error| error.to_string())?;
     restore_terminal();

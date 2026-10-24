@@ -6,12 +6,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sh::Result;
 
-// kelpie's state holds messages, prompts and push tokens, so its folders are the user's alone.
+// kebbie's state holds messages, prompts and push tokens, so its folders are the user's alone.
 pub fn private_dir(dir: &Path) -> Result<()> {
     fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(|error| format!("{}: {error}", dir.display()))
 }
 
-// A state folder made before kelpie made them private is closed on its next use.
+// A state folder made before kebbie made them private is closed on its next use.
 pub fn close_up(dir: &Path) -> Result<()> {
     private_dir(dir)?;
     let mode = fs::metadata(dir).map_err(|error| format!("{}: {error}", dir.display()))?.permissions().mode();
@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn state_files_are_private_and_replaced_whole() {
-        let root = std::env::temp_dir().join(format!("kelpie-state-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("kebbie-state-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let file = root.join("approved/billing@app");
         write(&file, "one").unwrap();

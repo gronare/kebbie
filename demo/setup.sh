@@ -1,9 +1,9 @@
 #!/bin/bash
-# Builds a throwaway kelpie world under $KDEMO_DIR: its own HOME, herdr server, repos and a stand-in claude.
+# Builds a throwaway kebbie world under $KDEMO_DIR: its own HOME, herdr server, repos and a stand-in claude.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
-D=${KDEMO_DIR:-$(cd /tmp && pwd -P)/kelpie-demo}
+D=${KDEMO_DIR:-$(cd /tmp && pwd -P)/kebbie-demo}
 H=$D/home
 
 case "$D" in /tmp/*|/private/tmp/*) ;; *) echo "KDEMO_DIR must be under /tmp" >&2; exit 1 ;; esac
@@ -22,46 +22,46 @@ stop_demo
 scene=${1:-demo}
 case "$scene" in demo) ;; *) [ -f "$repo_root/demo/clips/$scene.tape" ] || { echo "no scene $scene: demo or a name from demo/clips" >&2; exit 1; } ;; esac
 rm -rf "$D"
-mkdir -p "$D/bin" "$D/remotes" "$D/screens" "$D/modes" "$D/react" "$D/shots" "$D/verdicts" "$H/code" "$H/.config/herdr" "$H/.config/kelpie" "$H/.local/state" "$H/.local/share" "$H/.cache"
+mkdir -p "$D/bin" "$D/remotes" "$D/screens" "$D/modes" "$D/react" "$D/shots" "$D/verdicts" "$H/code" "$H/.config/herdr" "$H/.config/kebbie" "$H/.local/state" "$H/.local/share" "$H/.cache"
 
-install=$H/.local/share/kelpie/current
-target=$(dirname "$D")/kelpie-demo-target
+install=$H/.local/share/kebbie/current
+target=$(dirname "$D")/kebbie-demo-target
 cargo_env=
 demo_path=$D/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 if [ "$scene" = update-and-restarts ]; then
-  # kelpie installed as herdr installs it, a checkout at a release tag, with a newer release on its own origin to update to.
-  install=$H/.local/share/herdr/plugins/kelpie
+  # kebbie installed as herdr installs it, a checkout at a release tag, with a newer release on its own origin to update to.
+  install=$H/.local/share/herdr/plugins/kebbie
   version=$(git -C "$repo_root" show HEAD:Cargo.toml | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
   next=${version%.*}.$((${version##*.} + 1))
-  git clone -q --bare --single-branch --no-tags "$repo_root" "$D/remotes/kelpie.git"
-  git -C "$D/remotes/kelpie.git" tag "v$version" HEAD
-  git clone -q "$D/remotes/kelpie.git" "$D/kelpie-next"
-  perl -0pi -e "s/^version = \"\Q$version\E\"/version = \"$next\"/m" "$D/kelpie-next/Cargo.toml" "$D/kelpie-next/herdr-plugin.toml"
-  perl -0pi -e "s/(name = \"kelpie\"\nversion = \")\Q$version\E/\${1}$next/" "$D/kelpie-next/Cargo.lock"
-  perl -pi -e "s/\"version\": \"\Q$version\E\"/\"version\": \"$next\"/" "$D/kelpie-next/.claude-plugin/plugin.json"
-  git -C "$D/kelpie-next" -c user.name="Robin Demo" -c user.email=robin@example.com commit -qam "kelpie $next"
-  git -C "$D/kelpie-next" tag "v$next"
-  git -C "$D/kelpie-next" push -q origin HEAD "v$next"
-  git clone -q "$D/remotes/kelpie.git" "$install"
+  git clone -q --bare --single-branch --no-tags "$repo_root" "$D/remotes/kebbie.git"
+  git -C "$D/remotes/kebbie.git" tag "v$version" HEAD
+  git clone -q "$D/remotes/kebbie.git" "$D/kebbie-next"
+  perl -0pi -e "s/^version = \"\Q$version\E\"/version = \"$next\"/m" "$D/kebbie-next/Cargo.toml" "$D/kebbie-next/herdr-plugin.toml"
+  perl -0pi -e "s/(name = \"kebbie\"\nversion = \")\Q$version\E/\${1}$next/" "$D/kebbie-next/Cargo.lock"
+  perl -pi -e "s/\"version\": \"\Q$version\E\"/\"version\": \"$next\"/" "$D/kebbie-next/.claude-plugin/plugin.json"
+  git -C "$D/kebbie-next" -c user.name="Robin Demo" -c user.email=robin@example.com commit -qam "kebbie $next"
+  git -C "$D/kebbie-next" tag "v$next"
+  git -C "$D/kebbie-next" push -q origin HEAD "v$next"
+  git clone -q "$D/remotes/kebbie.git" "$install"
   git -C "$install" checkout -q --detach "v$version"
   cp -R "$target" "$install/target"
   cargo build --release --quiet --manifest-path "$install/Cargo.toml"
-  mkdir -p "$H/.local/share/kelpie"
-  ln -s "$install" "$H/.local/share/kelpie/current"
+  mkdir -p "$H/.local/share/kebbie"
+  ln -s "$install" "$H/.local/share/kebbie/current"
   demo_path=$D/bin:$(dirname "$(command -v cargo)"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
   cargo_env="RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup} CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}"
 else
   mkdir -p "$install/target/release"
   git -C "$repo_root" archive HEAD | tar -x -C "$install"
   cargo build --release --quiet --manifest-path "$install/Cargo.toml" --target-dir "$target"
-  cp "$target/release/kelpie" "$install/target/release/kelpie"
+  cp "$target/release/kebbie" "$install/target/release/kebbie"
 fi
-ln -s "$install/target/release/kelpie" "$D/bin/kelpie"
+ln -s "$install/target/release/kebbie" "$D/bin/kebbie"
 cp "$repo_root/demo/bin/claude" "$D/bin/claude.py"
 python=$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')
 app="$(dirname "$(dirname "$python")")/Resources/Python.app/Contents/MacOS/Python"
 [ -x "$app" ] && python=$app
-# kelpie tells the lead and a task by their process, a claude with its role's --settings, so the stand-in runs under that name; macOS's python3 stub would rename it, hence the app binary.
+# kebbie tells the lead and a task by their process, a claude with its role's --settings, so the stand-in runs under that name; macOS's python3 stub would rename it, hence the app binary.
 printf '#!/bin/bash\nexec -a claude %q %q "$@"\n' "$python" "$D/bin/claude.py" > "$D/bin/claude"
 chmod +x "$D/bin/claude"
 
@@ -72,8 +72,8 @@ cat > "$D/env.sh" <<EOF
 exec env -i HOME=$H PATH=$demo_path \\
   TERM=\${TERM:-xterm-256color} COLORTERM=truecolor LANG=en_US.UTF-8 SHELL=/bin/zsh USER=demo KDEMO_DIR=$D \\
   XDG_CONFIG_HOME=$H/.config XDG_STATE_HOME=$H/.local/state XDG_DATA_HOME=$H/.local/share XDG_CACHE_HOME=$H/.cache \\
-  KELPIE_STATE_DIR=$H/.local/state/kelpie KELPIE_CONFIG=$H/.config/kelpie/config.toml KELPIE_REPOS_DIR=$H/.config/kelpie/repos \\
-  KELPIE_BIN=$install/target/release/kelpie KELPIE_CLAUDE_BIN=$D/bin/claude KELPIE_REPO_DIRS=$H/code KELPIE_IMAGES=halfblocks \\
+  KEBBIE_STATE_DIR=$H/.local/state/kebbie KEBBIE_CONFIG=$H/.config/kebbie/config.toml KEBBIE_REPOS_DIR=$H/.config/kebbie/repos \\
+  KEBBIE_BIN=$install/target/release/kebbie KEBBIE_CLAUDE_BIN=$D/bin/claude KEBBIE_REPO_DIRS=$H/code KEBBIE_IMAGES=halfblocks \\
   HERDR_SOCKET_PATH=$H/.config/herdr/herdr.sock $vault_env $cargo_env \\
   "\$@"
 EOF
@@ -128,25 +128,25 @@ shell_mode = "non_login"
 [[keys.command]]
 key = "prefix+space"
 type = "shell"
-command = "kelpie lead"
-description = "kelpie: go to the lead, or back"
+command = "kebbie lead"
+description = "kebbie: go to the lead, or back"
 
 [[keys.command]]
 key = "prefix+t"
 type = "popup"
-command = "kelpie board --overlay"
+command = "kebbie board --overlay"
 width = "85%"
 height = "85%"
-description = "kelpie board"
+description = "kebbie board"
 EOF
 restart_auto=false
 [ "$scene" = update-and-restarts ] && restart_auto=true
-cat > "$H/.config/kelpie/config.toml" <<EOF
+cat > "$H/.config/kebbie/config.toml" <<EOF
 [restart]
 auto = $restart_auto
 EOF
 if [ "$scene" = demo ]; then
-  cat >> "$H/.config/kelpie/config.toml" <<'EOF'
+  cat >> "$H/.config/kebbie/config.toml" <<'EOF'
 
 [machine]
 name = "laptop"
@@ -154,8 +154,8 @@ name = "laptop"
 [board.backlog]
 sources = ["vault"]
 EOF
-  mkdir -p "$H/.config/kelpie/repos"
-  printf '[worktree]\nstage_on_main = true\n' > "$H/.config/kelpie/repos/api.toml"
+  mkdir -p "$H/.config/kebbie/repos"
+  printf '[worktree]\nstage_on_main = true\n' > "$H/.config/kebbie/repos/api.toml"
 fi
 
 put() { mkdir -p "$(dirname "$1/$2")"; cat > "$1/$2"; }
@@ -258,7 +258,7 @@ socket=$(demo_socket)
 [ "$socket" = "$H/.config/herdr/herdr.sock" ] || { echo "herdr answered from $socket, not the demo socket; stopping" >&2; exit 1; }
 [ "$scene" = update-and-restarts ] && run herdr plugin link "$install" >/dev/null
 
-# kelpie tells the user from a Claude session by the process tree, so the user's own steps run in a pane of the demo herdr.
+# kebbie tells the user from a Claude session by the process tree, so the user's own steps run in a pane of the demo herdr.
 as_user() {
   local pane done=$D/as-user.done
   rm -f "$done"
@@ -303,12 +303,12 @@ screen wt2.api <<'EOF'
 EOF
 
 cd "$H/code/shop"
-run kelpie lead >/dev/null
-run kelpie start search-filters "Add price and size filters to the search page" --no-focus >/dev/null
-run kelpie start checkout-copy "Rewrite the checkout copy in plain words" --no-focus >/dev/null
+run kebbie lead >/dev/null
+run kebbie start search-filters "Add price and size filters to the search page" --no-focus >/dev/null
+run kebbie start checkout-copy "Rewrite the checkout copy in plain words" --no-focus >/dev/null
 cd "$H/code/api"
-run kelpie start rate-limit "Rate-limit the public API per key" --no-focus >/dev/null
-run kelpie start vat-rounding "Round VAT once per invoice instead of per line" --no-focus >/dev/null
+run kebbie start rate-limit "Rate-limit the public API per key" --no-focus >/dev/null
+run kebbie start vat-rounding "Round VAT once per invoice instead of per line" --no-focus >/dev/null
 if [ "$scene" = demo ]; then
   screen wt3.api <<'EOF'
 > Tag every request with an ID in the log
@@ -322,9 +322,9 @@ EOF
 ● The gallery loads each image as it scrolls into view; the first one loads at once.
 
 EOF
-  run kelpie start request-ids "Tag every request with an ID in the log" --no-focus >/dev/null
+  run kebbie start request-ids "Tag every request with an ID in the log" --no-focus >/dev/null
   cd "$H/code/shop"
-  run kelpie start product-images "Lazy-load the product page's images" --no-focus >/dev/null
+  run kebbie start product-images "Lazy-load the product page's images" --no-focus >/dev/null
 fi
 
 put "$H/code/wt1.shop" src/search/filters.ts <<'EOF'
@@ -407,8 +407,8 @@ EOF
 save "$H/code/wt2.api" "Preview old and new VAT per invoice" "Changing the rounding changes totals on invoices already sent. The preview lists every invoice whose VAT differs, with the old and the new amount, to check before the change goes out."
 echo working > "$D/modes/wt1.api"
 
-cd "$H/code/wt1.api" && run kelpie report --state working --next "nothing yet" "Counting requests per key; the limiter middleware is next" >/dev/null
-cd "$H/code/wt2.api" && run kelpie report --state needs-you --next "check the totals in the preview" "VAT is rounded once per invoice; the preview shows old and new totals" >/dev/null
+cd "$H/code/wt1.api" && run kebbie report --state working --next "nothing yet" "Counting requests per key; the limiter middleware is next" >/dev/null
+cd "$H/code/wt2.api" && run kebbie report --state needs-you --next "check the totals in the preview" "VAT is rounded once per invoice; the preview shows old and new totals" >/dev/null
 cat > "$H/code/wt2.shop/card.md" <<EOF
 The checkout speaks plainly: Pay now, a declined card says what to do, and the shipping line says when you see the cost.
 
@@ -416,9 +416,9 @@ The checkout speaks plainly: Pay now, a declined card says what to do, and the s
 
 Confirm: the declined message reads right to you.
 EOF
-cd "$H/code/wt2.shop" && run kelpie report --state ready --card card.md --next "push it" "Checkout copy rewritten in plain words; tests pass" >/dev/null
-cd "$H/code/wt1.shop" && run kelpie tell rate-limit "search will call the API once per keystroke; leave room for that in the limit" >/dev/null
-cd "$H/code/wt1.shop" && run kelpie ask \
+cd "$H/code/wt2.shop" && run kebbie report --state ready --card card.md --next "push it" "Checkout copy rewritten in plain words; tests pass" >/dev/null
+cd "$H/code/wt1.shop" && run kebbie tell rate-limit "search will call the API once per keystroke; leave room for that in the limit" >/dev/null
+cd "$H/code/wt1.shop" && run kebbie ask \
   --option "Fixed ranges: under 25, 25 to 50, 50 to 100, over 100" \
   --option "Slider: any min and max, updates as you drag" \
   --option "Both: ranges first, a slider behind more" \
@@ -443,7 +443,7 @@ def log_request(request, response):
     log.info("%s %s %s key=%s id=%s", request.method, request.path, response.status, request.api_key.id, request.id)
 EOF
   save "$H/code/wt3.api" "Tag every request with an ID in the log" "A support question about one failed call meant searching the log by time and key. Each request now carries an ID, taken from X-Request-Id or made up, sent back in the response and written on its log line."
-  cd "$H/code/wt3.api" && run kelpie report --state ready --next "push it" "Every request has an ID, in its response and on its log line" >/dev/null
+  cd "$H/code/wt3.api" && run kebbie report --state ready --next "push it" "Every request has an ID, in its response and on its log line" >/dev/null
 
   put "$H/code/wt3.shop" src/product/gallery.ts <<'EOF'
 export function gallery(images: string[]): string {
@@ -468,17 +468,17 @@ verdict: changes
 
 - src/search/search.ts:6 — commit {sha} also renames the search text to `needle`, a change of its own beside the lazy-loaded images; rule 2, one logical change per commit. Move the rename into a commit of its own.
 EOF
-  cd "$H/code/wt3.shop" && run kelpie report --state ready --next "push it" "Product images load as they scroll into view" >/dev/null
+  cd "$H/code/wt3.shop" && run kebbie report --state ready --next "push it" "Product images load as they scroll into view" >/dev/null
 
-  as_user "$H/code/shop" kelpie start price-alerts "Email a shopper when a saved product drops in price" --after search-filters --why "it reuses the price ranges search-filters adds" --no-focus
-  as_user "$H/code/api" kelpie start invoice-archive "Move invoices older than seven years to cold storage" --at "tomorrow 06:00" --why "it locks the invoices table, so it runs before the shop opens" --no-focus
+  as_user "$H/code/shop" kebbie start price-alerts "Email a shopper when a saved product drops in price" --after search-filters --why "it reuses the price ranges search-filters adds" --no-focus
+  as_user "$H/code/api" kebbie start invoice-archive "Move invoices older than seven years to cold storage" --at "tomorrow 06:00" --why "it locks the invoices table, so it runs before the shop opens" --no-focus
 
-  as_user "$H/code/shop" kelpie issue add --kind bug --title "Every task's Claude is asked to append the vault log when it stops" "The vault plugin's Stop hook runs in task sessions too, so each task ends its turn writing a repo log line that only the lead should write."
-  as_user "$H/code/shop" kelpie issue add --kind bug --title "herdr shows the old kelpie version after an update" "After kelpie update the plugin list in herdr still names the version before, though kelpie version prints the new one."
-  python3 - "$H/.local/state/kelpie/issues" "$(git -C "$repo_root" rev-parse HEAD)" "$(git -C "$repo_root" show HEAD:Cargo.toml | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)" "$(date +%s)" <<'EOF'
+  as_user "$H/code/shop" kebbie issue add --kind bug --title "Every task's Claude is asked to append the vault log when it stops" "The vault plugin's Stop hook runs in task sessions too, so each task ends its turn writing a repo log line that only the lead should write."
+  as_user "$H/code/shop" kebbie issue add --kind bug --title "herdr shows the old kebbie version after an update" "After kebbie update the plugin list in herdr still names the version before, though kebbie version prints the new one."
+  python3 - "$H/.local/state/kebbie/issues" "$(git -C "$repo_root" rev-parse HEAD)" "$(git -C "$repo_root" show HEAD:Cargo.toml | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)" "$(date +%s)" <<'EOF'
 import json, pathlib, sys
 issues, head, version, now = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], int(sys.argv[4])
-fixes = {"Every task's Claude is asked to append the vault log when it stops": "8f21848", "herdr shows the old kelpie version after an update": "d387bac"}
+fixes = {"Every task's Claude is asked to append the vault log when it stops": "8f21848", "herdr shows the old kebbie version after an update": "d387bac"}
 for path in issues.glob("*.md"):
     front, body = path.read_text().split("\n+++\n", 1)
     lines = front.splitlines()
@@ -493,17 +493,17 @@ EOF
 fi
 if [ "$scene" != demo ]; then
   cd "$H/code/shop"
-  run kelpie backlog add --priority high "Wishlist — save products for later from the product page (shop)" >/dev/null
-  run kelpie backlog add --priority medium "Order export — CSV of orders per month for the accountant (api)" >/dev/null
-  run kelpie backlog add --priority medium "Gift cards — sell and redeem fixed-value cards (shop)" >/dev/null
-  run kelpie backlog add --priority low "Slow query log — flag queries over 200 ms (api)" >/dev/null
+  run kebbie backlog add --priority high "Wishlist — save products for later from the product page (shop)" >/dev/null
+  run kebbie backlog add --priority medium "Order export — CSV of orders per month for the accountant (api)" >/dev/null
+  run kebbie backlog add --priority medium "Gift cards — sell and redeem fixed-value cards (shop)" >/dev/null
+  run kebbie backlog add --priority low "Slow query log — flag queries over 200 ms (api)" >/dev/null
 fi
 
-checked() { for _ in $(seq 1 120); do grep -qs "approved\.\|break the rules" "$H/.local/state/kelpie/rules/$1.log" && return 0; sleep 0.5; done; echo "the rules check of $1 gave no verdict" >&2; exit 1; }
+checked() { for _ in $(seq 1 120); do grep -qs "approved\.\|break the rules" "$H/.local/state/kebbie/rules/$1.log" && return 0; sleep 0.5; done; echo "the rules check of $1 gave no verdict" >&2; exit 1; }
 checked checkout-copy@shop
 if [ "$scene" = demo ]; then
   checked request-ids@api
-  as_user "$H/code/api" kelpie stage request-ids
+  as_user "$H/code/api" kebbie stage request-ids
   checked product-images@shop
   for _ in $(seq 1 60); do grep -q "rules check of your commits" "$D/screens/wt3.shop" && break; sleep 0.5; done
   printf '%s\n' "" "● The rules check is right: the rename in src/search/search.ts is a change of its own. Splitting it into a second commit." >> "$D/screens/wt3.shop"
@@ -516,10 +516,10 @@ EOF
 fi
 
 now=$(date +%s)
-printf '{"rate_limits":{"five_hour":{"used_percentage":34,"resets_at":%s},"seven_day":{"used_percentage":61,"resets_at":%s}}}' $((now + 9000)) $((now + 300000)) | run kelpie statusline
+printf '{"rate_limits":{"five_hour":{"used_percentage":34,"resets_at":%s},"seven_day":{"used_percentage":61,"resets_at":%s}}}' $((now + 9000)) $((now + 300000)) | run kebbie statusline
 
 
-# The lead's chat starts clean once kelpie has typed the seeded tasks' messages into it.
+# The lead's chat starts clean once kebbie has typed the seeded tasks' messages into it.
 for _ in $(seq 1 60); do grep -q "checkout-copy@shop is ready" "$D/screens/lead" && break; sleep 0.5; done
 sleep 1
 screen lead < "$D/lead.screen"

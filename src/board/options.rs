@@ -111,7 +111,7 @@ pub(super) fn busy(item: &Item) -> bool {
 pub(super) fn ongoing_choices(note: &Ongoing) -> Vec<Choice> {
     vec![match (&note.task, &note.claim) {
         (Some(_), _) => choice(Act::Go, "Go to its task", "select the task that works on this note"),
-        (None, Some(claim)) => choice(Act::Go, "Start here too", &format!("kelpie on {} works on it as {}; a task here too (asks first)", claim.machine, claim.task)),
+        (None, Some(claim)) => choice(Act::Go, "Start here too", &format!("kebbie on {} works on it as {}; a task here too (asks first)", claim.machine, claim.task)),
         (None, None) => choice(Act::Go, "Resume as task", "a worktree, a Space and Claude with the note as its prompt"),
     }]
 }
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn a_link_key_opens_its_address_and_without_a_browser_says_it() {
-        let dir = std::env::temp_dir().join(format!("kelpie-menu-link-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-menu-link-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let opener = dir.join("open");
         let opened = dir.join("opened");

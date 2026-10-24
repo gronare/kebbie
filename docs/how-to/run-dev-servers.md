@@ -5,7 +5,7 @@ Start a task's dev server and worker from the board, each on the worktree's own 
 1. Set the commands in the repo config:
 
    ```toml
-   # ~/.config/kelpie/repos/app.toml
+   # ~/.config/kebbie/repos/app.toml
    [worktree]
    dev_server = "bin/dev"
    dev_worker = "bin/jobs"
@@ -20,19 +20,19 @@ Start a task's dev server and worker from the board, each on the worktree's own 
 The default link is `http://localhost:{port}`. Behind a proxy that serves each checkout by folder name:
 
 ```toml
-# ~/.config/kelpie/config.toml
+# ~/.config/kebbie/config.toml
 [worktree]
 dev_url = "https://{worktree}.test"
 ```
 
 `""` turns the link off. See [URL placeholders](../reference/configuration.md#url-placeholders).
 
-When kelpie runs on a remote machine and your browser is on your laptop, see [Open dev servers from a remote machine](open-dev-servers-from-a-remote-machine.md).
+When kebbie runs on a remote machine and your browser is on your laptop, see [Open dev servers from a remote machine](open-dev-servers-from-a-remote-machine.md).
 
 ## Rename the tabs
 
 ```toml
-# ~/.config/kelpie/config.toml
+# ~/.config/kebbie/config.toml
 [worktree]
 server_name = "web"
 worker_name = "jobs"

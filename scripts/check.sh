@@ -9,7 +9,7 @@ fail() { printf '\ncheck: FAILED: %s\n' "$*" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || echo "check: testing uncommitted changes, not HEAD" >&2
 
 step "cargo test"
-KELPIE_STATE_DIR=$(mktemp -d) HERDR_BIN_PATH=false GIT_CONFIG_GLOBAL=/dev/null cargo test --locked -q -j 4 || fail "cargo test"
+KEBBIE_STATE_DIR=$(mktemp -d) HERDR_BIN_PATH=false GIT_CONFIG_GLOBAL=/dev/null cargo test --locked -q -j 4 || fail "cargo test"
 step "cargo clippy"
 cargo clippy --locked --all-targets -- -D warnings || fail "cargo clippy"
 step "cargo audit and cargo deny"

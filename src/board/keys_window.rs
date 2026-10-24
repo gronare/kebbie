@@ -91,14 +91,14 @@ const WORK: Sheet = Sheet {
         group("WAITING ON YOU", &[
             bind(&[Act::Inbox], "inbox: questions, one at a time", "inbox"),
             bind(&[Act::Messages], "messages", "messages"),
-            bind(&[Act::Reports], "bugs to send to kelpie's maintainers", "bug reports"),
+            bind(&[Act::Reports], "bugs to send to kebbie's maintainers", "bug reports"),
             bind(&[Act::Away], "away mode", "away mode"),
         ]),
         group("THE BOARD", &[
             bind(&[Act::New], "new task", "new task"),
             bind(&[Act::Refresh], "refresh the backlog", "refresh"),
-            bind(&[Act::Update], "update kelpie and its plugins", "update"),
-            bind(&[Act::RestartLead], "restart the lead on the new kelpie", "restart lead"),
+            bind(&[Act::Update], "update kebbie and its plugins", "update"),
+            bind(&[Act::RestartLead], "restart the lead on the new kebbie", "restart lead"),
             bind(&[Act::Hub], "the hub: this board on your phone", "phone · hub"),
         ]),
         WINDOWS,
@@ -418,9 +418,9 @@ pub(crate) fn draw(frame: &mut Frame, keys: &Keys, page: Ctx, lead: bool, update
     frame.render_widget(Paragraph::new(lines).block(modal_block(sheet.title.to_string())), area);
 }
 
-// The update hint beside U: kelpie's own version only, never another component's or an override.
+// The update hint beside U: kebbie's own version only, never another component's or an override.
 pub(crate) fn update_hint(updates: &[(String, String)]) -> Option<String> {
-    updates.iter().find(|(name, _)| name == "kelpie").map(|(_, version)| version.clone())
+    updates.iter().find(|(name, _)| name == "kebbie").map(|(_, version)| version.clone())
 }
 
 #[cfg(test)]
@@ -453,7 +453,7 @@ mod tests {
     fn at_150_columns_the_keys_window_has_two_columns_of_groups_with_a_short_line_per_key() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         app.lead_chat = Some(false);
-        app.updates = vec![("kelpie".to_string(), "0.26.0".to_string())];
+        app.updates = vec![("kebbie".to_string(), "0.26.0".to_string())];
         press(&mut app, key(KeyCode::Char('?')));
         let (rows, buffer) = render(&mut app, 150, 40);
         let screen = rows.join("\n");
@@ -471,7 +471,7 @@ mod tests {
             assert_eq!(find(&rows, group)[0].0, task_x, "{group} is in the right column: {screen}");
         }
         assert!(row_with(&rows, "END IT").contains("each asks first"));
-        assert!(row_with(&rows, "U         update kelpie").contains("↑ 0.26.0"), "{screen}");
+        assert!(row_with(&rows, "U         update kebbie").contains("↑ 0.26.0"), "{screen}");
         assert!(screen.contains("h         hide or show the lead's chat") && screen.contains("ctrl+c    twice: quit the board"), "{screen}");
         assert!(screen.contains("in the card window  ← → image · ↑ ↓ j k scroll · f fullscreen · o open the image · p push"), "{screen}");
         assert!(screen.contains("areas (2) and routines (3) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
@@ -545,22 +545,22 @@ mod tests {
     }
 
     #[test]
-    fn beside_u_only_kelpies_own_version_shows_and_never_moves_the_right_column() {
+    fn beside_u_only_kebbies_own_version_shows_and_never_moves_the_right_column() {
         let updates = |pairs: &[(&str, &str)]| pairs.iter().map(|(name, version)| (name.to_string(), version.to_string())).collect::<Vec<_>>();
-        assert_eq!(update_hint(&updates(&[("running", "override /tmp/kelpie"), ("vault", "0.2.17")])), None);
-        assert_eq!(update_hint(&updates(&[("running", "override /tmp/kelpie"), ("kelpie", "0.26.0")])).as_deref(), Some("0.26.0"));
+        assert_eq!(update_hint(&updates(&[("running", "override /tmp/kebbie"), ("vault", "0.2.17")])), None);
+        assert_eq!(update_hint(&updates(&[("running", "override /tmp/kebbie"), ("kebbie", "0.26.0")])).as_deref(), Some("0.26.0"));
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
-        app.updates = updates(&[("running", "override /tmp/kelpie"), ("vault", "0.2.17")]);
+        app.updates = updates(&[("running", "override /tmp/kebbie"), ("vault", "0.2.17")]);
         press(&mut app, key(KeyCode::Char('?')));
         let (rows, _) = render(&mut app, 150, 40);
-        let row = row_with(&rows, "U         update kelpie and its plugins");
+        let row = row_with(&rows, "U         update kebbie and its plugins");
         assert!(!row.contains('↑') && !row.contains("override") && !row.contains("vault"), "{row}");
-        app.updates = updates(&[("kelpie", "0.26.0-a-very-long-prerelease-name")]);
+        app.updates = updates(&[("kebbie", "0.26.0-a-very-long-prerelease-name")]);
         let (rows, _) = render(&mut app, 150, 40);
         let (task_x, _) = find(&rows, "THE SELECTED TASK")[0];
         let (end_x, _) = find(&rows, "END IT")[0];
-        assert!(row_with(&rows, "U         update kelpie").contains("↑ 0.26.0") && end_x == task_x, "{}", rows.join("\n"));
-        let row = row_with(&rows, "U         update kelpie");
+        assert!(row_with(&rows, "U         update kebbie").contains("↑ 0.26.0") && end_x == task_x, "{}", rows.join("\n"));
+        let row = row_with(&rows, "U         update kebbie");
         assert!(!row.contains("prerelease-name"), "the hint is clipped to the left column: {row}");
     }
 

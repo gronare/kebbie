@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::sh::Result;
 
-// The vault as notes-vault-mcp sees it: kelpie reads the server's local SQLite index, read-only, so a vault on S3 needs no credentials here.
+// The vault as notes-vault-mcp sees it: kebbie reads the server's local SQLite index, read-only, so a vault on S3 needs no credentials here.
 pub struct Index {
     db: Connection,
 }
@@ -24,7 +24,7 @@ pub struct Note {
     pub area: String,
 }
 
-// The kelpie frontmatter key a task note carries while a kelpie works on it: which machine, which task, since when.
+// The kebbie frontmatter key a task note carries while a kebbie works on it: which machine, which task, since when.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Claim {
     pub machine: String,
@@ -282,36 +282,36 @@ mod tests {
 
     #[test]
     fn a_log_line_loses_its_commits_and_link() {
-        let line = "- [2026-10-16] kelpie 0.9.0: sessions message each other | commits: 7f88afc | branch: x | [[kelpie]]";
-        assert_eq!(log_line(line), Some(LogLine { date: "2026-10-16".to_string(), text: "kelpie 0.9.0: sessions message each other".to_string() }));
+        let line = "- [2026-10-16] kebbie 0.9.0: sessions message each other | commits: 7f88afc | branch: x | [[kebbie]]";
+        assert_eq!(log_line(line), Some(LogLine { date: "2026-10-16".to_string(), text: "kebbie 0.9.0: sessions message each other".to_string() }));
         assert_eq!(log_line("not a log line"), None);
     }
 
     #[test]
     fn an_areas_log_is_its_own_note_and_lines_that_link_it_newest_first() {
         let logs = vec![
-            ("Log/kelpie-log.md".to_string(), "- [2026-10-15] first | [[kelpie]]\n- [2026-10-16] second\n".to_string()),
-            ("Log/api-log.md".to_string(), "- [2026-10-14] api only | [[api]]\n- [2026-10-16] for kelpie too | [[kelpie]]\n".to_string()),
+            ("Log/kebbie-log.md".to_string(), "- [2026-10-15] first | [[kebbie]]\n- [2026-10-16] second\n".to_string()),
+            ("Log/api-log.md".to_string(), "- [2026-10-14] api only | [[api]]\n- [2026-10-16] for kebbie too | [[kebbie]]\n".to_string()),
         ];
-        let texts: Vec<String> = log_for(&logs, "kelpie", &["Log/kelpie-log.md".to_string()]).into_iter().map(|line| line.text).collect();
-        assert_eq!(texts, ["for kelpie too", "second", "first"]);
+        let texts: Vec<String> = log_for(&logs, "kebbie", &["Log/kebbie-log.md".to_string()]).into_iter().map(|line| line.text).collect();
+        assert_eq!(texts, ["for kebbie too", "second", "first"]);
     }
 
     #[test]
     fn a_repos_own_log_is_found_by_whatever_the_vault_calls_it() {
-        let logs: Vec<(String, String)> = ["Log/kelpie-2026-09.md", "Log/kelpie-logg.md", "Log/kelpie-plugin-log.md", "Log/api-log.md"].iter().map(|key| (key.to_string(), String::new())).collect();
-        assert_eq!(own_log_guess(&logs, "kelpie").as_deref(), Some("Log/kelpie-logg.md"), "the user's logs are -logg.md, and a month page is no own log");
+        let logs: Vec<(String, String)> = ["Log/kebbie-2026-09.md", "Log/kebbie-logg.md", "Log/kebbie-plugin-log.md", "Log/api-log.md"].iter().map(|key| (key.to_string(), String::new())).collect();
+        assert_eq!(own_log_guess(&logs, "kebbie").as_deref(), Some("Log/kebbie-logg.md"), "the user's logs are -logg.md, and a month page is no own log");
         assert_eq!(own_log_guess(&logs, "api").as_deref(), Some("Log/api-log.md"));
         assert_eq!(own_log_guess(&logs, "web"), None);
-        let both: Vec<(String, String)> = ["Log/kelpie-changes.md", "Log/kelpie-log.md"].iter().map(|key| (key.to_string(), String::new())).collect();
-        assert_eq!(own_log_guess(&both, "kelpie").as_deref(), Some("Log/kelpie-log.md"), "without the vault command the -log.md note kelpie always read still wins");
+        let both: Vec<(String, String)> = ["Log/kebbie-changes.md", "Log/kebbie-log.md"].iter().map(|key| (key.to_string(), String::new())).collect();
+        assert_eq!(own_log_guess(&both, "kebbie").as_deref(), Some("Log/kebbie-log.md"), "without the vault command the -log.md note kebbie always read still wins");
         let source = include_str!("vault.rs");
         assert!(!source.contains(&["\"Log/{name}", "-log.md\""].concat()), "the log note's name is the vault's to say");
     }
 
     #[test]
     fn reads_areas_and_their_notes_from_an_index() {
-        let dir = std::env::temp_dir().join(format!("kelpie-vault-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-vault-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("index.sqlite");
         let _ = std::fs::remove_file(&path);
@@ -322,44 +322,44 @@ mod tests {
             CREATE TABLE repos (repo TEXT PRIMARY KEY, root TEXT, seen_at TEXT);
             CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT);
             CREATE VIRTUAL TABLE notes_fts USING fts5(title, summary, tags, body, stem, stemmed, key UNINDEXED);
-            INSERT INTO notes (key, folder, stem, title, status, kind, paths, valid) VALUES ('Areas/kelpie.md', 'Areas', 'kelpie', 'kelpie', 'active', 'system', '[\"~/personal/kelpie\"]', 1);
-            INSERT INTO notes (key, folder, stem, title, status, kind, area, priority, valid) VALUES ('Projects/kelpie-x.md', 'Projects', 'kelpie-x', 'X', 'backlog', 'task', '[[kelpie]]', 'high', 1);
-            INSERT INTO notes (key, folder, stem, title, status, kind, area, valid) VALUES ('Archive/kelpie-y.md', 'Archive', 'kelpie-y', 'Y', 'complete', 'task', '[[kelpie]]', 1);
-            INSERT INTO repos VALUES ('kelpie', '/src/kelpie', '2026-10-16');
+            INSERT INTO notes (key, folder, stem, title, status, kind, paths, valid) VALUES ('Areas/kebbie.md', 'Areas', 'kebbie', 'kebbie', 'active', 'system', '[\"~/personal/kebbie\"]', 1);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, priority, valid) VALUES ('Projects/kebbie-x.md', 'Projects', 'kebbie-x', 'X', 'backlog', 'task', '[[kebbie]]', 'high', 1);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, valid) VALUES ('Archive/kebbie-y.md', 'Archive', 'kebbie-y', 'Y', 'complete', 'task', '[[kebbie]]', 1);
+            INSERT INTO repos VALUES ('kebbie', '/src/kebbie', '2026-10-16');
             INSERT INTO meta VALUES ('last_sync', '1792172065.5');
-            INSERT INTO notes_fts (key, body) VALUES ('Log/kelpie-log.md', '- [2026-10-16] done');
-            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-old.md', 'Projects', 'kelpie-old', 'Old', 'active', 'task', '[[other-area]]', 100, 1);
-            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-new.md', 'Projects', 'kelpie-new', 'New', 'active', 'task', '[[other-area]]', 200, 1);
-            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-broken.md', 'Projects', 'kelpie-broken', 'Broken', 'active', 'task', '[[other-area]]', 300, 0);
-            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-done.md', 'Projects', 'kelpie-done', 'Done', 'complete', 'task', '[[other-area]]', 400, 1);
-            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kelpie-draft.md', 'Projects', 'kelpie-draft', 'Draft', 'draft', 'task', '[[other-area]]', 150, 1);
+            INSERT INTO notes_fts (key, body) VALUES ('Log/kebbie-log.md', '- [2026-10-16] done');
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kebbie-old.md', 'Projects', 'kebbie-old', 'Old', 'active', 'task', '[[other-area]]', 100, 1);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kebbie-new.md', 'Projects', 'kebbie-new', 'New', 'active', 'task', '[[other-area]]', 200, 1);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kebbie-broken.md', 'Projects', 'kebbie-broken', 'Broken', 'active', 'task', '[[other-area]]', 300, 0);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kebbie-done.md', 'Projects', 'kebbie-done', 'Done', 'complete', 'task', '[[other-area]]', 400, 1);
+            INSERT INTO notes (key, folder, stem, title, status, kind, area, mtime, valid) VALUES ('Projects/kebbie-draft.md', 'Projects', 'kebbie-draft', 'Draft', 'draft', 'task', '[[other-area]]', 150, 1);
             INSERT INTO notes (key, folder, stem, title, status, kind, mtime, valid) VALUES ('Resources/other.md', 'Resources', 'other', 'Other', 'active', 'howto', 500, 1);
-            INSERT INTO notes_fts (key, body) VALUES ('Projects/kelpie-new.md', '## Problem
+            INSERT INTO notes_fts (key, body) VALUES ('Projects/kebbie-new.md', '## Problem
 The payload says amount.');
         ").unwrap();
         drop(db);
         let index = Index::at(&path).unwrap();
         let areas = index.areas().unwrap();
         assert_eq!(areas.len(), 1);
-        assert_eq!(areas[0].paths, ["~/personal/kelpie"]);
-        let notes = index.notes_of("kelpie").unwrap();
-        assert_eq!(notes.iter().map(|note| note.key.as_str()).collect::<Vec<_>>(), ["Projects/kelpie-x.md"]);
+        assert_eq!(areas[0].paths, ["~/personal/kebbie"]);
+        let notes = index.notes_of("kebbie").unwrap();
+        assert_eq!(notes.iter().map(|note| note.key.as_str()).collect::<Vec<_>>(), ["Projects/kebbie-x.md"]);
         assert_eq!(notes[0].priority, "high");
-        assert_eq!(index.known_root("kelpie"), Some(PathBuf::from("/src/kelpie")));
+        assert_eq!(index.known_root("kebbie"), Some(PathBuf::from("/src/kebbie")));
         assert_eq!(index.last_sync(), Some(1792172065));
-        assert_eq!(index.logs().unwrap(), [("Log/kelpie-log.md".to_string(), "- [2026-10-16] done".to_string())]);
+        assert_eq!(index.logs().unwrap(), [("Log/kebbie-log.md".to_string(), "- [2026-10-16] done".to_string())]);
         let ongoing: Vec<String> = index.ongoing().unwrap().into_iter().map(|note| note.key).collect();
-        assert_eq!(ongoing, ["Projects/kelpie-new.md", "Projects/kelpie-draft.md", "Projects/kelpie-old.md"], "active and draft projects, as the vault's Open tasks base shows them, newest first");
+        assert_eq!(ongoing, ["Projects/kebbie-new.md", "Projects/kebbie-draft.md", "Projects/kebbie-old.md"], "active and draft projects, as the vault's Open tasks base shows them, newest first");
         assert_eq!(index.ongoing().unwrap()[0].area, "other-area");
-        assert_eq!(notes[0].area, "kelpie", "the [[link]] reads as the area's stem");
-        assert_eq!(index.body("Projects/kelpie-new.md").as_deref(), Some("## Problem\nThe payload says amount."));
+        assert_eq!(notes[0].area, "kebbie", "the [[link]] reads as the area's stem");
+        assert_eq!(index.body("Projects/kebbie-new.md").as_deref(), Some("## Problem\nThe payload says amount."));
         assert_eq!(index.body("Projects/missing.md"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_claim_is_read_from_the_index_and_an_older_index_has_none() {
-        let dir = std::env::temp_dir().join(format!("kelpie-vault-claims-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-vault-claims-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("index.sqlite");
         let _ = std::fs::remove_file(&path);
@@ -397,11 +397,11 @@ The payload says amount.');
     #[test]
     fn a_tilde_path_expands_under_home_and_an_area_link_loses_its_brackets() {
         let home = std::env::var("HOME").unwrap_or_default();
-        assert_eq!(expand("~/personal/kelpie"), PathBuf::from(&home).join("personal/kelpie"));
+        assert_eq!(expand("~/personal/kebbie"), PathBuf::from(&home).join("personal/kebbie"));
         assert_eq!(expand("~personal"), PathBuf::from("~personal"), "only ~/ is the home");
         assert_eq!(expand("/abs"), PathBuf::from("/abs"));
-        assert_eq!(area_name(" [[kelpie]] "), "kelpie");
-        assert_eq!(area_name("kelpie"), "kelpie");
+        assert_eq!(area_name(" [[kebbie]] "), "kebbie");
+        assert_eq!(area_name("kebbie"), "kebbie");
         assert_eq!(area_name("[[a]] [[b]]"), "a]] [[b");
     }
 
@@ -422,8 +422,8 @@ The payload says amount.');
     }
 
     #[test]
-    fn the_index_is_opened_read_only_so_kelpie_never_writes_the_servers_database() {
-        let dir = std::env::temp_dir().join(format!("kelpie-vault-ro-{}", std::process::id()));
+    fn the_index_is_opened_read_only_so_kebbie_never_writes_the_servers_database() {
+        let dir = std::env::temp_dir().join(format!("kebbie-vault-ro-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("index.sqlite");
         let _ = std::fs::remove_file(&path);

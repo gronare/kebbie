@@ -44,7 +44,7 @@ impl Unsure {
 
     pub(crate) fn said(self, main: &str, done: char) -> String {
         match self {
-            Unsure::Turn => format!("landed on {main} · kelpie closes it after this turn"),
+            Unsure::Turn => format!("landed on {main} · kebbie closes it after this turn"),
             Unsure::Uncommitted => format!("landed on {main}, but its worktree has uncommitted changes or a stash: commit them, or drop it to discard them"),
             Unsure::Note => format!("landed on {main} · its note waits for its solution and decisions"),
             Unsure::Prompt | Unsure::Question => format!("landed on {main} · {done} closes it"),
@@ -344,7 +344,7 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                             if intent::pending(state, &address).is_some_and(|pending| pending.work == Work::Ci) {
                                 intent::forget(state, &address);
                             }
-                            let text = format!("{address} landed on {main} outside kelpie's push, so kelpie closed it as done.");
+                            let text = format!("{address} landed on {main} outside kebbie's push, so kebbie closed it as done.");
                             tell(&text);
                             notes.push(format!("landed: {text}"));
                         }
@@ -481,7 +481,7 @@ mod tests {
         let notes = pass(&state, &world(&repos, &seen, &[], "false"), &mut closing_by_finish(&state, &upstream), &mut |text| told.borrow_mut().push(text.to_string()));
         assert!(!branch_exists(&dir, "billing"), "closed as done: {notes:?}");
         let address = peers::address("billing", &name_of(&dir));
-        assert_eq!(told.borrow().as_slice(), [format!("{address} landed on {} outside kelpie's push, so kelpie closed it as done.", upstream.trim_start_matches("origin/"))], "the lead hears one line");
+        assert_eq!(told.borrow().as_slice(), [format!("{address} landed on {} outside kebbie's push, so kebbie closed it as done.", upstream.trim_start_matches("origin/"))], "the lead hears one line");
         cleanup(dir, origin, &slot);
     }
 
@@ -749,7 +749,7 @@ mod tests {
         let mut turning = crate::status::tests::task(Some("working"), None, 1);
         turning.landed = Some(Unsure::Turn);
         assert_eq!(turning.group(), crate::status::Group::Working);
-        assert!(turning.summary().contains("landed on main · kelpie closes it after this turn"), "{}", turning.summary());
+        assert!(turning.summary().contains("landed on main · kebbie closes it after this turn"), "{}", turning.summary());
         let mut ready = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         assert_eq!(ready.group(), crate::status::Group::ReadyToPush);
         ready.landed = Some(Unsure::Prompt);
@@ -786,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn a_push_of_kelpies_own_under_way_holds_the_round_off_even_with_ci_watch_off() {
+    fn a_push_of_kebbies_own_under_way_holds_the_round_off_even_with_ci_watch_off() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let state = state_of(&dir);
         on_main(&dir, &slot, &upstream);

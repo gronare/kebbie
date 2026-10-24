@@ -5,7 +5,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::Frame;
-use kelpie_hub_protocol::BugReport;
+use kebbie_hub_protocol::BugReport;
 
 use crate::hub::report::{self, Scrub};
 use crate::issue_recheck::Fixed;
@@ -99,8 +99,8 @@ pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'s
     }
     let key = keys::key(Act::Reports);
     let panel = &app.offer_panel;
-    let mut lines = vec![Line::default(), group_line("Send to kelpie's maintainers?", app.offers.len(), YELLOW)];
-    let hint = if panel.focused { format!("↑ ↓ pick · ⏎ shows the text and asks · n keeps it here only · esc back · {key} hides") } else { format!("bugs in kelpie you ran into · {key} selects · {key} again hides") };
+    let mut lines = vec![Line::default(), group_line("Send to kebbie's maintainers?", app.offers.len(), YELLOW)];
+    let hint = if panel.focused { format!("↑ ↓ pick · ⏎ shows the text and asks · n keeps it here only · esc back · {key} hides") } else { format!("bugs in kebbie you ran into · {key} selects · {key} again hides") };
     lines.push(Line::from(Span::styled(hint, style(MUTED))));
     let mut rows = Vec::new();
     let mut selected_line = None;
@@ -144,7 +144,7 @@ impl App {
         if let Ok(state) = crate::lead::state_dir() {
             let _ = crate::issue_recheck::dismiss(&state, &fixed, crate::messages::now());
         }
-        let notice = fixed.titles.iter().fold(Notice::new(Tone::Done, crate::issue_recheck::headline(&fixed)).next("kelpie issues --all lists them, each with the commit that fixed it."), |notice, title| notice.detail("fixed", title));
+        let notice = fixed.titles.iter().fold(Notice::new(Tone::Done, crate::issue_recheck::headline(&fixed)).next("kebbie issues --all lists them, each with the commit that fixed it."), |notice, title| notice.detail("fixed", title));
         self.subject = Some(super::notices::Subject::plain("issues"));
         self.show_as(notice.ok(), true);
         true
@@ -183,7 +183,7 @@ impl App {
             (true, false) if self.offers.is_empty() => self.set_shown(false),
             (_, false) if self.offers.is_empty() => {
                 self.set_shown(true);
-                self.say("No bugs wait to be sent to kelpie's maintainers".to_string());
+                self.say("No bugs wait to be sent to kebbie's maintainers".to_string());
             }
             _ => self.focus_offers(0),
         }
@@ -244,7 +244,7 @@ impl App {
                 self.offers_changed();
                 let digest = offer.report.digest();
                 let send = self.reporter.send.clone();
-                self.in_background("Sending the report to kelpie's maintainers…".to_string(), move || send(&id, &digest));
+                self.in_background("Sending the report to kebbie's maintainers…".to_string(), move || send(&id, &digest));
             }
             KeyCode::Char('n') => self.decline(&id),
             KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::Report { id, scroll: scroll.saturating_add(1), read, nudged: false },
@@ -270,10 +270,10 @@ pub(super) fn draw_report(frame: &mut Frame, app: &App, id: &str, scroll: u16, r
     let last = rows.len().saturating_sub(view);
     let scroll = usize::from(scroll).min(last);
     let read = read || scroll >= last;
-    let mut lines = vec![Line::from(Span::styled(format!("Bug {} as it would go to kelpie's maintainers{}:", offer.id, if last > 0 { format!(", rows {}–{} of {}", scroll + 1, scroll + view, rows.len()) } else { String::new() }), style(MUTED))), Line::default()];
+    let mut lines = vec![Line::from(Span::styled(format!("Bug {} as it would go to kebbie's maintainers{}:", offer.id, if last > 0 { format!(", rows {}–{} of {}", scroll + 1, scroll + view, rows.len()) } else { String::new() }), style(MUTED))), Line::default()];
     lines.extend(rows.iter().enumerate().skip(scroll).take(view).map(|(index, row)| Line::from(Span::styled(row.clone(), if index == 0 { bold(TEXT) } else { style(TEXT) }))));
     lines.push(Line::default());
-    lines.push(Line::from(vec![Span::styled("Send this report to kelpie's maintainers?", style(YELLOW)), Span::styled("  y / n", style(MUTED))]));
+    lines.push(Line::from(vec![Span::styled("Send this report to kebbie's maintainers?", style(YELLOW)), Span::styled("  y / n", style(MUTED))]));
     let keys = if read { "y sends it, signed with this install's key · n keeps it here only · esc decides later" } else { "↓ pgdn read on: y counts once you have read to the end · n keeps it here only · esc decides later" };
     lines.push(Line::from(Span::styled(keys, style(MUTED))));
     if nudged {
@@ -329,11 +329,11 @@ mod tests {
         assert!(!screen(&mut app).contains("to send"), "no bugs, no count");
         app.offers = offers;
         let shown = screen(&mut app);
-        assert!(shown.contains("! 1 bug to send · B") && !shown.contains("Send to kelpie's maintainers?") && !shown.contains("push hid git's error"), "hidden at first: {shown}");
+        assert!(shown.contains("! 1 bug to send · B") && !shown.contains("Send to kebbie's maintainers?") && !shown.contains("push hid git's error"), "hidden at first: {shown}");
 
         press(&mut app, key(KeyCode::Char('B')));
         let shown = screen(&mut app);
-        assert!(shown.contains("Send to kelpie's maintainers?  1") && shown.contains("! a1b2c3  push hid git's error") && shown.contains("⏎ shows the text and asks"), "{shown}");
+        assert!(shown.contains("Send to kebbie's maintainers?  1") && shown.contains("! a1b2c3  push hid git's error") && shown.contains("⏎ shows the text and asks"), "{shown}");
         assert!(app.offer_panel.focused, "B shows the list with its first bug selected");
         press(&mut app, key(KeyCode::Esc));
         assert!(!app.offer_panel.focused && app.offer_panel.shown && screen(&mut app).contains("! a1b2c3"), "esc goes back to the tasks and leaves the list shown");
@@ -347,7 +347,7 @@ mod tests {
         press(&mut app, key(KeyCode::Enter));
         assert!(matches!(&app.mode, Mode::Report { id, nudged: false, .. } if id == "a1b2c3"), "a question waiting does not stand in the way");
         let shown = screen(&mut app);
-        assert!(shown.contains("Send this report to kelpie's maintainers?  y / n") && shown.contains("It failed in ~/work/<repo>."), "the text as it would go out: {shown}");
+        assert!(shown.contains("Send this report to kebbie's maintainers?  y / n") && shown.contains("It failed in ~/work/<repo>."), "the text as it would go out: {shown}");
         assert!(!shown.contains("/Users/carl") && !shown.contains("greenhouse"), "{shown}");
         press(&mut app, key(KeyCode::Char('x')));
         assert!(matches!(app.mode, Mode::Report { nudged: true, .. }), "another key keeps the question");
@@ -480,12 +480,12 @@ mod tests {
         app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: titles.clone(), bugs: titles.clone(), wishes: 0, last: 500 });
         let (rows, _) = render(&mut app, 120, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("✓ Fixed in kelpie 0.26.3: 4 bugs you ran into") && screen.contains("  i shows the list"), "{screen}");
+        assert!(screen.contains("✓ Fixed in kebbie 0.26.3: 4 bugs you ran into") && screen.contains("  i shows the list"), "{screen}");
         assert!(screen.contains("  push hid git's error") && screen.contains("  stage lost a commit") && !screen.contains("a fourth") && screen.contains("… and 1 more"), "{screen}");
         press(&mut app, key(KeyCode::Char('i')));
         assert!(app.fixed.is_none() && app.fixed_seen == 500, "the line goes once it was opened, and a snapshot read before it cannot bring it back");
         let Mode::Message(text) = &app.mode else { panic!("a window that stays until a key") };
-        assert!(text.contains("Fixed in kelpie 0.26.3: 4 bugs you ran into") && text.contains("a fourth") && text.contains("kelpie issues --all"), "{text}");
+        assert!(text.contains("Fixed in kebbie 0.26.3: 4 bugs you ran into") && text.contains("a fourth") && text.contains("kebbie issues --all"), "{text}");
         app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: vec!["x".to_string()], bugs: vec!["x".to_string()], wishes: 0, last: 600 });
         app.questions = crate::messages::fold(QUESTION);
         let hint = |questions: bool| fixed_lines(app.fixed.as_ref(), questions, 120).iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");

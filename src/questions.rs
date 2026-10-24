@@ -10,7 +10,7 @@ use crate::report;
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
 
-const USAGE: &str = "kelpie ask --option \"<label>: <what it means>\" --option \"<label>: <what it means>\" [--option …] --recommend <n> \"<question>\", where an option ending in \" +comment\" takes the user's written comment, or kelpie ask --plan <vault:<note path> | file> [\"<question>\"]";
+const USAGE: &str = "kebbie ask --option \"<label>: <what it means>\" --option \"<label>: <what it means>\" [--option …] --recommend <n> \"<question>\", where an option ending in \" +comment\" takes the user's written comment, or kebbie ask --plan <vault:<note path> | file> [\"<question>\"]";
 
 pub const COMMENT_MARK: &str = "+comment";
 
@@ -41,16 +41,16 @@ pub fn parse(options: &[&str], recommend: Option<&str>, plan: bool, text: &str) 
     let text = one_line(text);
     if plan {
         if !options.is_empty() || recommend.is_some() {
-            return Err("kelpie ask --plan takes the plan's own options (approve, approve with a comment, ask for changes, reject with a comment); leave out --option and --recommend".to_string());
+            return Err("kebbie ask --plan takes the plan's own options (approve, approve with a comment, ask for changes, reject with a comment); leave out --option and --recommend".to_string());
         }
         let text = if text.is_empty() { "Approve this plan?".to_string() } else { text };
         return Ok(Asked { text, options: PLAN_OPTIONS.iter().map(|(label, meaning)| (label.to_string(), meaning.to_string())).collect(), recommend: 1, comment: PLAN_COMMENT.to_vec() });
     }
     if text.is_empty() {
-        return Err(format!("kelpie ask needs the question: {USAGE}"));
+        return Err(format!("kebbie ask needs the question: {USAGE}"));
     }
     if !(2..=4).contains(&options.len()) {
-        return Err(format!("kelpie ask takes two to four --option, not {}: {USAGE}", options.len()));
+        return Err(format!("kebbie ask takes two to four --option, not {}: {USAGE}", options.len()));
     }
     let marked: Vec<(&str, bool)> = options.iter().map(|option| match option.trim_end().strip_suffix(COMMENT_MARK) {
         Some(rest) if rest.ends_with(char::is_whitespace) => (rest, true),
@@ -61,7 +61,7 @@ pub fn parse(options: &[&str], recommend: Option<&str>, plan: bool, text: &str) 
         Some((label, meaning)) if !one_line(label).is_empty() && !one_line(meaning).is_empty() => Ok((one_line(label), one_line(meaning))),
         _ => Err(format!("--option \"{option}\" needs a label and what it means, as \"<label>: <what it means>\", with \" {COMMENT_MARK}\" after it when the option takes the user's comment")),
     }).collect::<Result<Vec<_>>>()?;
-    let recommend = recommend.ok_or(format!("kelpie ask needs --recommend <n>, the option you recommend: {USAGE}"))?;
+    let recommend = recommend.ok_or(format!("kebbie ask needs --recommend <n>, the option you recommend: {USAGE}"))?;
     let recommend: usize = recommend.trim().parse().ok().filter(|n| (1..=options.len()).contains(n))
         .ok_or(format!("--recommend is the number of an option, 1 to {}, not \"{recommend}\"", options.len()))?;
     Ok(Asked { text, options, recommend, comment })
@@ -81,7 +81,7 @@ pub fn record(id: &str, at: u64, from: &str, asked: &Asked, plan: Option<&str>, 
     })
 }
 
-// The task may change or delete its plan file; the user reads the plan as it was asked. kelpie's own plans/ file is moved rather than copied, so it is stored once.
+// The task may change or delete its plan file; the user reads the plan as it was asked. kebbie's own plans/ file is moved rather than copied, so it is stored once.
 pub fn keep_plan(source: &Path, state: &Path, me: &str, id: &str) -> Result<PathBuf> {
     let dir = state.join("plans");
     crate::state::private_dir(&dir)?;
@@ -102,7 +102,7 @@ pub fn plan_reference(plan: &str, cwd: &Path, state: &Path, me: &str, id: &str) 
         Some(key) => {
             let key = key.trim().trim_start_matches('/');
             if key.is_empty() {
-                return Err("kelpie ask --plan vault:<path> needs the note's path in the vault, as vault:Projects/<note>.md".to_string());
+                return Err("kebbie ask --plan vault:<path> needs the note's path in the vault, as vault:Projects/<note>.md".to_string());
             }
             Ok(format!("{VAULT_PLAN}{key}{}", if key.ends_with(".md") { "" } else { ".md" }))
         }
@@ -181,9 +181,9 @@ pub fn question_copy(message: &Message, away: bool) -> String {
     let Some(question) = &message.question else { return message.text.clone() };
     let plan = question.plan.as_ref().map(|plan| format!(" The plan: {plan}.")).unwrap_or_default();
     let then = if away {
-        format!(" The user is away: settle a question of method with kelpie decide {from} \"<answer>\", and keep one of intent for them with kelpie defer {from}.", from = message.from)
+        format!(" The user is away: settle a question of method with kebbie decide {from} \"<answer>\", and keep one of intent for them with kebbie defer {from}.", from = message.from)
     } else {
-        format!(" A question of method you settle with kelpie decide {from} \"<answer>\"; one of intent the user answers on the board.", from = message.from)
+        format!(" A question of method you settle with kebbie decide {from} \"<answer>\"; one of intent the user answers on the board.", from = message.from)
     };
     format!("{} asks the user: {} Options: {}.{plan}{then}", message.from, message.text, options_line(question))
 }
@@ -314,7 +314,7 @@ fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &
 
 pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&str>, text: &str) -> Result<String> {
     let asked = parse(options, recommend, plan.is_some(), text)?;
-    let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kelpie ask runs in a task's worktree")?;
+    let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kebbie ask runs in a task's worktree")?;
     let sessions = peers::sessions().unwrap_or_default();
     let _lock = Lock::take(true)?;
     if open_now(&messages::load()).iter().any(|question| question.from == me) {
@@ -371,7 +371,7 @@ fn answered_as(caller: &crate::permit::Caller, to: &str) -> Result<String> {
         return Err(format!("{own} marks only its own question answered; the user or the lead settles the one from {to}"));
     }
     if settled.is_empty() {
-        return Err(format!("No question from \"{to}\" waits for the user; kelpie status --json lists each task's question"));
+        return Err(format!("No question from \"{to}\" waits for the user; kebbie status --json lists each task's question"));
     }
     for question in &settled {
         messages::append(&json!({ "id": question.id, "at": messages::now(), "state": "answered" }))?;
@@ -395,7 +395,7 @@ fn lead_settles(caller: &crate::permit::Caller, away: bool, keep: bool) -> Resul
 fn open_from(open: &[&Message], to: &str) -> Result<Message> {
     let found: Vec<&&Message> = open.iter().filter(|question| of_task(question, to)).collect();
     match found.as_slice() {
-        [] => Err(format!("No question from \"{to}\" waits for the user; kelpie status --json lists each task's question")),
+        [] => Err(format!("No question from \"{to}\" waits for the user; kebbie status --json lists each task's question")),
         [question] => Ok((**question).clone()),
         several => Err(format!("{} each have a question open; name one as task@repo", several.iter().map(|question| question.from.as_str()).collect::<Vec<_>>().join(" and "))),
     }
@@ -404,7 +404,7 @@ fn open_from(open: &[&Message], to: &str) -> Result<Message> {
 // A how-question the lead answers itself: the answer goes to the task as the lead's call, closes the question on the board, and is recorded, for the user's return when they are away.
 pub fn decide(to: &str, answer: &str) -> Result<String> {
     if answer.trim().is_empty() {
-        return Err("kelpie decide needs the answer: kelpie decide <task> \"<answer>\"".to_string());
+        return Err("kebbie decide needs the answer: kebbie decide <task> \"<answer>\"".to_string());
     }
     let away = crate::permit::away_since().is_some();
     lead_settles(&crate::permit::caller(), away, false)?;
@@ -452,7 +452,7 @@ mod tests {
             r#"{"id":"q1","at":10,"from":"billing@web","to":"you","text":"Probe?","state":"asked","question":{"options":[{"label":"Yes","meaning":"run it"},{"label":"No","meaning":"skip"}],"recommend":1}}"#,
             r#"{"id":"q2","at":11,"from":"shop@web","to":"you","text":"Which?","state":"asked","question":{"options":[["A","a"],["B","b"]],"recommend":1}}"#,
             r#"{"id":"q2","at":12,"state":"answered"}"#,
-            r#"{"id":"q3","at":13,"from":"kelpie","to":"you","text":"Restart?","state":"asked","kind":"restart","question":{"options":[["Yes","y"],["No","n"]],"recommend":1}}"#,
+            r#"{"id":"q3","at":13,"from":"kebbie","to":"you","text":"Restart?","state":"asked","kind":"restart","question":{"options":[["Yes","y"],["No","n"]],"recommend":1}}"#,
         ].join("\n");
         let messages = fold(&log);
         assert!(open(&messages, |task| (task == "billing@web").then_some(20)).iter().all(|question| question.id != "q1"), "a new turn in the pane closed it");
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn a_late_answer_names_why_its_question_closed_and_waits_while_a_newer_one_is_open() {
         let asked = |id: &str, at: u64, from: &str| json!({ "id": id, "at": at, "from": from, "to": "you", "text": format!("{id}?"), "state": "asked", "question": { "options": [["A", "a"], ["B", "b"]], "recommend": 1 } });
-        let ended = |at: u64, to: &str| json!({ "id": format!("end{at}"), "at": at, "from": "kelpie", "to": to, "text": "ended", "state": "ended" });
+        let ended = |at: u64, to: &str| json!({ "id": format!("end{at}"), "at": at, "from": "kebbie", "to": to, "text": "ended", "state": "ended" });
         let no_turn = |_: &str| None;
         let newer = log(&[asked("q1", 10, "billing@web"), asked("q2", 11, "billing@web")]);
         assert_eq!(closed_by(&newer, &newer[0], no_turn), Closed::Newer { open: true });
@@ -531,10 +531,10 @@ mod tests {
         let messages = log(&[record("q1", 10, "billing@web", &asked(), Some("vault:Projects/billing.md"), Some(5000))]);
         let here = question_copy(&messages[0], false);
         assert!(here.starts_with("billing@web asks the user: Which queue should retries use? Options: Sidekiq: reuse the jobs we have; Solid Queue (recommended): one less service."), "{here}");
-        assert!(here.contains("The plan: vault:Projects/billing.md.") && here.contains("kelpie decide billing@web \"<answer>\"") && here.ends_with("the user answers on the board."), "{here}");
-        assert!(!here.contains("kelpie defer"), "{here}");
+        assert!(here.contains("The plan: vault:Projects/billing.md.") && here.contains("kebbie decide billing@web \"<answer>\"") && here.ends_with("the user answers on the board."), "{here}");
+        assert!(!here.contains("kebbie defer"), "{here}");
         let away = question_copy(&messages[0], true);
-        assert!(away.contains("kelpie decide billing@web \"<answer>\"") && away.contains("kelpie defer billing@web"), "{away}");
+        assert!(away.contains("kebbie decide billing@web \"<answer>\"") && away.contains("kebbie defer billing@web"), "{away}");
     }
 
     #[test]
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn a_question_is_settled_by_its_tasks_end_a_later_question_or_a_new_turn() {
         let first = record("q1", 10, "billing@web", &asked(), None, None);
-        let end = json!({ "id": "e", "at": 30, "from": "kelpie", "to": "billing@web", "text": "billing ended (done)", "state": "ended" });
+        let end = json!({ "id": "e", "at": 30, "from": "kebbie", "to": "billing@web", "text": "billing ended (done)", "state": "ended" });
         assert!(open(&log(&[first.clone(), end]), |_| None).is_empty());
         let later = log(&[first.clone(), record("q2", 20, "billing@web", &asked(), None, None)]);
         assert_eq!(open(&later, |_| None).iter().map(|question| question.id.as_str()).collect::<Vec<_>>(), ["q2"]);
@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn a_plan_is_kept_under_the_state_dir_as_it_was_asked() {
-        let base = std::env::temp_dir().join(format!("kelpie-plan-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("kebbie-plan-{}", std::process::id()));
         fs::create_dir_all(&base).unwrap();
         let source = base.join("plan.md");
         fs::write(&source, "# Plan\n1. rename").unwrap();
@@ -611,14 +611,14 @@ mod tests {
         let own = base.join("state/plans/billing@web.md");
         fs::write(&own, "# Own plan").unwrap();
         let kept = keep_plan(&own, &base.join("state"), "billing@web", "12").unwrap();
-        assert!(!own.exists(), "kelpie's own plan file is moved, so the plan is stored once");
+        assert!(!own.exists(), "kebbie's own plan file is moved, so the plan is stored once");
         assert_eq!(fs::read_to_string(kept).unwrap(), "# Own plan");
         fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
     fn two_plans_asked_in_the_same_second_are_kept_apart() {
-        let base = std::env::temp_dir().join(format!("kelpie-plan-twice-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("kebbie-plan-twice-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         let (first, second) = (base.join("first.md"), base.join("second.md"));
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn a_vault_plan_names_the_note_and_copies_nothing() {
-        let state = std::env::temp_dir().join(format!("kelpie-vault-plan-{}", std::process::id()));
+        let state = std::env::temp_dir().join(format!("kebbie-vault-plan-{}", std::process::id()));
         let reference = |plan: &str| plan_reference(plan, Path::new("/nowhere"), &state, "billing@web", "10");
         assert_eq!(reference("vault:Projects/payload-rename.md").unwrap(), "vault:Projects/payload-rename.md");
         assert_eq!(reference(" vault:/Projects/payload-rename ").unwrap(), "vault:Projects/payload-rename.md");
@@ -695,7 +695,7 @@ mod tests {
 
     #[test]
     fn a_plan_file_is_kept_by_its_path_relative_to_where_ask_ran_and_a_vault_plan_is_only_named() {
-        let base = std::env::temp_dir().join(format!("kelpie-plan-ref-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("kebbie-plan-ref-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let (cwd, state) = (base.join("wt1.app"), base.join("state"));
         fs::create_dir_all(cwd.join("docs")).unwrap();

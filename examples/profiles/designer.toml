@@ -1,4 +1,4 @@
-# Copy to ~/.config/kelpie/profiles/designer.toml, with designer.md beside it.
+# Copy to ~/.config/kebbie/profiles/designer.toml, with designer.md beside it.
 about = "UI work: a mockup first, then the code, measured in the browser"
 for = "UI, CSS, new screens and components, mockups"
 agent = "claude"

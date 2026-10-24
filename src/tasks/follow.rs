@@ -15,7 +15,7 @@ use crate::sh::Result;
 use super::pool::{Slot, find_task, slots, task_of};
 use super::push::{HandOver, Touched, Updated, conflict_prompt, hand_over, update};
 
-const WHY: &str = "This task follows main, so kelpie tried to rebase it when main moved";
+const WHY: &str = "This task follows main, so kebbie tried to rebase it when main moved";
 
 fn dir(state: &Path) -> PathBuf {
     state.join("follow-main")
@@ -74,7 +74,7 @@ fn switched(task: &str, upstream: &str, on: bool) -> String {
     if on {
         crate::notice::Notice::new(crate::notice::Tone::Done, format!("It follows {main} now")).next(format!("When {main} moves, the keeper rebases it while its Claude is idle and its files are committed; a conflict goes to its Claude. Nothing is pushed.")).detail("task", task).to_string()
     } else {
-        crate::notice::Notice::new(crate::notice::Tone::Done, format!("It no longer follows {main}")).next(format!("Rebase it when you choose (e on the board, or kelpie land {task}).")).detail("task", task).to_string()
+        crate::notice::Notice::new(crate::notice::Tone::Done, format!("It no longer follows {main}")).next(format!("Rebase it when you choose (e on the board, or kebbie land {task}).")).detail("task", task).to_string()
     }
 }
 
@@ -93,7 +93,7 @@ pub fn follow(cwd: &Path, words: &[String]) -> Result<String> {
         [word] if switch(word) => (None, Some(word.as_str())),
         [name] => (Some(name.as_str()), None),
         [name, word] if switch(word) => (Some(name.as_str()), Some(word.as_str())),
-        _ => return Err("kelpie follow takes a task and on or off: kelpie follow [name] [on|off]".to_string()),
+        _ => return Err("kebbie follow takes a task and on or off: kebbie follow [name] [on|off]".to_string()),
     };
     let repo = main_checkout(cwd)?;
     let slot = find_task(&repo, name, cwd)?;
@@ -102,7 +102,7 @@ pub fn follow(cwd: &Path, words: &[String]) -> Result<String> {
     let upstream = default_branch(&repo)?;
     let state = crate::lead::state_dir()?;
     let Some(word) = word else {
-        return Ok(if follows_in(&state, &address) { switched(task, &upstream, true) } else { format!("{task} does not follow {upstream}: kelpie follow {task} on switches it on.") });
+        return Ok(if follows_in(&state, &address) { switched(task, &upstream, true) } else { format!("{task} does not follow {upstream}: kebbie follow {task} on switches it on.") });
     };
     let caller = crate::permit::caller();
     if !matches!(caller, Caller::User | Caller::Lead) {
@@ -166,7 +166,7 @@ pub(super) fn step(state: &Path, slot: &Slot, address: &str, waiting: Option<boo
 fn overlap_text(upstream: &str, touched: &[Touched]) -> String {
     let files: Vec<String> = touched.iter().map(|touched| format!("- {}: {}", touched.file, touched.commits.join("; "))).collect();
     format!(
-        "This task follows main, so kelpie rebased it onto {upstream} without conflicts, but the commits it was rebased over changed files this task \
+        "This task follows main, so kebbie rebased it onto {upstream} without conflicts, but the commits it was rebased over changed files this task \
          changes too:\n{}\nRun the tests that cover those files and fix what broke with a new commit. Do not push.",
         files.join("\n")
     )
@@ -185,7 +185,7 @@ fn waiting_of(path: &Path, workspaces: &[Value], agents: &[Value]) -> Option<boo
 
 fn log_line(address: &str, text: &str) {
     if let Ok(_lock) = messages::Lock::take(true) {
-        let _ = messages::append(&json!({ "id": messages::new_id("follow"), "at": messages::now(), "from": "kelpie", "to": address, "text": text, "state": "logged", "kind": "follow" }));
+        let _ = messages::append(&json!({ "id": messages::new_id("follow"), "at": messages::now(), "from": "kebbie", "to": address, "text": text, "state": "logged", "kind": "follow" }));
     }
 }
 
@@ -239,7 +239,7 @@ fn pass(state: &Path, workspaces: &[Value], agents: &[Value], hand: HandOver) ->
             Ok(Step::Rebased(touched)) => {
                 let upstream = default_branch(&repo).unwrap_or_default();
                 let ahead = ahead_behind(&slot.path, &upstream).map(|counts| counts.0).unwrap_or_default();
-                let text = format!("kelpie rebased {address} onto {upstream}, {} on top{}", plural(ahead, "commit"), if touched.is_empty() { "" } else { "; its Claude tests the files both changed" });
+                let text = format!("kebbie rebased {address} onto {upstream}, {} on top{}", plural(ahead, "commit"), if touched.is_empty() { "" } else { "; its Claude tests the files both changed" });
                 log_line(&address, &text);
                 text
             }
@@ -251,7 +251,7 @@ fn pass(state: &Path, workspaces: &[Value], agents: &[Value], hand: HandOver) ->
                 text
             }
             Ok(Step::Stuck(why)) => {
-                let text = format!("{address} follows main but kelpie could not rebase it: {why}. kelpie tries again once main or the task moves.");
+                let text = format!("{address} follows main but kebbie could not rebase it: {why}. kebbie tries again once main or the task moves.");
                 if let Err(error) = messages::tell_lead(&text, Some("follow")) {
                     eprintln!("Could not tell the lead: {error}");
                 }
@@ -332,13 +332,13 @@ mod tests {
         set_in(&state, &address, &dir, true).unwrap();
         set_in(&state, &peers::address("gone", &name_of(&dir)), &dir, true).unwrap();
         let _ = tick(&state);
-        assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 1), "without herdr kelpie cannot tell whether its Claude is mid-turn, so it waits");
+        assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 1), "without herdr kebbie cannot tell whether its Claude is mid-turn, so it waits");
         let workspaces: Vec<Value> = [(&slot, "w1"), (&other, "w2")].iter().map(|(slot, id)| json!({ "workspace_id": id, "worktree": { "checkout_path": slot.path } })).collect();
         let agents: Vec<Value> = ["w1", "w2"].iter().enumerate().map(|(at, id)| json!({ "agent": "claude", "pane_id": format!("{id}:p{at}"), "workspace_id": id, "agent_status": "idle", "interactive_ready": true })).collect();
         let (typed, hand) = handed();
         let notes = pass(&state, &workspaces, &agents, &hand);
         assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(notes[0].starts_with(&format!("follow: kelpie rebased {address} onto {upstream}, 1 commit on top")), "{notes:?}");
+        assert!(notes[0].starts_with(&format!("follow: kebbie rebased {address} onto {upstream}, 1 commit on top")), "{notes:?}");
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0));
         assert_eq!(ahead_behind(&other.path, &upstream).unwrap(), (1, 1), "a task that does not follow main stays where it is");
         assert!(!follows_in(&state, &peers::address("gone", &name_of(&dir))), "a task that is gone loses its flag");

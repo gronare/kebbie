@@ -14,8 +14,8 @@ pub(crate) mod tests;
 use std::io::Write;
 use std::path::Path;
 
-use kelpie_hub_api::{JoinRequest, Joined, MachineName};
-use kelpie_hub_protocol::{Kind, SecretKeys};
+use kebbie_hub_api::{JoinRequest, Joined, MachineName};
+use kebbie_hub_protocol::{Kind, SecretKeys};
 
 use crate::doctor::{Check, Level};
 use crate::sh::Result;
@@ -45,7 +45,7 @@ pub fn hub_url(url: &str) -> Result<String> {
 }
 
 fn already(joined: &Identity) -> String {
-    format!("this machine has joined {} as {} already; kelpie hub leave first", joined.url, joined.name)
+    format!("this machine has joined {} as {} already; kebbie hub leave first", joined.url, joined.name)
 }
 
 pub type AskName = dyn Fn(&str) -> Result<String>;
@@ -107,7 +107,7 @@ pub fn name_detail(config: &Path, named: Named, configured: Option<String>, name
         Named::Configured(_) => None,
         Named::Chosen(_) if linked(config) => {
             let after = configured.map_or(String::new(), |configured| format!("; until then the hub shows it as {configured:?} after the next post, the name that file sets"));
-            Some(("not set", format!("{} is a link, so kelpie writes no per-machine key through it; set {set} there or in a config.toml of this machine's own{after}", crate::config::shown(config))))
+            Some(("not set", format!("{} is a link, so kebbie writes no per-machine key through it; set {set} there or in a config.toml of this machine's own{after}", crate::config::shown(config))))
         }
         Named::Chosen(chosen) => Some(match crate::routine_file::set_machine_name_in(config, &chosen) {
             Ok(()) => ("set", format!("{set} in {}", config.display())),
@@ -124,7 +124,7 @@ pub fn join_named(state: &Path, config: &Path, url: &str, code: &str, given: Opt
     let configured = crate::config::load_machine(config)?.machine_name;
     let named = checked_name(config, configured.as_deref(), given, ask)?;
     let joined = join(state, url, code, named.name(), now)?;
-    let notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Joined {} as {}", joined.url, joined.name)).next("kelpie hub add-device adds your phone; the keeper posts the board once a device is paired.");
+    let notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Joined {} as {}", joined.url, joined.name)).next("kebbie hub add-device adds your phone; the keeper posts the board once a device is paired.");
     match name_detail(config, named, configured, &joined.name) {
         Some((label, text)) => notice.detail(label, text),
         None => notice,
@@ -134,7 +134,7 @@ pub fn join_named(state: &Path, config: &Path, url: &str, code: &str, given: Opt
 pub fn rename_machine(config: &Path, name: &str) -> Result<String> {
     let name = crate::config::valid_machine_name(name)?;
     if linked(config) {
-        return Err(format!("{} is a link, so kelpie writes no per-machine key through it; set [machine] name = {name:?} there or in a config.toml of this machine's own", crate::config::shown(config)));
+        return Err(format!("{} is a link, so kebbie writes no per-machine key through it; set [machine] name = {name:?} there or in a config.toml of this machine's own", crate::config::shown(config)));
     }
     crate::routine_file::check_machine_name_in(config, &name)?;
     crate::routine_file::set_machine_name_in(config, &name)?;
@@ -154,8 +154,8 @@ pub fn sync_name(state: &Path, configured: Option<&str>) -> Result<()> {
         Some(name) if identity.rename_stopped.as_deref() == Some(name) => return Ok(()),
         Some(name) => match Client::new(&identity.url, Some(identity.token()), CALL).put::<_, MachineName>("/v1/m/name", &MachineName { name: name.to_string() }) {
             Ok(renamed) if renamed.name == name => (renamed.name, None, None),
-            Ok(renamed) => (renamed.name.clone(), Some(format!("the hub took it as {:?}; kelpie tries again once [machine] name changes", renamed.name)), Some(name.to_string())),
-            Err(error) if error.status() == Some(404) => (identity.name.clone(), Some("this hub cannot rename machines yet; update kelpie-hub".to_string()), None),
+            Ok(renamed) => (renamed.name.clone(), Some(format!("the hub took it as {:?}; kebbie tries again once [machine] name changes", renamed.name)), Some(name.to_string())),
+            Err(error) if error.status() == Some(404) => (identity.name.clone(), Some("this hub cannot rename machines yet; update kebbie-hub".to_string()), None),
             Err(error) => (identity.name.clone(), Some(error.to_string()), None),
         },
     };
@@ -174,8 +174,8 @@ fn rename_line(identity: &Identity, configured: Option<&str>) -> Option<String> 
     let configured = configured.filter(|name| *name != identity.name)?;
     Some(match &identity.rename_error {
         Some(error) if identity.rename_stopped.is_some() => format!("the hub shows this machine as {:?}, not {configured:?}: {error}", identity.name),
-        Some(error) => format!("the hub still shows this machine as {:?}; renaming it to {configured:?} failed: {error}; kelpie tries again on the next post", identity.name),
-        None => format!("the hub shows this machine as {:?} until the keeper's next post or kelpie hub status renames it to {configured:?}", identity.name),
+        Some(error) => format!("the hub still shows this machine as {:?}; renaming it to {configured:?} failed: {error}; kebbie tries again on the next post", identity.name),
+        None => format!("the hub shows this machine as {:?} until the keeper's next post or kebbie hub status renames it to {configured:?}", identity.name),
     })
 }
 
@@ -187,7 +187,7 @@ pub fn join(state: &Path, url: &str, code: &str, name: &str, now: u64) -> Result
     let keys = SecretKeys::generate();
     let client = Client::new(&url, None, CALL);
     let joined: Joined = client.post("/v1/m/join", &JoinRequest { code: code.trim().to_string(), name: name.to_string(), keys: keys.public() }).map_err(|error| match error.status() {
-        Some(401) => "the hub refused that join code: it is used, expired or mistyped; mint a new one with kelpie-hub admin join-code".to_string(),
+        Some(401) => "the hub refused that join code: it is used, expired or mistyped; mint a new one with kebbie-hub admin join-code".to_string(),
         _ => error.to_string(),
     })?;
     let identity = Identity::new(&client.moved().unwrap_or(url), joined.machine, name, joined.token, &keys, now)?;
@@ -233,14 +233,14 @@ pub fn host(url: &str) -> &str {
 
 pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<String> {
     let Some(identity) = identity::load(state)? else {
-        return Ok("Not connected to a hub. kelpie hub connect, or H on the board, shows this machine's board on your phone.".to_string());
+        return Ok("Not connected to a hub. kebbie hub connect, or H on the board, shows this machine's board on your phone.".to_string());
     };
     let relay = relay::load(state);
     let listed = devices::load(state);
     let mut lines = vec![format!("hub:      {}", identity.url), format!("machine:  {} ({})", identity.name, identity.machine)];
     lines.extend(rename_line(&identity, configured).map(|line| format!("name:     {line}")));
     if identity.devices.is_empty() {
-        lines.push("devices:  none; kelpie hub add-device adds your phone".to_string());
+        lines.push("devices:  none; kebbie hub add-device adds your phone".to_string());
     }
     for device in &identity.devices {
         let line = match listed.devices.iter().find(|known| known.device == device.id) {
@@ -267,9 +267,9 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
 
 // Nothing here proves the new address is the same hub, so no token goes there until the user has chosen it.
 pub fn move_to(state: &Path, url: &str) -> Result<String> {
-    let mut identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kelpie hub connect first")?;
+    let mut identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kebbie hub connect first")?;
     let url = hub_url(url)?;
-    reach(&url).map_err(|error| format!("{url} does not answer as a kelpie hub: {error}; nothing changed"))?;
+    reach(&url).map_err(|error| format!("{url} does not answer as a kebbie hub: {error}; nothing changed"))?;
     let before = std::mem::replace(&mut identity.url, url);
     identity::save(state, &identity)?;
     crate::notice::Notice::new(crate::notice::Tone::Done, format!("Moved from {before} to {}", identity.url)).next("The keeper posts the board there from now on.").ok()
@@ -281,7 +281,7 @@ pub fn leave(state: &Path) -> Result<String> {
     let client = Client::new(&identity.url, Some(identity.token()), CALL);
     let kept: Vec<String> = identity.devices.iter().filter_map(|device| client.delete(&format!("/v1/m/devices/{}", device.id)).err().filter(|error| error.status() != Some(404)).map(|error| format!("{}: {error}", device.id))).collect();
     identity::forget(state)?;
-    let mut notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Disconnected this machine from {}", identity.url)).next(format!("The hub still lists machine {}; its admin removes it with kelpie-hub admin remove-machine {}.", identity.machine, identity.machine));
+    let mut notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Disconnected this machine from {}", identity.url)).next(format!("The hub still lists machine {}; its admin removes it with kebbie-hub admin remove-machine {}.", identity.machine, identity.machine));
     for line in &kept {
         notice = notice.detail("not removed", line);
     }
@@ -333,7 +333,7 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
         }
         Some("join") => {
             crate::permit::user_only("joining a hub")?;
-            let (Some(url), Some(code)) = (rest.first(), rest.get(1)) else { return Err("kelpie hub join needs the hub's address and a join code: kelpie hub join https://hub.example.com <join code>".to_string()) };
+            let (Some(url), Some(code)) = (rest.first(), rest.get(1)) else { return Err("kebbie hub join needs the hub's address and a join code: kebbie hub join https://hub.example.com <join code>".to_string()) };
             let ask: Option<&AskName> = if interactive() { Some(&ask_name) } else { None };
             join_named(&state, &crate::config::path(), url, code, name, ask, now)
         }
@@ -349,8 +349,8 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
         }
         Some("remove-device") => {
             crate::permit::user_only("removing a device")?;
-            let wanted = rest.first().ok_or("kelpie hub remove-device needs the device's name or id, as kelpie hub status shows it")?;
-            let identity = identity::load(&state)?.ok_or("this machine is not connected to a hub; kelpie hub connect first")?;
+            let wanted = rest.first().ok_or("kebbie hub remove-device needs the device's name or id, as kebbie hub status shows it")?;
+            let identity = identity::load(&state)?.ok_or("this machine is not connected to a hub; kebbie hub connect first")?;
             let listed = devices::fetch(&state, now)?;
             let device = devices::find(&listed, &identity.devices, wanted)?;
             let said = devices::remove(&state, &device)?;
@@ -363,17 +363,17 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
         }
         Some("move") => {
             crate::permit::user_only("moving the hub")?;
-            let url = rest.first().ok_or("kelpie hub move needs the hub's new address: kelpie hub move https://hub.example.com")?;
+            let url = rest.first().ok_or("kebbie hub move needs the hub's new address: kebbie hub move https://hub.example.com")?;
             move_to(&state, url)
         }
-        Some(other) => Err(format!("kelpie hub knows connect, add-device, remove-device, join, pair, move, status and leave, not {other}")),
+        Some(other) => Err(format!("kebbie hub knows connect, add-device, remove-device, join, pair, move, status and leave, not {other}")),
     }
 }
 
 pub fn config_line(state: Option<&Path>) -> String {
     let identity = state.and_then(|state| identity::load(state).ok().flatten());
     let value = identity.map_or("none".to_string(), |identity| format!("{:?}", identity.url));
-    format!("hub.connected = {value}  (kelpie hub connect)\n  The hub this machine posts its board to, sealed to the phones it paired with; kelpie hub connect or join sets it, kelpie hub leave forgets it, kelpie hub move moves it. Kept in kelpie's state with the machine's keys, not in config.toml.")
+    format!("hub.connected = {value}  (kebbie hub connect)\n  The hub this machine posts its board to, sealed to the phones it paired with; kebbie hub connect or join sets it, kebbie hub leave forgets it, kebbie hub move moves it. Kept in kebbie's state with the machine's keys, not in config.toml.")
 }
 
 fn check(level: Level, name: &str, fact: impl Into<String>, fix: Vec<String>) -> Check {
@@ -383,26 +383,26 @@ fn check(level: Level, name: &str, fact: impl Into<String>, fix: Vec<String>) ->
 pub fn doctor(state: &Path, configured: Option<&str>, now: u64, reach: impl FnOnce(&str) -> std::result::Result<(), String>) -> Check {
     let name = "hub";
     let Ok(Some(identity)) = identity::load(state) else {
-        return check(Level::Ok, name, "not connected; kelpie hub connect shows the board on your phone", Vec::new());
+        return check(Level::Ok, name, "not connected; kebbie hub connect shows the board on your phone", Vec::new());
     };
     let relay = relay::load(state);
     let posted = relay.posted_at.map_or("no board posted yet".to_string(), |at| format!("board rev {} posted {}", relay.rev, ago(Some(at), now)));
     let fact = format!("{} as {} · {} paired · {posted}", identity.url, identity.name, identity.devices.len());
     if let Err(error) = reach(&identity.url) {
-        return check(Level::Warn, name, format!("{fact}; not reachable: {error}"), vec!["check the address and your network; kelpie hub status shows the last error".to_string()]);
+        return check(Level::Warn, name, format!("{fact}; not reachable: {error}"), vec!["check the address and your network; kebbie hub status shows the last error".to_string()]);
     }
     if identity.devices.is_empty() {
-        return check(Level::Warn, name, format!("{fact}; no phone paired, so no board goes out"), vec!["kelpie hub add-device".to_string()]);
+        return check(Level::Warn, name, format!("{fact}; no phone paired, so no board goes out"), vec!["kebbie hub add-device".to_string()]);
     }
     if let Some(plan) = &relay.plan_inactive {
         return check(Level::Warn, name, format!("{fact}; {plan}"), vec!["everything on this machine keeps working; the phone gets the board again once the subscription is active".to_string()]);
     }
     if let Some(error) = &relay.error {
-        return check(Level::Warn, name, format!("{fact}; last post failed {}: {error}", ago(relay.error_at, now)), vec!["kelpie hub status; the keeper retries by itself".to_string()]);
+        return check(Level::Warn, name, format!("{fact}; last post failed {}: {error}", ago(relay.error_at, now)), vec!["kebbie hub status; the keeper retries by itself".to_string()]);
     }
     match (rename_line(&identity, configured), &identity.rename_error) {
         (Some(line), Some(_)) if identity.rename_stopped.is_some() => check(Level::Warn, name, format!("{fact}; {line}"), vec![format!("set [machine] name = {:?}, or a name the hub keeps as it is", identity.name)]),
-        (Some(line), Some(_)) => check(Level::Warn, name, format!("{fact}; {line}"), vec!["kelpie hub status renames it now and shows the error if it fails again".to_string()]),
+        (Some(line), Some(_)) => check(Level::Warn, name, format!("{fact}; {line}"), vec!["kebbie hub status renames it now and shows the error if it fails again".to_string()]),
         (Some(line), None) => check(Level::Ok, name, format!("{fact}; {line}"), Vec::new()),
         (None, _) => check(Level::Ok, name, fact, Vec::new()),
     }

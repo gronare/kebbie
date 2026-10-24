@@ -9,14 +9,14 @@ use sha2::{Digest, Sha256};
 use crate::permit::Caller;
 use crate::sh::Result;
 
-pub const REVIEWER_BIN: &str = "KELPIE_REVIEWER_BIN";
+pub const REVIEWER_BIN: &str = "KEBBIE_REVIEWER_BIN";
 
 const KEPT_ENV: [&str; 12] = ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "PATH", "SSH_AUTH_SOCK", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME"];
-const KEPT_PREFIXES: [&str; 4] = ["KELPIE_", "CLAUDE_", "ANTHROPIC_", "HERDR_"];
+const KEPT_PREFIXES: [&str; 4] = ["KEBBIE_", "CLAUDE_", "ANTHROPIC_", "HERDR_"];
 
-// The child's environment is the keeper's own, never a task's, and claude is the absolute path kelpie resolved from it.
+// The child's environment is the keeper's own, never a task's, and claude is the absolute path kebbie resolved from it.
 pub fn reviewer_env(own: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
-    own.filter(|(name, _)| KEPT_ENV.contains(&name.as_str()) || KEPT_PREFIXES.iter().any(|prefix| name.starts_with(prefix))).filter(|(name, _)| name != "KELPIE_ADDRESS").collect()
+    own.filter(|(name, _)| KEPT_ENV.contains(&name.as_str()) || KEPT_PREFIXES.iter().any(|prefix| name.starts_with(prefix))).filter(|(name, _)| name != "KEBBIE_ADDRESS").collect()
 }
 
 pub fn claude_path(env: &[(String, String)]) -> Option<PathBuf> {
@@ -28,8 +28,8 @@ pub fn claude_path(env: &[(String, String)]) -> Option<PathBuf> {
     crate::doctor::which(&named, &path)
 }
 
-pub fn command(kelpie: &Path, cwd: &Path, args: &[&str], env: &[(String, String)], claude: &Path) -> Command {
-    let mut command = Command::new(kelpie);
+pub fn command(kebbie: &Path, cwd: &Path, args: &[&str], env: &[(String, String)], claude: &Path) -> Command {
+    let mut command = Command::new(kebbie);
     command.args(args).env_clear().envs(env.iter().map(|(name, value)| (name, value))).env(REVIEWER_BIN, claude)
         .current_dir(cwd).stdin(Stdio::piped()).process_group(0);
     command
@@ -74,7 +74,7 @@ pub fn trusted(caller: &Caller, presented: &str, recorded: Option<&str>) -> bool
 fn spawn(mut command: Command, nonce: &str) -> Result<u32> {
     use std::io::Write;
     let program = command.get_args().map(|arg| arg.to_string_lossy().to_string()).collect::<Vec<_>>().join(" ");
-    let mut child = command.spawn().map_err(|error| format!("kelpie {program}: {error}"))?;
+    let mut child = command.spawn().map_err(|error| format!("kebbie {program}: {error}"))?;
     let written = child.stdin.take().ok_or("the child has no stdin".to_string()).and_then(|mut stdin| writeln!(stdin, "{nonce}").map_err(|error| error.to_string()));
     let pid = crate::sh::reap(child);
     written.map(|_| pid)

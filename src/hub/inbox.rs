@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use kelpie_hub_api::ReportInbox;
+use kebbie_hub_api::ReportInbox;
 use serde::{Deserialize, Serialize};
 
 use super::http::{CALL, Client};
@@ -58,7 +58,7 @@ fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, now: u64
         for received in &page.reports {
             if let std::collections::btree_map::Entry::Vacant(slot) = ledger.filed.entry(received.id) {
                 let issue = issues::file_report_in(&dir, received.id, &received.report, now)?;
-                notes.push(format!("reports: filed kelpie issue {issue} from report {}", received.id));
+                notes.push(format!("reports: filed kebbie issue {issue} from report {}", received.id));
                 slot.insert(issue);
                 save(state, ledger)?;
             }
@@ -86,9 +86,9 @@ pub fn doctor(state: &Path, settings: &crate::config::Report, now: u64) -> Optio
     let checked = ledger.checked_at.map_or("not fetched yet".to_string(), |at| format!("fetched {} ago", crate::keeper::span(now.saturating_sub(at))));
     let fact = format!("{} · {} filed · {checked}", settings.url(), ledger.filed.len());
     Some(if let Some(error) = &ledger.error {
-        Check { level: Level::Warn, name, fact: format!("{fact}; last fetch failed: {error}"), fix: vec!["check [report] inbox_token against kelpie-hub admin token; the keeper retries every 10 minutes".to_string()] }
+        Check { level: Level::Warn, name, fact: format!("{fact}; last fetch failed: {error}"), fix: vec!["check [report] inbox_token against kebbie-hub admin token; the keeper retries every 10 minutes".to_string()] }
     } else if ledger.quarantined > 0 {
-        Check { level: Level::Warn, name, fact: format!("{fact}; {} reports wait in quarantine: kelpie-hub admin reports --quarantine", ledger.quarantined), fix: vec!["kelpie-hub admin reports allow <key> or block <key> on the hub".to_string()] }
+        Check { level: Level::Warn, name, fact: format!("{fact}; {} reports wait in quarantine: kebbie-hub admin reports --quarantine", ledger.quarantined), fix: vec!["kebbie-hub admin reports allow <key> or block <key> on the hub".to_string()] }
     } else {
         Check { level: Level::Ok, name, fact, fix: Vec::new() }
     })

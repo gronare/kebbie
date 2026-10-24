@@ -1,5 +1,5 @@
-id = "kelpie"
-name = "kelpie"
+id = "kebbie"
+name = "kebbie"
 version = "0.27.0"
 min_herdr_version = "0.9.0"
 description = "Tasks in pooled git worktrees with Claude, and a sidebar sync"
@@ -13,58 +13,58 @@ command = ["sh", "scripts/herdr-startup.sh"]
 
 [[events]]
 on = "workspace.created"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kelpie\" lead --first"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kebbie\" lead --first"]
 
 [[events]]
 on = "workspace.moved"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kelpie\" lead --first"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kebbie\" lead --first"]
 
 [[events]]
 on = "workspace.reordered"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kelpie\" lead --first"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kebbie\" lead --first"]
 
 [[actions]]
 id = "lead"
 title = "Go to the lead, or back"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kelpie\" lead"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kebbie\" lead"]
 
 [[actions]]
 id = "focus"
 title = "Move focus between the board and the lead"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kelpie\" focus"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kebbie\" focus"]
 
 [[actions]]
 id = "chat"
 title = "Hide or show the lead's chat"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kelpie\" lead --toggle-chat"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kebbie\" lead --toggle-chat"]
 
 [[actions]]
 id = "board"
 title = "Board"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin kelpie --entrypoint board"]
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin kebbie --entrypoint board"]
 
 [[actions]]
 id = "update"
-title = "Update kelpie"
+title = "Update kebbie"
 contexts = ["workspace"]
-command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin kelpie --entrypoint update"]
+command = ["sh", "-c", "exec \"$HERDR_BIN_PATH\" plugin pane open --plugin kebbie --entrypoint update"]
 
 [[panes]]
 id = "update"
-title = "kelpie update"
+title = "kebbie update"
 placement = "popup"
 width = "70%"
 height = "60%"
-command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/target/release/kelpie\" update; printf '\\nenter closes'; read -r _"]
+command = ["sh", "-c", "\"$HERDR_PLUGIN_ROOT/target/release/kebbie\" update; printf '\\nenter closes'; read -r _"]
 
 [[panes]]
 id = "board"
-title = "kelpie"
+title = "kebbie"
 placement = "popup"
 width = "85%"
 height = "85%"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kelpie\" board --overlay"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/kebbie\" board --overlay"]

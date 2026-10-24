@@ -212,7 +212,7 @@ fn read(file: &Path) -> Result<String> {
 // Every change is checked as the whole file before it is written, so a file that parsed before still parses after.
 fn rewrite(file: &Path, machine: bool, change: impl FnOnce(&str) -> Result<String>) -> Result<()> {
     let text = read(file)?;
-    check(file, machine, &text).map_err(|error| format!("{error}\nFix that first; kelpie changes a config file only when it parses."))?;
+    check(file, machine, &text).map_err(|error| format!("{error}\nFix that first; kebbie changes a config file only when it parses."))?;
     let changed = change(&text)?;
     check(file, machine, &changed)?;
     write_config(file, &changed)
@@ -273,7 +273,7 @@ fn with_key(file: &Path, text: &str, section: &str, key: &str, value: &str, writ
             text + &table + "\n" + &line + "\n"
         }
     };
-    let by_hand = format!("{}: [{section}] {key} is set in a form kelpie does not rewrite; edit it by hand", file.display());
+    let by_hand = format!("{}: [{section}] {key} is set in a form kebbie does not rewrite; edit it by hand", file.display());
     match crate::config::parse_machine(&changed, &file.display().to_string()) {
         Ok(machine) if written(&machine).map(String::as_str) == Some(value) => Ok(changed),
         _ => Err(by_hand),
@@ -292,7 +292,7 @@ pub fn set_hub_url_in(file: &Path, url: &str) -> Result<()> {
 pub fn check_machine_name_in(file: &Path, name: &str) -> Result<()> {
     let name = crate::config::valid_machine_name(name)?;
     let text = read(file)?;
-    check(file, true, &text).map_err(|error| format!("{error}\nFix that first; kelpie changes a config file only when it parses."))?;
+    check(file, true, &text).map_err(|error| format!("{error}\nFix that first; kebbie changes a config file only when it parses."))?;
     with_machine_name(file, &text, &name).map(|_| ())
 }
 
@@ -420,7 +420,7 @@ pub struct Asked<'a> {
 }
 
 pub fn draft_from(asked: &Asked, taken: &[String]) -> Result<Draft> {
-    let usage = "kelpie routine add --title <name> --repo <folder or path> --at <\"07:00\" or \"mon 07:00\"> | --every <\"6h\"> [--mode report|plan|fix] [--push] [--paused] [--id <id>] <prompt>";
+    let usage = "kebbie routine add --title <name> --repo <folder or path> --at <\"07:00\" or \"mon 07:00\"> | --every <\"6h\"> [--mode report|plan|fix] [--push] [--paused] [--id <id>] <prompt>";
     let title = asked.title.map(str::trim).filter(|title| !title.is_empty()).ok_or(format!("a routine needs --title\n{usage}"))?;
     let repo = asked.repo.map(str::trim).filter(|repo| !repo.is_empty()).ok_or(format!("a routine needs --repo, the folder name or path of the repo it runs in\n{usage}"))?;
     let schedule = match (asked.at, asked.every) {
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn the_machine_name_goes_under_machine_and_leaves_every_other_byte() {
-        let file = Path::new("/home/u/.config/kelpie/config.toml");
+        let file = Path::new("/home/u/.config/kebbie/config.toml");
         let set = |text: &str| with_machine_name(file, text, "mac");
         assert_eq!(set("[machine] # me\r\n[keys]\r\ninbox = \"I\"\r\n").unwrap(), "[machine] # me\r\nname = \"mac\"\r\n[keys]\r\ninbox = \"I\"\r\n");
         assert_eq!(set("[machine]").unwrap(), "[machine]\nname = \"mac\"\n");
@@ -639,7 +639,7 @@ mod tests {
         let prompt = "[[routines]]\nid = \"x\"\ntitle = \"X\"\nrepo = \"r\"\nevery = \"1d\"\nprompt = \"\"\"\n[machine]\nname = \"no\"\n\"\"\"\n";
         assert_eq!(set(prompt).unwrap(), format!("{prompt}\n[machine]\nname = \"mac\"\n"), "a header inside a prompt is no table");
         for other_form in ["machine = { name = \"old\" }\n", "machine.name = \"old\"\n"] {
-            assert_eq!(set(other_form).unwrap_err(), "/home/u/.config/kelpie/config.toml: [machine] name is set in a form kelpie does not rewrite; edit it by hand", "{other_form}");
+            assert_eq!(set(other_form).unwrap_err(), "/home/u/.config/kebbie/config.toml: [machine] name is set in a form kebbie does not rewrite; edit it by hand", "{other_form}");
         }
         let dir = crate::sh::test_dir("machine-name-check");
         assert!(check_machine_name_in(&dir.join("config.toml"), &"x".repeat(65)).unwrap_err().contains("at most 64 characters"));

@@ -87,7 +87,7 @@ pub fn note_lines(lines: &[Line]) {
     }
 }
 
-// A URL ends at whitespace or an ellipsis; one that runs into any other character beyond printable ASCII is not a URL kelpie links.
+// A URL ends at whitespace or an ellipsis; one that runs into any other character beyond printable ASCII is not a URL kebbie links.
 pub(super) fn urls_in(text: &str) -> Vec<String> {
     let mut urls = Vec::new();
     let mut rest = text;
@@ -245,7 +245,7 @@ mod tests {
         assert!(!buffer.content.iter().any(|cell| cell.symbol().contains('\x1b')));
     }
 
-    const LONG: &str = "https://github.com/gronare/kelpie/actions/runs/18734523412/job/53412345678";
+    const LONG: &str = "https://github.com/gronare/kebbie/actions/runs/18734523412/job/53412345678";
 
     #[test]
     fn a_url_is_read_out_of_prose_without_its_punctuation_and_only_when_it_is_plain_ascii() {
@@ -311,7 +311,7 @@ mod tests {
             assert_whole_link(&buffer, LONG, 1, &format!("the ci line at {width} columns"));
         }
         let mut item = served("search-filters");
-        let pull = "https://github.com/gronare/kelpie/pull/123/files?diff=split&w=1";
+        let pull = "https://github.com/gronare/kebbie/pull/123/files?diff=split&w=1";
         item.report.as_mut().unwrap().report.as_mut().unwrap().state = "needs-you".to_string();
         item.report.as_mut().unwrap().report.as_mut().unwrap().next = format!("{pull} then push and close");
         crate::status::tests::rederive(&mut item);
@@ -332,7 +332,7 @@ mod tests {
         app.fold = Fold::Open;
         let (_, buffer) = render(&mut app, 100, 50);
         assert_whole_link(&buffer, LONG, 1, "the messages panel row");
-        app.mode = Mode::Message(format!("10:00 kelpie → billing@web\n\n{}", app.messages[0].text));
+        app.mode = Mode::Message(format!("10:00 kebbie → billing@web\n\n{}", app.messages[0].text));
         let (_, buffer) = render(&mut app, 50, 30);
         assert_whole_link(&buffer, LONG, 2, "the opened message");
     }

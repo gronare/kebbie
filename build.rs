@@ -12,7 +12,7 @@ fn main() {
     // A source tree unpacked inside another repo must not take that repo's commit.
     let own = git(&root, &["rev-parse", "--show-toplevel"]).is_some_and(|top| Path::new(&top).canonicalize().ok() == root.canonicalize().ok());
     let built = own.then(|| Some(format!("{} {}", git(&root, &["rev-parse", "--short=7", "HEAD"])?, git(&root, &["log", "-1", "--format=%cs", "HEAD"])?))).flatten();
-    println!("cargo:rustc-env=KELPIE_BUILT_FROM={}", built.unwrap_or_default());
+    println!("cargo:rustc-env=KEBBIE_BUILT_FROM={}", built.unwrap_or_default());
     if own {
         let reference = git(&root, &["symbolic-ref", "-q", "HEAD"]);
         for name in ["HEAD", "packed-refs"].into_iter().map(str::to_string).chain(reference) {

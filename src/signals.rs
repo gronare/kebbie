@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use kelpie_hub_api::{Bytes32, Bytes64, ReportChallenge, SignalUpload, SignalsAccepted};
-use kelpie_hub_protocol::{ErrorSignals, MAX_SIGNAL_COUNT, MAX_SIGNAL_ROWS, Name, SignalCount, SignalKind, solve};
+use kebbie_hub_api::{Bytes32, Bytes64, ReportChallenge, SignalUpload, SignalsAccepted};
+use kebbie_hub_protocol::{ErrorSignals, MAX_SIGNAL_COUNT, MAX_SIGNAL_ROWS, Name, SignalCount, SignalKind, solve};
 use serde::{Deserialize, Serialize};
 
 use crate::doctor::{Check, Level};
@@ -18,7 +18,7 @@ const LEDGER: &str = "signals.json";
 const LOG_BYTES: u64 = 64 * 1024;
 pub const KIND: &str = "signal";
 pub const DEPENDENCY: &str = "dependency";
-pub const CONTAINS: &str = "kelpie's version and commit, the OS and CPU architecture, the component (a fixed name from kelpie's code, such as keeper.push), the error kind (panic, internal-error or corrupt-state) and a count";
+pub const CONTAINS: &str = "kebbie's version and commit, the OS and CPU architecture, the component (a fixed name from kebbie's code, such as keeper.push), the error kind (panic, internal-error or corrupt-state) and a count";
 
 // Every field is a Name or the kind, so no message, path or name from the user's work fits in a line.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -56,7 +56,7 @@ fn dir(state: &Path) -> PathBuf {
 }
 
 fn built() -> (Option<Name>, Option<Name>) {
-    let commit = env!("KELPIE_BUILT_FROM").split(' ').next().and_then(Name::new);
+    let commit = env!("KEBBIE_BUILT_FROM").split(' ').next().and_then(Name::new);
     (Name::new(env!("CARGO_PKG_VERSION")), commit)
 }
 
@@ -76,7 +76,7 @@ fn enabled() -> bool {
     crate::config::report_settings().is_ok_and(|settings| settings.signals())
 }
 
-// The component is a name in kelpie's own code, never a value it read.
+// The component is a name in kebbie's own code, never a value it read.
 pub fn record_if(on: &dyn Fn() -> bool, state: &dyn Fn() -> Result<PathBuf>, component: &'static str, kind: SignalKind) {
     let Some(component) = Name::new(component) else { return };
     if on() && let Ok(state) = state() {
@@ -96,7 +96,7 @@ pub fn internal(component: &'static str, kind: SignalKind, error: impl Into<Stri
     error.into()
 }
 
-// A panic in kelpie's own source is named after its module; anywhere else (a dependency, the standard library) the location may hold a home path, so it is only "dependency".
+// A panic in kebbie's own source is named after its module; anywhere else (a dependency, the standard library) the location may hold a home path, so it is only "dependency".
 pub fn panic_component(file: Option<&str>) -> Name {
     let own = file.and_then(|file| file.strip_prefix("src/")).and_then(|file| file.strip_suffix(".rs")).map(|module| module.trim_end_matches("/mod").replace('/', "."));
     own.and_then(|module| Name::new(&module)).or_else(|| Name::new(DEPENDENCY)).expect("dependency is a name")
@@ -141,7 +141,7 @@ fn fold(texts: &[String]) -> Folded {
     let mut folded = Folded::new();
     for line in texts.iter().flat_map(|text| text.lines()) {
         let Ok(counted) = serde_json::from_str::<Counted>(line) else { continue };
-        let commit_ok = counted.commit.as_ref().is_none_or(|commit| commit.as_str().len() <= kelpie_hub_protocol::MAX_COMMIT_CHARS && commit.as_str().chars().all(|character| character.is_ascii_hexdigit()));
+        let commit_ok = counted.commit.as_ref().is_none_or(|commit| commit.as_str().len() <= kebbie_hub_protocol::MAX_COMMIT_CHARS && commit.as_str().chars().all(|character| character.is_ascii_hexdigit()));
         if !commit_ok || counted.count == 0 {
             continue;
         }
@@ -184,7 +184,7 @@ fn without(folded: &mut Folded, sent: &ErrorSignals) {
 pub fn summary(signals: &ErrorSignals) -> String {
     let rows = signals.counts.iter().map(|row| format!("{} {} (×{})", row.component, row.kind.key(), row.count)).collect::<Vec<_>>().join(", ");
     let built = signals.commit.as_ref().map_or(signals.version.to_string(), |commit| format!("{} ({commit})", signals.version));
-    format!("Sent kelpie's maintainers an error signal, a count of kelpie's own failures: {rows}; with kelpie {built} on {} {} and nothing else. [report] signals = false in config.toml turns these off.", signals.os, signals.arch)
+    format!("Sent kebbie's maintainers an error signal, a count of kebbie's own failures: {rows}; with kebbie {built} on {} {} and nothing else. [report] signals = false in config.toml turns these off.", signals.os, signals.arch)
 }
 
 // A refusal the hub would give again writes its batch off, so one bad batch never holds back every later count.
@@ -249,7 +249,7 @@ pub fn send(state: &Path, url: &str, signals: &ErrorSignals) -> std::result::Res
     let client = Client::new(&crate::hub::hub_url(url).map_err(Refusal::Retry)?, None, CALL);
     let challenge: ReportChallenge = client.get("/v1/reports/challenge").map_err(refusal)?;
     if challenge.difficulty > crate::hub::report::MAX_WORK {
-        return Err(Refusal::Retry(format!("the signals endpoint asks for {} bits of work, more than kelpie does ({}); nothing was sent", challenge.difficulty, crate::hub::report::MAX_WORK)));
+        return Err(Refusal::Retry(format!("the signals endpoint asks for {} bits of work, more than kebbie does ({}); nothing was sent", challenge.difficulty, crate::hub::report::MAX_WORK)));
     }
     let counter = solve(&challenge.nonce.0, &signals.digest(), challenge.difficulty);
     let upload = SignalUpload { signature: Bytes64(key.sign_signals(&challenge.nonce.0, signals)), key: Bytes32(key.public()), signals: signals.clone(), challenge, counter };
@@ -277,10 +277,10 @@ pub fn doctor(state: &Path, settings: &crate::config::Report, now: u64) -> Check
     let name = "maintainers".to_string();
     let armed = crate::hub::report::armed(state);
     let text = match settings.text() {
-        crate::config::ReportText::Ask => "each bug you run into in kelpie is shown to you and goes to its maintainers only on your yes ([report] text = \"ask\")",
-        crate::config::ReportText::Always if armed => "each bug you run into in kelpie goes to its maintainers redacted, without asking, each send a line under messages ([report] text = \"always\", armed)",
+        crate::config::ReportText::Ask => "each bug you run into in kebbie is shown to you and goes to its maintainers only on your yes ([report] text = \"ask\")",
+        crate::config::ReportText::Always if armed => "each bug you run into in kebbie goes to its maintainers redacted, without asking, each send a line under messages ([report] text = \"always\", armed)",
         crate::config::ReportText::Always => "[report] text = \"always\" is set but not armed, so each bug you run into is still shown to you and sent only on your yes",
-        crate::config::ReportText::Never => "the bugs you run into in kelpie stay on this machine ([report] text = \"never\")",
+        crate::config::ReportText::Never => "the bugs you run into in kebbie stay on this machine ([report] text = \"never\")",
     };
     let unarmed = settings.text() == crate::config::ReportText::Always && !armed;
     let arm = || vec![format!("run {} in your own terminal to send them without asking", crate::hub::report::ARM_COMMAND)];
@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn a_panic_is_named_after_kelpies_own_module_and_anything_else_is_a_dependency() {
+    fn a_panic_is_named_after_kebbies_own_module_and_anything_else_is_a_dependency() {
         assert_eq!(panic_component(Some("src/board/draw.rs")), name("board.draw"));
         assert_eq!(panic_component(Some("src/tasks/mod.rs")), name("tasks"));
         assert_eq!(panic_component(Some("src/main.rs")), name("main"));
@@ -345,7 +345,7 @@ mod tests {
         let _ = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| original(info)));
         assert!(caught.is_err());
-        assert!(PREVIOUS_RAN.with(|ran| ran.get()), "the hook before kelpie's still runs");
+        assert!(PREVIOUS_RAN.with(|ran| ran.get()), "the hook before kebbie's still runs");
         let recorded = log_lines(&state);
         let line: serde_json::Value = recorded.iter().filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok()).find(|line| line["component"] == "signals").expect("this test's panic was recorded");
         assert_eq!((line["component"].as_str(), line["kind"].as_str(), line["count"].as_u64()), (Some("signals"), Some("panic"), Some(1)));
@@ -434,8 +434,8 @@ mod tests {
         assert_eq!(notes.len(), 1);
         let shown = crate::messages::load_in(&state);
         let line = shown.last().unwrap();
-        assert_eq!((line.from.as_str(), line.to.as_str(), line.kind.as_deref()), ("kelpie", crate::messages::USER_LABEL, Some(KIND)));
-        assert!(line.text.starts_with("Sent kelpie's maintainers an error signal, a count of kelpie's own failures: board.draw panic (×1), keeper.push internal-error (×3); with kelpie ") && line.text.ends_with("[report] signals = false in config.toml turns these off."), "{}", line.text);
+        assert_eq!((line.from.as_str(), line.to.as_str(), line.kind.as_deref()), ("kebbie", crate::messages::USER_LABEL, Some(KIND)));
+        assert!(line.text.starts_with("Sent kebbie's maintainers an error signal, a count of kebbie's own failures: board.draw panic (×1), keeper.push internal-error (×3); with kebbie ") && line.text.ends_with("[report] signals = false in config.toml turns these off."), "{}", line.text);
 
         record_in(&state, &name("keeper.push"), SignalKind::InternalError);
         assert!(tick_in(&state, true, NOW + 3600, &mut |_| panic!("a second send the same day")).unwrap().is_empty());
@@ -469,17 +469,17 @@ mod tests {
         assert!(crate::messages::load_in(&state).is_empty());
         let off = crate::config::Report { signals: Some(false), ..Default::default() };
         let check = doctor(&state, &off, NOW);
-        assert!(check.level == Level::Ok && check.fact.starts_with("error signals off ([report] signals = false); each bug you run into in kelpie is shown to you and goes to its maintainers only on your yes"), "{}", check.fact);
+        assert!(check.level == Level::Ok && check.fact.starts_with("error signals off ([report] signals = false); each bug you run into in kebbie is shown to you and goes to its maintainers only on your yes"), "{}", check.fact);
     }
 
     #[test]
     fn doctor_says_what_a_signal_holds_and_how_reports_are_sent() {
         let state = crate::sh::test_dir("signals-doctor");
         let check = doctor(&state, &crate::config::Report::default(), NOW);
-        assert!(check.level == Level::Ok && check.fact.contains("error signals on, at most once a day, holding only kelpie's version and commit, the OS and CPU architecture") && check.fact.contains("none sent yet") && check.fact.contains("[report] text = \"ask\""), "{}", check.fact);
+        assert!(check.level == Level::Ok && check.fact.contains("error signals on, at most once a day, holding only kebbie's version and commit, the OS and CPU architecture") && check.fact.contains("none sent yet") && check.fact.contains("[report] text = \"ask\""), "{}", check.fact);
         let always = crate::config::Report { text: Some(crate::config::ReportText::Always), ..Default::default() };
         let unarmed = doctor(&state, &always, NOW);
-        assert!(unarmed.level == Level::Warn && unarmed.fact.contains("[report] text = \"always\" is set but not armed") && unarmed.fix == ["run kelpie issue report --always in your own terminal to send them without asking"], "{unarmed:?}");
+        assert!(unarmed.level == Level::Warn && unarmed.fact.contains("[report] text = \"always\" is set but not armed") && unarmed.fix == ["run kebbie issue report --always in your own terminal to send them without asking"], "{unarmed:?}");
         crate::hub::report::arm_in(&state, &crate::permit::Caller::User, true, crate::config::ReportText::Always, NOW).unwrap();
         let armed = doctor(&state, &always, NOW);
         assert!(armed.level == Level::Ok && armed.fact.contains("goes to its maintainers redacted, without asking"), "{armed:?}");

@@ -2,7 +2,7 @@
 # Records the README film (demo) and the feature clips (demo/clips/*.tape), each in a fresh throwaway world: record.sh [demo | clip name]...
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export KDEMO_DIR=${KDEMO_DIR:-$(cd /tmp && pwd -P)/kelpie-demo}
+export KDEMO_DIR=${KDEMO_DIR:-$(cd /tmp && pwd -P)/kebbie-demo}
 trap 'demo/setup.sh --stop' EXIT
 names=("$@")
 if [ ${#names[@]} -eq 0 ]; then

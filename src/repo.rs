@@ -11,7 +11,7 @@ pub fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     run("git", args, Some(cwd))
 }
 
-// A sandboxed task writes its worktree, hooks and fsmonitor included through a hooksPath like husky's, so kelpie's own git there runs neither.
+// A sandboxed task writes its worktree, hooks and fsmonitor included through a hooksPath like husky's, so kebbie's own git there runs neither.
 pub const UNHOOKED: [&str; 4] = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
 
 pub fn unhooked<'a>(cwd: Option<&Path>, args: &[&'a str]) -> Vec<&'a str> {
@@ -166,7 +166,7 @@ fn push_hooks(path: &Path) -> Result<Vec<String>> {
     if original.join("pre-push").is_file() {
         let branch = git(path, &["branch", "--show-current"]).unwrap_or_default();
         return Err(format!(
-            "the repo's pre-push hook lives in the task's worktree ({}), and the task may have written it, so kelpie did not run it and did not push. Check the hook, then push from your own terminal: git -C {} push origin {branch}",
+            "the repo's pre-push hook lives in the task's worktree ({}), and the task may have written it, so kebbie did not run it and did not push. Check the hook, then push from your own terminal: git -C {} push origin {branch}",
             original.join("pre-push").display(), crate::sh::quote(&main_checkout(path)?.to_string_lossy())
         ));
     }
@@ -198,7 +198,7 @@ pub fn slot_path(repo: &Path, number: usize) -> PathBuf {
 }
 
 pub fn setup_note(worktree: &Path) -> Result<PathBuf> {
-    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kelpie-setup.md"))
+    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kebbie-setup.md"))
 }
 
 pub fn setup_line(worktree: &Path) -> Option<String> {
@@ -246,7 +246,7 @@ pub fn slot_number(repo: &Path, path: &Path) -> Option<usize> {
 
 fn roots() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
-    let dirs = std::env::var("KELPIE_REPO_DIRS").unwrap_or_else(|_| format!("{home}/projects:{home}/personal:{home}/src:{home}/code"));
+    let dirs = std::env::var("KEBBIE_REPO_DIRS").unwrap_or_else(|_| format!("{home}/projects:{home}/personal:{home}/src:{home}/code"));
     dirs.split(':').filter(|dir| !dir.is_empty()).map(PathBuf::from).filter(|dir| dir.is_dir()).collect()
 }
 
@@ -295,7 +295,7 @@ fn clone(name: &str, roots: &[PathBuf]) -> Result<PathBuf> {
     Err(format!("No checkout of {name} under {} and no remote of your other repos has it", roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>().join(", ")))
 }
 
-// Main checkouts with a kelpie pool (a wt<N>.<repo> next to them), so a task shows even when no Space of its repo is open.
+// Main checkouts with a kebbie pool (a wt<N>.<repo> next to them), so a task shows even when no Space of its repo is open.
 pub fn pooled_checkouts() -> Vec<PathBuf> {
     pooled_under(&roots())
 }
@@ -343,19 +343,19 @@ mod tests {
     }
 
     #[test]
-    fn kelpies_git_runs_no_fsmonitor_or_hook_in_a_sandboxed_tasks_worktree() {
+    fn kebbies_git_runs_no_fsmonitor_or_hook_in_a_sandboxed_tasks_worktree() {
         let (dir, ran) = hooked_repo("unhooked");
         crate::sandbox::mark(&crate::lead::state_location().unwrap(), &dir, true).unwrap();
         git(&dir, &["add", "a"]).unwrap();
         git(&dir, &["status", "--porcelain"]).unwrap();
         git_writing(&dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "a"]).unwrap();
         assert!(!ran.exists(), "neither ran");
-        assert_eq!(git(&dir, &["config", "--get", "core.hooksPath"]).unwrap(), "hooks", "git config reads the repo's own value, not kelpie's override");
+        assert_eq!(git(&dir, &["config", "--get", "core.hooksPath"]).unwrap(), "hooks", "git config reads the repo's own value, not kebbie's override");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn kelpies_git_runs_the_repos_hooks_where_the_task_is_not_sandboxed() {
+    fn kebbies_git_runs_the_repos_hooks_where_the_task_is_not_sandboxed() {
         let (dir, ran) = hooked_repo("hooked");
         git(&dir, &["add", "a"]).unwrap();
         git_writing(&dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "a"]).unwrap();
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn a_worktrees_port_comes_from_its_env_else_its_setup_note_else_nowhere() {
-        let dir = std::env::temp_dir().join(format!("kelpie-port-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-port-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let main = dir.join("app");
         let tree = dir.join("wt2.app");
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn a_checkout_with_a_worktree_pool_next_to_it_is_found_without_a_space_open() {
-        let root = std::env::temp_dir().join(format!("kelpie-pooled-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("kebbie-pooled-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for dir in ["shop/.git", "wt2.shop", "blog/.git", "wtx.blog", "gronare/api/.git", "gronare/wt1.api", "notes"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
@@ -459,7 +459,7 @@ mod tests {
     }
 
     fn conflicting(name: &str) -> (PathBuf, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("kelpie-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let main = dir.join("app");
         std::fs::create_dir_all(&main).unwrap();
@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn the_worktree_list_is_read_from_gits_porcelain_output_with_branches_and_detached_heads() {
-        let dir = std::env::temp_dir().join(format!("kelpie-worktrees-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-worktrees-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let main = dir.join("app");
         std::fs::create_dir_all(&main).unwrap();

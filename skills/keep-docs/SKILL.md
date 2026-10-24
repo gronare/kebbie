@@ -1,6 +1,6 @@
 ---
 name: keep-docs
-description: Keep a repo's README and docs/ in step with a change to what a user sees or does. Use when kelpie's task role names it for a repo with docs.required, when a review finding ends "(keep-docs)", or when the user asks to document a change.
+description: Keep a repo's README and docs/ in step with a change to what a user sees or does. Use when kebbie's task role names it for a repo with docs.required, when a review finding ends "(keep-docs)", or when the user asks to document a change.
 ---
 
 # Keep the docs in step

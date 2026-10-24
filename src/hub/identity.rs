@@ -1,8 +1,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use kelpie_hub_api::Bytes32;
-use kelpie_hub_protocol::{Id, PublicKeys, SecretKeys};
+use kebbie_hub_api::Bytes32;
+use kebbie_hub_protocol::{Id, PublicKeys, SecretKeys};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -115,7 +115,7 @@ mod tests {
     fn the_identity_is_kept_private_and_its_collapse_tag_names_no_task() {
         let state = crate::sh::test_dir("hub-identity");
         let keys = SecretKeys::generate();
-        let identity = Identity::new("https://hub.example.com", Id::new(kelpie_hub_protocol::Prefix::Machine).unwrap(), "mac", "khm_secret".to_string(), &keys, 1).unwrap();
+        let identity = Identity::new("https://hub.example.com", Id::new(kebbie_hub_protocol::Prefix::Machine).unwrap(), "mac", "khm_secret".to_string(), &keys, 1).unwrap();
         save(&state, &identity).unwrap();
         assert_eq!(std::fs::metadata(file(&state)).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(dir(&state)).unwrap().permissions().mode() & 0o777, 0o700);

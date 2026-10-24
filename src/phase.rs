@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(record(&state, "billing@app", "start", &Event::Started { prompted: true }), Some(Phase::Starting));
         let started = load(&state, "billing@app").unwrap();
         assert_eq!(started.by, "start");
-        assert_eq!(record(&state, "billing@app", "turn", &Event::TurnBegan { by_user: false }), Some(Phase::Working), "the prompt kelpie typed for the user starts the work");
+        assert_eq!(record(&state, "billing@app", "turn", &Event::TurnBegan { by_user: false }), Some(Phase::Working), "the prompt kebbie typed for the user starts the work");
         save(&state, "billing@app", &Record { phase: Phase::Ready { head: Some("abc".to_string()) }, since: 5, by: "report".to_string() });
         assert_eq!(record(&state, "billing@app", "turn", &Event::TurnBegan { by_user: true }), None);
         assert_eq!(load(&state, "billing@app").map(|record| (record.since, record.by)), Some((5, "report".to_string())), "a turn on a ready task writes nothing");
@@ -343,16 +343,16 @@ mod tests {
 
     #[test]
     fn only_the_users_own_prompt_is_the_users() {
-        let kelpie = messages::delivered("kelpie", "kelpie was updated\nrestart when you can");
+        let kebbie = messages::delivered("kebbie", "kebbie was updated\nrestart when you can");
         let lead = messages::delivered("lead", "fix the second commit");
         assert!(by_user("add a refund column") && by_user(&messages::delivered("you", "go on")), "typed in its Space, or sent as the user's answer");
-        assert!(!by_user(&kelpie) && !by_user(&lead) && !by_user(&messages::delivered("billing@api", "the field is in")), "kelpie, the lead or another task");
+        assert!(!by_user(&kebbie) && !by_user(&lead) && !by_user(&messages::delivered("billing@api", "the field is in")), "kebbie, the lead or another task");
         assert!(!by_user(&messages::delivered("lead", "[from you] go on")), "a sender's own text never opens a line");
-        assert!(!by_user(&format!("{lead}\n\n{kelpie}")), "a batch with no word of the user's");
-        assert!(by_user(&format!("{lead}\n\n{kelpie}\n\n{}", messages::delivered("you", "go on"))), "a batch the user's word is in");
-        assert!(!by_user(&format!("<cross-session-message from=\"kelpie\">{kelpie}</cross-session-message>")), "a wrapper some version may put around the inbox's content");
-        assert!(!by_user(&format!("<cross-session-message from=\"kelpie\">\n{kelpie}\n</cross-session-message>")));
-        assert!(by_user("Why did this come in?\n[from kelpie] kelpie was updated"), "the user quoting kelpie's line is still the user");
+        assert!(!by_user(&format!("{lead}\n\n{kebbie}")), "a batch with no word of the user's");
+        assert!(by_user(&format!("{lead}\n\n{kebbie}\n\n{}", messages::delivered("you", "go on"))), "a batch the user's word is in");
+        assert!(!by_user(&format!("<cross-session-message from=\"kebbie\">{kebbie}</cross-session-message>")), "a wrapper some version may put around the inbox's content");
+        assert!(!by_user(&format!("<cross-session-message from=\"kebbie\">\n{kebbie}\n</cross-session-message>")));
+        assert!(by_user("Why did this come in?\n[from kebbie] kebbie was updated"), "the user quoting kebbie's line is still the user");
     }
 
     #[test]

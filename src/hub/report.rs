@@ -1,8 +1,8 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use kelpie_hub_api::{Bytes32, Bytes64, ReportAccepted, ReportChallenge, ReportUpload};
-use kelpie_hub_protocol::{BugReport, InstallKey, MAX_TEXT_BYTES, MAX_TITLE_CHARS, solve};
+use kebbie_hub_api::{Bytes32, Bytes64, ReportAccepted, ReportChallenge, ReportUpload};
+use kebbie_hub_protocol::{BugReport, InstallKey, MAX_TEXT_BYTES, MAX_TITLE_CHARS, solve};
 use serde::{Deserialize, Serialize};
 
 use super::http::{CALL, Client, HubError};
@@ -10,7 +10,7 @@ use crate::issues::{self, Issue};
 use crate::permit::Caller;
 use crate::sh::Result;
 
-// A hub asking for more than this would keep a laptop busy for minutes, so kelpie refuses rather than spins.
+// A hub asking for more than this would keep a laptop busy for minutes, so kebbie refuses rather than spins.
 pub const MAX_WORK: u8 = 26;
 pub const DIR: &str = "report";
 const KEY_FILE: &str = "install-key.json";
@@ -27,13 +27,13 @@ const TLDS: [&str; 34] = ["com", "net", "org", "io", "dev", "app", "local", "int
 const FILE_EXTENSIONS: [&str; 24] = ["rs", "toml", "md", "json", "yml", "yaml", "txt", "lock", "sh", "py", "rb", "js", "ts", "tsx", "jsx", "css", "html", "log", "sqlite3", "db", "png", "jpg", "gz", "zip"];
 const BRANCH_PREFIXES: [&str; 9] = ["feature/", "feat/", "fix/", "bugfix/", "hotfix/", "release/", "refs/heads/", "refs/remotes/", "origin/"];
 
-// What a report must never carry, as this machine knows it: its home, its user's name, the repos kelpie works in, and which commits are kelpie's own.
+// What a report must never carry, as this machine knows it: its home, its user's name, the repos kebbie works in, and which commits are kebbie's own.
 #[derive(Clone, Debug, Default)]
 pub struct Scrub {
     pub home: Option<String>,
     pub users: Vec<String>,
     pub repos: Vec<String>,
-    pub kelpie_root: Option<PathBuf>,
+    pub kebbie_root: Option<PathBuf>,
 }
 
 impl Scrub {
@@ -43,21 +43,21 @@ impl Scrub {
             .filter_map(|entry| entry.path().file_stem().map(|stem| stem.to_string_lossy().to_string())));
         let mut scrub = Scrub::new(std::env::var("HOME").ok(), repos);
         scrub.users.extend(std::env::var("USER").ok().filter(|user| user.chars().count() >= 2));
-        scrub.kelpie_root = crate::lead::install_root().ok();
+        scrub.kebbie_root = crate::lead::install_root().ok();
         scrub
     }
 
     pub fn new(home: Option<String>, repos: Vec<String>) -> Scrub {
-        let mut repos: Vec<String> = repos.into_iter().filter(|name| name.chars().count() >= 2 && name != "kelpie").collect();
+        let mut repos: Vec<String> = repos.into_iter().filter(|name| name.chars().count() >= 2 && name != "kebbie").collect();
         repos.sort_by_key(|name| std::cmp::Reverse(name.len()));
         repos.dedup();
         let home = home.map(|home| home.trim_end_matches('/').to_string()).filter(|home| home.len() > 1);
         let users = home.as_deref().and_then(|home| home.rsplit('/').next()).filter(|user| user.chars().count() >= 2).map(str::to_string).into_iter().collect();
-        Scrub { home, users, repos, kelpie_root: None }
+        Scrub { home, users, repos, kebbie_root: None }
     }
 
-    fn kelpie_commit(&self, sha: &str) -> bool {
-        self.kelpie_root.as_deref().is_some_and(|root| crate::sh::succeeds("git", &["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(root)))
+    fn kebbie_commit(&self, sha: &str) -> bool {
+        self.kebbie_root.as_deref().is_some_and(|root| crate::sh::succeeds("git", &["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(root)))
     }
 }
 
@@ -190,13 +190,13 @@ fn secret_name(name: &str) -> bool {
     SECRET_NAMES.iter().any(|secret| name.contains(secret)) || name.ends_with("_key") || name == "key"
 }
 
-fn kelpies_own(core: &str) -> bool {
+fn kebbies_own(core: &str) -> bool {
     let without_scheme = issues::REPOSITORY.trim_start_matches("https://");
     core.starts_with(issues::REPOSITORY) || core.starts_with(without_scheme)
 }
 
 fn redact_word(core: &str, after_bearer: bool, scrub: &Scrub) -> Option<String> {
-    if core.is_empty() || kelpies_own(core) {
+    if core.is_empty() || kebbies_own(core) {
         return None;
     }
     let replaced = |label: &str| Some(format!("<{label}>"));
@@ -218,7 +218,7 @@ fn redact_word(core: &str, after_bearer: bool, scrub: &Scrub) -> Option<String> 
     if TOKEN_PREFIXES.iter().any(|prefix| core.starts_with(prefix) && core.len() > prefix.len() + 6) || aws_key_id(core) || opaque(core) {
         return replaced("token");
     }
-    if core.len() >= 32 && hex(core) && !scrub.kelpie_commit(core) {
+    if core.len() >= 32 && hex(core) && !scrub.kebbie_commit(core) {
         return replaced("token");
     }
     if ip(core) {
@@ -321,7 +321,7 @@ pub fn payload(issue: &Issue, scrub: &Scrub) -> BugReport {
 
 pub fn preview(report: &BugReport) -> String {
     let text = if report.text.trim().is_empty() { "(no text)" } else { report.text.trim() };
-    format!("{}\nkelpie {} · {}\n\n{text}", report.title, report.version, report.os)
+    format!("{}\nkebbie {} · {}\n\n{text}", report.title, report.version, report.os)
 }
 
 pub fn offered(issue: &Issue) -> bool {
@@ -352,7 +352,7 @@ pub fn install_key(state: &Path) -> Result<InstallKey> {
             let kept: KeyFile = serde_json::from_str(&text).map_err(|error| format!("{}: {error}", file.display()))?;
             let key = InstallKey::from_bytes(kept.secret.0);
             if key.public() != kept.public.0 {
-                return Err(crate::signals::internal("report.install-key", kelpie_hub_protocol::SignalKind::CorruptState, format!("{}: the public key does not match the secret one; move the file away and kelpie makes a new one", file.display())));
+                return Err(crate::signals::internal("report.install-key", kebbie_hub_protocol::SignalKind::CorruptState, format!("{}: the public key does not match the secret one; move the file away and kebbie makes a new one", file.display())));
             }
             Ok(key)
         }
@@ -380,7 +380,7 @@ fn deliver(state: &Path, issue: &mut Issue, report: BugReport, url: &str, now: u
     let client = Client::new(&super::hub_url(url)?, None, CALL);
     let challenge: ReportChallenge = client.get("/v1/reports/challenge").map_err(refused)?;
     if challenge.difficulty > MAX_WORK {
-        return Err(format!("the reports endpoint asks for {} bits of work, more than kelpie does ({MAX_WORK}); nothing was sent", challenge.difficulty));
+        return Err(format!("the reports endpoint asks for {} bits of work, more than kebbie does ({MAX_WORK}); nothing was sent", challenge.difficulty));
     }
     let counter = solve(&challenge.nonce.0, &report.digest(), challenge.difficulty);
     let title = report.title.clone();
@@ -397,31 +397,31 @@ fn deliver(state: &Path, issue: &mut Issue, report: BugReport, url: &str, now: u
 pub const SENT_KIND: &str = "report-sent";
 
 pub fn sent_line(report: &str, issue: &str, title: &str) -> String {
-    format!("Sent bug {issue} to kelpie's maintainers as report {report}: \"{title}\", redacted; kelpie issue report {issue} shows the text that went.")
+    format!("Sent bug {issue} to kebbie's maintainers as report {report}: \"{title}\", redacted; kebbie issue report {issue} shows the text that went.")
 }
 
 // The digest is of the report the user read; anything else that would go out instead is refused.
 pub fn send_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub, read: &[u8; 32], now: u64) -> Result<String> {
-    crate::permit::user_only_as(caller, "Sending a report to kelpie's maintainers")?;
+    crate::permit::user_only_as(caller, "Sending a report to kebbie's maintainers")?;
     let dir = issues::dir(state);
     let mut issue = issues::find(&dir, id)?;
     if let Some(report) = &issue.report {
-        return Err(format!("Bug {} went to kelpie's maintainers already, as report {report}", issue.id));
+        return Err(format!("Bug {} went to kebbie's maintainers already, as report {report}", issue.id));
     }
     if issue.kind != "bug" || issue.source.is_some() {
-        return Err(format!("{} is a wish or another install's report; only a bug you ran into goes to kelpie's maintainers", issue.id));
+        return Err(format!("{} is a wish or another install's report; only a bug you ran into goes to kebbie's maintainers", issue.id));
     }
     let report = payload(&issue, scrub);
     if report.digest() != *read {
-        return Err(format!("Bug {} changed since you read it, so nothing was sent; read it again with kelpie issue report {0}", issue.id));
+        return Err(format!("Bug {} changed since you read it, so nothing was sent; read it again with kebbie issue report {0}", issue.id));
     }
     let sent = deliver(state, &mut issue, report, url, now)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent bug {} to kelpie's maintainers as report {sent}", issue.id)).next("It stays on this machine too; after each update the keeper rechecks it and closes it once a commit plainly fixes it.").ok()
+    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent bug {} to kebbie's maintainers as report {sent}", issue.id)).next("It stays on this machine too; after each update the keeper rechecks it and closes it once a commit plainly fixes it.").ok()
 }
 
 const ARMED: &str = "always-armed";
-pub const ARM_COMMAND: &str = "kelpie issue report --always";
-pub const DISARM_COMMAND: &str = "kelpie issue report --ask";
+pub const ARM_COMMAND: &str = "kebbie issue report --always";
+pub const DISARM_COMMAND: &str = "kebbie issue report --ask";
 
 // The lead can write config.toml, so text = "always" alone sends nothing; it waits for the user's own arming, which only a user-only command writes.
 pub fn armed(state: &Path) -> bool {
@@ -439,18 +439,18 @@ pub fn board_offers(settings: &crate::config::Report, state: &Path) -> bool {
 pub fn arm_in(state: &Path, caller: &Caller, on: bool, text: crate::config::ReportText, now: u64) -> Result<String> {
     let file = dir(state).join(ARMED);
     if !on {
-        crate::permit::user_only_as(caller, "Choosing how reports go to kelpie's maintainers")?;
+        crate::permit::user_only_as(caller, "Choosing how reports go to kebbie's maintainers")?;
         if file.exists() {
             std::fs::remove_file(&file).map_err(|error| format!("{}: {error}", file.display()))?;
         }
-        return Ok("kelpie now shows you each bug before it goes to its maintainers, and sends it only on your yes.".to_string());
+        return Ok("kebbie now shows you each bug before it goes to its maintainers, and sends it only on your yes.".to_string());
     }
-    crate::permit::user_only_as(caller, "Letting kelpie send reports to its maintainers without asking")?;
+    crate::permit::user_only_as(caller, "Letting kebbie send reports to its maintainers without asking")?;
     crate::state::write(&file, issues::today(now))?;
     Ok(if text == crate::config::ReportText::Always {
-        format!("kelpie now sends each bug you run into to its maintainers without asking, redacted, and each send is a line under messages. {DISARM_COMMAND} stops it.")
+        format!("kebbie now sends each bug you run into to its maintainers without asking, redacted, and each send is a line under messages. {DISARM_COMMAND} stops it.")
     } else {
-        format!("Armed, but [report] text is \"{}\" in config.toml; with text = \"always\" there, kelpie sends bug reports without asking. {DISARM_COMMAND} disarms it.", text.key())
+        format!("Armed, but [report] text is \"{}\" in config.toml; with text = \"always\" there, kebbie sends bug reports without asking. {DISARM_COMMAND} disarms it.", text.key())
     })
 }
 
@@ -473,7 +473,7 @@ pub fn send_unasked_in(state: &Path, text: crate::config::ReportText, url: &str,
     for mut issue in waiting {
         let report = payload(&issue, &scrub);
         let sent = deliver(state, &mut issue, report, url, now)?;
-        notes.push(format!("reports: sent bug {} to kelpie's maintainers as report {sent}, as [report] text = \"always\" says", issue.id));
+        notes.push(format!("reports: sent bug {} to kebbie's maintainers as report {sent}, as [report] text = \"always\" says", issue.id));
     }
     Ok(notes)
 }
@@ -487,16 +487,16 @@ pub fn send_unasked_tick(state: &Path) -> Result<Vec<String>> {
 }
 
 pub fn decline_in(state: &Path, caller: &Caller, id: &str, now: u64) -> Result<String> {
-    crate::permit::user_only_as(caller, "Deciding on a report to kelpie's maintainers")?;
+    crate::permit::user_only_as(caller, "Deciding on a report to kebbie's maintainers")?;
     let dir = issues::dir(state);
     let mut issue = issues::find(&dir, id)?;
     issue.declined = Some(issues::today(now));
     issues::save(&dir, &issue)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Kept bug {} on this machine only", issue.id)).next(format!("kelpie issue report {} sends it to kelpie's maintainers later.", issue.id)).ok()
+    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Kept bug {} on this machine only", issue.id)).next(format!("kebbie issue report {} sends it to kebbie's maintainers later.", issue.id)).ok()
 }
 
 fn ask_send() -> bool {
-    print!("Send this report to kelpie's maintainers? [y/N] ");
+    print!("Send this report to kebbie's maintainers? [y/N] ");
     let _ = std::io::stdout().flush();
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim(), "y" | "Y" | "yes")
@@ -504,7 +504,7 @@ fn ask_send() -> bool {
 
 pub fn cli(id: &str) -> Result<String> {
     let caller = crate::permit::caller();
-    crate::permit::user_only_as(&caller, "Sending a report to kelpie's maintainers")?;
+    crate::permit::user_only_as(&caller, "Sending a report to kebbie's maintainers")?;
     let state = crate::lead::state_dir()?;
     let settings = crate::config::report_settings()?;
     let scrub = Scrub::current();
@@ -512,9 +512,9 @@ pub fn cli(id: &str) -> Result<String> {
     let read = payload(&issue, &scrub);
     let shown = preview(&read);
     if !super::interactive() {
-        return Ok(format!("{shown}\n\nThis is the report as it would go to kelpie's maintainers at {}. Run kelpie issue report {} in your own terminal to answer y or n.", settings.url(), issue.id));
+        return Ok(format!("{shown}\n\nThis is the report as it would go to kebbie's maintainers at {}. Run kebbie issue report {} in your own terminal to answer y or n.", settings.url(), issue.id));
     }
-    println!("{shown}\n\nThis goes to kelpie's maintainers at {}, signed with this install's key.", settings.url());
+    println!("{shown}\n\nThis goes to kebbie's maintainers at {}, signed with this install's key.", settings.url());
     if ask_send() {
         send_in(&state, &caller, id, settings.url(), &scrub, &read.digest(), crate::messages::now())
     } else {
@@ -529,17 +529,17 @@ mod tests {
     const NOW: u64 = 1_792_540_800;
 
     fn scrub() -> Scrub {
-        Scrub::new(Some("/Users/carl".to_string()), vec!["greenhouse".to_string(), "app".to_string(), "kelpie".to_string()])
+        Scrub::new(Some("/Users/carl".to_string()), vec!["greenhouse".to_string(), "app".to_string(), "kebbie".to_string()])
     }
 
     #[test]
     fn a_report_names_no_home_repo_remote_or_token() {
-        let text = "Ran kelpie push in /Users/carl/work/greenhouse/wt2.greenhouse.\n\
+        let text = "Ran kebbie push in /Users/carl/work/greenhouse/wt2.greenhouse.\n\
             origin is git@github.com:acme/greenhouse.git, mirror https://gitlab.example.com/acme/app.git\n\
             The task billing@app said: token khm_Q2ZR8HWNx9a1b2c3d4 and GITHUB_TOKEN=ghp_abcdefghijklmnop1234\n\
             Authorization: Bearer abc.def.ghi; key eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9xyz123\n\
             Another user's /home/bob/notes and /Users/alice/.ssh stay out too.\n\
-            Kept: commit 869bc49a1f3c2e0000000000000000000000abcd, the apply step, kelpie's own https://github.com/gronare/kelpie/issues/12, ~/.config/kelpie.";
+            Kept: commit 869bc49a1f3c2e0000000000000000000000abcd, the apply step, kebbie's own https://github.com/gronare/kebbie/issues/12, ~/.config/kebbie.";
         let redacted = redact(text, &scrub());
         for gone in ["/Users/carl", "greenhouse", "acme", "gitlab.example.com", "billing@app", "khm_Q2ZR", "ghp_abcdef", "abc.def.ghi", "eyJhbGci", "/home/bob", "/Users/alice"] {
             assert!(!redacted.contains(gone), "{gone} is still in:\n{redacted}");
@@ -547,7 +547,7 @@ mod tests {
         assert!(redacted.contains("in ~/work/<repo>/wt2.<repo>.") && redacted.contains("origin is <remote>, mirror <url>"), "{redacted}");
         assert!(redacted.contains("billing@<repo>") && redacted.contains("token <token>") && redacted.contains("GITHUB_TOKEN=<redacted>") && redacted.contains("Bearer <token>;"), "{redacted}");
         assert!(redacted.contains("~/notes and ~/.ssh"), "{redacted}");
-        assert!(redacted.contains("the apply step") && redacted.contains("https://github.com/gronare/kelpie/issues/12") && redacted.contains("~/.config/kelpie."), "what is not private stays: {redacted}");
+        assert!(redacted.contains("the apply step") && redacted.contains("https://github.com/gronare/kebbie/issues/12") && redacted.contains("~/.config/kebbie."), "what is not private stays: {redacted}");
     }
 
     fn leaks(text: &str, gone: &[&str], shown: &str) {
@@ -584,8 +584,8 @@ mod tests {
     }
 
     #[test]
-    fn a_scheme_less_repo_address_is_redacted_but_kelpies_own_is_kept() {
-        leaks("cloned github.com/acme/billing, see github.com/gronare/kelpie/issues/3", &["acme", "billing"], "cloned <url>, see github.com/gronare/kelpie/issues/3");
+    fn a_scheme_less_repo_address_is_redacted_but_kebbies_own_is_kept() {
+        leaks("cloned github.com/acme/billing, see github.com/gronare/kebbie/issues/3", &["acme", "billing"], "cloned <url>, see github.com/gronare/kebbie/issues/3");
     }
 
     #[test]
@@ -594,17 +594,17 @@ mod tests {
     }
 
     #[test]
-    fn a_long_hex_string_is_redacted_unless_it_is_one_of_kelpies_commits() {
-        let root = crate::sh::test_dir("report-kelpie-root");
+    fn a_long_hex_string_is_redacted_unless_it_is_one_of_kebbies_commits() {
+        let root = crate::sh::test_dir("report-kebbie-root");
         let git = |args: &[&str]| crate::sh::run("git", &[&["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"], args].concat(), Some(&root)).unwrap();
         git(&["init", "-q"]);
         git(&["commit", "-q", "--allow-empty", "-m", "one"]);
-        let kelpies = git(&["rev-parse", "HEAD"]);
+        let kebbies = git(&["rev-parse", "HEAD"]);
         let mut scrub = scrub();
-        scrub.kelpie_root = Some(root);
+        scrub.kebbie_root = Some(root);
         let foreign = "0123456789abcdef0123456789abcdef01234567";
-        let redacted = redact(&format!("kelpie at {kelpies}, the project at {foreign}, a key 00112233445566778899aabbccddeeff"), &scrub);
-        assert_eq!(redacted, format!("kelpie at {kelpies}, the project at <token>, a key <token>"));
+        let redacted = redact(&format!("kebbie at {kebbies}, the project at {foreign}, a key 00112233445566778899aabbccddeeff"), &scrub);
+        assert_eq!(redacted, format!("kebbie at {kebbies}, the project at <token>, a key <token>"));
     }
 
     #[test]
@@ -631,13 +631,13 @@ mod tests {
     fn the_payload_is_the_redacted_issue_with_its_version_and_os_and_nothing_else() {
         let report = payload(&bug("push in greenhouse hid an error", "Saw it in /Users/carl/greenhouse."), &scrub());
         assert_eq!(report, BugReport { title: "push in <repo> hid an error".to_string(), text: "Saw it in ~/<repo>.".to_string(), version: "0.26.0 (e58e84a)".to_string(), os: issues::os() });
-        assert_eq!(preview(&report), format!("push in <repo> hid an error\nkelpie 0.26.0 (e58e84a) · {}\n\nSaw it in ~/<repo>.", issues::os()));
+        assert_eq!(preview(&report), format!("push in <repo> hid an error\nkebbie 0.26.0 (e58e84a) · {}\n\nSaw it in ~/<repo>.", issues::os()));
         let long = payload(&bug(&"t".repeat(300), &"å".repeat(MAX_TEXT_BYTES)), &scrub());
         assert!(long.check().is_ok() && long.text.ends_with("(shortened)") && long.title.chars().count() == MAX_TITLE_CHARS, "{} {}", long.text.len(), long.title.len());
     }
 
     #[test]
-    fn only_an_open_bug_kelpie_filed_here_and_not_yet_decided_is_offered() {
+    fn only_an_open_bug_kebbie_filed_here_and_not_yet_decided_is_offered() {
         let state = crate::sh::test_dir("report-offers");
         let dir = issues::dir(&state);
         let wish = Issue { id: "bbbbbb".to_string(), kind: "wish".to_string(), ..bug("a wish", "") };
@@ -668,7 +668,7 @@ mod tests {
         assert_eq!(issues::load(&issues::dir(&state))[0], bug("t", ""));
         decline_in(&state, &Caller::User, "a1b2c3", NOW).unwrap();
         assert!(offers(&state, true).is_empty(), "a no takes it off the board");
-        assert!(issues::show_in(&issues::dir(&state), "a1b2c3").unwrap().contains("kelpie issue report a1b2c3 sends it"));
+        assert!(issues::show_in(&issues::dir(&state), "a1b2c3").unwrap().contains("kebbie issue report a1b2c3 sends it"));
     }
 
     #[test]

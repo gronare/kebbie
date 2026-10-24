@@ -21,6 +21,6 @@ sleep 2.5
 git add src/product/wishlist.ts && git commit -qm "Save products for later from the product page" -m "Shoppers who were not ready to buy had to find a product again from search. A Save for later button now keeps it on the shopper's wishlist, one entry per product."
 say "● Bash(git commit -m \"Save products for later from the product page\")"
 sleep 1
-kelpie report --state ready --next "try Save for later on a product page" "A Save for later button on the product page; saved products are kept per shopper" >/dev/null
+kebbie report --state ready --next "try Save for later on a product page" "A Save for later button on the product page; saved products are kept per shopper" >/dev/null
 say "● Ready: a Save for later button on the product page."
 mode idle

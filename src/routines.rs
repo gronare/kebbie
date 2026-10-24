@@ -331,18 +331,18 @@ pub fn task_name(id: &str, now: u64, offset: i64) -> String {
     format!("{}-{date}", head.trim_end_matches('-'))
 }
 
-pub fn prompt(routine: &Routine, kelpie: &str) -> String {
-    let ok = format!("When all is well, run `{kelpie} routine ok \"<one line on what you checked and found in order>\"` as your last command: it records the run as ok and closes this task, so it works only while the task has no changes and no commits.");
+pub fn prompt(routine: &Routine, kebbie: &str) -> String {
+    let ok = format!("When all is well, run `{kebbie} routine ok \"<one line on what you checked and found in order>\"` as your last command: it records the run as ok and closes this task, so it works only while the task has no changes and no commits.");
     let work = match routine.mode {
         Mode::Report => format!(
-            "Investigate and change nothing: no edits, no commits, nothing applied to the systems you look at. {ok} Otherwise write a sign-off card listing each finding (what you saw, where, how serious, what you recommend) and run `{kelpie} report --state needs-you --next \"<the first thing the user should do>\" --card <file> \"<one line on the findings>\"`."
+            "Investigate and change nothing: no edits, no commits, nothing applied to the systems you look at. {ok} Otherwise write a sign-off card listing each finding (what you saw, where, how serious, what you recommend) and run `{kebbie} report --state needs-you --next \"<the first thing the user should do>\" --card <file> \"<one line on the findings>\"`."
         ),
         Mode::Plan => format!(
-            "Investigate and change nothing yet. {ok} Otherwise write a plan for what should change and put it to the user with `{kelpie} ask --plan`, as your role's Questions section says; carry it out only once they approve it, in commits, and report ready as any task does."
+            "Investigate and change nothing yet. {ok} Otherwise write a plan for what should change and put it to the user with `{kebbie} ask --plan`, as your role's Questions section says; carry it out only once they approve it, in commits, and report ready as any task does."
         ),
         Mode::Fix => {
             let push = if routine.push {
-                "kelpie gave the lead push permission for this task: once you report ready and your commits hold to the rules, the lead pushes them without waiting for the user."
+                "kebbie gave the lead push permission for this task: once you report ready and your commits hold to the rules, the lead pushes them without waiting for the user."
             } else {
                 "The user pushes your fix, as with any task."
             };
@@ -350,7 +350,7 @@ pub fn prompt(routine: &Routine, kelpie: &str) -> String {
         }
     };
     format!(
-        "This is the routine \"{}\" ({}), which kelpie runs {} in {}, in {} mode. Nobody typed this prompt: kelpie started this task on the schedule, and the user reads the outcome later.\n\nWhat to check:\n{}\n\n{work}",
+        "This is the routine \"{}\" ({}), which kebbie runs {} in {}, in {} mode. Nobody typed this prompt: kebbie started this task on the schedule, and the user reads the outcome later.\n\nWhat to check:\n{}\n\n{work}",
         routine.title, routine.id, routine.schedule.text(), routine.repo, routine.mode.key(), routine.prompt,
     )
 }
@@ -462,7 +462,7 @@ fn start_run(routine: &Routine, dir: &Path, now: u64, offset: i64) -> Result<Str
         if grants_push(routine) {
             crate::permit::set_task_in(dir, &address, true)?;
         }
-        let prompt = prompt(routine, &crate::peers::kelpie_command()?);
+        let prompt = prompt(routine, &crate::peers::kebbie_command()?);
         let options = crate::tasks::Start { prompt: Some(&prompt), focus: false, from: None, mode: Some("auto"), profile: routine.profile.as_deref(), backlog: None, note: false, anyway: false };
         crate::tasks::begin(&repo, &task, &options)
     });
@@ -553,8 +553,8 @@ pub fn tick_cli() -> Result<String> {
 pub fn run_now(id: &str) -> Result<String> {
     let dir = crate::lead::state_dir()?;
     let (routines, _) = load();
-    let routine = routines.iter().find(|routine| routine.id == id).ok_or(format!("No routine \"{id}\"; kelpie routines lists them"))?;
-    let _lock = Lock::take(&dir).ok_or("another kelpie is starting routines right now; try again in a moment")?;
+    let routine = routines.iter().find(|routine| routine.id == id).ok_or(format!("No routine \"{id}\"; kebbie routines lists them"))?;
+    let _lock = Lock::take(&dir).ok_or("another kebbie is starting routines right now; try again in a moment")?;
     let state = load_state(&dir, id);
     if let Some(task) = state.last_task.as_deref().filter(|address| open(routine, address)) {
         return Err(format!("{task}, the last run of {id}, is still open; a routine runs again once its task is closed"));
@@ -566,7 +566,7 @@ pub fn run_now(id: &str) -> Result<String> {
 pub fn ok_allowed(caller: &Caller, me: &str) -> Result<()> {
     match caller {
         Caller::Task(address) if address == me => Ok(()),
-        other => Err(format!("kelpie routine ok is the word of the routine's own task, {me}; {} cannot say it", crate::permit::describe(other))),
+        other => Err(format!("kebbie routine ok is the word of the routine's own task, {me}; {} cannot say it", crate::permit::describe(other))),
     }
 }
 
@@ -574,9 +574,9 @@ pub fn ok_allowed(caller: &Caller, me: &str) -> Result<()> {
 pub fn ok(cwd: &Path, summary: &str) -> Result<String> {
     let summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
     if summary.is_empty() {
-        return Err("kelpie routine ok needs a one-line summary: kelpie routine ok \"<what you checked and found in order>\"".to_string());
+        return Err("kebbie routine ok needs a one-line summary: kebbie routine ok \"<what you checked and found in order>\"".to_string());
     }
-    let me = crate::peers::me(cwd).filter(|me| me != crate::status::LEAD_LABEL).ok_or("kelpie routine ok runs in a routine's task")?;
+    let me = crate::peers::me(cwd).filter(|me| me != crate::status::LEAD_LABEL).ok_or("kebbie routine ok runs in a routine's task")?;
     let dir = crate::lead::state_dir()?;
     let (id, mut state) = run_of(&dir, &me).ok_or(format!("{me} is not a routine's task; report as any task does"))?;
     ok_allowed(&crate::permit::caller(), &me)?;
@@ -609,7 +609,7 @@ pub fn row_json(routine: &Routine, state: &State, open: bool, now: u64, offset: 
 pub fn render(rows: &[(Routine, State, bool)], errors: &[String], now: u64, offset: i64) -> String {
     let mut lines = Vec::new();
     if rows.is_empty() {
-        lines.push("No routines yet: press n on the board's Routines page (3), or run kelpie routine add (kelpie help shows its flags).".to_string());
+        lines.push("No routines yet: press n on the board's Routines page (3), or run kebbie routine add (kebbie help shows its flags).".to_string());
     }
     for (routine, state, open) in rows {
         let push = if routine.push { ", pushes its fix" } else { "" };
@@ -864,24 +864,24 @@ mod tests {
         }
         assert_eq!(state.earlier.iter().map(|past| past.start).collect::<Vec<_>>(), [6, 5, 4, 3]);
         assert_eq!((state.earlier[0].outcome, state.earlier[0].summary.as_deref()), (Outcome::Ok, Some("run 6")));
-        assert_eq!(state_from(&json!({ "earlier": [{ "start": 1, "outcome": "nonsense" }, { "start": 2, "outcome": "ok" }] })).earlier.len(), 1, "an entry kelpie cannot read is left out");
+        assert_eq!(state_from(&json!({ "earlier": [{ "start": 1, "outcome": "nonsense" }, { "start": 2, "outcome": "ok" }] })).earlier.len(), 1, "an entry kebbie cannot read is left out");
     }
 
     #[test]
     fn the_prompt_carries_the_routine_the_modes_rules_and_how_to_finish() {
         let mut routine = one(CLUSTER);
-        let report = prompt(&routine, "/bin/kelpie");
-        assert!(report.contains("routine \"Cluster health\" (cluster-health), which kelpie runs every 6h in infra, in report mode"), "{report}");
+        let report = prompt(&routine, "/bin/kebbie");
+        assert!(report.contains("routine \"Cluster health\" (cluster-health), which kebbie runs every 6h in infra, in report mode"), "{report}");
         assert!(report.contains("What to check:\nCheck that every node is Ready."));
-        assert!(report.contains("change nothing") && report.contains("/bin/kelpie routine ok \"") && report.contains("/bin/kelpie report --state needs-you") && report.contains("--card <file>"), "{report}");
+        assert!(report.contains("change nothing") && report.contains("/bin/kebbie routine ok \"") && report.contains("/bin/kebbie report --state needs-you") && report.contains("--card <file>"), "{report}");
         routine.mode = Mode::Plan;
-        let plan = prompt(&routine, "/bin/kelpie");
-        assert!(plan.contains("/bin/kelpie ask --plan") && plan.contains("only once they approve it") && plan.contains("routine ok"), "{plan}");
+        let plan = prompt(&routine, "/bin/kebbie");
+        assert!(plan.contains("/bin/kebbie ask --plan") && plan.contains("only once they approve it") && plan.contains("routine ok"), "{plan}");
         routine.mode = Mode::Fix;
-        let fix = prompt(&routine, "/bin/kelpie");
+        let fix = prompt(&routine, "/bin/kebbie");
         assert!(fix.contains("fix it in commits") && fix.contains("--state ready") && fix.contains("The user pushes your fix"), "{fix}");
         routine.push = true;
-        assert!(prompt(&routine, "/bin/kelpie").contains("the lead pushes them without waiting for the user"));
+        assert!(prompt(&routine, "/bin/kebbie").contains("the lead pushes them without waiting for the user"));
     }
 
     #[test]

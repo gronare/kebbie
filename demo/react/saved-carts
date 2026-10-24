@@ -13,14 +13,14 @@ case "$text" in
     more "  ⎿  Read 19 lines"
     sleep 5
     say "● Carts can live in the database or in the browser, and that choice is yours. I put the question on the board."
-    kelpie ask --option "Database: the cart follows the shopper to every device" \
+    kebbie ask --option "Database: the cart follows the shopper to every device" \
       --option "Browser storage: the cart stays on the device it was filled on" \
       --recommend 1 "Where should saved carts be kept?" >/dev/null
     mode idle
     ;;
   "[from you]"*)
     mode working
-    kelpie report --state working --next "nothing yet" "Saving carts in the database" >/dev/null
+    kebbie report --state working --next "nothing yet" "Saving carts in the database" >/dev/null
     say "● Keeping carts in the database, for 7 days after the shopper's last visit."
     sleep 1.5
     mkdir -p src/cart
@@ -43,13 +43,13 @@ TS
     commit "Keep a signed-in shopper's cart in the database" "A cart lived only in the session, so it was gone on another device or after a restart. A signed-in shopper's cart is now saved in the database and loaded again until it expires."
     sleep 1
     say "● Bash(git commit -m \"Keep a signed-in shopper's cart in the database\")"
-    kelpie report --state ready --next "review src/cart/store.ts" "Carts are kept in the database for 7 days after the last visit" >/dev/null
+    kebbie report --state ready --next "review src/cart/store.ts" "Carts are kept in the database for 7 days after the last visit" >/dev/null
     say "● Ready: carts are saved in the database and kept for 7 days."
     mode idle
     ;;
   *"30 days"*)
     mode working
-    kelpie report --state working --next "nothing yet" "Keeping carts for 30 days, from your review comment" >/dev/null
+    kebbie report --state working --next "nothing yet" "Keeping carts for 30 days, from your review comment" >/dev/null
     sleep 1
     say "● Your comment on src/cart/store.ts:3 asks to keep the cart for 30 days, not 7. Changing it."
     sleep 2.5
@@ -65,7 +65,7 @@ Saved carts are kept for 30 days after the shopper's last visit, on every device
 
 Confirm: sign in on a second device and the same cart is there.
 CARD
-    kelpie report --state ready --card card.md --next "push it" "Carts are kept 30 days; the card shows the saved cart" >/dev/null
+    kebbie report --state ready --card card.md --next "push it" "Carts are kept 30 days; the card shows the saved cart" >/dev/null
     say "● Done: carts are kept for 30 days. The card shows the saved cart on a second device."
     mode idle
     ;;

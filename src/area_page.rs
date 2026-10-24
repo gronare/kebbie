@@ -883,10 +883,10 @@ impl Page {
                     lines.push(Line::from(vec![Span::styled("next  ", style(MUTED)), Span::styled(next.target.clone(), style(TEAL)), Span::styled("  n opens it", style(MUTED))]));
                 }
                 lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
-                modal(frame, "kelpie".to_string(), lines, 96);
+                modal(frame, "kebbie".to_string(), lines, 96);
             }
             Mode::Working { label, .. } => {
-                modal(frame, "kelpie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
+                modal(frame, "kebbie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
             }
             Mode::Input { label, buffer, .. } => {
                 modal(frame, label.clone(), vec![

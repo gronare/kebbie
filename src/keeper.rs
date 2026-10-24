@@ -332,7 +332,7 @@ pub fn span(seconds: u64) -> String {
 
 pub fn render_status(enabled: bool, holder: Option<&Holder>, status: Option<&Value>, log: &Path, now: u64) -> String {
     let Some(holder) = holder else {
-        let head = if enabled { "keeper: not running; kelpie keeper --start starts it, and so do herdr's startup and the board".to_string() } else { OFF.to_string() };
+        let head = if enabled { "keeper: not running; kebbie keeper --start starts it, and so do herdr's startup and the board".to_string() } else { OFF.to_string() };
         return format!("{head}\nlog: {}", log.display());
     };
     let pid = holder.pid.map_or("?".to_string(), |pid| pid.to_string());
@@ -369,7 +369,7 @@ pub fn status_cli() -> Result<String> {
     Ok(render_status(enabled(), holder(&dir).as_ref(), read_status(&dir).as_ref(), &dir.join(LOG), crate::messages::now()))
 }
 
-// Its own session, so a closing pane's hangup never reaches it, and its output in the log, so herdr's hook and kelpie update never wait on a pipe it holds.
+// Its own session, so a closing pane's hangup never reaches it, and its output in the log, so herdr's hook and kebbie update never wait on a pipe it holds.
 fn spawn(exe: &Path, dir: &Path) -> Result<std::process::Child> {
     let log = crate::state::append_to(&dir.join(LOG)).map_err(|error| format!("{}: {error}", dir.join(LOG).display()))?;
     let mut command = Command::new(exe);
@@ -410,12 +410,12 @@ pub fn start_in(dir: &Path, exe: &Path, enabled: bool) -> Result<String> {
 
 pub fn start() -> Result<String> {
     let dir = crate::lead::state_dir()?;
-    start_in(&dir, Path::new(&crate::peers::kelpie_command()?), enabled())
+    start_in(&dir, Path::new(&crate::peers::kebbie_command()?), enabled())
 }
 
 pub fn stop_in(dir: &Path, timeout: Duration) -> Result<String> {
     let Some(running) = holder(dir) else { return Ok("keeper: not running".to_string()) };
-    let pid = running.pid.ok_or_else(|| crate::signals::internal("keeper.lock", kelpie_hub_protocol::SignalKind::CorruptState, "keeper: one runs, but its lock names no pid"))?;
+    let pid = running.pid.ok_or_else(|| crate::signals::internal("keeper.lock", kebbie_hub_protocol::SignalKind::CorruptState, "keeper: one runs, but its lock names no pid"))?;
     // SAFETY: a signal to the pid that holds the keeper's lock, read from that lock.
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
     if wait_for(|| holder(dir).is_none(), timeout) {
@@ -434,23 +434,23 @@ pub fn stop_for_update(dir: &Path) -> bool {
 }
 
 pub fn start_after_update(dir: &Path, was_running: bool) -> String {
-    let exe = match crate::peers::kelpie_command() {
+    let exe = match crate::peers::kebbie_command() {
         Ok(exe) => PathBuf::from(exe),
         Err(error) => return format!("keeper: {error}"),
     };
     match start_in(dir, &exe, enabled()) {
-        Ok(line) if was_running && line.starts_with("keeper: started") => line.replacen("keeper: started", "keeper: restarted on the new kelpie", 1),
+        Ok(line) if was_running && line.starts_with("keeper: started") => line.replacen("keeper: started", "keeper: restarted on the new kebbie", 1),
         Ok(line) | Err(line) => line,
     }
 }
 
-// The board's part: a keeper runs while it is on. The start goes through a short-lived kelpie, so the keeper is never the board's child.
+// The board's part: a keeper runs while it is on. The start goes through a short-lived kebbie, so the keeper is never the board's child.
 pub fn ensure() {
     let Ok(dir) = crate::lead::state_dir() else { return };
     if !should_start(enabled(), holder(&dir).is_some()) {
         return;
     }
-    let Ok(exe) = crate::peers::kelpie_command() else { return };
+    let Ok(exe) = crate::peers::kebbie_command() else { return };
     if let Ok(child) = Command::new(exe).args(["keeper", "--start"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
         crate::sh::reap(child);
     }
@@ -468,7 +468,7 @@ pub fn run() -> Result<String> {
         return Err(OFF.to_string());
     }
     let dir = crate::lead::state_dir()?;
-    let exe = PathBuf::from(crate::peers::kelpie_command()?);
+    let exe = PathBuf::from(crate::peers::kebbie_command()?);
     let Some(held) = acquire(&dir, &exe, 30)? else {
         let pid = holder(&dir).and_then(|running| running.pid).map_or("?".to_string(), |pid| pid.to_string());
         return Ok(format!("keeper: already running (pid {pid})"));
@@ -477,7 +477,7 @@ pub fn run() -> Result<String> {
     crate::login_env::import();
     let log = Log(dir.join(LOG));
     let me = Holder { pid: Some(std::process::id()), exe: Some(exe.to_string_lossy().to_string()), started: Some(crate::messages::now()) };
-    log.line(&format!("started: pid {}, kelpie {}, {}", std::process::id(), env!("CARGO_PKG_VERSION"), exe.display()));
+    log.line(&format!("started: pid {}, kebbie {}, {}", std::process::id(), env!("CARGO_PKG_VERSION"), exe.display()));
     let routines = routines();
     let mut tracks = vec![Track::default(); routines.len()];
     let mut ctx = Ctx::default();
@@ -493,7 +493,7 @@ pub fn run() -> Result<String> {
             break "[keeper] enabled = false".to_string();
         }
         if binary.replaced(identity(&exe)) {
-            break "a new kelpie binary is in place".to_string();
+            break "a new kebbie binary is in place".to_string();
         }
         let now = crate::messages::now();
         let ran = due(&routines, &tracks, now);
@@ -517,7 +517,7 @@ pub fn run() -> Result<String> {
         pause(wait(&routines, &tracks, crate::messages::now()));
     };
     log.line(&format!("exits: {reason}"));
-    let replaced = reason.starts_with("a new kelpie");
+    let replaced = reason.starts_with("a new kebbie");
     drop(held);
     if replaced {
         match spawn(&exe, &dir) {
@@ -539,17 +539,17 @@ mod tests {
     #[test]
     fn a_dead_keepers_lock_is_taken_over_and_a_live_one_is_not() {
         let dir = crate::sh::test_dir("keeper-lock");
-        fs::write(dir.join(LOCK), r#"{"pid":999999,"exe":"/old/kelpie","started":1}"#).unwrap();
+        fs::write(dir.join(LOCK), r#"{"pid":999999,"exe":"/old/kebbie","started":1}"#).unwrap();
         assert_eq!(holder(&dir), None, "a lock file nobody holds is no keeper, whatever pid it names");
-        let held = acquire(&dir, Path::new("/new/kelpie"), 1).unwrap().expect("a dead pid's lock is free");
+        let held = acquire(&dir, Path::new("/new/kebbie"), 1).unwrap().expect("a dead pid's lock is free");
         let running = holder(&dir).unwrap();
-        assert_eq!((running.pid, running.exe.as_deref()), (Some(std::process::id()), Some("/new/kelpie")));
-        assert!(acquire(&dir, Path::new("/other/kelpie"), 2).unwrap().is_none(), "a second keeper never runs beside the first");
+        assert_eq!((running.pid, running.exe.as_deref()), (Some(std::process::id()), Some("/new/kebbie")));
+        assert!(acquire(&dir, Path::new("/other/kebbie"), 2).unwrap().is_none(), "a second keeper never runs beside the first");
         assert_eq!(fs::metadata(dir.join(LOCK)).unwrap().permissions().mode() & 0o777, 0o600);
         assert!(held.still_ours());
         drop(held);
         assert_eq!(holder(&dir), None, "the lock goes with its holder");
-        let again = acquire(&dir, Path::new("/new/kelpie"), 1).unwrap().unwrap();
+        let again = acquire(&dir, Path::new("/new/kebbie"), 1).unwrap().unwrap();
         fs::remove_file(dir.join(LOCK)).unwrap();
         assert!(!again.still_ours(), "a removed state dir tells the keeper to go");
         fs::remove_dir_all(dir).unwrap();
@@ -593,7 +593,7 @@ mod tests {
     #[test]
     fn a_new_binary_is_seen_once_it_holds_still() {
         let dir = crate::sh::test_dir("keeper-binary");
-        let exe = dir.join("kelpie");
+        let exe = dir.join("kebbie");
         fs::write(&exe, "old").unwrap();
         let mut binary = Binary::new(identity(&exe));
         assert!(!binary.replaced(identity(&exe)));
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn the_status_names_the_pid_the_binary_and_each_routines_last_run() {
         let log = Path::new("/state/keeper.log");
-        let me = Holder { pid: Some(4242), exe: Some("/home/u/.local/share/kelpie/current/target/release/kelpie".to_string()), started: Some(10_000) };
+        let me = Holder { pid: Some(4242), exe: Some("/home/u/.local/share/kebbie/current/target/release/kebbie".to_string()), started: Some(10_000) };
         let routines = [routine("messages", 3), routine("restart", 60), routine("updates", 600)];
         let tracks = [
             Track { last: Some(17_198), ..Track::default() },
@@ -628,7 +628,7 @@ mod tests {
         let status = status_json(&me, &routines, &tracks, &["billing: restarts when idle".to_string()], 17_160);
         assert_eq!(render_status(true, Some(&me), Some(&status), log, 17_200), [
             "keeper: running, pid 4242, up 2h",
-            "binary: /home/u/.local/share/kelpie/current/target/release/kelpie",
+            "binary: /home/u/.local/share/kebbie/current/target/release/kebbie",
             "log: /state/keeper.log",
             "routines:",
             "  messages  every 3s   last 2s ago",
@@ -637,7 +637,7 @@ mod tests {
         ].join("\n"));
         let other = Holder { pid: Some(7), ..me.clone() };
         assert!(render_status(true, Some(&other), Some(&status), log, 17_200).ends_with("routines: none has run yet"), "another keeper's leftovers are not this one's");
-        assert_eq!(render_status(true, None, Some(&status), log, 17_200), "keeper: not running; kelpie keeper --start starts it, and so do herdr's startup and the board\nlog: /state/keeper.log");
+        assert_eq!(render_status(true, None, Some(&status), log, 17_200), "keeper: not running; kebbie keeper --start starts it, and so do herdr's startup and the board\nlog: /state/keeper.log");
         assert!(render_status(false, None, None, log, 0).starts_with(OFF));
         assert!(render_status(false, Some(&me), None, log, 17_200).contains("enabled = false: it stops at its next round"));
     }
@@ -661,7 +661,7 @@ mod tests {
         let me = Holder { pid: Some(std::process::id()), exe: None, started: None };
         fs::write(dir.join(STATUS), status_json(&me, &[], &[], &["api: restarts when idle".to_string()], 500).to_string()).unwrap();
         assert_eq!(stale_in(&dir), (0, Vec::new()), "no keeper holds the lock");
-        let held = acquire(&dir, Path::new("/kelpie"), 1).unwrap().unwrap();
+        let held = acquire(&dir, Path::new("/kebbie"), 1).unwrap().unwrap();
         assert_eq!(stale_in(&dir), (500, vec!["api: restarts when idle".to_string()]), "with the round's time, so a board can tell a reading from before an update");
         drop(held);
         fs::remove_dir_all(dir).unwrap();
@@ -671,7 +671,7 @@ mod tests {
     fn stopping_without_a_keeper_says_so_and_off_starts_nothing() {
         let dir = crate::sh::test_dir("keeper-off");
         assert_eq!(stop_in(&dir, Duration::from_millis(10)).unwrap(), "keeper: not running");
-        assert_eq!(start_in(&dir, Path::new("/no/such/kelpie"), false).unwrap(), OFF);
+        assert_eq!(start_in(&dir, Path::new("/no/such/kebbie"), false).unwrap(), OFF);
         assert!(!dir.join(LOG).exists(), "nothing was spawned");
         fs::remove_dir_all(dir).unwrap();
     }

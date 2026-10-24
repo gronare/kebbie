@@ -1,10 +1,10 @@
-# kelpie documentation
+# kebbie documentation
 
-New to kelpie? Start with the tutorial. Come back to the how-to guides when you have something to get done, to the reference when you need an exact name, and to the explanations when you want to know why. On a machine with kelpie installed, `kelpie docs <words>` finds the page.
+New to kebbie? Start with the tutorial. Come back to the how-to guides when you have something to get done, to the reference when you need an exact name, and to the explanations when you want to know why. On a machine with kebbie installed, `kebbie docs <words>` finds the page.
 
 ## Tutorial
 
-- [Your first task](tutorial.md): install kelpie, run one task in its own worktree and push it.
+- [Your first task](tutorial.md): install kebbie, run one task in its own worktree and push it.
 
 ## How-to guides
 
@@ -25,7 +25,7 @@ The lead
 - [Work while you are away](how-to/work-while-away.md): away mode and the summary when you are back.
 - [Get notifications](how-to/get-notifications.md): ntfy, macOS or any shell command.
 - [Fill the backlog](how-to/fill-the-backlog.md): local file, vault and Linear.
-- [Add a routine](how-to/add-a-routine.md): a check kelpie runs on a schedule as a task.
+- [Add a routine](how-to/add-a-routine.md): a check kebbie runs on a schedule as a task.
 
 Repos and worktrees
 
@@ -37,7 +37,7 @@ Repos and worktrees
 - [Decide what a task does with what it notices](how-to/decide-what-a-task-does-with-what-it-notices.md): file it, fix it or ask you.
 - [Let tasks run without permission prompts](how-to/let-tasks-run-without-prompts.md): bypass permissions mode, on an isolated machine.
 - [Give tasks a profile](how-to/give-tasks-a-profile.md): a model, role, skills and permissions for one kind of work.
-- [Run a task with Codex](how-to/run-a-task-with-codex.md): a profile with `agent = "codex"` and kelpie's Codex plugin.
+- [Run a task with Codex](how-to/run-a-task-with-codex.md): a profile with `agent = "codex"` and kebbie's Codex plugin.
 - [Add a release action to a repo](how-to/add-a-release-action.md): bump, tag and push from the Areas page.
 - [Share a team setup](how-to/share-a-team-setup.md): repo configs linked in from a team repo.
 
@@ -49,38 +49,39 @@ The vault
 Your machine
 
 - [Switch update channel](how-to/switch-update-channel.md): releases or every push to main.
+- [Move from kelpie to kebbie](how-to/move-from-kelpie.md): an install made under the old name, in four steps.
 - [Try unreleased code](how-to/try-unreleased-code.md): `--from` a branch or checkout, `--stable` back.
 - [Turn off automatic restarts](how-to/turn-off-automatic-restarts.md): restart stale sessions yourself.
 - [Show plan usage on the board](how-to/show-plan-usage.md): the status line command.
 - [Show task state in herdr's sidebar](how-to/show-task-state-in-the-sidebar.md): the sidebar sync.
-- [See your board on your phone](how-to/see-your-board-on-your-phone.md): connect a kelpie hub, add your phone, get notified.
-- [Fix common problems](how-to/troubleshoot.md): `kelpie doctor` and what each message means.
-- [Report a problem with kelpie](how-to/report-a-problem-with-kelpie.md): save it on the machine, send it to kelpie's maintainers, and see it rechecked after an update.
+- [See your board on your phone](how-to/see-your-board-on-your-phone.md): connect a kebbie hub, add your phone, get notified.
+- [Fix common problems](how-to/troubleshoot.md): `kebbie doctor` and what each message means.
+- [Report a problem with kebbie](how-to/report-a-problem-with-kebbie.md): save it on the machine, send it to kebbie's maintainers, and see it rechecked after an update.
 
-Working on kelpie
+Working on kebbie
 
-- [Develop kelpie](how-to/develop-kelpie.md): run kelpie from your own checkout.
-- [Release kelpie](how-to/release-kelpie.md): bump, tag and publish.
+- [Develop kebbie](how-to/develop-kebbie.md): run kebbie from your own checkout.
+- [Release kebbie](how-to/release-kebbie.md): bump, tag and publish.
 
 ## Reference
 
-- [Commands](reference/commands.md): every `kelpie` command and option.
+- [Commands](reference/commands.md): every `kebbie` command and option.
 - [Configuration](reference/configuration.md): layers, every key, notify events and area actions.
 - [Board](reference/board.md): layout, groups and every key, including the Areas page.
 - [Review split](reference/review-split.md): its keys and behaviour.
 - [Skills](reference/skills.md): the Claude Code plugin's skills and hooks.
 - [Files and paths](reference/files.md): config, state, the backlog file and the setup note.
-- [Environment variables](reference/environment.md): what kelpie reads and sets.
-- [Requirements](reference/requirements.md): tools, versions and what `kelpie doctor` checks.
+- [Environment variables](reference/environment.md): what kebbie reads and sets.
+- [Requirements](reference/requirements.md): tools, versions and what `kebbie doctor` checks.
 
 ## Explanation
 
-- [How kelpie fits together](explanation/architecture.md): the binary, the keeper, the two plugins, and the optional vault and hub.
+- [How kebbie fits together](explanation/architecture.md): the binary, the keeper, the two plugins, and the optional vault and hub.
 - [Trunk-based by design](explanation/trunk-based.md): why tasks land on the default branch with no pull request.
 - [The review gate](explanation/review-gate.md): the rules check, the read-only reviewer and what keeps a pass.
 - [The worktree pool](explanation/worktree-pool.md): why worktrees are kept and reused.
 - [The lead and away mode](explanation/lead-and-away-mode.md): what the lead holds, where it stops, and how it restarts.
 - [Routines](explanation/routines.md): scheduled checks that report, plan or fix.
-- [The trust boundary](explanation/trust-boundary.md): what kelpie guards against, and what it does not.
+- [The trust boundary](explanation/trust-boundary.md): what kebbie guards against, and what it does not.
 - [The vault](explanation/vault.md): what a task note adds, and two machines sharing one vault.
 - [Updates and stale sessions](explanation/updates-and-restarts.md): channels, overrides and restarts.

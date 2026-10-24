@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::sh::Result;
 
-pub const BIN_VAR: &str = "KELPIE_VAULT_BIN";
+pub const BIN_VAR: &str = "KEBBIE_VAULT_BIN";
 pub const NEEDS_UPDATE: &str = "claude plugin update vault@gronare";
 const TIMEOUT: Duration = Duration::from_secs(30);
 const STATUS_TTL: u64 = 600;
@@ -239,7 +239,7 @@ pub fn plugin(claude_home: &Path) -> Plugin {
     }
 }
 
-// "uvx notes-vault-mcp==0.5.1 hook session-start" -> the words before `hook`, so kelpie runs the plugin's own pin.
+// "uvx notes-vault-mcp==0.5.1 hook session-start" -> the words before `hook`, so kebbie runs the plugin's own pin.
 pub fn hook_prefix(hooks: &str) -> Option<Vec<String>> {
     fn commands(value: &Value, found: &mut Vec<String>) {
         match value {
@@ -301,7 +301,7 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
 }
 
-// The probe's verdict for this command, kept a while so a start, a push or an edit does not wait on uvx each time: (on, claims): whether kelpie keeps tasks in this vault, and whether its server writes cross-machine claims.
+// The probe's verdict for this command, kept a while so a start, a push or an edit does not wait on uvx each time: (on, claims): whether kebbie keeps tasks in this vault, and whether its server writes cross-machine claims.
 pub fn verdict_with(cli: &Cli, state: &Path, at: u64, probe: impl FnOnce(&Cli) -> Result<Probe>) -> (bool, bool) {
     let cached = read_json(&status_file(state)).filter(|cached| cached["command"] == cli.cache_key() && cached["at"].as_u64().is_some_and(|then| at.saturating_sub(then) < STATUS_TTL));
     if let Some(cached) = cached {
@@ -314,7 +314,7 @@ pub fn verdict_with(cli: &Cli, state: &Path, at: u64, probe: impl FnOnce(&Cli) -
     (on, claims)
 }
 
-// The vault kelpie keeps tasks in: the plugin is there, enabled and configured, and its server has the task commands; the board lives for days, so the verdict is the kept one and not the process's first.
+// The vault kebbie keeps tasks in: the plugin is there, enabled and configured, and its server has the task commands; the board lives for days, so the verdict is the kept one and not the process's first.
 pub fn detect() -> Option<Cli> {
     let cli = cli()?;
     let state = crate::lead::state_dir().ok()?;
@@ -364,7 +364,7 @@ pub mod fake {
 
     impl Fake {
         pub fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("kelpie-fake-vault-{name}-{}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("kebbie-fake-vault-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(dir.join("answers")).unwrap();
             let script = dir.join("vault");
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn a_new_pin_uv_has_not_seen_is_retried_once_with_refresh() {
-        let dir = std::env::temp_dir().join(format!("kelpie-vault-refresh-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-vault-refresh-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let uvx = dir.join("uvx");
         crate::executable::write(&uvx, "#!/bin/sh\necho \"$@\" >> \"$(dirname \"$0\")/argv.log\"\nif [ \"$1\" = --refresh ]; then echo '{\"missing\":[]}'; else echo 'requirements are unsatisfiable.' >&2; exit 1; fi\n").unwrap();
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn the_env_override_beats_the_machine_config_which_beats_the_plugin() {
-        let dir = std::env::temp_dir().join(format!("kelpie-vault-command-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-vault-command-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("hooks")).unwrap();
         std::fs::write(dir.join("hooks/hooks.json"), r#"{"hooks":{"Stop":[{"hooks":[{"command":"uvx notes-vault-mcp==0.6.0 hook stop"}]}]}}"#).unwrap();
         let plugin = Plugin::Enabled { id: "vault@gronare".to_string(), version: "0.3.0".to_string(), root: dir.clone() };
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn the_plugin_counts_only_when_installed_and_not_disabled() {
-        let home = std::env::temp_dir().join(format!("kelpie-vault-plugin-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("kebbie-vault-plugin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let root = home.join("plugins/cache/gronare/vault/0.2.15");
         std::fs::create_dir_all(root.join("hooks")).unwrap();
@@ -466,20 +466,20 @@ mod tests {
     #[test]
     fn each_call_sends_the_interface_arguments_and_reads_the_json_answer() {
         let fake = Fake::new("calls");
-        fake.answer("task-open", r#"{"path":"Projects/kelpie-billing.md","created":true,"repo":"kelpie","area":"kelpie"}"#);
+        fake.answer("task-open", r#"{"path":"Projects/kebbie-billing.md","created":true,"repo":"kebbie","area":"kebbie"}"#);
         fake.answer("task-check", r#"{"missing":["solution"]}"#);
-        fake.answer("log-append", r#"{"path":"Log/kelpie-logg.md"}"#);
-        let opened = fake.cli.open("billing", Path::new("/src/wt1.kelpie"), Some("billing"), Some("Projects/x.md")).unwrap();
-        assert_eq!(opened, Opened { path: "Projects/kelpie-billing.md".to_string(), created: true });
-        assert_eq!(fake.cli.missing("Projects/kelpie-billing.md", &["solution", "decisions"]).unwrap(), ["solution"]);
-        assert_eq!(fake.cli.log(Path::new("/src/wt1.kelpie"), Some("billing"), "billing: Add refunds", &["a1b2c3d"]).unwrap(), "Log/kelpie-logg.md");
+        fake.answer("log-append", r#"{"path":"Log/kebbie-logg.md"}"#);
+        let opened = fake.cli.open("billing", Path::new("/src/wt1.kebbie"), Some("billing"), Some("Projects/x.md")).unwrap();
+        assert_eq!(opened, Opened { path: "Projects/kebbie-billing.md".to_string(), created: true });
+        assert_eq!(fake.cli.missing("Projects/kebbie-billing.md", &["solution", "decisions"]).unwrap(), ["solution"]);
+        assert_eq!(fake.cli.log(Path::new("/src/wt1.kebbie"), Some("billing"), "billing: Add refunds", &["a1b2c3d"]).unwrap(), "Log/kebbie-logg.md");
         assert_eq!(fake.calls(), [
-            "task open --name billing --cwd /src/wt1.kelpie --branch billing --note Projects/x.md",
-            "task check Projects/kelpie-billing.md --need solution,decisions",
-            "log append --cwd /src/wt1.kelpie --branch billing --line billing: Add refunds --commit a1b2c3d",
+            "task open --name billing --cwd /src/wt1.kebbie --branch billing --note Projects/x.md",
+            "task check Projects/kebbie-billing.md --need solution,decisions",
+            "log append --cwd /src/wt1.kebbie --branch billing --line billing: Add refunds --commit a1b2c3d",
         ]);
-        fake.fail("task-close", "Traceback\nNoteNotFound: Projects/kelpie-billing.md");
-        assert_eq!(fake.cli.close("Projects/kelpie-billing.md").unwrap_err(), "vault task close: NoteNotFound: Projects/kelpie-billing.md");
+        fake.fail("task-close", "Traceback\nNoteNotFound: Projects/kebbie-billing.md");
+        assert_eq!(fake.cli.close("Projects/kebbie-billing.md").unwrap_err(), "vault task close: NoteNotFound: Projects/kebbie-billing.md");
     }
 
     #[test]
@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn a_vault_note_is_a_markdown_path_and_not_a_local_item_or_a_linear_id() {
-        assert!(is_note("Projects/kelpie-billing.md"));
+        assert!(is_note("Projects/kebbie-billing.md"));
         assert!(!is_note("ABC-12"));
         assert!(!is_note("local:Fix login.md"));
     }
@@ -611,15 +611,15 @@ mod tests {
     fn a_repos_log_note_is_asked_once_and_then_kept() {
         let fake = Fake::new("logs");
         let state = fake.state();
-        fake.answer("log-path", r#"{"path":"Log/kelpie-logg.md"}"#);
-        assert_eq!(log_note(&fake.cli, &state, "kelpie").as_deref(), Some("Log/kelpie-logg.md"));
-        assert_eq!(log_note(&fake.cli, &state, "kelpie").as_deref(), Some("Log/kelpie-logg.md"));
-        assert_eq!(fake.calls(), ["log path --repo kelpie"]);
+        fake.answer("log-path", r#"{"path":"Log/kebbie-logg.md"}"#);
+        assert_eq!(log_note(&fake.cli, &state, "kebbie").as_deref(), Some("Log/kebbie-logg.md"));
+        assert_eq!(log_note(&fake.cli, &state, "kebbie").as_deref(), Some("Log/kebbie-logg.md"));
+        assert_eq!(fake.calls(), ["log path --repo kebbie"]);
     }
 
     #[test]
     fn a_vault_command_that_will_not_run_is_an_error_and_not_a_panic() {
-        let dir = std::env::temp_dir().join(format!("kelpie-vault-missing-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-vault-missing-{}", std::process::id()));
         let missing = Cli::new(vec![dir.join("nothing-here").to_string_lossy().to_string()]);
         assert!(missing.probe(false).is_err());
     }

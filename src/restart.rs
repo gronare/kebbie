@@ -16,7 +16,7 @@ use crate::tasks;
 use crate::typing::Draft;
 
 pub const QUESTION_KIND: &str = "restart";
-const FROM: &str = "kelpie";
+const FROM: &str = "kebbie";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
@@ -62,14 +62,14 @@ impl Verdict {
             Verdict::Fresh => "up to date".to_string(),
             Verdict::Restart => "restarted".to_string(),
             Verdict::Busy | Verdict::Quiet if auto => "restarts when idle".to_string(),
-            Verdict::Busy | Verdict::Quiet => "busy: run kelpie restart when it waits".to_string(),
+            Verdict::Busy | Verdict::Quiet => "busy: run kebbie restart when it waits".to_string(),
             Verdict::Focused if auto => "you are in it: restarts when you leave it".to_string(),
-            Verdict::Focused => "you are in it: run kelpie restart from another pane".to_string(),
+            Verdict::Focused => "you are in it: run kebbie restart from another pane".to_string(),
             Verdict::Ask | Verdict::Asked => "waiting for your answer: background work running".to_string(),
             Verdict::Keep => "kept until its background work is done, then restarts when idle".to_string(),
-            Verdict::Manual => "stale: run kelpie restart when you want it".to_string(),
+            Verdict::Manual => "stale: run kebbie restart when you want it".to_string(),
             Verdict::Drafted if auto => "its input box holds text or cannot be read: restarts once it is empty".to_string(),
-            Verdict::Drafted => "its input box holds text or cannot be read: run kelpie restart once it is empty".to_string(),
+            Verdict::Drafted => "its input box holds text or cannot be read: run kebbie restart once it is empty".to_string(),
             Verdict::Skip(reason) => format!("skipped: {reason}"),
         }
     }
@@ -211,7 +211,7 @@ fn fingerprint(value: &Value) -> String {
     sha1_smol::Sha1::from(value.to_string()).digest().to_string()
 }
 
-// ~/.claude.json is rewritten all the time, so its MCP servers are fingerprinted and kelpie keeps when each fingerprint last changed; a key first seen in a file already watched counts as changed now.
+// ~/.claude.json is rewritten all the time, so its MCP servers are fingerprinted and kebbie keeps when each fingerprint last changed; a key first seen in a file already watched counts as changed now.
 pub fn observe_mcp(record: &Path, claude: &Value, now: u64) -> HashMap<String, u64> {
     let watched = record.exists();
     let mut seen: Map<String, Value> = std::fs::read_to_string(record).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()).and_then(|value| value.as_object().cloned()).unwrap_or_default();
@@ -284,7 +284,7 @@ impl Changes {
             reasons.push("MCP servers changed".to_string());
         }
         if self.updated.is_some_and(|at| at > started) {
-            reasons.push(KELPIE_UPDATE.to_string());
+            reasons.push(KEBBIE_UPDATE.to_string());
         }
         reasons
     }
@@ -446,34 +446,34 @@ fn load_restarted(state: &Path) -> Map<String, Value> {
     restarted_file(state).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| serde_json::from_str::<Value>(&text).ok()).and_then(|value| value.as_object().cloned()).unwrap_or_default()
 }
 
-pub const KELPIE_UPDATE: &str = "kelpie update";
+pub const KEBBIE_UPDATE: &str = "kebbie update";
 
 // The reasons a second restart cannot satisfy when the first left them standing: the pane's PATH starts the same Claude Code, or the restart did not give a task its role.
 fn sticky(entry: &Value) -> Vec<&str> {
     entry["reasons"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|reason| reason.starts_with("Claude Code ") || *reason == "a newer Claude Code" || *reason == NO_ROLE).collect()
 }
 
-// A session kelpie recorded starting on the installed kelpie already runs it, whatever the update's time says.
+// A session kebbie recorded starting on the installed kebbie already runs it, whatever the update's time says.
 pub fn on_installed(reasons: &mut Vec<String>, started: Option<&str>, installed: &str) {
     if started == Some(installed) {
-        reasons.retain(|reason| reason != KELPIE_UPDATE);
+        reasons.retain(|reason| reason != KEBBIE_UPDATE);
     }
 }
 
-// Why a stale session must not be restarted again: kelpie restarted it lately, or a restart left it where it was, on the same Claude Code or on the kelpie it was restarted to leave; `now` is the entry this restart would record.
+// Why a stale session must not be restarted again: kebbie restarted it lately, or a restart left it where it was, on the same Claude Code or on the kebbie it was restarted to leave; `now` is the entry this restart would record.
 pub fn held_back(last: Option<&Value>, now: &Value, manual: bool) -> Option<String> {
     let last = last?;
     let when = last["at"].as_u64()?;
     let at = now["at"].as_u64().unwrap_or(when);
     let reasons: Vec<&str> = now["reasons"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     let same_claude = !sticky(now).is_empty() && last["exe"] == now["exe"] && sticky(last) == sticky(now);
-    let same_kelpie = !manual && reasons.contains(&KELPIE_UPDATE) && !now["kelpie"].is_null() && last["kelpie"] == now["kelpie"] && last["started"] == now["started"];
-    let held = |reason: &&str| (same_claude && sticky(now).contains(reason)) || (same_kelpie && *reason == KELPIE_UPDATE);
+    let same_kebbie = !manual && reasons.contains(&KEBBIE_UPDATE) && !now["kebbie"].is_null() && last["kebbie"] == now["kebbie"] && last["started"] == now["started"];
+    let held = |reason: &&str| (same_claude && sticky(now).contains(reason)) || (same_kebbie && *reason == KEBBIE_UPDATE);
     if !reasons.is_empty() && reasons.iter().all(held) {
         return Some(if same_claude {
             format!("a restart brought back the same Claude Code ({}), so the pane starts that one; restarting again cannot update it", now["exe"].as_str().unwrap_or("?"))
         } else {
-            format!("a restart onto {} left it on {}; restarting again would not move it", now["kelpie"].as_str().unwrap_or("?"), now["started"].as_str().unwrap_or("an older kelpie"))
+            format!("a restart onto {} left it on {}; restarting again would not move it", now["kebbie"].as_str().unwrap_or("?"), now["started"].as_str().unwrap_or("an older kebbie"))
         });
     }
     (!manual && at.saturating_sub(when) < COOLDOWN).then(|| format!("restarted {} min ago; the next restart waits {} min", at.saturating_sub(when) / 60, COOLDOWN / 60))
@@ -550,7 +550,7 @@ impl SessionLock {
         if mtime(&path).is_some_and(|at| now().saturating_sub(at) > 300) {
             let _ = std::fs::remove_file(&path);
         }
-        std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|_| "another kelpie is restarting it".to_string())?;
+        std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|_| "another kebbie is restarting it".to_string())?;
         Ok(SessionLock(path))
     }
 }
@@ -577,9 +577,9 @@ fn wait_for_claude(pane: &str) -> Result<()> {
 
 fn perform(pane: &Pane, own: Option<&Path>, args: &[String], lead: bool) -> Result<tasks::Started> {
     if lead {
-        return match sh::attempt(&crate::peers::kelpie_command()?, &["lead", "--restart", "--anyway"], None)? {
+        return match sh::attempt(&crate::peers::kebbie_command()?, &["lead", "--restart", "--anyway"], None)? {
             Ok(_) => Ok(tasks::Started::Ready),
-            Err(stderr) if stderr.is_empty() => Err("kelpie lead --restart failed".to_string()),
+            Err(stderr) if stderr.is_empty() => Err("kebbie lead --restart failed".to_string()),
             Err(stderr) => Err(stderr),
         };
     }
@@ -656,7 +656,7 @@ pub fn mode_for(mode: Mode, lead: bool) -> Mode {
     }
 }
 
-// A restart on its own waits on a box kelpie cannot read, as it may hold a draft; one asked for goes ahead.
+// A restart on its own waits on a box kebbie cannot read, as it may hold a draft; one asked for goes ahead.
 pub fn with_draft(mode: Mode, verdict: Verdict, draft: impl FnOnce() -> Draft) -> Verdict {
     if verdict != Verdict::Restart {
         return verdict;
@@ -726,7 +726,7 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
         counted(index, total);
         let line = |verdict: &Verdict| Line { label: pane.label.clone(), said: verdict.words(auto), stale: verdict.stale() };
         if pane.agent != Agent::Claude {
-            lines.push(line(&Verdict::Skip(format!("kelpie restarts Claude sessions; {} is left as it runs", pane.agent.name()))));
+            lines.push(line(&Verdict::Skip(format!("kebbie restarts Claude sessions; {} is left as it runs", pane.agent.name()))));
             continue;
         }
         let Some(session) = pane.session.clone() else {
@@ -750,16 +750,16 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
         if process.argv.as_deref().is_some_and(|argv| pane.agent.lacks_role(argv)) && cwd.as_deref().and_then(tasks::task_at).is_some() {
             reasons.push(NO_ROLE.to_string());
         }
-        let (kelpie, started_on) = if reasons.iter().any(|reason| reason == KELPIE_UPDATE) {
+        let (kebbie, started_on) = if reasons.iter().any(|reason| reason == KEBBIE_UPDATE) {
             let address = if lead { Some(crate::status::LEAD_LABEL.to_string()) } else { cwd.as_deref().and_then(tasks::task_at).and_then(|(repo, slot)| Some(crate::peers::address(slot.task.as_deref()?, &crate::repo::name_of(&repo)))) };
             let started_on = address.and_then(|address| crate::known::load_in(&crate::lead::roles_dir().ok()?, &address)).and_then(|record| record.started);
-            let kelpie = installed.get_or_insert_with(crate::known::installed).clone();
-            on_installed(&mut reasons, started_on.as_deref(), &kelpie);
-            (Some(kelpie), started_on)
+            let kebbie = installed.get_or_insert_with(crate::known::installed).clone();
+            on_installed(&mut reasons, started_on.as_deref(), &kebbie);
+            (Some(kebbie), started_on)
         } else {
             (None, None)
         };
-        let record = json!({ "at": at, "exe": exe.as_deref().map(|exe| exe.to_string_lossy().to_string()), "reasons": reasons, "kelpie": kelpie, "started": started_on });
+        let record = json!({ "at": at, "exe": exe.as_deref().map(|exe| exe.to_string_lossy().to_string()), "reasons": reasons, "kebbie": kebbie, "started": started_on });
         if !reasons.is_empty() && let Some(why) = held_back(restarted.get(&session), &record, matches!(mode, Mode::Manual { .. })) {
             lines.push(Line { label: pane.label.clone(), said: format!("stale, held: {why}"), stale: lead });
             continue;
@@ -867,8 +867,8 @@ mod tests {
     use super::*;
     use crate::agent::claude::{lacks_role, resume_args, with_role};
 
-    fn entry(at: u64, exe: &str, reasons: &[&str], kelpie: Option<&str>, started: Option<&str>) -> Value {
-        json!({ "at": at, "exe": exe, "reasons": reasons, "kelpie": kelpie, "started": started })
+    fn entry(at: u64, exe: &str, reasons: &[&str], kebbie: Option<&str>, started: Option<&str>) -> Value {
+        json!({ "at": at, "exe": exe, "reasons": reasons, "kebbie": kebbie, "started": started })
     }
 
     #[test]
@@ -879,44 +879,44 @@ mod tests {
         assert!(held_back(Some(&last), &entry(99_999, old, &reasons, None, None), true).unwrap().contains("same Claude Code"), "a restart that brought back the same Claude is never repeated, not even by hand");
         assert!(held_back(Some(&last), &entry(1000 + 60, newer, &reasons, None, None), false).unwrap().contains("restarted 1 min ago"), "the routine waits out the cooldown");
         assert_eq!(held_back(Some(&last), &entry(1000 + COOLDOWN, newer, &reasons, None, None), false), None);
-        assert_eq!(held_back(Some(&last), &entry(1000 + 60, newer, &reasons, None, None), true), None, "kelpie restart by hand skips the cooldown");
+        assert_eq!(held_back(Some(&last), &entry(1000 + 60, newer, &reasons, None, None), true), None, "kebbie restart by hand skips the cooldown");
         assert_eq!(held_back(None, &entry(1000, old, &reasons, None, None), false), None);
     }
 
     #[test]
-    fn each_kelpie_update_restarts_a_session_again_on_the_same_claude_code() {
+    fn each_kebbie_update_restarts_a_session_again_on_the_same_claude_code() {
         let exe = "/Users/u/.local/share/claude/versions/2.1.310";
-        let last = entry(1000, exe, &[KELPIE_UPDATE, "plugin kelpie updated"], Some("kelpie 0.30.0"), Some("kelpie 0.29.0"));
-        let next = entry(1000 + COOLDOWN, exe, &[KELPIE_UPDATE, "plugin kelpie updated"], Some("kelpie 0.31.0"), Some("kelpie 0.30.0"));
-        assert_eq!(held_back(Some(&last), &next, false), None, "the next kelpie update restarts it again");
-        let before = json!({ "at": 1000, "exe": exe, "reasons": [KELPIE_UPDATE, "plugin kelpie updated"] });
-        assert_eq!(held_back(Some(&before), &entry(1000 + COOLDOWN, exe, &[KELPIE_UPDATE, "plugin kelpie updated"], Some("kelpie 0.31.0"), Some("kelpie 0.30.0")), false), None, "a record from before kelpie kept versions holds nothing back");
+        let last = entry(1000, exe, &[KEBBIE_UPDATE, "plugin kebbie updated"], Some("kebbie 0.30.0"), Some("kebbie 0.29.0"));
+        let next = entry(1000 + COOLDOWN, exe, &[KEBBIE_UPDATE, "plugin kebbie updated"], Some("kebbie 0.31.0"), Some("kebbie 0.30.0"));
+        assert_eq!(held_back(Some(&last), &next, false), None, "the next kebbie update restarts it again");
+        let before = json!({ "at": 1000, "exe": exe, "reasons": [KEBBIE_UPDATE, "plugin kebbie updated"] });
+        assert_eq!(held_back(Some(&before), &entry(1000 + COOLDOWN, exe, &[KEBBIE_UPDATE, "plugin kebbie updated"], Some("kebbie 0.31.0"), Some("kebbie 0.30.0")), false), None, "a record from before kebbie kept versions holds nothing back");
         assert_eq!(held_back(Some(&entry(1000, exe, &["plugin vault updated"], None, None)), &entry(1000 + COOLDOWN, exe, &["plugin vault updated"], None, None), false), None, "a later plugin update restarts it again");
-        let claude_too = entry(1000 + COOLDOWN, exe, &["a newer Claude Code", KELPIE_UPDATE], Some("kelpie 0.31.0"), Some("kelpie 0.30.0"));
-        assert_eq!(held_back(Some(&entry(1000, exe, &["a newer Claude Code"], None, None)), &claude_too, false), None, "a held Claude Code does not hold back the new kelpie");
+        let claude_too = entry(1000 + COOLDOWN, exe, &["a newer Claude Code", KEBBIE_UPDATE], Some("kebbie 0.31.0"), Some("kebbie 0.30.0"));
+        assert_eq!(held_back(Some(&entry(1000, exe, &["a newer Claude Code"], None, None)), &claude_too, false), None, "a held Claude Code does not hold back the new kebbie");
     }
 
     #[test]
-    fn a_restart_that_left_the_session_on_its_kelpie_is_not_repeated_by_the_routine() {
+    fn a_restart_that_left_the_session_on_its_kebbie_is_not_repeated_by_the_routine() {
         let exe = "/v/2.1.310";
-        let last = entry(1000, exe, &[KELPIE_UPDATE], Some("kelpie 0.31.0"), Some("kelpie 0.30.0"));
-        let again = entry(1000 + 10 * COOLDOWN, exe, &[KELPIE_UPDATE], Some("kelpie 0.31.0"), Some("kelpie 0.30.0"));
-        assert_eq!(held_back(Some(&last), &again, false).unwrap(), "a restart onto kelpie 0.31.0 left it on kelpie 0.30.0; restarting again would not move it");
-        assert_eq!(held_back(Some(&last), &again, true), None, "kelpie restart by hand tries again");
-        let mut reasons = vec![KELPIE_UPDATE.to_string(), "plugin kelpie updated".to_string()];
-        on_installed(&mut reasons, Some("kelpie 0.30.0"), "kelpie 0.31.0");
-        assert_eq!(reasons, [KELPIE_UPDATE, "plugin kelpie updated"], "a session on an older kelpie is stale for the update");
-        on_installed(&mut reasons, Some("kelpie 0.31.0"), "kelpie 0.31.0");
-        assert_eq!(reasons, ["plugin kelpie updated"], "a session that started on the installed kelpie is not");
-        on_installed(&mut reasons, None, "kelpie 0.31.0");
-        assert_eq!(reasons, ["plugin kelpie updated"]);
+        let last = entry(1000, exe, &[KEBBIE_UPDATE], Some("kebbie 0.31.0"), Some("kebbie 0.30.0"));
+        let again = entry(1000 + 10 * COOLDOWN, exe, &[KEBBIE_UPDATE], Some("kebbie 0.31.0"), Some("kebbie 0.30.0"));
+        assert_eq!(held_back(Some(&last), &again, false).unwrap(), "a restart onto kebbie 0.31.0 left it on kebbie 0.30.0; restarting again would not move it");
+        assert_eq!(held_back(Some(&last), &again, true), None, "kebbie restart by hand tries again");
+        let mut reasons = vec![KEBBIE_UPDATE.to_string(), "plugin kebbie updated".to_string()];
+        on_installed(&mut reasons, Some("kebbie 0.30.0"), "kebbie 0.31.0");
+        assert_eq!(reasons, [KEBBIE_UPDATE, "plugin kebbie updated"], "a session on an older kebbie is stale for the update");
+        on_installed(&mut reasons, Some("kebbie 0.31.0"), "kebbie 0.31.0");
+        assert_eq!(reasons, ["plugin kebbie updated"], "a session that started on the installed kebbie is not");
+        on_installed(&mut reasons, None, "kebbie 0.31.0");
+        assert_eq!(reasons, ["plugin kebbie updated"]);
     }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kelpie-restart-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let dir = std::env::temp_dir().join(format!("kebbie-restart-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -934,7 +934,7 @@ mod tests {
         assert_eq!(decide(ROUTINE, true, &facts(true, true, false, 600), none), Verdict::Restart);
         assert_eq!(decide(ROUTINE, true, &facts(true, true, false, 599), none), Verdict::Quiet);
         assert_eq!(decide(ROUTINE, true, &facts(false, true, false, 9999), none), Verdict::Fresh);
-        assert_eq!(decide(Mode::Update, true, &facts(true, true, false, 0), none), Verdict::Restart, "kelpie update does not wait the idle minutes");
+        assert_eq!(decide(Mode::Update, true, &facts(true, true, false, 0), none), Verdict::Restart, "kebbie update does not wait the idle minutes");
         assert_eq!(decide(Mode::Manual { all: false }, true, &facts(false, true, false, 0), none), Verdict::Fresh);
         assert_eq!(decide(Mode::Manual { all: true }, true, &facts(false, true, false, 0), none), Verdict::Restart, "--all restarts a free session that is current");
     }
@@ -960,12 +960,12 @@ mod tests {
     }
 
     #[test]
-    fn with_auto_off_the_routine_and_update_leave_every_session_and_only_kelpie_restart_acts() {
+    fn with_auto_off_the_routine_and_update_leave_every_session_and_only_kebbie_restart_acts() {
         let mut looked = false;
         assert_eq!(decide(ROUTINE, false, &facts(true, true, false, 99_999), || { looked = true; true }), Verdict::Manual);
         assert!(!looked, "the routine never looks for background work, so it never asks");
         assert_eq!(decide(Mode::Update, false, &facts(true, true, false, 0), || false), Verdict::Manual);
-        assert_eq!(Verdict::Manual.words(false), "stale: run kelpie restart when you want it");
+        assert_eq!(Verdict::Manual.words(false), "stale: run kebbie restart when you want it");
         assert!(Verdict::Manual.stale(), "the board still marks it");
         assert_eq!(decide(Mode::Manual { all: false }, false, &facts(true, true, false, 0), || false), Verdict::Restart);
         assert_eq!(decide(Mode::Manual { all: false }, false, &facts(true, true, true, 0), || false), Verdict::Focused);
@@ -986,8 +986,8 @@ mod tests {
     #[test]
     fn a_refused_lead_restart_holds_nothing_back_and_a_real_failure_is_recorded_and_told() {
         let mut restarted = Map::new();
-        let attempt = entry(1000, "/v/2.1.304", &[KELPIE_UPDATE], Some("kelpie 0.31.0"), None);
-        let next = entry(1060, "/v/2.1.304", &[KELPIE_UPDATE], Some("kelpie 0.31.0"), None);
+        let attempt = entry(1000, "/v/2.1.304", &[KEBBIE_UPDATE], Some("kebbie 0.31.0"), None);
+        let next = entry(1060, "/v/2.1.304", &[KEBBIE_UPDATE], Some("kebbie 0.31.0"), None);
         let refused: Result<tasks::Started> = Err("Not restarted: the lead is working.".to_string());
         assert!(!note_attempt(&mut restarted, "s1", attempt.clone(), &refused));
         assert!(held_back(restarted.get("s1"), &next, false).is_none(), "the next round tries again");
@@ -1009,7 +1009,7 @@ mod tests {
         }
         assert_eq!(with_draft(ROUTINE, Verdict::Restart, || Draft::Unreadable), Verdict::Drafted);
         assert_eq!(with_draft(Mode::Update, Verdict::Restart, || Draft::Unreadable), Verdict::Drafted);
-        assert_eq!(with_draft(Mode::Manual { all: false }, Verdict::Restart, || Draft::Unreadable), Verdict::Restart, "kelpie restart by hand goes ahead");
+        assert_eq!(with_draft(Mode::Manual { all: false }, Verdict::Restart, || Draft::Unreadable), Verdict::Restart, "kebbie restart by hand goes ahead");
         assert_eq!(with_draft(ROUTINE, Verdict::Busy, || panic!("a busy session's box is not read")), Verdict::Busy);
     }
 
@@ -1044,8 +1044,8 @@ mod tests {
 
     #[test]
     fn a_restart_that_waits_at_the_trust_prompt_tells_the_board_to_answer_it_rather_than_that_it_runs() {
-        let reasons = ["kelpie was rebuilt".to_string()];
-        assert_eq!(restarted_said("billing@app", &reasons, &tasks::Started::Ready), "Restarted billing@app with claude --resume, as it ran older code (kelpie was rebuilt).");
+        let reasons = ["kebbie was rebuilt".to_string()];
+        assert_eq!(restarted_said("billing@app", &reasons, &tasks::Started::Ready), "Restarted billing@app with claude --resume, as it ran older code (kebbie was rebuilt).");
         let waits = restarted_said("billing@app", &reasons, &tasks::Started::AwaitsTrust);
         assert!(waits.contains("asks whether you trust its folder") && waits.contains("Answer it there, and it resumes its conversation") && !waits.contains("with claude --resume"), "{waits}");
         let source = include_str!("restart.rs").split("#[cfg(test)]").next().unwrap();
@@ -1063,7 +1063,7 @@ mod tests {
         let source = include_str!("restart.rs");
         let perform = &source[source.find("\nfn perform(").unwrap()..];
         let perform = &perform[..perform.find("\n}\n").unwrap()];
-        assert!(perform.find("tasks::task_role").unwrap() < perform.find(".end(&pane.pane)").unwrap() && perform.contains("with_role(args, &settings, &role)"), "every task Claude kelpie resumes runs with its settings and role, written before the old one ends");
+        assert!(perform.find("tasks::task_role").unwrap() < perform.find(".end(&pane.pane)").unwrap() && perform.contains("with_role(args, &settings, &role)"), "every task Claude kebbie resumes runs with its settings and role, written before the old one ends");
     }
 
     #[test]
@@ -1075,7 +1075,7 @@ mod tests {
         let (settings, role) = (settings.to_string_lossy().to_string(), role.to_string_lossy().to_string());
         assert!(!lacks_role(&argv(&["claude", "--settings", &settings, "--append-system-prompt-file", &role, "--resume", "id"])));
         assert!(!lacks_role(&argv(&["claude", &format!("--settings={settings}"), &format!("--append-system-prompt-file={role}")])));
-        assert!(lacks_role(&argv(&["claude", "--permission-mode", "acceptEdits", "--resume", "id"])), "started before kelpie gave tasks a role");
+        assert!(lacks_role(&argv(&["claude", "--permission-mode", "acceptEdits", "--resume", "id"])), "started before kebbie gave tasks a role");
         assert!(lacks_role(&argv(&["claude", "--settings", &settings, "--resume", "id"])));
         assert!(lacks_role(&argv(&["claude", "--settings", &settings, "--append-system-prompt-file", &format!("{role}.gone")])), "its role file was lost");
         let source = include_str!("restart.rs").split("#[cfg(test)]").next().unwrap();
@@ -1084,8 +1084,8 @@ mod tests {
     }
 
     #[test]
-    fn a_command_line_kelpie_cannot_place_is_refused_rather_than_restarted_blind() {
-        assert!(resume_args(&argv(&["claude", "--brand-new-flag", "maybe a prompt"]), "id").unwrap_err().contains("--brand-new-flag, an option kelpie does not know"));
+    fn a_command_line_kebbie_cannot_place_is_refused_rather_than_restarted_blind() {
+        assert!(resume_args(&argv(&["claude", "--brand-new-flag", "maybe a prompt"]), "id").unwrap_err().contains("--brand-new-flag, an option kebbie does not know"));
         assert!(resume_args(&argv(&["claude", "-p", "hi"]), "id").unwrap_err().contains("-p"));
         assert!(resume_args(&argv(&["vim", "x"]), "id").unwrap_err().contains("not claude"));
         assert!(resume_args(&argv(&["claude", "--model"]), "id").unwrap_err().contains("--model has no value"));
@@ -1116,13 +1116,13 @@ mod tests {
         assert_eq!(replaced.reasons(Some(Path::new("/usr/bin/node")), 100, None), ["a newer Claude Code"]);
         assert!(replaced.reasons(Some(Path::new("/v/2.1.304")), 300, None).is_empty());
         let plugin = |id: &str, updated: u64, project: Option<&str>| Plugin { id: id.to_string(), updated, project: project.map(PathBuf::from) };
-        let plugins = Changes { plugins: vec![plugin("vault@gronare", 500, None), plugin("kelpie@kelpie", 50, None), plugin("local@x", 900, Some("/repo"))], ..changes() };
+        let plugins = Changes { plugins: vec![plugin("vault@gronare", 500, None), plugin("kebbie@kebbie", 50, None), plugin("local@x", 900, Some("/repo"))], ..changes() };
         assert_eq!(plugins.reasons(Some(Path::new("/v/2.1.304")), 100, Some(Path::new("/elsewhere"))), ["plugin vault updated"]);
         assert_eq!(plugins.reasons(Some(Path::new("/v/2.1.304")), 100, Some(Path::new("/repo/sub"))), ["plugin vault, local updated"]);
         assert!(plugins.reasons(Some(Path::new("/v/2.1.304")), 1000, None).is_empty());
         let mcp = Changes { mcp: HashMap::from([("project:/repo".to_string(), 500), ("user".to_string(), 10)]), updated: Some(700), ..changes() };
-        assert_eq!(mcp.reasons(Some(Path::new("/v/2.1.304")), 100, Some(Path::new("/repo/a"))), ["MCP servers changed", "kelpie update"]);
-        assert_eq!(mcp.reasons(Some(Path::new("/v/2.1.304")), 100, Some(Path::new("/other"))), ["kelpie update"]);
+        assert_eq!(mcp.reasons(Some(Path::new("/v/2.1.304")), 100, Some(Path::new("/repo/a"))), ["MCP servers changed", "kebbie update"]);
+        assert_eq!(mcp.reasons(Some(Path::new("/v/2.1.304")), 100, Some(Path::new("/other"))), ["kebbie update"]);
     }
 
     #[test]
@@ -1135,11 +1135,11 @@ mod tests {
     }
 
     #[test]
-    fn an_mcp_change_is_dated_by_kelpie_from_the_first_look_on() {
+    fn an_mcp_change_is_dated_by_kebbie_from_the_first_look_on() {
         let dir = scratch("mcp");
         let record = dir.join("mcp.json");
         let first = json!({ "mcpServers": { "a": { "command": "x" } }, "projects": { "/repo": { "mcpServers": {} } } });
-        assert_eq!(observe_mcp(&record, &first, 100), HashMap::from([("user".to_string(), 0)]), "what was there before kelpie looked has no change time");
+        assert_eq!(observe_mcp(&record, &first, 100), HashMap::from([("user".to_string(), 0)]), "what was there before kebbie looked has no change time");
         assert_eq!(observe_mcp(&record, &first, 200), HashMap::from([("user".to_string(), 0)]));
         let added = json!({ "mcpServers": { "a": { "command": "x" } }, "projects": { "/repo": { "mcpServers": { "b": {} } } } });
         assert_eq!(observe_mcp(&record, &added, 300)["project:/repo"], 300);
@@ -1219,7 +1219,7 @@ mod tests {
         let mut anonymous = agent.clone();
         anonymous["agent_session"] = Value::Null;
         assert_eq!(Pane::from_agent(&anonymous).unwrap().session, None);
-        assert_eq!(Pane::from_agent(&json!({ "agent": "codex", "pane_id": "p" })).map(|pane| pane.agent), Some(Agent::Codex), "a Codex pane is kelpie's");
+        assert_eq!(Pane::from_agent(&json!({ "agent": "codex", "pane_id": "p" })).map(|pane| pane.agent), Some(Agent::Codex), "a Codex pane is kebbie's");
         assert!(Pane::from_agent(&json!({ "agent": "gemini", "pane_id": "p" })).is_none());
     }
 

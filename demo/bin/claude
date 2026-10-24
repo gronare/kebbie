@@ -13,10 +13,10 @@ import textwrap
 import time
 import tty
 
-demo = os.environ.get("KDEMO_DIR", "/tmp/kelpie-demo")
+demo = os.environ.get("KDEMO_DIR", "/tmp/kebbie-demo")
 
 
-# kelpie's rules check asks a reviewer for a verdict on stdin; the demo's is $KDEMO_DIR/verdicts/<branch>, or a pass.
+# kebbie's rules check asks a reviewer for a verdict on stdin; the demo's is $KDEMO_DIR/verdicts/<branch>, or a pass.
 def rules_verdict():
     brief = "" if sys.stdin.isatty() else sys.stdin.read()
     if "this is a rules check" not in brief:
@@ -134,7 +134,7 @@ def draw(state, tick):
     sys.stdout.flush()
 
 
-# kelpie checks the transcript for what it typed, so a submitted prompt lands there as the user's message, as in Claude Code.
+# kebbie checks the transcript for what it typed, so a submitted prompt lands there as the user's message, as in Claude Code.
 def submit(text):
     if not read_script().startswith(f"> {text}\n"):
         with open(script_file, "a") as screen:

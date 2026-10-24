@@ -4,7 +4,7 @@
 
 Read a task's diff next to its Claude and send it comments line by line.
 
-1. Select the task on the board and press `r`. Or, in the task's Claude, run `/kelpie:review-split`.
+1. Select the task on the board and press `r`. Or, in the task's Claude, run `/kebbie:review-split`.
 
    A split opens next to Claude with the task's files in review order.
 
@@ -18,6 +18,6 @@ Read a task's diff next to its Claude and send it comments line by line.
 
 To edit a file yourself, press `o` in the diff. Save, then `ctrl-q` back to the diff; Claude is told which lines you edited.
 
-To open the split on every task automatically, turn on `auto_open`: `/plugin` → Installed → kelpie → Configure.
+To open the split on every task automatically, turn on `auto_open`: `/plugin` → Installed → kebbie → Configure.
 
 Every key: [Review split](../reference/review-split.md).

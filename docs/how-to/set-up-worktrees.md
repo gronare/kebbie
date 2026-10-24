@@ -7,7 +7,7 @@ Make every new worktree of a repo runnable on its own: dependencies, gitignored 
 In a Claude session in the repo's main checkout:
 
 ```text
-/kelpie:make-worktree-safe
+/kebbie:make-worktree-safe
 ```
 
 It audits the repo for what breaks across worktrees: fixed ports, shared databases and services, gitignored inputs, absolute paths and shared caches. When you say yes, it writes `bin/setup-worktree`, the port fix and a `## Working in a worktree` section, in a worktree for you to review. You run the script; Claude never starts it on its own.
@@ -32,7 +32,7 @@ The setup skill runs `bin/setup-worktree` whenever a repo has one.
 Name it in the repo config:
 
 ```toml
-# ~/.config/kelpie/repos/app.toml
+# ~/.config/kebbie/repos/app.toml
 [worktree]
 setup_command = "script/prepare_worktree"
 ```
@@ -49,9 +49,9 @@ setup_skill = "my-tools:set-up-worktree"
 ## Check a worktree's setup
 
 ```bash
-kelpie list
+kebbie list
 ```
 
-Each worktree shows the first line of its setup note. The full note is at `$(git rev-parse --git-dir)/kelpie-setup.md` inside the worktree.
+Each worktree shows the first line of its setup note. The full note is at `$(git rev-parse --git-dir)/kebbie-setup.md` inside the worktree.
 
 See also: [The worktree pool](../explanation/worktree-pool.md).

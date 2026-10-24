@@ -29,15 +29,15 @@ fn short_head(root: &Path) -> Option<String> {
 
 fn labels(channel: Channel, request: &Request, running: Option<&release::Override>) -> (String, &'static str) {
     match (request, running) {
-        (Request::From(from), _) => (format!("Fetching {from}"), "Build kelpie"),
-        (Request::Channel, Some(running)) => (format!("Fetching {}", running.name()), "Build kelpie"),
-        _ if channel == Channel::Release => ("Finding the latest release".to_string(), "Download kelpie"),
-        _ => ("Fetching main".to_string(), "Build kelpie"),
+        (Request::From(from), _) => (format!("Fetching {from}"), "Build kebbie"),
+        (Request::Channel, Some(running)) => (format!("Fetching {}", running.name()), "Build kebbie"),
+        _ if channel == Channel::Release => ("Finding the latest release".to_string(), "Download kebbie"),
+        _ => ("Fetching main".to_string(), "Build kebbie"),
     }
 }
 
 pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcome> {
-    let plugin = kelpie_plugin()?;
+    let plugin = kebbie_plugin()?;
     let root = plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).map(PathBuf::from);
     let channel = config::channel()?;
     let state = lead::state_dir()?;
@@ -64,14 +64,14 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
         let running = release::read_override(&state);
         let mut details = versions(&before, &after);
         details.insert(0, match &running {
-            Some(running) => format!("kelpie is {}", running.describe(channel)),
-            None => format!("kelpie follows the {} channel", channel.key()),
+            Some(running) => format!("kebbie is {}", running.describe(channel)),
+            None => format!("kebbie follows the {} channel", channel.key()),
         });
         details.extend(crate::lead_restart::versions().map(|(from, to)| format!("lead: runs {from}; {to} is installed")));
         details.push(String::new());
         details.extend(lines);
-        let version = after.iter().find(|component| component.name == update_check::KELPIE).and_then(|component| component.installed.clone()).unwrap_or_default();
-        let was = before.iter().find(|component| component.name == update_check::KELPIE).and_then(|component| component.installed.clone());
+        let version = after.iter().find(|component| component.name == update_check::KEBBIE).and_then(|component| component.installed.clone()).unwrap_or_default();
+        let was = before.iter().find(|component| component.name == update_check::KEBBIE).and_then(|component| component.installed.clone());
         let main = channel == Channel::Main || running.is_some();
         let olds = old_commits(&before, old_head.as_deref());
         let notes = root.as_deref().map(|root| changes::for_update(root, &olds, was.as_deref(), &version, main)).unwrap_or_default();
@@ -97,9 +97,9 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
     outcome
 }
 
-// A checkout can reach the new commit before the update runs, when kelpie is developed in it, so the binary's own commit says best where the update came from.
+// A checkout can reach the new commit before the update runs, when kebbie is developed in it, so the binary's own commit says best where the update came from.
 fn old_commits(before: &[Component], old_head: Option<&str>) -> Vec<String> {
-    let built = before.iter().find(|component| component.name == update_check::KELPIE).and_then(|component| component.built.clone());
+    let built = before.iter().find(|component| component.name == update_check::KEBBIE).and_then(|component| component.built.clone());
     built.into_iter().chain(old_head.map(str::to_string)).collect()
 }
 
@@ -117,7 +117,7 @@ pub fn bug_line(title: &str) -> String {
 
 pub fn text(outcome: &Outcome, bugs: &[String]) -> String {
     let summary = &outcome.summary;
-    let mut lines = vec![if summary.version.is_empty() { "✓ Updated kelpie".to_string() } else { format!("✓ Updated kelpie {}", summary.version) }, String::new()];
+    let mut lines = vec![if summary.version.is_empty() { "✓ Updated kebbie".to_string() } else { format!("✓ Updated kebbie {}", summary.version) }, String::new()];
     if summary.new.is_empty() && summary.fixed.is_empty() && bugs.is_empty() {
         lines.push("No notes for this update".to_string());
     }
@@ -136,11 +136,11 @@ pub fn text(outcome: &Outcome, bugs: &[String]) -> String {
 
 // The steps after the build run on the binary just built, so a fix to them reaches the update that installs it.
 fn finish_on_new_binary(claude_dir: &Path, root: Option<&Path>, progress: &Path) -> Vec<String> {
-    let built = root.map(|root| root.join("target/release/kelpie")).filter(|binary| binary.is_file());
+    let built = root.map(|root| root.join("target/release/kebbie")).filter(|binary| binary.is_file());
     let env = format!("{}={}", progress::ENV, progress.display());
     match built.map(|binary| sh::run("env", &[&env, &binary.to_string_lossy(), "update", "--finish"], None)) {
         Some(Ok(output)) => output.lines().map(str::to_string).collect(),
-        Some(Err(error)) => vec![format!("the new kelpie could not finish the update ({error}); this one does")].into_iter().chain(finish(claude_dir, Some(progress)).unwrap_or_else(|error| vec![error])).collect(),
+        Some(Err(error)) => vec![format!("the new kebbie could not finish the update ({error}); this one does")].into_iter().chain(finish(claude_dir, Some(progress)).unwrap_or_else(|error| vec![error])).collect(),
         None => finish(claude_dir, Some(progress)).unwrap_or_else(|error| vec![error]),
     }
 }
@@ -177,7 +177,7 @@ fn count(tracker: &mut Option<Tracker>, what: &str, done: usize, total: usize) {
 }
 
 fn finish_in(claude_dir: &Path, state: &Path, tracker: &mut Option<Tracker>) -> Result<Vec<String>> {
-    let plugin = kelpie_plugin()?;
+    let plugin = kebbie_plugin()?;
     let root = plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).map(PathBuf::from);
     let channel = config::channel()?;
     let running = release::read_override(state);
@@ -188,6 +188,8 @@ fn finish_in(claude_dir: &Path, state: &Path, tracker: &mut Option<Tracker>) -> 
     let mut lines = vec![claude_plugin(claude_dir, &setup::claude_bin(), root.as_deref(), channel == Channel::Main && running.is_none())];
     count(tracker, "plugins", 1, plugins);
     lines.extend(vault_plugin(claude_dir, &setup::claude_bin()));
+    let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    lines.extend(crate::old_name::update_line(&crate::old_name::places_now(&home, claude_dir, &setup::claude_bin(), &herdr::bin(), &setup::herdr_config_path(&home))));
     count(tracker, "plugins", plugins, plugins);
     step(tracker, progress::PLUGINS, if vault_installed { "Updated the Claude Code and vault plugins" } else { "Updated the Claude Code plugin" }, true);
     step(tracker, progress::RESTART, "Restarting sessions", false);
@@ -202,7 +204,7 @@ fn finish_in(claude_dir: &Path, state: &Path, tracker: &mut Option<Tracker>) -> 
     said.extend(board_summary(&board));
     lines.push(board);
     lines.extend(crate::issues::after_update(state, root.as_deref()));
-    step(tracker, progress::RESTART, "Sessions move to the new kelpie", true);
+    step(tracker, progress::RESTART, "Sessions move to the new kebbie", true);
     if let Some(tracker) = tracker.as_mut() {
         tracker.progress.summary = Some(Summary { restart: said, sessions: restarted, restarted_at, ..Summary::default() });
         tracker.save();
@@ -231,22 +233,22 @@ pub fn restart_summary(lines: &[crate::restart::Line]) -> Vec<String> {
     let on = group(&|said| said.starts_with("restarted") || said == "up to date");
     let failed = group(&|said| said.starts_with("restart failed"));
     let asked = group(&|said| said.starts_with("waiting for your answer"));
-    let manual = group(&|said| said.contains("run kelpie restart"));
+    let manual = group(&|said| said.contains("run kebbie restart"));
     let held = group(&|said| said.starts_with("stale, held"));
-    let waits = group(&|said| !said.contains("run kelpie restart") && (said.contains("restarts when") || said.contains("restarts once") || said.contains("then restarts") || said.starts_with("not restarted yet")));
+    let waits = group(&|said| !said.contains("run kebbie restart") && (said.contains("restarts when") || said.contains("restarts once") || said.contains("then restarts") || said.starts_with("not restarted yet")));
     let mut said = Vec::new();
     if let Some((who, many)) = counted(on.0, on.1) {
-        said.push(format!("✓ {who} {} on the new kelpie", if many { "are" } else { "is" }));
+        said.push(format!("✓ {who} {} on the new kebbie", if many { "are" } else { "is" }));
     }
     if let Some((who, many)) = counted(waits.0, waits.1) {
         said.push(if many { format!("{who} restart when they're idle") } else { format!("{who} restarts when it's idle") });
     }
     if let Some((who, many)) = counted(manual.0, manual.1) {
         let them = if many { "them" } else { "it" };
-        said.push(format!("{who} keep{} the old kelpie until you restart {them}: restart.auto is off", if many { "" } else { "s" }));
+        said.push(format!("{who} keep{} the old kebbie until you restart {them}: restart.auto is off", if many { "" } else { "s" }));
     }
     if let Some((who, many)) = counted(held.0, held.1) {
-        said.push(format!("{who} stay{} on the old kelpie, as a restart did not move {}; d shows why", if many { "" } else { "s" }, if many { "them" } else { "it" }));
+        said.push(format!("{who} stay{} on the old kebbie, as a restart did not move {}; d shows why", if many { "" } else { "s" }, if many { "them" } else { "it" }));
     }
     if let Some((who, many)) = counted(asked.0, asked.1) {
         said.push(format!("{who} wait{} for your answer, as background work is still running", if many { "" } else { "s" }));
@@ -262,14 +264,14 @@ pub fn restart_summary(lines: &[crate::restart::Line]) -> Vec<String> {
 
 pub fn board_summary(board: &str) -> Option<String> {
     match board {
-        "board: restarted on the new kelpie" => Some("The board restarted on the new kelpie".to_string()),
-        line if line.starts_with("board: not running") || line.starts_with("board: restarts on the new kelpie once") => Some("Open boards restart on the new kelpie when you next open them".to_string()),
+        "board: restarted on the new kebbie" => Some("The board restarted on the new kebbie".to_string()),
+        line if line.starts_with("board: not running") || line.starts_with("board: restarts on the new kebbie once") => Some("Open boards restart on the new kebbie when you next open them".to_string()),
         "board: up to date" | "board: no lead Space" | "board: the lead Space has no board pane" => None,
         _ => Some("The board did not restart; d shows why".to_string()),
     }
 }
 
-// The sessions the update went through, each as the latest restart round sees it; one no longer stale there runs the new kelpie.
+// The sessions the update went through, each as the latest restart round sees it; one no longer stale there runs the new kebbie.
 pub fn live_sessions(update: &[crate::restart::Line], stale: Option<&[String]>) -> Vec<crate::restart::Line> {
     update.iter().map(|line| {
         let Some(stale) = stale.filter(|_| !line.said.starts_with("skipped")) else { return line.clone() };
@@ -302,10 +304,10 @@ fn versions(before: &[Component], after: &[Component]) -> Vec<String> {
     }).collect()
 }
 
-fn kelpie_plugin() -> Result<Value> {
+fn kebbie_plugin() -> Result<Value> {
     let list: Value = serde_json::from_str(&sh::run(&herdr::bin(), &["plugin", "list", "--json"], None)?).map_err(|error| format!("herdr plugin list: {error}"))?;
-    list["result"]["plugins"].as_array().into_iter().flatten().find(|plugin| plugin["plugin_id"] == "kelpie").cloned()
-        .ok_or_else(|| "kelpie is not registered with herdr; kelpie doctor shows how".to_string())
+    list["result"]["plugins"].as_array().into_iter().flatten().find(|plugin| plugin["plugin_id"] == "kebbie").cloned()
+        .ok_or_else(|| "kebbie is not registered with herdr; kebbie doctor shows how".to_string())
 }
 
 fn capitalized(text: &str) -> String {
@@ -334,24 +336,24 @@ fn modified(path: &Path) -> Option<std::time::SystemTime> {
 }
 
 fn built_label(root: &Path, was: Option<std::time::SystemTime>) -> String {
-    let binary = root.join("target/release/kelpie");
+    let binary = root.join("target/release/kebbie");
     match (binary_origin(root), modified(&binary) == was) {
-        (Some(Origin::Downloaded { tag, .. }), false) => format!("Downloaded kelpie {}", tag.trim_start_matches('v')),
-        (Some(Origin::Downloaded { .. }), true) => "kelpie was downloaded already".to_string(),
-        (_, true) => "kelpie was built already".to_string(),
-        _ => "Built kelpie".to_string(),
+        (Some(Origin::Downloaded { tag, .. }), false) => format!("Downloaded kebbie {}", tag.trim_start_matches('v')),
+        (Some(Origin::Downloaded { .. }), true) => "kebbie was downloaded already".to_string(),
+        (_, true) => "kebbie was built already".to_string(),
+        _ => "Built kebbie".to_string(),
     }
 }
 
 fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Request, mut tracker: Tracker, old_head: Option<&str>) -> (Tracker, Result<String>) {
     let Some(root) = plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).map(PathBuf::from) else {
         tracker.fail_current();
-        return (tracker, Err("herdr names no folder kelpie is installed in".to_string()));
+        return (tracker, Err("herdr names no folder kebbie is installed in".to_string()));
     };
     let dir = progress::prepare_dir(state);
-    let binary = modified(&root.join("target/release/kelpie"));
+    let binary = modified(&root.join("target/release/kebbie"));
     let release_build = build_mode(channel, release::read_override(state).is_some()) == Channel::Release;
-    let building = if release_build { "Downloading kelpie" } else { "Building kelpie" };
+    let building = if release_build { "Downloading kebbie" } else { "Building kebbie" };
     let plan = release::install(&root, state, channel, request, plugin["source"]["kind"] != "local", &release::Binaries::of(&root));
     match plan {
         Err(error) => {
@@ -361,7 +363,7 @@ fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Reques
         Ok(Plan::Herdr) => {
             let watch = progress::watch(tracker, dir.clone(), root.clone(), building.to_string(), now);
             let progress_env = format!("{}={}", progress::BUILD_ENV, dir.display());
-            let ran = sh::run("env", &["KELPIE_CHANNEL=main", &progress_env, &herdr::bin(), "plugin", "update", "--yes", "kelpie"], None);
+            let ran = sh::run("env", &["KEBBIE_CHANNEL=main", &progress_env, &herdr::bin(), "plugin", "update", "--yes", "kebbie"], None);
             let mut tracker = watch.stop();
             if tracker.state(progress::BUILD) == Some(progress::State::Pending) && ran.is_ok() {
                 tracker.done(progress::FETCH, &fetched(&root, old_head, None, true));
@@ -381,7 +383,7 @@ fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Reques
         Ok(Plan::Done(line)) => {
             tracker.done(progress::FETCH, &fetched(&root, old_head, Some(&line), channel == Channel::Main && *request == Request::Channel && release::read_override(state).is_none()));
             let label = match crate::issue_recheck::version_at(&root).filter(|_| release_build) {
-                Some(version) => format!("Downloading kelpie {version}"),
+                Some(version) => format!("Downloading kebbie {version}"),
                 None => building.to_string(),
             };
             tracker.begin(progress::BUILD, &label, now());
@@ -402,7 +404,7 @@ fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Reques
     }
 }
 
-// kelpie run from the main checkout it was built in, on the main channel, rebuilds from what that checkout now holds; the board and keeper restart onto the new binary.
+// kebbie run from the main checkout it was built in, on the main channel, rebuilds from what that checkout now holds; the board and keeper restart onto the new binary.
 pub fn rebuild_staged(repo: &Path, announce: bool) -> Option<String> {
     let root = update_check::install_root()?;
     let state = lead::state_dir().ok()?;
@@ -411,19 +413,19 @@ pub fn rebuild_staged(repo: &Path, announce: bool) -> Option<String> {
     }
     let channel = config::channel().ok()?;
     if let Some(running) = release::read_override(&state) {
-        return Some(format!("not rebuilt: kelpie is {}; kelpie update --stable goes back to building this checkout", running.describe(channel)));
+        return Some(format!("not rebuilt: kebbie is {}; kebbie update --stable goes back to building this checkout", running.describe(channel)));
     }
     if channel != Channel::Main {
-        return Some(format!("not rebuilt: kelpie follows the {} channel, which installs release binaries", channel.key()));
+        return Some(format!("not rebuilt: kebbie follows the {} channel, which installs release binaries", channel.key()));
     }
     if announce {
-        eprintln!("building kelpie from local main…");
+        eprintln!("building kebbie from local main…");
     }
     Some(build(&root, Channel::Main, None).unwrap_or_else(|error| format!("the build failed: {error}")))
 }
 
 pub const BUILD_SCRIPT: &str = "scripts/build.sh";
-const ORIGIN_FILE: &str = "target/release/kelpie.origin";
+const ORIGIN_FILE: &str = "target/release/kebbie.origin";
 
 #[derive(Debug, PartialEq)]
 pub enum Origin {
@@ -443,7 +445,7 @@ impl Origin {
 // The build script writes the origin file after the binary it downloaded, so a binary newer than it was built by cargo since.
 pub fn binary_origin(root: &Path) -> Option<Origin> {
     let modified = |path: PathBuf| std::fs::metadata(path).and_then(|meta| meta.modified()).ok();
-    let binary = modified(root.join("target/release/kelpie"))?;
+    let binary = modified(root.join("target/release/kebbie"))?;
     let downloaded = modified(root.join(ORIGIN_FILE)).filter(|written| *written >= binary).and_then(|_| std::fs::read_to_string(root.join(ORIGIN_FILE)).ok()).and_then(|text| {
         let mut words = text.split_whitespace();
         match (words.next(), words.next(), words.next()) {
@@ -462,7 +464,7 @@ fn build_mode(channel: Channel, overridden: bool) -> Channel {
 // An install root checked out at a commit from before the build script has only cargo; with `progress` the script writes cargo's output there instead of keeping it quiet.
 fn build(root: &Path, channel: Channel, progress: Option<&Path>) -> Result<String> {
     if root.join(BUILD_SCRIPT).is_file() {
-        let channel = format!("KELPIE_CHANNEL={}", channel.key());
+        let channel = format!("KEBBIE_CHANNEL={}", channel.key());
         match progress {
             Some(dir) => sh::run("env", &[&channel, &format!("{}={}", progress::BUILD_ENV, dir.display()), "sh", BUILD_SCRIPT], Some(root))?,
             None => sh::run("env", &[&channel, "sh", BUILD_SCRIPT, "--quiet"], Some(root))?,
@@ -503,7 +505,7 @@ pub fn marketplace(claude_dir: &Path, id: &str) -> Marketplace {
     Marketplace::InPlace(PathBuf::from(entry["source"]["path"].as_str().or(entry["installLocation"].as_str()).unwrap_or_default()))
 }
 
-pub const IN_PLACE_FIX: &str = "claude plugin marketplace remove kelpie && claude plugin marketplace add ~/.local/share/kelpie/current && claude plugin install kelpie@kelpie";
+pub const IN_PLACE_FIX: &str = "claude plugin marketplace remove kebbie && claude plugin marketplace add ~/.local/share/kebbie/current && claude plugin install kebbie@kebbie";
 
 pub fn same_folder(one: &Path, other: &Path) -> bool {
     one.canonicalize().ok().is_some_and(|one| other.canonicalize().ok().as_ref() == Some(&one))
@@ -512,12 +514,12 @@ pub fn same_folder(one: &Path, other: &Path) -> bool {
 pub fn claude_plugin(claude_dir: &Path, claude: &str, root: Option<&Path>, follows_github: bool) -> String {
     let installed: Value = std::fs::read_to_string(claude_dir.join("plugins/installed_plugins.json")).ok()
         .and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
-    let Some(id) = installed["plugins"].as_object().and_then(|plugins| plugins.keys().find(|id| id.starts_with("kelpie@")).cloned()) else {
-        return "Claude Code plugin: not installed; kelpie doctor shows how".to_string();
+    let Some(id) = installed["plugins"].as_object().and_then(|plugins| plugins.keys().find(|id| id.starts_with("kebbie@")).cloned()) else {
+        return "Claude Code plugin: not installed; kebbie doctor shows how".to_string();
     };
     match marketplace(claude_dir, &id) {
         Marketplace::InPlace(path) if root.is_some_and(|root| same_folder(&path, root)) => {
-            let marketplace = id.split_once('@').map_or("kelpie", |(_, market)| market);
+            let marketplace = id.split_once('@').map_or("kebbie", |(_, market)| market);
             match sh::run(claude, &["plugin", "marketplace", "update", marketplace], None).and_then(|_| sh::run(claude, &["plugin", "update", &id], None)) {
                 Ok(output) => format!("Claude Code plugin: {}", output.lines().last().unwrap_or("up to date").trim_start_matches(['✔', ' '])),
                 Err(error) => format!("Claude Code plugin: {error}"),
@@ -540,14 +542,14 @@ mod tests {
     #[test]
     fn the_steps_after_the_build_run_on_the_binary_just_built() {
         let dir = scratch("finish");
-        let binary = dir.join("target/release/kelpie");
+        let binary = dir.join("target/release/kebbie");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
-        crate::executable::write(&binary, "#!/bin/sh\n[ \"$*\" = \"update --finish\" ] && [ -n \"$KELPIE_UPDATE_PROGRESS\" ] && printf 'Claude Code plugin: from the new binary\\nboard: up to date\\n'\n").unwrap();
+        crate::executable::write(&binary, "#!/bin/sh\n[ \"$*\" = \"update --finish\" ] && [ -n \"$KEBBIE_UPDATE_PROGRESS\" ] && printf 'Claude Code plugin: from the new binary\\nboard: up to date\\n'\n").unwrap();
         assert_eq!(finish_on_new_binary(&dir, Some(&dir), &dir.join(progress::FILE)), ["Claude Code plugin: from the new binary", "board: up to date"]);
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kelpie-update-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-update-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -592,8 +594,8 @@ mod tests {
     fn claude_home(dir: &Path, source: Value) -> PathBuf {
         let home = dir.join("claude-home");
         std::fs::create_dir_all(home.join("plugins")).unwrap();
-        std::fs::write(home.join("plugins/installed_plugins.json"), json!({ "plugins": { "kelpie@kelpie": [{ "version": "0.20.0" }] } }).to_string()).unwrap();
-        std::fs::write(home.join("plugins/known_marketplaces.json"), json!({ "kelpie": { "source": source, "installLocation": "/elsewhere" } }).to_string()).unwrap();
+        std::fs::write(home.join("plugins/installed_plugins.json"), json!({ "plugins": { "kebbie@kebbie": [{ "version": "0.20.0" }] } }).to_string()).unwrap();
+        std::fs::write(home.join("plugins/known_marketplaces.json"), json!({ "kebbie": { "source": source, "installLocation": "/elsewhere" } }).to_string()).unwrap();
         home
     }
 
@@ -601,13 +603,13 @@ mod tests {
     fn the_claude_code_plugin_follows_github_only_on_the_main_channel() {
         let dir = scratch("claude-plugin");
         let (claude, log) = fake_claude(&dir);
-        let home = claude_home(&dir, json!({ "source": "git", "url": "https://github.com/gronare/kelpie.git" }));
-        assert_eq!(marketplace(&home, "kelpie@kelpie"), Marketplace::Git);
+        let home = claude_home(&dir, json!({ "source": "git", "url": "https://github.com/gronare/kebbie.git" }));
+        assert_eq!(marketplace(&home, "kebbie@kebbie"), Marketplace::Git);
         claude_plugin(&home, &claude, None, true);
-        assert_eq!(std::fs::read_to_string(&log).unwrap(), "plugin update kelpie@kelpie\n");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "plugin update kebbie@kebbie\n");
         let left = claude_plugin(&home, &claude, None, false);
         assert!(left.contains("left as it is") && left.contains(IN_PLACE_FIX), "{left}");
-        assert_eq!(std::fs::read_to_string(&log).unwrap(), "plugin update kelpie@kelpie\n", "a release machine never pulls the plugin from main");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "plugin update kebbie@kebbie\n", "a release machine never pulls the plugin from main");
     }
 
     #[test]
@@ -617,24 +619,24 @@ mod tests {
         let root = dir.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let home = claude_home(&dir, json!({ "source": "directory", "path": root }));
-        assert_eq!(marketplace(&home, "kelpie@kelpie"), Marketplace::InPlace(root.clone()));
+        assert_eq!(marketplace(&home, "kebbie@kebbie"), Marketplace::InPlace(root.clone()));
         assert!(claude_plugin(&home, &claude, Some(&dir), false).contains("which is not the install root"));
         assert!(!log.exists(), "claude was not run for a folder that is not the install root");
         claude_plugin(&home, &claude, Some(&root), false);
-        assert_eq!(std::fs::read_to_string(&log).unwrap(), "plugin marketplace update kelpie\nplugin update kelpie@kelpie\n", "Claude Code runs a cached copy, so the folder marketplace is refreshed and the plugin updated");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "plugin marketplace update kebbie\nplugin update kebbie@kebbie\n", "Claude Code runs a cached copy, so the folder marketplace is refreshed and the plugin updated");
     }
 
     #[test]
     fn update_lists_each_component_before_and_after() {
         let component = |name: &str, installed: Option<&str>| Component { name: name.to_string(), installed: installed.map(str::to_string), ..Component::default() };
-        let before = [component("kelpie", Some("0.18.1")), component("vault", Some("0.2.16")), component("notes-vault-mcp", Some("0.6.0"))];
-        let after = [component("kelpie", Some("0.18.2")), component("vault", Some("0.2.16")), component("notes-vault-mcp", Some("0.6.1"))];
-        assert_eq!(versions(&before, &after), ["kelpie 0.18.1 → 0.18.2", "vault plugin 0.2.16, already latest", "notes-vault-mcp 0.6.0 → 0.6.1"]);
-        assert_eq!(versions(&before[..1], &after[..2]), ["kelpie 0.18.1 → 0.18.2", "vault plugin → 0.2.16"]);
-        assert_eq!(versions(&[], &[component("kelpie", None)]), ["kelpie: version unknown"]);
-        let built = |sha: &str| Component { built: Some(sha.to_string()), ..component("kelpie", Some("0.25.0")) };
-        assert_eq!(versions(&[built("e70d5d5")], &[built("1234567")]), ["kelpie 0.25.0 rebuilt, e70d5d5 → 1234567"], "a rebuild within one version names both commits");
-        assert_eq!(versions(&[built("e70d5d5")], &[built("e70d5d5")]), ["kelpie 0.25.0, already latest"]);
+        let before = [component("kebbie", Some("0.18.1")), component("vault", Some("0.2.16")), component("notes-vault-mcp", Some("0.6.0"))];
+        let after = [component("kebbie", Some("0.18.2")), component("vault", Some("0.2.16")), component("notes-vault-mcp", Some("0.6.1"))];
+        assert_eq!(versions(&before, &after), ["kebbie 0.18.1 → 0.18.2", "vault plugin 0.2.16, already latest", "notes-vault-mcp 0.6.0 → 0.6.1"]);
+        assert_eq!(versions(&before[..1], &after[..2]), ["kebbie 0.18.1 → 0.18.2", "vault plugin → 0.2.16"]);
+        assert_eq!(versions(&[], &[component("kebbie", None)]), ["kebbie: version unknown"]);
+        let built = |sha: &str| Component { built: Some(sha.to_string()), ..component("kebbie", Some("0.25.0")) };
+        assert_eq!(versions(&[built("e70d5d5")], &[built("1234567")]), ["kebbie 0.25.0 rebuilt, e70d5d5 → 1234567"], "a rebuild within one version names both commits");
+        assert_eq!(versions(&[built("e70d5d5")], &[built("e70d5d5")]), ["kebbie 0.25.0, already latest"]);
     }
 
 
@@ -647,45 +649,45 @@ mod tests {
         let lines = said(&[("lead", "restarts when idle"), ("billing@app", "restarts when idle"), ("api@app", "you are in it: restarts when you leave it"), ("ghost", "skipped: its session id is unknown")]);
         assert_eq!(restart_summary(&lines), ["The lead and 2 sessions restart when they're idle"]);
         assert_eq!(restart_summary(&said(&[("lead", "restarts when idle")])), ["The lead restarts when it's idle"]);
-        let manual = said(&[("lead", "stale: run kelpie restart when you want it"), ("billing@app", "stale: run kelpie restart when you want it")]);
-        assert_eq!(restart_summary(&manual), ["The lead and 1 session keep the old kelpie until you restart them: restart.auto is off"]);
-        let trouble = said(&[("billing@app", "restart failed: Claude did not come back"), ("worker@app", "waiting for your answer: background work running"), ("api@app", "stale, held: a restart onto kelpie 0.27.0 left it on kelpie 0.26.0; restarting again would not move it")]);
-        assert_eq!(restart_summary(&trouble), ["1 session stays on the old kelpie, as a restart did not move it; d shows why", "1 session waits for your answer, as background work is still running", "Restarting 1 session failed; d shows why"]);
+        let manual = said(&[("lead", "stale: run kebbie restart when you want it"), ("billing@app", "stale: run kebbie restart when you want it")]);
+        assert_eq!(restart_summary(&manual), ["The lead and 1 session keep the old kebbie until you restart them: restart.auto is off"]);
+        let trouble = said(&[("billing@app", "restart failed: Claude did not come back"), ("worker@app", "waiting for your answer: background work running"), ("api@app", "stale, held: a restart onto kebbie 0.27.0 left it on kebbie 0.26.0; restarting again would not move it")]);
+        assert_eq!(restart_summary(&trouble), ["1 session stays on the old kebbie, as a restart did not move it; d shows why", "1 session waits for your answer, as background work is still running", "Restarting 1 session failed; d shows why"]);
         assert_eq!(restart_summary(&[]), ["No Claude sessions are running"]);
         let on = said(&[("lead", "restarted"), ("billing@app", "up to date"), ("api@app", "restarted"), ("worker@app", "up to date"), ("docs@app", "restarts when idle")]);
-        assert_eq!(restart_summary(&on), ["✓ The lead and 3 sessions are on the new kelpie", "1 session restarts when it's idle"]);
-        assert_eq!(restart_summary(&said(&[("billing@app", "up to date")])), ["✓ 1 session is on the new kelpie"]);
+        assert_eq!(restart_summary(&on), ["✓ The lead and 3 sessions are on the new kebbie", "1 session restarts when it's idle"]);
+        assert_eq!(restart_summary(&said(&[("billing@app", "up to date")])), ["✓ 1 session is on the new kebbie"]);
     }
 
     #[test]
     fn the_terminal_names_the_board_and_a_board_names_none() {
-        assert_eq!(board_summary("board: not running; it starts with the new kelpie when you open the lead").as_deref(), Some("Open boards restart on the new kelpie when you next open them"));
-        assert_eq!(board_summary("board: restarted on the new kelpie").as_deref(), Some("The board restarted on the new kelpie"));
+        assert_eq!(board_summary("board: not running; it starts with the new kebbie when you open the lead").as_deref(), Some("Open boards restart on the new kebbie when you next open them"));
+        assert_eq!(board_summary("board: restarted on the new kebbie").as_deref(), Some("The board restarted on the new kebbie"));
         assert_eq!(board_summary("board: up to date"), None);
         assert_eq!(board_summary("board: did not quit on ctrl-c; quit it and open the lead again").as_deref(), Some("The board did not restart; d shows why"));
     }
 
     #[test]
-    fn the_sessions_follow_the_latest_restart_round_and_one_gone_from_it_runs_the_new_kelpie() {
+    fn the_sessions_follow_the_latest_restart_round_and_one_gone_from_it_runs_the_new_kebbie() {
         let update = said(&[("lead", "restarts when idle"), ("billing@app", "you are in it: restarts when you leave it"), ("api@app", "restarts when idle"), ("ghost", "skipped: its session id is unknown")]);
         assert_eq!(live_sessions(&update, None), update, "without a round since the update, the update's own word stands");
         let live = live_sessions(&update, Some(&["api@app: restarts when idle".to_string()]));
         assert_eq!(live.iter().map(|line| line.said.as_str()).collect::<Vec<_>>(), ["up to date", "up to date", "restarts when idle", "skipped: its session id is unknown"]);
-        assert_eq!(restart_summary(&live), ["✓ The lead and 1 session are on the new kelpie", "1 session restarts when it's idle"]);
+        assert_eq!(restart_summary(&live), ["✓ The lead and 1 session are on the new kebbie", "1 session restarts when it's idle"]);
     }
 
     #[test]
     fn the_notes_come_from_the_commit_the_old_binary_was_built_from_before_the_old_head() {
-        let kelpie = |built: Option<&str>| Component { name: update_check::KELPIE.to_string(), installed: Some("0.27.0".to_string()), built: built.map(str::to_string), ..Component::default() };
-        assert_eq!(old_commits(&[kelpie(Some("c634f7b"))], Some("f39045b")), ["c634f7b", "f39045b"]);
-        assert_eq!(old_commits(&[kelpie(None)], Some("f39045b")), ["f39045b"]);
+        let kebbie = |built: Option<&str>| Component { name: update_check::KEBBIE.to_string(), installed: Some("0.27.0".to_string()), built: built.map(str::to_string), ..Component::default() };
+        assert_eq!(old_commits(&[kebbie(Some("c634f7b"))], Some("f39045b")), ["c634f7b", "f39045b"]);
+        assert_eq!(old_commits(&[kebbie(None)], Some("f39045b")), ["f39045b"]);
         assert!(old_commits(&[], None).is_empty());
     }
 
     #[test]
     fn the_terminal_summary_puts_the_notes_and_the_fixed_bugs_above_the_details() {
-        let outcome = Outcome { summary: Summary { version: "0.28.0".to_string(), new: vec!["Name a device".to_string()], restart: vec!["The lead restarts when it's idle".to_string(), "Open boards restart on the new kelpie when you next open them".to_string()], ..Summary::default() }, details: vec!["kelpie 0.27.0 → 0.28.0".to_string()], started: 0 };
-        assert_eq!(text(&outcome, &["update stopped on a newer config key".to_string()]), "✓ Updated kelpie 0.28.0\n\nWhat's new\n  • Name a device\nFixed\n  • A bug you ran into: update stopped on a newer config key\n\nRestarting\n  The lead restarts when it's idle\n  Open boards restart on the new kelpie when you next open them\n\nDetails\nkelpie 0.27.0 → 0.28.0");
+        let outcome = Outcome { summary: Summary { version: "0.28.0".to_string(), new: vec!["Name a device".to_string()], restart: vec!["The lead restarts when it's idle".to_string(), "Open boards restart on the new kebbie when you next open them".to_string()], ..Summary::default() }, details: vec!["kebbie 0.27.0 → 0.28.0".to_string()], started: 0 };
+        assert_eq!(text(&outcome, &["update stopped on a newer config key".to_string()]), "✓ Updated kebbie 0.28.0\n\nWhat's new\n  • Name a device\nFixed\n  • A bug you ran into: update stopped on a newer config key\n\nRestarting\n  The lead restarts when it's idle\n  Open boards restart on the new kebbie when you next open them\n\nDetails\nkebbie 0.27.0 → 0.28.0");
         let bare = Outcome { summary: Summary::default(), details: Vec::new(), started: 0 };
         assert!(text(&bare, &[]).contains("No notes for this update"), "never the commit subjects");
     }

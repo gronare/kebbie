@@ -226,7 +226,7 @@ impl App {
     // Another machine's claim on the note: the start asks first, and true says it did.
     fn ask_if_claimed(&mut self, entry: &Entry) -> bool {
         let Some(claim) = self.ongoing.iter().find(|note| note.key == entry.reference).and_then(|note| note.claim.clone()) else { return false };
-        let about = format!("kelpie {} since {}. Started here, the note's claim moves to this machine.", claim.shown(crate::backlog::today()), claim.since.get(..10).unwrap_or(&claim.since));
+        let about = format!("kebbie {} since {}. Started here, the note's claim moves to this machine.", claim.shown(crate::backlog::today()), claim.since.get(..10).unwrap_or(&claim.since));
         self.mode = Mode::ConfirmClaimed { entry: entry.clone(), about, machine: claim.machine, nudged: false };
         true
     }
@@ -351,11 +351,11 @@ impl App {
 
     fn restart_lead(&mut self) {
         if self.lead_line().is_none() {
-            return self.say("The lead runs the installed kelpie; nothing to restart".to_string());
+            return self.say("The lead runs the installed kebbie; nothing to restart".to_string());
         }
         let restarter = self.lead_restarter.clone();
         self.subject = Some(notices::Subject::plain("lead"));
-        self.in_background("Restarting the lead on the new kelpie…".to_string(), move || restarter());
+        self.in_background("Restarting the lead on the new kebbie…".to_string(), move || restarter());
     }
 
     fn lead_line(&self) -> Option<String> {
@@ -728,7 +728,7 @@ impl App {
                     }
                     Act::Rebase if item.push_waits.is_some() => {
                         self.about("rebase", &item.name);
-                        self.show(Notice::new(Tone::NotNow, "Not rebased: it is in the push line").next("kelpie rebases it when its turn comes.").ok());
+                        self.show(Notice::new(Tone::NotNow, "Not rebased: it is in the push line").next("kebbie rebases it when its turn comes.").ok());
                     }
                     Act::Push if item.in_push_line() => {
                         if let Some(path) = item.path.clone() {
@@ -846,7 +846,7 @@ impl Settle {
     }
 }
 
-const RESTART_STATE: &str = "KELPIE_BOARD_STATE";
+const RESTART_STATE: &str = "KEBBIE_BOARD_STATE";
 
 fn built(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().filter(|metadata| metadata.len() > 0).and_then(|metadata| metadata.modified().ok())
@@ -884,7 +884,7 @@ impl Rebuild {
     }
 
     fn restart(&self, app: &App) -> String {
-        let Some(path) = &self.path else { return "Cannot tell where kelpie's binary is".to_string() };
+        let Some(path) = &self.path else { return "Cannot tell where kebbie's binary is".to_string() };
         let column = match (app.page, app.column) {
             (Page::Areas, _) => "areas",
             (Page::Routines, _) => "routines",
@@ -895,7 +895,7 @@ impl Rebuild {
         let state = format!("{column}\t{}\t{task}", app.backlog_selected);
         restore_terminal();
         let error = Command::new(path).args(std::env::args_os().skip(1)).env(RESTART_STATE, state).exec();
-        format!("Restarting on the rebuilt kelpie failed: {error}")
+        format!("Restarting on the rebuilt kebbie failed: {error}")
     }
 }
 
@@ -1067,7 +1067,7 @@ fn act_kind(act: Act) -> &'static str {
         Act::Done => "done",
         Act::SendReview => "review",
         Act::Rebase => "rebase",
-        _ => "kelpie",
+        _ => "kebbie",
     }
 }
 
@@ -1226,7 +1226,7 @@ mod tests {
     }
 
     #[test]
-    fn while_the_lead_runs_an_older_kelpie_one_line_says_so_and_l_restarts_it() {
+    fn while_the_lead_runs_an_older_kebbie_one_line_says_so_and_l_restarts_it() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows.join("\n").contains("↻ The lead"), "nothing pending, no line");
@@ -1235,12 +1235,12 @@ mod tests {
         app.stale = vec!["lead: restarts when idle".to_string()];
         for width in [80, 120] {
             let (rows, _) = render(&mut app, width, 30);
-            assert!(rows.iter().any(|row| row.trim_end().ends_with("↻ The lead restarts on the new kelpie when it's idle · L restarts it now")), "the whole line at {width} columns: {}", rows.join("\n"));
+            assert!(rows.iter().any(|row| row.trim_end().ends_with("↻ The lead restarts on the new kebbie when it's idle · L restarts it now")), "the whole line at {width} columns: {}", rows.join("\n"));
         }
         let (rows, _) = render(&mut app, 60, 30);
         assert!(rows.iter().any(|row| row.trim_end().ends_with("↻ Lead restarts when idle · L now")), "a narrow board takes the short wording, never a cut one: {}", rows.join("\n"));
         let (rows, _) = render(&mut app, 170, 30);
-        let (x, y) = find(&rows, "↻ The lead restarts on the new kelpie")[0];
+        let (x, y) = find(&rows, "↻ The lead restarts on the new kebbie")[0];
         assert!(rows[y + 1].trim().is_empty() && rows[y + 2].contains("WORK"), "one line, then the columns: {}", rows.join("\n"));
         assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Key(KeyCode::Char('L'))), "a click on the line restarts too");
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));

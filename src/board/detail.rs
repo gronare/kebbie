@@ -93,7 +93,7 @@ impl App {
     }
 }
 
-// A question asked through kelpie shows from the log; a prompt on screen outranks it.
+// A question asked through kebbie shows from the log; a prompt on screen outranks it.
 fn asked_question(item: &Item) -> Option<&messages::Message> {
     item.question.as_ref().filter(|_| item.agent.as_ref().is_none_or(|agent| agent.status != "blocked"))
 }
@@ -657,7 +657,7 @@ mod tests {
         let mut item = crate::status::tests::task(Some("idle"), None, 0);
         assert_eq!((item.titled(), item.to_json()["profile"].as_str()), ("billing".to_string(), Some("task")));
         item.profile = Some("designer".to_string());
-        assert_eq!((item.titled(), item.to_json()["profile"].as_str()), ("billing · designer".to_string(), Some("designer")), "kelpie status --json names it too");
+        assert_eq!((item.titled(), item.to_json()["profile"].as_str()), ("billing · designer".to_string(), Some("designer")), "kebbie status --json names it too");
     }
 
     #[test]
@@ -719,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn a_question_asked_through_kelpie_shows_on_one_line_with_its_option_count_and_a_prompt_on_screen_over_it() {
+    fn a_question_asked_through_kebbie_shows_on_one_line_with_its_option_count_and_a_prompt_on_screen_over_it() {
         let asked = messages::fold(QUESTION).remove(0);
         let mut item = crate::status::tests::task(Some("idle"), Some("needs-you"), 0);
         assert!(asked_question(&item).is_none(), "a question in plain text keeps the screen fallback");

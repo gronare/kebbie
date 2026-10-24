@@ -17,5 +17,5 @@ For a plan, the options are approve, approve with a comment, ask for changes, an
 `g` jumps to the asking task's Space. When you settle a question there instead, close it on the board with:
 
 ```bash
-kelpie answered billing
+kebbie answered billing
 ```

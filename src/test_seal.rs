@@ -17,7 +17,7 @@ const GIT_CONFIG: &str = "[maintenance]\n\tauto = false\n[receive]\n\tautoGc = f
 static SEAL_AT_START: extern "C" fn() = seal_at_start;
 
 extern "C" fn seal_at_start() {
-    let root = std::env::temp_dir().canonicalize().unwrap_or_else(|_| PathBuf::from("/tmp")).join(format!("kelpie-sealed-{}", std::process::id()));
+    let root = std::env::temp_dir().canonicalize().unwrap_or_else(|_| PathBuf::from("/tmp")).join(format!("kebbie-sealed-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     for dir in ["home", "state", "tmp", "bin"] {
         fs::create_dir_all(root.join(dir)).expect("the sealed test root");
@@ -49,10 +49,10 @@ fn sealed_vars(root: &Path, path: &str) -> Vec<(&'static str, String)> {
         ("PATH", format!("{}:{path}", at("bin"))),
         ("HOME", at("home")),
         ("TMPDIR", at("tmp")),
-        ("KELPIE_STATE_DIR", at("state")),
+        ("KEBBIE_STATE_DIR", at("state")),
         ("HERDR_BIN_PATH", "false".to_string()),
         ("HERDR_SOCKET_PATH", at("herdr.sock")),
-        ("KELPIE_GH_BIN", "false".to_string()),
+        ("KEBBIE_GH_BIN", "false".to_string()),
         ("GIT_CONFIG_NOSYSTEM", "1".to_string()),
         ("GIT_CONFIG_GLOBAL", at("gitconfig")),
         ("GIT_CEILING_DIRECTORIES", root.display().to_string()),
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn the_test_binary_reaches_no_real_herdr_state_home_temp_or_git_config() {
         let root = root();
-        for name in ["HOME", "TMPDIR", "KELPIE_STATE_DIR", "HERDR_SOCKET_PATH", "GIT_CONFIG_GLOBAL"] {
+        for name in ["HOME", "TMPDIR", "KEBBIE_STATE_DIR", "HERDR_SOCKET_PATH", "GIT_CONFIG_GLOBAL"] {
             let value = std::env::var(name).unwrap_or_default();
             assert!(Path::new(&value).starts_with(root), "{name}={value} is outside the sealed root {}", root.display());
         }
@@ -140,7 +140,7 @@ mod tests {
         for (name, _) in std::env::vars() {
             assert!(!name.starts_with("HERDR_") || ["HERDR_BIN_PATH", "HERDR_SOCKET_PATH"].contains(&name.as_str()), "{name} reaches the test from the shell it ran in");
             assert!(!name.starts_with("GIT_CONFIG_") || ["GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL"].contains(&name.as_str()), "{name} reaches the test from the shell it ran in");
-            assert!(!["CLAUDE_CONFIG_DIR", "KELPIE_CONFIG", "VAULT_PATH", "TERM_PROGRAM", "XDG_CONFIG_HOME"].contains(&name.as_str()), "{name} reaches the test from the shell it ran in");
+            assert!(!["CLAUDE_CONFIG_DIR", "KEBBIE_CONFIG", "VAULT_PATH", "TERM_PROGRAM", "XDG_CONFIG_HOME"].contains(&name.as_str()), "{name} reaches the test from the shell it ran in");
         }
         assert_eq!(std::env::temp_dir(), root.join("tmp"));
     }

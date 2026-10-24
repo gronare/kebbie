@@ -1,13 +1,13 @@
 {
-  "name": "kelpie",
-  "displayName": "Kelpie",
+  "name": "kebbie",
+  "displayName": "Kebbie",
   "version": "0.27.0",
   "description": "Herding coding agents in herdr: review a task's changes in a split next to Claude, with unified diffs in nvim, line comments typed into Claude's input box, read marks, scoped and live reviews, and worktree-aware bases.",
   "author": {
     "name": "Carl Green"
   },
-  "homepage": "https://github.com/gronare/kelpie",
-  "repository": "https://github.com/gronare/kelpie",
+  "homepage": "https://github.com/gronare/kebbie",
+  "repository": "https://github.com/gronare/kebbie",
   "license": "MIT",
   "keywords": ["herdr", "review", "worktree", "agents", "nvim", "fzf"],
   "userConfig": {

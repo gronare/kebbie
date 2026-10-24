@@ -1,13 +1,13 @@
 # Open dev servers from a remote machine
 
-Run kelpie on a VM or devbox you reach over ssh, and open every worktree's dev server in your laptop's browser at its own address, such as `https://app-1.dev.example.com`. Caddy on the machine serves one site per worktree and proxies it to that worktree's port.
+Run kebbie on a VM or devbox you reach over ssh, and open every worktree's dev server in your laptop's browser at its own address, such as `https://app-1.dev.example.com`. Caddy on the machine serves one site per worktree and proxies it to that worktree's port.
 
-Routing is opt-in per repo. A repo that already serves its worktrees itself, through its own proxy, puma-dev or a tunnel, leaves `worktree.dev_route` off and kelpie never routes it.
+Routing is opt-in per repo. A repo that already serves its worktrees itself, through its own proxy, puma-dev or a tunnel, leaves `worktree.dev_route` off and kebbie never routes it.
 
 The fastest way is to ask Claude on the machine:
 
 ```
-/kelpie:expose-dev-servers
+/kebbie:expose-dev-servers
 ```
 
 It asks for your domain and who ends TLS, turns the repo on on your yes, installs Caddy, writes the routes and checks one worktree end to end. The steps below are what it does.
@@ -20,7 +20,7 @@ It asks for your domain and who ends TLS, turns the repo on on your yes, install
 
 ## 1. Turn the repo on
 
-In the repo config, `~/.config/kelpie/repos/app.toml`:
+In the repo config, `~/.config/kebbie/repos/app.toml`:
 
 ```toml
 [worktree]
@@ -35,11 +35,11 @@ dev_url = "https://{repo}-{number}.dev.example.com"
 ## 2. Print the routes
 
 ```bash
-kelpie routes
+kebbie routes
 ```
 
 ```
-# kelpie routes: a site per pooled worktree with a port in the repos with worktree.dev_route; rerun it when the pool changes
+# kebbie routes: a site per pooled worktree with a port in the repos with worktree.dev_route; rerun it when the pool changes
 
 https://app-1.dev.example.com {
 	reverse_proxy localhost:3001
@@ -52,12 +52,12 @@ https://app-2.dev.example.com {
 # 2 sites; skipped 1: no port: wt3.app; 1 repo without worktree.dev_route left out
 ```
 
-kelpie looks at every repo it knows on the machine: those with a Space open in herdr, and the checkouts with a worktree pool under `KELPIE_REPO_DIRS`. Each repo uses its own `dev_url`. A worktree without a port, a `dev_url` on localhost or without a host, or a host another worktree already has gets no site, and the last line says which and why.
+kebbie looks at every repo it knows on the machine: those with a Space open in herdr, and the checkouts with a worktree pool under `KEBBIE_REPO_DIRS`. Each repo uses its own `dev_url`. A worktree without a port, a `dev_url` on localhost or without a host, or a host another worktree already has gets no site, and the last line says which and why.
 
 When a proxy in front holds the certificate and forwards plain HTTP to the machine's port 80:
 
 ```bash
-kelpie routes --plain-http
+kebbie routes --plain-http
 ```
 
 prints each site as `http://app-1.dev.example.com`.
@@ -65,13 +65,13 @@ prints each site as `http://app-1.dev.example.com`.
 ## 3. Load them into Caddy
 
 ```bash
-kelpie routes | sudo tee /etc/caddy/kelpie.caddy >/dev/null
+kebbie routes | sudo tee /etc/caddy/kebbie.caddy >/dev/null
 ```
 
 Add one line to `/etc/caddy/Caddyfile`:
 
 ```
-import kelpie.caddy
+import kebbie.caddy
 ```
 
 Then check and reload:
@@ -104,6 +104,6 @@ The app's own answer means the route works. Open the task's link on the board fr
 
 ## When the pool grows
 
-A new worktree gets a site when you print the routes again and reload. The setup skill does it for you when it gives a worktree of a routed repo its port and `/etc/caddy/kelpie.caddy` exists.
+A new worktree gets a site when you print the routes again and reload. The setup skill does it for you when it gives a worktree of a routed repo its port and `/etc/caddy/kebbie.caddy` exists.
 
 See also: [Run a task's dev server](run-dev-servers.md), [`worktree.dev_route`](../reference/configuration.md#keys).

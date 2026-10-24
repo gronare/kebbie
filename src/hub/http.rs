@@ -36,8 +36,8 @@ impl fmt::Display for HubError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HubError::Status { status, code } => write!(formatter, "the hub answered {status} {code}"),
-            HubError::PlanInactive { url: Some(url) } => write!(formatter, "Your kelpie hub subscription isn't active: {url}"),
-            HubError::PlanInactive { url: None } => formatter.write_str("Your kelpie hub subscription isn't active"),
+            HubError::PlanInactive { url: Some(url) } => write!(formatter, "Your kebbie hub subscription isn't active: {url}"),
+            HubError::PlanInactive { url: None } => formatter.write_str("Your kebbie hub subscription isn't active"),
             HubError::Transport(message) => write!(formatter, "could not reach the hub: {message}"),
             HubError::Redirect(message) => write!(formatter, "the hub's redirect was not followed: {message}"),
         }
@@ -66,7 +66,7 @@ impl Client {
             .http_status_as_error(false)
             .timeout_global(Some(timeout))
             .timeout_connect(Some(Duration::from_secs(5)))
-            .user_agent(format!("kelpie/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("kebbie/{}", env!("CARGO_PKG_VERSION")))
             .build();
         Client { base: base.trim_end_matches('/').to_string(), token: token.map(str::to_string), agent: ureq::Agent::new_with_config(config), moved: RefCell::new(None) }
     }
@@ -117,7 +117,7 @@ impl Client {
             }
             let body = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
             let code = body["error"].as_str().map(str::to_string).unwrap_or_else(|| response.status().canonical_reason().unwrap_or("error").to_string());
-            if status == 402 && code == kelpie_hub_api::PLAN_INACTIVE {
+            if status == 402 && code == kebbie_hub_api::PLAN_INACTIVE {
                 return Err(HubError::PlanInactive { url: body["url"].as_str().map(str::to_string) });
             }
             return Err(HubError::Status { status, code });
@@ -166,13 +166,13 @@ fn host_name(host: &str) -> String {
     name.to_ascii_lowercase()
 }
 
-// The token and join code go along, so a redirect stays on the hub's own host and never leaves https; another host is the user's call through kelpie hub move.
+// The token and join code go along, so a redirect stays on the hub's own host and never leaves https; another host is the user's call through kebbie hub move.
 pub fn follow(from: &str, location: &str) -> Result<String, HubError> {
     let (scheme, host) = origin(from).ok_or_else(|| HubError::Redirect(format!("{from} is not a URL")))?;
     let next = if location.starts_with('/') && !location.starts_with("//") { format!("{scheme}://{host}{location}") } else { location.to_string() };
     let (next_scheme, next_host) = origin(&next).ok_or_else(|| HubError::Redirect(format!("{location} is not a URL")))?;
     if host_name(next_host) != host_name(host) {
-        return Err(HubError::Redirect(format!("the hub points to {next_scheme}://{next_host}; run kelpie hub move <url> if you moved it")));
+        return Err(HubError::Redirect(format!("the hub points to {next_scheme}://{next_host}; run kebbie hub move <url> if you moved it")));
     }
     match (scheme, next_scheme) {
         ("https", "https") | ("http", "http" | "https") => Ok(next),
@@ -190,7 +190,7 @@ mod tests {
         assert_eq!(follow("http://127.0.0.1:8470/v1/m/join", "https://127.0.0.1:8471/v1/m/join").unwrap(), "https://127.0.0.1:8471/v1/m/join");
         assert_eq!(follow("https://Hub.Example.com/v1/m/board", "https://hub.example.com:8443/v1/m/board").unwrap(), "https://hub.example.com:8443/v1/m/board");
         let elsewhere = follow("https://hub.example.com/v1/m/board", "https://hub.example.net/v1/m/board").unwrap_err();
-        assert_eq!(elsewhere, HubError::Redirect("the hub points to https://hub.example.net; run kelpie hub move <url> if you moved it".to_string()));
+        assert_eq!(elsewhere, HubError::Redirect("the hub points to https://hub.example.net; run kebbie hub move <url> if you moved it".to_string()));
         assert!(matches!(follow("https://hub.example.com/v1/m/board", "https://hub.example.com.evil.example/v1/m/board"), Err(HubError::Redirect(_))));
         assert!(matches!(follow("https://hub.example.com/v1/m/board", "http://hub.example.com/v1/m/board"), Err(HubError::Redirect(_))));
         assert!(matches!(follow("https://hub.example.com/v1/m/board", "//evil.example/v1"), Err(HubError::Redirect(_))));

@@ -37,7 +37,7 @@ jobs:
       - name: cargo test
         run: |
           mkdir -p "$RUNNER_TEMP/state"
-          KELPIE_STATE_DIR="$RUNNER_TEMP/state" cargo test --locked
+          KEBBIE_STATE_DIR="$RUNNER_TEMP/state" cargo test --locked
 
   binaries:
     needs: [test]
@@ -62,14 +62,14 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: The binary starts
         if: matrix.runs
-        run: target/${{ matrix.target }}/release/kelpie help > /dev/null
-      - name: Pack kelpie-<version>-<target>.tar.gz
+        run: target/${{ matrix.target }}/release/kebbie help > /dev/null
+      - name: Pack kebbie-<version>-<target>.tar.gz
         run: |
           mkdir dist
-          tar -czf "dist/kelpie-${GITHUB_REF_NAME#v}-${{ matrix.target }}.tar.gz" -C target/${{ matrix.target }}/release kelpie
+          tar -czf "dist/kebbie-${GITHUB_REF_NAME#v}-${{ matrix.target }}.tar.gz" -C target/${{ matrix.target }}/release kebbie
       - uses: actions/upload-artifact@v4
         with:
-          name: kelpie-${{ matrix.target }}
+          name: kebbie-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
@@ -94,9 +94,9 @@ jobs:
       - name: SHA256SUMS over every binary
         working-directory: dist
         run: |
-          set -- kelpie-*.tar.gz
+          set -- kebbie-*.tar.gz
           [ $# -eq 4 ] || { echo "::error::expected 4 binaries, got $*"; exit 1; }
-          sha256sum kelpie-*.tar.gz > SHA256SUMS
+          sha256sum kebbie-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
       - name: Draft a GitHub Release with the binaries and the version's notes
         working-directory: dist
@@ -104,9 +104,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber kelpie-*.tar.gz SHA256SUMS
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber kebbie-*.tar.gz SHA256SUMS
           else
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --notes-file ../release-notes.md --title "kelpie ${GITHUB_REF_NAME#v}" kelpie-*.tar.gz SHA256SUMS
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --notes-file ../release-notes.md --title "kebbie ${GITHUB_REF_NAME#v}" kebbie-*.tar.gz SHA256SUMS
           fi
       - name: Publish the release once every binary and SHA256SUMS is attached
         working-directory: dist
@@ -114,6 +114,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           attached=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | sort)
-          expected=$(ls kelpie-*.tar.gz SHA256SUMS | sort)
+          expected=$(ls kebbie-*.tar.gz SHA256SUMS | sort)
           [ "$attached" = "$expected" ] || { echo "::error::attached $attached, expected $expected"; exit 1; }
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

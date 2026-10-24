@@ -66,7 +66,7 @@ pub fn gate(note: &str, passed: Option<&str>, check: impl FnOnce() -> Result<Vec
             "This task's note {note} has no Problem yet, and code waits for it. With the vault MCP tools, write its Problem section in your own clear words: what is wrong or missing, for whom, and what done looks like, from the user's prompt and what you read. Rewrite the prompt rather than pasting it. Then make this change again."
         )),
         Ok(_) => Gate::Passed,
-        Err(error) => Gate::Warn(format!("kelpie could not check {note} in the vault ({error}), so this edit goes through; write its Problem section when the vault answers again.")),
+        Err(error) => Gate::Warn(format!("kebbie could not check {note} in the vault ({error}), so this edit goes through; write its Problem section when the vault answers again.")),
     }
 }
 
@@ -143,7 +143,7 @@ pub fn waits(cli: &Cli, note: &str, task: &str) -> std::result::Result<Option<(S
     let named = missing.join(" and ");
     let user = crate::notice::Notice::new(crate::notice::Tone::You, format!("Not closed yet: its note lacks its {named}"))
         .next("Its Claude was asked to write them.").you("Close it again once it reports ready.").detail("task", task).detail("note", note).to_string();
-    let told = format!("kelpie done waits for your note {note}: write its {named} sections there with the vault MCP tools (what changes from the user's side, and each decision with its reason), then report ready.");
+    let told = format!("kebbie done waits for your note {note}: write its {named} sections there with the vault MCP tools (what changes from the user's side, and each decision with its reason), then report ready.");
     Ok(Some((user, told)))
 }
 
@@ -186,7 +186,7 @@ pub fn heartbeat(cli: &Cli, state: &Path, address: &str) {
 
 pub fn refusal(note: &str, claim: &Claim, today: i64) -> String {
     crate::notice::Notice::new(crate::notice::Tone::You, format!("Not started: {} works on it", claim.machine))
-        .next("Its vault note is claimed by kelpie on another machine.")
+        .next("Its vault note is claimed by kebbie on another machine.")
         .you("Start it with --anyway to work on it here too, or pick another item.")
         .detail("note", note).detail("claim", format!("{} since {}", claim.shown(today), claim.since)).to_string()
 }
@@ -216,80 +216,80 @@ mod tests {
     #[test]
     fn a_start_with_the_vault_on_opens_a_note_for_the_task() {
         let fake = Fake::new("start");
-        fake.answer("task-open", r#"{"path":"Projects/kelpie-billing.md","created":true,"repo":"kelpie","area":"kelpie"}"#);
-        assert_eq!(open(&fake.cli, "billing", Path::new("/src/wt1.kelpie"), None).unwrap(), "Projects/kelpie-billing.md");
-        assert_eq!(open(&fake.cli, "billing", Path::new("/src/wt1.kelpie"), Some("local:Fix login")).unwrap(), "Projects/kelpie-billing.md");
-        assert_eq!(fake.calls(), ["task open --name billing --cwd /src/wt1.kelpie --branch billing"; 2], "a local item or a Linear id is no vault note to claim");
+        fake.answer("task-open", r#"{"path":"Projects/kebbie-billing.md","created":true,"repo":"kebbie","area":"kebbie"}"#);
+        assert_eq!(open(&fake.cli, "billing", Path::new("/src/wt1.kebbie"), None).unwrap(), "Projects/kebbie-billing.md");
+        assert_eq!(open(&fake.cli, "billing", Path::new("/src/wt1.kebbie"), Some("local:Fix login")).unwrap(), "Projects/kebbie-billing.md");
+        assert_eq!(fake.calls(), ["task open --name billing --cwd /src/wt1.kebbie --branch billing"; 2], "a local item or a Linear id is no vault note to claim");
     }
 
     #[test]
     fn a_start_from_a_vault_backlog_item_claims_that_note() {
         let fake = Fake::new("claim");
-        fake.answer("task-open", r#"{"path":"Projects/kelpie-refunds.md","created":false,"repo":"kelpie","area":"kelpie"}"#);
-        assert_eq!(open(&fake.cli, "refunds", Path::new("/src/wt2.kelpie"), Some("Projects/kelpie-refunds.md")).unwrap(), "Projects/kelpie-refunds.md");
-        assert_eq!(fake.calls(), ["task open --name refunds --cwd /src/wt2.kelpie --branch refunds --note Projects/kelpie-refunds.md"]);
+        fake.answer("task-open", r#"{"path":"Projects/kebbie-refunds.md","created":false,"repo":"kebbie","area":"kebbie"}"#);
+        assert_eq!(open(&fake.cli, "refunds", Path::new("/src/wt2.kebbie"), Some("Projects/kebbie-refunds.md")).unwrap(), "Projects/kebbie-refunds.md");
+        assert_eq!(fake.calls(), ["task open --name refunds --cwd /src/wt2.kebbie --branch refunds --note Projects/kebbie-refunds.md"]);
     }
 
     #[test]
     fn edits_wait_for_the_problem_and_pass_once_it_is_written_asking_no_more() {
         let fake = Fake::new("gate");
         let state = fake.state();
-        link(&state, "billing@kelpie", "Projects/kelpie-billing.md");
+        link(&state, "billing@kebbie", "Projects/kebbie-billing.md");
         fake.answer("task-check", r#"{"missing":["problem","solution","decisions"]}"#);
-        let Gate::Deny(reason) = decide(&state, "billing@kelpie", || Some(fake.cli.clone())) else { panic!("an edit before Problem is blocked") };
-        assert!(reason.contains("Projects/kelpie-billing.md") && reason.contains("vault MCP tools") && reason.contains("Rewrite the prompt rather than pasting it"), "{reason}");
+        let Gate::Deny(reason) = decide(&state, "billing@kebbie", || Some(fake.cli.clone())) else { panic!("an edit before Problem is blocked") };
+        assert!(reason.contains("Projects/kebbie-billing.md") && reason.contains("vault MCP tools") && reason.contains("Rewrite the prompt rather than pasting it"), "{reason}");
         assert!(answer(&Gate::Deny(reason)).contains("\"permissionDecision\":\"deny\""));
         fake.answer("task-check", r#"{"missing":["solution","decisions"]}"#);
-        assert_eq!(decide(&state, "billing@kelpie", || Some(fake.cli.clone())), Gate::Passed);
-        assert_eq!(decide(&state, "billing@kelpie", || Some(fake.cli.clone())), Gate::Allow);
+        assert_eq!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Passed);
+        assert_eq!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Allow);
         assert_eq!(fake.calls().len(), 2, "a pass is kept: {:?}", fake.calls());
-        assert_eq!(fake.calls()[0], "task check Projects/kelpie-billing.md --need problem");
-        link(&state, "billing@kelpie", "Projects/kelpie-other.md");
+        assert_eq!(fake.calls()[0], "task check Projects/kebbie-billing.md --need problem");
+        link(&state, "billing@kebbie", "Projects/kebbie-other.md");
         fake.answer("task-check", r#"{"missing":["problem"]}"#);
-        assert!(matches!(decide(&state, "billing@kelpie", || Some(fake.cli.clone())), Gate::Deny(_)), "a pass holds for its own note only");
+        assert!(matches!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Deny(_)), "a pass holds for its own note only");
     }
 
     #[test]
     fn an_edit_goes_through_with_a_warning_when_the_vault_does_not_answer() {
         let fake = Fake::new("gate-down");
         let state = fake.state();
-        link(&state, "billing@kelpie", "Projects/kelpie-billing.md");
+        link(&state, "billing@kebbie", "Projects/kebbie-billing.md");
         fake.fail("task-check", "uvx: no network");
-        let Gate::Warn(text) = decide(&state, "billing@kelpie", || Some(fake.cli.clone())) else { panic!("a vault that is down never locks the task out") };
+        let Gate::Warn(text) = decide(&state, "billing@kebbie", || Some(fake.cli.clone())) else { panic!("a vault that is down never locks the task out") };
         assert!(text.contains("uvx: no network") && text.contains("goes through"), "{text}");
         assert!(answer(&Gate::Warn(text)).contains("systemMessage"));
-        assert!(std::fs::read_to_string(state.join("vault.log")).unwrap().contains("billing@kelpie"));
-        assert!(matches!(decide(&state, "billing@kelpie", || None), Gate::Warn(_)), "no vault command at all lets it through too");
-        assert!(!passed_file(&state, "billing@kelpie").exists(), "a warning is no pass");
+        assert!(std::fs::read_to_string(state.join("vault.log")).unwrap().contains("billing@kebbie"));
+        assert!(matches!(decide(&state, "billing@kebbie", || None), Gate::Warn(_)), "no vault command at all lets it through too");
+        assert!(!passed_file(&state, "billing@kebbie").exists(), "a warning is no pass");
     }
 
     #[test]
     fn a_warm_pass_answers_without_building_the_vault_command() {
         let fake = Fake::new("gate-warm");
         let state = fake.state();
-        link(&state, "billing@kelpie", "Projects/kelpie-billing.md");
+        link(&state, "billing@kebbie", "Projects/kebbie-billing.md");
         std::fs::create_dir_all(state.join("vault-gate")).unwrap();
-        std::fs::write(passed_file(&state, "billing@kelpie"), "Projects/kelpie-billing.md").unwrap();
-        assert_eq!(decide(&state, "billing@kelpie", || unreachable!("a kept pass reads no config and runs no vault")), Gate::Allow);
+        std::fs::write(passed_file(&state, "billing@kebbie"), "Projects/kebbie-billing.md").unwrap();
+        assert_eq!(decide(&state, "billing@kebbie", || unreachable!("a kept pass reads no config and runs no vault")), Gate::Allow);
     }
 
     #[test]
     fn the_gate_denies_only_on_the_vaults_own_answer_never_on_its_failure() {
         let fake = Fake::new("gate-never");
         let state = fake.state();
-        link(&state, "billing@kelpie", "Projects/kelpie-billing.md");
+        link(&state, "billing@kebbie", "Projects/kebbie-billing.md");
         fake.answer("task-check", "not json");
-        assert!(matches!(decide(&state, "billing@kelpie", || Some(fake.cli.clone())), Gate::Warn(_)), "an answer kelpie cannot read lets the edit through");
+        assert!(matches!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Warn(_)), "an answer kebbie cannot read lets the edit through");
         fake.answer("task-check", r#"{"other":1}"#);
-        assert!(matches!(decide(&state, "billing@kelpie", || Some(fake.cli.clone())), Gate::Warn(_)));
+        assert!(matches!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Warn(_)));
         let slow = Cli::new(vec!["/nonexistent/vault".to_string()]);
-        assert!(matches!(decide(&state, "billing@kelpie", || Some(slow)), Gate::Warn(_)));
+        assert!(matches!(decide(&state, "billing@kebbie", || Some(slow)), Gate::Warn(_)));
     }
 
     #[test]
     fn a_started_entry_keeps_the_note_next_to_the_backlog_item_it_came_from() {
-        assert_eq!(items("Projects/kelpie-billing.md\nlocal:Fix login\n"), ["Projects/kelpie-billing.md", "local:Fix login"]);
-        assert_eq!(note_in("local:Fix login\nProjects/kelpie-billing.md").as_deref(), Some("Projects/kelpie-billing.md"));
+        assert_eq!(items("Projects/kebbie-billing.md\nlocal:Fix login\n"), ["Projects/kebbie-billing.md", "local:Fix login"]);
+        assert_eq!(note_in("local:Fix login\nProjects/kebbie-billing.md").as_deref(), Some("Projects/kebbie-billing.md"));
         assert_eq!(note_in("ABC-12"), None);
         assert_eq!(items("Projects/old.md"), ["Projects/old.md"], "an entry from before reads as it did");
     }
@@ -312,36 +312,36 @@ mod tests {
     fn a_task_without_a_vault_note_is_never_gated_and_the_vault_never_asked() {
         let fake = Fake::new("gate-off");
         let state = fake.state();
-        assert_eq!(decide(&state, "billing@kelpie", || Some(fake.cli.clone())), Gate::Allow);
-        link(&state, "billing@kelpie", "local:Fix login");
-        assert_eq!(decide(&state, "billing@kelpie", || Some(fake.cli.clone())), Gate::Allow);
+        assert_eq!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Allow);
+        link(&state, "billing@kebbie", "local:Fix login");
+        assert_eq!(decide(&state, "billing@kebbie", || Some(fake.cli.clone())), Gate::Allow);
         assert!(fake.calls().is_empty());
     }
 
     #[test]
     fn a_push_logs_one_line_of_its_commit_subjects_with_their_shas() {
         let fake = Fake::new("push");
-        fake.answer("log-append", r#"{"path":"Log/kelpie-logg.md"}"#);
-        let said = logged_text(&log_push(&fake.cli, Path::new("/src/wt1.kelpie"), "billing", "a1b2c3d Add refunds\ne4f5a6b Show refunds on the invoice"));
-        assert_eq!(said, "Log/kelpie-logg.md");
-        assert_eq!(fake.calls(), ["log append --cwd /src/wt1.kelpie --branch billing --line billing: Add refunds; Show refunds on the invoice --commit a1b2c3d --commit e4f5a6b"]);
+        fake.answer("log-append", r#"{"path":"Log/kebbie-logg.md"}"#);
+        let said = logged_text(&log_push(&fake.cli, Path::new("/src/wt1.kebbie"), "billing", "a1b2c3d Add refunds\ne4f5a6b Show refunds on the invoice"));
+        assert_eq!(said, "Log/kebbie-logg.md");
+        assert_eq!(fake.calls(), ["log append --cwd /src/wt1.kebbie --branch billing --line billing: Add refunds; Show refunds on the invoice --commit a1b2c3d --commit e4f5a6b"]);
         fake.fail("log-append", "S3 unreachable");
-        assert!(logged_text(&log_push(&fake.cli, Path::new("/src/wt1.kelpie"), "billing", "a1b2c3d Add refunds")).contains("not written (vault log append: S3 unreachable)"), "a failing vault never fails the push");
-        assert_eq!(log_push(&fake.cli, Path::new("/src/wt1.kelpie"), "billing", ""), Ok(None));
+        assert!(logged_text(&log_push(&fake.cli, Path::new("/src/wt1.kebbie"), "billing", "a1b2c3d Add refunds")).contains("not written (vault log append: S3 unreachable)"), "a failing vault never fails the push");
+        assert_eq!(log_push(&fake.cli, Path::new("/src/wt1.kebbie"), "billing", ""), Ok(None));
     }
 
     #[test]
     fn done_waits_for_the_solution_and_decisions_and_says_so_to_both() {
         let fake = Fake::new("done");
         fake.answer("task-check", r#"{"missing":["decisions"]}"#);
-        let (user, told) = waits(&fake.cli, "Projects/kelpie-billing.md", "billing").unwrap().unwrap();
+        let (user, told) = waits(&fake.cli, "Projects/kebbie-billing.md", "billing").unwrap().unwrap();
         assert!(user.contains("its note lacks its decisions") && user.contains("Close it again once it reports ready"), "{user}");
-        assert!(told.contains("Projects/kelpie-billing.md") && told.contains("decisions sections") && told.contains("report ready"), "{told}");
+        assert!(told.contains("Projects/kebbie-billing.md") && told.contains("decisions sections") && told.contains("report ready"), "{told}");
         fake.answer("task-check", r#"{"missing":[]}"#);
-        assert_eq!(waits(&fake.cli, "Projects/kelpie-billing.md", "billing").unwrap(), None);
-        fake.answer("task-close", r#"{"path":"Archive/kelpie-billing.md"}"#);
-        assert_eq!(close(&fake.cli, "Projects/kelpie-billing.md").unwrap(), "Archive/kelpie-billing.md");
-        assert_eq!(fake.calls(), ["task check Projects/kelpie-billing.md --need solution,decisions", "task check Projects/kelpie-billing.md --need solution,decisions", "task close Projects/kelpie-billing.md"]);
+        assert_eq!(waits(&fake.cli, "Projects/kebbie-billing.md", "billing").unwrap(), None);
+        fake.answer("task-close", r#"{"path":"Archive/kebbie-billing.md"}"#);
+        assert_eq!(close(&fake.cli, "Projects/kebbie-billing.md").unwrap(), "Archive/kebbie-billing.md");
+        assert_eq!(fake.calls(), ["task check Projects/kebbie-billing.md --need solution,decisions", "task check Projects/kebbie-billing.md --need solution,decisions", "task close Projects/kebbie-billing.md"]);
     }
 
     #[test]
@@ -395,20 +395,20 @@ mod tests {
     #[test]
     fn a_reset_puts_the_note_back_in_the_backlog() {
         let fake = Fake::new("reset");
-        fake.answer("task-backlog", r#"{"path":"Projects/kelpie-billing.md"}"#);
-        assert_eq!(to_backlog(&fake.cli, "Projects/kelpie-billing.md").unwrap(), "Projects/kelpie-billing.md");
-        assert_eq!(fake.calls(), ["task backlog Projects/kelpie-billing.md"]);
+        fake.answer("task-backlog", r#"{"path":"Projects/kebbie-billing.md"}"#);
+        assert_eq!(to_backlog(&fake.cli, "Projects/kebbie-billing.md").unwrap(), "Projects/kebbie-billing.md");
+        assert_eq!(fake.calls(), ["task backlog Projects/kebbie-billing.md"]);
     }
 
-    // KELPIE_VAULT_E2E=<wrapper> VAULT_PATH=<scratch vault> cargo test -- --ignored real_vault; the wrapper's folder holds wt1.orchard, a worktree of a repo the vault knows.
+    // KEBBIE_VAULT_E2E=<wrapper> VAULT_PATH=<scratch vault> cargo test -- --ignored real_vault; the wrapper's folder holds wt1.orchard, a worktree of a repo the vault knows.
     #[test]
     #[ignore]
     fn real_vault_open_gate_log_done_close() {
-        let Some(wrapper) = std::env::var_os("KELPIE_VAULT_E2E").map(PathBuf::from) else { return };
+        let Some(wrapper) = std::env::var_os("KEBBIE_VAULT_E2E").map(PathBuf::from) else { return };
         let vault = PathBuf::from(std::env::var("VAULT_PATH").expect("VAULT_PATH names the scratch vault"));
         let worktree = wrapper.parent().unwrap().join("wt1.orchard");
         let cli = Cli::new(vec![wrapper.to_string_lossy().to_string()]);
-        let state = std::env::temp_dir().join(format!("kelpie-e2e-state-{}", std::process::id()));
+        let state = std::env::temp_dir().join(format!("kebbie-e2e-state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&state);
         std::fs::create_dir_all(&state).unwrap();
         let address = "prune@orchard";

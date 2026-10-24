@@ -50,7 +50,7 @@ pub fn succeeds(program: &str, args: &[&str], cwd: Option<&Path>) -> bool {
     command(program, args, cwd).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
 }
 
-// A child kelpie does not wait for itself is waited on by a thread, or it stays a zombie for as long as kelpie runs.
+// A child kebbie does not wait for itself is waited on by a thread, or it stays a zombie for as long as kebbie runs.
 pub fn reap(mut child: std::process::Child) -> u32 {
     let pid = child.id();
     std::thread::spawn(move || {
@@ -62,7 +62,7 @@ pub fn reap(mut child: std::process::Child) -> u32 {
 #[cfg(test)]
 pub fn test_dir(name: &str) -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!("kelpie-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let dir = std::env::temp_dir().join(format!("kebbie-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -79,13 +79,13 @@ mod tests {
 
     #[test]
     fn a_program_that_will_not_start_is_the_outer_error_and_a_failing_one_the_inner() {
-        let missing = attempt("/no/such/program-kelpie", &[], None);
-        assert!(missing.is_err() && missing.unwrap_err().starts_with("/no/such/program-kelpie: "));
+        let missing = attempt("/no/such/program-kebbie", &[], None);
+        assert!(missing.is_err() && missing.unwrap_err().starts_with("/no/such/program-kebbie: "));
         assert_eq!(attempt("sh", &["-c", "echo out; echo err >&2; exit 3"], None), Ok(Err("err".to_string())));
         assert_eq!(attempt("sh", &["-c", "printf '  out  \\n'"], None), Ok(Ok("out".to_string())), "stdout is trimmed");
         assert_eq!(run("sh", &["-c", "exit 1"], None).unwrap_err(), "sh -c exit 1 failed");
         assert_eq!(run("sh", &["-c", "echo why >&2; exit 1"], None).unwrap_err(), "sh -c echo why >&2; exit 1 failed: why");
-        assert!(succeeds("true", &[], None) && !succeeds("false", &[], None) && !succeeds("/no/such/program-kelpie", &[], None));
+        assert!(succeeds("true", &[], None) && !succeeds("false", &[], None) && !succeeds("/no/such/program-kebbie", &[], None));
     }
 
     // A zombie still answers kill(pid, 0); only a reaped child is gone.

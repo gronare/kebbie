@@ -37,7 +37,7 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
             Some(NoteBack::Shared) => shown = shown.detail("note", format!("{item} stays open for the task's other halves")),
             Some(NoteBack::Elsewhere(claim)) => shown = shown.detail("note", crate::task_note::held_text(item, &claim, crate::backlog::today())),
             Some(NoteBack::Gone) => shown = shown.detail("note", crate::task_note::gone_text(item)),
-            Some(NoteBack::Back(path)) => notice.push_str(&format!(" kelpie put its note {path} back in the backlog.")),
+            Some(NoteBack::Back(path)) => notice.push_str(&format!(" kebbie put its note {path} back in the backlog.")),
             Some(NoteBack::Failed(error)) => {
                 shown = shown.detail("note", format!("{item} could not go back to the backlog ({error}); set its status to backlog in the vault"));
                 notice.push_str(&crate::backlog::reset_notice(item));
@@ -148,7 +148,7 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
             Some(cli) => match crate::task_note::release(cli, state, &item, task) {
                 crate::vault_cli::Released::Held(claim) => {
                     said.push(crate::task_note::held_text(&item, &claim, crate::backlog::today()));
-                    messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but {} on {} has taken over its note {item}, so kelpie left the note open: settle it with the user.", claim.task, claim.machine))
+                    messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but {} on {} has taken over its note {item}, so kebbie left the note open: settle it with the user.", claim.task, claim.machine))
                 }
                 crate::vault_cli::Released::Gone => {
                     said.push(crate::task_note::gone_text(&item));
@@ -177,11 +177,11 @@ fn close_note(cli: &crate::vault_cli::Cli, task: &str, item: &str, said: &mut Ve
     match crate::task_note::close(cli, item) {
         Ok(path) => {
             said.push(format!("closed ({path})"));
-            messages::log_for_lead(&format!("{task} is done and its commits are on the default branch; kelpie closed its note {item}."), None)
+            messages::log_for_lead(&format!("{task} is done and its commits are on the default branch; kebbie closed its note {item}."), None)
         }
         Err(error) => {
             said.push(format!("{item} could not be closed ({error})"));
-            messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but kelpie could not close its note {item} ({error}): close it with the vault tools."))
+            messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but kebbie could not close its note {item} ({error}): close it with the vault tools."))
         }
     }
 }
@@ -326,7 +326,7 @@ pub(super) fn forget_address(state: &Path, address: &str) {
 
 fn forget_held_prompt(address: &str) {
     if let Err(error) = messages::drop_held_for_ended(address) {
-        eprintln!("Could not drop what kelpie still held for {address}: {error}");
+        eprintln!("Could not drop what kebbie still held for {address}: {error}");
     }
 }
 
@@ -497,7 +497,7 @@ mod tests {
         std::fs::write(tmp.join("deep/file"), "x").unwrap();
         assert!(is_clean(&slot.path).unwrap(), "temp files never show as changes in the worktree");
         let dirs = crate::sandbox::TaskDirs::new(&slot.path, &tmp);
-        let written: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", None, Some(&dirs), None)).unwrap();
+        let written: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", None, Some(&dirs), None)).unwrap();
         for name in TMP_VARS {
             assert_eq!(written["env"][name], json!(tmp.to_string_lossy()), "{name}");
         }

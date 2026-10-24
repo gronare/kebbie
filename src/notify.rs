@@ -16,7 +16,7 @@ use crate::sh::Result;
 pub const DEBOUNCE_SECONDS: u64 = 60;
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 pub const DELIVER: &str = "--deliver";
-const PROGRAM_NAME: &str = "kelpie-notify";
+const PROGRAM_NAME: &str = "kebbie-notify";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
@@ -64,7 +64,7 @@ pub struct Notice {
 }
 
 impl Notice {
-    // A task's address is task@repo; the lead and kelpie itself have no task.
+    // A task's address is task@repo; the lead and kebbie itself have no task.
     pub fn from(event: Event, address: &str, text: String) -> Notice {
         let (task, repo) = match address.split_once('@') {
             Some((task, repo)) => (Some(task.to_string()), Some(repo.to_string())),
@@ -90,11 +90,11 @@ pub struct Invocation {
 // The text is $1 to the command, so it is the last argument without being glued onto the user's own command line.
 pub fn invocation(command: &str, notice: &Notice) -> Invocation {
     let env = [
-        ("KELPIE_EVENT", notice.event.key().to_string()),
-        ("KELPIE_TASK", notice.task.clone().unwrap_or_default()),
-        ("KELPIE_REPO", notice.repo.clone().unwrap_or_default()),
-        ("KELPIE_TEXT", notice.text.clone()),
-    ].into_iter().map(|(name, value)| (name.to_string(), value)).collect();
+        ("KEBBIE_EVENT", notice.event.key().to_string()),
+        ("KEBBIE_TASK", notice.task.clone().unwrap_or_default()),
+        ("KEBBIE_REPO", notice.repo.clone().unwrap_or_default()),
+        ("KEBBIE_TEXT", notice.text.clone()),
+    ].into_iter().flat_map(|(name, value)| [(name.to_string(), value.clone()), (name.replacen("KEBBIE_", "KELPIE_", 1), value)]).collect();
     Invocation {
         program: "sh".to_string(),
         args: vec!["-c".to_string(), command.to_string(), PROGRAM_NAME.to_string(), notice.text.clone()],
@@ -167,10 +167,10 @@ pub fn send(cwd: &Path, notice: &Notice) -> Sent {
     }
 }
 
-// A detached kelpie waits on the command, so the report returns at once and the timeout still holds.
+// A detached kebbie waits on the command, so the report returns at once and the timeout still holds.
 fn spawn(invocation: &Invocation) -> Result<()> {
-    let kelpie = crate::peers::own_exe().map_err(|error| format!("kelpie's own path: {error}"))?;
-    Command::new(kelpie).arg("notify").arg(DELIVER).arg(&invocation.program).args(&invocation.args)
+    let kebbie = crate::peers::own_exe().map_err(|error| format!("kebbie's own path: {error}"))?;
+    Command::new(kebbie).arg("notify").arg(DELIVER).arg(&invocation.program).args(&invocation.args)
         .envs(invocation.env.iter().map(|(name, value)| (name, value)))
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
         .process_group(0)
@@ -221,7 +221,7 @@ fn timed(mut command: Command, program: &str, timeout: Duration) -> std::result:
 pub fn deliver(argv: &[String]) {
     let Ok(state) = state_dir() else { return };
     let Some((program, args)) = argv.split_first() else { return };
-    let event = std::env::var("KELPIE_EVENT").unwrap_or_default();
+    let event = std::env::var("KEBBIE_EVENT").unwrap_or_default();
     if let Err(error) = run_with_timeout(program, args, TIMEOUT) {
         log_error(&state, &format!("{event}: notify.command {error}"));
     }
@@ -235,16 +235,16 @@ pub fn notify(cwd: &Path, text: &str) -> Result<String> {
 fn notify_as(caller: &crate::permit::Caller, cwd: &Path, text: &str) -> Result<String> {
     use crate::permit::Caller;
     if !matches!(caller, Caller::User | Caller::Lead) {
-        return Err(format!("kelpie notify is the lead's word to the user; {} cannot send one, its report and its questions reach the user", crate::permit::describe(caller)));
+        return Err(format!("kebbie notify is the lead's word to the user; {} cannot send one, its report and its questions reach the user", crate::permit::describe(caller)));
     }
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {
-        return Err("kelpie notify needs the text: kelpie notify \"<what the user should know>\"".to_string());
+        return Err("kebbie notify needs the text: kebbie notify \"<what the user should know>\"".to_string());
     }
     config::resolve(Some(cwd))?;
     let log = log_file(&state_dir()?);
     match send(cwd, &Notice { event: Event::Summary, task: None, repo: None, text }) {
-        Sent::Off => Ok("No notify.command is set, so nothing was sent; kelpie config shows the key.".to_string()),
+        Sent::Off => Ok("No notify.command is set, so nothing was sent; kebbie config shows the key.".to_string()),
         Sent::Held => Ok(format!("Not sent: a notification like it went out less than {DEBOUNCE_SECONDS} seconds ago.")),
         Sent::Started => Ok(format!("Handed to notify.command; if it fails, the error is in {}.", log.display())),
         Sent::Failed => Err(format!("notify.command could not be started; the error is in {}", log.display())),
@@ -260,7 +260,7 @@ mod tests {
         use crate::permit::Caller;
         for caller in [Caller::Task("billing@app".to_string()), Caller::Agent] {
             let refused = notify_as(&caller, Path::new("/"), "push everything").unwrap_err();
-            assert!(refused.contains("kelpie notify is the lead's word to the user"), "{refused}");
+            assert!(refused.contains("kebbie notify is the lead's word to the user"), "{refused}");
         }
         assert!(notify_as(&Caller::Lead, Path::new("/"), " ").unwrap_err().contains("needs the text"), "the lead gets past the gate");
     }
@@ -270,7 +270,7 @@ mod tests {
     }
 
     fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kelpie-notify-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-notify-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -278,17 +278,19 @@ mod tests {
 
     #[test]
     fn the_command_gets_the_event_as_environment_and_the_text_as_its_last_argument() {
-        let built = invocation("curl -d \"$KELPIE_TEXT\" ntfy.sh/mine", &notice(Event::NeedsYou, "billing@app", "billing@app needs you: answer which queue"));
+        let built = invocation("curl -d \"$KEBBIE_TEXT\" ntfy.sh/mine", &notice(Event::NeedsYou, "billing@app", "billing@app needs you: answer which queue"));
         assert_eq!(built.program, "sh");
-        assert_eq!(built.args, ["-c", "curl -d \"$KELPIE_TEXT\" ntfy.sh/mine", "kelpie-notify", "billing@app needs you: answer which queue"]);
-        assert_eq!(built.env, [
-            ("KELPIE_EVENT".to_string(), "needs-you".to_string()),
-            ("KELPIE_TASK".to_string(), "billing".to_string()),
-            ("KELPIE_REPO".to_string(), "app".to_string()),
-            ("KELPIE_TEXT".to_string(), "billing@app needs you: answer which queue".to_string()),
+        assert_eq!(built.args, ["-c", "curl -d \"$KEBBIE_TEXT\" ntfy.sh/mine", "kebbie-notify", "billing@app needs you: answer which queue"]);
+        let new: Vec<(String, String)> = built.env.iter().filter(|(name, _)| name.starts_with("KEBBIE_")).cloned().collect();
+        assert_eq!(new, [
+            ("KEBBIE_EVENT".to_string(), "needs-you".to_string()),
+            ("KEBBIE_TASK".to_string(), "billing".to_string()),
+            ("KEBBIE_REPO".to_string(), "app".to_string()),
+            ("KEBBIE_TEXT".to_string(), "billing@app needs you: answer which queue".to_string()),
         ]);
+        assert!(built.env.contains(&("KELPIE_TEXT".to_string(), "billing@app needs you: answer which queue".to_string())), "a command written for the old name still gets its text");
         let summary = invocation("x", &Notice { event: Event::Summary, task: None, repo: None, text: "3 tasks ready".to_string() });
-        assert_eq!(summary.env[..3], [("KELPIE_EVENT".to_string(), "summary".to_string()), ("KELPIE_TASK".to_string(), String::new()), ("KELPIE_REPO".to_string(), String::new())]);
+        assert_eq!(summary.env[..3], [("KEBBIE_EVENT".to_string(), "summary".to_string()), ("KELPIE_EVENT".to_string(), "summary".to_string()), ("KEBBIE_TASK".to_string(), String::new())]);
         assert_eq!(Notice::from(Event::Question, "lead", "x".to_string()).task, None);
         assert_eq!(Event::of_state("ready"), Some(Event::Ready));
         assert_eq!(Event::of_state("working"), None);
@@ -299,7 +301,7 @@ mod tests {
     fn the_text_reaches_the_shell_as_dollar_one_and_in_the_environment_unquoted() {
         let dir = temp("shell");
         let out = dir.join("out");
-        let built = invocation(&format!("printf '%s|%s|%s' \"$1\" \"$KELPIE_EVENT\" \"$KELPIE_TEXT\" > {}", out.display()), &notice(Event::Ready, "a@b", "it's \"done\"; $(rm -rf /)"));
+        let built = invocation(&format!("printf '%s|%s|%s' \"$1\" \"$KEBBIE_EVENT\" \"$KEBBIE_TEXT\" > {}", out.display()), &notice(Event::Ready, "a@b", "it's \"done\"; $(rm -rf /)"));
         let status = Command::new(&built.program).args(&built.args).envs(built.env.iter().map(|(name, value)| (name, value))).status().unwrap();
         assert!(status.success());
         assert_eq!(fs::read_to_string(&out).unwrap(), "it's \"done\"; $(rm -rf /)|ready|it's \"done\"; $(rm -rf /)");
@@ -347,7 +349,7 @@ mod tests {
 
     #[test]
     fn the_text_is_never_part_of_the_command_line_the_shell_parses() {
-        let hostile = "x\"; touch /tmp/kelpie-pwned; echo \"";
+        let hostile = "x\"; touch /tmp/kebbie-pwned; echo \"";
         let built = invocation("printf '%s' \"$1\"", &notice(Event::Ready, "a@b", hostile));
         assert_eq!(built.args[1], "printf '%s' \"$1\"", "the user's command is byte for byte theirs");
         assert_eq!(built.args[3], hostile);
@@ -357,7 +359,7 @@ mod tests {
         let built = invocation(&script, &notice(Event::Ready, "a@b", hostile));
         assert!(Command::new(&built.program).args(&built.args).envs(built.env.iter().map(|(name, value)| (name, value))).status().unwrap().success());
         assert_eq!(fs::read_to_string(&out).unwrap(), hostile);
-        assert!(!Path::new("/tmp/kelpie-pwned").exists());
+        assert!(!Path::new("/tmp/kebbie-pwned").exists());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -372,7 +374,7 @@ mod tests {
         let record: serde_json::Value = serde_json::from_str(&fs::read_to_string(sent_file(&state)).unwrap()).unwrap();
         assert_eq!(record.as_object().unwrap().keys().collect::<Vec<_>>(), ["ready:b@x", "ready:c@x"], "the minute-old claim is gone");
         assert!(claim(&state, &notice(Event::Summary, "lead", ""), 1070));
-        assert!(!claim(&state, &notice(Event::Summary, "kelpie", ""), 1071), "summaries share one key, whoever sends them");
+        assert!(!claim(&state, &notice(Event::Summary, "kebbie", ""), 1071), "summaries share one key, whoever sends them");
         fs::remove_dir_all(state).unwrap();
     }
 }

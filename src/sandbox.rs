@@ -4,13 +4,13 @@ use serde_json::{Value, json};
 
 use crate::sh::Result;
 
-// Every kelpie subcommand a task's Claude is told to run (roles/task.md, the parts kelpie fills in, and `config` in the set-up-worktree skill) that reaches kelpie's state or herdr's socket, so it runs outside the sandbox; `docs` only reads the install's checkout and stays in.
+// Every kebbie subcommand a task's Claude is told to run (roles/task.md, the parts kebbie fills in, and `config` in the set-up-worktree skill) that reaches kebbie's state or herdr's socket, so it runs outside the sandbox; `docs` only reads the install's checkout and stays in.
 pub const TASK_COMMANDS: [&str; 8] = ["peers", "tell", "ask", "report", "routine ok", "link", "backlog add", "config"];
 pub const DOMAINS: [&str; 8] = ["crates.io", "static.crates.io", "index.crates.io", "registry.npmjs.org", "github.com", "objects.githubusercontent.com", "pypi.org", "files.pythonhosted.org"];
 pub const WRITES: [&str; 4] = ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache"];
 pub const OPS_COMMANDS: [&str; 3] = ["ssh *", "scp *", "rsync *"];
 const SHELL_FILES: [&str; 11] = ["~/.zshrc", "~/.zshenv", "~/.zprofile", "~/.zlogin", "~/.zlogout", "~/.bashrc", "~/.bash_profile", "~/.bash_login", "~/.bash_logout", "~/.profile", "~/.config/fish/**"];
-const HOSTS: [&str; 5] = ["kelpie", "herdr", "tmux", "screen", "zellij"];
+const HOSTS: [&str; 5] = ["kebbie", "herdr", "tmux", "screen", "zellij"];
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Policy {
@@ -34,8 +34,8 @@ impl Policy {
     }
 }
 
-pub fn excluded(kelpie: &str, policy: &Policy) -> Vec<String> {
-    TASK_COMMANDS.iter().map(|command| format!("{kelpie} {command} *")).chain(policy.excluded.iter().cloned()).collect()
+pub fn excluded(kebbie: &str, policy: &Policy) -> Vec<String> {
+    TASK_COMMANDS.iter().map(|command| format!("{kebbie} {command} *")).chain(policy.excluded.iter().cloned()).collect()
 }
 
 // A task's worktree and its temp folder, which sits in the worktree's own git dir.
@@ -73,7 +73,7 @@ impl TaskDirs {
     }
 }
 
-// Every other pooled worktree's git dir in the shared .git: its config.worktree and kelpie-hooks run as the user when that slot pushes.
+// Every other pooled worktree's git dir in the shared .git: its config.worktree and kebbie-hooks run as the user when that slot pushes.
 pub fn sibling_git_dirs(dirs: &TaskDirs) -> Vec<PathBuf> {
     let own = dirs.git_dir();
     let mut found: Vec<PathBuf> = std::fs::read_dir(dirs.common_dir().join("worktrees")).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|dir| dir.is_dir() && *dir != own).collect();
@@ -81,7 +81,7 @@ pub fn sibling_git_dirs(dirs: &TaskDirs) -> Vec<PathBuf> {
     found
 }
 
-// What git follows to find a worktree's config: rewriting one points the user's and kelpie's unsandboxed git at a config the task wrote.
+// What git follows to find a worktree's config: rewriting one points the user's and kebbie's unsandboxed git at a config the task wrote.
 fn git_pointers(dirs: &TaskDirs) -> [PathBuf; 4] {
     let git_dir = dirs.git_dir();
     [dirs.worktree.join(".git"), git_dir.join("commondir"), git_dir.join("gitdir"), git_dir.join("config.worktree")]
@@ -93,7 +93,7 @@ fn other_sessions_temp() -> [String; 2] {
     [format!("/tmp/claude-{uid}"), format!("/private/tmp/claude-{uid}")]
 }
 
-pub fn block(kelpie: &str, policy: &Policy, dirs: Option<&TaskDirs>, mac: bool) -> Value {
+pub fn block(kebbie: &str, policy: &Policy, dirs: Option<&TaskDirs>, mac: bool) -> Value {
     let mut network = json!({ "allowedDomains": policy.domains() });
     if mac {
         network["allowLocalBinding"] = json!(true);
@@ -102,12 +102,12 @@ pub fn block(kelpie: &str, policy: &Policy, dirs: Option<&TaskDirs>, mac: bool) 
     let mut denied: Vec<String> = other_sessions_temp().to_vec();
     if let Some(dirs) = dirs {
         writes.push(dirs.tmp.display().to_string());
-        denied.extend(git_pointers(dirs).iter().chain([&dirs.git_dir().join("kelpie-hooks")]).map(|path| path.display().to_string()));
+        denied.extend(git_pointers(dirs).iter().chain([&dirs.git_dir().join("kebbie-hooks")]).map(|path| path.display().to_string()));
         denied.extend(sibling_git_dirs(dirs).iter().map(|dir| dir.display().to_string()));
     }
     json!({
         "enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true,
-        "excludedCommands": excluded(kelpie, policy),
+        "excludedCommands": excluded(kebbie, policy),
         "network": network,
         "filesystem": { "allowWrite": writes, "denyWrite": denied, "denyRead": SECRETS },
     })
@@ -152,17 +152,17 @@ impl Protected {
         let data = std::env::var("XDG_DATA_HOME").ok().filter(|dir| !dir.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
         let path = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
         Protected {
-            state: crate::lead::state_location().unwrap_or_else(|_| home.join(".local/state/kelpie")), config: crate::config::dir(), data: data.join("kelpie"),
+            state: crate::lead::state_location().unwrap_or_else(|_| home.join(".local/state/kebbie")), config: crate::config::dir(), data: data.join("kebbie"),
             claude_home: std::env::var("CLAUDE_CONFIG_DIR").ok().filter(|dir| !dir.is_empty()).map(PathBuf::from),
             codex_home: std::env::var("CODEX_HOME").ok().filter(|dir| !dir.is_empty()).map(PathBuf::from), install: crate::lead::install_root().ok(), path, home,
         }
     }
 
     // Only Edit(path) rules guard Claude Code's file tools: a Write(...) or MultiEdit(...) path rule is never consulted. `//` anchors at /, `~/` at the home.
-    pub fn deny_rules(&self, kelpie: &str, dirs: Option<&TaskDirs>) -> Vec<String> {
+    pub fn deny_rules(&self, kebbie: &str, dirs: Option<&TaskDirs>) -> Vec<String> {
         let absolute = |path: &Path| format!("/{}", path.display());
         let tree = |path: &Path| format!("{}/**", absolute(path));
-        let mut paths = vec![tree(&self.state), tree(&self.config), tree(&self.data), absolute(Path::new(kelpie)), "~/.config/kelpie/**".to_string()];
+        let mut paths = vec![tree(&self.state), tree(&self.config), tree(&self.data), absolute(Path::new(kebbie)), "~/.config/kebbie/**".to_string()];
         paths.extend(HOME_LOADED.iter().chain(&SHELL_FILES).chain(&SHELL_DIRS).map(|path| format!("~/{}", path.trim_start_matches("~/"))));
         if let Some(claude) = self.claude_home.as_ref().filter(|claude| **claude != self.home.join(".claude")) {
             paths.extend(HOME_LOADED.iter().filter_map(|path| path.strip_prefix(".claude/")).chain([".claude.json"]).map(|path| format!("{}/{path}", absolute(claude))));
@@ -186,7 +186,7 @@ impl Protected {
             paths.extend(git_pointers(dirs).iter().map(|path| absolute(path)));
             paths.push(tree(&dirs.worktree.join(".git")));
             paths.extend(["config", "config.worktree"].map(|file| absolute(&common.join(file))));
-            paths.extend(["hooks", "modules", "worktrees/*/kelpie-hooks"].map(|dir| tree(&common.join(dir))));
+            paths.extend(["hooks", "modules", "worktrees/*/kebbie-hooks"].map(|dir| tree(&common.join(dir))));
             paths.extend(["commondir", "gitdir", "config.worktree"].map(|file| absolute(&common.join("worktrees/*").join(file))));
             paths.extend(sibling_git_dirs(dirs).iter().map(|dir| tree(dir)));
             if let Some(main) = dirs.main_checkout().filter(|main| !worktrees.contains(&main.as_path())) {
@@ -254,12 +254,12 @@ pub fn file_hook(task: Option<&str>, worktree: Option<&str>, tmp: Option<&str>, 
             dirs.halves = crate::lead::state_dir().map(|state| halves(&state, task, &dirs.worktree)).unwrap_or_default();
             file_refusal(Path::new(target), &dirs, &claude_home)
         }
-        _ => Some("kelpie could not tell which file this tool writes, so a task's file tool does not run; give it an absolute path".to_string()),
+        _ => Some("kebbie could not tell which file this tool writes, so a task's file tool does not run; give it an absolute path".to_string()),
     };
     reason.map(|reason| json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason } }).to_string()).unwrap_or_default()
 }
 
-// kelpie's state holds which worktrees run sandboxed tasks, where neither a task's shell nor its file tools reach.
+// kebbie's state holds which worktrees run sandboxed tasks, where neither a task's shell nor its file tools reach.
 fn mark_file(state: &Path, worktree: &Path) -> PathBuf {
     let real = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
     state.join("sandboxed").join(real.to_string_lossy().replace('%', "%25").replace('/', "%2F"))
@@ -326,7 +326,7 @@ pub fn halves(state: &Path, task: &str, own: &Path) -> Vec<TaskDirs> {
         .filter(|dirs| dirs.worktree != own && on_task(dirs)).collect()
 }
 
-// An entry that would run kelpie, herdr or a terminal multiplexer unsandboxed lets a task pass as the user.
+// An entry that would run kebbie, herdr or a terminal multiplexer unsandboxed lets a task pass as the user.
 pub fn excluded_refusal(entry: &str) -> Option<String> {
     let program = entry.split_whitespace().next().unwrap_or_default();
     let name = program.rsplit('/').next().unwrap_or(program);
@@ -344,7 +344,7 @@ pub fn write_refusal(entry: &str, home: &Path) -> Option<String> {
     };
     let path = PathBuf::from(path.to_string_lossy().trim_end_matches(['/', '*']));
     let path = if path.as_os_str().is_empty() { PathBuf::from("/") } else { path };
-    let guarded = [".local/state/kelpie", ".local/share/kelpie", ".config/kelpie", ".config/herdr", ".claude", ".codex", ".zshrc", ".bashrc", ".profile"].map(|part| home.join(part));
+    let guarded = [".local/state/kebbie", ".local/share/kebbie", ".config/kebbie", ".config/herdr", ".claude", ".codex", ".zshrc", ".bashrc", ".profile"].map(|part| home.join(part));
     guarded.iter().find(|guarded| guarded.starts_with(&path) || path.starts_with(guarded))
         .map(|guarded| format!("\"{entry}\" would let a task's shell write {}", guarded.display()))
 }
@@ -423,7 +423,7 @@ pub fn refusal(missing: &[String]) -> Result<()> {
         return Ok(());
     }
     Err(format!(
-        "task.sandbox is on, but this machine cannot sandbox a task's shell commands fully: {}. Install what is missing, or set task.sandbox = false in {} to run tasks unsandboxed, where a task's Claude can pass as you to kelpie's user-only commands; kelpie doctor shows the sandbox's state",
+        "task.sandbox is on, but this machine cannot sandbox a task's shell commands fully: {}. Install what is missing, or set task.sandbox = false in {} to run tasks unsandboxed, where a task's Claude can pass as you to kebbie's user-only commands; kebbie doctor shows the sandbox's state",
         fixes(missing).join("; "), crate::config::path().display()
     ))
 }
@@ -433,12 +433,12 @@ pub fn ran_sandboxed(command: &str, error: &str, confined: bool) -> String {
     if !confined || !TASK_COMMANDS.contains(&command) {
         return error.to_string();
     }
-    format!("{error}\nkelpie {command} ran inside the sandbox, where it cannot reach kelpie's state: run kelpie {command} on its own, without cd, pipes, redirects or $(…), so it runs outside it")
+    format!("{error}\nkebbie {command} ran inside the sandbox, where it cannot reach kebbie's state: run kebbie {command} on its own, without cd, pipes, redirects or $(…), so it runs outside it")
 }
 
-pub const OFF: &str = "off (task.sandbox = false): a task's shell commands run unsandboxed and can pass as you to kelpie's user-only commands";
+pub const OFF: &str = "off (task.sandbox = false): a task's shell commands run unsandboxed and can pass as you to kebbie's user-only commands";
 
-// A process inside a sandbox cannot create a file in kelpie's real state dir or the folder it would be made in, and on macOS the kernel says so outright.
+// A process inside a sandbox cannot create a file in kebbie's real state dir or the folder it would be made in, and on macOS the kernel says so outright.
 pub fn confined() -> bool {
     // Test builds probe the sealed state dir, as they read the sealed ps; a release reads neither env nor PATH.
     if cfg!(debug_assertions) {
@@ -477,7 +477,7 @@ fn real_state_dir() -> Option<PathBuf> {
         }
         std::ffi::CStr::from_ptr((*entry).pw_dir).to_string_lossy().to_string()
     };
-    Some(PathBuf::from(home).join(".local/state/kelpie"))
+    Some(PathBuf::from(home).join(".local/state/kebbie"))
 }
 
 #[cfg(target_os = "macos")]
@@ -502,7 +502,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_without_bubblewrap_socat_or_the_seccomp_filter_cannot_sandbox_and_kelpie_names_what_to_install() {
+    fn linux_without_bubblewrap_socat_or_the_seccomp_filter_cannot_sandbox_and_kebbie_names_what_to_install() {
         let found = |present: &'static [&'static str]| move |tool: &str| present.contains(&tool);
         assert!(missing("macos", "aarch64", found(&[]), |_| false).is_empty(), "macOS sandboxes with what it ships");
         assert!(missing("linux", "x86_64", found(&["bwrap", "socat"]), |arch| arch == "x64").is_empty());
@@ -522,7 +522,7 @@ mod tests {
         let base = crate::sh::test_dir("halves");
         let state = base.join("state");
         let half = |name: &str, head: &str| {
-            let dirs = TaskDirs::new(&base.join(format!("wt.{name}")), &base.join(name).join(".git/worktrees/1/kelpie-tmp"));
+            let dirs = TaskDirs::new(&base.join(format!("wt.{name}")), &base.join(name).join(".git/worktrees/1/kebbie-tmp"));
             std::fs::create_dir_all(&dirs.tmp).unwrap();
             std::fs::write(dirs.git_dir().join("HEAD"), format!("ref: refs/heads/{head}\n")).unwrap();
             dirs
@@ -539,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn the_mark_lives_in_kelpies_state_and_is_there_only_while_the_task_is_sandboxed() {
+    fn the_mark_lives_in_kebbies_state_and_is_there_only_while_the_task_is_sandboxed() {
         let base = crate::sh::test_dir("mark");
         let (state, worktree) = (base.join("state"), base.join("wt1.app"));
         std::fs::create_dir_all(&worktree).unwrap();
@@ -577,7 +577,7 @@ mod tests {
     fn the_probe_reads_the_nearest_folder_that_exists_and_creates_none() {
         use std::os::unix::fs::PermissionsExt;
         let dir = crate::sh::test_dir("nearest");
-        let missing = dir.join(".local/state/kelpie");
+        let missing = dir.join(".local/state/kebbie");
         assert_eq!(writes_nearest(&missing), Some(true));
         assert!(!dir.join(".local").exists(), "nothing made on the way");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn a_task_command_that_failed_in_the_sandbox_says_how_to_run_it_outside() {
         let said = ran_sandboxed("report", "Operation not permitted", true);
-        assert!(said.starts_with("Operation not permitted\n") && said.contains("run kelpie report on its own, without cd, pipes, redirects or $(…)"), "{said}");
+        assert!(said.starts_with("Operation not permitted\n") && said.contains("run kebbie report on its own, without cd, pipes, redirects or $(…)"), "{said}");
         assert_eq!(ran_sandboxed("routine ok", "x", true).lines().count(), 2);
         assert_eq!(ran_sandboxed("report", "x", false), "x", "outside the sandbox the error is the error");
         assert_eq!(ran_sandboxed("push", "x", true), "x", "a user-only command is refused on its own terms");
@@ -606,8 +606,8 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_cannot_take_kelpie_herdr_or_a_multiplexer_out_of_the_sandbox() {
-        for refused in ["kelpie push x", "/opt/kelpie/target/release/kelpie *", "herdr *", "tmux *", "/usr/bin/screen -dm x", "zellij *", "*", "* push", ""] {
+    fn a_profile_cannot_take_kebbie_herdr_or_a_multiplexer_out_of_the_sandbox() {
+        for refused in ["kebbie push x", "/opt/kebbie/target/release/kebbie *", "herdr *", "tmux *", "/usr/bin/screen -dm x", "zellij *", "*", "* push", ""] {
             assert!(excluded_refusal(refused).is_some(), "{refused}");
         }
         for kept in OPS_COMMANDS.iter().chain(&["docker compose *", "git fetch *"]) {
@@ -616,9 +616,9 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_cannot_open_kelpies_herdrs_or_claudes_own_files_to_the_shell() {
+    fn a_profile_cannot_open_kebbies_herdrs_or_claudes_own_files_to_the_shell() {
         let home = Path::new("/home/ada");
-        for refused in ["~", "~/", "/", "~/.config", "~/.config/kelpie", "~/.local", "~/.local/state/kelpie/roles", "/home/ada/.claude", "~/.codex", "~/.codex/plugins", "/home/ada/.codex/plugins/cache/kelpie/kelpie/local/bin", "~/.zshrc", "~/.local/share/*", "build", "./cache"] {
+        for refused in ["~", "~/", "/", "~/.config", "~/.config/kebbie", "~/.local", "~/.local/state/kebbie/roles", "/home/ada/.claude", "~/.codex", "~/.codex/plugins", "/home/ada/.codex/plugins/cache/kebbie/kebbie/local/bin", "~/.zshrc", "~/.local/share/*", "build", "./cache"] {
             assert!(write_refusal(refused, home).is_some(), "{refused}");
         }
         for kept in WRITES.iter().chain(&["~/.gradle", "/tmp/build", "~/.local/share/pnpm"]) {
@@ -644,7 +644,7 @@ mod tests {
     #[test]
     fn a_tasks_file_tools_write_in_its_worktree_and_temp_folder_and_nowhere_that_runs_as_the_user() {
         let base = crate::sh::test_dir("file-refusal").canonicalize().unwrap();
-        let (worktree, tmp, claude, home) = (base.join("wt1.app"), base.join("app/.git/worktrees/1/kelpie-tmp"), base.join("home/.claude"), base.join("home"));
+        let (worktree, tmp, claude, home) = (base.join("wt1.app"), base.join("app/.git/worktrees/1/kebbie-tmp"), base.join("home/.claude"), base.join("home"));
         for dir in [&worktree, &tmp, &claude.join("projects"), &worktree.join("src")] {
             std::fs::create_dir_all(dir).unwrap();
         }
@@ -664,7 +664,7 @@ mod tests {
         std::fs::create_dir_all(worktree.join(".claude")).unwrap();
         std::os::unix::fs::symlink(worktree.join(".claude"), worktree.join("alias")).unwrap();
         assert!(refused(&worktree.join("alias/settings.json")).is_some(), "a link to the worktree's .claude is its .claude");
-        let (other, other_tmp) = (base.join("wt2.api"), base.join("api/.git/worktrees/2/kelpie-tmp"));
+        let (other, other_tmp) = (base.join("wt2.api"), base.join("api/.git/worktrees/2/kebbie-tmp"));
         assert!(file_refusal(&other.join("src/lib.rs"), &dirs, &claude).is_some(), "another repo's worktree is not this task's without a half there");
         dirs.halves.push(TaskDirs::new(&other, &other_tmp));
         assert_eq!(file_refusal(&other.join("src/lib.rs"), &dirs, &claude), None, "the task's half in another repo is its own");
@@ -695,7 +695,7 @@ mod tests {
         for slot in ["1", "2", "3"] {
             std::fs::create_dir_all(base.join("app/.git/worktrees").join(slot)).unwrap();
         }
-        let dirs = TaskDirs::new(&base.join("wt1.app"), &base.join("app/.git/worktrees/1/kelpie-tmp"));
+        let dirs = TaskDirs::new(&base.join("wt1.app"), &base.join("app/.git/worktrees/1/kebbie-tmp"));
         let others = [base.join("app/.git/worktrees/2"), base.join("app/.git/worktrees/3")];
         assert_eq!(sibling_git_dirs(&dirs), others);
         let denied: Vec<String> = block("/k", &Policy::default(), Some(&dirs), false)["filesystem"]["denyWrite"].as_array().unwrap().iter().filter_map(|path| path.as_str().map(str::to_string)).collect();
@@ -710,9 +710,9 @@ mod tests {
 
     #[test]
     fn a_linked_worktrees_git_dirs_are_read_from_its_temp_folder() {
-        let dirs = TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1/kelpie-tmp"));
+        let dirs = TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1/kebbie-tmp"));
         assert_eq!((dirs.git_dir(), dirs.common_dir(), dirs.main_checkout()), (PathBuf::from("/src/app/.git/worktrees/1"), PathBuf::from("/src/app/.git"), Some(PathBuf::from("/src/app"))));
-        let main = TaskDirs::new(Path::new("/src/app"), Path::new("/src/app/.git/kelpie-tmp"));
+        let main = TaskDirs::new(Path::new("/src/app"), Path::new("/src/app/.git/kebbie-tmp"));
         assert_eq!((main.common_dir(), main.main_checkout()), (PathBuf::from("/src/app/.git"), None));
     }
 

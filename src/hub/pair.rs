@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use kelpie_hub_api::{Bytes32, DeviceAdd, MAX_WAIT_SECONDS, PairingFailure, PairingOpened, PairingRefusal, PairingReply, PairingState, PairingView};
-use kelpie_hub_protocol::{ConnectSecret, Id, MachinePairing};
+use kebbie_hub_api::{Bytes32, DeviceAdd, MAX_WAIT_SECONDS, PairingFailure, PairingOpened, PairingRefusal, PairingReply, PairingState, PairingView};
+use kebbie_hub_protocol::{ConnectSecret, Id, MachinePairing};
 
 use super::http::{Client, HubError, LONG_POLL};
 use super::identity::{self, Device, Identity};
@@ -15,7 +15,7 @@ pub type Stop<'a> = Option<&'a (dyn Fn() -> bool + Sync)>;
 
 // The six digits are the only proof the phone holds the keys it committed to, so a pairing nobody can answer is refused.
 pub fn interactive_only(interactive: bool) -> Result<()> {
-    if interactive { Ok(()) } else { Err("kelpie hub pair asks you to compare six digits with the phone, so it runs in your own terminal".to_string()) }
+    if interactive { Ok(()) } else { Err("kebbie hub pair asks you to compare six digits with the phone, so it runs in your own terminal".to_string()) }
 }
 
 fn hub_error(error: HubError) -> String {
@@ -101,7 +101,7 @@ impl Run<'_> {
 }
 
 fn joined(state: &Path) -> Result<Identity> {
-    identity::load(state)?.ok_or_else(|| "this machine is not connected to a hub; kelpie hub connect first".to_string())
+    identity::load(state)?.ok_or_else(|| "this machine is not connected to a hub; kebbie hub connect first".to_string())
 }
 
 fn run<'a>(identity: &Identity, pairing: &str, timeout: Duration, stop: Stop<'a>, again: &'a str) -> Run<'a> {
@@ -112,7 +112,7 @@ pub fn pair(state: &Path, timeout: Duration, show_code: impl FnOnce(&str), confi
     let identity = joined(state)?;
     let opened: PairingOpened = Client::new(&identity.url, Some(identity.token()), LONG_POLL).post("/v1/m/pairings", &serde_json::Value::Null).map_err(hub_error)?;
     show_code(&opened.code);
-    run(&identity, &opened.pairing, timeout, None, "kelpie hub pair").finish(state, &identity, &opened.code, confirm, now)
+    run(&identity, &opened.pairing, timeout, None, "kebbie hub pair").finish(state, &identity, &opened.code, confirm, now)
 }
 
 // The phone's own tap goes through the hub, so only the user's answer here admits it.
@@ -120,13 +120,13 @@ pub fn add_device(state: &Path, timeout: Duration, show: impl FnOnce(&DeviceAdd)
     let identity = joined(state)?;
     let added: DeviceAdd = Client::new(&identity.url, Some(identity.token()), LONG_POLL).post("/v1/m/devices/add", &serde_json::Value::Null).map_err(hub_error)?;
     show(&added);
-    run(&identity, &added.pairing, timeout, stop, "kelpie hub add-device").finish(state, &identity, &added.code, confirm, now)
+    run(&identity, &added.pairing, timeout, stop, "kebbie hub add-device").finish(state, &identity, &added.code, confirm, now)
 }
 
 // The secret reached the browser past the hub, in the link's fragment, so only a reveal that hashes with it to the commitment is admitted.
 pub fn admit_browser(state: &Path, pairing: &str, secret: &ConnectSecret, timeout: Duration, stop: Stop, now: u64) -> Result<Id> {
     let identity = joined(state)?;
-    run(&identity, pairing, timeout, stop, "kelpie hub add-device").finish(state, &identity, &secret.pairing_code(), |_| true, now)
+    run(&identity, pairing, timeout, stop, "kebbie hub add-device").finish(state, &identity, &secret.pairing_code(), |_| true, now)
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 #!/bin/bash
-# The lead: starts saved-carts when asked, and approves a task's commits when kelpie says it is ready.
+# The lead: starts saved-carts when asked, and approves a task's commits when kebbie says it is ready.
 . "$KDEMO_DIR/react/lib.sh"
 text=$1
 case "$text" in
@@ -9,14 +9,14 @@ case "$text" in
     say "● I'll start it as a task in shop. Where carts are kept is your call, so it will ask you."
     sleep 1
     prompt="Saved carts: keep a signed-in shopper's cart across devices. Ask the user where carts are kept."
-    say "● Bash(kelpie start saved-carts --repo shop --no-focus \"$prompt\")"
-    out=$(kelpie start saved-carts --repo shop --no-focus "$prompt" 2>&1 | head -1)
+    say "● Bash(kebbie start saved-carts --repo shop --no-focus \"$prompt\")"
+    out=$(kebbie start saved-carts --repo shop --no-focus "$prompt" 2>&1 | head -1)
     more "  ⎿  ${out/$HOME/~}"
     mode idle
     ;;
   *"is ready at"*" approve "*)
-    repo=$(sed -n 's/.*kelpie -C \([^ ]*\) approve \([a-z0-9-]*\).*/\1/p' <<<"$text" | head -1)
-    task=$(sed -n 's/.*kelpie -C \([^ ]*\) approve \([a-z0-9-]*\).*/\2/p' <<<"$text" | head -1)
+    repo=$(sed -n 's/.*kebbie -C \([^ ]*\) approve \([a-z0-9-]*\).*/\1/p' <<<"$text" | head -1)
+    task=$(sed -n 's/.*kebbie -C \([^ ]*\) approve \([a-z0-9-]*\).*/\2/p' <<<"$text" | head -1)
     [ -n "$task" ] || exit 0
     mode working
     sleep 0.4
@@ -24,22 +24,22 @@ case "$text" in
     [ "$count" = 1 ] && commits="1 commit" || commits="$count commits"
     say "● Bash(git -C ${repo/$HOME/~} log -p origin/main..$task)"
     more "  ⎿  $commits; each holds to the rules"
-    out=$(kelpie -C "$repo" approve "$task" 2>&1)
-    say "● Bash(kelpie approve $task)"
+    out=$(kebbie -C "$repo" approve "$task" 2>&1)
+    say "● Bash(kebbie approve $task)"
     more "  ⎿  $out"
     mode idle
     ;;
-  "[from kelpie] The user is away from now on"*)
+  "[from kebbie] The user is away from now on"*)
     sleep 0.6
     mode working
     say "● You are away. search-filters asks how the price filter should work: that is how, not what, so I settle it as recommended."
     sleep 2
-    out=$(kelpie decide search-filters "Fixed ranges: under 25, 25 to 50, 50 to 100, over 100" 2>&1)
-    say "● Bash(kelpie decide search-filters \"Fixed ranges\")"
+    out=$(kebbie decide search-filters "Fixed ranges: under 25, 25 to 50, 50 to 100, over 100" 2>&1)
+    say "● Bash(kebbie decide search-filters \"Fixed ranges\")"
     more "  ⎿  $out"
     mode idle
     ;;
-  "[from kelpie] The user is back"*)
+  "[from kebbie] The user is back"*)
     sleep 0.6
     mode working
     sleep 1.5

@@ -1,16 +1,16 @@
 [package]
-name = "kelpie"
+name = "kebbie"
 version = "0.27.0"
 edition = "2024"
 rust-version = "1.90"
 description = "Herding coding agents in herdr"
 license = "MIT"
-repository = "https://github.com/gronare/kelpie"
+repository = "https://github.com/gronare/kebbie"
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-kelpie-hub-api = { git = "https://github.com/gronare/kelpie-hub", rev = "5ceb3ead857c1f526cf8906152731cbc81c813c2" }
-kelpie-hub-protocol = { git = "https://github.com/gronare/kelpie-hub", rev = "5ceb3ead857c1f526cf8906152731cbc81c813c2" }
+kebbie-hub-api = { git = "https://github.com/gronare/kebbie-hub", rev = "a220767f367abcc7336a88bc36df441dd34f0927" }
+kebbie-hub-protocol = { git = "https://github.com/gronare/kebbie-hub", rev = "a220767f367abcc7336a88bc36df441dd34f0927" }
 libc = "0.2"
 qrcodegen = "1.8"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
@@ -27,8 +27,8 @@ unicode-width = "0.2"
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
-kelpie-hub = { git = "https://github.com/gronare/kelpie-hub", rev = "5ceb3ead857c1f526cf8906152731cbc81c813c2" }
-kelpie-hub-fakes = { git = "https://github.com/gronare/kelpie-hub", rev = "5ceb3ead857c1f526cf8906152731cbc81c813c2" }
+kebbie-hub = { git = "https://github.com/gronare/kebbie-hub", rev = "a220767f367abcc7336a88bc36df441dd34f0927" }
+kebbie-hub-fakes = { git = "https://github.com/gronare/kebbie-hub", rev = "a220767f367abcc7336a88bc36df441dd34f0927" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
 
 [profile.release]

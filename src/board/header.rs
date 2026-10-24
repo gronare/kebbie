@@ -18,7 +18,7 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
     let (needs, working, review, ready) = (count(Group::NeedsYou), count(Group::Working), count(Group::ToReview), count(Group::ReadyToPush));
     let ci = count(Group::CiRunning);
     let questions = app.questions.len();
-    let mut spans = vec![Span::styled("kelpie", bold(MAUVE)), Span::raw(if compact { "  " } else { "   " })];
+    let mut spans = vec![Span::styled("kebbie", bold(MAUVE)), Span::raw(if compact { "  " } else { "   " })];
     if compact {
         let offers = super::bug_report::indicator(app.offers.len(), true);
         if let Some(pill_text) = app.update_pill() {

@@ -896,7 +896,7 @@ mod tests {
         assert!(window.notice.as_ref().is_some_and(|(ok, text)| !ok && text.contains("own words")));
     }
 
-    const LONG_ASK: &str = r#"{"id":"q9","at":10,"from":"routines@kelpie","to":"lead","text":"The keeper runs the routines when no board is open, and an open board runs them itself, so a routine can start twice when a board opens in the middle of a keeper run. Which side should own the routine schedule from now on?","state":"asked","question":{"options":[{"label":"Keeper only","meaning":"the keeper runs every routine whether a board is open or not; the board shows each routine's last and next run"},{"label":"Board first","meaning":"an open board runs the routines and the keeper stands down while a board answers on its socket"},{"label":"Both, with a lock","meaning":"either side may run a routine, but takes a lock file in the state directory first and the other skips it"},{"label":"Per routine","meaning":"each routine names its owner in its file; a routine without one stays with the keeper as today"}],"recommend":1}}"#;
+    const LONG_ASK: &str = r#"{"id":"q9","at":10,"from":"routines@kebbie","to":"lead","text":"The keeper runs the routines when no board is open, and an open board runs them itself, so a routine can start twice when a board opens in the middle of a keeper run. Which side should own the routine schedule from now on?","state":"asked","question":{"options":[{"label":"Keeper only","meaning":"the keeper runs every routine whether a board is open or not; the board shows each routine's last and next run"},{"label":"Board first","meaning":"an open board runs the routines and the keeper stands down while a board answers on its socket"},{"label":"Both, with a lock","meaning":"either side may run a routine, but takes a lock file in the state directory first and the other skips it"},{"label":"Per routine","meaning":"each routine names its owner in its file; a routine without one stays with the keeper as today"}],"recommend":1}}"#;
 
     fn window_rows(rows: &[String]) -> (usize, usize) {
         let top = rows.iter().position(|row| row.contains('╭')).expect("a window");
@@ -1050,7 +1050,7 @@ mod tests {
     #[test]
     fn a_plan_that_cannot_be_read_yet_is_read_again_on_the_next_draw() {
         let mut app = test_app(Vec::new());
-        app.questions = messages::fold(&PLAN.replace("/state/plans/payload@api-20.md", "/nowhere/kelpie-plan.md"));
+        app.questions = messages::fold(&PLAN.replace("/state/plans/payload@api-20.md", "/nowhere/kebbie-plan.md"));
         app.open_questions(None);
         render(&mut app, 170, 40);
         assert!(app.plans.is_empty(), "nothing is cached for a plan that is not there");

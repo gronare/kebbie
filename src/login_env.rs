@@ -71,7 +71,7 @@ pub fn import() {
     let Some(shell) = std::env::var("SHELL").ok().filter(|shell| !shell.is_empty()) else { return };
     let Some(login) = login_env(&shell) else { return };
     for (name, value) in missing(current, &login) {
-        // SAFETY: called at the start of a command, before kelpie starts a thread.
+        // SAFETY: called at the start of a command, before kebbie starts a thread.
         unsafe { std::env::set_var(name, value) };
     }
 }

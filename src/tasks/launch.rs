@@ -19,7 +19,7 @@ use super::started::{read_start, start_entry, started_file};
 
 // A task's temporary files live in its worktree's own git dir, so they go with the task and never land in the repo.
 pub(crate) fn task_tmp(worktree: &Path) -> Result<PathBuf> {
-    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kelpie-tmp"))
+    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kebbie-tmp"))
 }
 
 pub(super) fn clear_tmp(worktree: &Path) {
@@ -195,7 +195,7 @@ pub fn transcript(repo: &Path, slot: &Slot) -> Option<(Agent, PathBuf)> {
     Some((agent, agent.session_transcript(&home, Some(&slot.path), &id)?))
 }
 
-// Codex picks its own session id, so its SessionStart hook writes it into the task's record; a task on Claude keeps the id kelpie gave it.
+// Codex picks its own session id, so its SessionStart hook writes it into the task's record; a task on Claude keeps the id kebbie gave it.
 pub(crate) fn record_session(address: &str, session: &str) -> Result<()> {
     record_session_in(&crate::lead::state_location()?, address, session)
 }
@@ -249,7 +249,7 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
     let (profile, fell_back) = task_profile(&repo, given, recorded.as_deref())?;
     sandboxed(config::resolve(Some(&repo))?.settings.sandbox.value, &profile, crate::sandbox::missing_here)?;
     if profile.agent == Agent::Codex {
-        crate::agent::codex::ready_to_start(crate::agent::codex::home().as_deref(), &peers::kelpie_command()?)?;
+        crate::agent::codex::ready_to_start(crate::agent::codex::home().as_deref(), &peers::kebbie_command()?)?;
     }
     let place = |slot: &Slot| Launch { repo: &repo, task: &task, mode, profile: &profile, setup_skill: &setup_skill, setup_command: setup_command.as_deref(), rules_skill: &rules_skill, worktree: slot.path.clone(), vault: vault.is_some(), note: None };
     if let Some(existing) = running {
@@ -360,7 +360,7 @@ fn launch_new(repo: &Path, task: &str, slot: &Slot, address: &str, place: Launch
     Ok(Begun { said: said.to_string(), started })
 }
 
-// A note kelpie opened for the task is claimed as a backlog note is, so the other machine sees it worked on too.
+// A note kebbie opened for the task is claimed as a backlog note is, so the other machine sees it worked on too.
 fn claim_opened(cli: &crate::vault_cli::Cli, note: &str, backlog: Option<&str>, task: &str, repo: &Path) {
     if !cli.claims || backlog == Some(note) {
         return;
@@ -397,7 +397,7 @@ pub(crate) struct Prepared {
     pub tmp: PathBuf,
 }
 
-// Every agent kelpie starts or resumes for a task runs with these two files, written afresh: a session without them never reports.
+// Every agent kebbie starts or resumes for a task runs with these two files, written afresh: a session without them never reports.
 fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
     let Launch { repo, task, profile, setup_skill, setup_command, rules_skill, ref worktree, vault, note, .. } = *place;
     crate::push_block::warn_if_off(crate::push_block::install(worktree, &state_dir()?)?);
@@ -413,7 +413,7 @@ fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
         crate::sandbox::record_half(&state, task, &dirs)?;
         dirs.halves = crate::sandbox::halves(&state, task, worktree);
     }
-    let written = profile.agent.task_settings(&peers::kelpie_command()?, &address, note.map(|_| address.as_str()), Some(&dirs), profile, shell);
+    let written = profile.agent.task_settings(&peers::kebbie_command()?, &address, note.map(|_| address.as_str()), Some(&dirs), profile, shell);
     let settings = crate::lead::write_settings(&crate::lead::roles_dir()?, &address, &written)?;
     let added = profiles::role_section(profile)?;
     let (role, text) = peers::role_file(task, &peers::Place { agent: profile.agent, repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added, sandboxed: shell })?;
@@ -445,7 +445,7 @@ pub(crate) fn task_role(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
     prepare(&place, true).map(|prepared| Some((prepared.settings, prepared.role)))
 }
 
-// The task's role as kelpie gives it now, written to its role file alone: the file, and the role without its peer list.
+// The task's role as kebbie gives it now, written to its role file alone: the file, and the role without its peer list.
 pub(crate) fn task_role_now(cwd: &Path) -> Result<Option<(PathBuf, String)>> {
     let Some((repo, slot)) = task_at(cwd) else { return Ok(None) };
     let task = slot.task.clone().unwrap_or_default();
@@ -461,7 +461,7 @@ pub(crate) fn task_role_now(cwd: &Path) -> Result<Option<(PathBuf, String)>> {
 fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Result<Started>)> {
     let Launch { repo, task, mode, profile, .. } = *place;
     if profile.agent == Agent::Codex {
-        crate::agent::codex::ready_to_start(crate::agent::codex::home().as_deref(), &peers::kelpie_command()?)?;
+        crate::agent::codex::ready_to_start(crate::agent::codex::home().as_deref(), &peers::kebbie_command()?)?;
     }
     let prepared = prepare(place, matches!(session, Session::Resume(_)))?;
     if let Err(error) = messages::drop_held_prompts(&peers::address(task, &name_of(repo))) {
@@ -558,7 +558,7 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     Ok(Begun { said: said.to_string(), started })
 }
 
-// A conversation kelpie cannot read, as a rollout Codex compressed, may have heard its prompt, so it is not sent again.
+// A conversation kebbie cannot read, as a rollout Codex compressed, may have heard its prompt, so it is not sent again.
 fn unheard_in(agent: Agent, file: &Path) -> bool {
     !crate::agent::codex::compressed(file) && std::fs::read_to_string(file).ok().is_none_or(|text| agent.user_messages(&text).is_empty())
 }
@@ -567,7 +567,7 @@ fn unprompted(name: &str, how: &str, task: &str, folder: &Path, error: &str) -> 
     Notice::new(Tone::You, format!("{how}, but its prompt did not reach {name}")).you(format!("Paste the task's prompt into its {name}.")).detail("task", task).detail("folder", folder.display().to_string()).detail("error", error).to_string()
 }
 
-// What a start still asks of the user once Claude runs: an answer only they can give, and what kelpie does after it.
+// What a start still asks of the user once Claude runs: an answer only they can give, and what kebbie does after it.
 #[derive(Debug, Default, PartialEq)]
 struct Asks {
     you: Option<String>,
@@ -608,8 +608,8 @@ fn send_prompt(name: &str, started: &Started, prompt: Option<&str>, type_now: im
     Ok(match prompt {
         None => Asks { you: Some(asks.to_string()), ..Asks::default() },
         Some(prompt) => match hold(prompt) {
-            Ok(()) => Asks { you: Some(asks.to_string()), next: Some("Once you answer, kelpie types the task's prompt in while the keeper or an open board runs.".to_string()), detail: None },
-            Err(error) => Asks { you: Some(format!("{asks} Then paste the task's prompt there yourself: kelpie could not keep it ({error}).")), ..Asks::default() },
+            Ok(()) => Asks { you: Some(asks.to_string()), next: Some("Once you answer, kebbie types the task's prompt in while the keeper or an open board runs.".to_string()), detail: None },
+            Err(error) => Asks { you: Some(format!("{asks} Then paste the task's prompt there yourself: kebbie could not keep it ({error}).")), ..Asks::default() },
         },
     })
 }
@@ -649,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn a_note_kelpie_opens_for_a_task_is_claimed_too_but_a_claimed_backlog_note_only_once() {
+    fn a_note_kebbie_opens_for_a_task_is_claimed_too_but_a_claimed_backlog_note_only_once() {
         let fake = crate::vault_cli::fake::Fake::new("open-claim");
         fake.answer("task-claim", r#"{"path":"Projects/web-search.md","claimed":true,"claim":{"machine":"m","task":"search","since":"2026-10-23T09:00:00Z"}}"#);
         claim_opened(&fake.claiming(), "Projects/web-search.md", None, "search", Path::new("/src/web"));
@@ -680,15 +680,15 @@ mod tests {
 
     #[test]
     fn edits_are_gated_only_in_a_task_started_with_the_vault_on() {
-        let off: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", None, None, None)).unwrap();
+        let off: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", None, None, None)).unwrap();
         assert!(off["hooks"].get("PreToolUse").is_none(), "without the vault no edit hook runs");
         for event in ["PostToolUse", "PostToolUseFailure"] {
             assert_eq!(off["hooks"][event][0]["matcher"], "Bash");
-            assert_eq!(off["hooks"][event][0]["hooks"][0]["command"], "'/bin/kelpie' hook evidence 'billing@app'", "every task records its test runs, passed and failed");
+            assert_eq!(off["hooks"][event][0]["hooks"][0]["command"], "'/bin/kebbie' hook evidence 'billing@app'", "every task records its test runs, passed and failed");
         }
-        let on: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", Some("billing@app"), None, None)).unwrap();
+        let on: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", Some("billing@app"), None, None)).unwrap();
         assert_eq!(on["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|MultiEdit|NotebookEdit|Bash", "a Bash command that writes a file waits for the Problem too");
-        assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kelpie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
+        assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kebbie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
         assert_eq!(on["hooks"]["Stop"], off["hooks"]["Stop"]);
     }
 
@@ -696,15 +696,15 @@ mod tests {
     fn a_prompt_is_typed_at_once_into_a_ready_claude_and_held_while_the_user_owes_the_trust_answer() {
         let sent = |started: Started, prompt: Option<&str>, keeps: bool| {
             let (typed, held) = (std::cell::RefCell::new(Vec::new()), std::cell::RefCell::new(Vec::new()));
-            let said = send_prompt("Claude", &started, prompt, |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |text| { held.borrow_mut().push(text.to_string()); if keeps { Ok(()) } else { Err("Another kelpie is holding the message log; try again".to_string()) } });
+            let said = send_prompt("Claude", &started, prompt, |text| { typed.borrow_mut().push(text.to_string()); Ok(()) }, |text| { held.borrow_mut().push(text.to_string()); if keeps { Ok(()) } else { Err("Another kebbie is holding the message log; try again".to_string()) } });
             (said, typed.into_inner(), held.into_inner())
         };
         assert_eq!(sent(Started::Ready, Some("Fix the flaky test"), true), (Ok(Asks::default()), vec!["Fix the flaky test".to_string()], Vec::new()));
         let (said, typed, held) = sent(Started::AwaitsTrust, Some("Fix the flaky test"), true);
         assert_eq!((typed, held), (Vec::new(), vec!["Fix the flaky test".to_string()]));
-        assert!(said.unwrap().next.unwrap().contains("kelpie types the task's prompt in while the keeper or an open board runs"));
+        assert!(said.unwrap().next.unwrap().contains("kebbie types the task's prompt in while the keeper or an open board runs"));
         let (said, _, _) = sent(Started::AwaitsTrust, Some("Fix the flaky test"), false);
-        assert!(said.unwrap().you.unwrap().contains("paste the task's prompt there yourself"), "a prompt kelpie could not keep is the user's to paste, and the start still stands");
+        assert!(said.unwrap().you.unwrap().contains("paste the task's prompt there yourself"), "a prompt kebbie could not keep is the user's to paste, and the start still stands");
         assert_eq!(sent(Started::AwaitsTrust, None, true).0.unwrap().you.as_deref(), Some("Answer Claude's question in its Space: whether you trust the repo's folder."));
         let source = include_str!("launch.rs");
         let launch = &source[source.find("\nfn launch(").unwrap()..];
@@ -723,10 +723,10 @@ mod tests {
 
     #[test]
     fn a_tasks_start_line_carries_its_settings_as_a_short_path_to_the_same_json() {
-        let dir = std::env::temp_dir().join(format!("kelpie-task-settings-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-task-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let kelpie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kelpie", "nested/".repeat(20));
-        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kelpie, "billing@app", None, None, None)).unwrap();
+        let kebbie = format!("/Users/someone-with-a-long-name/projects/{}/target/release/kebbie", "nested/".repeat(20));
+        let file = crate::lead::write_settings(&dir, &peers::address("billing", "app"), &settings(&kebbie, "billing@app", None, None, None)).unwrap();
         assert_eq!(file, dir.join("billing@app.settings.json"));
         let args = claude_args(Some("acceptEdits"), &file, &dir.join("billing@app.md"), &Session::New("0b6a".to_string()));
         let line = args.join(" ");
@@ -734,13 +734,13 @@ mod tests {
         assert_eq!(args[..2], ["--permission-mode", "acceptEdits"]);
         assert_eq!(args[args.iter().position(|arg| arg == "--settings").unwrap() + 1], file.to_string_lossy());
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kelpie, "billing@app", None, None, None)).unwrap());
+        assert_eq!(written, serde_json::from_str::<Value>(&settings(&kebbie, "billing@app", None, None, None)).unwrap());
         let deny: Vec<&str> = written["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        for rule in ["Bash(git push:*)".to_string(), format!("Bash({kelpie} approve:*)"), format!("Bash({kelpie} push:*)"), format!("Bash({kelpie} choose:*)"), format!("Bash({kelpie} after:*)"), format!("Bash({kelpie} ci dismiss:*)"), "Bash(herdr pane send-keys:*)".to_string(), "Bash(herdr pane send-text:*)".to_string(), "Bash(herdr pane run:*)".to_string(), "Bash(herdr agent send-keys:*)".to_string(), "Bash(herdr agent prompt:*)".to_string()] {
+        for rule in ["Bash(git push:*)".to_string(), format!("Bash({kebbie} approve:*)"), format!("Bash({kebbie} push:*)"), format!("Bash({kebbie} choose:*)"), format!("Bash({kebbie} after:*)"), format!("Bash({kebbie} ci dismiss:*)"), "Bash(herdr pane send-keys:*)".to_string(), "Bash(herdr pane send-text:*)".to_string(), "Bash(herdr pane run:*)".to_string(), "Bash(herdr agent send-keys:*)".to_string(), "Bash(herdr agent prompt:*)".to_string()] {
             assert!(deny.contains(&rule.as_str()), "a task never pushes, approves its own commits, answers a Claude's prompt nor types into a pane: {rule}");
         }
-        assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kelpie}' hook"));
-        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kelpie} ask:*)"))), "a task asks the user without a permission prompt");
+        assert_eq!(written["hooks"]["Stop"][0]["hooks"][0]["command"], format!("'{kebbie}' hook"));
+        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!(format!("Bash({kebbie} ask:*)"))), "a task asks the user without a permission prompt");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -833,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn a_resumed_conversation_hears_its_prompt_again_only_when_kelpie_can_read_it_had_none() {
+    fn a_resumed_conversation_hears_its_prompt_again_only_when_kebbie_can_read_it_had_none() {
         let dir = crate::sh::test_dir("unheard");
         let empty = dir.join("rollout-x-1.jsonl");
         std::fs::write(&empty, "").unwrap();
@@ -854,12 +854,12 @@ mod tests {
         crate::state::write(&session_file_in(&state, "billing@app"), record_text(&codex)).unwrap();
         record_session_in(&state, "billing@app", "019b3136-fdf0").unwrap();
         assert_eq!(parse_record(&std::fs::read_to_string(session_file_in(&state, "billing@app")).unwrap()), Record { session: Some("019b3136-fdf0".to_string()), ..codex }, "the mode and profile stay");
-        let claude = Record { session: Some("kelpies-own-id".to_string()), agent: Some("claude".to_string()), ..Record::default() };
+        let claude = Record { session: Some("kebbies-own-id".to_string()), agent: Some("claude".to_string()), ..Record::default() };
         crate::state::write(&session_file_in(&state, "search@app"), record_text(&claude)).unwrap();
         record_session_in(&state, "search@app", "other").unwrap();
-        assert_eq!(parse_record(&std::fs::read_to_string(session_file_in(&state, "search@app")).unwrap()).session.as_deref(), Some("kelpies-own-id"));
+        assert_eq!(parse_record(&std::fs::read_to_string(session_file_in(&state, "search@app")).unwrap()).session.as_deref(), Some("kebbies-own-id"));
         record_session_in(&state, "nobody@app", "x").unwrap();
-        assert!(!session_file_in(&state, "nobody@app").exists(), "a session outside kelpie's tasks writes no record");
+        assert!(!session_file_in(&state, "nobody@app").exists(), "a session outside kebbie's tasks writes no record");
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -872,20 +872,20 @@ mod tests {
 
     #[test]
     fn a_tasks_settings_deny_push_and_approve_in_every_spelling_claude_code_matches() {
-        let on: Value = serde_json::from_str(&settings("/bin/kelpie", "billing@app", Some("billing@app"), None, None)).unwrap();
+        let on: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", Some("billing@app"), None, None)).unwrap();
         let deny: Vec<&str> = on["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        let user_only: Vec<String> = crate::permit::USER_ONLY.iter().map(|command| format!("Bash(/bin/kelpie {command}:*)")).collect();
+        let user_only: Vec<String> = crate::permit::USER_ONLY.iter().map(|command| format!("Bash(/bin/kebbie {command}:*)")).collect();
         assert_eq!(deny[0], "Bash(git push:*)");
-        assert_eq!(deny[1..=user_only.len()], user_only.iter().map(String::as_str).collect::<Vec<_>>()[..], "every user-only command, in kelpie's own spelling");
+        assert_eq!(deny[1..=user_only.len()], user_only.iter().map(String::as_str).collect::<Vec<_>>()[..], "every user-only command, in kebbie's own spelling");
         assert_eq!(deny[user_only.len() + 1..user_only.len() + 6], ["Bash(herdr pane send-keys:*)", "Bash(herdr pane send-text:*)", "Bash(herdr pane run:*)", "Bash(herdr agent send-keys:*)", "Bash(herdr agent prompt:*)"]);
         for command in ["approve", "push", "choose", "after", "ci dismiss", "issue report"] {
-            assert!(deny.contains(&format!("Bash(/bin/kelpie {command}:*)").as_str()), "{command}");
+            assert!(deny.contains(&format!("Bash(/bin/kebbie {command}:*)").as_str()), "{command}");
         }
         let allow: Vec<&str> = on["permissions"]["allow"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(!allow.iter().any(|rule| rule.contains("push") || rule.contains("approve") || rule.contains("decide") || rule.contains("away")), "{allow:?}");
-        assert_eq!(on["env"]["GIT_CONFIG_KEY_0"], "url.kelpie-blocks-push:.pushInsteadOf");
+        assert_eq!(on["env"]["GIT_CONFIG_KEY_0"], "url.kebbie-blocks-push:.pushInsteadOf");
         assert_eq!(on["env"]["GIT_CONFIG_VALUE_0"], "");
-        assert_eq!(on["env"]["VAULT_STOP_HOOK"], "off", "the vault plugin's Stop hook never asks a task for the repo log kelpie writes");
+        assert_eq!(on["env"]["VAULT_STOP_HOOK"], "off", "the vault plugin's Stop hook never asks a task for the repo log kebbie writes");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 40);
     }
 
@@ -907,15 +907,15 @@ mod tests {
     #[test]
     fn a_task_started_in_bypass_permissions_still_never_pushes_nor_approves() {
         let dir = crate::sh::test_dir("task-bypass");
-        let file = crate::lead::write_settings(&dir, "billing@app", &settings("/bin/kelpie", "billing@app", None, None, None)).unwrap();
+        let file = crate::lead::write_settings(&dir, "billing@app", &settings("/bin/kebbie", "billing@app", None, None, None)).unwrap();
         let args = claude_args(Some(BYPASS), &file, &dir.join("billing@app.md"), &Session::New("0b6a".to_string()));
         assert_eq!(args[..2], ["--permission-mode", "bypassPermissions"]);
         let written: Value = serde_json::from_str(&std::fs::read_to_string(&args[args.iter().position(|arg| arg == "--settings").unwrap() + 1]).unwrap()).unwrap();
         let deny: Vec<&str> = written["permissions"]["deny"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        for rule in ["Bash(git push:*)", "Bash(/bin/kelpie approve:*)", "Bash(/bin/kelpie push:*)"] {
+        for rule in ["Bash(git push:*)", "Bash(/bin/kebbie approve:*)", "Bash(/bin/kebbie push:*)"] {
             assert!(deny.contains(&rule), "deny rules hold in every mode, bypassPermissions too: {deny:?}");
         }
-        assert_eq!(written["env"]["GIT_CONFIG_KEY_0"], "url.kelpie-blocks-push:.pushInsteadOf");
+        assert_eq!(written["env"]["GIT_CONFIG_KEY_0"], "url.kebbie-blocks-push:.pushInsteadOf");
         let source = include_str!("launch.rs");
         let prepare = &source[source.find("\nfn prepare(").unwrap()..];
         assert!(!prepare[..prepare.find("\n}\n").unwrap()].contains("mode"), "a task's settings are the same whatever its mode");
@@ -946,17 +946,17 @@ mod tests {
         let said = send_prompt("Claude", &Started::AwaitsBypass, Some("Fix the flaky test"), |_| panic!("no key reaches the bypass warning"), |text| { held.borrow_mut().push(text.to_string()); Ok(()) }).unwrap();
         assert_eq!(held.into_inner(), ["Fix the flaky test"]);
         assert_eq!(said.you.as_deref(), Some("Answer Claude's question in its Space: whether to accept bypass permissions mode."));
-        assert!(said.next.unwrap().starts_with("Once you answer, kelpie types"));
+        assert!(said.next.unwrap().starts_with("Once you answer, kebbie types"));
     }
 
     #[test]
     fn the_hook_commands_run_from_a_path_with_an_apostrophe() {
-        let dir = std::env::temp_dir().join(format!("kelpie-hook-quote-{}", std::process::id())).join("o'brien");
+        let dir = std::env::temp_dir().join(format!("kebbie-hook-quote-{}", std::process::id())).join("o'brien");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
         std::fs::create_dir_all(&dir).unwrap();
-        let kelpie = dir.join("kelpie");
-        crate::executable::write(&kelpie, "#!/bin/sh\necho ran \"$@\"\n").unwrap();
-        let written: Value = serde_json::from_str(&settings(&kelpie.to_string_lossy(), "billing@it's", Some("billing@it's"), None, None)).unwrap();
+        let kebbie = dir.join("kebbie");
+        crate::executable::write(&kebbie, "#!/bin/sh\necho ran \"$@\"\n").unwrap();
+        let written: Value = serde_json::from_str(&settings(&kebbie.to_string_lossy(), "billing@it's", Some("billing@it's"), None, None)).unwrap();
         for command in [&written["hooks"]["Stop"][0]["hooks"][0]["command"], &written["hooks"]["PreToolUse"][0]["hooks"][0]["command"], &written["hooks"]["PostToolUse"][0]["hooks"][0]["command"]] {
             let output = std::process::Command::new("sh").args(["-c", command.as_str().unwrap()]).output().unwrap();
             assert!(output.status.success(), "{command}: {}", String::from_utf8_lossy(&output.stderr));
@@ -984,28 +984,28 @@ mod tests {
         let body = |name: &str| { let start = source.find(&format!("\nfn {name}(")).or_else(|| source.find(&format!("\npub fn {name}("))).or_else(|| source.find(&format!("\npub(crate) fn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
         assert!(body("launch").contains("profile: Some(profile.name.clone())") && body("launch").contains("record_text(&record)"), "every start records the profile it ran with");
         assert!(body("begin").contains("recorded_session(&task, &repo).profile") && body("begin").find("task_profile(").unwrap() < body("begin").find("fetch(").unwrap(), "a running task keeps its profile, and a missing one is refused before a worktree is claimed");
-        assert!(body("task_role").contains("recorded_session(&task, &repo).profile"), "kelpie restart writes the role and settings of the profile the task started with");
+        assert!(body("task_role").contains("recorded_session(&task, &repo).profile"), "kebbie restart writes the role and settings of the profile the task started with");
         assert!(body("begin").contains("detail(\"careful\", why)") && body("task_role").contains("messages::log_for_lead(&said, None)"), "a recorded profile that no longer loads is said where the restart reports, and the restart goes on");
     }
 
     #[test]
-    fn a_task_started_with_a_profile_runs_its_model_effort_mode_and_rules_on_top_of_kelpies_own() {
+    fn a_task_started_with_a_profile_runs_its_model_effort_mode_and_rules_on_top_of_kebbies_own() {
         let task = profiles::built_in(profiles::TASK).unwrap();
         let designer = Profile {
             name: "designer".to_string(), model: Some("opus".to_string()), effort: Some("high".to_string()), permission_mode: Some("acceptEdits".to_string()),
             deny: vec!["Bash(rm -rf:*)".to_string()], allow: vec!["Bash(npx playwright:*)".to_string()], plugins: vec!["design@claude-plugins".to_string()], ..task.clone()
         };
-        let plain: Value = serde_json::from_str(&crate::inbox::with_inbox(&settings("/bin/kelpie", "billing@app", Some("billing@app"), None, None), "/bin/kelpie", "billing@app")).unwrap();
-        let ours: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kelpie", "billing@app", Some("billing@app"), None, &task, false)).unwrap();
-        assert_eq!(ours, plain, "the built-in task's settings are kelpie's own, nothing added");
-        assert_eq!((&ours["crossSessionInbound"], &ours["hooks"]["SessionStart"][0]["hooks"][0]["command"]), (&json!("accept"), &json!("'/bin/kelpie' hook inbox 'billing@app'")), "a task takes kelpie's messages in its inbox, whatever its permission mode");
-        let written: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kelpie", "billing@app", Some("billing@app"), None, &designer, false)).unwrap();
+        let plain: Value = serde_json::from_str(&crate::inbox::with_inbox(&settings("/bin/kebbie", "billing@app", Some("billing@app"), None, None), "/bin/kebbie", "billing@app")).unwrap();
+        let ours: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", Some("billing@app"), None, &task, false)).unwrap();
+        assert_eq!(ours, plain, "the built-in task's settings are kebbie's own, nothing added");
+        assert_eq!((&ours["crossSessionInbound"], &ours["hooks"]["SessionStart"][0]["hooks"][0]["command"]), (&json!("accept"), &json!("'/bin/kebbie' hook inbox 'billing@app'")), "a task takes kebbie's messages in its inbox, whatever its permission mode");
+        let written: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", Some("billing@app"), None, &designer, false)).unwrap();
         let deny = written["permissions"]["deny"].as_array().unwrap();
-        let kelpies = plain["permissions"]["deny"].as_array().unwrap();
-        assert_eq!(deny[..kelpies.len()], kelpies[..], "kelpie's deny rules stay, first and whole");
-        assert_eq!(deny[kelpies.len()..], [json!("Bash(rm -rf:*)")]);
-        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!("Bash(npx playwright:*)")) && written["permissions"]["allow"].as_array().unwrap().contains(&json!("Bash(/bin/kelpie ask:*)")));
-        assert_eq!((&written["hooks"], &written["env"]), (&plain["hooks"], &plain["env"]), "the hooks and the push block's env are kelpie's whatever the profile");
+        let kebbies = plain["permissions"]["deny"].as_array().unwrap();
+        assert_eq!(deny[..kebbies.len()], kebbies[..], "kebbie's deny rules stay, first and whole");
+        assert_eq!(deny[kebbies.len()..], [json!("Bash(rm -rf:*)")]);
+        assert!(written["permissions"]["allow"].as_array().unwrap().contains(&json!("Bash(npx playwright:*)")) && written["permissions"]["allow"].as_array().unwrap().contains(&json!("Bash(/bin/kebbie ask:*)")));
+        assert_eq!((&written["hooks"], &written["env"]), (&plain["hooks"], &plain["env"]), "the hooks and the push block's env are kebbie's whatever the profile");
         assert_eq!(written["enabledPlugins"], json!({ "design@claude-plugins": true }));
         let configured = designer.permission_mode.clone().or(Some("plan".to_string()));
         assert_eq!(chosen_mode(None, None, configured.as_deref()), Some("acceptEdits"), "the profile's mode goes ahead of task.permission_mode");
@@ -1020,7 +1020,7 @@ mod tests {
         let prepare = &source[source.find("\nfn prepare(").unwrap()..];
         let prepare = &prepare[..prepare.find("\n}\n").unwrap()];
         assert!(prepare.contains("profile.agent.task_settings(") && prepare.contains("profiles::role_section(profile)?") && prepare.contains("profile: &added"), "the profile's rules reach the settings and its role and skills the role file");
-        assert!(include_str!("../peers.rs").contains("write_role(&file, &template, &pairs, place.profile)"), "the profile's section goes after kelpie's own role");
+        assert!(include_str!("../peers.rs").contains("write_role(&file, &template, &pairs, place.profile)"), "the profile's section goes after kebbie's own role");
     }
 
     #[test]

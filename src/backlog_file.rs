@@ -5,7 +5,7 @@ use crate::sh::Result;
 
 pub const PREFIX: &str = "local:";
 pub const FORMAT: &str = "- [priority] Title — one-line summary (area)";
-const HEADER: &str = "<!-- kelpie's backlog: one item per line, - [urgent|high|medium|low] Title — one-line summary (area); the priority, summary and area are optional, and other lines (checkboxes, nested bullets, prose) are left as they are. -->\n\n";
+const HEADER: &str = "<!-- kebbie's backlog: one item per line, - [urgent|high|medium|low] Title — one-line summary (area); the priority, summary and area are optional, and other lines (checkboxes, nested bullets, prose) are left as they are. -->\n\n";
 
 pub fn path() -> PathBuf {
     crate::config::path().with_file_name("backlog.md")
@@ -70,7 +70,7 @@ pub fn appended(existing: Option<&str>, priority: &str, item: &str) -> Result<(S
     let entry = parse(&new).ok_or_else(|| crate::notice::Notice::new(crate::notice::Tone::You, "Not added: the item needs a title").you("Give it a title that does not start with [.").to_string())?;
     let existing = existing.unwrap_or(HEADER);
     if entries(existing).iter().any(|other| other.title == entry.title) {
-        return crate::notice::Notice::new(crate::notice::Tone::You, format!("Not added: \"{}\" is already in the backlog", entry.title)).you("Give this one another title; the title is how kelpie knows an item.").err();
+        return crate::notice::Notice::new(crate::notice::Tone::You, format!("Not added: \"{}\" is already in the backlog", entry.title)).you("Give this one another title; the title is how kebbie knows an item.").err();
     }
     let separator = if existing.is_empty() || existing.ends_with('\n') { "" } else { "\n" };
     Ok((format!("{existing}{separator}{new}\n"), entry))
@@ -122,7 +122,7 @@ mod tests {
         let (text, _) = appended(Some("- a\n"), "", "b").unwrap();
         assert_eq!(text, "- a\n- b\n");
         let (fresh, _) = appended(None, "medium", "First").unwrap();
-        assert!(fresh.starts_with("<!-- kelpie's backlog") && fresh.ends_with("\n\n- [medium] First\n"));
+        assert!(fresh.starts_with("<!-- kebbie's backlog") && fresh.ends_with("\n\n- [medium] First\n"));
         assert_eq!(entries(&fresh).len(), 1, "the header is not an item");
     }
 
@@ -135,9 +135,9 @@ mod tests {
 
     #[test]
     fn add_writes_the_file_next_to_the_config_creating_it() {
-        let dir = std::env::temp_dir().join(format!("kelpie-backlog-file-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-backlog-file-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let file = dir.join("kelpie/backlog.md");
+        let file = dir.join("kebbie/backlog.md");
         assert!(add_to(&file, "high", "Ship it (app)").unwrap().contains("item: \"Ship it\" [high]"));
         add_to(&file, "", "Then this").unwrap();
         let titles: Vec<String> = read(&file).into_iter().map(|entry| entry.title).collect();
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(parse("-  spaced  title  ").map(|item| item.title), Some("spaced  title".to_string()));
         assert_eq!(parse("- [ High ] Title").map(|item| item.priority), Some("high".to_string()));
         assert!(parse("- [high]").is_none());
-        let missing = read(Path::new("/no/such/kelpie-backlog.md"));
+        let missing = read(Path::new("/no/such/kebbie-backlog.md"));
         assert!(missing.is_empty());
     }
 }

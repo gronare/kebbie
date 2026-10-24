@@ -207,7 +207,7 @@ fn said_at(transcript: &str, text: &str, since_ms: u64, enqueued: bool) -> Optio
     })
 }
 
-// Claude records a prompt submitted while its turn runs as an enqueue without the text, and takes it only when the turn ends; with kelpie's text gone from the box, that enqueue is kelpie's. An enqueue with another text (a task notification) is not. Codex records a queued prompt only once its turn ends, so its box letting go of the text is the take.
+// Claude records a prompt submitted while its turn runs as an enqueue without the text, and takes it only when the turn ends; with kebbie's text gone from the box, that enqueue is kebbie's. An enqueue with another text (a task notification) is not. Codex records a queued prompt only once its turn ends, so its box letting go of the text is the take.
 fn taken(agent: Agent, transcript: Option<&str>, shown: &Draft, text: &str, since_ms: u64) -> bool {
     let left_box = match shown {
         Draft::Empty => true,
@@ -342,7 +342,7 @@ pub fn not_delivered(typed: &Typed) -> String {
     if typed.inbox {
         return format!("Not delivered to {}: Claude Code's inbox took it, but its conversation does not show it after {} minutes; the session may hold or drop messages from other sessions (crossSessionInbound). It began: {}", typed.label, INBOX_GIVE_UP / 60, normalized(&typed.text).chars().take(120).collect::<String>());
     }
-    format!("Not delivered to {}: Claude did not take what kelpie typed into its input box within {GIVE_UP} s; it may still sit there. It began: {}", typed.label, normalized(&typed.text).chars().take(120).collect::<String>())
+    format!("Not delivered to {}: Claude did not take what kebbie typed into its input box within {GIVE_UP} s; it may still sit there. It began: {}", typed.label, normalized(&typed.text).chars().take(120).collect::<String>())
 }
 
 fn typed_dir() -> Result<PathBuf> {
@@ -406,7 +406,7 @@ pub fn clear_draft(read: &mut dyn FnMut() -> Draft, press: &mut dyn FnMut() -> R
             Draft::Typed(_) => {}
         }
     }
-    Err(Refused::Failed(format!("its input box still held text after kelpie cleared it line by line; it began: {}", cleared.lines().next().unwrap_or_default())))
+    Err(Refused::Failed(format!("its input box still held text after kebbie cleared it line by line; it began: {}", cleared.lines().next().unwrap_or_default())))
 }
 
 // Types even over the user's draft, which it clears first and returns, so the caller can log it; used only when the user or the lead forces a delivery.
@@ -430,7 +430,7 @@ impl Refused {
     pub fn reason(&self) -> String {
         match self {
             Refused::Draft => "has text typed in its input box".to_string(),
-            Refused::Unreadable => "shows no input box kelpie can read".to_string(),
+            Refused::Unreadable => "shows no input box kebbie can read".to_string(),
             Refused::Failed(error) => error.clone(),
         }
     }
@@ -476,7 +476,7 @@ pub fn check() {
             Outcome::NotDelivered => {
                 let _ = std::fs::remove_file(&path);
                 let again = crate::messages::hold_again(&typed.label, &typed.text).unwrap_or(false);
-                let again = if again { format!(" kelpie holds it and sends it again once {} is free.", typed.label) } else { String::new() };
+                let again = if again { format!(" kebbie holds it and sends it again once {} is free.", typed.label) } else { String::new() };
                 crate::restart::tell_board(&format!("{}{again}", not_delivered(&typed)));
             }
         }
@@ -610,12 +610,12 @@ mod tests {
         let answer = "[from you] The user's answer to \"Treat Claude's dim suggestion as an empty box\": Approve";
         assert!(taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at), "submitted while a turn ran: Claude records the enqueue without the text and takes it when the turn ends, 17 minutes later in the case seen");
         assert!(taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Typed("my own words".to_string()), answer, typed_at), "the user typing after it does not undo it");
-        assert!(!taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Typed("[from you] The user's answer to \"Treat".to_string()), answer, typed_at), "an enqueue while kelpie's text still sits in the box is someone else's");
+        assert!(!taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Typed("[from you] The user's answer to \"Treat".to_string()), answer, typed_at), "an enqueue while kebbie's text still sits in the box is someone else's");
         assert!(!taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Unreadable, answer, typed_at));
-        assert!(!taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at + 60_000), "an enqueue from before kelpie typed is not its");
+        assert!(!taken(Agent::Claude, Some(&queued_for_the_turns_end), &Draft::Empty, answer, typed_at + 60_000), "an enqueue from before kebbie typed is not its");
         assert!(taken(Agent::Claude, None, &Draft::Empty, answer, typed_at) && !taken(Agent::Claude, None, &Draft::Typed(answer.to_string()), answer, typed_at), "without a transcript, an empty box is the sign");
         let notification = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-22T08:39:48.500Z", "content": "<task-notification>\n<task-type>artifact-auto-react</task-type>" }).to_string();
-        assert!(!taken(Agent::Claude, Some(&notification), &Draft::Empty, answer, typed_at), "a notification Claude queued after kelpie typed is not kelpie's text: the CI log seen logged delivered and never taken");
+        assert!(!taken(Agent::Claude, Some(&notification), &Draft::Empty, answer, typed_at), "a notification Claude queued after kebbie typed is not kebbie's text: the CI log seen logged delivered and never taken");
         let old_queue = json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-10-20T11:00:00.000Z", "content": "[from lead] rebase onto main please" }).to_string();
         assert!(!taken_in(&old_queue, "[from lead] rebase onto main please", at));
     }

@@ -36,7 +36,7 @@ pub fn link(cwd: &Path, name: &str, item: &str) -> Result<String> {
     let task = task_of(&find_task(&repo, Some(name), cwd)?).to_string();
     let item = item.trim();
     if item.is_empty() {
-        return Err("kelpie link needs the item: a vault note's path, a Linear id, or local:<Title>".to_string());
+        return Err("kebbie link needs the item: a vault note's path, a Linear id, or local:<Title>".to_string());
     }
     let previous = record_start(&started_file(&task, &repo)?, item)?;
     let vault = crate::vault_cli::is_note(item).then(crate::vault_cli::detect).flatten();
@@ -52,7 +52,7 @@ pub fn link(cwd: &Path, name: &str, item: &str) -> Result<String> {
 // A linked note is claimed as a started one is; one another machine holds stays theirs, and the answer says so.
 fn link_claim(cli: &crate::vault_cli::Cli, note: &str, task: &str, repo: &str) -> String {
     match crate::task_note::claim(cli, note, task, repo, false) {
-        Ok(Some(held)) => format!(" kelpie on {} works on it as {}, so the claim stays theirs; start it with --anyway to take it over.", held.machine, held.task),
+        Ok(Some(held)) => format!(" kebbie on {} works on it as {}, so the claim stays theirs; start it with --anyway to take it over.", held.machine, held.task),
         Ok(None) => String::new(),
         Err(error) => format!(" Its claim for this machine was not written ({error})."),
     }
@@ -61,7 +61,7 @@ fn link_claim(cli: &crate::vault_cli::Cli, note: &str, task: &str, repo: &str) -
 fn link_text(task: &str, item: &str, previous: Option<&str>, kept: bool) -> String {
     let was = previous.filter(|previous| *previous != item).map_or(String::new(), |previous| format!(" (it was linked to {})", previous.replace('\n', ", ")));
     if kept {
-        return format!("Linked {task} to {item}{was}: kelpie closes the note when the task is done, and a reset or a drop puts it back in the backlog.");
+        return format!("Linked {task} to {item}{was}: kebbie closes the note when the task is done, and a reset or a drop puts it back in the backlog.");
     }
     format!("Linked {task} to {item}{was}: when it is done the lead is told to log and close it, and a reset puts it back in the backlog.")
 }
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn a_link_records_the_item_and_names_the_one_it_replaces() {
-        let file = std::env::temp_dir().join(format!("kelpie-link-{}", std::process::id()));
+        let file = std::env::temp_dir().join(format!("kebbie-link-{}", std::process::id()));
         let _ = std::fs::remove_file(&file);
         assert_eq!(record_start(&file, "Projects/grown.md").unwrap(), None);
         assert_eq!(record_start(&file, "local:Fix login").unwrap().as_deref(), Some("Projects/grown.md"));
@@ -144,13 +144,13 @@ mod tests {
         fake.answer("task-claim", r#"{"path":"Projects/billing.md","claimed":true,"claim":{"machine":"mac","task":"billing","since":"2026-10-23T09:00:00Z"}}"#);
         assert_eq!(link_claim(&fake.claiming(), "Projects/billing.md", "billing", "api"), "");
         fake.answer("task-claim", r#"{"path":"Projects/billing.md","claimed":false,"claim":{"machine":"devbox","task":"search","since":"2026-10-21T08:00:00Z"}}"#);
-        assert!(link_claim(&fake.claiming(), "Projects/billing.md", "billing", "api").contains("kelpie on devbox works on it as search, so the claim stays theirs"));
+        assert!(link_claim(&fake.claiming(), "Projects/billing.md", "billing", "api").contains("kebbie on devbox works on it as search, so the claim stays theirs"));
         assert_eq!(link_claim(&fake.cli, "Projects/billing.md", "billing", "api"), "", "an older vault claims nothing");
         assert_eq!(fake.calls(), ["task claim Projects/billing.md --machine mac --task billing --repo api"; 2]);
         let off = link_text("billing", "Projects/billing.md", Some("local:Fix login"), false);
         assert_eq!(off, "Linked billing to Projects/billing.md (it was linked to local:Fix login): when it is done the lead is told to log and close it, and a reset puts it back in the backlog.", "without the vault the text is today's");
         let on = link_text("billing", "Projects/billing.md", Some("Projects/old.md\nlocal:Fix login"), true);
-        assert!(on.contains("kelpie closes the note when the task is done") && on.contains("a reset or a drop puts it back in the backlog") && !on.contains("the lead is told"), "{on}");
+        assert!(on.contains("kebbie closes the note when the task is done") && on.contains("a reset or a drop puts it back in the backlog") && !on.contains("the lead is told"), "{on}");
         assert!(on.contains("(it was linked to Projects/old.md, local:Fix login)"), "{on}");
     }
 
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn a_start_entry_and_its_items_round_trip_through_the_started_file() {
-        let file = std::env::temp_dir().join(format!("kelpie-started-entry-{}", std::process::id()));
+        let file = std::env::temp_dir().join(format!("kebbie-started-entry-{}", std::process::id()));
         let _ = std::fs::remove_file(&file);
         let entry = start_entry(Some("Projects/x.md"), Some("local:Fix login")).unwrap();
         std::fs::write(&file, &entry).unwrap();

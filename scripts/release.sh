@@ -1,5 +1,5 @@
 #!/bin/sh
-# Releases kelpie: scripts/release.sh <X.Y.Z> "<what it brings>" moves CHANGES.md's Unreleased entries under X.Y.Z, bumps the manifests, tags, pushes and waits until the binaries download.
+# Releases kebbie: scripts/release.sh <X.Y.Z> "<what it brings>" moves CHANGES.md's Unreleased entries under X.Y.Z, bumps the manifests, tags, pushes and waits until the binaries download.
 set -eu
 
 version=${1:-}
@@ -32,8 +32,8 @@ for manifest in Cargo.toml herdr-plugin.toml; do grep -q "^version = \"$version\
 grep -q "\"version\": \"$version\"" .claude-plugin/plugin.json || fail ".claude-plugin/plugin.json still names another version"
 cargo check --quiet
 git add CHANGES.md Cargo.toml Cargo.lock herdr-plugin.toml .claude-plugin/plugin.json
-git commit --quiet -m "kelpie $version: $summary"
-git tag -a "$tag" -m "kelpie $version"
+git commit --quiet -m "kebbie $version: $summary"
+git tag -a "$tag" -m "kebbie $version"
 git push --atomic --quiet origin main "$tag"
 echo "release: pushed $tag; waiting for the release workflow"
 
@@ -48,8 +48,8 @@ gh run watch "$run" --exit-status >/dev/null || fail "the release workflow faile
 
 slug=$(git remote get-url origin | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')
 for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-  url="https://github.com/$slug/releases/download/$tag/kelpie-$version-$target.tar.gz"
+  url="https://github.com/$slug/releases/download/$tag/kebbie-$version-$target.tar.gz"
   code=$(curl -sL -r 0-0 -o /dev/null -w '%{http_code}' "$url?check=$$" || true)
-  case "$code" in 2*) ;; *) fail "kelpie-$version-$target.tar.gz answers $code" ;; esac
+  case "$code" in 2*) ;; *) fail "kebbie-$version-$target.tar.gz answers $code" ;; esac
 done
-echo "release: kelpie $version is published: https://github.com/$slug/releases/tag/$tag"
+echo "release: kebbie $version is published: https://github.com/$slug/releases/tag/$tag"

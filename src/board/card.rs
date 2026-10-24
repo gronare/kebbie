@@ -521,7 +521,7 @@ mod tests {
         std::rc::Rc::get_mut(app.details.get_mut(Path::new("/work/wt2.web")).unwrap()).unwrap().card.as_mut().unwrap().0.text = text.to_string();
     }
 
-    const LABELLED: &str = "Refunds show on the **billing page** for every paid invoice.\n\nTo check: /billing on desktop and phone width.\n\nPlease confirm:\nOn the phone the column folds under the amount.\n![the refund row](/tmp/kelpie-shots/refund-row-desktop.png)\n![at 390 px](/tmp/kelpie-shots/refund-row-phone.png)";
+    const LABELLED: &str = "Refunds show on the **billing page** for every paid invoice.\n\nTo check: /billing on desktop and phone width.\n\nPlease confirm:\nOn the phone the column folds under the amount.\n![the refund row](/tmp/kebbie-shots/refund-row-desktop.png)\n![at 390 px](/tmp/kebbie-shots/refund-row-phone.png)";
 
     #[test]
     fn a_short_capitalised_label_at_a_paragraphs_start_opens_a_section_and_nothing_else_does() {
@@ -618,7 +618,7 @@ mod tests {
         assert_eq!(rows[card_y + 1].matches('│').count(), 3, "a bar between them, inside the window's borders: {screen}");
         assert!(screen.contains("TO CHECK ─") && screen.contains("PLEASE CONFIRM ─") && screen.contains("IMAGES ─"), "{screen}");
         assert!(screen.contains("billing page for every") && !screen.contains("**"), "{screen}");
-        assert!(!screen.contains("/tmp/kelpie-shots"), "the path stays behind the link: {screen}");
+        assert!(!screen.contains("/tmp/kebbie-shots"), "the path stays behind the link: {screen}");
         press(&mut app, key(KeyCode::Right));
         let (rows, _) = render(&mut app, 160, 48);
         assert!(rows.join("\n").contains("2/2 refund-row-phone.png  at 390 px") && rows.join("\n").contains("▸ ▣ refund-row-phone.png"));

@@ -236,15 +236,15 @@ mod tests {
     }
 
     fn area() -> Area {
-        Area { key: "Areas/kelpie.md".to_string(), stem: "kelpie".to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new(), sandbox: true }
+        Area { key: "Areas/kebbie.md".to_string(), stem: "kebbie".to_string(), summary: String::new(), repo: None, open: Vec::new(), backlog: Vec::new(), log: Vec::new(), git: None, actions: Vec::new(), errors: Vec::new(), sandbox: true }
     }
 
     #[test]
     fn a_task_in_an_area_is_pointed_at_its_notes() {
         let mut area = area();
-        assert_eq!(task_context(&area), "This task is in the area [[kelpie]]. Read its system note Areas/kelpie.md with the vault tools first.");
-        area.open = vec![note("Projects/kelpie-a.md"), note("Projects/kelpie-b.md")];
-        assert!(task_context(&area).ends_with("first, and its open notes: Projects/kelpie-a.md, Projects/kelpie-b.md."));
+        assert_eq!(task_context(&area), "This task is in the area [[kebbie]]. Read its system note Areas/kebbie.md with the vault tools first.");
+        area.open = vec![note("Projects/kebbie-a.md"), note("Projects/kebbie-b.md")];
+        assert!(task_context(&area).ends_with("first, and its open notes: Projects/kebbie-a.md, Projects/kebbie-b.md."));
     }
 
     #[test]
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn a_repos_state_is_read_from_its_main_branch_against_origin_and_its_last_tag() {
-        let dir = std::env::temp_dir().join(format!("kelpie-areas-state-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-areas-state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (main, origin) = (dir.join("app"), dir.join("origin.git"));
         std::fs::create_dir_all(&main).unwrap();
@@ -318,7 +318,7 @@ mod tests {
         for number in 0..3 {
             add(format!("other-{number}"), Some(other.join("lib")));
         }
-        add("kelpie-test-area-without-a-repo".to_string(), None);
+        add("kebbie-test-area-without-a-repo".to_string(), None);
         drop(db);
         let reads = std::sync::Mutex::new(Vec::new());
         let areas = gather_from(&Index::at(&path).unwrap(), None, |repo| {

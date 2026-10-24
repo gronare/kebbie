@@ -85,7 +85,7 @@ fn running(progress: Option<&Progress>, overall: &Cell<Overall>, now: u64, width
 
 pub(super) fn finished(progress: Option<&Progress>, bugs: &[String], restart: &[String], width: usize) -> (String, Vec<Line<'static>>) {
     let summary = progress.and_then(|progress| progress.summary.clone()).unwrap_or_default();
-    let title = if summary.version.is_empty() { "kelpie".to_string() } else { format!("kelpie {}", summary.version) };
+    let title = if summary.version.is_empty() { "kebbie".to_string() } else { format!("kebbie {}", summary.version) };
     let mut lines = vec![Line::from(Span::styled("✓ Updated", bold(GREEN))), Line::default()];
     let fixed: Vec<String> = summary.fixed.iter().cloned().chain(bugs.iter().map(|title| crate::update::bug_line(title))).collect();
     if summary.new.is_empty() && fixed.is_empty() {
@@ -136,11 +136,11 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     let bugs = run.fixed.as_ref().map(|fixed| fixed.bugs.clone()).unwrap_or_default();
     let restart = progress.as_ref().and_then(|progress| progress.summary.as_ref()).map(|summary| app.restart_lines(summary)).unwrap_or_default();
     let (title, lines) = match &run.outcome {
-        None => ("Updating kelpie".to_string(), running(progress.as_ref(), &run.overall, now, width)),
+        None => ("Updating kebbie".to_string(), running(progress.as_ref(), &run.overall, now, width)),
         Some(Ok(text)) if run.details => (finished(progress.as_ref(), &bugs, &restart, width).0, details(text)),
         Some(Ok(_)) => finished(progress.as_ref(), &bugs, &restart, width),
-        Some(Err(error)) if run.details => ("kelpie update".to_string(), details(error)),
-        Some(Err(error)) => ("kelpie update".to_string(), failed(error, progress.as_ref(), now, width)),
+        Some(Err(error)) if run.details => ("kebbie update".to_string(), details(error)),
+        Some(Err(error)) => ("kebbie update".to_string(), failed(error, progress.as_ref(), now, width)),
     };
     modal(frame, title, lines, WIDTH);
 }
@@ -150,7 +150,7 @@ impl App {
         self.progress_file.clone().or_else(|| crate::lead::state_dir().ok().map(|state| progress::file(&state))).unwrap_or_default()
     }
 
-    // The board restarts itself onto the new kelpie once this window closes, so it names no board; a restart round older than the update's own says nothing new.
+    // The board restarts itself onto the new kebbie once this window closes, so it names no board; a restart round older than the update's own says nothing new.
     pub(super) fn restart_lines(&self, summary: &Summary) -> Vec<String> {
         if summary.sessions.is_empty() {
             return summary.restart.iter().filter(|line| !line.starts_with("The board") && !line.starts_with("Open boards")).cloned().collect();
@@ -226,7 +226,7 @@ impl App {
     pub(super) fn update_pill(&self) -> Option<String> {
         let run = self.update.as_ref().filter(|_| !matches!(self.mode, Mode::Update))?;
         let key = crate::keys::map().label(crate::keys::Act::Update);
-        Some(if run.running() { format!("⇣ updating kelpie · {key}") } else { format!("✓ kelpie updated · {key}") })
+        Some(if run.running() { format!("⇣ updating kebbie · {key}") } else { format!("✓ kebbie updated · {key}") })
     }
 }
 
@@ -254,7 +254,7 @@ mod tests {
     fn summary(new: &[&str], fixed: &[&str]) -> Summary {
         let owned = |lines: &[&str]| lines.iter().map(|line| line.to_string()).collect();
         let line = |label: &str, said: &str| crate::restart::Line { label: label.to_string(), said: said.to_string(), stale: true };
-        Summary { version: "0.27.0".to_string(), new: owned(new), fixed: owned(fixed), restart: vec!["The lead and 2 sessions restart when they're idle".to_string(), "Open boards restart on the new kelpie when you next open them".to_string()], sessions: vec![line("lead", "restarts when idle"), line("billing@app", "restarts when idle"), line("api@app", "restarts when idle")], restarted_at: 1000, head: "9cbd545".to_string() }
+        Summary { version: "0.27.0".to_string(), new: owned(new), fixed: owned(fixed), restart: vec!["The lead and 2 sessions restart when they're idle".to_string(), "Open boards restart on the new kebbie when you next open them".to_string()], sessions: vec![line("lead", "restarts when idle"), line("billing@app", "restarts when idle"), line("api@app", "restarts when idle")], restarted_at: 1000, head: "9cbd545".to_string() }
     }
 
     fn updating(app: &mut App, finish: Summary) -> mpsc::Sender<()> {
@@ -263,16 +263,16 @@ mod tests {
         let (release, gate) = mpsc::channel::<()>();
         let gate = std::sync::Mutex::new(gate);
         app.updater = std::sync::Arc::new(move || {
-            let mut tracker = Tracker::start(&file, "Fetching main", "Build kelpie", crate::messages::now());
+            let mut tracker = Tracker::start(&file, "Fetching main", "Build kebbie", crate::messages::now());
             tracker.done(progress::FETCH, "Fetched main (3 new commits)");
-            tracker.begin(progress::BUILD, "Building kelpie", crate::messages::now());
+            tracker.begin(progress::BUILD, "Building kebbie", crate::messages::now());
             tracker.meter(Meter::Build { done: 212, total: Some(348), compiling: None });
             gate.lock().unwrap().recv().map_err(|error| error.to_string())?;
-            tracker.done(progress::BUILD, "Built kelpie");
+            tracker.done(progress::BUILD, "Built kebbie");
             tracker.done(progress::PLUGINS, "Updated the Claude Code and vault plugins");
-            tracker.done(progress::RESTART, "Sessions move to the new kelpie");
+            tracker.done(progress::RESTART, "Sessions move to the new kebbie");
             tracker.finish(finish.clone());
-            Ok("kelpie follows the main channel\nkelpie 0.27.0 rebuilt, 02c7fe0 → 9cbd545\n\nClaude sessions:\n  lead: restarts when idle\nkeeper: restarted on the new kelpie (pid 4242)".to_string())
+            Ok("kebbie follows the main channel\nkebbie 0.27.0 rebuilt, 02c7fe0 → 9cbd545\n\nClaude sessions:\n  lead: restarts when idle\nkeeper: restarted on the new kebbie (pid 4242)".to_string())
         });
         release
     }
@@ -281,20 +281,20 @@ mod tests {
     fn u_shows_the_steps_with_the_build_bar_and_esc_hides_the_window_while_the_update_keeps_going() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         let release = updating(&mut app, summary(&["The hub window shows your devices by name, and r removes one"], &[]));
-        app.updates = vec![("kelpie".to_string(), "0.27.0".to_string())];
+        app.updates = vec![("kebbie".to_string(), "0.27.0".to_string())];
         press(&mut app, key(KeyCode::Char('U')));
         assert!(matches!(app.mode, Mode::Update), "the key returns while the update runs");
         waits_for(&mut app, "the build step", |app| progress::load(&app.progress_file()).is_some_and(|progress| progress.meter.is_some()));
         let shown = screen(&mut app, 100);
         assert!(shown.lines().any(|line| line.contains('█') && line.contains('%') && !line.contains("crates")), "one bar for the whole update above the steps: {shown}");
-        for line in ["Updating kelpie", "✓ Fetched main (3 new commits)", "▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 0:0", "  Claude Code and vault plugins", "  Restart sessions", "esc hides this; the update keeps going"] {
+        for line in ["Updating kebbie", "✓ Fetched main (3 new commits)", "▸ Building kebbie  ████████████░░░░░░░░  212/348 crates 0:0", "  Claude Code and vault plugins", "  Restart sessions", "esc hides this; the update keeps going"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
         press(&mut app, key(KeyCode::Char('x')));
         assert!(matches!(app.mode, Mode::Update), "only esc hides it");
         press(&mut app, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal) && app.update.as_ref().is_some_and(Run::running), "hidden, still running");
-        assert!(crate::board::header::header(&app, 200).0.to_string().contains("⇣ updating kelpie · U"), "{}", crate::board::header::header(&app, 200).0);
+        assert!(crate::board::header::header(&app, 200).0.to_string().contains("⇣ updating kebbie · U"), "{}", crate::board::header::header(&app, 200).0);
         press(&mut app, key(KeyCode::Char('U')));
         assert!(matches!(app.mode, Mode::Update), "U opens the window again, not a second update");
         press(&mut app, key(KeyCode::Esc));
@@ -322,7 +322,7 @@ mod tests {
         app.update.as_mut().unwrap().fixed_read = None;
         app.poll_update();
         let shown = screen(&mut app, 100);
-        for line in ["kelpie 0.27.0", "✓ Updated", "What's new", " • The hub window shows your devices by name, and r removes", "   one", "Fixed", " • A bug you ran into: bug ours", "Restarting", " The lead and 2 sessions restart when they're idle", "d details · any other key closes"] {
+        for line in ["kebbie 0.27.0", "✓ Updated", "What's new", " • The hub window shows your devices by name, and r removes", "   one", "Fixed", " • A bug you ran into: bug ours", "Restarting", " The lead and 2 sessions restart when they're idle", "d details · any other key closes"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
         assert!(!shown.contains("bug earlier"), "a bug an earlier update closed was shown then: {shown}");
@@ -330,12 +330,12 @@ mod tests {
         assert!(!shown.contains("pid") && !shown.contains("02c7fe0") && !shown.contains("lead: restarts"), "the detail lines wait behind d: {shown}");
         press(&mut app, key(KeyCode::Char('d')));
         let shown = screen(&mut app, 100);
-        assert!(shown.contains("kelpie 0.27.0 rebuilt, 02c7fe0 → 9cbd545") && shown.contains("keeper: restarted on the new kelpie (pid 4242)") && shown.contains("d back · any other key closes"), "{shown}");
+        assert!(shown.contains("kebbie 0.27.0 rebuilt, 02c7fe0 → 9cbd545") && shown.contains("keeper: restarted on the new kebbie (pid 4242)") && shown.contains("d back · any other key closes"), "{shown}");
         press(&mut app, key(KeyCode::Char('d')));
         assert!(screen(&mut app, 100).contains("What's new"), "d again goes back");
         press(&mut app, key(KeyCode::Char('x')));
         assert!(matches!(app.mode, Mode::Normal) && app.update.is_none(), "any other key closes it");
-        assert!(app.restart_after_update, "closing the summary lets the board restart onto the new kelpie at once");
+        assert!(app.restart_after_update, "closing the summary lets the board restart onto the new kebbie at once");
         assert!(crate::issue_recheck::for_update(&state, 0, "9cbd545", crate::messages::now()).is_none(), "a bug the summary showed is never shown again");
     }
 
@@ -347,11 +347,11 @@ mod tests {
         app.stale_at = 999;
         assert_eq!(app.restart_lines(&shown), ["The lead and 2 sessions restart when they're idle"], "a round from before the update says nothing about it");
         app.stale_at = 1010;
-        assert_eq!(app.restart_lines(&shown), ["✓ 2 sessions are on the new kelpie", "The lead restarts when it's idle"]);
+        assert_eq!(app.restart_lines(&shown), ["✓ 2 sessions are on the new kebbie", "The lead restarts when it's idle"]);
         app.stale = Vec::new();
-        assert_eq!(app.restart_lines(&shown), ["✓ The lead and 2 sessions are on the new kelpie"]);
+        assert_eq!(app.restart_lines(&shown), ["✓ The lead and 2 sessions are on the new kebbie"]);
         let old = Summary { sessions: Vec::new(), ..summary(&[], &[]) };
-        assert_eq!(app.restart_lines(&old), ["The lead and 2 sessions restart when they're idle"], "a summary an older kelpie wrote keeps its words, without the board");
+        assert_eq!(app.restart_lines(&old), ["The lead and 2 sessions restart when they're idle"], "a summary an older kebbie wrote keeps its words, without the board");
     }
 
     #[test]
@@ -371,16 +371,16 @@ mod tests {
         let file = crate::sh::test_dir("board-update-failed").join(progress::FILE);
         app.progress_file = Some(file.clone());
         app.updater = std::sync::Arc::new(move || {
-            let mut tracker = Tracker::start(&file, "Fetching main", "Build kelpie", crate::messages::now());
+            let mut tracker = Tracker::start(&file, "Fetching main", "Build kebbie", crate::messages::now());
             tracker.done(progress::FETCH, "Fetched main (1 new commit)");
-            tracker.begin(progress::BUILD, "Building kelpie", crate::messages::now());
+            tracker.begin(progress::BUILD, "Building kebbie", crate::messages::now());
             tracker.fail_current();
             Err("sh scripts/build.sh failed: error[E0425]: cannot find value `x`".to_string())
         });
         press(&mut app, key(KeyCode::Char('U')));
         waits_for(&mut app, "the outcome", |app| app.update.as_ref().is_some_and(|run| !run.running()));
         let shown = screen(&mut app, 100);
-        assert!(shown.contains("✗ The update stopped") && shown.contains("sh scripts/build.sh failed") && shown.contains("✗ Building kelpie") && shown.contains("  Restart sessions"), "{shown}");
+        assert!(shown.contains("✗ The update stopped") && shown.contains("sh scripts/build.sh failed") && shown.contains("✗ Building kebbie") && shown.contains("  Restart sessions"), "{shown}");
     }
 
     #[test]

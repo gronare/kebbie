@@ -126,7 +126,7 @@ pub struct Item {
 }
 
 impl Item {
-    // A push kelpie stopped between taking it from the line and sending it leaves Pushing behind with nothing in the line; the task is ready again.
+    // A push kebbie stopped between taking it from the line and sending it leaves Pushing behind with nothing in the line; the task is ready again.
     fn settle_orphaned_push(&mut self) {
         let head = self.git.as_ref().and_then(|git| git.head.clone());
         if let Some(record) = self.phase.as_mut().filter(|record| matches!(record.phase, Phase::Pushing { .. })).filter(|_| self.push_waits.is_none()) {
@@ -171,7 +171,7 @@ impl Item {
         self.committed() && self.git.as_ref().is_some_and(|git| git.approved)
     }
 
-    // A task that reported ready has its rules checked by the reviewer, or by the lead once kelpie asked it; one that has not, has not.
+    // A task that reported ready has its rules checked by the reviewer, or by the lead once kebbie asked it; one that has not, has not.
     pub fn rules_note(&self) -> Option<String> {
         let unchecked = self.git.as_ref().is_some_and(|git| git.ahead > 0 && !git.approved) && self.group() != Group::Working && self.push_waits.is_none();
         if !unchecked {
@@ -209,11 +209,11 @@ impl Item {
 
     fn phase_note(&self) -> Option<String> {
         match self.phase()? {
-            Phase::Closing => Some("pushed · kelpie closes it".to_string()),
-            Phase::NeedsYou(Why::Failed) => Some("kelpie could not finish its push or close it; the lead has why".to_string()),
+            Phase::Closing => Some("pushed · kebbie closes it".to_string()),
+            Phase::NeedsYou(Why::Failed) => Some("kebbie could not finish its push or close it; the lead has why".to_string()),
             Phase::NeedsYou(Why::Unreadable) => Some(format!("gh has not read its CI for {} minutes", crate::ci::UNREADABLE_AFTER / 60)),
             Phase::NeedsYou(Why::LeftLine) => Some(self.left_note()),
-            Phase::NeedsYou(Why::NotStaged) => Some(format!("kelpie could not put it on local main again within {} minutes; stage it once the main checkout is clear", tasks::STAGE_WAIT / 60)),
+            Phase::NeedsYou(Why::NotStaged) => Some(format!("kebbie could not put it on local main again within {} minutes; stage it once the main checkout is clear", tasks::STAGE_WAIT / 60)),
             _ => None,
         }
     }
@@ -249,12 +249,12 @@ impl Item {
             tasks::PushBy::Lead => "the lead",
         };
         if pending.work == tasks::PushWork::Turn {
-            let place = if pending.ahead == 0 { "kelpie pushes it now".to_string() } else { tasks::place_in_line(pending.ahead, pending.after.as_deref()) };
+            let place = if pending.ahead == 0 { "kebbie pushes it now".to_string() } else { tasks::place_in_line(pending.ahead, pending.after.as_deref()) };
             return Some(format!("pushing for {who} · {place}"));
         }
         let what = match pending.work {
-            _ if self.reported_since(pending.at, "ready") && self.git.as_ref().is_some_and(|git| git.approved) && stalled => "ready for a while, but kelpie has not seen its Claude take the request; push again",
-            _ if self.reported_since(pending.at, "ready") && self.git.as_ref().is_some_and(|git| git.approved) => "kelpie pushes it now",
+            _ if self.reported_since(pending.at, "ready") && self.git.as_ref().is_some_and(|git| git.approved) && stalled => "ready for a while, but kebbie has not seen its Claude take the request; push again",
+            _ if self.reported_since(pending.at, "ready") && self.git.as_ref().is_some_and(|git| git.approved) => "kebbie pushes it now",
             _ if self.reported_since(pending.at, "ready") => "the new commits' rules are checked",
             tasks::PushWork::Turn | tasks::PushWork::Tests => "its Claude runs the tests",
             tasks::PushWork::Conflict => "its Claude resolves the conflict",
@@ -669,7 +669,7 @@ pub(crate) fn known_repos(workspaces: &[Value], pooled: Vec<PathBuf>) -> BTreeSe
         .map(|repo| repo.canonicalize().unwrap_or(repo)).collect()
 }
 
-// The main checkout of every repo kelpie knows: leftover uncommitted files there, and its worktree pool.
+// The main checkout of every repo kebbie knows: leftover uncommitted files there, and its worktree pool.
 pub fn checkouts() -> Result<Vec<Checkout>> {
     Ok(known_repos(&herdr::workspaces()?, pooled_checkouts()).iter().filter_map(|repo| {
         let pool = slots(repo).ok()?;
@@ -682,7 +682,7 @@ pub fn checkouts() -> Result<Vec<Checkout>> {
     }).collect())
 }
 
-// Every task in a pooled worktree of a repo kelpie knows, then every other Claude session, sorted by what they need.
+// Every task in a pooled worktree of a repo kebbie knows, then every other Claude session, sorted by what they need.
 pub fn running_url(repo: &Path, worktree: &Path) -> Option<String> {
     let settings = crate::config::resolve(Some(repo)).ok()?.settings;
     crate::config::dev_url(settings.dev_url.value.as_deref(), repo, worktree)
@@ -692,7 +692,7 @@ pub fn running_url(repo: &Path, worktree: &Path) -> Option<String> {
 pub(crate) fn held_by_draft(log: &[Message], task: &str, address: &str) -> Option<String> {
     let held: Vec<&Message> = log.iter().filter(|message| message.held && message.to == address && message.kind.as_deref() != Some(messages::NOTICE_KIND)).collect();
     let (waiting, draft) = (held.len(), held.iter().any(|message| message.why.as_deref() == Some(messages::DRAFT_HOLD)));
-    draft.then(|| format!("clear the draft in its input box, or kelpie tell --force {task} \"<text>\" ({} held)", plural(waiting, "message")))
+    draft.then(|| format!("clear the draft in its input box, or kebbie tell --force {task} \"<text>\" ({} held)", plural(waiting, "message")))
 }
 
 const PUSH_STALLS_AFTER: u64 = 600;
@@ -910,7 +910,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_repo_counts_once_whether_herdr_has_it_open_or_only_its_pool_is_on_disk() {
-        let dir = std::env::temp_dir().join(format!("kelpie-known-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-known-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("shop")).unwrap();
         std::fs::create_dir_all(dir.join("blog")).unwrap();
         let shop = dir.join("shop").canonicalize().unwrap();
@@ -1111,7 +1111,7 @@ pub(crate) mod tests {
         moved(&mut item, &Event::Started { prompted: false });
         assert_eq!(at(&mut item, Some("idle")), Group::Idle, "started without a prompt, it waits for work");
         moved(&mut item, &Event::TurnBegan { by_user: false });
-        assert_eq!(item.group(), Group::Idle, "a notice of kelpie's is no work");
+        assert_eq!(item.group(), Group::Idle, "a notice of kebbie's is no work");
         moved(&mut item, &Event::TurnBegan { by_user: true });
         assert_eq!(item.group(), Group::Working, "the user's prompt is");
     }
@@ -1145,7 +1145,7 @@ pub(crate) mod tests {
         step(&mut item, "the tests pass", Some(Event::Reported { state: "ready", head: Some("abd"), committed: true, pushing: true }), &[Some("idle"), Some("done")], Group::ReadyToPush);
         item.push_waits = None;
         item.git.as_mut().unwrap().ahead = 0;
-        step(&mut item, "kelpie pushes it", Some(Event::PushOut { sha: "abcdef0" }), &[Some("done"), Some("idle"), None], Group::CiRunning);
+        step(&mut item, "kebbie pushes it", Some(Event::PushOut { sha: "abcdef0" }), &[Some("done"), Some("idle"), None], Group::CiRunning);
         item.ci = Some(watched(crate::ci::State::Running, true));
         step(&mut item, "the push notice it reads", Some(Event::TurnBegan { by_user: false }), &[Some("working")], Group::CiRunning);
         reported(&mut item, "ready", 60);
@@ -1180,12 +1180,12 @@ pub(crate) mod tests {
         item.ci = None;
         moved(&mut item, &Event::Closing);
         for status in [Some("done"), Some("idle"), Some("working")] {
-            assert_eq!(at(&mut item, status), Group::Working, "green, its note being written before kelpie closes it, herdr {status:?}");
+            assert_eq!(at(&mut item, status), Group::Working, "green, its note being written before kebbie closes it, herdr {status:?}");
         }
         reported(&mut item, "ready", 90);
         moved(&mut item, &Event::Reported { state: "ready", head: None, committed: false, pushing: false });
-        assert_eq!(at(&mut item, Some("idle")), Group::Working, "the note written, it waits for kelpie to close it");
-        assert!(item.summary().starts_with("pushed · kelpie closes it"), "{}", item.summary());
+        assert_eq!(at(&mut item, Some("idle")), Group::Working, "the note written, it waits for kebbie to close it");
+        assert!(item.summary().starts_with("pushed · kebbie closes it"), "{}", item.summary());
     }
 
     #[test]
@@ -1246,8 +1246,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_draft_holding_back_only_kelpies_own_notices_is_no_reason_to_need_the_user() {
-        let log = |kind: &str| crate::messages::fold(&format!(r#"{{"id":"m1","at":1,"from":"kelpie","to":"billing@web","text":"kelpie was updated","state":"held","why":"{}","kind":"{kind}"}}"#, messages::DRAFT_HOLD));
+    fn a_draft_holding_back_only_kebbies_own_notices_is_no_reason_to_need_the_user() {
+        let log = |kind: &str| crate::messages::fold(&format!(r#"{{"id":"m1","at":1,"from":"kebbie","to":"billing@web","text":"kebbie was updated","state":"held","why":"{}","kind":"{kind}"}}"#, messages::DRAFT_HOLD));
         assert_eq!(held_by_draft(&log(messages::NOTICE_KIND), "billing", "billing@web"), None);
         assert!(held_by_draft(&log(messages::HAND_KIND), "billing", "billing@web").is_some_and(|said| said.starts_with("clear the draft")));
     }
@@ -1283,7 +1283,7 @@ pub(crate) mod tests {
         assert_eq!(item.summary(), "CI failed: CI · test");
         moved(&mut item, &Event::TurnBegan { by_user: false });
         item.agent.as_mut().unwrap().status = "working".to_string();
-        assert!(item.group() == Group::NeedsYou, "the log kelpie hands it starts a turn, shown on its icon");
+        assert!(item.group() == Group::NeedsYou, "the log kebbie hands it starts a turn, shown on its icon");
         item.agent.as_mut().unwrap().status = "idle".to_string();
         item.report.as_mut().unwrap().at = 30;
         moved(&mut item, &Event::Reported { state: "ready", head: None, committed: false, pushing: false });
@@ -1312,7 +1312,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_task_kelpie_resumes_stays_where_it_was_and_one_it_will_not_resume_needs_you() {
+    fn a_task_kebbie_resumes_stays_where_it_was_and_one_it_will_not_resume_needs_you() {
         let mut item = task(Some("idle"), Some("needs-you"), 1);
         in_phase(&mut item, Phase::Working);
         item.recover = Some(stopped_by(crate::recover::Kind::Retrying));
@@ -1363,7 +1363,7 @@ pub(crate) mod tests {
             r#"{"id":"m3","at":3,"from":"lead","to":"shop@web","text":"c","state":"held","why":"is waiting for an answer"}"#,
         ].join("\n"));
         let held = held_by_draft(&log, "billing", "billing@web");
-        assert_eq!(held.as_deref(), Some("clear the draft in its input box, or kelpie tell --force billing \"<text>\" (2 messages held)"));
+        assert_eq!(held.as_deref(), Some("clear the draft in its input box, or kebbie tell --force billing \"<text>\" (2 messages held)"));
         assert_eq!(held_by_draft(&log, "shop", "shop@web"), None, "held for another reason, the row stays as the task reported");
         let mut item = task(Some("idle"), Some("blocked"), 0);
         assert!(item.group() == Group::Idle);
@@ -1405,7 +1405,7 @@ pub(crate) mod tests {
         assert_eq!((item.group(), item.summary()), (Group::ReadyToPush, "2 commits · pushing for you · 2nd in line after Refunds on invoices".to_string()));
         assert_eq!((item.next_for_you(), item.to_json()["push_ahead"].clone()), (None, json!(1)), "nothing for the user while it waits its turn");
         item.push_waits = Some(PendingPush { by: PushBy::Lead, work: PushWork::Turn, at: 10, ahead: 0, after: None });
-        assert_eq!(item.push_note().unwrap(), "pushing for the lead · kelpie pushes it now");
+        assert_eq!(item.push_note().unwrap(), "pushing for the lead · kebbie pushes it now");
         item.push_waits = None;
         item.push_left = Some("its Claude did not report ready within 30 minutes, so the pushes behind it went on".to_string());
         moved(item, &Event::PushFailed);
@@ -1439,8 +1439,8 @@ pub(crate) mod tests {
         assert_eq!((item.group(), item.push_note().unwrap()), (Group::ReadyToPush, "pushing for you · the new commits' rules are checked".to_string()));
         assert_eq!(item.rules_note(), None, "the push note says it");
         item.git.as_mut().unwrap().approved = true;
-        assert_eq!(item.push_note_at(20 + PUSH_STALLS_AFTER).unwrap(), "pushing for you · kelpie pushes it now");
-        assert_eq!(item.push_note_at(21 + PUSH_STALLS_AFTER).unwrap(), "pushing for you · ready for a while, but kelpie has not seen its Claude take the request; push again", "a push that never completes says so");
+        assert_eq!(item.push_note_at(20 + PUSH_STALLS_AFTER).unwrap(), "pushing for you · kebbie pushes it now");
+        assert_eq!(item.push_note_at(21 + PUSH_STALLS_AFTER).unwrap(), "pushing for you · ready for a while, but kebbie has not seen its Claude take the request; push again", "a push that never completes says so");
         report(&mut item, "needs-you");
         assert_eq!(item.group(), Group::NeedsYou, "a red test or a choice between behaviours stops the push");
         report(&mut item, "working");
@@ -1540,14 +1540,14 @@ pub(crate) mod tests {
         assert!(item.is_task() && item.group() == Group::Queued && Group::Queued.title() == "QUEUED");
         assert!(Group::Idle < Group::Queued, "queued tasks come last among the tasks");
         assert_eq!(item.summary(), "Waits for billing in api (ci running). Starts by itself once it is pushed and CI is green.");
-        assert_eq!(item.to_json()["waiting"], json!(item.summary()), "kelpie status --json says it in the same words");
+        assert_eq!(item.to_json()["waiting"], json!(item.summary()), "kebbie status --json says it in the same words");
         assert_eq!(item.next_for_you(), None);
         let shown = item.to_json();
         assert_eq!((shown["kind"].clone(), shown["group"].clone(), shown["after"][0]["address"].clone(), shown["after"][0]["state"].clone()), (json!("queued"), json!("QUEUED"), json!("billing@api"), json!("ci running")));
         assert!(shown["git"].is_null() && shown["path"].is_null() && shown["workspace"].is_null(), "no worktree, no Space");
         let source = include_str!("status.rs");
         let gather = &source[source.find("\npub fn gather(").unwrap()..];
-        assert!(gather[..gather.find("\n}\n").unwrap()].contains("tasks::waits_shown(state, &items)"), "kelpie status and the board list them");
+        assert!(gather[..gather.find("\n}\n").unwrap()].contains("tasks::waits_shown(state, &items)"), "kebbie status and the board list them");
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -1599,14 +1599,14 @@ pub(crate) mod tests {
 
     #[test]
     fn a_task_shows_claudes_session_title_without_the_repo_word_and_keeps_it_when_claude_is_gone() {
-        assert_eq!(readable("Kelpie board task rows", "kelpie"), "Board task rows");
-        assert_eq!(readable("✳ kelpie: wrapped CI links", "kelpie"), "Wrapped CI links");
-        assert_eq!(readable("Kelpies everywhere", "kelpie"), "Kelpies everywhere");
+        assert_eq!(readable("Kebbie board task rows", "kebbie"), "Board task rows");
+        assert_eq!(readable("✳ kebbie: wrapped CI links", "kebbie"), "Wrapped CI links");
+        assert_eq!(readable("Kebbies everywhere", "kebbie"), "Kebbies everywhere");
         let state = crate::sh::test_dir("titles");
-        assert_eq!(title_of(&state, "rows@kelpie", Some("Claude Code"), "kelpie", "rows", "wt4.kelpie"), None, "Claude has not named the session yet");
-        assert_eq!(title_of(&state, "rows@kelpie", Some("wt4.kelpie"), "kelpie", "rows", "wt4.kelpie"), None, "the terminal's folder is no title");
-        assert_eq!(title_of(&state, "rows@kelpie", Some("Kelpie board task rows"), "kelpie", "rows", "wt4.kelpie").as_deref(), Some("Board task rows"));
-        assert_eq!(title_of(&state, "rows@kelpie", None, "kelpie", "rows", "wt4.kelpie").as_deref(), Some("Board task rows"), "kept for when its Claude is not running");
+        assert_eq!(title_of(&state, "rows@kebbie", Some("Claude Code"), "kebbie", "rows", "wt4.kebbie"), None, "Claude has not named the session yet");
+        assert_eq!(title_of(&state, "rows@kebbie", Some("wt4.kebbie"), "kebbie", "rows", "wt4.kebbie"), None, "the terminal's folder is no title");
+        assert_eq!(title_of(&state, "rows@kebbie", Some("Kebbie board task rows"), "kebbie", "rows", "wt4.kebbie").as_deref(), Some("Board task rows"));
+        assert_eq!(title_of(&state, "rows@kebbie", None, "kebbie", "rows", "wt4.kebbie").as_deref(), Some("Board task rows"), "kept for when its Claude is not running");
         let mut item = task(Some("idle"), None, 0);
         assert_eq!(item.titled(), "billing");
         item.title = Some("Refund mails".to_string());

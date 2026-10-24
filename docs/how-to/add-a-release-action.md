@@ -2,7 +2,7 @@
 
 Release a repo from the board's Areas page with one key: bump the version, build, commit, tag and push.
 
-1. Add an `[[actions]]` table to the repo config, `~/.config/kelpie/repos/billing.toml`:
+1. Add an `[[actions]]` table to the repo config, `~/.config/kebbie/repos/billing.toml`:
 
    ```toml
    [[actions]]
@@ -20,7 +20,7 @@ Release a repo from the board's Areas page with one key: bump the version, build
 2. Check it parses:
 
    ```bash
-   kelpie doctor
+   kebbie doctor
    ```
 
 3. On the board, press `2` for the Areas page, select the repo's area and press `R`.
@@ -46,7 +46,7 @@ then = ["web:bump-client"]
 ```
 
 ```toml
-# ~/.config/kelpie/repos/web.toml
+# ~/.config/kebbie/repos/web.toml
 [[actions]]
 id = "bump-client"
 key = "P"

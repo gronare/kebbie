@@ -83,7 +83,7 @@ impl Drop for FetchLock {
     }
 }
 
-// One fetch per repo at a time across kelpie's processes; one that landed while this one waited for the lock (FETCH_HEAD changed meanwhile, never FETCH_HEAD against a clock a time sync can step back) is shared, and a ref lock taken by a git outside kelpie is waited out.
+// One fetch per repo at a time across kebbie's processes; one that landed while this one waited for the lock (FETCH_HEAD changed meanwhile, never FETCH_HEAD against a clock a time sync can step back) is shared, and a ref lock taken by a git outside kebbie is waited out.
 pub fn shared_in(state: &Path, repo: &Path, attempt: impl FnMut() -> Result<(), String>, pause: impl FnMut(Duration)) -> Result<(), String> {
     let before = fetched_at(repo);
     let _lock = FetchLock::take(lock_file(state, repo), Duration::from_secs(120));
@@ -228,12 +228,12 @@ mod tests {
     #[test]
     fn failures_are_one_quiet_line_of_repo_names() {
         assert_eq!(failed_note(&[]), "");
-        assert_eq!(failed_note(&["kelpie".to_string(), "web".to_string()]), "fetch failed: kelpie, web   ");
+        assert_eq!(failed_note(&["kebbie".to_string(), "web".to_string()]), "fetch failed: kebbie, web   ");
     }
 
     #[test]
     fn a_fetch_failure_is_reported_and_cleared_by_the_next_success() {
-        let dir = std::env::temp_dir().join(format!("kelpie-fetch-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-fetch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (origin, clone) = (dir.join("origin"), dir.join("clone"));
         let git = |cwd: &Path, args: &[&str]| assert!(Command::new("git").args(args).current_dir(cwd).output().unwrap().status.success(), "{args:?}");

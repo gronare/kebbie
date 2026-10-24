@@ -68,7 +68,7 @@ impl App {
             }
             Purpose::BacklogName(entry) | Purpose::ClaimedName(entry) | Purpose::BacklogLaterAt(entry, _) if entry.area.is_empty() => {
                 self.subject = Some(super::notices::Subject::plain("start"));
-                self.show(Notice::new(Tone::You, "Not started: kelpie cannot tell which repo it is in").you("Add the repo's folder name as (area) at the end of its backlog line.").detail("item", &entry.title).ok());
+                self.show(Notice::new(Tone::You, "Not started: kebbie cannot tell which repo it is in").you("Add the repo's folder name as (area) at the end of its backlog line.").detail("item", &entry.title).ok());
             }
             Purpose::TaskName => {
                 let label = "What should Claude do? (optional)".to_string();
@@ -124,7 +124,7 @@ fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: O
     let log = dir.join(format!("{}.log", name.replace('/', "-")));
     let output = crate::state::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
     let errors = output.try_clone().map_err(|error| error.to_string())?;
-    let mut command = Command::new(peers::kelpie_command()?);
+    let mut command = Command::new(peers::kebbie_command()?);
     command.arg("-C").arg(repo).args(["start", name, "--no-focus"]);
     if let Some(item) = backlog.filter(|item| !item.is_empty()) {
         command.args(["--backlog", item]);
@@ -140,7 +140,7 @@ fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: O
     }
     // Its own process group, so closing the board's popup does not take the start down with it.
     command.stdin(std::process::Stdio::null()).stdout(output).stderr(errors).process_group(0);
-    crate::sh::reap(command.spawn().map_err(|error| format!("kelpie start: {error}"))?);
+    crate::sh::reap(command.spawn().map_err(|error| format!("kebbie start: {error}"))?);
     Notice::new(Tone::Moving, "Starting in the background").next("It shows under Work in a moment.").detail("output", log.display().to_string()).ok()
 }
 

@@ -735,7 +735,7 @@ impl Page {
     fn empty_lines(&self, width: usize) -> (Vec<Line<'static>>, usize, Vec<(usize, usize, Hit)>) {
         let mut lines = column_title("ROUTINES", String::new(), true, width);
         lines.push(Line::default());
-        let about = "A routine is a task kelpie starts on a schedule. It checks something, then reports, proposes a plan or fixes it. A run that finds nothing closes itself; one that finds something lands in NEEDS YOU.";
+        let about = "A routine is a task kebbie starts on a schedule. It checks something, then reports, proposes a plan or fixes it. A run that finds nothing closes itself; one that finds something lands in NEEDS YOU.";
         lines.extend(wrap(about, width.saturating_sub(2).min(72), 6).into_iter().map(|text| Line::from(Span::styled(format!("  {text}"), style(TEXT)))));
         lines.push(Line::default());
         lines.push(Line::from(Span::styled("  START FROM", style(MUTED))));
@@ -816,12 +816,12 @@ impl Page {
                 modal(frame, "delete".to_string(), lines, 72);
             }
             Mode::Working { label, .. } => {
-                modal(frame, "kelpie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
+                modal(frame, "kebbie".to_string(), vec![Line::from(Span::styled(label.clone(), style(TEXT)))], 72);
             }
             Mode::Message(text) => {
                 let mut lines: Vec<Line> = text.lines().map(|line| Line::from(Span::styled(line.to_string(), style(TEXT)))).collect();
                 lines.push(Line::from(Span::styled("any key to close", style(MUTED))));
-                modal(frame, "kelpie".to_string(), lines, 96);
+                modal(frame, "kebbie".to_string(), lines, 96);
             }
             Mode::Help(scroll) => {
                 let mut scroll = *scroll;
@@ -894,7 +894,7 @@ fn report_text(routine: &Routine, state: &State, (now, offset): (u64, i64)) -> S
 }
 
 fn edit_in_editor(terminal: &mut DefaultTerminal, text: &str) -> Result<Option<String>> {
-    let file = std::env::temp_dir().join(format!("kelpie-{}-routine-prompt.md", std::process::id()));
+    let file = std::env::temp_dir().join(format!("kebbie-{}-routine-prompt.md", std::process::id()));
     std::fs::write(&file, text).map_err(|error| error.to_string())?;
     let status = crate::board::terminal::outside(terminal, || std::process::Command::new("sh").args(["-c", "${VISUAL:-${EDITOR:-vi}} \"$1\"", "sh"]).arg(&file).status().map_err(|error| error.to_string()));
     let edited = std::fs::read_to_string(&file).map_err(|error| error.to_string());
@@ -1037,7 +1037,7 @@ mod tests {
         let mut page = Page::new(PathBuf::from("/c/config.toml"), PathBuf::from("/c/repos"));
         page.loaded = true;
         let screen = render(&mut page, 120, 20).join("\n");
-        assert!(screen.contains("A routine is a task kelpie starts on a schedule.") && screen.contains("START FROM"), "{screen}");
+        assert!(screen.contains("A routine is a task kebbie starts on a schedule.") && screen.contains("START FROM"), "{screen}");
         assert!(screen.contains("▌ Health check    report · daily 07:00  look over a repo's service and say what's wrong"), "{screen}");
         assert!(screen.contains("  Dependency bump plan · mon 08:00      list updates and propose which to take"), "{screen}");
         assert!(screen.contains("  Keep CI green   fix · every 6h        fix a red main and hand it to the lead to push"), "{screen}");
@@ -1142,7 +1142,7 @@ mod tests {
         assert!(page.is_normal(), "a click on esc cancel closes the steps");
         press(&mut page, KeyCode::Char('n'));
         let Mode::Wizard(wizard) = &mut page.mode else { panic!("n opens the steps") };
-        wizard.repos = ["homelab-gitops", "greenhouse", "kelpie"].iter().map(|name| Repo { value: format!("~/{name}"), name: name.to_string(), shown: format!("~/{name}") }).collect();
+        wizard.repos = ["homelab-gitops", "greenhouse", "kebbie"].iter().map(|name| Repo { value: format!("~/{name}"), name: name.to_string(), shown: format!("~/{name}") }).collect();
         typed(&mut page, "Check every node.");
         click_on(&mut page, "⏎ next");
         assert_eq!(step(&page), 1, "a click on ⏎ next is ⏎");
@@ -1150,10 +1150,10 @@ mod tests {
         let Mode::Wizard(wizard) = &page.mode else { panic!() };
         assert_eq!((wizard.step, wizard.repo().as_deref()), (1, Some("~/greenhouse")), "a click selects the repo");
         assert!(render(&mut page, 120, 40).join("\n").contains("▌greenhouse"));
-        let list = spot(&mut page, "kelpie");
+        let list = spot(&mut page, "kebbie");
         mouse(&mut page, MouseEventKind::ScrollDown, list);
         let Mode::Wizard(wizard) = &page.mode else { panic!() };
-        assert_eq!(wizard.repo().as_deref(), Some("~/kelpie"), "the wheel moves down the list");
+        assert_eq!(wizard.repo().as_deref(), Some("~/kebbie"), "the wheel moves down the list");
         mouse(&mut page, MouseEventKind::ScrollUp, list);
         click_on(&mut page, "greenhouse");
         assert_eq!(step(&page), 2, "a click on the selected repo goes on");

@@ -14,20 +14,20 @@ use crate::tasks;
 
 pub const STATES: [&str; 4] = ["needs-you", "ready", "working", "blocked"];
 
-const USAGE: &str = "kelpie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] \"<where the task stands>\"";
+const USAGE: &str = "kebbie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] \"<where the task stands>\"";
 
 pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str) -> Result<(Report, String)> {
-    let state = state.ok_or(format!("kelpie report needs --state: {USAGE}"))?;
+    let state = state.ok_or(format!("kebbie report needs --state: {USAGE}"))?;
     if !STATES.contains(&state) {
         return Err(format!("--state is one of {}, not \"{state}\"", STATES.join(", ")));
     }
     if card && !["ready", "needs-you"].contains(&state) {
         return Err(format!("--card goes with --state ready: the user reads the card when they push. {USAGE}"));
     }
-    let next = next.map(str::trim).filter(|next| !next.is_empty()).ok_or(format!("kelpie report needs --next (\"nothing\" when there is nothing for the user): {USAGE}"))?;
+    let next = next.map(str::trim).filter(|next| !next.is_empty()).ok_or(format!("kebbie report needs --next (\"nothing\" when there is nothing for the user): {USAGE}"))?;
     let summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
     if summary.is_empty() {
-        return Err(format!("kelpie report needs a one-line summary: {USAGE}"));
+        return Err(format!("kebbie report needs a one-line summary: {USAGE}"));
     }
     Ok((Report { state: state.to_string(), next: next.split_whitespace().collect::<Vec<_>>().join(" "), head: None }, summary))
 }
@@ -35,7 +35,7 @@ pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str)
 pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, summary: &str) -> Result<String> {
     let (mut report, summary) = parse(state, next, card.is_some(), summary)?;
     report.head = crate::repo::git(cwd, &["rev-parse", "HEAD"]).ok();
-    let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kelpie report runs in a task's worktree")?;
+    let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kebbie report runs in a task's worktree")?;
     card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
     if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
@@ -109,7 +109,7 @@ pub fn save_card(state: &Path, address: &str, sha: &str, text: &str) -> Result<(
     crate::state::write(&file, format!("card: {sha}\n\n{text}\n"))
 }
 
-// An untracked card left in the worktree would count as an uncommitted change and stop the push, so kelpie keeps the card and removes the file.
+// An untracked card left in the worktree would count as an uncommitted change and stop the push, so kebbie keeps the card and removes the file.
 fn take_card(cwd: &Path, file: &Path, state: &Path, address: &str, text: &str) -> Result<String> {
     save_card(state, address, &git(cwd, &["rev-parse", "HEAD"])?, text)?;
     let untracked = !crate::sh::succeeds("git", &["ls-files", "--error-unmatch", &file.to_string_lossy()], Some(cwd));
@@ -163,7 +163,7 @@ pub fn show_in_sidebar(report: &Report) {
 fn rules_check(cwd: &Path) -> String {
     use crate::rules_check::Started;
     match crate::rules_check::start(cwd) {
-        Ok(Started::Queued) => " The reviewer checks your commits against the rules in the background; kelpie tells you if one needs fixing.".to_string(),
+        Ok(Started::Queued) => " The reviewer checks your commits against the rules in the background; kebbie tells you if one needs fixing.".to_string(),
         Ok(Started::Retold(findings)) => format!(" The rules check already found these on this code; fix each, then report ready again:\n{findings}"),
         Ok(Started::ByReview) => " Your reviewer's verdict covers the rules too.".to_string(),
         Ok(Started::Lead) => " The lead checks your commits against the rules next; it tells you if one needs fixing.".to_string(),
@@ -183,7 +183,7 @@ fn label(state: &str) -> Option<&'static str> {
 
 // herdr replaces a source's labels with each new set, and refuses to set and clear the same field at once.
 pub fn metadata_args(report: &Report, agent: crate::agent::Agent) -> Vec<String> {
-    let mut args: Vec<String> = ["--source", "kelpie", "--agent", agent.kind()].map(str::to_string).to_vec();
+    let mut args: Vec<String> = ["--source", "kebbie", "--agent", agent.kind()].map(str::to_string).to_vec();
     let next = report.next.trim();
     if next.is_empty() || next.eq_ignore_ascii_case("nothing") {
         args.extend(["--clear-token".to_string(), "next".to_string()]);
@@ -218,11 +218,11 @@ fn unreported(turn_started: Option<u64>, last_report: Option<u64>) -> bool {
     last_report.is_none_or(|at| at < turn_started.unwrap_or(0))
 }
 
-fn block_reason(kelpie: &str) -> String {
-    format!("Before you stop, report where this task stands, so the board shows the user what to act on: {kelpie} report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" \"<one-line summary>\". Then stop; there is no need to repeat your answer.")
+fn block_reason(kebbie: &str) -> String {
+    format!("Before you stop, report where this task stands, so the board shows the user what to act on: {kebbie} report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" \"<one-line summary>\". Then stop; there is no need to repeat your answer.")
 }
 
-// Both hooks kelpie gives a task's Claude: a prompt marks the start of a turn, and a stop without a report since then is sent back once.
+// Both hooks kebbie gives a task's Claude: a prompt marks the start of a turn, and a stop without a report since then is sent back once.
 pub fn hook(input: &str) -> String {
     let input: Value = serde_json::from_str(input).unwrap_or_default();
     let cwd = input["cwd"].as_str().map(PathBuf::from).or_else(|| std::env::current_dir().ok());
@@ -246,8 +246,8 @@ pub fn hook(input: &str) -> String {
                 }
                 return String::new();
             }
-            let kelpie = peers::kelpie_command().unwrap_or_else(|_| "kelpie".to_string());
-            json!({ "decision": "block", "reason": block_reason(&kelpie) }).to_string()
+            let kebbie = peers::kebbie_command().unwrap_or_else(|_| "kebbie".to_string());
+            json!({ "decision": "block", "reason": block_reason(&kebbie) }).to_string()
         }
         _ => String::new(),
     }
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn a_card_is_kept_with_the_sha_it_was_written_at_and_gone_once_forgotten() {
-        let dir = std::env::temp_dir().join(format!("kelpie-cards-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-cards-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let worktree = dir.join("wt1.app");
         fs::create_dir_all(&worktree).unwrap();
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn herdr_shows_the_next_step_and_the_state() {
         let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string(), head: None };
-        assert_eq!(metadata_args(&report("needs-you", "answer: which queue?"), crate::agent::Agent::Codex)[..4], ["--source", "kelpie", "--agent", "codex"], "herdr shows it on the pane of the agent that reported");
+        assert_eq!(metadata_args(&report("needs-you", "answer: which queue?"), crate::agent::Agent::Codex)[..4], ["--source", "kebbie", "--agent", "codex"], "herdr shows it on the pane of the agent that reported");
         assert_eq!(metadata_args(&report("needs-you", "answer: which queue?"), crate::agent::Agent::Claude)[4..], [
             "--token", "next=answer: which queue?", "--state-label", "idle=needs you", "--state-label", "done=needs you",
         ]);

@@ -4,7 +4,7 @@ Give the board's Backlog column work to start from: a local file, the vault, Lin
 
 ## Pick the sources
 
-In `~/.config/kelpie/config.toml`:
+In `~/.config/kebbie/config.toml`:
 
 ```toml
 [board.backlog]
@@ -18,10 +18,10 @@ The first source is where the lead files new ideas. `"vault"` needs the [vault p
 On the board, move to the Backlog column and press `n`: a title, then a priority. Or:
 
 ```bash
-kelpie backlog add --priority high "Fix login — the session drops on reload (app)"
+kebbie backlog add --priority high "Fix login — the session drops on reload (app)"
 ```
 
-Or edit `~/.config/kelpie/backlog.md` by hand, one item per line:
+Or edit `~/.config/kebbie/backlog.md` by hand, one item per line:
 
 ```markdown
 - [high] Fix login — the session drops on reload (app)

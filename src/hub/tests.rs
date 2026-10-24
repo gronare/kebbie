@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use kelpie_hub::{Config, Hub, serve};
-use kelpie_hub_fakes::PairError;
-use kelpie_hub_fakes::phone::PhoneState;
-use kelpie_hub_protocol::{Board, Group, Id};
+use kebbie_hub::{Config, Hub, serve};
+use kebbie_hub_fakes::PairError;
+use kebbie_hub_fakes::phone::PhoneState;
+use kebbie_hub_protocol::{Board, Group, Id};
 
 use super::board::tests::asking;
 use super::board::build;
@@ -84,15 +84,15 @@ fn a_machine_joins_and_keeps_its_keys_to_itself() {
     assert_eq!((joined.url.as_str(), joined.name.as_str()), (hub.url.as_str(), "mac"));
     assert!(joined.token().starts_with("khm_"));
     let shown = super::status_text(&state, Some("mac"), now()).unwrap();
-    assert!(shown.contains(&hub.url) && shown.contains("mac") && shown.contains("kelpie hub add-device"), "{shown}");
+    assert!(shown.contains(&hub.url) && shown.contains("mac") && shown.contains("kebbie hub add-device"), "{shown}");
     let (signing, encryption) = joined.secret().to_bytes();
     let file = std::fs::read_to_string(state.join("hub/identity.json")).unwrap();
-    for secret in [joined.token().to_string(), format!("{:?}", kelpie_hub_api::Bytes32(signing)), format!("{:?}", kelpie_hub_api::Bytes32(encryption))] {
+    for secret in [joined.token().to_string(), format!("{:?}", kebbie_hub_api::Bytes32(signing)), format!("{:?}", kebbie_hub_api::Bytes32(encryption))] {
         assert!(file.contains(&secret), "the file keeps the secret it guards");
         assert!(!shown.contains(&secret), "status never prints a secret");
     }
     let again = super::join(&state, &hub.url, &hub.hub.mint_join_code().unwrap(), "mac", now()).err().unwrap();
-    assert!(again.contains("kelpie hub leave first"), "{again}");
+    assert!(again.contains("kebbie hub leave first"), "{again}");
     let used = super::join(&crate::sh::test_dir("hub-used"), &hub.url, "AAAA-AAAA", "mac", now()).err().unwrap();
     assert!(used.contains("refused that join code"), "{used}");
 }
@@ -192,7 +192,7 @@ fn a_notice_fits_one_push_and_names_no_task_in_its_header() {
     let state = hub.joined("mac");
     hub.pair(&state, true).0.unwrap();
     let joined = identity::load(&state).unwrap().unwrap();
-    assert_eq!(relay::PUSH_ENVELOPE_BYTES, kelpie_hub::webpush::MAX_PUSH_PLAINTEXT);
+    assert_eq!(relay::PUSH_ENVELOPE_BYTES, kebbie_hub::webpush::MAX_PUSH_PLAINTEXT);
     let mut long = asking("räksmörgås-🦀", "greenhouse");
     let question = long.question.as_mut().unwrap();
     question.text = "Ska vi behålla den gamla ändpunkten för 🦀 en release till? ".repeat(200);
@@ -303,11 +303,11 @@ fn doctor_says_whether_the_hub_is_joined_reachable_and_posting() {
     let alone = crate::sh::test_dir("hub-doctor-none");
     let check = super::doctor(&alone, Some("mac"), now(), |_| Ok(()));
     assert_eq!(check.level, crate::doctor::Level::Ok);
-    assert!(check.fact.contains("not connected") && check.fact.contains("kelpie hub connect"), "{}", check.fact);
+    assert!(check.fact.contains("not connected") && check.fact.contains("kebbie hub connect"), "{}", check.fact);
     let state = hub.joined("mac");
     let lonely = super::doctor(&state, Some("mac"), now(), super::reach);
     assert_eq!(lonely.level, crate::doctor::Level::Warn);
-    assert!(lonely.fact.contains("no phone paired") && lonely.fix == ["kelpie hub add-device"], "{}", lonely.fact);
+    assert!(lonely.fact.contains("no phone paired") && lonely.fix == ["kebbie hub add-device"], "{}", lonely.fact);
     hub.pair(&state, true).0.unwrap();
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
     let posting = super::doctor(&state, Some("mac"), now(), super::reach);
@@ -315,12 +315,12 @@ fn doctor_says_whether_the_hub_is_joined_reachable_and_posting() {
     assert!(posting.fact.contains(&hub.url) && posting.fact.contains("1 paired") && posting.fact.contains("board rev ") && posting.fact.contains(" posted "), "{}", posting.fact);
     let down = super::doctor(&state, Some("mac"), now(), |_| Err("connection refused".to_string()));
     assert!(down.level == crate::doctor::Level::Warn && down.fact.contains("not reachable: connection refused"), "{}", down.fact);
-    assert!(super::config_line(Some(&state)).starts_with(&format!("hub.connected = {:?}  (kelpie hub connect)", hub.url)));
+    assert!(super::config_line(Some(&state)).starts_with(&format!("hub.connected = {:?}  (kebbie hub connect)", hub.url)));
     assert!(super::config_line(Some(&alone)).starts_with("hub.connected = none"));
 }
 
 #[test]
-fn hub_url_in_config_toml_names_the_hub_to_connect_to_and_defaults_to_the_kelpie_hub() {
+fn hub_url_in_config_toml_names_the_hub_to_connect_to_and_defaults_to_the_kebbie_hub() {
     let set = crate::config::parse_machine("[hub]\nurl = \"https://hub.example.com/\"\n", "config.toml").unwrap();
     assert_eq!(set.hub_url.as_deref(), Some("https://hub.example.com"));
     let unset = crate::config::settings(&crate::config::Worktree::default(), &crate::config::Machine::default()).hub_url;
@@ -351,14 +351,14 @@ fn a_redirect_to_another_host_is_refused_until_the_user_moves_the_hub() {
     kept.url = elsewhere.clone();
     identity::save(&state, &kept).unwrap();
     let refused = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap_err();
-    assert!(refused.contains(&format!("the hub points to http://localhost:{port}")) && refused.contains("kelpie hub move"), "{refused}");
+    assert!(refused.contains(&format!("the hub points to http://localhost:{port}")) && refused.contains("kebbie hub move"), "{refused}");
     assert_eq!(identity::load(&state).unwrap().unwrap().url, elsewhere, "the stored address stays");
     assert!(hub.boards(&phone).is_empty(), "nothing reached the hub");
     let fresh = crate::sh::test_dir("hub-elsewhere");
     let join = super::join(&fresh, &elsewhere, &hub.hub.mint_join_code().unwrap(), "mac", now()).err().unwrap();
     assert!(join.contains("the hub points to"), "the join code never follows to another host: {join}");
 
-    assert!(super::move_to(&state, "http://127.0.0.1:9").unwrap_err().contains("does not answer as a kelpie hub"));
+    assert!(super::move_to(&state, "http://127.0.0.1:9").unwrap_err().contains("does not answer as a kebbie hub"));
     assert!(super::move_to(&state, "http://hub.example.com").unwrap_err().contains("takes https"));
     assert_eq!(identity::load(&state).unwrap().unwrap().url, elsewhere);
     let moved = super::move_to(&state, &hub.url).unwrap();
@@ -372,7 +372,7 @@ fn reported_bug(state: &Path) -> String {
     let issue = crate::issues::Issue {
         id: "a1b2c3".to_string(), title: "push in greenhouse hid git's error".to_string(), kind: "bug".to_string(), status: "open".to_string(),
         version: "0.26.0".to_string(), commit: "e58e84a".to_string(), filed: "2026-10-23".to_string(), by: "lead".to_string(),
-        body: "Ran kelpie push in /Users/carl/work/greenhouse; origin git@github.com:acme/greenhouse.git refused and kelpie said nothing.".to_string(),
+        body: "Ran kebbie push in /Users/carl/work/greenhouse; origin git@github.com:acme/greenhouse.git refused and kebbie said nothing.".to_string(),
         ..Default::default()
     };
     crate::issues::save(&crate::issues::dir(state), &issue).unwrap();
@@ -380,7 +380,7 @@ fn reported_bug(state: &Path) -> String {
 }
 
 #[test]
-fn a_bug_the_user_sends_reaches_the_maintainers_kelpie_as_one_issue_once_its_key_is_allowed() {
+fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key_is_allowed() {
     use crate::hub::{inbox, report};
     use crate::permit::Caller;
     let hub = TestHub::start_with(|config| config.report_difficulty = 8);
@@ -398,33 +398,33 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kelpie_as_one_issue_once_its_key
     assert!(again.contains(&format!("already, as report {number}")), "{again}");
 
     let maintainer = crate::sh::test_dir("report-maintainer");
-    let token = hub.hub.mint_admin_token("maintainer", kelpie_hub::store::AdminScope::Reports).unwrap().unwrap();
+    let token = hub.hub.mint_admin_token("maintainer", kebbie_hub::store::AdminScope::Reports).unwrap().unwrap();
     let settings = crate::config::Report { url: Some(hub.url.clone()), inbox_token: Some(token.clone()), ..Default::default() };
     assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "an unknown install's report waits in quarantine");
     let check = inbox::doctor(&maintainer, &settings, now()).unwrap();
-    assert!(check.level == crate::doctor::Level::Warn && check.fact.contains("1 reports wait in quarantine: kelpie-hub admin reports --quarantine"), "{}", check.fact);
+    assert!(check.level == crate::doctor::Level::Warn && check.fact.contains("1 reports wait in quarantine: kebbie-hub admin reports --quarantine"), "{}", check.fact);
 
     let key = report::install_key(&user).unwrap().public();
-    hub.hub.store().set_key_status(&key, kelpie_hub::store::KeyStatus::Allowed, now()).unwrap();
+    hub.hub.store().set_key_status(&key, kebbie_hub::store::KeyStatus::Allowed, now()).unwrap();
     let notes = inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");
     let arrived = crate::issues::load(&crate::issues::dir(&maintainer));
     assert_eq!(arrived.len(), 1);
     let issue = &arrived[0];
     assert_eq!((issue.title.as_str(), issue.kind.as_str(), issue.source.as_deref(), issue.version.as_str()), ("push in <repo> hid git's error", "bug", Some(format!("report {number}").as_str()), "0.26.0 (e58e84a)"));
-    assert!(issue.body.starts_with("Ran kelpie push in ~/work/<repo>; origin <remote> refused") && issue.body.ends_with(&format!("OS: {}", crate::issues::os())), "{}", issue.body);
+    assert!(issue.body.starts_with("Ran kebbie push in ~/work/<repo>; origin <remote> refused") && issue.body.ends_with(&format!("OS: {}", crate::issues::os())), "{}", issue.body);
     for private in ["/Users/carl", "greenhouse", "acme"] {
         assert!(!issue.body.contains(private) && !issue.title.contains(private), "{private} reached the maintainer: {issue:?}");
     }
     assert!(report::offers(&maintainer, true).is_empty(), "a report from elsewhere is never offered back");
-    assert!(hub.hub.store().reports(kelpie_hub::store::KeyStatus::Allowed, 0, true, 10).unwrap().is_empty(), "the routine acked it");
+    assert!(hub.hub.store().reports(kebbie_hub::store::KeyStatus::Allowed, 0, true, 10).unwrap().is_empty(), "the routine acked it");
     assert_eq!(inbox::doctor(&maintainer, &settings, now()).unwrap().level, crate::doctor::Level::Ok);
 
     let database = rusqlite::Connection::open(hub.hub.config().database()).unwrap();
     database.execute("UPDATE reports SET acked_at = NULL", []).unwrap();
     assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "a report whose ack was lost is acked again, not filed again");
     assert_eq!(crate::issues::load(&crate::issues::dir(&maintainer)).len(), 1);
-    assert!(hub.hub.store().reports(kelpie_hub::store::KeyStatus::Allowed, 0, true, 10).unwrap().is_empty());
+    assert!(hub.hub.store().reports(kebbie_hub::store::KeyStatus::Allowed, 0, true, 10).unwrap().is_empty());
 
     database.execute("UPDATE reports SET acked_at = NULL", []).unwrap();
     std::fs::remove_file(maintainer.join("report/inbox.json")).unwrap();
@@ -440,14 +440,14 @@ fn the_reports_routine_runs_every_ten_minutes_and_doctor_says_nothing_without_a_
 }
 
 #[test]
-fn a_hub_that_asks_for_more_work_than_kelpie_does_gets_nothing() {
+fn a_hub_that_asks_for_more_work_than_kebbie_does_gets_nothing() {
     let hub = TestHub::start_with(|config| config.report_difficulty = crate::hub::report::MAX_WORK + 1);
     let user = crate::sh::test_dir("report-greedy");
     let id = reported_bug(&user);
     let scrub = crate::hub::report::Scrub::default();
     let read = crate::hub::report::payload(&crate::issues::find(&crate::issues::dir(&user), &id).unwrap(), &scrub).digest();
     let refused = crate::hub::report::send_in(&user, &crate::permit::Caller::User, &id, &hub.url, &scrub, &read, now()).unwrap_err();
-    assert!(refused.contains("more than kelpie does") && refused.contains("nothing was sent"), "{refused}");
+    assert!(refused.contains("more than kebbie does") && refused.contains("nothing was sent"), "{refused}");
     assert!(crate::issues::find(&crate::issues::dir(&user), &id).unwrap().report.is_none());
 }
 
@@ -475,7 +475,7 @@ fn a_join_name_given_with_name_is_written_to_config_toml_and_nothing_else_change
     let hub = TestHub::start();
     let dir = crate::sh::test_dir("hub-named-given");
     let config = dir.join("config.toml");
-    let rest = "# kelpie\n[keeper]\nenabled = true   # keep it\n\n[machine]\n# who am I\n";
+    let rest = "# kebbie\n[keeper]\nenabled = true   # keep it\n\n[machine]\n# who am I\n";
     let after = "\n[keys]\ninbox = \"I\"";
     std::fs::write(&config, format!("{rest}name = \"old\"  # first{after}")).unwrap();
     let (state, shown) = join_with(&hub, &config, Some("studio"), None);
@@ -580,7 +580,7 @@ fn an_older_hub_or_one_that_keeps_another_name_is_said_once_and_a_paired_phone_i
     super::sync_name(&state, Some("studio")).unwrap();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), marked, "the same error is not written again");
     let failed = identity::load(&state).unwrap().unwrap();
-    assert_eq!((failed.name.as_str(), failed.rename_error.as_deref(), failed.devices.len()), ("mac", Some("this hub cannot rename machines yet; update kelpie-hub"), 1));
+    assert_eq!((failed.name.as_str(), failed.rename_error.as_deref(), failed.devices.len()), ("mac", Some("this hub cannot rename machines yet; update kebbie-hub"), 1));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2, "an older hub may be updated, so it is asked again");
 
     let (keeps, calls) = answering("200 OK", "{\"name\":\"Studio\"}");
@@ -598,12 +598,12 @@ fn an_older_hub_or_one_that_keeps_another_name_is_said_once_and_a_paired_phone_i
 #[test]
 fn a_phone_paired_while_the_rename_is_on_its_way_is_kept() {
     let state = crate::sh::test_dir("hub-rename-race");
-    let keys = kelpie_hub_protocol::SecretKeys::generate();
-    identity::save(&state, &identity::Identity::new("http://127.0.0.1:9", Id::new(kelpie_hub_protocol::Prefix::Machine).unwrap(), "mac", "khm_x".to_string(), &keys, now()).unwrap()).unwrap();
+    let keys = kebbie_hub_protocol::SecretKeys::generate();
+    identity::save(&state, &identity::Identity::new("http://127.0.0.1:9", Id::new(kebbie_hub_protocol::Prefix::Machine).unwrap(), "mac", "khm_x".to_string(), &keys, now()).unwrap()).unwrap();
     let pairing = state.clone();
     let url = serving(move |_| {
         let mut paired = identity::load(&pairing).unwrap().unwrap();
-        paired.admit(identity::Device { id: Id::new(kelpie_hub_protocol::Prefix::Device).unwrap(), keys: kelpie_hub_protocol::SecretKeys::generate().public(), paired_at: now(), label: None });
+        paired.admit(identity::Device { id: Id::new(kebbie_hub_protocol::Prefix::Device).unwrap(), keys: kebbie_hub_protocol::SecretKeys::generate().public(), paired_at: now(), label: None });
         identity::save(&pairing, &paired).unwrap();
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"name\":\"studio\"}".to_string()
     });
@@ -631,17 +631,17 @@ fn with_text_always_a_bug_goes_out_unasked_redacted_and_each_send_is_a_line_unde
     let notes = report::send_unasked_in(&user, always, &hub.url, &scrub, now()).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");
     let number = crate::issues::find(&crate::issues::dir(&user), &id).unwrap().report.expect("the issue keeps the report's id");
-    let stored = hub.hub.store().reports(kelpie_hub::store::KeyStatus::Quarantine, 0, false, 10).unwrap();
+    let stored = hub.hub.store().reports(kebbie_hub::store::KeyStatus::Quarantine, 0, false, 10).unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].report.title, "push in <repo> hid git's error");
     assert!(!stored[0].report.text.contains("/Users/carl") && !stored[0].report.text.contains("acme"), "{}", stored[0].report.text);
     let line = crate::messages::load_in(&user).pop().unwrap();
-    assert_eq!((line.from.as_str(), line.to.as_str(), line.kind.as_deref()), ("kelpie", crate::messages::USER_LABEL, Some(report::SENT_KIND)));
+    assert_eq!((line.from.as_str(), line.to.as_str(), line.kind.as_deref()), ("kebbie", crate::messages::USER_LABEL, Some(report::SENT_KIND)));
     assert_eq!(line.text, report::sent_line(&number, &id, "push in <repo> hid git's error"));
-    assert!(line.text.starts_with(&format!("Sent bug {id} to kelpie's maintainers as report {number}: \"push in <repo> hid git's error\"")), "{}", line.text);
+    assert!(line.text.starts_with(&format!("Sent bug {id} to kebbie's maintainers as report {number}: \"push in <repo> hid git's error\"")), "{}", line.text);
     assert!(report::send_unasked_in(&user, always, &hub.url, &|| panic!("nothing waits, so nothing is scrubbed"), now()).unwrap().is_empty(), "a sent bug goes once");
     report::arm_in(&user, &crate::permit::Caller::User, false, always, now()).unwrap();
-    assert!(!report::armed(&user), "kelpie issue report --ask disarms it");
+    assert!(!report::armed(&user), "kebbie issue report --ask disarms it");
 }
 
 #[test]
@@ -654,12 +654,12 @@ fn a_bug_the_user_sends_is_a_line_under_messages_too() {
     let read = report::payload(&crate::issues::find(&crate::issues::dir(&user), &id).unwrap(), &scrub).digest();
     report::send_in(&user, &crate::permit::Caller::User, &id, &hub.url, &scrub, &read, now()).unwrap();
     let line = crate::messages::load_in(&user).pop().unwrap();
-    assert!(line.kind.as_deref() == Some(report::SENT_KIND) && line.text.starts_with(&format!("Sent bug {id} to kelpie's maintainers as report ")), "{line:?}");
+    assert!(line.kind.as_deref() == Some(report::SENT_KIND) && line.text.starts_with(&format!("Sent bug {id} to kebbie's maintainers as report ")), "{line:?}");
 }
 
 #[test]
 fn error_signals_reach_the_hub_as_counts_signed_with_the_install_key() {
-    use kelpie_hub_protocol::{Name, SignalKind};
+    use kebbie_hub_protocol::{Name, SignalKind};
     let hub = TestHub::start_with(|config| config.report_difficulty = 8);
     let user = crate::sh::test_dir("signals-hub");
     for _ in 0..3 {
@@ -672,7 +672,7 @@ fn error_signals_reach_the_hub_as_counts_signed_with_the_install_key() {
     assert_eq!(rows.iter().map(|row| (row.component.as_str(), row.kind.as_str(), row.count, row.vetted)).collect::<Vec<_>>(), [("keeper.push", "internal-error", 3, false)]);
     assert_eq!((rows[0].os.as_str(), rows[0].arch.as_str(), rows[0].version.as_str()), (std::env::consts::OS, std::env::consts::ARCH, env!("CARGO_PKG_VERSION")));
     let key = crate::hub::report::install_key(&user).unwrap().public();
-    hub.hub.store().set_key_status(&key, kelpie_hub::store::KeyStatus::Allowed, now()).unwrap();
+    hub.hub.store().set_key_status(&key, kebbie_hub::store::KeyStatus::Allowed, now()).unwrap();
     crate::signals::record_in(&user, &Name::new("keeper.push").unwrap(), SignalKind::InternalError);
     crate::signals::tick_in(&user, true, now() + crate::signals::DAY, &mut |signals| crate::signals::send(&user, &url, signals)).unwrap();
     assert!(hub.hub.store().signal_rows(0).unwrap().iter().any(|row| row.vetted && row.count == 1), "the key a report was allowed for counts its signals as vetted");
@@ -686,22 +686,22 @@ fn the_board_offers_a_bug_with_text_ask_and_with_always_until_it_is_armed() {
         assert_eq!(crate::hub::report::board_offers(&Report { text, ..Default::default() }, &state), offers, "{text:?} unarmed");
     }
     crate::hub::report::arm_in(&state, &crate::permit::Caller::User, true, ReportText::Always, now()).unwrap();
-    assert!(!crate::hub::report::board_offers(&Report { text: Some(ReportText::Always), ..Default::default() }, &state), "armed, kelpie sends it without the offer");
+    assert!(!crate::hub::report::board_offers(&Report { text: Some(ReportText::Always), ..Default::default() }, &state), "armed, kebbie sends it without the offer");
     assert!(crate::hub::report::board_offers(&Report { text: Some(ReportText::Ask), ..Default::default() }, &state), "an arming left behind changes nothing under ask");
 }
 
 pub(crate) fn open_hub(configure: impl FnOnce(&mut Config)) -> TestHub {
     TestHub::start_with(|config| {
         config.connect_interval = 0;
-        config.rate = kelpie_hub::RateLimit { burst: 10_000, per_minute: 100_000 };
+        config.rate = kebbie_hub::RateLimit { burst: 10_000, per_minute: 100_000 };
         configure(config);
     })
 }
 
-pub(crate) fn member(hub: &TestHub) -> kelpie_hub_fakes::browser::Browser {
+pub(crate) fn member(hub: &TestHub) -> kebbie_hub_fakes::browser::Browser {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let handle = format!("carl{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    let mut browser = kelpie_hub_fakes::browser::Browser::new(&hub.url, kelpie_hub::DEV_ORIGIN, &handle);
+    let mut browser = kebbie_hub_fakes::browser::Browser::new(&hub.url, kebbie_hub::DEV_ORIGIN, &handle);
     hub.runtime.block_on(browser.sign_up_with_invite(&hub.hub.mint_invite().unwrap())).unwrap();
     browser
 }
@@ -712,7 +712,7 @@ fn named_config(name: &str) -> PathBuf {
     config
 }
 
-fn connected(hub: &TestHub, browser: &mut kelpie_hub_fakes::browser::Browser) -> PathBuf {
+fn connected(hub: &TestHub, browser: &mut kebbie_hub_fakes::browser::Browser) -> PathBuf {
     let state = crate::sh::test_dir("hub-connected");
     let mut pending = super::connect::start(&hub.url, "mac").unwrap();
     hub.runtime.block_on(browser.approve_connect(&pending.link(), false)).unwrap();
@@ -722,7 +722,7 @@ fn connected(hub: &TestHub, browser: &mut kelpie_hub_fakes::browser::Browser) ->
     state
 }
 
-pub(crate) fn connected_state(hub: &TestHub, browser: &mut kelpie_hub_fakes::browser::Browser) -> PathBuf {
+pub(crate) fn connected_state(hub: &TestHub, browser: &mut kebbie_hub_fakes::browser::Browser) -> PathBuf {
     let state = crate::sh::test_dir("hub-connected-device");
     let mut pending = super::connect::start(&hub.url, "mac").unwrap();
     let approval = hub.runtime.block_on(browser.approve_connect(&pending.link(), true)).unwrap();
@@ -816,7 +816,7 @@ fn a_machine_connects_through_the_browser_which_then_shows_its_board_without_dig
     let boards = hub.runtime.block_on(device.boards()).unwrap();
     assert_eq!(boards[0].rev, posted, "the browser reads the board the machine sealed to it");
     let again = super::connect::prepare(&state, &config, None, None).err().unwrap();
-    assert!(again.contains("kelpie hub leave first"), "{again}");
+    assert!(again.contains("kebbie hub leave first"), "{again}");
 }
 
 #[test]
@@ -857,7 +857,7 @@ fn an_own_hub_is_tested_before_it_is_saved_once_and_never_through_a_linked_confi
     std::fs::write(&config, "# mine\n[machine]\nname = \"mac\"\n").unwrap();
     let web = serving(|_| "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 15\r\nconnection: close\r\n\r\n<html>hi</html>".to_string());
     let refused = super::connect::own_hub(&config, &web).err().unwrap();
-    assert!(refused.contains("does not answer as a kelpie hub") && refused.contains("nothing changed"), "{refused}");
+    assert!(refused.contains("does not answer as a kebbie hub") && refused.contains("nothing changed"), "{refused}");
     assert!(super::connect::own_hub(&config, "http://hub.example.com").err().unwrap().contains("takes https"));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), "# mine\n[machine]\nname = \"mac\"\n", "a hub that fails the test is not saved");
     let chosen = super::connect::choose_hub(&config, Some(&|| Ok(Some(format!("{}/", hub.url))))).unwrap();
@@ -868,9 +868,9 @@ fn an_own_hub_is_tested_before_it_is_saved_once_and_never_through_a_linked_confi
     let again = super::connect::choose_hub(&config, Some(&|| panic!("a set [hub] url is not asked again"))).unwrap();
     assert_eq!((again.url, again.note), (hub.url.clone(), None));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), written, "written once");
-    let kelpie = super::connect::choose_hub(&dir.join("fresh.toml"), Some(&|| Ok(None))).unwrap();
-    assert_eq!(kelpie.url, crate::config::DEFAULT_HUB_URL);
-    assert!(!dir.join("fresh.toml").exists(), "the kelpie hub needs no key");
+    let kebbie = super::connect::choose_hub(&dir.join("fresh.toml"), Some(&|| Ok(None))).unwrap();
+    assert_eq!(kebbie.url, crate::config::DEFAULT_HUB_URL);
+    assert!(!dir.join("fresh.toml").exists(), "the kebbie hub needs no key");
 
     let shared = dir.join("dotfiles.toml");
     std::fs::write(&shared, "[keeper]\nenabled = true\n").unwrap();
@@ -882,7 +882,7 @@ fn an_own_hub_is_tested_before_it_is_saved_once_and_never_through_a_linked_confi
     assert_eq!(std::fs::read_to_string(&shared).unwrap(), "[keeper]\nenabled = true\n");
 }
 
-fn add_device(hub: &TestHub, state: &Path, browser: &mut kelpie_hub_fakes::browser::Browser, phone_shows: impl Fn(&str) -> String + Send + 'static, answer: bool) -> (crate::sh::Result<Id>, Result<Id, PairError>) {
+fn add_device(hub: &TestHub, state: &Path, browser: &mut kebbie_hub_fakes::browser::Browser, phone_shows: impl Fn(&str) -> String + Send + 'static, answer: bool) -> (crate::sh::Result<Id>, Result<Id, PairError>) {
     let (link_out, link_in) = mpsc::channel::<String>();
     let (digits_out, digits_in) = mpsc::channel::<String>();
     let machine_state = state.to_path_buf();
@@ -923,12 +923,12 @@ fn a_lapsed_plan_is_said_on_status_doctor_and_add_device_and_nothing_local_stops
     });
     let mut browser = member(&hub);
     let account = hub.runtime.block_on(browser.account()).unwrap().account;
-    hub.hub.store().set_plan(&account, kelpie_hub_api::PlanStatus::Active, None).unwrap();
+    hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Active, None).unwrap();
     let state = connected(&hub, &mut browser);
     let (added, _) = add_device(&hub, &state, &mut browser, |digits| digits.to_string(), true);
     added.unwrap();
-    hub.hub.store().set_plan(&account, kelpie_hub_api::PlanStatus::Inactive, None).unwrap();
-    let said = format!("Your kelpie hub subscription isn't active: {BILLING}");
+    hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Inactive, None).unwrap();
+    let said = format!("Your kebbie hub subscription isn't active: {BILLING}");
     let failed = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap_err();
     assert_eq!(failed, said);
     assert_eq!(relay::load(&state).plan_inactive.as_deref(), Some(said.as_str()));
@@ -938,7 +938,7 @@ fn a_lapsed_plan_is_said_on_status_doctor_and_add_device_and_nothing_local_stops
     let refused = super::pair::add_device(&state, WAIT, |_| panic!("no link without a plan"), |_| true, None, now()).unwrap_err();
     assert_eq!(refused, said);
     assert_eq!(identity::load(&state).unwrap().unwrap().devices.len(), 1, "the paired device stays");
-    hub.hub.store().set_plan(&account, kelpie_hub_api::PlanStatus::Active, None).unwrap();
+    hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Active, None).unwrap();
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now() + HEARTBEAT).unwrap();
     assert_eq!(relay::load(&state).plan_inactive, None, "a post that goes through clears it");
 }

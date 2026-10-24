@@ -1811,14 +1811,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "kelpie"
+name = "kebbie"
 version = "0.27.0"
 dependencies = [
  "image",
- "kelpie-hub",
- "kelpie-hub-api",
- "kelpie-hub-fakes",
- "kelpie-hub-protocol",
+ "kebbie-hub",
+ "kebbie-hub-api",
+ "kebbie-hub-fakes",
+ "kebbie-hub-protocol",
  "libc",
  "qrcodegen",
  "ratatui",
@@ -1837,9 +1837,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "kelpie-hub"
+name = "kebbie-hub"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=5ceb3ead857c1f526cf8906152731cbc81c813c2#5ceb3ead857c1f526cf8906152731cbc81c813c2"
+source = "git+https://github.com/gronare/kebbie-hub?rev=a220767f367abcc7336a88bc36df441dd34f0927#a220767f367abcc7336a88bc36df441dd34f0927"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -1853,8 +1853,8 @@ dependencies = [
  "http-body",
  "hyper",
  "hyper-util",
- "kelpie-hub-api",
- "kelpie-hub-protocol",
+ "kebbie-hub-api",
+ "kebbie-hub-protocol",
  "openssl",
  "p256",
  "reqwest",
@@ -1871,28 +1871,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "kelpie-hub-api"
+name = "kebbie-hub-api"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=5ceb3ead857c1f526cf8906152731cbc81c813c2#5ceb3ead857c1f526cf8906152731cbc81c813c2"
+source = "git+https://github.com/gronare/kebbie-hub?rev=a220767f367abcc7336a88bc36df441dd34f0927#a220767f367abcc7336a88bc36df441dd34f0927"
 dependencies = [
  "base64 0.23.1",
- "kelpie-hub-protocol",
+ "kebbie-hub-protocol",
  "serde",
  "webauthn-rs-proto",
 ]
 
 [[package]]
-name = "kelpie-hub-fakes"
+name = "kebbie-hub-fakes"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=5ceb3ead857c1f526cf8906152731cbc81c813c2#5ceb3ead857c1f526cf8906152731cbc81c813c2"
+source = "git+https://github.com/gronare/kebbie-hub?rev=a220767f367abcc7336a88bc36df441dd34f0927#a220767f367abcc7336a88bc36df441dd34f0927"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
  "clap",
  "getrandom 0.4.3",
  "hkdf",
- "kelpie-hub-api",
- "kelpie-hub-protocol",
+ "kebbie-hub-api",
+ "kebbie-hub-protocol",
  "p256",
  "reqwest",
  "serde",
@@ -1904,9 +1904,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "kelpie-hub-protocol"
+name = "kebbie-hub-protocol"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=5ceb3ead857c1f526cf8906152731cbc81c813c2#5ceb3ead857c1f526cf8906152731cbc81c813c2"
+source = "git+https://github.com/gronare/kebbie-hub?rev=a220767f367abcc7336a88bc36df441dd34f0927#a220767f367abcc7336a88bc36df441dd34f0927"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::sh::Result;
 use crate::vault_cli::Plugin;
 
-pub const CLAUDE_VAR: &str = "KELPIE_CLAUDE_BIN";
+pub const CLAUDE_VAR: &str = "KEBBIE_CLAUDE_BIN";
 const MARKETPLACE: &str = "https://github.com/gronare/claude-plugins.git";
 const PLUGIN: &str = "vault@gronare";
 
@@ -35,7 +35,7 @@ pub fn steps(claude: &str, plugin: &Plugin, marketplace: bool) -> Vec<Vec<String
 
 fn configure_text(claude: &str) -> String {
     format!(
-        "Point the plugin at your vault, one of:\n  a local folder:  echo '{{\"vault_path\": \"/path/to/vault\"}}' | {claude} plugin configure {PLUGIN} --values-stdin\n  an S3 bucket:    set s3_endpoint, s3_bucket, s3_access_key and s3_secret_key the same way, or in Claude Code's /plugin screen, which asks for them.\nThen run kelpie doctor: its vault line says whether kelpie keeps your tasks in the vault."
+        "Point the plugin at your vault, one of:\n  a local folder:  echo '{{\"vault_path\": \"/path/to/vault\"}}' | {claude} plugin configure {PLUGIN} --values-stdin\n  an S3 bucket:    set s3_endpoint, s3_bucket, s3_access_key and s3_secret_key the same way, or in Claude Code's /plugin screen, which asks for them.\nThen run kebbie doctor: its vault line says whether kebbie keeps your tasks in the vault."
     )
 }
 
@@ -61,7 +61,7 @@ pub fn vault() -> Result<String> {
     let claude = claude_bin();
     let home = crate::agent::claude::home().unwrap_or_default();
     let steps = steps(&claude, &crate::vault_cli::plugin(&home), marketplace_known(&home, "gronare"));
-    println!("kelpie setup vault: the vault plugin keeps each task's note and the repos' logs in your Obsidian vault. Optional: kelpie works the same without it.");
+    println!("kebbie setup vault: the vault plugin keeps each task's note and the repos' logs in your Obsidian vault. Optional: kebbie works the same without it.");
     let stdin = std::io::stdin();
     let ran = run_steps(&steps, &mut stdin.lock(), &mut std::io::stdout(), |step| crate::sh::run_visibly(&step[0], &step[1..].iter().map(String::as_str).collect::<Vec<_>>(), None))?;
     if ran < steps.len() {
@@ -94,6 +94,7 @@ pub struct Machine {
     pub herdr: String,
     pub herdr_config: PathBuf,
     pub follows_github: bool,
+    pub codex_home: Option<PathBuf>,
 }
 
 const EXAMPLE: &str = include_str!("../examples/herdr-config.toml");
@@ -107,8 +108,8 @@ pub fn herdr_config_path(home: &Path) -> PathBuf {
 }
 
 pub fn install(yes: bool) -> Result<String> {
-    crate::permit::user_only("kelpie setup")?;
-    let home = var("HOME").ok_or("HOME is not set, so kelpie setup cannot find where to link kelpie")?;
+    crate::permit::user_only("kebbie setup")?;
+    let home = var("HOME").ok_or("HOME is not set, so kebbie setup cannot find where to link kebbie")?;
     let channel = crate::config::channel()?;
     let state = crate::lead::state_dir()?;
     let machine = Machine {
@@ -119,6 +120,7 @@ pub fn install(yes: bool) -> Result<String> {
         herdr: crate::herdr::bin(),
         herdr_config: herdr_config_path(&home),
         follows_github: channel == crate::config::Channel::Main && crate::release::read_override(&state).is_none(),
+        codex_home: crate::agent::codex::home(),
         home,
     };
     let asking = if yes { Asking::Yes } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) { Asking::Terminal } else { Asking::Closed };
@@ -130,17 +132,17 @@ pub fn install(yes: bool) -> Result<String> {
     Ok(crate::doctor::summary(&crate::doctor::checks(&crate::doctor::Env::current())))
 }
 
-const HUB_STEP: &str = "kelpie hub";
+const HUB_STEP: &str = "kebbie hub";
 
 // None means the user said yes; the connect reads the terminal itself, so it runs after this lock on stdin is gone.
 pub fn hub_offer(asking: Asking, connected: bool, input: &mut impl BufRead, output: &mut impl Write) -> Result<Option<String>> {
     if connected {
-        return Ok(Some(line("already", HUB_STEP, "connected; kelpie hub status shows it")));
+        return Ok(Some(line("already", HUB_STEP, "connected; kebbie hub status shows it")));
     }
     Ok(match asking {
-        Asking::Closed => Some(line("skipped", HUB_STEP, "no terminal to ask in: kelpie hub connect shows the board on your phone")),
-        Asking::Yes => Some(line("skipped", HUB_STEP, "kelpie hub connect shows the board on your phone when you want it")),
-        Asking::Terminal if !yes("Connect a hub now, to see the board on your phone? (kelpie hub connect)", input, output)? => Some(line("skipped", HUB_STEP, "kelpie hub connect, or H on the board, connects one later")),
+        Asking::Closed => Some(line("skipped", HUB_STEP, "no terminal to ask in: kebbie hub connect shows the board on your phone")),
+        Asking::Yes => Some(line("skipped", HUB_STEP, "kebbie hub connect shows the board on your phone when you want it")),
+        Asking::Terminal if !yes("Connect a hub now, to see the board on your phone? (kebbie hub connect)", input, output)? => Some(line("skipped", HUB_STEP, "kebbie hub connect, or H on the board, connects one later")),
         Asking::Terminal => None,
     })
 }
@@ -154,11 +156,28 @@ pub fn hub_connected(result: Result<String>) -> String {
 
 pub fn install_on(machine: &Machine, asking: Asking, input: &mut impl BufRead, output: &mut impl Write) -> Result<()> {
     let say = |output: &mut dyn Write, line: String| writeln!(output, "{line}").map_err(|error| error.to_string());
+    let old = crate::old_name::leftovers(&old_places(machine), crate::old_name::herdr_list(&machine.herdr).as_deref());
+    let (switched, rewrote) = crate::old_name::switch_over(&old, asking, input, output)?;
+    for line in switched {
+        say(output, line)?;
+    }
     say(output, link_binary(&machine.home, &machine.path))?;
     say(output, claude_plugin(machine))?;
     let (keys, wrote) = herdr_keys(&machine.herdr_config, asking, input, output)?;
     say(output, keys)?;
-    say(output, herdr_restart(machine, wrote))
+    say(output, herdr_restart(machine, wrote || rewrote))
+}
+
+fn old_places(machine: &Machine) -> crate::old_name::Places {
+    crate::old_name::Places {
+        home: machine.home.clone(),
+        data_home: machine.data_home.clone(),
+        claude_dir: machine.claude_dir.clone(),
+        claude: machine.claude.clone(),
+        herdr: machine.herdr.clone(),
+        herdr_config: machine.herdr_config.clone(),
+        codex_home: machine.codex_home.clone(),
+    }
 }
 
 fn line(verb: &str, step: &str, detail: impl std::fmt::Display) -> String {
@@ -166,18 +185,18 @@ fn line(verb: &str, step: &str, detail: impl std::fmt::Display) -> String {
 }
 
 fn link_binary(home: &Path, path: &[PathBuf]) -> String {
-    const STEP: &str = "kelpie on PATH";
-    let binary = home.join(".local/share/kelpie/current/target/release/kelpie");
+    const STEP: &str = "kebbie on PATH";
+    let binary = home.join(".local/share/kebbie/current/target/release/kebbie");
     let bin_dir = home.join(".local/bin");
-    let link = bin_dir.join("kelpie");
+    let link = bin_dir.join("kebbie");
     let on_path = if path.contains(&bin_dir) { String::new() } else { format!("; {} is not on PATH: add export PATH=\"$HOME/.local/bin:$PATH\" to your shell's profile", bin_dir.display()) };
     if !binary.is_file() {
-        return line("skipped", STEP, format!("{} is missing: restart herdr so kelpie's startup links {}, then run this again", binary.display(), home.join(".local/share/kelpie/current").display()));
+        return line("skipped", STEP, format!("{} is missing: restart herdr so kebbie's startup links {}, then run this again", binary.display(), home.join(".local/share/kebbie/current").display()));
     }
     match std::fs::read_link(&link) {
         Ok(target) if target == binary => line("already", STEP, format!("{} → {}{on_path}", link.display(), binary.display())),
         Ok(target) => line("skipped", STEP, format!("{} links to {}: remove it and run this again to link {}", link.display(), target.display(), binary.display())),
-        Err(_) if std::fs::symlink_metadata(&link).is_ok() => line("skipped", STEP, format!("{} is a file kelpie did not put there: remove it and run this again", link.display())),
+        Err(_) if std::fs::symlink_metadata(&link).is_ok() => line("skipped", STEP, format!("{} is a file kebbie did not put there: remove it and run this again", link.display())),
         Err(_) => match std::fs::create_dir_all(&bin_dir).and_then(|_| std::os::unix::fs::symlink(&binary, &link)) {
             Ok(()) => line("done", STEP, format!("linked {} → {}{on_path}", link.display(), binary.display())),
             Err(error) => line("failed", STEP, format!("linking {}: {error}", link.display())),
@@ -188,10 +207,10 @@ fn link_binary(home: &Path, path: &[PathBuf]) -> String {
 fn claude_plugin(machine: &Machine) -> String {
     use crate::update::{self, Marketplace};
     const STEP: &str = "Claude Code plugin";
-    let current = machine.home.join(".local/share/kelpie/current");
+    let current = machine.home.join(".local/share/kebbie/current");
     let read = |file: &str| std::fs::read_to_string(machine.claude_dir.join(file)).ok().and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok()).unwrap_or_default();
     let installed = read("plugins/installed_plugins.json");
-    if let Some(id) = installed["plugins"].as_object().and_then(|plugins| plugins.keys().find(|id| id.starts_with("kelpie@")).cloned()) {
+    if let Some(id) = installed["plugins"].as_object().and_then(|plugins| plugins.keys().find(|id| id.starts_with("kebbie@")).cloned()) {
         if read("settings.json")["enabledPlugins"][&id] == false {
             return match crate::sh::run(&machine.claude, &["plugin", "enable", &id], None) {
                 Ok(_) => line("done", STEP, format!("enabled {id}")),
@@ -201,22 +220,22 @@ fn claude_plugin(machine: &Machine) -> String {
         let said = update::claude_plugin(&machine.claude_dir, &machine.claude, Some(&current), machine.follows_github);
         return line("already", STEP, format!("{id} is installed; {}", said.trim_start_matches("Claude Code plugin: ")));
     }
-    if marketplace_known(&machine.claude_dir, "kelpie") {
-        if !matches!(update::marketplace(&machine.claude_dir, "kelpie@kelpie"), Marketplace::InPlace(path) if update::same_folder(&path, &current)) {
-            return line("skipped", STEP, format!("Claude Code has a kelpie marketplace that is not {}: {}", current.display(), update::IN_PLACE_FIX));
+    if marketplace_known(&machine.claude_dir, "kebbie") {
+        if !matches!(update::marketplace(&machine.claude_dir, "kebbie@kebbie"), Marketplace::InPlace(path) if update::same_folder(&path, &current)) {
+            return line("skipped", STEP, format!("Claude Code has a kebbie marketplace that is not {}: {}", current.display(), update::IN_PLACE_FIX));
         }
     } else if let Err(error) = crate::sh::run(&machine.claude, &["plugin", "marketplace", "add", &current.to_string_lossy()], None) {
         return line("failed", STEP, error);
     }
-    match crate::sh::run(&machine.claude, &["plugin", "install", "kelpie@kelpie"], None) {
-        Ok(_) => line("done", STEP, format!("installed kelpie@kelpie from {}", current.display())),
+    match crate::sh::run(&machine.claude, &["plugin", "install", "kebbie@kebbie"], None) {
+        Ok(_) => line("done", STEP, format!("installed kebbie@kebbie from {}", current.display())),
         Err(error) => line("failed", STEP, error),
     }
 }
 
-pub fn kelpie_keys() -> Vec<toml::Table> {
+pub fn kebbie_keys() -> Vec<toml::Table> {
     let example: toml::Table = EXAMPLE.parse().expect("examples/herdr-config.toml is TOML");
-    bindings(&example).into_iter().filter(|binding| text(binding, "command").starts_with("kelpie.")).cloned().collect()
+    bindings(&example).into_iter().filter(|binding| text(binding, "command").starts_with("kebbie.")).cloned().collect()
 }
 
 fn bindings(config: &toml::Table) -> Vec<&toml::Table> {
@@ -249,11 +268,11 @@ pub fn herdr_keys(config: &Path, asking: Asking, input: &mut impl BufRead, outpu
     };
     let table: toml::Table = match existing.parse() {
         Ok(table) => table,
-        Err(error) => return skipped(format!("{} is not valid TOML, so kelpie leaves it alone: {}", config.display(), error.message())),
+        Err(error) => return skipped(format!("{} is not valid TOML, so kebbie leaves it alone: {}", config.display(), error.message())),
     };
-    let missing: Vec<toml::Table> = kelpie_keys().into_iter().filter(|wanted| !bindings(&table).iter().any(|binding| text(binding, "command") == text(wanted, "command"))).collect();
+    let missing: Vec<toml::Table> = kebbie_keys().into_iter().filter(|wanted| !bindings(&table).iter().any(|binding| text(binding, "command") == text(wanted, "command"))).collect();
     if missing.is_empty() {
-        return Ok((line("already", STEP, format!("{} binds kelpie's keys", config.display())), false));
+        return Ok((line("already", STEP, format!("{} binds kebbie's keys", config.display())), false));
     }
     let (free, taken): (Vec<_>, Vec<_>) = missing.iter().partition(|wanted| taken_by(&table, text(wanted, "key")).is_none());
     let taken = taken.iter().map(|wanted| format!("{} is already {}, so {} gets no key", text(wanted, "key"), taken_by(&table, text(wanted, "key")).unwrap_or_default(), text(wanted, "command"))).collect::<Vec<_>>().join("; ");
@@ -270,9 +289,9 @@ pub fn herdr_keys(config: &Path, asking: Asking, input: &mut impl BufRead, outpu
     let resolved = std::fs::canonicalize(config).ok().or_else(|| Some(std::fs::canonicalize(config.parent()?).ok()?.join(config.file_name()?))).unwrap_or_else(|| config.to_path_buf());
     let via = if resolved == config { String::new() } else { format!(" (a link to {})", resolved.display()) };
     match asking {
-        Asking::Closed => return skipped(format!("no terminal to ask in before writing {}{via}: run kelpie setup --yes to add {keys}", config.display())),
-        Asking::Yes if !via.is_empty() => return skipped(format!("{}{via} is a link, which --yes never writes through: run kelpie setup in a terminal to be asked, or add {keys} by hand", config.display())),
-        Asking::Terminal if !yes(&format!("kelpie setup adds kelpie's keys to the end of {}{via}, leaving the rest as it is:\n{addition}", config.display()), input, output)? => {
+        Asking::Closed => return skipped(format!("no terminal to ask in before writing {}{via}: run kebbie setup --yes to add {keys}", config.display())),
+        Asking::Yes if !via.is_empty() => return skipped(format!("{}{via} is a link, which --yes never writes through: run kebbie setup in a terminal to be asked, or add {keys} by hand", config.display())),
+        Asking::Terminal if !yes(&format!("kebbie setup adds kebbie's keys to the end of {}{via}, leaving the rest as it is:\n{addition}", config.display()), input, output)? => {
             return skipped(format!("you said no; {} is unchanged", config.display()));
         }
         _ => {}
@@ -289,7 +308,7 @@ fn herdr_restart(machine: &Machine, wrote: bool) -> String {
     const STEP: &str = "herdr";
     let current = crate::doctor::current_link(&machine.home, machine.data_home.as_deref(), None);
     if current.level != crate::doctor::Level::Ok {
-        return line("to do", STEP, format!("restart herdr: {}, and kelpie's startup in herdr links it", current.fact));
+        return line("to do", STEP, format!("restart herdr: {}, and kebbie's startup in herdr links it", current.fact));
     }
     if !wrote {
         return line("already", STEP, "nothing to restart");
@@ -301,42 +320,42 @@ fn herdr_restart(machine: &Machine, wrote: bool) -> String {
 }
 
 pub fn codex(uninstall: bool) -> Result<String> {
-    crate::permit::user_only("kelpie setup codex")?;
-    let home = crate::agent::codex::home().ok_or("Neither CODEX_HOME nor HOME is set, so kelpie cannot find Codex's home")?;
-    let kelpie = crate::peers::kelpie_command()?;
+    crate::permit::user_only("kebbie setup codex")?;
+    let home = crate::agent::codex::home().ok_or("Neither CODEX_HOME nor HOME is set, so kebbie cannot find Codex's home")?;
+    let kebbie = crate::peers::kebbie_command()?;
     let stdin = std::io::stdin();
-    codex_in(&home, &kelpie, uninstall, &mut stdin.lock(), &mut std::io::stdout())
+    codex_in(&home, &kebbie, uninstall, &mut stdin.lock(), &mut std::io::stdout())
 }
 
-// Codex's plugin cache is the one place kelpie writes in Codex's home, and only on the user's y; config.toml and hooks.json stay theirs.
-pub fn codex_in(home: &Path, kelpie: &str, uninstall: bool, input: &mut impl BufRead, output: &mut impl Write) -> Result<String> {
+// Codex's plugin cache is the one place kebbie writes in Codex's home, and only on the user's y; config.toml and hooks.json stay theirs.
+pub fn codex_in(home: &Path, kebbie: &str, uninstall: bool, input: &mut impl BufRead, output: &mut impl Write) -> Result<String> {
     use crate::agent::codex::{self, Installed};
     let root = codex::plugin_root(home);
     if uninstall {
         if !root.exists() {
-            return Ok(format!("kelpie's Codex plugin is not installed; {} is not there.", root.display()));
+            return Ok(format!("kebbie's Codex plugin is not installed; {} is not there.", root.display()));
         }
-        if !yes(&format!("kelpie setup codex --uninstall removes kelpie's plugin from Codex: {}", root.display()), input, output)? {
+        if !yes(&format!("kebbie setup codex --uninstall removes kebbie's plugin from Codex: {}", root.display()), input, output)? {
             return Ok("Skipped; nothing was removed.".to_string());
         }
         codex::uninstall(home)?;
-        return Ok(format!("Removed {}. Tasks whose profile runs Codex now start without kelpie's hooks, so they neither report nor get their role.", root.display()));
+        return Ok(format!("Removed {}. Tasks whose profile runs Codex now start without kebbie's hooks, so they neither report nor get their role.", root.display()));
     }
-    let state = codex::installed(home, kelpie);
+    let state = codex::installed(home, kebbie);
     if state == Installed::Current {
-        return Ok(format!("kelpie's Codex plugin is installed and current at {}; nothing to do.", root.display()));
+        return Ok(format!("kebbie's Codex plugin is installed and current at {}; nothing to do.", root.display()));
     }
     let verb = if state == Installed::Missing { "install" } else { "update" };
     let question = format!(
-        "kelpie setup codex: {verb} kelpie's plugin in Codex's plugin cache, {}.\nIts three hooks (SessionStart, UserPromptSubmit, Stop) record the session, give it its role and ask for kelpie report before a turn ends; outside a kelpie task they do nothing.\nkelpie enables the plugin, and trusts those three hooks by their hash, only in the Codex sessions it starts (-c on its command line). It never edits {} or {}.",
+        "kebbie setup codex: {verb} kebbie's plugin in Codex's plugin cache, {}.\nIts three hooks (SessionStart, UserPromptSubmit, Stop) record the session, give it its role and ask for kebbie report before a turn ends; outside a kebbie task they do nothing.\nkebbie enables the plugin, and trusts those three hooks by their hash, only in the Codex sessions it starts (-c on its command line). It never edits {} or {}.",
         root.display(), home.join("config.toml").display(), home.join("hooks.json").display(),
     );
     if !yes(&question, input, output)? {
         return Ok("Skipped; nothing was written.".to_string());
     }
-    let written = codex::install(home, kelpie)?;
+    let written = codex::install(home, kebbie)?;
     let files = written.iter().map(|file| format!("  {}", file.display())).collect::<Vec<_>>().join("\n");
-    Ok(format!("Wrote:\n{files}\nkelpie doctor's codex lines say whether Codex and its hooks are ready."))
+    Ok(format!("Wrote:\n{files}\nkebbie doctor's codex lines say whether Codex and its hooks are ready."))
 }
 
 #[cfg(test)]
@@ -351,11 +370,11 @@ mod tests {
             (offered, String::from_utf8(output).unwrap())
         };
         let (offered, asked) = offer(Asking::Terminal, false, "y\n");
-        assert_eq!(offered, None, "a yes runs kelpie hub connect");
-        assert!(asked.contains("Connect a hub now") && asked.contains("(kelpie hub connect)"), "{asked}");
+        assert_eq!(offered, None, "a yes runs kebbie hub connect");
+        assert!(asked.contains("Connect a hub now") && asked.contains("(kebbie hub connect)"), "{asked}");
         for (asking, answers) in [(Asking::Terminal, "n\n"), (Asking::Terminal, ""), (Asking::Closed, "y\n"), (Asking::Yes, "y\n")] {
             let (offered, asked) = offer(asking, false, answers);
-            assert!(offered.as_deref().is_some_and(|line| line.starts_with("skipped") && line.contains("kelpie hub connect")), "{asking:?}: {offered:?}");
+            assert!(offered.as_deref().is_some_and(|line| line.starts_with("skipped") && line.contains("kebbie hub connect")), "{asking:?}: {offered:?}");
             assert!(asking == Asking::Terminal || asked.is_empty(), "only a terminal is asked");
         }
         let (offered, asked) = offer(Asking::Terminal, true, "y\n");
@@ -369,12 +388,12 @@ mod tests {
         std::fs::write(home.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
         let run = |answers: &str, uninstall: bool| {
             let mut output = Vec::new();
-            let said = codex_in(&home, "/opt/kelpie", uninstall, &mut answers.as_bytes(), &mut output).unwrap();
+            let said = codex_in(&home, "/opt/kebbie", uninstall, &mut answers.as_bytes(), &mut output).unwrap();
             (said, String::from_utf8(output).unwrap())
         };
         let (said, asked) = run("", false);
         assert_eq!(said, "Skipped; nothing was written.");
-        assert!(asked.contains("install kelpie's plugin in Codex's plugin cache") && asked.contains(&format!("It never edits {}", home.join("config.toml").display())), "{asked}");
+        assert!(asked.contains("install kebbie's plugin in Codex's plugin cache") && asked.contains(&format!("It never edits {}", home.join("config.toml").display())), "{asked}");
         assert!(!home.join("plugins").exists(), "no answer is no");
         let (said, _) = run("y\n", false);
         assert!(said.starts_with("Wrote:\n") && said.contains("hooks/hooks.json"), "{said}");
@@ -400,9 +419,9 @@ mod tests {
     }
 
     #[test]
-    fn the_keys_kelpie_adds_are_the_ones_the_example_config_binds() {
-        let keys: Vec<String> = kelpie_keys().iter().map(|binding| format!("{} {}", text(binding, "key"), text(binding, "command"))).collect();
-        assert_eq!(keys, ["prefix+space kelpie.lead", "prefix+tab kelpie.focus", "prefix+t kelpie.board", "prefix+u kelpie.update"]);
+    fn the_keys_kebbie_adds_are_the_ones_the_example_config_binds() {
+        let keys: Vec<String> = kebbie_keys().iter().map(|binding| format!("{} {}", text(binding, "key"), text(binding, "command"))).collect();
+        assert_eq!(keys, ["prefix+space kebbie.lead", "prefix+tab kebbie.focus", "prefix+t kebbie.board", "prefix+u kebbie.update"]);
     }
 
     #[test]
@@ -417,13 +436,13 @@ mod tests {
         assert!(!wrote && said.starts_with("already"), "{said}");
         assert_eq!(std::fs::read(&config).unwrap(), written, "a second run writes nothing");
 
-        let own = "onboarding = false # mine\n\n[[keys.command]]\nkey = \"prefix+t\"\ntype = \"plugin_action\"\ncommand = \"kelpie.board\"\n\n[ui]\npane_borders  =  \"auto\"";
+        let own = "onboarding = false # mine\n\n[[keys.command]]\nkey = \"prefix+t\"\ntype = \"plugin_action\"\ncommand = \"kebbie.board\"\n\n[ui]\npane_borders  =  \"auto\"";
         std::fs::write(&config, own).unwrap();
         let (said, wrote, _) = keys(&config, Asking::Yes, "");
         assert!(wrote && said.contains("added prefix+space, prefix+tab, prefix+u"), "{said}");
         let after = std::fs::read_to_string(&config).unwrap();
-        assert!(after.starts_with(own) && after[own.len()..].starts_with("\n\n[[keys.command]]"), "the user's bytes stay a prefix, and a missing last newline is added before kelpie's: {after}");
-        assert_eq!(commands(&config), ["prefix+t kelpie.board", "prefix+space kelpie.lead", "prefix+tab kelpie.focus", "prefix+u kelpie.update"]);
+        assert!(after.starts_with(own) && after[own.len()..].starts_with("\n\n[[keys.command]]"), "the user's bytes stay a prefix, and a missing last newline is added before kebbie's: {after}");
+        assert_eq!(commands(&config), ["prefix+t kebbie.board", "prefix+space kebbie.lead", "prefix+tab kebbie.focus", "prefix+u kebbie.update"]);
         assert!(keys(&config, Asking::Yes, "").0.starts_with("already"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), after);
         std::fs::remove_dir_all(dir).unwrap();
@@ -436,8 +455,8 @@ mod tests {
         let own = "[keys]\ncycle_pane_next = \"prefix+tab\"\n\n[[keys.command]]\nkey = \"prefix+t\"\ntype = \"popup\"\ncommand = \"lazygit\"\n";
         std::fs::write(&config, own).unwrap();
         let (said, wrote, _) = keys(&config, Asking::Yes, "");
-        assert!(wrote && said.contains("added prefix+space, prefix+u") && said.contains("prefix+tab is already cycle_pane_next, so kelpie.focus gets no key") && said.contains("prefix+t is already lazygit"), "{said}");
-        assert_eq!(commands(&config), ["prefix+t lazygit", "prefix+space kelpie.lead", "prefix+u kelpie.update"]);
+        assert!(wrote && said.contains("added prefix+space, prefix+u") && said.contains("prefix+tab is already cycle_pane_next, so kebbie.focus gets no key") && said.contains("prefix+t is already lazygit"), "{said}");
+        assert_eq!(commands(&config), ["prefix+t lazygit", "prefix+space kebbie.lead", "prefix+u kebbie.update"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -447,7 +466,7 @@ mod tests {
         let config = dir.join("config.toml");
         std::fs::write(&config, "onboarding = false\n").unwrap();
         let (said, wrote, asked) = keys(&config, Asking::Closed, "y\n");
-        assert!(!wrote && said.contains("no terminal to ask in") && said.contains("kelpie setup --yes") && asked.is_empty(), "{said}");
+        assert!(!wrote && said.contains("no terminal to ask in") && said.contains("kebbie setup --yes") && asked.is_empty(), "{said}");
         let (said, wrote, asked) = keys(&config, Asking::Terminal, "n\n");
         assert!(!wrote && said.contains("you said no") && asked.contains("[[keys.command]]\nkey = \"prefix+space\""), "{asked}");
         assert_eq!(std::fs::read_to_string(&config).unwrap(), "onboarding = false\n");
@@ -483,15 +502,15 @@ mod tests {
         let home = dir.join("home");
         let root = dir.join("herdr-install");
         std::fs::create_dir_all(root.join("target/release")).unwrap();
-        std::fs::write(root.join("target/release/kelpie"), "").unwrap();
-        std::fs::create_dir_all(home.join(".local/share/kelpie")).unwrap();
-        std::os::unix::fs::symlink(&root, home.join(".local/share/kelpie/current")).unwrap();
+        std::fs::write(root.join("target/release/kebbie"), "").unwrap();
+        std::fs::create_dir_all(home.join(".local/share/kebbie")).unwrap();
+        std::os::unix::fs::symlink(&root, home.join(".local/share/kebbie/current")).unwrap();
         let claude_dir = home.join(".claude");
         std::fs::create_dir_all(claude_dir.join("plugins")).unwrap();
         let log = dir.join("claude.log");
         let plugins = claude_dir.join("plugins");
         let script = format!(
-            "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$*\" in\n  'plugin marketplace add '*) printf '{{\"kelpie\":{{\"source\":{{\"source\":\"directory\",\"path\":\"%s\"}}}}}}' \"$4\" > '{plugins}/known_marketplaces.json' ;;\n  'plugin install kelpie@kelpie') printf '{{\"plugins\":{{\"kelpie@kelpie\":[{{\"version\":\"0.26.6\"}}]}}}}' > '{plugins}/installed_plugins.json' ;;\nesac\n",
+            "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$*\" in\n  'plugin marketplace add '*) printf '{{\"kebbie\":{{\"source\":{{\"source\":\"directory\",\"path\":\"%s\"}}}}}}' \"$4\" > '{plugins}/known_marketplaces.json' ;;\n  'plugin install kebbie@kebbie') printf '{{\"plugins\":{{\"kebbie@kebbie\":[{{\"version\":\"0.26.6\"}}]}}}}' > '{plugins}/installed_plugins.json' ;;\nesac\n",
             log = log.display(), plugins = plugins.display(),
         );
         crate::executable::write(dir.join("claude"), script).unwrap();
@@ -503,6 +522,7 @@ mod tests {
             herdr: "false".to_string(),
             herdr_config: home.join(".config/herdr/config.toml"),
             follows_github: false,
+            codex_home: Some(home.join(".codex")),
             home,
         };
         (machine, log)
@@ -519,28 +539,28 @@ mod tests {
         let dir = crate::sh::test_dir("setup-install");
         let (machine, log) = machine(&dir);
         assert_eq!(setup(&machine), ["done", "done", "done", "to"], "herdr is restarted by hand when it cannot reload");
-        let binary = machine.home.join(".local/share/kelpie/current/target/release/kelpie");
-        assert_eq!(std::fs::read_link(machine.home.join(".local/bin/kelpie")).unwrap(), binary);
-        let current = machine.home.join(".local/share/kelpie/current");
-        assert_eq!(std::fs::read_to_string(&log).unwrap(), format!("plugin marketplace add {}\nplugin install kelpie@kelpie\n", current.display()));
+        let binary = machine.home.join(".local/share/kebbie/current/target/release/kebbie");
+        assert_eq!(std::fs::read_link(machine.home.join(".local/bin/kebbie")).unwrap(), binary);
+        let current = machine.home.join(".local/share/kebbie/current");
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), format!("plugin marketplace add {}\nplugin install kebbie@kebbie\n", current.display()));
         let config = std::fs::read(&machine.herdr_config).unwrap();
         assert_eq!(setup(&machine), ["already", "already", "already", "already"]);
         assert_eq!(std::fs::read(&machine.herdr_config).unwrap(), config);
-        assert!(std::fs::read_to_string(&log).unwrap().ends_with("plugin marketplace update kelpie\nplugin update kelpie@kelpie\n"), "a second run updates the plugin as kelpie update does");
+        assert!(std::fs::read_to_string(&log).unwrap().ends_with("plugin marketplace update kebbie\nplugin update kebbie@kebbie\n"), "a second run updates the plugin as kebbie update does");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn setup_leaves_a_kelpie_on_path_it_did_not_link_and_says_when_bin_is_not_on_path() {
+    fn setup_leaves_a_kebbie_on_path_it_did_not_link_and_says_when_bin_is_not_on_path() {
         let dir = crate::sh::test_dir("setup-path");
         let (mut machine, _) = machine(&dir);
         machine.path = Vec::new();
         let said = link_binary(&machine.home, &machine.path);
         assert!(said.starts_with("done") && said.contains("is not on PATH: add export PATH=\"$HOME/.local/bin:$PATH\""), "{said}");
-        std::fs::remove_file(machine.home.join(".local/bin/kelpie")).unwrap();
-        std::os::unix::fs::symlink("/opt/old/kelpie", machine.home.join(".local/bin/kelpie")).unwrap();
-        assert!(link_binary(&machine.home, &machine.path).contains("links to /opt/old/kelpie: remove it"));
-        assert_eq!(std::fs::read_link(machine.home.join(".local/bin/kelpie")).unwrap(), PathBuf::from("/opt/old/kelpie"));
+        std::fs::remove_file(machine.home.join(".local/bin/kebbie")).unwrap();
+        std::os::unix::fs::symlink("/opt/old/kebbie", machine.home.join(".local/bin/kebbie")).unwrap();
+        assert!(link_binary(&machine.home, &machine.path).contains("links to /opt/old/kebbie: remove it"));
+        assert_eq!(std::fs::read_link(machine.home.join(".local/bin/kebbie")).unwrap(), PathBuf::from("/opt/old/kebbie"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

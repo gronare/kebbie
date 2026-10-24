@@ -68,7 +68,7 @@ pub fn tools(min_herdr: &str) -> Vec<Tool> {
         tool("nvim", false, "the review split's diffs", Some("0.10.0"), "brew install neovim", "brew install neovim, or a release from https://github.com/neovim/neovim/releases (distro packages are often older than 0.10)"),
         tool("tig", false, "the history split", None, "brew install tig", "sudo apt install tig"),
         tool("curl", false, "downloading a release's prebuilt binary, and the review list reloading when files change", None, "brew install curl", "sudo apt install curl"),
-        tool("cargo", false, "building kelpie on the main channel and with kelpie update --from", None, "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
+        tool("cargo", false, "building kebbie on the main channel and with kebbie update --from", None, "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
     ]
 }
 
@@ -112,17 +112,17 @@ pub struct Plugin {
 }
 
 pub fn herdr_plugin(list: Option<&str>) -> (Check, Option<Plugin>) {
-    let register = both("herdr plugin install gronare/kelpie (or herdr plugin link <a kelpie checkout>)", "herdr plugin install gronare/kelpie (or herdr plugin link <a kelpie checkout>)");
+    let register = both("herdr plugin install gronare/kebbie (or herdr plugin link <a kebbie checkout>)", "herdr plugin install gronare/kebbie (or herdr plugin link <a kebbie checkout>)");
     let Some(list) = list else { return (fail("herdr plugin", "herdr plugin list --json failed", one("install herdr first")), None) };
     let value: Value = serde_json::from_str(list).unwrap_or_default();
-    let found = value["result"]["plugins"].as_array().into_iter().flatten().find(|plugin| plugin["plugin_id"] == "kelpie");
-    let Some(found) = found else { return (fail("herdr plugin", "kelpie is not registered with herdr", register), None) };
+    let found = value["result"]["plugins"].as_array().into_iter().flatten().find(|plugin| plugin["plugin_id"] == "kebbie");
+    let Some(found) = found else { return (fail("herdr plugin", "kebbie is not registered with herdr", register), None) };
     let plugin = Plugin { enabled: found["enabled"] == true, root: PathBuf::from(found["plugin_root"].as_str().unwrap_or_default()) };
     let version = found["version"].as_str().unwrap_or("?");
     let check = if plugin.enabled {
-        ok("herdr plugin", format!("kelpie {version} enabled, at {}", plugin.root.display()))
+        ok("herdr plugin", format!("kebbie {version} enabled, at {}", plugin.root.display()))
     } else {
-        fail("herdr plugin", format!("kelpie {version} is registered but disabled"), one("herdr plugin enable kelpie"))
+        fail("herdr plugin", format!("kebbie {version} is registered but disabled"), one("herdr plugin enable kebbie"))
     };
     (check, Some(plugin))
 }
@@ -130,33 +130,33 @@ pub fn herdr_plugin(list: Option<&str>) -> (Check, Option<Plugin>) {
 pub fn updates(state: &Path, channel: crate::config::Channel, installed: &[crate::update_check::Component]) -> Check {
     let (latest, fact) = crate::update_check::doctor_line(state, channel, installed);
     let check = ok("updates", fact);
-    let fix = if crate::release::read_override(state).is_some() { "kelpie update --stable" } else { "kelpie update" };
+    let fix = if crate::release::read_override(state).is_some() { "kebbie update --stable" } else { "kebbie update" };
     if latest { check } else { check.with(one(fix)) }
 }
 
 pub fn keeper(enabled: bool, running: Option<&crate::keeper::Holder>, now: u64) -> Check {
     match (enabled, running) {
         (false, None) => ok("keeper", "off ([keeper] enabled = false): an open board runs the routines"),
-        (false, Some(_)) => warn("keeper", "off in config.toml, but one still runs", one("kelpie keeper --stop")),
+        (false, Some(_)) => warn("keeper", "off in config.toml, but one still runs", one("kebbie keeper --stop")),
         (true, Some(running)) => {
             let pid = running.pid.map_or("?".to_string(), |pid| pid.to_string());
             let up = running.started.map_or(String::new(), |started| format!(", up {}", crate::keeper::span(now.saturating_sub(started))));
-            ok("keeper", format!("running, pid {pid}{up}; kelpie keeper --status shows its routines"))
+            ok("keeper", format!("running, pid {pid}{up}; kebbie keeper --status shows its routines"))
         }
-        (true, None) => warn("keeper", "not running, so stale sessions, held messages and typed prompts wait for an open board", one("kelpie keeper --start (herdr's startup and the board start it too)")),
+        (true, None) => warn("keeper", "not running, so stale sessions, held messages and typed prompts wait for an open board", one("kebbie keeper --start (herdr's startup and the board start it too)")),
     }
 }
 
 pub fn sandbox(on: &Setting<bool>, missing: &[String]) -> Check {
     match (on.value, missing.is_empty()) {
         (false, _) => warn("sandbox", crate::sandbox::OFF, one(format!("set task.sandbox = true (now from the {})", on.layer.label()))),
-        (true, true) => ok("sandbox", "on: a task's shell writes only in its worktree and the folders it is given, reaches only the allowed hosts and no Unix socket, and kelpie refuses its user-only commands to a sandboxed process"),
-        (true, false) => fail("sandbox", format!("on, but this machine cannot sandbox a task's shell fully, so kelpie starts no task: {} missing", missing.join(", ")), crate::sandbox::fixes(missing).into_iter().chain([format!("or set task.sandbox = false in {}", config::path().display())]).collect()),
+        (true, true) => ok("sandbox", "on: a task's shell writes only in its worktree and the folders it is given, reaches only the allowed hosts and no Unix socket, and kebbie refuses its user-only commands to a sandboxed process"),
+        (true, false) => fail("sandbox", format!("on, but this machine cannot sandbox a task's shell fully, so kebbie starts no task: {} missing", missing.join(", ")), crate::sandbox::fixes(missing).into_iter().chain([format!("or set task.sandbox = false in {}", config::path().display())]).collect()),
     }
 }
 
 pub fn plugin_binary(root: &Path) -> Check {
-    let binary = root.join("target/release/kelpie");
+    let binary = root.join("target/release/kebbie");
     match crate::update::binary_origin(root).filter(|_| binary.is_file()) {
         Some(origin) => ok("plugin binary", format!("{}, {}", binary.display(), origin.describe())),
         None => fail("plugin binary", format!("{} is missing", binary.display()), one(format!("sh {} in {} (herdr runs it on install and update)", crate::update::BUILD_SCRIPT, root.display()))),
@@ -167,23 +167,23 @@ pub fn cargo(tool: &Tool, found: Option<&Path>, channel: crate::config::Channel,
     let downloaded = matches!(origin, Some(crate::update::Origin::Downloaded { .. }));
     match found {
         None if downloaded && channel == crate::config::Channel::Release => ok("cargo", "not on PATH, not needed: each release installs its prebuilt binary"),
-        None => warn("cargo", "not on PATH; needed for the main channel and kelpie update --from", both(tool.mac, tool.linux)),
+        None => warn("cargo", "not on PATH; needed for the main channel and kebbie update --from", both(tool.mac, tool.linux)),
         Some(found) => self::tool(tool, Some(found), None),
     }
 }
 
 pub fn claude_plugin(installed: Option<&Value>, settings: &Value, checkout: Option<&str>) -> Check {
-    let install = one("claude plugin marketplace add ~/.local/share/kelpie/current && claude plugin install kelpie@kelpie");
+    let install = one("claude plugin marketplace add ~/.local/share/kebbie/current && claude plugin install kebbie@kebbie");
     let Some(installed) = installed else { return warn("claude plugin", "no installed_plugins.json; the review skills and hook are missing", install) };
-    let Some((id, installs)) = installed["plugins"].as_object().into_iter().flatten().find(|(id, _)| id.starts_with("kelpie@")) else {
-        return warn("claude plugin", "kelpie is not installed in Claude Code; the review skills and hook are missing", install);
+    let Some((id, installs)) = installed["plugins"].as_object().into_iter().flatten().find(|(id, _)| id.starts_with("kebbie@")) else {
+        return warn("claude plugin", "kebbie is not installed in Claude Code; the review skills and hook are missing", install);
     };
     let version = installs[0]["version"].as_str().unwrap_or("?");
     if settings["enabledPlugins"][id] == false {
         return warn("claude plugin", format!("{id} {version} is installed but disabled"), one(format!("claude plugin enable {id}")));
     }
     if let Some(checkout) = checkout.filter(|checkout| *checkout != version) {
-        return warn("claude plugin", format!("{id} {version} runs in Claude Code, but kelpie's checkout is {checkout}; Claude Code runs a cached copy"), one("kelpie update"));
+        return warn("claude plugin", format!("{id} {version} runs in Claude Code, but kebbie's checkout is {checkout}; Claude Code runs a cached copy"), one("kebbie update"));
     }
     ok("claude plugin", format!("{id} {version}"))
 }
@@ -193,50 +193,50 @@ pub fn plugin_source(source: &crate::update::Marketplace, channel: crate::config
     match (source, channel) {
         (Marketplace::InPlace(path), _) => ok("claude plugin source", format!("loaded in place from {}", path.display())),
         (Marketplace::Git, crate::config::Channel::Main) => ok("claude plugin source", "GitHub, following the default branch like this machine's main channel"),
-        (Marketplace::Git, crate::config::Channel::Release) => warn("claude plugin source", "GitHub, following the default branch, while this machine follows release tags; kelpie update leaves it as it is", one(crate::update::IN_PLACE_FIX)),
+        (Marketplace::Git, crate::config::Channel::Release) => warn("claude plugin source", "GitHub, following the default branch, while this machine follows release tags; kebbie update leaves it as it is", one(crate::update::IN_PLACE_FIX)),
     }
 }
 
-// Kelpie and the lead's role read the link under $HOME; scripts/herdr-startup.sh writes it under $XDG_DATA_HOME.
+// Kebbie and the lead's role read the link under $HOME; scripts/herdr-startup.sh writes it under $XDG_DATA_HOME.
 pub fn current_link(home: &Path, data_home: Option<&Path>, plugin_root: Option<&Path>) -> Check {
-    let link = home.join(".local/share/kelpie/current");
-    let start = one("start herdr once: the kelpie plugin's startup (scripts/herdr-startup.sh) links it");
+    let link = home.join(".local/share/kebbie/current");
+    let start = one("start herdr once: the kebbie plugin's startup (scripts/herdr-startup.sh) links it");
     if let Some(data) = data_home.filter(|data| *data != home.join(".local/share")) {
-        return warn("current link", format!("XDG_DATA_HOME is {}, so herdr links {}/kelpie/current while kelpie reads {}", data.display(), data.display(), link.display()), one("unset XDG_DATA_HOME for herdr, or link it yourself: ln -sfn <plugin root> ~/.local/share/kelpie/current"));
+        return warn("current link", format!("XDG_DATA_HOME is {}, so herdr links {}/kebbie/current while kebbie reads {}", data.display(), data.display(), link.display()), one("unset XDG_DATA_HOME for herdr, or link it yourself: ln -sfn <plugin root> ~/.local/share/kebbie/current"));
     }
     if std::fs::symlink_metadata(&link).is_err() {
         return fail("current link", format!("{} is missing", link.display()), start);
     }
     let Ok(target) = link.canonicalize() else { return fail("current link", format!("{} points nowhere", link.display()), start) };
     match plugin_root.map(|root| root.canonicalize().unwrap_or_else(|_| root.to_path_buf())) {
-        Some(root) if root != target => warn("current link", format!("{} points at {}, herdr's kelpie is at {}", link.display(), target.display(), root.display()), one("restart herdr so its startup relinks it")),
+        Some(root) if root != target => warn("current link", format!("{} points at {}, herdr's kebbie is at {}", link.display(), target.display(), root.display()), one("restart herdr so its startup relinks it")),
         _ => ok("current link", format!("{} → {}", link.display(), target.display())),
     }
 }
 
-const LINK_KELPIE: &str = "ln -s ~/.local/share/kelpie/current/target/release/kelpie ~/.local/bin/kelpie";
+const LINK_KEBBIE: &str = "ln -s ~/.local/share/kebbie/current/target/release/kebbie ~/.local/bin/kebbie";
 
-pub fn kelpie_on_path(home: &Path, path: &[PathBuf]) -> Check {
-    let current = home.join(".local/share/kelpie/current/target/release/kelpie");
-    let Some(found) = which("kelpie", path) else {
-        return warn("kelpie on PATH", "not on PATH; the lead, tasks and hooks run kelpie by name", vec![LINK_KELPIE.to_string(), "make sure ~/.local/bin is on PATH".to_string()]);
+pub fn kebbie_on_path(home: &Path, path: &[PathBuf]) -> Check {
+    let current = home.join(".local/share/kebbie/current/target/release/kebbie");
+    let Some(found) = which("kebbie", path) else {
+        return warn("kebbie on PATH", "not on PATH; the lead, tasks and hooks run kebbie by name", vec![LINK_KEBBIE.to_string(), "make sure ~/.local/bin is on PATH".to_string()]);
     };
     let resolved = found.canonicalize().unwrap_or_else(|_| found.clone());
     match current.canonicalize() {
-        Ok(binary) if binary == resolved => ok("kelpie on PATH", format!("{} → {}", found.display(), binary.display())),
-        _ => warn("kelpie on PATH", format!("{} resolves to {}, not {}", found.display(), resolved.display(), current.display()), one(format!("remove {} or put ~/.local/bin ahead of it on PATH, then {LINK_KELPIE}", found.display()))),
+        Ok(binary) if binary == resolved => ok("kebbie on PATH", format!("{} → {}", found.display(), binary.display())),
+        _ => warn("kebbie on PATH", format!("{} resolves to {}, not {}", found.display(), resolved.display(), current.display()), one(format!("remove {} or put ~/.local/bin ahead of it on PATH, then {LINK_KEBBIE}", found.display()))),
     }
 }
 
-pub fn state_dirs(kelpie: &Path, own: bool, state_home: &Path, data_home: &Path) -> Vec<(PathBuf, &'static str)> {
-    let about = if own { "backlog, messages, lead, review marks; set by KELPIE_STATE_DIR" } else { "backlog, messages, lead, review marks" };
+pub fn state_dirs(kebbie: &Path, own: bool, state_home: &Path, data_home: &Path) -> Vec<(PathBuf, &'static str)> {
+    let about = if own { "backlog, messages, lead, review marks; set by KEBBIE_STATE_DIR" } else { "backlog, messages, lead, review marks" };
     vec![
-        (kelpie.to_path_buf(), about),
-        (kelpie.join("roles"), "task and lead roles"),
-        (kelpie.join("turns"), "task reports"),
-        (kelpie.join("reviews"), "review splits"),
+        (kebbie.to_path_buf(), about),
+        (kebbie.join("roles"), "task and lead roles"),
+        (kebbie.join("turns"), "task reports"),
+        (kebbie.join("reviews"), "review splits"),
         (state_home.join("herdr-sync"), "sidebar sync"),
-        (data_home.join("kelpie"), "the current link"),
+        (data_home.join("kebbie"), "the current link"),
     ]
 }
 
@@ -268,13 +268,13 @@ pub fn config_file(path: &Path) -> (Check, Option<Machine>) {
         Ok((config, unknown)) if !unknown.is_empty() => (warn("config", unknown.join("; "), one(config::UNKNOWN_FIX)), Some(config)),
         Ok((config, _)) if path.exists() => (ok("config", format!("{} parses", path.display())), Some(config)),
         Ok((config, _)) => (ok("config", format!("{} not found; every machine setting is its default", path.display())), Some(config)),
-        Err(error) => (fail("config", error, one("fix that key; kelpie config shows the result")), None),
+        Err(error) => (fail("config", error, one("fix that key; kebbie config shows the result")), None),
     }
 }
 
 pub fn repo_file(path: &Path) -> (Check, Option<Worktree>) {
     let (name, shown) = ("repo config", config::shown(path));
-    let fix = || one("fix that key; kelpie config --repo <the repo> shows the result");
+    let fix = || one("fix that key; kebbie config --repo <the repo> shows the result");
     if !path.exists() && std::fs::symlink_metadata(path).is_ok() {
         return (fail(name, format!("{shown}: the link points at nothing"), one("clone the repo it links into, or remove the link")), None);
     }
@@ -343,7 +343,7 @@ pub fn setup_command(command: &Setting<Option<String>>, repo: &Path) -> Option<C
     let path = repo.join(program);
     let fix = format!("add {program} to the main checkout, or set worktree.setup_command to the repo's prepare command");
     Some(match std::fs::metadata(&path) {
-        Err(_) if command.layer == config::Layer::Machine => ok(name, format!("{shown}: this repo has no {program}, so kelpie's default setup runs here")),
+        Err(_) if command.layer == config::Layer::Machine => ok(name, format!("{shown}: this repo has no {program}, so kebbie's default setup runs here")),
         Err(_) => warn(name, format!("{shown}: {} not found, so the setup skill cannot run it", path.display()), one(fix)),
         Ok(meta) if !meta.is_file() || meta.mode() & 0o111 == 0 => warn(name, format!("{shown}: {} is not an executable file", path.display()), vec![format!("chmod +x {program}"), fix]),
         Ok(_) => ok(name, format!("{shown}: {}", path.display())),
@@ -354,21 +354,35 @@ pub fn setup_command(command: &Setting<Option<String>>, repo: &Path) -> Option<C
 pub fn notify(command: &Setting<Option<String>>) -> Check {
     match &command.value {
         Some(value) => ok("notify", format!("notify.command {value:?} ({}): run when a task needs you or is ready, a question waits, or the lead notifies; failures go to notify.log in the state dir", command.layer.label())),
-        None => ok("notify", "notify.command not set, so kelpie sends no notifications; set [notify] command to a shell command to get them"),
+        None => ok("notify", "notify.command not set, so kebbie sends no notifications; set [notify] command to a shell command to get them"),
     }
 }
 
-const STATUS_LINE: &str = r#""statusLine": { "type": "command", "command": "~/.local/share/kelpie/current/target/release/kelpie statusline" }"#;
+const STATUS_LINE: &str = r#""statusLine": { "type": "command", "command": "~/.local/share/kebbie/current/target/release/kebbie statusline" }"#;
 
-// Claude Code passes the plan's usage only to the statusLine command, so the board's usage bar needs kelpie there.
+// Claude Code passes the plan's usage only to the statusLine command, so the board's usage bar needs kebbie there.
 pub fn status_line(settings: &Value) -> Check {
     let command = settings["statusLine"]["command"].as_str().unwrap_or_default();
-    if command.contains("kelpie") && command.contains("statusline") {
+    if command.contains("kebbie") && command.contains("statusline") {
         return ok("status line", format!("{command:?} keeps the plan's usage for the board"));
     }
     let fact = if command.is_empty() { "no statusLine command in Claude Code's settings, so the board shows no plan usage".to_string() } else { format!("statusLine runs {command:?}, so the board shows no plan usage") };
-    let fix = if command.is_empty() { format!("add to ~/.claude/settings.json: {STATUS_LINE}") } else { "have your statusLine command pipe its stdin to `kelpie statusline` as well (it prints nothing, so your line stays as it is), or use kelpie's, which shows no line: ".to_string() + STATUS_LINE };
+    let fix = if command.is_empty() { format!("add to ~/.claude/settings.json: {STATUS_LINE}") } else { "have your statusLine command pipe its stdin to `kebbie statusline` as well (it prints nothing, so your line stays as it is), or use kebbie's, which shows no line: ".to_string() + STATUS_LINE };
     warn("status line", fact, one(fix))
+}
+
+pub fn old_name(found: &[crate::old_name::Leftover], vars: &[String], status_line: &str) -> Option<Check> {
+    let mut facts: Vec<String> = found.iter().map(|leftover| leftover.what.clone()).collect();
+    let mut fixes: Vec<String> = if found.is_empty() { Vec::new() } else { vec!["kebbie setup, which asks before each".to_string()] };
+    if !vars.is_empty() {
+        facts.push(format!("{} still set", vars.join(", ")));
+        fixes.push(format!("rename them where you set them: {}", vars.iter().map(|name| name.replacen("KELPIE_", "KEBBIE_", 1)).collect::<Vec<_>>().join(", ")));
+    }
+    if status_line.contains("kelpie") {
+        facts.push(format!("Claude Code's statusLine runs {status_line:?}"));
+        fixes.push(format!("in ~/.claude/settings.json: {STATUS_LINE}"));
+    }
+    (!facts.is_empty()).then(|| warn("kelpie leftovers", facts.join("; "), fixes))
 }
 
 pub fn push_block(repo: &Path) -> Check {
@@ -387,7 +401,7 @@ pub fn visibility(gh: Option<&Path>, repo: &Path, timeout: std::time::Duration) 
     Some(answer.trim().to_ascii_lowercase()).filter(|answer| !answer.is_empty())
 }
 
-// KELPIE_GH_BIN as CI watching reads it, else gh on the doctor's PATH.
+// KEBBIE_GH_BIN as CI watching reads it, else gh on the doctor's PATH.
 fn gh_on(path: &[PathBuf]) -> Option<PathBuf> {
     let gh = crate::ci::gh();
     if gh.contains('/') { Some(PathBuf::from(gh)) } else { which(&gh, path) }
@@ -409,7 +423,7 @@ pub fn backlog(sources: &[Source], vault_index: impl Fn() -> Result<PathBuf, Str
     }
     sources.iter().map(|source| match source {
         Source::Local if local_file.exists() => ok("backlog local", format!("{}: {} items", local_file.display(), crate::backlog_file::read(local_file).len())),
-        Source::Local => ok("backlog local", format!("{} is created by the first item (the board's a, or kelpie backlog add)", local_file.display())),
+        Source::Local => ok("backlog local", format!("{} is created by the first item (the board's a, or kebbie backlog add)", local_file.display())),
         Source::Vault => match vault_index() {
             Ok(index) => ok("backlog vault", format!("vault index {}", index.display())),
             Err(error) => warn("backlog vault", error, one("open a Claude session with the vault plugin once; the Areas page reads its index")),
@@ -456,24 +470,24 @@ pub fn unused_sources(sources: &[Source], vault: Option<String>, linear: Option<
     checks
 }
 
-// Optional: without the plugin kelpie keeps its own backlog and state, so a missing plugin is no gap.
-// override_bin is KELPIE_VAULT_BIN, which stands in for the plugin as it does for detect().
+// Optional: without the plugin kebbie keeps its own backlog and state, so a missing plugin is no gap.
+// override_bin is KEBBIE_VAULT_BIN, which stands in for the plugin as it does for detect().
 pub fn vault(plugin: &crate::vault_cli::Plugin, override_bin: Option<&str>, probe: Option<Result<crate::vault_cli::Probe, String>>) -> Check {
     use crate::vault_cli::{NEEDS_UPDATE, Plugin};
     let name = "vault";
     let shown = match (override_bin, plugin) {
-        (Some(bin), _) => Plugin::Enabled { id: format!("KELPIE_VAULT_BIN={bin}"), version: "(in place of the plugin)".to_string(), root: PathBuf::new() },
+        (Some(bin), _) => Plugin::Enabled { id: format!("KEBBIE_VAULT_BIN={bin}"), version: "(in place of the plugin)".to_string(), root: PathBuf::new() },
         (None, plugin) => plugin.clone(),
     };
     match (&shown, probe) {
-        (Plugin::Missing, _) => ok(name, "the vault plugin is not installed (optional): with it, kelpie keeps each task's note and the repos' logs in your Obsidian vault").with(one("kelpie setup vault")),
-        (Plugin::Disabled { id, version }, _) => ok(name, format!("{id} {version} is installed but disabled (optional), so kelpie keeps tasks without the vault")).with(one(format!("claude plugin enable {id}"))),
-        (Plugin::Enabled { id, version, .. }, None) => warn(name, format!("{id} {version} has no notes-vault-mcp command in its hooks, so kelpie cannot reach the vault"), vec![NEEDS_UPDATE.to_string(), "or set [vault] command in the machine config".to_string()]),
-        (Plugin::Enabled { id, version, .. }, Some(Err(error))) => warn(name, format!("{id} {version}: the vault command failed ({error}), so kelpie keeps tasks without the vault"), one("check that uvx runs, or set [vault] command in the machine config")),
-        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.configured => warn(name, format!("{id} {version} is installed but no vault is configured"), vec![format!("claude plugin configure {id} shows its options: vault_path for a local folder, or the s3_ ones"), "kelpie setup vault walks through it".to_string()]),
-        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.tasks => warn(name, format!("{id} {version} (notes-vault-mcp {}) is older than the task and log commands: the vault is read-only to kelpie, so tasks get no notes and pushes no log lines", probe.version), one(NEEDS_UPDATE)),
-        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if probe.writable == Some(false) => warn(name, format!("{id} {version}: the {} vault is not writable, so kelpie keeps tasks without it", probe.backend), one("check the vault folder's permissions or the S3 key's write access")),
-        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.claims => warn(name, format!("{id} {version} (notes-vault-mcp {}) is too old for cross-machine claims: tasks get notes and logs, but kelpie on another machine sharing this vault cannot see which machine works on a note", probe.version), one(NEEDS_UPDATE)),
+        (Plugin::Missing, _) => ok(name, "the vault plugin is not installed (optional): with it, kebbie keeps each task's note and the repos' logs in your Obsidian vault").with(one("kebbie setup vault")),
+        (Plugin::Disabled { id, version }, _) => ok(name, format!("{id} {version} is installed but disabled (optional), so kebbie keeps tasks without the vault")).with(one(format!("claude plugin enable {id}"))),
+        (Plugin::Enabled { id, version, .. }, None) => warn(name, format!("{id} {version} has no notes-vault-mcp command in its hooks, so kebbie cannot reach the vault"), vec![NEEDS_UPDATE.to_string(), "or set [vault] command in the machine config".to_string()]),
+        (Plugin::Enabled { id, version, .. }, Some(Err(error))) => warn(name, format!("{id} {version}: the vault command failed ({error}), so kebbie keeps tasks without the vault"), one("check that uvx runs, or set [vault] command in the machine config")),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.configured => warn(name, format!("{id} {version} is installed but no vault is configured"), vec![format!("claude plugin configure {id} shows its options: vault_path for a local folder, or the s3_ ones"), "kebbie setup vault walks through it".to_string()]),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.tasks => warn(name, format!("{id} {version} (notes-vault-mcp {}) is older than the task and log commands: the vault is read-only to kebbie, so tasks get no notes and pushes no log lines", probe.version), one(NEEDS_UPDATE)),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if probe.writable == Some(false) => warn(name, format!("{id} {version}: the {} vault is not writable, so kebbie keeps tasks without it", probe.backend), one("check the vault folder's permissions or the S3 key's write access")),
+        (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) if !probe.claims => warn(name, format!("{id} {version} (notes-vault-mcp {}) is too old for cross-machine claims: tasks get notes and logs, but kebbie on another machine sharing this vault cannot see which machine works on a note", probe.version), one(NEEDS_UPDATE)),
         (Plugin::Enabled { id, version, .. }, Some(Ok(probe))) => ok(name, format!("{id} {version} (notes-vault-mcp {}, {}): each task gets a note claimed for this machine, edits wait for its Problem, pushes are logged, done closes it", probe.version, probe.backend)),
     }
 }
@@ -481,7 +495,7 @@ pub fn vault(plugin: &crate::vault_cli::Plugin, override_bin: Option<&str>, prob
 // The phone and the other machines on the vault show this name, so a name nobody chose is worth one warning.
 pub fn machine_name(name: &config::Setting<String>, config_file: &Path) -> Check {
     match name.layer {
-        config::Layer::Default => warn("machine", format!("machine.name is unset, so your phone and your other machines on the vault see this one as \"{}\", the host's short name", name.value), vec![format!("set [machine] name = \"<a name of your own, such as mac or devbox>\" in {}", config_file.display()), "or run /kelpie:configure, which asks for it first".to_string()]),
+        config::Layer::Default => warn("machine", format!("machine.name is unset, so your phone and your other machines on the vault see this one as \"{}\", the host's short name", name.value), vec![format!("set [machine] name = \"<a name of your own, such as mac or devbox>\" in {}", config_file.display()), "or run /kebbie:configure, which asks for it first".to_string()]),
         _ => ok("machine", format!("goes by \"{}\" on your phone and in vault claims", name.value)),
     }
 }
@@ -497,7 +511,7 @@ pub struct Env {
     pub path: Vec<PathBuf>,
     pub home: PathBuf,
     pub state_home: PathBuf,
-    pub kelpie_state: PathBuf,
+    pub kebbie_state: PathBuf,
     pub own_state: bool,
     pub data_home: Option<PathBuf>,
     pub claude_dir: PathBuf,
@@ -517,7 +531,7 @@ impl Env {
         Self {
             path: std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default(),
             state_home: var("XDG_STATE_HOME").unwrap_or_else(|| home.join(".local/state")),
-            kelpie_state: crate::lead::state_location().unwrap_or_else(|_| home.join(".local/state/kelpie")),
+            kebbie_state: crate::lead::state_location().unwrap_or_else(|_| home.join(".local/state/kebbie")),
             own_state: var(crate::lead::STATE_DIR_VAR).is_some(),
             data_home: var("XDG_DATA_HOME"),
             claude_dir: var("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
@@ -535,7 +549,7 @@ impl Env {
 
 pub const MIN_CODEX: &str = "0.163.0";
 
-// Codex is optional until a profile runs it; then its binary, kelpie's plugin and nothing in the user's config that turns hooks off are what a Codex task needs to report.
+// Codex is optional until a profile runs it; then its binary, kebbie's plugin and nothing in the user's config that turns hooks off are what a Codex task needs to report.
 pub fn codex(found: &crate::agent::codex::Availability, config: Option<&toml::Table>, needed: bool, home: &Path) -> Vec<Check> {
     use crate::agent::codex::Installed;
     let missing = |name: &str, fact: String, fix: Vec<String>| if needed { fail(name, fact, fix) } else { warn(name, fact, fix) };
@@ -546,18 +560,18 @@ pub fn codex(found: &crate::agent::codex::Availability, config: Option<&toml::Ta
     let want = version(MIN_CODEX).unwrap_or_default();
     let mut checks = vec![match found.version.as_deref().and_then(version) {
         Some(have) if at_least(&have, &want) => ok("codex", format!("{} at {}", shown(&have), binary.display())),
-        Some(have) => missing("codex", format!("{} is older than {MIN_CODEX}, whose plugin hooks kelpie's Codex tasks need", shown(&have)), one("codex update")),
+        Some(have) => missing("codex", format!("{} is older than {MIN_CODEX}, whose plugin hooks kebbie's Codex tasks need", shown(&have)), one("codex update")),
         None => missing("codex", format!("cannot read the version from {} --version; need {MIN_CODEX}", binary.display()), one("codex update")),
     }];
     let root = crate::agent::codex::plugin_root(home);
     checks.push(match &found.plugin {
-        Installed::Current => ok("codex plugin", format!("kelpie's plugin at {}", root.display())),
-        Installed::Missing => missing("codex plugin", "kelpie's plugin is not installed, so a Codex task neither reports nor gets its role".to_string(), one("kelpie setup codex")),
-        Installed::Stale(files) => missing("codex plugin", format!("kelpie's plugin is out of date ({})", files.join(", ")), one("kelpie setup codex")),
+        Installed::Current => ok("codex plugin", format!("kebbie's plugin at {}", root.display())),
+        Installed::Missing => missing("codex plugin", "kebbie's plugin is not installed, so a Codex task neither reports nor gets its role".to_string(), one("kebbie setup codex")),
+        Installed::Stale(files) => missing("codex plugin", format!("kebbie's plugin is out of date ({})", files.join(", ")), one("kebbie setup codex")),
     });
     let blocked = crate::agent::codex::hooks_blocked(config);
     checks.push(if blocked.is_empty() {
-        ok("codex hooks", "kelpie enables its plugin and trusts its three hooks by hash in each Codex session it starts")
+        ok("codex hooks", "kebbie enables its plugin and trusts its three hooks by hash in each Codex session it starts")
     } else {
         missing("codex hooks", format!("{}: {}", home.join("config.toml").display(), blocked.join("; ")), one("turn them back on in Codex's /hooks, or drop [features] hooks = false"))
     });
@@ -584,7 +598,8 @@ pub fn checks(env: &Env) -> Vec<Check> {
         }
         checks.push(self::tool(&tool, found.as_deref(), output.as_deref()));
     }
-    let list = herdr.and_then(|herdr| run(&herdr.to_string_lossy(), &["plugin", "list", "--json", "--plugin", "kelpie"], None).ok());
+    let all_plugins = herdr.as_ref().and_then(|herdr| crate::old_name::herdr_list(&herdr.to_string_lossy()));
+    let list = herdr.and_then(|herdr| run(&herdr.to_string_lossy(), &["plugin", "list", "--json", "--plugin", "kebbie"], None).ok());
     let (check, plugin) = herdr_plugin(list.as_deref());
     checks.push(check);
     if let Some(plugin) = &plugin {
@@ -599,28 +614,31 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let claude_settings = read_json(&env.claude_dir.join("settings.json")).unwrap_or_default();
     let checkout = plugin.as_ref().and_then(|plugin| read_json(&plugin.root.join(".claude-plugin/plugin.json"))).and_then(|manifest| manifest["version"].as_str().map(str::to_string));
     checks.push(claude_plugin(installed.as_ref(), &claude_settings, checkout.as_deref()));
-    let kelpie_id = installed.as_ref().and_then(|installed| installed["plugins"].as_object()?.keys().find(|id| id.starts_with("kelpie@")).cloned());
-    if let Some(id) = kelpie_id {
+    let kebbie_id = installed.as_ref().and_then(|installed| installed["plugins"].as_object()?.keys().find(|id| id.starts_with("kebbie@")).cloned());
+    if let Some(id) = kebbie_id {
         checks.push(plugin_source(&crate::update::marketplace(&env.claude_dir, &id), channel));
     }
     checks.push(status_line(&claude_settings));
+    let old = crate::old_name::Places { home: env.home.clone(), data_home: env.data_home.clone(), claude_dir: env.claude_dir.clone(), claude: "claude".to_string(), herdr: "herdr".to_string(), herdr_config: crate::setup::herdr_config_path(&env.home), codex_home: Some(env.codex_dir.clone()) };
+    let vars: Vec<(String, String)> = std::env::vars_os().filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?))).collect();
+    checks.extend(old_name(&crate::old_name::leftovers(&old, all_plugins.as_deref()), &crate::old_name::adopted(&vars, |_| true).named, claude_settings["statusLine"]["command"].as_str().unwrap_or_default()));
     checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
-    checks.push(kelpie_on_path(&env.home, &env.path));
+    checks.push(kebbie_on_path(&env.home, &env.path));
     let needed = crate::profiles::list_in(&env.profiles_dir).0.iter().any(|profile| profile.agent == crate::agent::Agent::Codex);
-    let kelpie = crate::peers::kelpie_command().unwrap_or_default();
+    let kebbie = crate::peers::kebbie_command().unwrap_or_default();
     let codex_config = std::fs::read_to_string(env.codex_dir.join("config.toml")).ok().and_then(|text| text.parse::<toml::Table>().ok());
-    checks.extend(codex(&crate::agent::codex::availability(&env.path, Some(&env.codex_dir), &kelpie), codex_config.as_ref(), needed, &env.codex_dir));
+    checks.extend(codex(&crate::agent::codex::availability(&env.path, Some(&env.codex_dir), &kebbie), codex_config.as_ref(), needed, &env.codex_dir));
     let places = crate::update_check::Places::new(plugin.as_ref().map(|plugin| plugin.root.clone()), env.claude_dir.clone(), channel);
-    checks.push(updates(&env.kelpie_state, channel, &crate::update_check::installed(&places)));
+    checks.push(updates(&env.kebbie_state, channel, &crate::update_check::installed(&places)));
     let keeper_on = config::check_machine(&env.config).ok().and_then(|(machine, _)| machine.keeper).unwrap_or(true);
-    checks.push(keeper(keeper_on, crate::keeper::holder(&env.kelpie_state).as_ref(), crate::messages::now()));
-    checks.push(crate::hub::doctor(&env.kelpie_state, crate::hub::configured_name(&env.config).as_deref(), crate::messages::now(), crate::hub::reach));
+    checks.push(keeper(keeper_on, crate::keeper::holder(&env.kebbie_state).as_ref(), crate::messages::now()));
+    checks.push(crate::hub::doctor(&env.kebbie_state, crate::hub::configured_name(&env.config).as_deref(), crate::messages::now(), crate::hub::reach));
     if let Ok((machine, _)) = config::check_machine(&env.config) {
-        checks.push(crate::signals::doctor(&env.kelpie_state, &machine.report, crate::messages::now()));
-        checks.extend(crate::hub::inbox::doctor(&env.kelpie_state, &machine.report, crate::messages::now()));
+        checks.push(crate::signals::doctor(&env.kebbie_state, &machine.report, crate::messages::now()));
+        checks.extend(crate::hub::inbox::doctor(&env.kebbie_state, &machine.report, crate::messages::now()));
     }
     let data_home = env.data_home.clone().unwrap_or_else(|| env.home.join(".local/share"));
-    for (dir, about) in state_dirs(&env.kelpie_state, env.own_state, &env.state_home, &data_home) {
+    for (dir, about) in state_dirs(&env.kebbie_state, env.own_state, &env.state_home, &data_home) {
         checks.push(writable(&dir, about, env.uid));
     }
     let (check, machine) = config_file(&env.config);
@@ -645,7 +663,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let command = crate::vault_cli::command(override_bin.clone(), settings.vault_command.value.clone(), &plugin).filter(|_| reachable);
     let reached = command.is_some();
     checks.push(vault(&plugin, override_bin.as_deref(), command.map(|command| crate::vault_cli::Cli::new(command).probe(true))));
-    if reached || crate::hub::identity::load(&env.kelpie_state).ok().flatten().is_some() {
+    if reached || crate::hub::identity::load(&env.kebbie_state).ok().flatten().is_some() {
         checks.push(machine_name(&settings.machine_name, &env.config));
     }
     checks.extend(backlog(&settings.sources.value, crate::vault::index_path, &env.config.with_file_name("backlog.md")));
@@ -680,7 +698,7 @@ pub fn summary(checks: &[Check]) -> String {
     let count = |level: Level| checks.iter().filter(|check| check.level == level).count();
     let rendered = render(&open);
     let lines: Vec<&str> = rendered.lines().collect();
-    let total = format!("kelpie doctor: {} failed, {} warnings, {} ok", count(Level::Fail), count(Level::Warn), count(Level::Ok));
+    let total = format!("kebbie doctor: {} failed, {} warnings, {} ok", count(Level::Fail), count(Level::Warn), count(Level::Ok));
     lines[..lines.len().saturating_sub(2)].iter().map(|line| line.to_string()).chain([total]).collect::<Vec<_>>().join("\n")
 }
 
@@ -695,7 +713,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kelpie-doctor-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-doctor-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -747,20 +765,20 @@ mod tests {
 
     #[test]
     fn the_herdr_plugin_is_read_from_plugin_list() {
-        let list = r#"{"result":{"plugins":[{"plugin_id":"kelpie","enabled":true,"plugin_root":"/src/kelpie","version":"0.11.0"}],"type":"plugin_list"}}"#;
+        let list = r#"{"result":{"plugins":[{"plugin_id":"kebbie","enabled":true,"plugin_root":"/src/kebbie","version":"0.11.0"}],"type":"plugin_list"}}"#;
         let (check, plugin) = herdr_plugin(Some(list));
-        assert_eq!((check.level, check.fact.as_str()), (Level::Ok, "kelpie 0.11.0 enabled, at /src/kelpie"));
-        assert_eq!(plugin.unwrap().root, PathBuf::from("/src/kelpie"));
+        assert_eq!((check.level, check.fact.as_str()), (Level::Ok, "kebbie 0.11.0 enabled, at /src/kebbie"));
+        assert_eq!(plugin.unwrap().root, PathBuf::from("/src/kebbie"));
         let (check, _) = herdr_plugin(Some(&list.replace("true", "false")));
-        assert_eq!((check.level, check.fix[0].as_str()), (Level::Fail, "herdr plugin enable kelpie"));
+        assert_eq!((check.level, check.fix[0].as_str()), (Level::Fail, "herdr plugin enable kebbie"));
         let (check, plugin) = herdr_plugin(Some(r#"{"result":{"plugins":[]}}"#));
         assert!(check.level == Level::Fail && plugin.is_none() && check.fix[0].contains("herdr plugin install"));
         let dir = scratch("plugin");
         let missing = plugin_binary(&dir);
         assert!(missing.level == Level::Fail && missing.fix[0].starts_with("sh scripts/build.sh in "), "{missing:?}");
         std::fs::create_dir_all(dir.join("target/release")).unwrap();
-        executable(&dir.join("target/release/kelpie"));
-        assert_eq!(plugin_binary(&dir).fact, format!("{}, built from source", dir.join("target/release/kelpie").display()));
+        executable(&dir.join("target/release/kebbie"));
+        assert_eq!(plugin_binary(&dir).fact, format!("{}, built from source", dir.join("target/release/kebbie").display()));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -770,8 +788,8 @@ mod tests {
         use crate::update::{Origin, binary_origin};
         let dir = scratch("origin");
         std::fs::create_dir_all(dir.join("target/release")).unwrap();
-        executable(&dir.join("target/release/kelpie"));
-        std::fs::write(dir.join("target/release/kelpie.origin"), "downloaded v0.24.0 aarch64-apple-darwin\n").unwrap();
+        executable(&dir.join("target/release/kebbie"));
+        std::fs::write(dir.join("target/release/kebbie.origin"), "downloaded v0.24.0 aarch64-apple-darwin\n").unwrap();
         let downloaded = Origin::Downloaded { tag: "v0.24.0".to_string(), target: "aarch64-apple-darwin".to_string() };
         assert_eq!(binary_origin(&dir).as_ref(), Some(&downloaded));
         assert!(plugin_binary(&dir).fact.ends_with(", downloaded v0.24.0 for aarch64-apple-darwin"));
@@ -780,24 +798,24 @@ mod tests {
         assert_eq!(cargo(cargo_tool, None, Channel::Release, Some(&downloaded)).level, Level::Ok, "a release machine with a downloaded binary needs no Rust");
         assert_eq!(cargo(cargo_tool, None, Channel::Main, Some(&downloaded)).level, Level::Warn);
         assert_eq!(cargo(cargo_tool, None, Channel::Release, Some(&Origin::Built)).level, Level::Warn);
-        assert_eq!(cargo(cargo_tool, Some(&dir.join("target/release/kelpie")), Channel::Main, None).level, Level::Ok);
+        assert_eq!(cargo(cargo_tool, Some(&dir.join("target/release/kebbie")), Channel::Main, None).level, Level::Ok);
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
-        std::fs::File::options().write(true).open(dir.join("target/release/kelpie")).unwrap().set_modified(later).unwrap();
+        std::fs::File::options().write(true).open(dir.join("target/release/kebbie")).unwrap().set_modified(later).unwrap();
         assert_eq!(binary_origin(&dir), Some(Origin::Built), "a binary cargo replaced after the download is built");
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn the_claude_plugin_is_read_from_installed_plugins() {
-        let installed: Value = serde_json::from_str(r#"{"version":2,"plugins":{"kelpie@kelpie":[{"version":"0.11.0"}]}}"#).unwrap();
-        assert_eq!(claude_plugin(Some(&installed), &Value::Null, None).fact, "kelpie@kelpie 0.11.0");
-        let disabled: Value = serde_json::from_str(r#"{"enabledPlugins":{"kelpie@kelpie":false}}"#).unwrap();
-        assert_eq!(claude_plugin(Some(&installed), &disabled, None).fix, ["claude plugin enable kelpie@kelpie"]);
+        let installed: Value = serde_json::from_str(r#"{"version":2,"plugins":{"kebbie@kebbie":[{"version":"0.11.0"}]}}"#).unwrap();
+        assert_eq!(claude_plugin(Some(&installed), &Value::Null, None).fact, "kebbie@kebbie 0.11.0");
+        let disabled: Value = serde_json::from_str(r#"{"enabledPlugins":{"kebbie@kebbie":false}}"#).unwrap();
+        assert_eq!(claude_plugin(Some(&installed), &disabled, None).fix, ["claude plugin enable kebbie@kebbie"]);
         let other: Value = serde_json::from_str(r#"{"plugins":{"vault@x":[{}]}}"#).unwrap();
         assert_eq!(claude_plugin(Some(&other), &Value::Null, None).level, Level::Warn);
         assert_eq!(claude_plugin(None, &Value::Null, None).level, Level::Warn);
         let behind = claude_plugin(Some(&installed), &Value::Null, Some("0.12.0"));
-        assert_eq!((behind.level, behind.fix), (Level::Warn, vec!["kelpie update".to_string()]), "a cached copy older than the checkout is a warning");
+        assert_eq!((behind.level, behind.fix), (Level::Warn, vec!["kebbie update".to_string()]), "a cached copy older than the checkout is a warning");
         assert_eq!(claude_plugin(Some(&installed), &Value::Null, Some("0.11.0")).level, Level::Ok);
     }
 
@@ -818,11 +836,11 @@ mod tests {
         assert!(missing.level == Level::Fail && missing.fix[0].starts_with("start herdr once"));
         let root = home.join("plugin");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(home.join(".local/share/kelpie")).unwrap();
-        std::os::unix::fs::symlink(home.join("gone"), home.join(".local/share/kelpie/current")).unwrap();
+        std::fs::create_dir_all(home.join(".local/share/kebbie")).unwrap();
+        std::os::unix::fs::symlink(home.join("gone"), home.join(".local/share/kebbie/current")).unwrap();
         assert!(current_link(&home, None, None).fact.ends_with("points nowhere"));
-        std::fs::remove_file(home.join(".local/share/kelpie/current")).unwrap();
-        std::os::unix::fs::symlink(&root, home.join(".local/share/kelpie/current")).unwrap();
+        std::fs::remove_file(home.join(".local/share/kebbie/current")).unwrap();
+        std::os::unix::fs::symlink(&root, home.join(".local/share/kebbie/current")).unwrap();
         assert_eq!(current_link(&home, None, Some(&root)).level, Level::Ok);
         assert_eq!(current_link(&home, None, Some(&home)).level, Level::Warn);
         assert_eq!(current_link(&home, Some(&home.join("data")), Some(&root)).level, Level::Warn);
@@ -830,25 +848,25 @@ mod tests {
     }
 
     #[test]
-    fn kelpie_on_path_must_be_the_current_links_binary() {
+    fn kebbie_on_path_must_be_the_current_links_binary() {
         let home = scratch("on-path");
         let bin = home.join(".local/bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let missing = kelpie_on_path(&home, std::slice::from_ref(&bin));
-        assert!(missing.level == Level::Warn && missing.fix[0] == LINK_KELPIE && missing.fix[1].contains("~/.local/bin is on PATH"));
+        let missing = kebbie_on_path(&home, std::slice::from_ref(&bin));
+        assert!(missing.level == Level::Warn && missing.fix[0] == LINK_KEBBIE && missing.fix[1].contains("~/.local/bin is on PATH"));
         let release = home.join("plugin/target/release");
         std::fs::create_dir_all(&release).unwrap();
-        executable(&release.join("kelpie"));
-        std::fs::create_dir_all(home.join(".local/share/kelpie")).unwrap();
-        std::os::unix::fs::symlink(home.join("plugin"), home.join(".local/share/kelpie/current")).unwrap();
-        std::os::unix::fs::symlink(home.join(".local/share/kelpie/current/target/release/kelpie"), bin.join("kelpie")).unwrap();
-        assert_eq!(kelpie_on_path(&home, std::slice::from_ref(&bin)).level, Level::Ok);
+        executable(&release.join("kebbie"));
+        std::fs::create_dir_all(home.join(".local/share/kebbie")).unwrap();
+        std::os::unix::fs::symlink(home.join("plugin"), home.join(".local/share/kebbie/current")).unwrap();
+        std::os::unix::fs::symlink(home.join(".local/share/kebbie/current/target/release/kebbie"), bin.join("kebbie")).unwrap();
+        assert_eq!(kebbie_on_path(&home, std::slice::from_ref(&bin)).level, Level::Ok);
         let stale = home.join("cargo/bin");
         std::fs::create_dir_all(&stale).unwrap();
-        executable(&stale.join("kelpie"));
-        let shadowed = kelpie_on_path(&home, &[stale.clone(), bin.clone()]);
+        executable(&stale.join("kebbie"));
+        let shadowed = kebbie_on_path(&home, &[stale.clone(), bin.clone()]);
         assert_eq!(shadowed.level, Level::Warn);
-        assert!(shadowed.fact.contains(&stale.join("kelpie").canonicalize().unwrap().display().to_string()));
+        assert!(shadowed.fact.contains(&stale.join("kebbie").canonicalize().unwrap().display().to_string()));
         let _ = std::fs::remove_dir_all(home);
     }
 
@@ -856,31 +874,31 @@ mod tests {
     fn state_dirs_must_be_writable_or_creatable() {
         let base = scratch("state");
         let me = uid(&base);
-        let created = writable(&base.join("kelpie/roles"), "roles", me);
+        let created = writable(&base.join("kebbie/roles"), "roles", me);
         assert!(created.level == Level::Ok && created.fact.contains("created on first use"), "{created:?}");
         let locked = base.join("locked");
         std::fs::create_dir_all(&locked).unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let check = writable(&locked.join("kelpie"), "x", me);
+        let check = writable(&locked.join("kebbie"), "x", me);
         assert_eq!((check.level, check.fix[0].clone()), (Level::Fail, format!("chmod u+w {}", locked.display())));
-        let foreign = writable(&base.join("kelpie"), "x", me.wrapping_add(1));
+        let foreign = writable(&base.join("kebbie"), "x", me.wrapping_add(1));
         assert!(foreign.level == Level::Fail && foreign.fix[0].starts_with("sudo chown -R \"$(id -un)\" "), "{foreign:?}");
         std::fs::write(base.join("file"), "").unwrap();
-        assert!(writable(&base.join("file/kelpie"), "x", me).fact.contains("is not a directory"));
+        assert!(writable(&base.join("file/kebbie"), "x", me).fact.contains("is not a directory"));
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         let _ = std::fs::remove_dir_all(base);
-        let dirs = state_dirs(Path::new("/s/kelpie"), false, Path::new("/s"), Path::new("/d"));
-        assert!(dirs.iter().any(|(dir, _)| dir == Path::new("/s/herdr-sync")) && dirs.iter().any(|(dir, _)| dir == Path::new("/d/kelpie")));
+        let dirs = state_dirs(Path::new("/s/kebbie"), false, Path::new("/s"), Path::new("/d"));
+        assert!(dirs.iter().any(|(dir, _)| dir == Path::new("/s/herdr-sync")) && dirs.iter().any(|(dir, _)| dir == Path::new("/d/kebbie")));
         assert!(dirs.iter().all(|(dir, _)| dir != Path::new("/s/herdr-sync-fetch")));
     }
 
     #[test]
-    fn an_own_state_dir_holds_every_kelpie_dir_and_says_where_it_came_from() {
+    fn an_own_state_dir_holds_every_kebbie_dir_and_says_where_it_came_from() {
         let dirs = state_dirs(Path::new("/probe/state"), true, Path::new("/s"), Path::new("/d"));
-        let kelpie: Vec<&PathBuf> = dirs.iter().map(|(dir, _)| dir).filter(|dir| !dir.starts_with("/s") && !dir.starts_with("/d")).collect();
-        assert_eq!(kelpie, [Path::new("/probe/state"), Path::new("/probe/state/roles"), Path::new("/probe/state/turns"), Path::new("/probe/state/reviews")]);
-        assert!(!dirs.iter().any(|(dir, _)| dir.starts_with("/s/kelpie")));
-        assert!(dirs[0].1.ends_with("set by KELPIE_STATE_DIR"));
+        let kebbie: Vec<&PathBuf> = dirs.iter().map(|(dir, _)| dir).filter(|dir| !dir.starts_with("/s") && !dir.starts_with("/d")).collect();
+        assert_eq!(kebbie, [Path::new("/probe/state"), Path::new("/probe/state/roles"), Path::new("/probe/state/turns"), Path::new("/probe/state/reviews")]);
+        assert!(!dirs.iter().any(|(dir, _)| dir.starts_with("/s/kebbie")));
+        assert!(dirs[0].1.ends_with("set by KEBBIE_STATE_DIR"));
     }
 
     #[test]
@@ -894,7 +912,7 @@ mod tests {
         std::fs::write(&file, "[update]\nchannel = \"main\"\n\n[board]\nlanes = 2\n\n[signals]\nsample = 0.5\n").unwrap();
         let (check, config) = config_file(&file);
         assert!(check.level == Level::Warn && check.fact.contains("signals: unknown key") && check.fact.contains("board.lanes: unknown key"), "{check:?}");
-        assert_eq!(check.fix, ["a newer kelpie may know it; kelpie update"]);
+        assert_eq!(check.fix, ["a newer kebbie may know it; kebbie update"]);
         assert_eq!(config.and_then(|config| config.channel), Some(crate::config::Channel::Main), "the rest of the file still applies");
         std::fs::write(&file, "[restart]\nidle_minutes = \"soon\"\n").unwrap();
         assert_eq!(config_file(&file).0.level, Level::Fail, "a known key with the wrong type still fails");
@@ -904,7 +922,7 @@ mod tests {
         assert_eq!(repo_file(&own).0.level, Level::Ok);
         std::fs::write(&own, "[worktree]\ndev_server = \"bin/dev\"\nport = 3000\n").unwrap();
         let (check, worktree) = repo_file(&own);
-        assert!(check.level == Level::Warn && check.fact.contains("worktree.port: unknown key") && check.fix == ["a newer kelpie may know it; kelpie update"], "{check:?}");
+        assert!(check.level == Level::Warn && check.fact.contains("worktree.port: unknown key") && check.fix == ["a newer kebbie may know it; kebbie update"], "{check:?}");
         assert_eq!(worktree.and_then(|worktree| worktree.dev_server).as_deref(), Some("bin/dev"));
         std::fs::write(&own, "[ci]\nwatch = \"yes\"\n").unwrap();
         assert_eq!(repo_file(&own).0.level, Level::Fail, "a known key with the wrong type still fails");
@@ -938,12 +956,12 @@ mod tests {
     }
 
     #[test]
-    fn the_status_line_check_advises_kelpies_command_and_never_fails() {
-        let set = status_line(&serde_json::json!({ "statusLine": { "type": "command", "command": "~/.local/share/kelpie/current/target/release/kelpie statusline" } }));
+    fn the_status_line_check_advises_kebbies_command_and_never_fails() {
+        let set = status_line(&serde_json::json!({ "statusLine": { "type": "command", "command": "~/.local/share/kebbie/current/target/release/kebbie statusline" } }));
         assert_eq!(set.level, Level::Ok);
         let unset = status_line(&serde_json::json!({}));
         assert_eq!(unset.level, Level::Warn);
-        assert!(unset.fix[0].contains("kelpie statusline") && unset.fix[0].contains("~/.claude/settings.json"), "{:?}", unset.fix);
+        assert!(unset.fix[0].contains("kebbie statusline") && unset.fix[0].contains("~/.claude/settings.json"), "{:?}", unset.fix);
         let other = status_line(&serde_json::json!({ "statusLine": { "command": "~/bin/line" } }));
         assert!(other.level == Level::Warn && other.fact.contains("~/bin/line"), "{}", other.fact);
     }
@@ -962,15 +980,15 @@ mod tests {
     #[test]
     fn the_setup_skills_plugin_must_be_installed_and_enabled() {
         let skill = |value: &str, layer: config::Layer| Setting { value: value.to_string(), layer };
-        let installed: Value = serde_json::from_str(r#"{"version":2,"plugins":{"kelpie@kelpie":[{"version":"0.11.0"}],"my-tools@private":[{"version":"1.0.0"}]}}"#).unwrap();
-        let default = setup_skill(&skill("kelpie:set-up-worktree", config::Layer::Default), Some(&installed), &Value::Null);
-        assert_eq!((default.level, default.fact.as_str()), (Level::Ok, "kelpie:set-up-worktree (default): kelpie@kelpie"));
+        let installed: Value = serde_json::from_str(r#"{"version":2,"plugins":{"kebbie@kebbie":[{"version":"0.11.0"}],"my-tools@private":[{"version":"1.0.0"}]}}"#).unwrap();
+        let default = setup_skill(&skill("kebbie:set-up-worktree", config::Layer::Default), Some(&installed), &Value::Null);
+        assert_eq!((default.level, default.fact.as_str()), (Level::Ok, "kebbie:set-up-worktree (default): kebbie@kebbie"));
         assert_eq!(setup_skill(&skill("my-tools:set-up-worktree", config::Layer::Repo), Some(&installed), &Value::Null).level, Level::Ok);
         let missing = setup_skill(&skill("work-tools:set-up-worktree", config::Layer::Machine), Some(&installed), &Value::Null);
         assert_eq!(missing.level, Level::Warn);
         assert!(missing.fact.starts_with("work-tools:set-up-worktree (machine config): the plugin work-tools is not installed"), "{}", missing.fact);
         assert_eq!(missing.fix[0], "claude plugin install work-tools@<marketplace>");
-        assert_eq!(setup_skill(&skill("kelpie:set-up-worktree", config::Layer::Default), None, &Value::Null).level, Level::Warn);
+        assert_eq!(setup_skill(&skill("kebbie:set-up-worktree", config::Layer::Default), None, &Value::Null).level, Level::Warn);
         let disabled: Value = serde_json::from_str(r#"{"enabledPlugins":{"my-tools@private":false}}"#).unwrap();
         let off = setup_skill(&skill("my-tools:set-up-worktree", config::Layer::Repo), Some(&installed), &disabled);
         assert_eq!((off.level, off.fix[0].as_str()), (Level::Warn, "claude plugin enable my-tools@private"));
@@ -979,14 +997,14 @@ mod tests {
 
     #[test]
     fn the_setup_skill_must_be_in_the_installed_plugin_version() {
-        let dir = std::env::temp_dir().join(format!("kelpie-doctor-skill-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-doctor-skill-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("skills/set-up-worktree")).unwrap();
         std::fs::write(dir.join("skills/set-up-worktree/SKILL.md"), "").unwrap();
-        let installed = serde_json::json!({"plugins": {"kelpie@kelpie": [{"version": "0.12.0", "installPath": dir.to_str().unwrap()}]}});
+        let installed = serde_json::json!({"plugins": {"kebbie@kebbie": [{"version": "0.12.0", "installPath": dir.to_str().unwrap()}]}});
         let skill = |value: &str| Setting { value: value.to_string(), layer: config::Layer::Default };
-        assert_eq!(setup_skill(&skill("kelpie:set-up-worktree"), Some(&installed), &Value::Null).level, Level::Ok);
-        let stale = setup_skill(&skill("kelpie:make-worktree-safe"), Some(&installed), &Value::Null);
-        assert_eq!((stale.level, stale.fact.as_str(), stale.fix[0].as_str()), (Level::Warn, "kelpie:make-worktree-safe (default): kelpie@kelpie 0.12.0 has no skill make-worktree-safe", "claude plugin update kelpie@kelpie"));
+        assert_eq!(setup_skill(&skill("kebbie:set-up-worktree"), Some(&installed), &Value::Null).level, Level::Ok);
+        let stale = setup_skill(&skill("kebbie:make-worktree-safe"), Some(&installed), &Value::Null);
+        assert_eq!((stale.level, stale.fact.as_str(), stale.fix[0].as_str()), (Level::Warn, "kebbie:make-worktree-safe (default): kebbie@kebbie 0.12.0 has no skill make-worktree-safe", "claude plugin update kebbie@kebbie"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1013,7 +1031,7 @@ mod tests {
 
     #[test]
     fn backlog_sources_are_checked_per_source() {
-        let nowhere = Path::new("/nonexistent/kelpie/backlog.md");
+        let nowhere = Path::new("/nonexistent/kebbie/backlog.md");
         let none = backlog(&[], || unreachable!(), nowhere);
         assert_eq!((none.len(), none[0].level), (1, Level::Ok));
         let missing = backlog(&[Source::Vault, Source::Linear], || Err("No vault index at /x".to_string()), nowhere);
@@ -1022,7 +1040,7 @@ mod tests {
         assert_eq!(backlog(&[Source::Vault], || Ok(PathBuf::from("/i.sqlite")), nowhere)[0].level, Level::Ok);
         let local = backlog(&[Source::Local], || unreachable!(), nowhere);
         assert!(local[0].level == Level::Ok && local[0].fact.contains("is created by the first item"), "{:?}", local[0]);
-        let dir = std::env::temp_dir().join(format!("kelpie-doctor-local-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-doctor-local-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("backlog.md"), "# Mine\n- [high] One (app)\n- Two\n").unwrap();
         assert!(backlog(&[Source::Local], || unreachable!(), &dir.join("backlog.md"))[0].fact.ends_with("backlog.md: 2 items"));
@@ -1031,7 +1049,7 @@ mod tests {
 
     #[test]
     fn an_installed_vault_plugin_or_linear_mcp_that_is_not_a_source_is_suggested_with_its_config_line() {
-        let installed = json!({ "plugins": { "vault@gronare": [{ "installPath": "/plugins/vault/1.0" }], "kelpie@kelpie": [{ "installPath": "/plugins/kelpie" }] } });
+        let installed = json!({ "plugins": { "vault@gronare": [{ "installPath": "/plugins/vault/1.0" }], "kebbie@kebbie": [{ "installPath": "/plugins/kebbie" }] } });
         let files = |file: &Path| (file == Path::new("/plugins/vault/1.0/.mcp.json")).then(|| r#"{"mcpServers":{"vault":{"command":"uvx","args":["notes-vault-mcp"]}}}"#.to_string());
         assert_eq!(vault_plugin(Some(&installed), files).as_deref(), Some("vault@gronare"));
         assert_eq!(vault_plugin(Some(&installed), |_| None), None, "a vault plugin of some other server is not this one");
@@ -1041,24 +1059,24 @@ mod tests {
         assert_eq!(linear_mcp(None, Some(&json!({ "mcpServers": { "Linear": {} } }))).as_deref(), Some("the MCP server Linear"));
         assert_eq!(linear_mcp(None, Some(&json!({ "projects": { "/src/app": { "mcpServers": { "linear-server": {} } } } }))).as_deref(), Some("the MCP server linear-server"));
         assert_eq!(linear_mcp(Some(&installed), Some(&json!({ "mcpServers": { "github": {} } }))), None);
-        let config = Path::new("/home/u/.config/kelpie/config.toml");
+        let config = Path::new("/home/u/.config/kebbie/config.toml");
         let found = unused_sources(&[Source::Local], Some("vault@gronare".to_string()), Some("the MCP server Linear".to_string()), config);
         assert_eq!(found.len(), 2);
         assert_eq!((found[0].name.as_str(), found[0].level), ("backlog vault", Level::Ok));
-        assert_eq!(found[0].fix, ["to use it, set sources = [\"local\", \"vault\"] under [board.backlog] in /home/u/.config/kelpie/config.toml"]);
-        assert_eq!(found[1].fix, ["to use it, set sources = [\"local\", \"linear\"] under [board.backlog] in /home/u/.config/kelpie/config.toml"]);
+        assert_eq!(found[0].fix, ["to use it, set sources = [\"local\", \"vault\"] under [board.backlog] in /home/u/.config/kebbie/config.toml"]);
+        assert_eq!(found[1].fix, ["to use it, set sources = [\"local\", \"linear\"] under [board.backlog] in /home/u/.config/kebbie/config.toml"]);
         assert!(unused_sources(&[Source::Vault, Source::Linear], Some("vault@gronare".to_string()), Some("x".to_string()), config).is_empty(), "an enabled source is not suggested");
         assert!(unused_sources(&[Source::Local], None, None, config).is_empty());
     }
 
     #[test]
     fn an_unset_machine_name_is_a_warning_with_where_to_set_it() {
-        let unset = machine_name(&config::Setting { value: "mbp-7".to_string(), layer: config::Layer::Default }, Path::new("/home/u/.config/kelpie/config.toml"));
+        let unset = machine_name(&config::Setting { value: "mbp-7".to_string(), layer: config::Layer::Default }, Path::new("/home/u/.config/kebbie/config.toml"));
         assert_eq!(unset.level, Level::Warn);
-        assert!(unset.fact.contains("machine.name is unset") && unset.fact.contains("\"mbp-7\"") && unset.fix[0].contains("[machine] name = ") && unset.fix[0].contains("/home/u/.config/kelpie/config.toml"), "{unset:?}");
+        assert!(unset.fact.contains("machine.name is unset") && unset.fact.contains("\"mbp-7\"") && unset.fix[0].contains("[machine] name = ") && unset.fix[0].contains("/home/u/.config/kebbie/config.toml"), "{unset:?}");
         let set = machine_name(&config::Setting { value: "devbox".to_string(), layer: config::Layer::Machine }, Path::new("/c.toml"));
         assert_eq!((set.level, set.fact.as_str()), (Level::Ok, "goes by \"devbox\" on your phone and in vault claims"));
-        assert!(unset.fix[1].contains("/kelpie:configure"), "{unset:?}");
+        assert!(unset.fix[1].contains("/kebbie:configure"), "{unset:?}");
     }
 
     #[test]
@@ -1066,7 +1084,7 @@ mod tests {
         use crate::vault_cli::{Plugin, Probe};
         let missing = vault(&Plugin::Missing, None, None);
         assert_eq!(missing.level, Level::Ok, "a user without the vault plugin sees no error");
-        assert!(missing.fact.contains("(optional)") && missing.fix == ["kelpie setup vault"], "{missing:?}");
+        assert!(missing.fact.contains("(optional)") && missing.fix == ["kebbie setup vault"], "{missing:?}");
         let enabled = Plugin::Enabled { id: "vault@gronare".to_string(), version: "0.2.15".to_string(), root: "/x".into() };
         let probe = |configured: bool, tasks: bool, writable: Option<bool>| Some(Ok(Probe { configured, writable, tasks, claims: tasks, version: "0.5.1".to_string(), backend: "s3".to_string() }));
         let old = vault(&enabled, None, probe(true, false, Some(true)));
@@ -1078,8 +1096,8 @@ mod tests {
         assert_eq!(vault(&Plugin::Disabled { id: "vault@gronare".to_string(), version: "0.2.15".to_string() }, None, None).level, Level::Ok);
         assert_eq!(vault(&enabled, None, Some(Err("uvx: not found".to_string()))).level, Level::Warn);
         let stood_in = vault(&Plugin::Missing, Some("/tmp/fake-vault"), probe(true, true, Some(true)));
-        assert_eq!(stood_in.level, Level::Ok, "KELPIE_VAULT_BIN stands in for a missing plugin, as detect() lets it: {stood_in:?}");
-        assert!(stood_in.fact.contains("KELPIE_VAULT_BIN=/tmp/fake-vault") && stood_in.fact.contains("each task gets a note"), "{stood_in:?}");
+        assert_eq!(stood_in.level, Level::Ok, "KEBBIE_VAULT_BIN stands in for a missing plugin, as detect() lets it: {stood_in:?}");
+        assert!(stood_in.fact.contains("KEBBIE_VAULT_BIN=/tmp/fake-vault") && stood_in.fact.contains("each task gets a note"), "{stood_in:?}");
         assert!(vault(&Plugin::Missing, Some("/tmp/fake-vault"), Some(Err("no such file".to_string()))).fact.contains("the vault command failed"));
         let unclaimed = vault(&enabled, None, Some(Ok(Probe { configured: true, writable: Some(true), tasks: true, claims: false, version: "0.7.0".to_string(), backend: "s3".to_string() })));
         assert_eq!(unclaimed.level, Level::Warn, "a server without claims still keeps notes, and says once what it lacks");
@@ -1124,11 +1142,11 @@ mod tests {
     fn doctor_says_whether_the_keeper_runs() {
         let running = crate::keeper::Holder { pid: Some(4242), exe: None, started: Some(100) };
         let check = keeper(true, Some(&running), 100 + 3 * 3600);
-        assert_eq!((check.level, check.fact.as_str()), (Level::Ok, "running, pid 4242, up 3h; kelpie keeper --status shows its routines"));
+        assert_eq!((check.level, check.fact.as_str()), (Level::Ok, "running, pid 4242, up 3h; kebbie keeper --status shows its routines"));
         let check = keeper(true, None, 0);
-        assert_eq!((check.level, check.fix.as_slice()), (Level::Warn, ["kelpie keeper --start (herdr's startup and the board start it too)".to_string()].as_slice()));
+        assert_eq!((check.level, check.fix.as_slice()), (Level::Warn, ["kebbie keeper --start (herdr's startup and the board start it too)".to_string()].as_slice()));
         assert_eq!(keeper(false, None, 0).level, Level::Ok);
-        assert_eq!(keeper(false, Some(&running), 0).fix, ["kelpie keeper --stop"]);
+        assert_eq!(keeper(false, Some(&running), 0).fix, ["kebbie keeper --stop"]);
     }
 
     #[test]
@@ -1142,7 +1160,7 @@ mod tests {
 
     #[test]
     fn doctor_says_whether_notify_is_set_and_runs_nothing() {
-        let marker = std::env::temp_dir().join(format!("kelpie-doctor-notify-{}", std::process::id()));
+        let marker = std::env::temp_dir().join(format!("kebbie-doctor-notify-{}", std::process::id()));
         let command = format!("touch {}", marker.display());
         let set = notify(&Setting { value: Some(command.clone()), layer: config::Layer::Repo });
         assert_eq!(set.level, Level::Ok);
@@ -1157,13 +1175,13 @@ mod tests {
     fn the_doctor_runs_against_an_empty_environment_without_touching_the_users_home() {
         let dir = scratch("env");
         let env = Env {
-            path: vec![dir.join("bin")], home: dir.join("home"), state_home: dir.join("state"), kelpie_state: dir.join("state/kelpie"), own_state: true, data_home: None,
+            path: vec![dir.join("bin")], home: dir.join("home"), state_home: dir.join("state"), kebbie_state: dir.join("state/kebbie"), own_state: true, data_home: None,
             claude_dir: dir.join("claude"), codex_dir: dir.join("codex"), profiles_dir: dir.join("profiles"), config: dir.join("config.toml"), repos_dir: dir.join("repos"), repo_config: None, repo: None, uid: 0,
         };
         let checks = checks(&env);
         assert!(failed(&checks), "no tools on PATH is a failure");
         let names: Vec<&str> = checks.iter().map(|check| check.name.as_str()).collect();
-        for needed in ["git", "herdr", "claude", "jq", "herdr plugin", "claude plugin", "status line", "current link", "kelpie on PATH", "updates", "state dir", "config", "setup skill", "notify", "vault", "backlog local"] {
+        for needed in ["git", "herdr", "claude", "jq", "herdr plugin", "claude plugin", "status line", "current link", "kebbie on PATH", "updates", "state dir", "config", "setup skill", "notify", "vault", "backlog local"] {
             assert!(names.contains(&needed), "{needed} is not checked: {names:?}");
         }
         assert!(!dir.join("home").exists() && !dir.join("claude").exists() && !dir.join("codex").exists(), "doctor reads, it never creates");
@@ -1187,12 +1205,12 @@ mod tests {
         let lines = codex(&ready, Some(&"model = \"gpt-5.5\"\n".parse().unwrap()), true, home);
         assert_eq!(lines.iter().map(|check| (check.level, check.name.as_str())).collect::<Vec<_>>(), [(Level::Ok, "codex"), (Level::Ok, "codex plugin"), (Level::Ok, "codex hooks")]);
         assert_eq!(lines[0].fact, "0.163.0 at /u/.local/bin/codex");
-        assert!(lines[1].fact.contains("/u/.codex/plugins/cache/kelpie/kelpie/local") && lines[2].fact.contains("trusts its three hooks by hash"));
+        assert!(lines[1].fact.contains("/u/.codex/plugins/cache/kebbie/kebbie/local") && lines[2].fact.contains("trusts its three hooks by hash"));
         let old = Availability { version: Some("codex-cli 0.120.4".to_string()), plugin: Installed::Missing, ..ready };
         let off: toml::Table = "[features]\nhooks = false\n".parse().unwrap();
         let lines = codex(&old, Some(&off), true, home);
         assert!(lines.iter().all(|check| check.level == Level::Fail), "{lines:?}");
-        assert!(lines[0].fact.contains("older than 0.163.0") && lines[1].fix == ["kelpie setup codex"] && lines[2].fact.contains("[features] hooks = false"), "{lines:?}");
+        assert!(lines[0].fact.contains("older than 0.163.0") && lines[1].fix == ["kebbie setup codex"] && lines[2].fact.contains("[features] hooks = false"), "{lines:?}");
         assert_eq!(codex(&old, Some(&off), false, home)[2].level, Level::Warn, "a gap is a warning until a profile runs Codex");
     }
 
@@ -1217,7 +1235,7 @@ mod tests {
         assert_eq!(sandbox(&set(true, config::Layer::Default), &[]).level, Level::Ok);
         let lacking = sandbox(&set(true, config::Layer::Default), &["socat".to_string(), "the seccomp filter".to_string()]);
         assert_eq!(lacking.level, Level::Fail);
-        assert!(lacking.fact.contains("kelpie starts no task: socat, the seccomp filter missing"), "{}", lacking.fact);
+        assert!(lacking.fact.contains("kebbie starts no task: socat, the seccomp filter missing"), "{}", lacking.fact);
         assert!(lacking.fix.iter().any(|fix| fix.contains("npm install -g @anthropic-ai/sandbox-runtime")) && lacking.fix.last().unwrap().contains("task.sandbox = false"), "{:?}", lacking.fix);
         assert!(include_str!("doctor.rs").contains("checks.push(sandbox(&settings.sandbox, &crate::sandbox::missing_here()));"), "doctor runs the check");
     }

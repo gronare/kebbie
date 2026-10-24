@@ -15,7 +15,7 @@ pub const SETTLE_SECONDS: u64 = 60;
 pub const PUSHING_SECONDS: u64 = 300;
 pub const LOG_LINES: usize = 60;
 pub const UNREADABLE_AFTER: u64 = 15 * 60;
-pub const GH_VAR: &str = "KELPIE_GH_BIN";
+pub const GH_VAR: &str = "KEBBIE_GH_BIN";
 const PASSED: [&str; 3] = ["success", "skipped", "neutral"];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -307,7 +307,7 @@ fn mark_pushing(state: &Path, address: &str, at: u64) -> Result<()> {
     crate::state::write(&pushing_file(state, address), at.to_string())
 }
 
-// The push went out: the watch counts from now and carries whether kelpie wrote the log line.
+// The push went out: the watch counts from now and carries whether kebbie wrote the log line.
 pub fn arm(state: &Path, address: &str, logged: Option<bool>) {
     if let Some(watch) = load(state, address) {
         let _ = save(state, &Watch { started_at: messages::now(), pushed: Pushed { logged, ..watch.pushed.clone() }, ..watch });
@@ -466,18 +466,18 @@ fn task_open(watch: &Watch, log: &[messages::Message]) -> bool {
         && !log.iter().any(|message| message.ended && message.to == watch.address && message.at >= watch.started_at)
 }
 
-// `pushing` names who pushed when kelpie pushes the fix under that same push.
+// `pushing` names who pushed when kebbie pushes the fix under that same push.
 pub fn task_message(watch: &Watch, run: &Run, job: &str, tail: &str, pushing: Option<&str>) -> String {
     let log = if tail.trim().is_empty() { "gh showed no log for it.".to_string() } else { format!("The last lines of its log:\n{tail}") };
     let then = match pushing {
         Some(who) => format!(
-            "Find the cause and fix it with a new commit; do not push. Then report ready: the fix is part of the push {who} gave, and kelpie pushes it for {who} once the lead has checked it. \
+            "Find the cause and fix it with a new commit; do not push. Then report ready: the fix is part of the push {who} gave, and kebbie pushes it for {who} once the lead has checked it. \
              Report needs-you only when you cannot fix it or the fix needs a decision from the user."
         ),
         None => "Find the cause, fix it with a new commit and report ready; the next push is watched the same way.".to_string(),
     };
     format!(
-        "CI failed for {} on {}: {} · {job} ({}). {log}\n{then}\nWhen the failure is outside the code (a deploy window, infrastructure, secrets, a flake), change nothing: say so with kelpie ci outside \"<what failed>\" and report needs-you. Only the user can dismiss a red CI.",
+        "CI failed for {} on {}: {} · {job} ({}). {log}\n{then}\nWhen the failure is outside the code (a deploy window, infrastructure, secrets, a flake), change nothing: say so with kebbie ci outside \"<what failed>\" and report needs-you. Only the user can dismiss a red CI.",
         watch.short(), if watch.pushed.target.is_empty() { "the default branch" } else { &watch.pushed.target }, run.title(), run.url
     )
 }
@@ -514,10 +514,10 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     let text = match pushing {
         _ if !open => format!("CI failed for {} ({}): {what}. Its task has ended, so nobody was handed the log; fix it in a new task. {}", watch.address, watch.short(), run.url),
         Some(who) => format!(
-            "CI failed for {} ({}): {what}. kelpie sent its Claude the failing log, and it fixes it as part of the push {who} gave: when it reports ready, the reviewer checks the fix against the rules and kelpie pushes it for {who}; you hear only of a break, or when the reviewer gives no verdict. It stays under Ready to push meanwhile. {}",
+            "CI failed for {} ({}): {what}. kebbie sent its Claude the failing log, and it fixes it as part of the push {who} gave: when it reports ready, the reviewer checks the fix against the rules and kebbie pushes it for {who}; you hear only of a break, or when the reviewer gives no verdict. It stays under Ready to push meanwhile. {}",
             watch.address, watch.short(), run.url
         ),
-        None => format!("CI failed for {} ({}): {what}. kelpie sent the task the failing log; it stays open under Needs you. {}", watch.address, watch.short(), run.url),
+        None => format!("CI failed for {} ({}): {what}. kebbie sent the task the failing log; it stays open under Needs you. {}", watch.address, watch.short(), run.url),
     };
     if let Err(error) = messages::tell_lead(&text, Some("ci")) {
         eprintln!("Could not tell the lead that CI failed: {error}");
@@ -630,7 +630,7 @@ mod tests {
         assert!(told.contains("line 100") && !told.contains("line 40\n"), "{told}");
         assert!(task_message(&watch, &run("completed", "failure"), "test", "", None).contains("gh showed no log"));
         let pushing = task_message(&watch, &run("completed", "failure"), "test", &tail, Some("the user"));
-        assert!(pushing.contains("kelpie pushes it for the user once the lead has checked it") && pushing.contains("do not push") && pushing.contains("needs-you only when you cannot fix it"), "{pushing}");
+        assert!(pushing.contains("kebbie pushes it for the user once the lead has checked it") && pushing.contains("do not push") && pushing.contains("needs-you only when you cannot fix it"), "{pushing}");
     }
 
     #[test]
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn red_ci_goes_to_the_task_only_while_the_task_that_pushed_is_still_open() {
-        let dir = std::env::temp_dir().join(format!("kelpie-ci-open-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kebbie-ci-open-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         crate::repo::git(&dir, &["init", "--quiet"]).unwrap();
@@ -661,7 +661,7 @@ mod tests {
         let _ = fs::remove_dir_all(&worktree);
         crate::repo::git(&dir, &["worktree", "add", "--quiet", "-b", "billing", &worktree.to_string_lossy(), "HEAD"]).unwrap();
         assert!(task_open(&watch("billing"), &[]));
-        let ended = |at: u64| messages::fold(&format!(r#"{{"id":"e","at":{at},"from":"kelpie","to":"billing@app","text":"billing ended (done)","state":"ended"}}"#));
+        let ended = |at: u64| messages::fold(&format!(r#"{{"id":"e","at":{at},"from":"kebbie","to":"billing@app","text":"billing ended (done)","state":"ended"}}"#));
         assert!(!task_open(&watch("billing"), &ended(150)), "the task that pushed ended; this billing is a later one");
         assert!(task_open(&watch("billing"), &ended(50)), "an earlier billing's end says nothing about this one");
         crate::repo::git(&dir, &["worktree", "remove", "--force", &worktree.to_string_lossy()]).unwrap();
