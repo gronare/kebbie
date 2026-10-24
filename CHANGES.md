@@ -16,3 +16,4 @@ What each kelpie release brings, one line per change, as you would tell someone 
 - The line about the lead restarting on the new kelpie is short and always fits the board
 
 ### Fixed
+- The lead and other sessions restart onto each new kelpie again; a restart for an earlier update no longer holds them back

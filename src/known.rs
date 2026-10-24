@@ -239,6 +239,11 @@ pub fn announce() -> Result<Vec<String>> {
     })
 }
 
+// The kelpie on PATH, which a keeper left running on an older binary is not.
+pub fn installed() -> String {
+    crate::peers::kelpie_command().ok().and_then(|kelpie| crate::sh::run(&kelpie, &["--version"], None).ok()).map(|version| version.trim().to_string()).filter(|version| !version.is_empty()).unwrap_or_else(this_kelpie)
+}
+
 // A keeper left running on an older binary than is installed must not tell sessions its own, older kelpie.
 fn installed_is_me() -> bool {
     crate::peers::kelpie_command().ok().and_then(|kelpie| crate::sh::run(&kelpie, &["--version"], None).ok()).is_some_and(|version| version.trim() == this_kelpie())
