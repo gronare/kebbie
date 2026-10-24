@@ -1476,3 +1476,84 @@ fn a_due_routine_starts_as_a_task_in_the_keeper_round_reports_its_findings_and_c
     let unknown = lab.run(&["routine", "run", "nope"]);
     assert!(!unknown.status.success() && stderr(&unknown).contains("No routine \"nope\""));
 }
+
+// The lead Space with the lead's idle Claude on the right, which leaves for its shell on escape.
+fn idle_lead(lab: &Lab) {
+    let answers = lab.root.join("answers");
+    fs::create_dir_all(&answers).unwrap();
+    fs::write(answers.join("workspace-list.json"), r#"{"result":{"workspaces":[{"workspace_id":"w_lead","label":"lead","focused":false}]}}"#).unwrap();
+    fs::write(answers.join("agent-list.json"), r#"{"result":{"agents":[{"name":"lead","agent":"claude","workspace_id":"w_lead","pane_id":"p_lead","agent_status":"idle","interactive_ready":true}]}}"#).unwrap();
+    fs::write(answers.join("pane-list.json"), r#"{"result":{"panes":[{"pane_id":"p_board"},{"pane_id":"p_lead"}]}}"#).unwrap();
+    fs::write(answers.join("pane-layout.json"), r#"{"result":{"layout":{"zoomed":false,"panes":[{"pane_id":"p_board","rect":{"x":0,"y":0}},{"pane_id":"p_lead","rect":{"x":50,"y":0}}]}}}"#).unwrap();
+    fs::write(answers.join("process.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[{"argv":["claude"],"pid":2}]}}}"#).unwrap();
+    fs::write(answers.join("shell.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[]}}}"#).unwrap();
+    let script = format!(
+        "#!/bin/sh\nd='{}'\nfor a in \"$@\"; do printf '%s\\037' \"$a\" >> \"$d/herdr.log\"; done\nprintf '\\036' >> \"$d/herdr.log\"\n\
+         case \"$1 $2\" in\n\
+         'pane process-info') if [ -f \"$d/ended-$4\" ]; then cat \"$d/answers/shell.json\"; else cat \"$d/answers/process.json\"; fi; exit 0;;\n\
+         'pane send-keys') touch \"$d/ended-$3\"; echo '{{\"result\":{{}}}}'; exit 0;;\n\
+         'pane read') if [ -f \"$d/ended-$3\" ]; then echo 'you@host $'; else printf '%s\\n' '────────────────────' '❯ ' '────────────────────'; fi; exit 0;;\n\
+         'agent start'|'pane run') echo '{{\"result\":{{}}}}'; exit 0;;\n\
+         esac\n\
+         key=\"$1-$2\"\nif [ -f \"$d/answers/$key.json\" ]; then cat \"$d/answers/$key.json\"; exit 0; fi\necho '{{\"error\":{{\"code\":\"not_faked\",\"message\":\"the fake herdr has no answer\"}}}}' >&2\nexit 1\n",
+        lab.root.display()
+    );
+    executable(&lab.herdr, &script);
+}
+
+fn lead_starts(lab: &Lab) -> Vec<Vec<String>> {
+    lab.herdr_calls().into_iter().filter(|call| call[..2] == ["agent", "start"] && call.iter().any(|arg| arg == "p_lead")).collect()
+}
+
+#[test]
+fn restart_fresh_starts_the_lead_on_a_new_conversation_and_keeps_the_old_one_on_disk() {
+    let lab = Lab::new("lead-fresh");
+    idle_lead(&lab);
+    let lead = lab.state.join("lead");
+    let slug: String = lead.to_string_lossy().chars().map(|character| if character.is_ascii_alphanumeric() { character } else { '-' }).collect();
+    let transcripts = lab.home.join(".claude/projects").join(slug);
+    fs::create_dir_all(&transcripts).unwrap();
+    fs::write(transcripts.join("s-old.jsonl"), "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n").unwrap();
+    fs::write(lab.state.join("lead-session"), "s-old").unwrap();
+    fs::write(lab.state.join("lead-context.json"), r#"{"used_percentage":92.0}"#).unwrap();
+    let run = |args: &[&str]| lab.command().env_remove("CLAUDE_CONFIG_DIR").args(args).output().unwrap();
+
+    let resumed = run(&["lead", "--restart"]);
+    assert!(resumed.status.success(), "{}\n{}", stdout(&resumed), stderr(&resumed));
+    assert!(lead_starts(&lab)[0].windows(2).any(|pair| pair == ["--resume", "s-old"]), "plain --restart resumes: {:?}", lead_starts(&lab));
+    assert!(lab.state.join("lead-context.json").exists(), "a resumed conversation keeps its context share");
+
+    fs::remove_file(lab.root.join("ended-p_lead")).unwrap();
+    let fresh = run(&["lead", "--restart", "--fresh"]);
+    let said = stdout(&fresh);
+    assert!(fresh.status.success(), "{said}\n{}", stderr(&fresh));
+    assert!(said.contains("Restarted the lead with its current role and settings, with a new conversation; its earlier one stays on disk."), "{said}");
+    let start = lead_starts(&lab).pop().unwrap();
+    assert!(!start.iter().any(|arg| arg == "--resume"), "a fresh start never resumes: {start:?}");
+    for flag in ["--append-system-prompt-file", "--settings"] {
+        assert!(start.iter().any(|arg| arg == flag), "the role and settings as a normal start: {start:?}");
+    }
+    let id = start.iter().skip_while(|arg| *arg != "--session-id").nth(1).expect("a new session id").clone();
+    assert_ne!(id, "s-old");
+    assert_eq!(fs::read_to_string(lab.state.join("lead-session")).unwrap().trim(), id, "kebbie records the new session as the lead's");
+    assert!(transcripts.join("s-old.jsonl").exists(), "the old conversation stays on disk");
+    assert!(!lab.state.join("lead-context.json").exists(), "the old conversation's context share is forgotten");
+    let calls = lab.herdr_calls();
+    let cd = calls.iter().position(|call| call[..2] == ["pane", "run"] && call.iter().any(|arg| arg.starts_with("cd ") && arg.contains(&*lead.to_string_lossy()))).expect("the pane goes to the lead's folder");
+    assert!(cd < calls.iter().rposition(|call| call[..2] == ["agent", "start"]).unwrap());
+
+    fs::remove_file(lab.root.join("ended-p_lead")).unwrap();
+    let again = run(&["lead", "--restart"]);
+    assert!(again.status.success(), "{}", stderr(&again));
+    let after = lead_starts(&lab).pop().unwrap();
+    assert!(!after.iter().any(|arg| arg == "--resume") && after.windows(2).any(|pair| pair[0] == "--session-id" && pair[1] == id), "a restart before the fresh lead replied keeps the fresh conversation, never the old one: {after:?}");
+
+    let settings = fs::read_to_string(lab.state.join("roles/lead.settings.json")).unwrap();
+    assert!(!settings.contains(" lead:") && !settings.contains(" lead "), "the lead may not restart itself: {settings}");
+
+    fs::remove_file(lab.root.join("ended-p_lead")).unwrap();
+    lab.screen("❯ half a thought");
+    fs::write(lab.root.join("answers/agent-list.json"), r#"{"result":{"agents":[{"name":"lead","agent":"claude","workspace_id":"w_lead","pane_id":"p_lead","agent_status":"working","interactive_ready":true}]}}"#).unwrap();
+    let refused = run(&["lead", "--restart", "--fresh"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("Not restarted: the lead is working."), "{}", stderr(&refused));
+}

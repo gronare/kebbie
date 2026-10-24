@@ -100,6 +100,7 @@ enum Mode {
     ConfirmDismiss { path: PathBuf, name: String, nudged: bool },
     ConfirmQueued { name: String, about: String, now: bool, nudged: bool },
     ConfirmClaimed { entry: Entry, about: String, machine: String, nudged: bool },
+    RestartLead(usize),
     Filter { buffer: String },
     Card { path: PathBuf, name: String, scroll: u16, image: usize },
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
@@ -195,6 +196,9 @@ struct App {
     lead_chat: Option<bool>,
     restart_auto: bool,
     lead_restarter: Updater,
+    lead_fresh_starter: Updater,
+    lead_checker: std::sync::Arc<dyn Fn() -> Result<()> + Send + Sync>,
+    lead_context: Option<f64>,
     subject: Option<notices::Subject>,
     shown: Option<notices::Subject>,
     toast: Option<notices::Toast>,
@@ -349,12 +353,32 @@ impl App {
         self.mode = Mode::Working { label, result };
     }
 
-    // A restart the user asks for always runs; only the lead's own state refuses it.
+    // A restart the user asks for always runs; only the lead's own state refuses it, before the question opens.
     fn restart_lead(&mut self) {
+        match (self.lead_checker)() {
+            Ok(()) => self.mode = Mode::RestartLead(0),
+            Err(why) => {
+                self.subject = Some(notices::Subject::plain("lead"));
+                self.show(crate::lead_restart::outcome(Err(why)));
+            }
+        }
+    }
+
+    fn resume_lead(&mut self) {
         let restarter = self.lead_restarter.clone();
         self.subject = Some(notices::Subject::plain("lead"));
         let label = if self.lead_line().is_some() { "Restarting the lead on the new kebbie…" } else { "Restarting the lead…" };
         self.in_background(label.to_string(), move || restarter());
+    }
+
+    fn start_lead_fresh(&mut self) {
+        let starter = self.lead_fresh_starter.clone();
+        self.subject = Some(notices::Subject::plain("lead"));
+        self.in_background("Starting the lead fresh…".to_string(), move || starter());
+    }
+
+    fn context_line_for(&self, width: usize) -> Option<String> {
+        crate::lead_restart::context_line(self.lead_context, width)
     }
 
     fn lead_line(&self) -> Option<String> {
@@ -513,6 +537,7 @@ impl App {
             Mode::ConfirmQueued { name, about, now, .. } => self.confirm_queued(name, about, now, key, cancels),
             Mode::ConfirmClaimed { entry, about, machine, .. } => self.confirm_claimed(entry, about, machine, key, cancels),
             Mode::ConfirmDrop { path, name, force, .. } => self.confirm_drop(path, name, force, key, cancels),
+            Mode::RestartLead(index) => self.choose_restart(index, act, key),
             Mode::Card { path, name, scroll, image } => self.handle_card(path, name, scroll, image, key),
             Mode::Fullscreen { path, name, scroll, index } => self.handle_fullscreen(path, name, scroll, index, key),
             Mode::Filter { buffer } => self.handle_filter(buffer, key),
@@ -908,7 +933,7 @@ impl App {
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
-            filter: None, ctrl_c: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
+            filter: None, ctrl_c: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_context: None, subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
         }
     }
 }
@@ -999,6 +1024,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.ongoing = snapshot.ongoing;
                         app.lead_chat = snapshot.lead_chat;
                         app.restart_auto = snapshot.restart_auto;
+                        app.lead_context = snapshot.lead_context;
                         app.backlog_selected = app.backlog_selected.min(app.backlog_len().saturating_sub(1));
                         let newest = app.messages.last().map_or(0, |message| message.at);
                         if app.fold == Fold::Open && newest > app.seen {
@@ -1225,8 +1251,9 @@ mod tests {
     }
 
     #[test]
-    fn while_the_lead_runs_an_older_kebbie_one_line_says_so_and_l_restarts_it() {
+    fn while_the_lead_runs_an_older_kebbie_one_line_says_so_and_l_asks_how_to_restart_it() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.lead_checker = std::sync::Arc::new(|| Ok(()));
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows.join("\n").contains("↻ The lead"), "nothing pending, no line");
         let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1235,15 +1262,12 @@ mod tests {
             counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok("Restarted the lead with its current role and settings, resuming its conversation.".to_string())
         });
+        app.lead_fresh_starter = std::sync::Arc::new(|| panic!("2 never starts fresh"));
         app.handle_normal(key(KeyCode::Char('L')));
-        assert!(matches!(app.mode, Mode::Working { .. }), "L restarts a lead kebbie counts as current too");
-        for _ in 0..200 {
-            app.take_working_result();
-            if !matches!(app.mode, Mode::Working { .. }) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
+        assert!(matches!(app.mode, Mode::RestartLead(0)), "L asks for a lead kebbie counts as current too");
+        press(&mut app, key(KeyCode::Char('2')));
+        assert!(matches!(app.mode, Mode::Working { .. }), "2 resumes it in the background");
+        settle(&mut app);
         assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(app.notice.is_none() && app.toast.as_ref().is_some_and(|toast| toast.notice.headline.starts_with("Restarted the lead")), "the result goes by as a toast like the board's other results");
         app.toast = None;
@@ -1257,36 +1281,109 @@ mod tests {
         let (rows, _) = render(&mut app, 170, 30);
         let (x, y) = find(&rows, "↻ The lead restarts on the new kebbie")[0];
         assert!(rows[y + 1].trim().is_empty() && rows[y + 2].contains("WORK"), "one line, then the columns: {}", rows.join("\n"));
-        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Key(KeyCode::Char('L'))), "a click on the line restarts too");
-        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counted = calls.clone();
-        app.lead_restarter = std::sync::Arc::new(move || {
-            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            crate::lead_restart::outcome(Err("Not restarted: the lead is working.".to_string()))
-        });
-        app.handle_normal(key(KeyCode::Char('L')));
-        assert!(matches!(app.mode, Mode::Working { .. }));
-        for _ in 0..200 {
-            app.take_working_result();
-            if !matches!(app.mode, Mode::Working { .. }) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline == "Not restarted: the lead is working." && toast.notice.tone == Tone::NotNow), "the plain reason, not an error");
-        app.mode = Mode::Normal;
-        app.handle_normal(key(KeyCode::Char('L')));
-        for _ in 0..200 {
-            app.take_working_result();
-            if !matches!(app.mode, Mode::Working { .. }) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2, "a refused restart can be pressed again");
+        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Key(KeyCode::Char('L'))), "a click on the line asks too");
         app.page = Page::Areas;
         let (rows, _) = render(&mut app, 170, 30);
         assert!(!rows.join("\n").contains("↻ The lead"), "the Work page only");
         assert!(shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "L"), "L is in the keys help");
+        assert!(!shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "F"), "and no F");
+    }
+
+    fn settle(app: &mut App) {
+        for _ in 0..200 {
+            app.take_working_result();
+            if !matches!(app.mode, Mode::Working { .. }) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn l_offers_a_new_conversation_first_or_resuming_and_picks_by_arrows_enter_number_or_click() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.lead_checker = std::sync::Arc::new(|| Ok(()));
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        app.lead_fresh_starter = std::sync::Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok("Restarted the lead with its current role and settings, with a new conversation; its earlier one stays on disk.".to_string())
+        });
+        let resumed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted_resume = resumed.clone();
+        app.lead_restarter = std::sync::Arc::new(move || {
+            counted_resume.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok("Restarted the lead with its current role and settings, resuming its conversation.".to_string())
+        });
+        let count = |counter: &std::sync::Arc<std::sync::atomic::AtomicUsize>| counter.load(std::sync::atomic::Ordering::SeqCst);
+        app.handle_normal(key(KeyCode::Char('L')));
+        let (rows, _) = render(&mut app, 120, 30);
+        let screen = rows.join("\n");
+        assert!(screen.contains("Restart the lead") && screen.contains("▸ New conversation") && screen.contains("Resume this conversation") && screen.contains("from its role and the vault"), "{screen}");
+        for (code, at) in [(KeyCode::Down, 1), (KeyCode::Down, 1), (KeyCode::Up, 0), (KeyCode::Char('j'), 1), (KeyCode::Char('k'), 0)] {
+            press(&mut app, key(code));
+            assert!(matches!(app.mode, Mode::RestartLead(index) if index == at), "{code:?} moves to {at}");
+        }
+        for other in ['n', 'f', 'r', 'y'] {
+            press(&mut app, key(KeyCode::Char(other)));
+            assert!(matches!(app.mode, Mode::RestartLead(0)), "{other} is no choice and keeps it open");
+        }
+        press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal) && count(&calls) + count(&resumed) == 0, "esc cancels and starts nothing");
+        app.handle_normal(key(KeyCode::Char('L')));
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Working { .. }), "enter on the first row starts it fresh in the background");
+        settle(&mut app);
+        assert_eq!((count(&calls), count(&resumed)), (1, 0));
+        assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline.contains("with a new conversation")), "the result goes by as a toast");
+        app.mode = Mode::Normal;
+        app.handle_normal(key(KeyCode::Char('L')));
+        press(&mut app, key(KeyCode::Char('1')));
+        settle(&mut app);
+        assert_eq!((count(&calls), count(&resumed)), (2, 0), "1 starts it fresh");
+        app.mode = Mode::Normal;
+        app.handle_normal(key(KeyCode::Char('L')));
+        let (rows, _) = render(&mut app, 120, 30);
+        let (x, y) = find(&rows, "Resume this conversation")[0];
+        click(&mut app, x as u16, y as u16);
+        settle(&mut app);
+        assert_eq!((count(&calls), count(&resumed)), (2, 1), "a click on a row picks it");
+    }
+
+    #[test]
+    fn a_refused_restart_goes_by_as_a_toast_before_any_question_and_can_be_pressed_again() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        let checked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = checked.clone();
+        app.lead_checker = std::sync::Arc::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("Not restarted: the lead's input box holds text you have not sent.".to_string())
+        });
+        app.lead_restarter = std::sync::Arc::new(|| panic!("a refused restart never runs"));
+        app.lead_fresh_starter = std::sync::Arc::new(|| panic!("a refused restart never runs"));
+        app.handle_normal(key(KeyCode::Char('L')));
+        assert!(matches!(app.mode, Mode::Normal), "no question opens");
+        assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline == "Not restarted: the lead's input box holds text you have not sent." && toast.notice.tone == Tone::NotNow), "the plain reason as a toast, not an error");
+        app.handle_normal(key(KeyCode::Char('L')));
+        assert_eq!(checked.load(std::sync::atomic::Ordering::SeqCst), 2, "a refused restart can be pressed again");
+    }
+
+    #[test]
+    fn a_nearly_full_lead_context_shows_one_line_that_offers_l_and_nothing_below_the_mark() {
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.lead_checker = std::sync::Arc::new(|| Ok(()));
+        for used in [None, Some(60.0), Some(84.9)] {
+            app.lead_context = used;
+            let (rows, _) = render(&mut app, 170, 30);
+            assert!(!rows.join("\n").contains("context is"), "{used:?} shows no line");
+        }
+        app.lead_context = Some(91.2);
+        let (rows, _) = render(&mut app, 170, 30);
+        let (x, y) = find(&rows, "The lead's context is 91% full · L to restart it fresh")[0];
+        assert!(rows[y + 1].trim().is_empty() && rows[y + 2].contains("WORK"), "one line, then the columns: {}", rows.join("\n"));
+        assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Key(KeyCode::Char('L'))), "a click on the line asks as L does");
+        app.page = Page::Areas;
+        let (rows, _) = render(&mut app, 170, 30);
+        assert!(!rows.join("\n").contains("context is"), "the Work page only");
     }
 }

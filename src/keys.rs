@@ -248,7 +248,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Refresh, on: BOARD, help: "ask the lead to refresh the backlog", hint: Hint::No },
     Binding { act: Act::Away, on: BOARD, help: "away mode on or off: the lead settles how-questions and keeps what-questions for you", hint: Hint::No },
     Binding { act: Act::Update, on: BOARD, help: "update everything to the latest (kebbie update); ↑ at the bottom shows when there is a newer version", hint: Hint::No },
-    Binding { act: Act::RestartLead, on: BOARD, help: "restart the lead on the installed kebbie, resuming its conversation; offered while it runs an older one, and refused while it works, asks or holds text you have not sent", hint: Hint::No },
+    Binding { act: Act::RestartLead, on: BOARD, help: "restart the lead on the installed kebbie: offers a new conversation or resuming this one; refused while it works, asks, holds text you have not sent or has background work running", hint: Hint::No },
     Binding { act: Act::Go, on: &[Areas], help: "open the area's Space", hint: Hint::No },
     Binding { act: Act::New, on: &[Areas], help: "new task in its repo, with its notes", hint: Hint::No },
     Binding { act: Act::AreaRefresh, on: &[Areas], help: "ask the lead to refresh its backlog", hint: Hint::No },

@@ -126,9 +126,13 @@ fn settings(kebbie: &str) -> String {
 
 // Claude Code never remembers trust for the home directory, so the lead gets a directory of its own.
 pub(crate) fn lead_dir() -> Result<PathBuf> {
-    let dir = std::env::var("KEBBIE_LEAD_DIR").map(PathBuf::from).or_else(|_| state_dir().map(|dir| dir.join("lead")))?;
+    let dir = lead_dir_path()?;
     fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     Ok(dir)
+}
+
+pub(crate) fn lead_dir_path() -> Result<PathBuf> {
+    std::env::var("KEBBIE_LEAD_DIR").map(PathBuf::from).or_else(|_| state_dir().map(|dir| dir.join("lead")))
 }
 
 // The panes by where they sit: the chat on the right, the board on the left, and whatever pane is under the board.
@@ -220,6 +224,9 @@ fn start_chat(pane: &str, session: Session) -> Result<()> {
     let args = chat_args(&role, &settings, &session);
     tasks::wait_for_prompt(pane)?;
     herdr::run_in_pane(pane, &cd_line(&lead_dir()?))?;
+    if matches!(session, Session::New(_)) {
+        crate::usage::forget_lead_context(&state_dir()?);
+    }
     Agent::Claude.start("lead", pane, &args.iter().map(String::as_str).collect::<Vec<_>>(), true)?;
     crate::state::write(&session_file()?, session_id(&session))
 }
@@ -258,6 +265,12 @@ fn adopt_transcript(home: &Path, id: &str, dir: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+// A lead started fresh has no transcript until its first reply, and its start is newer than every older conversation, which it must not fall back to.
+fn unspoken(transcripts: &[Transcript], recorded: Option<&str>, recorded_at: Option<std::time::SystemTime>) -> Option<String> {
+    let (id, at) = recorded.zip(recorded_at)?;
+    (!transcripts.iter().any(|(_, stem)| stem == id) && transcripts.iter().all(|(modified, _)| *modified < at)).then(|| id.to_string())
 }
 
 fn lead_session(transcripts: &[Transcript], recorded: Option<&str>) -> Option<String> {
@@ -320,18 +333,24 @@ pub fn lead_agent<'a>(agents: &'a [Value], lead: &str) -> Option<&'a Value> {
 }
 
 // Every restart of the lead, by hand, from the board or from the keeper, holds this lock, so two never end and start its pane together.
-pub fn restart(anyway: bool) -> Result<String> {
+pub fn restart(anyway: bool, fresh: bool) -> Result<String> {
     let _lock = lead_lock()?;
-    restart_locked(anyway)
+    restart_locked(anyway, fresh)
 }
 
 fn lead_lock() -> Result<crate::restart::SessionLock> {
     crate::restart::SessionLock::take(&state_dir()?, LEAD_LABEL).map_err(|_| refused("another kebbie is restarting the lead"))
 }
 
-fn restart_locked(anyway: bool) -> Result<String> {
-    let nothing = "No lead is running, so there is nothing to restart.".to_string();
-    let Some(lead) = lead_workspace(&herdr::workspaces()?) else { return Ok(nothing) };
+struct Ready {
+    lead: String,
+    pane: String,
+    running: bool,
+}
+
+// The lead's pane when a restart may go ahead, None when no lead runs, and the plain refusal otherwise.
+fn ready(anyway: bool) -> Result<Option<Ready>> {
+    let Some(lead) = lead_workspace(&herdr::workspaces()?) else { return Ok(None) };
     let agents = herdr::agents()?;
     let agent = lead_agent(&agents, &lead);
     let pane = match with_draft(restart_verdict(agent), || draft_of(agent)) {
@@ -342,20 +361,45 @@ fn restart_locked(anyway: bool) -> Result<String> {
         // Its Claude already gone, the lead's chat pane at a shell prompt still takes the resumed conversation.
         Restart::Nothing => match places(&lead)?.chat.filter(|pane| herdr::foreground(pane).ok().flatten().is_none()) {
             Some(pane) => pane,
-            None => return Ok(nothing),
+            None => return Ok(None),
         },
     };
     let running = if anyway { Vec::new() } else { background_of(agent) };
     if !running.is_empty() {
         return Err(refused(&format!("the lead has background work running ({})", running.join(", "))));
     }
+    Ok(Some(Ready { lead, pane, running: agent.is_some() }))
+}
+
+// What the board asks before it offers the restart: the same refusals a restart gives.
+pub fn restart_refusal() -> Result<()> {
+    ready(false).map(|_| ())
+}
+
+fn restart_locked(anyway: bool, fresh: bool) -> Result<String> {
+    let Some(Ready { lead, pane, running }) = ready(anyway)? else { return Ok("No lead is running, so there is nothing to restart.".to_string()) };
+    let (session, how) = if fresh { (Session::New(tasks::new_session_id()?), "with a new conversation; its earlier one stays on disk") } else { previous_session()? };
+    if running {
+        Agent::Claude.end(&pane)?;
+    }
+    close_messages(places(&lead)?.messages.as_deref())?;
+    start_chat(&pane, session)?;
+    Ok(format!("Restarted the lead with its current role and settings, {how}."))
+}
+
+fn previous_session() -> Result<(Session, &'static str)> {
     let dir = lead_dir()?;
-    let recorded = fs::read_to_string(session_file()?).ok().map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
+    let file = session_file()?;
+    let recorded = fs::read_to_string(&file).ok().map(|id| id.trim().to_string()).filter(|id| !id.is_empty());
+    let recorded_at = fs::metadata(&file).and_then(|meta| meta.modified()).ok();
     let mut own: Vec<PathBuf> = [Some(dir.clone()), dir.canonicalize().ok()].into_iter().flatten().collect();
     own.dedup();
     let home = Agent::Claude.home();
     let mut transcripts: Vec<Transcript> = home.iter().flat_map(|home| own.iter().flat_map(|dir| transcripts_in(&Agent::Claude.transcripts_dir(home, dir)))).collect();
     let moved = home.as_ref().zip(recorded.as_deref()).filter(|(_, id)| !transcripts.iter().any(|(_, stem)| stem == id)).and_then(|(home, id)| transcript_elsewhere(&home.join("projects"), id));
+    if moved.is_none() && let Some(id) = unspoken(&transcripts, recorded.as_deref(), recorded_at) {
+        return Ok((Session::New(id), "with a new conversation, as its last start has none yet"));
+    }
     transcripts.extend(moved.clone());
     let previous = lead_session(&transcripts, recorded.as_deref());
     if let (Some(id), Some(home), Some((_, from))) = (&previous, &home, &moved) && id == from {
@@ -366,16 +410,10 @@ fn restart_locked(anyway: bool) -> Result<String> {
         (Some(_), _) => "resuming its conversation",
         (None, _) => "with a new conversation, as none of its own was found",
     };
-    let session = match previous {
-        Some(id) => Session::Resume(id),
-        None => Session::New(tasks::new_session_id()?),
-    };
-    if agent.is_some() {
-        Agent::Claude.end(&pane)?;
-    }
-    close_messages(places(&lead)?.messages.as_deref())?;
-    start_chat(&pane, session)?;
-    Ok(format!("Restarted the lead with its current role and settings, {how}."))
+    Ok(match previous {
+        Some(id) => (Session::Resume(id), how),
+        None => (Session::New(tasks::new_session_id()?), how),
+    })
 }
 
 // Whatever was quit or closed since the lead Space was made comes back when the user goes there: the board, or the lead's Claude.
@@ -686,7 +724,7 @@ mod tests {
     #[test]
     fn after_an_update_the_lead_says_it_restarts_once_idle_and_never_sends_the_user_to_another_pane() {
         let role = role_text(include_str!("../roles/lead.md"), &[Source::Local], false, true);
-        for needed in ["kebbie restarts you itself, resuming this conversation on the new role, once the user is out of your pane and you are idle, or at once when they press `L` on the board", "with `restart.auto` off only `L` does", "Never ask the user to run `kebbie lead --restart` or to open another pane", "say in one line what your prompt says about the restart"] {
+        for needed in ["kebbie restarts you itself, resuming this conversation on the new role, once the user is out of your pane and you are idle, or at once when they press `L` on the board and choose to resume", "with `restart.auto` off only `L` does", "Never ask the user to run `kebbie lead --restart` or to open another pane", "say in one line what your prompt says about the restart"] {
             assert!(role.contains(needed), "{needed}");
         }
     }
@@ -845,6 +883,22 @@ mod tests {
         at("after-clear.jsonl", 300);
         assert_eq!(lead_session(&transcripts_in(&dir), Some("recorded")).as_deref(), Some("after-clear"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_lead_started_fresh_that_has_not_replied_yet_never_falls_back_to_its_old_conversation() {
+        let at = |seconds: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+        let old = vec![(at(100), "old".to_string())];
+        assert_eq!(unspoken(&old, Some("fresh"), Some(at(500))).as_deref(), Some("fresh"), "the fresh start is newer than the old conversation and has no transcript yet");
+        assert_eq!(unspoken(&old, Some("fresh"), Some(at(50))), None, "a conversation newer than the start, as after /clear, wins");
+        assert_eq!(unspoken(&[(at(100), "old".to_string()), (at(600), "fresh".to_string())], Some("fresh"), Some(at(500))), None, "once it replied, its transcript is resumed as usual");
+        assert_eq!(unspoken(&old, None, Some(at(500))), None);
+    }
+
+    #[test]
+    fn the_lead_is_told_a_fresh_start_reads_only_its_role_and_the_vault() {
+        let role = role_text(include_str!("../roles/lead.md"), &[Source::Local], false, true);
+        assert!(role.contains("`L` on the board can also start you fresh: a new conversation that reads only this role and the vault"), "{role}");
     }
 
     #[test]

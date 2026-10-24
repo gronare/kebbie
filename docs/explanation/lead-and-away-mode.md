@@ -63,7 +63,13 @@ kebbie never types into a draft: a resume waits while the input box holds text, 
 
 ## Restarting the lead
 
-The lead reads its role and settings when it starts. `kebbie lead --restart` rewrites them and resumes the same conversation under the new role, so an update never costs you the lead's context. It goes ahead only while the lead is idle, not waiting on a question, without text you have not sent in its input box and without background work running (`--anyway` cuts that off). After `kebbie update` you do not run it yourself: the keeper restarts the lead a minute after it is idle and you are out of its pane, and `L` on the board does it at once. With `restart.auto = false` only `L` and the command do. See [Restarting the lead after an update](updates-and-restarts.md#restarting-the-lead-after-an-update).
+The lead reads its role and settings when it starts. `kebbie lead --restart` rewrites them and resumes the same conversation under the new role, so an update never costs you the lead's context. It goes ahead only while the lead is idle, not waiting on a question, without text you have not sent in its input box and without background work running (`--anyway` cuts that off). After `kebbie update` you do not run it yourself: the keeper restarts the lead a minute after it is idle and you are out of its pane, and `L` on the board does it at once when you pick `Resume this conversation`. With `restart.auto = false` only `L` and the command do. See [Restarting the lead after an update](updates-and-restarts.md#restarting-the-lead-after-an-update).
+
+### Starting the lead fresh
+
+A long conversation fills the lead's context. `L` on the board opens `Restart the lead`: `New conversation`, the first row, starts the lead's Claude on a new conversation, in its folder, with its role, settings and skills as at any start, while `Resume this conversation` resumes it as before; `kebbie lead --restart --fresh` starts it fresh from your own terminal. A refusal, for the reasons above, goes by as a toast before the question opens. The old conversation stays on disk, where `claude --resume` still finds it, and kebbie keeps the new one as the lead's, so later restarts resume that. Nothing starts the lead fresh on its own. The lead's role tells it that a fresh start reads only the role and the vault, so it keeps decisions, plans and where each task stands in the vault's notes as it goes.
+
+When the lead's context is 85% full or more, the board's Work page says `The lead's context is N% full · L to restart it fresh`. The share comes from Claude Code's status line for the lead, so it shows only with `kebbie statusline` as your `statusLine` command (`kebbie doctor` checks it); without that, or before the lead's first reply, there is no line.
 
 ## The lead's folder
 

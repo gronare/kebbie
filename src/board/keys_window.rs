@@ -98,7 +98,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::New], "new task", "new task"),
             bind(&[Act::Refresh], "refresh the backlog", "refresh"),
             bind(&[Act::Update], "update kebbie and its plugins", "update"),
-            bind(&[Act::RestartLead], "restart the lead on the new kebbie", "restart lead"),
+            bind(&[Act::RestartLead], "restart the lead: fresh or resumed", "restart lead"),
             bind(&[Act::Hub], "the hub: this board on your phone", "phone · hub"),
         ]),
         WINDOWS,

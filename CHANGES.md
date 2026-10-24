@@ -15,6 +15,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The update shows each step as it goes, with a bar while kebbie builds or downloads, and ends with what's new and what restarts
 - The line about the lead restarting on the new kebbie is short and always fits the board
 - One bar shows the whole update, from fetching to the restarts, weighed by how long each step took last time, and the summary comes once it is full
+- L on the board asks whether to start the lead fresh, on a new conversation from its role and the vault, or resume it; kebbie lead --restart --fresh starts it fresh, and the board says when the lead's context is nearly full
 
 ### Fixed
 - L on the board restarts the lead whenever you press it, and its result goes by like the board's other results

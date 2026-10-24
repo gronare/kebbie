@@ -31,6 +31,16 @@ pub fn line(stale: &[String], auto: bool, width: usize) -> Option<String> {
     Some(if crate::board::widgets::text_width(&long) <= width { long } else { short })
 }
 
+pub const CONTEXT_FULL: f64 = 85.0;
+
+// The lead's context share from its status line; nothing below the mark or when the share is unknown.
+pub fn context_line(used: Option<f64>, width: usize) -> Option<String> {
+    let used = used.filter(|used| *used >= CONTEXT_FULL)?.round().min(100.0);
+    let key = keys::map().label(Act::RestartLead);
+    let long = format!("The lead's context is {used}% full · {key} to restart it fresh");
+    Some(if crate::board::widgets::text_width(&long) <= width { long } else { format!("Lead context {used}% · {key}") })
+}
+
 pub fn outcome(ran: std::result::Result<String, String>) -> Result<String> {
     match ran {
         Ok(said) => Ok(said),
@@ -43,6 +53,10 @@ pub fn outcome(ran: std::result::Result<String, String>) -> Result<String> {
 // Through kebbie_command, so the start records the version that runs it.
 pub fn restart_now() -> Result<String> {
     outcome(crate::sh::attempt(&crate::peers::kebbie_command()?, &["lead", "--restart"], None)?)
+}
+
+pub fn fresh_now() -> Result<String> {
+    outcome(crate::sh::attempt(&crate::peers::kebbie_command()?, &["lead", "--restart", "--fresh"], None)?)
 }
 
 #[cfg(test)]
@@ -92,5 +106,14 @@ mod tests {
         assert_eq!(Notice::parse(&refused).map(|notice| notice.tone), Some(Tone::NotNow));
         assert_eq!(outcome(Err("Claude did not come back in pane p_9".to_string())), Err("Claude did not come back in pane p_9".to_string()));
         assert_eq!(outcome(Ok("Restarted the lead.".to_string())), Ok("Restarted the lead.".to_string()));
+    }
+
+    #[test]
+    fn the_context_line_shows_only_once_the_leads_context_is_nearly_full_and_never_when_unknown() {
+        assert_eq!(context_line(None, 120), None, "an unknown share shows nothing");
+        assert_eq!(context_line(Some(84.4), 120), None);
+        assert_eq!(context_line(Some(87.4), 120).unwrap(), "The lead's context is 87% full · L to restart it fresh");
+        assert_eq!(context_line(Some(85.0), 30).unwrap(), "Lead context 85% · L", "a narrow board takes the short wording");
+        assert_eq!(context_line(Some(103.0), 120).unwrap(), "The lead's context is 100% full · L to restart it fresh");
     }
 }

@@ -1,12 +1,14 @@
 use std::path::PathBuf;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
+use crate::keys::Act;
 use crate::tasks;
-use super::{App, Mode};
-use super::widgets::{MUTED, PEACH, TEXT, YELLOW, modal, style};
+use super::{App, Hit, Mode};
+use super::widgets::{Choice, MUTED, PEACH, TEXT, YELLOW, modal, options_lines, style};
 
 fn confirm_lines(name: &str, about: Option<&str>, question: &str, nudged: bool) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(Span::styled(name.to_string(), style(TEXT)))];
@@ -79,6 +81,22 @@ impl App {
         }
     }
 
+    pub(super) fn choose_restart(&mut self, index: usize, act: Option<Act>, key: KeyEvent) {
+        match (key.code, act) {
+            (KeyCode::Char('1'), _) => self.pick_restart(0),
+            (KeyCode::Char('2'), _) => self.pick_restart(1),
+            (_, Some(Act::Move)) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => self.mode = Mode::RestartLead(0),
+            (_, Some(Act::Move)) => self.mode = Mode::RestartLead(1),
+            (_, Some(Act::Options)) => self.pick_restart(index),
+            (_, Some(Act::Back | Act::Close)) => {}
+            _ => self.mode = Mode::RestartLead(index),
+        }
+    }
+
+    pub(super) fn pick_restart(&mut self, index: usize) {
+        if index == 0 { self.start_lead_fresh() } else { self.resume_lead() }
+    }
+
     pub(super) fn confirm_drop(&mut self, path: PathBuf, name: String, force: bool, key: KeyEvent, cancels: bool) {
         match key.code {
             KeyCode::Char('y') => match tasks::drop(&path, None, force) {
@@ -116,6 +134,19 @@ pub(super) fn draw_queued(frame: &mut Frame, name: &str, about: &str, now: bool,
 
 pub(super) fn draw_claimed(frame: &mut Frame, title: &str, about: &str, machine: &str, nudged: bool) {
     modal(frame, "worked on elsewhere".to_string(), confirm_lines(title, Some(about), &format!("Start it here and take the note over from {machine}?"), nudged), 72);
+}
+
+pub(super) fn restart_choices() -> Vec<Choice> {
+    let row = |key: char, label: &str, about: &str| Choice { key, act: None, label: label.to_string(), about: about.to_string(), link: None };
+    vec![
+        row('1', "New conversation", "from its role and the vault; the old one stays on disk"),
+        row('2', "Resume this conversation", "as to pick up a new Claude Code"),
+    ]
+}
+
+pub(super) fn draw_restart_lead(frame: &mut Frame, index: usize) -> Vec<(Rect, Hit)> {
+    let area = modal(frame, "Restart the lead".to_string(), options_lines(restart_choices(), index, 56), 62);
+    (0..2u16).map(|choice| (Rect::new(area.x, area.y + 1 + 2 * choice, area.width, 2), Hit::Choice(choice as usize))).filter(|(rect, _)| rect.y + 1 < area.bottom()).collect()
 }
 
 pub(super) fn draw_drop(frame: &mut Frame, name: &str, force: bool, nudged: bool) {

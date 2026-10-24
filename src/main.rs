@@ -106,6 +106,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   (--first only moves the lead Space to the top of herdr's Spaces; --restart
                                   restarts an idle lead's Claude on its current role and settings, resuming
                                   its conversation, and --anyway also while it has background work running;
+                                  --restart --fresh starts it with a new conversation instead, the old one kept;
                                   --toggle-chat hides the lead's chat so the board takes the whole width, or
                                   shows it again; --revive-board, run by herdr's startup, waits
                                   in the background for herdr's restore and starts the board in the lead Space's
@@ -494,7 +495,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("areas") => areas::print(),
         Some("routes") => Ok(routes::print(arguments.flag("--plain-http"))),
         Some("lead") if arguments.flag("--first") => lead::keep_first(),
-        Some("lead") if arguments.flag("--restart") => lead::restart(arguments.flag("--anyway")),
+        Some("lead") if arguments.flag("--restart") => lead::restart(arguments.flag("--anyway"), arguments.flag("--fresh")),
         Some("lead") if arguments.flag("--renew-board") => lead::renew_board(),
         Some("lead") if arguments.flag("--revive-board") && arguments.flag("--wait") => lead::revive_board(),
         Some("lead") if arguments.flag("--revive-board") => lead::revive_board_detached(),

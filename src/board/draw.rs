@@ -10,7 +10,7 @@ use crate::keys::{self, Ctx};
 use crate::messages;
 use super::card::{draw_card, draw_fullscreen};
 use super::columns::{backlog_lines, work_lines};
-use super::confirm::{draw_claimed, draw_dismiss, draw_done, draw_drop, draw_queued, draw_reset};
+use super::confirm::{draw_claimed, draw_dismiss, draw_done, draw_drop, draw_queued, draw_restart_lead, draw_reset};
 use super::detail::draw_panel;
 use super::editor::draw_editor;
 use super::header::header;
@@ -36,7 +36,8 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let fold = if app.page == Page::Work { app.fold } else { Fold::Hidden };
     let lead_line = app.lead_line_for(area.width as usize).filter(|_| app.page == Page::Work);
     let hub_line = app.hub_banner.clone().filter(|_| app.page == Page::Work).map(|plan| format!("{plan} · {} hub", keys::map().label(keys::Act::Hub)));
-    let banners = [lead_line.map(|line| (line, MAUVE, keys::Act::RestartLead)), hub_line.map(|line| (line, YELLOW, keys::Act::Hub))].into_iter().flatten().collect::<Vec<_>>();
+    let context_line = app.context_line_for(area.width as usize).filter(|_| app.page == Page::Work);
+    let banners = [lead_line.map(|line| (line, MAUVE, keys::Act::RestartLead)), context_line.map(|line| (line, PEACH, keys::Act::RestartLead)), hub_line.map(|line| (line, YELLOW, keys::Act::Hub))].into_iter().flatten().collect::<Vec<_>>();
     let [top, _, lead_area, body, messages_area, bottom] = Layout::vertical([
         Constraint::Length(1), Constraint::Length(1), Constraint::Length(if banners.is_empty() { 0 } else { banners.len() as u16 + 1 }), Constraint::Min(3), Constraint::Length(messages_height(fold, full.height)), Constraint::Length(1),
     ]).areas(area);
@@ -161,6 +162,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::ConfirmQueued { name, about, now, nudged } => draw_queued(frame, name, about, *now, *nudged),
         Mode::ConfirmClaimed { entry, about, machine, nudged } => draw_claimed(frame, &entry.title, about, machine, *nudged),
         Mode::ConfirmDrop { name, force, nudged, .. } => draw_drop(frame, name, *force, *nudged),
+        Mode::RestartLead(index) => modal_hits = draw_restart_lead(frame, *index),
         Mode::Filter { buffer } => draw_filter(frame, app, buffer),
         Mode::ConfirmPush { .. } => modal_hits = draw_push(frame, app),
         Mode::Working { label, .. } => {

@@ -271,9 +271,9 @@ pub fn announce_in(dir: &Path, sessions: &[Session], installed: &str, now: &mut 
 
 pub fn lead_restart(auto: bool, key: &str) -> String {
     if auto {
-        format!("kebbie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press {key} on the board")
+        format!("kebbie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press {key} on the board and choose to resume")
     } else {
-        format!("restart.auto is off, so nothing restarts you on its own: the user presses {key} on the board, which resumes this conversation on it")
+        format!("restart.auto is off, so nothing restarts you on its own: the user presses {key} on the board and chooses to resume this conversation on it or start fresh")
     }
 }
 
@@ -415,8 +415,8 @@ mod tests {
         let told = Record { known: fresh.known.clone(), ..untold };
         assert_eq!(stale_line(Some(&told), "kebbie 0.24.0", role, "a restart brings it in").unwrap(), "kebbie: you started on kebbie 0.22.4; kebbie 0.24.0 is installed. kebbie has sent you what changed for you, and your role as it is now is in /r/lead.md; a restart brings it in.");
         let lead = |auto: bool| stale_line(Some(&told), "kebbie 0.24.0", role, &lead_restart(auto, "L")).unwrap();
-        assert!(lead(true).ends_with("; kebbie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press L on the board."), "{}", lead(true));
-        assert!(lead(false).ends_with("; restart.auto is off, so nothing restarts you on its own: the user presses L on the board, which resumes this conversation on it."), "{}", lead(false));
+        assert!(lead(true).ends_with("; kebbie restarts you on it, resuming this conversation, once the user is out of your pane and you are idle, or at once when they press L on the board and choose to resume."), "{}", lead(true));
+        assert!(lead(false).ends_with("; restart.auto is off, so nothing restarts you on its own: the user presses L on the board and chooses to resume this conversation on it or start fresh."), "{}", lead(false));
         assert!(!lead(true).contains("kebbie lead --restart") && !lead(false).contains("another pane"));
     }
 }
