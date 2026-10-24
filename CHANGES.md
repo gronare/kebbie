@@ -14,6 +14,8 @@ What each kelpie release brings, one line per change, as you would tell someone 
 - kelpie speaks of the bugs in kelpie you ran into, plainly, on the board and in its messages
 - The update shows each step as it goes, with a bar while kelpie builds or downloads, and ends with what's new and what restarts
 - The line about the lead restarting on the new kelpie is short and always fits the board
+- One bar shows the whole update, from fetching to the restarts, weighed by how long each step took last time, and the summary comes once it is full
 
 ### Fixed
 - The lead and other sessions restart onto each new kelpie again; a restart for an earlier update no longer holds them back
+- The update's summary lists what was written since the kelpie you had, names only the bugs this update fixed, keeps its restarts up to date while open, and the board restarts itself onto the new kelpie when you close it

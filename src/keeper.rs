@@ -24,6 +24,7 @@ pub const OFF: &str = "keeper: off ([keeper] enabled = false); an open board run
 pub struct Ctx {
     memory: crate::restart::Memory,
     stale: Vec<String>,
+    stale_at: u64,
     notes: Vec<String>,
 }
 
@@ -62,6 +63,7 @@ fn restart(ctx: &mut Ctx) -> Result<()> {
     let lines = crate::restart::run(crate::restart::Mode::Routine { min_idle: 0 }, &mut ctx.memory, None)?;
     ctx.notes.extend(lines.iter().filter(|line| line.said == "restarted" || line.said.starts_with("restart failed")).map(|line| format!("restart: {}: {}", line.label, line.said)));
     ctx.stale = stale_lines(&lines);
+    ctx.stale_at = crate::messages::now();
     ctx.notes.extend(crate::known::announce()?.into_iter().map(|said| format!("update: {said}")));
     Ok(())
 }
@@ -297,24 +299,24 @@ fn catch_stop() {
     }
 }
 
-fn status_json(holder: &Holder, routines: &[Routine], tracks: &[Track], stale: &[String]) -> Value {
+fn status_json(holder: &Holder, routines: &[Routine], tracks: &[Track], stale: &[String], stale_at: u64) -> Value {
     let rows: Vec<Value> = routines.iter().zip(tracks).map(|(routine, track)| json!({ "name": routine.name, "every": routine.every, "last": track.last, "failures": track.failures, "error": track.error })).collect();
-    json!({ "pid": holder.pid, "exe": holder.exe, "started": holder.started, "routines": rows, "stale": stale })
+    json!({ "pid": holder.pid, "exe": holder.exe, "started": holder.started, "routines": rows, "stale": stale, "stale_at": stale_at })
 }
 
 fn read_status(dir: &Path) -> Option<Value> {
     serde_json::from_str(&fs::read_to_string(dir.join(STATUS)).ok()?).ok()
 }
 
-// The stale sessions the running keeper last saw, for the board's pill; a dead keeper's leftovers count as none.
-pub fn stale_in(dir: &Path) -> Vec<String> {
-    let Some(holder) = holder(dir) else { return Vec::new() };
+// The stale sessions the running keeper last saw and when, for the board's pill; a dead keeper's leftovers count as none, seen at 0.
+pub fn stale_in(dir: &Path) -> (u64, Vec<String>) {
+    let Some(holder) = holder(dir) else { return (0, Vec::new()) };
     read_status(dir).filter(|status| holder.pid.is_some() && status["pid"].as_u64() == holder.pid.map(u64::from))
-        .map(|status| status["stale"].as_array().into_iter().flatten().filter_map(|line| line.as_str().map(str::to_string)).collect())
+        .map(|status| (status["stale_at"].as_u64().unwrap_or(0), status["stale"].as_array().into_iter().flatten().filter_map(|line| line.as_str().map(str::to_string)).collect()))
         .unwrap_or_default()
 }
 
-pub fn stale() -> Vec<String> {
+pub fn stale() -> (u64, Vec<String>) {
     crate::lead::state_dir().map(|dir| stale_in(&dir)).unwrap_or_default()
 }
 
@@ -510,7 +512,7 @@ pub fn run() -> Result<String> {
             }
         }
         if !ran.is_empty() {
-            let _ = crate::state::write(&dir.join(STATUS), status_json(&me, &routines, &tracks, &ctx.stale).to_string());
+            let _ = crate::state::write(&dir.join(STATUS), status_json(&me, &routines, &tracks, &ctx.stale, ctx.stale_at).to_string());
         }
         pause(wait(&routines, &tracks, crate::messages::now()));
     };
@@ -623,7 +625,7 @@ mod tests {
             Track { last: Some(17_160), failures: 2, error: Some("herdr agent list failed".to_string()) },
             Track::default(),
         ];
-        let status = status_json(&me, &routines, &tracks, &["billing: restarts when idle".to_string()]);
+        let status = status_json(&me, &routines, &tracks, &["billing: restarts when idle".to_string()], 17_160);
         assert_eq!(render_status(true, Some(&me), Some(&status), log, 17_200), [
             "keeper: running, pid 4242, up 2h",
             "binary: /home/u/.local/share/kelpie/current/target/release/kelpie",
@@ -657,10 +659,10 @@ mod tests {
     fn the_board_shows_the_stale_sessions_only_a_running_keeper_saw() {
         let dir = crate::sh::test_dir("keeper-stale");
         let me = Holder { pid: Some(std::process::id()), exe: None, started: None };
-        fs::write(dir.join(STATUS), status_json(&me, &[], &[], &["api: restarts when idle".to_string()]).to_string()).unwrap();
-        assert!(stale_in(&dir).is_empty(), "no keeper holds the lock");
+        fs::write(dir.join(STATUS), status_json(&me, &[], &[], &["api: restarts when idle".to_string()], 500).to_string()).unwrap();
+        assert_eq!(stale_in(&dir), (0, Vec::new()), "no keeper holds the lock");
         let held = acquire(&dir, Path::new("/kelpie"), 1).unwrap().unwrap();
-        assert_eq!(stale_in(&dir), ["api: restarts when idle"]);
+        assert_eq!(stale_in(&dir), (500, vec!["api: restarts when idle".to_string()]), "with the round's time, so a board can tell a reading from before an update");
         drop(held);
         fs::remove_dir_all(dir).unwrap();
     }

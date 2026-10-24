@@ -16,6 +16,7 @@ use crate::vault_cli;
 pub struct Outcome {
     pub summary: Summary,
     pub details: Vec<String>,
+    pub started: u64,
 }
 
 fn now() -> u64 {
@@ -45,7 +46,10 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
     let old_head = root.as_deref().and_then(short_head);
     let path = progress::file(&state);
     let (fetch, build) = labels(channel, request, release::read_override(&state).as_ref());
-    let tracker = Tracker::start(&path, &fetch, build, now());
+    let weighed = build_mode(channel, release::read_override(&state).is_some());
+    let mut tracker = Tracker::start(&path, &fetch, build, now());
+    tracker.progress.weights = progress::weights(&state, weighed);
+    tracker.save();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let printer = visible.then(|| progress::print_while(path.clone(), stop.clone()));
     let (mut tracker, installed) = herdr_plugin(&plugin, &state, channel, request, tracker, old_head.as_deref());
@@ -69,12 +73,17 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
         let version = after.iter().find(|component| component.name == update_check::KELPIE).and_then(|component| component.installed.clone()).unwrap_or_default();
         let was = before.iter().find(|component| component.name == update_check::KELPIE).and_then(|component| component.installed.clone());
         let main = channel == Channel::Main || running.is_some();
-        let notes = root.as_deref().map(|root| changes::for_update(root, old_head.as_deref(), was.as_deref(), &version, main)).unwrap_or_default();
-        let restart = tracker.progress.summary.take().map(|summary| summary.restart).unwrap_or_default();
-        Outcome { summary: Summary { version, new: notes.new, fixed: notes.fixed, restart }, details }
+        let olds = old_commits(&before, old_head.as_deref());
+        let notes = root.as_deref().map(|root| changes::for_update(root, &olds, was.as_deref(), &version, main)).unwrap_or_default();
+        let head = root.as_deref().and_then(|root| update_check::git(root, &["rev-parse", "--short=7", "HEAD"]).ok()).unwrap_or_default();
+        let restarted = tracker.progress.summary.take().unwrap_or_default();
+        Outcome { summary: Summary { version, new: notes.new, fixed: notes.fixed, head, ..restarted }, details, started: tracker.progress.started }
     });
     match &outcome {
-        Ok(outcome) => tracker.finish(outcome.summary.clone()),
+        Ok(outcome) => {
+            progress::record_durations(&state, weighed, &tracker.progress);
+            tracker.finish(outcome.summary.clone());
+        }
         Err(_) => {
             tracker.fail_current();
             tracker.progress.finished = true;
@@ -86,6 +95,12 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
         let _ = printer.join();
     }
     outcome
+}
+
+// A checkout can reach the new commit before the update runs, when kelpie is developed in it, so the binary's own commit says best where the update came from.
+fn old_commits(before: &[Component], old_head: Option<&str>) -> Vec<String> {
+    let built = before.iter().find(|component| component.name == update_check::KELPIE).and_then(|component| component.built.clone());
+    built.into_iter().chain(old_head.map(str::to_string)).collect()
 }
 
 fn section(lines: &mut Vec<String>, heading: &str, entries: impl IntoIterator<Item = String>) {
@@ -149,30 +164,47 @@ pub fn finish(claude_dir: &Path, progress: Option<&Path>) -> Result<Vec<String>>
     }
 }
 
+fn step(tracker: &mut Option<Tracker>, index: usize, label: &str, done: bool) {
+    if let Some(tracker) = tracker.as_mut() {
+        if done { tracker.done(index, label) } else { tracker.begin(index, label, now()) }
+    }
+}
+
+fn count(tracker: &mut Option<Tracker>, what: &str, done: usize, total: usize) {
+    if let Some(tracker) = tracker.as_mut() {
+        tracker.meter(progress::Meter::Count { what: what.to_string(), done: done as u64, total: total as u64 });
+    }
+}
+
 fn finish_in(claude_dir: &Path, state: &Path, tracker: &mut Option<Tracker>) -> Result<Vec<String>> {
     let plugin = kelpie_plugin()?;
     let root = plugin["plugin_root"].as_str().filter(|root| !root.is_empty()).map(PathBuf::from);
     let channel = config::channel()?;
     let running = release::read_override(state);
-    let mut on = |index: usize, label: &str, done: bool| if let Some(tracker) = tracker.as_mut() { if done { tracker.done(index, label) } else { tracker.begin(index, label, now()) } };
-    on(progress::PLUGINS, "Claude Code and vault plugins", false);
+    let vault_installed = vault_cli::installed(claude_dir).is_some();
+    let plugins = 1 + usize::from(vault_installed);
+    step(tracker, progress::PLUGINS, "Claude Code and vault plugins", false);
+    count(tracker, "plugins", 0, plugins);
     let mut lines = vec![claude_plugin(claude_dir, &setup::claude_bin(), root.as_deref(), channel == Channel::Main && running.is_none())];
-    let vault = vault_plugin(claude_dir, &setup::claude_bin());
-    lines.extend(vault);
-    on(progress::PLUGINS, if vault_cli::installed(claude_dir).is_some() { "Updated the Claude Code and vault plugins" } else { "Updated the Claude Code plugin" }, true);
-    on(progress::RESTART, "Restarting sessions", false);
+    count(tracker, "plugins", 1, plugins);
+    lines.extend(vault_plugin(claude_dir, &setup::claude_bin()));
+    count(tracker, "plugins", plugins, plugins);
+    step(tracker, progress::PLUGINS, if vault_installed { "Updated the Claude Code and vault plugins" } else { "Updated the Claude Code plugin" }, true);
+    step(tracker, progress::RESTART, "Restarting sessions", false);
     update_check::forget(state);
     crate::restart::mark_updated(state, crate::restart::now())?;
-    let restarted = crate::restart::run(crate::restart::Mode::Update, &mut crate::restart::Memory::default(), None)?;
+    let restarted = crate::restart::run_counted(crate::restart::Mode::Update, &mut crate::restart::Memory::default(), None, &mut |done, total| count(tracker, "sessions", done, total))?;
     lines.extend(crate::restart::report(&restarted));
     lines.extend(crate::known::announce().unwrap_or_else(|error| vec![format!("telling the sessions what changed failed: {error}")]));
+    let restarted_at = now();
     let board = lead::renew_board().unwrap_or_else(|error| error);
-    let said = restart_summary(&restarted, &board);
+    let mut said = restart_summary(&restarted);
+    said.extend(board_summary(&board));
     lines.push(board);
     lines.extend(crate::issues::after_update(state, root.as_deref()));
-    on(progress::RESTART, "Sessions move to the new kelpie", true);
+    step(tracker, progress::RESTART, "Sessions move to the new kelpie", true);
     if let Some(tracker) = tracker.as_mut() {
-        tracker.progress.summary = Some(Summary { restart: said, ..Summary::default() });
+        tracker.progress.summary = Some(Summary { restart: said, sessions: restarted, restarted_at, ..Summary::default() });
         tracker.save();
     }
     Ok(lines)
@@ -193,42 +225,58 @@ fn counted(lead: bool, sessions: usize) -> Option<(String, bool)> {
     }
 }
 
-pub fn restart_summary(lines: &[crate::restart::Line], board: &str) -> Vec<String> {
+pub fn restart_summary(lines: &[crate::restart::Line]) -> Vec<String> {
     let lead = crate::status::LEAD_LABEL;
     let group = |test: &dyn Fn(&str) -> bool| (lines.iter().any(|line| line.label == lead && test(&line.said)), lines.iter().filter(|line| line.label != lead && test(&line.said)).count());
-    let restarted = group(&|said| said.starts_with("restarted"));
+    let on = group(&|said| said.starts_with("restarted") || said == "up to date");
     let failed = group(&|said| said.starts_with("restart failed"));
     let asked = group(&|said| said.starts_with("waiting for your answer"));
     let manual = group(&|said| said.contains("run kelpie restart"));
+    let held = group(&|said| said.starts_with("stale, held"));
     let waits = group(&|said| !said.contains("run kelpie restart") && (said.contains("restarts when") || said.contains("restarts once") || said.contains("then restarts") || said.starts_with("not restarted yet")));
     let mut said = Vec::new();
-    if let Some((who, many)) = counted(waits.0, waits.1) {
-        said.push(if many { format!("{who} restart when they're idle.") } else { format!("{who} restarts when it's idle.") });
+    if let Some((who, many)) = counted(on.0, on.1) {
+        said.push(format!("✓ {who} {} on the new kelpie", if many { "are" } else { "is" }));
     }
-    if let Some((who, _)) = counted(restarted.0, restarted.1) {
-        said.push(format!("{who} restarted on the new kelpie."));
+    if let Some((who, many)) = counted(waits.0, waits.1) {
+        said.push(if many { format!("{who} restart when they're idle") } else { format!("{who} restarts when it's idle") });
     }
     if let Some((who, many)) = counted(manual.0, manual.1) {
         let them = if many { "them" } else { "it" };
-        said.push(format!("{who} keep{} the old kelpie until you restart {them}: restart.auto is off.", if many { "" } else { "s" }));
+        said.push(format!("{who} keep{} the old kelpie until you restart {them}: restart.auto is off", if many { "" } else { "s" }));
+    }
+    if let Some((who, many)) = counted(held.0, held.1) {
+        said.push(format!("{who} stay{} on the old kelpie, as a restart did not move {}; d shows why", if many { "" } else { "s" }, if many { "them" } else { "it" }));
     }
     if let Some((who, many)) = counted(asked.0, asked.1) {
-        said.push(format!("{who} wait{} for your answer, as background work is still running.", if many { "" } else { "s" }));
+        said.push(format!("{who} wait{} for your answer, as background work is still running", if many { "" } else { "s" }));
     }
     if let Some((who, _)) = counted(failed.0, failed.1) {
-        said.push(format!("Restarting {} failed; d shows why.", who.replacen("The lead", "the lead", 1)));
+        said.push(format!("Restarting {} failed; d shows why", who.replacen("The lead", "the lead", 1)));
     }
-    if said.is_empty() {
-        said.push(if lines.is_empty() { "No Claude sessions are running.".to_string() } else { "Every session already runs the new kelpie.".to_string() });
-    }
-    match board {
-        "board: restarted on the new kelpie" => said.push("The board restarted on the new kelpie.".to_string()),
-        line if line.starts_with("board: not running") => said.push("The board restarts when you open it again.".to_string()),
-        line if line.starts_with("board: restarts on the new kelpie once") => said.push("The board restarts on the new kelpie when you close this window.".to_string()),
-        "board: up to date" | "board: no lead Space" | "board: the lead Space has no board pane" => {}
-        _ => said.push("The board did not restart; d shows why.".to_string()),
+    if said.is_empty() && lines.is_empty() {
+        said.push("No Claude sessions are running".to_string());
     }
     said
+}
+
+pub fn board_summary(board: &str) -> Option<String> {
+    match board {
+        "board: restarted on the new kelpie" => Some("The board restarted on the new kelpie".to_string()),
+        line if line.starts_with("board: not running") || line.starts_with("board: restarts on the new kelpie once") => Some("Open boards restart on the new kelpie when you next open them".to_string()),
+        "board: up to date" | "board: no lead Space" | "board: the lead Space has no board pane" => None,
+        _ => Some("The board did not restart; d shows why".to_string()),
+    }
+}
+
+// The sessions the update went through, each as the latest restart round sees it; one no longer stale there runs the new kelpie.
+pub fn live_sessions(update: &[crate::restart::Line], stale: Option<&[String]>) -> Vec<crate::restart::Line> {
+    update.iter().map(|line| {
+        let Some(stale) = stale.filter(|_| !line.said.starts_with("skipped")) else { return line.clone() };
+        let prefix = format!("{}: ", line.label);
+        let said = stale.iter().find_map(|entry| entry.strip_prefix(&prefix)).unwrap_or("up to date");
+        crate::restart::Line { said: said.to_string(), ..line.clone() }
+    }).collect()
 }
 
 pub fn check(claude_dir: &Path) -> String {
@@ -597,21 +645,48 @@ mod tests {
     #[test]
     fn the_restarts_are_summed_up_in_a_sentence_or_two_and_only_what_needs_you_is_named() {
         let lines = said(&[("lead", "restarts when idle"), ("billing@app", "restarts when idle"), ("api@app", "you are in it: restarts when you leave it"), ("ghost", "skipped: its session id is unknown")]);
-        assert_eq!(restart_summary(&lines, "board: not running; it starts with the new kelpie when you open the lead"), ["The lead and 2 sessions restart when they're idle.", "The board restarts when you open it again."]);
-        assert_eq!(restart_summary(&said(&[("lead", "restarts when idle")]), "board: up to date"), ["The lead restarts when it's idle."]);
+        assert_eq!(restart_summary(&lines), ["The lead and 2 sessions restart when they're idle"]);
+        assert_eq!(restart_summary(&said(&[("lead", "restarts when idle")])), ["The lead restarts when it's idle"]);
         let manual = said(&[("lead", "stale: run kelpie restart when you want it"), ("billing@app", "stale: run kelpie restart when you want it")]);
-        assert_eq!(restart_summary(&manual, "board: restarted on the new kelpie"), ["The lead and 1 session keep the old kelpie until you restart them: restart.auto is off.", "The board restarted on the new kelpie."]);
-        let trouble = said(&[("billing@app", "restart failed: Claude did not come back"), ("worker@app", "waiting for your answer: background work running")]);
-        assert_eq!(restart_summary(&trouble, "board: restarts on the new kelpie once the update's window closes"), ["1 session waits for your answer, as background work is still running.", "Restarting 1 session failed; d shows why.", "The board restarts on the new kelpie when you close this window."]);
-        assert_eq!(restart_summary(&[], "board: no lead Space"), ["No Claude sessions are running."]);
-        assert_eq!(restart_summary(&said(&[("billing@app", "up to date")]), "board: up to date"), ["Every session already runs the new kelpie."]);
+        assert_eq!(restart_summary(&manual), ["The lead and 1 session keep the old kelpie until you restart them: restart.auto is off"]);
+        let trouble = said(&[("billing@app", "restart failed: Claude did not come back"), ("worker@app", "waiting for your answer: background work running"), ("api@app", "stale, held: a restart onto kelpie 0.27.0 left it on kelpie 0.26.0; restarting again would not move it")]);
+        assert_eq!(restart_summary(&trouble), ["1 session stays on the old kelpie, as a restart did not move it; d shows why", "1 session waits for your answer, as background work is still running", "Restarting 1 session failed; d shows why"]);
+        assert_eq!(restart_summary(&[]), ["No Claude sessions are running"]);
+        let on = said(&[("lead", "restarted"), ("billing@app", "up to date"), ("api@app", "restarted"), ("worker@app", "up to date"), ("docs@app", "restarts when idle")]);
+        assert_eq!(restart_summary(&on), ["✓ The lead and 3 sessions are on the new kelpie", "1 session restarts when it's idle"]);
+        assert_eq!(restart_summary(&said(&[("billing@app", "up to date")])), ["✓ 1 session is on the new kelpie"]);
+    }
+
+    #[test]
+    fn the_terminal_names_the_board_and_a_board_names_none() {
+        assert_eq!(board_summary("board: not running; it starts with the new kelpie when you open the lead").as_deref(), Some("Open boards restart on the new kelpie when you next open them"));
+        assert_eq!(board_summary("board: restarted on the new kelpie").as_deref(), Some("The board restarted on the new kelpie"));
+        assert_eq!(board_summary("board: up to date"), None);
+        assert_eq!(board_summary("board: did not quit on ctrl-c; quit it and open the lead again").as_deref(), Some("The board did not restart; d shows why"));
+    }
+
+    #[test]
+    fn the_sessions_follow_the_latest_restart_round_and_one_gone_from_it_runs_the_new_kelpie() {
+        let update = said(&[("lead", "restarts when idle"), ("billing@app", "you are in it: restarts when you leave it"), ("api@app", "restarts when idle"), ("ghost", "skipped: its session id is unknown")]);
+        assert_eq!(live_sessions(&update, None), update, "without a round since the update, the update's own word stands");
+        let live = live_sessions(&update, Some(&["api@app: restarts when idle".to_string()]));
+        assert_eq!(live.iter().map(|line| line.said.as_str()).collect::<Vec<_>>(), ["up to date", "up to date", "restarts when idle", "skipped: its session id is unknown"]);
+        assert_eq!(restart_summary(&live), ["✓ The lead and 1 session are on the new kelpie", "1 session restarts when it's idle"]);
+    }
+
+    #[test]
+    fn the_notes_come_from_the_commit_the_old_binary_was_built_from_before_the_old_head() {
+        let kelpie = |built: Option<&str>| Component { name: update_check::KELPIE.to_string(), installed: Some("0.27.0".to_string()), built: built.map(str::to_string), ..Component::default() };
+        assert_eq!(old_commits(&[kelpie(Some("c634f7b"))], Some("f39045b")), ["c634f7b", "f39045b"]);
+        assert_eq!(old_commits(&[kelpie(None)], Some("f39045b")), ["f39045b"]);
+        assert!(old_commits(&[], None).is_empty());
     }
 
     #[test]
     fn the_terminal_summary_puts_the_notes_and_the_fixed_bugs_above_the_details() {
-        let outcome = Outcome { summary: Summary { version: "0.28.0".to_string(), new: vec!["Name a device".to_string()], fixed: Vec::new(), restart: vec!["The lead restarts when it's idle.".to_string()] }, details: vec!["kelpie 0.27.0 → 0.28.0".to_string()] };
-        assert_eq!(text(&outcome, &["update stopped on a newer config key".to_string()]), "✓ Updated kelpie 0.28.0\n\nWhat's new\n  • Name a device\nFixed\n  • A bug you ran into: update stopped on a newer config key\n\nRestarting\n  The lead restarts when it's idle.\n\nDetails\nkelpie 0.27.0 → 0.28.0");
-        let bare = Outcome { summary: Summary::default(), details: Vec::new() };
+        let outcome = Outcome { summary: Summary { version: "0.28.0".to_string(), new: vec!["Name a device".to_string()], restart: vec!["The lead restarts when it's idle".to_string(), "Open boards restart on the new kelpie when you next open them".to_string()], ..Summary::default() }, details: vec!["kelpie 0.27.0 → 0.28.0".to_string()], started: 0 };
+        assert_eq!(text(&outcome, &["update stopped on a newer config key".to_string()]), "✓ Updated kelpie 0.28.0\n\nWhat's new\n  • Name a device\nFixed\n  • A bug you ran into: update stopped on a newer config key\n\nRestarting\n  The lead restarts when it's idle\n  Open boards restart on the new kelpie when you next open them\n\nDetails\nkelpie 0.27.0 → 0.28.0");
+        let bare = Outcome { summary: Summary::default(), details: Vec::new(), started: 0 };
         assert!(text(&bare, &[]).contains("No notes for this update"), "never the commit subjects");
     }
 

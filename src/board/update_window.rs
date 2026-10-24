@@ -1,13 +1,16 @@
-use std::path::PathBuf;
+use std::cell::Cell;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::text::{Line, Span};
 
+use crate::issue_recheck::Fixed;
 use crate::sh::Result;
-use crate::update_progress::{self as progress, Progress, State};
+use crate::update_progress::{self as progress, Overall, Progress, State, Summary};
 use super::widgets::{GREEN, MAUVE, MUTED, PEACH, RED, TEXT, bold, modal, style, wrap};
 use super::{App, Mode};
 
@@ -18,6 +21,9 @@ pub(super) struct Run {
     pub(super) outcome: Option<Result<String>>,
     details: bool,
     file: PathBuf,
+    overall: Cell<Overall>,
+    fixed: Option<Fixed>,
+    fixed_read: Option<Instant>,
 }
 
 impl Run {
@@ -60,9 +66,16 @@ pub(super) fn step_lines(progress: &Progress, now: u64, width: usize) -> Vec<Lin
     }).collect()
 }
 
-fn running(progress: Option<&Progress>, now: u64, width: usize) -> Vec<Line<'static>> {
+fn running(progress: Option<&Progress>, overall: &Cell<Overall>, now: u64, width: usize) -> Vec<Line<'static>> {
     let mut lines = match progress.filter(|progress| !progress.steps.is_empty()) {
-        Some(progress) => step_lines(progress, now, width),
+        Some(progress) => {
+            let mut bar = overall.get();
+            let shown = bar.advance(progress, now);
+            overall.set(bar);
+            let mut lines = vec![Line::from(Span::styled(progress::overall_line(shown, width), style(MAUVE))), Line::default()];
+            lines.extend(step_lines(progress, now, width));
+            lines
+        }
         None => vec![muted("▸ Starting the update…")],
     };
     lines.push(Line::default());
@@ -70,7 +83,7 @@ fn running(progress: Option<&Progress>, now: u64, width: usize) -> Vec<Line<'sta
     lines
 }
 
-pub(super) fn finished(progress: Option<&Progress>, bugs: &[String], width: usize) -> (String, Vec<Line<'static>>) {
+pub(super) fn finished(progress: Option<&Progress>, bugs: &[String], restart: &[String], width: usize) -> (String, Vec<Line<'static>>) {
     let summary = progress.and_then(|progress| progress.summary.clone()).unwrap_or_default();
     let title = if summary.version.is_empty() { "kelpie".to_string() } else { format!("kelpie {}", summary.version) };
     let mut lines = vec![Line::from(Span::styled("✓ Updated", bold(GREEN))), Line::default()];
@@ -86,10 +99,10 @@ pub(super) fn finished(progress: Option<&Progress>, bugs: &[String], width: usiz
         lines.push(heading("Fixed"));
         lines.extend(fixed.iter().flat_map(|entry| bullet(entry, width)));
     }
-    if !summary.restart.is_empty() {
+    if !restart.is_empty() {
         lines.push(Line::default());
         lines.push(heading("Restarting"));
-        lines.extend(summary.restart.iter().flat_map(|said| indented(said, width)));
+        lines.extend(restart.iter().flat_map(|said| indented(said, width)));
     }
     lines.push(Line::default());
     lines.push(keys(&[("d", "details"), ("any other key", "closes")]));
@@ -120,11 +133,12 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     let width = WIDTH.min(frame.area().width.saturating_sub(4)).saturating_sub(4) as usize;
     let progress = progress::load(&run.file);
     let now = crate::messages::now();
-    let bugs = app.fixed_bugs(progress.as_ref());
+    let bugs = run.fixed.as_ref().map(|fixed| fixed.bugs.clone()).unwrap_or_default();
+    let restart = progress.as_ref().and_then(|progress| progress.summary.as_ref()).map(|summary| app.restart_lines(summary)).unwrap_or_default();
     let (title, lines) = match &run.outcome {
-        None => ("Updating kelpie".to_string(), running(progress.as_ref(), now, width)),
-        Some(Ok(text)) if run.details => (finished(progress.as_ref(), &bugs, width).0, details(text)),
-        Some(Ok(_)) => finished(progress.as_ref(), &bugs, width),
+        None => ("Updating kelpie".to_string(), running(progress.as_ref(), &run.overall, now, width)),
+        Some(Ok(text)) if run.details => (finished(progress.as_ref(), &bugs, &restart, width).0, details(text)),
+        Some(Ok(_)) => finished(progress.as_ref(), &bugs, &restart, width),
         Some(Err(error)) if run.details => ("kelpie update".to_string(), details(error)),
         Some(Err(error)) => ("kelpie update".to_string(), failed(error, progress.as_ref(), now, width)),
     };
@@ -136,10 +150,19 @@ impl App {
         self.progress_file.clone().or_else(|| crate::lead::state_dir().ok().map(|state| progress::file(&state))).unwrap_or_default()
     }
 
-    // A fixed line left from an earlier update names another version, so it stays out.
-    pub(super) fn fixed_bugs(&self, progress: Option<&Progress>) -> Vec<String> {
-        let version = progress.and_then(|progress| progress.summary.as_ref()).map(|summary| summary.version.clone()).unwrap_or_default();
-        self.fixed.as_ref().filter(|fixed| !version.is_empty() && fixed.version == version).map(|fixed| fixed.bugs.clone()).unwrap_or_default()
+    // The board restarts itself onto the new kelpie once this window closes, so it names no board; a restart round older than the update's own says nothing new.
+    pub(super) fn restart_lines(&self, summary: &Summary) -> Vec<String> {
+        if summary.sessions.is_empty() {
+            return summary.restart.iter().filter(|line| !line.starts_with("The board") && !line.starts_with("Open boards")).cloned().collect();
+        }
+        let live = (self.stale_at >= summary.restarted_at && summary.restarted_at > 0).then_some(self.stale.as_slice());
+        crate::update::restart_summary(&crate::update::live_sessions(&summary.sessions, live))
+    }
+
+    fn read_fixed(state: &Path, progress: Option<&Progress>) -> Option<Fixed> {
+        let progress = progress?;
+        let head = progress.summary.as_ref().map(|summary| summary.head.as_str()).unwrap_or_default();
+        crate::issue_recheck::for_update(state, progress.started, head, crate::messages::now())
     }
 
     pub(super) fn start_update(&mut self) {
@@ -153,11 +176,17 @@ impl App {
         thread::spawn(move || {
             let _ = sender.send(updater());
         });
-        self.update = Some(Run { result, outcome: None, details: false, file });
+        self.update = Some(Run { result, outcome: None, details: false, file, overall: Cell::new(Overall::default()), fixed: None, fixed_read: None });
         self.mode = Mode::Update;
     }
 
     pub(super) fn poll_update(&mut self) {
+        if let Some(run) = self.update.as_mut().filter(|run| matches!(run.outcome, Some(Ok(_))) && run.fixed_read.is_none_or(|at| at.elapsed() >= Duration::from_secs(2)))
+            && let Some(state) = run.file.parent()
+        {
+            run.fixed = Self::read_fixed(state, progress::load(&run.file).as_ref());
+            run.fixed_read = Some(Instant::now());
+        }
         let Some(run) = self.update.as_mut().filter(|run| run.running()) else { return };
         let Ok(outcome) = run.result.try_recv() else { return };
         run.outcome = Some(outcome);
@@ -184,6 +213,13 @@ impl App {
             self.mode = Mode::Update;
             return;
         }
+        let succeeded = matches!(run.outcome, Some(Ok(_)));
+        if let (Some(fixed), Some(state)) = (&run.fixed, run.file.parent()) {
+            let _ = crate::issue_recheck::dismiss(state, fixed, crate::messages::now());
+            self.fixed_seen = self.fixed_seen.max(fixed.last);
+            self.fixed = self.fixed.take().filter(|shown| shown.last > self.fixed_seen);
+        }
+        self.restart_after_update = succeeded;
         self.update = None;
     }
 
@@ -217,7 +253,8 @@ mod tests {
 
     fn summary(new: &[&str], fixed: &[&str]) -> Summary {
         let owned = |lines: &[&str]| lines.iter().map(|line| line.to_string()).collect();
-        Summary { version: "0.27.0".to_string(), new: owned(new), fixed: owned(fixed), restart: vec!["The lead and 2 sessions restart when they're idle.".to_string(), "The board restarts when you open it again.".to_string()] }
+        let line = |label: &str, said: &str| crate::restart::Line { label: label.to_string(), said: said.to_string(), stale: true };
+        Summary { version: "0.27.0".to_string(), new: owned(new), fixed: owned(fixed), restart: vec!["The lead and 2 sessions restart when they're idle".to_string(), "Open boards restart on the new kelpie when you next open them".to_string()], sessions: vec![line("lead", "restarts when idle"), line("billing@app", "restarts when idle"), line("api@app", "restarts when idle")], restarted_at: 1000, head: "9cbd545".to_string() }
     }
 
     fn updating(app: &mut App, finish: Summary) -> mpsc::Sender<()> {
@@ -249,6 +286,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::Update), "the key returns while the update runs");
         waits_for(&mut app, "the build step", |app| progress::load(&app.progress_file()).is_some_and(|progress| progress.meter.is_some()));
         let shown = screen(&mut app, 100);
+        assert!(shown.lines().any(|line| line.contains('█') && line.contains('%') && !line.contains("crates")), "one bar for the whole update above the steps: {shown}");
         for line in ["Updating kelpie", "✓ Fetched main (3 new commits)", "▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 0:0", "  Claude Code and vault plugins", "  Restart sessions", "esc hides this; the update keeps going"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
@@ -265,18 +303,30 @@ mod tests {
         assert!(matches!(app.mode, Mode::Update) && app.updates.is_empty(), "the summary opens by itself once the board is at rest");
     }
 
+    fn closed_by_recheck(state: &Path, id: &str, rechecked: String) {
+        let issue = crate::issues::Issue { id: id.to_string(), title: format!("bug {id}"), kind: "bug".to_string(), status: "fixed".to_string(), rechecked: Some(rechecked), ..crate::issues::Issue::default() };
+        crate::issues::save(&crate::issues::dir(state), &issue).unwrap();
+    }
+
     #[test]
-    fn the_finished_window_shows_the_notes_the_bugs_the_recheck_closed_and_one_line_on_restarts_with_the_rest_behind_d() {
+    fn the_finished_window_shows_the_notes_the_bugs_this_update_closed_and_the_restarts_with_the_rest_behind_d() {
         let mut app = test_app(Vec::new());
         let release = updating(&mut app, summary(&["The hub window shows your devices by name, and r removes one"], &[]));
-        app.fixed = Some(crate::issue_recheck::Fixed { version: "0.27.0".to_string(), titles: vec!["update stopped on a newer config key".to_string()], bugs: vec!["update stopped on a newer config key".to_string()], wishes: 0, last: 1 });
+        let state = app.progress_file().parent().unwrap().to_path_buf();
+        let now = crate::messages::now();
+        closed_by_recheck(&state, "earlier", format!("1111111 fixed {} 0.27.0", now - 3600));
         press(&mut app, key(KeyCode::Char('U')));
         release.send(()).unwrap();
         waits_for(&mut app, "the outcome", |app| app.update.as_ref().is_some_and(|run| !run.running()));
+        closed_by_recheck(&state, "ours", format!("9cbd545 fixed {} 0.27.0", crate::messages::now()));
+        app.update.as_mut().unwrap().fixed_read = None;
+        app.poll_update();
         let shown = screen(&mut app, 100);
-        for line in ["kelpie 0.27.0", "✓ Updated", "What's new", " • The hub window shows your devices by name, and r removes", "   one", "Fixed", " • A bug you ran into: update stopped on a newer config key", "Restarting", " The lead and 2 sessions restart when they're idle.", " The board restarts when you open it again.", "d details · any other key closes"] {
+        for line in ["kelpie 0.27.0", "✓ Updated", "What's new", " • The hub window shows your devices by name, and r removes", "   one", "Fixed", " • A bug you ran into: bug ours", "Restarting", " The lead and 2 sessions restart when they're idle", "d details · any other key closes"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
+        assert!(!shown.contains("bug earlier"), "a bug an earlier update closed was shown then: {shown}");
+        assert!(!shown.contains("board") && !shown.contains("Open boards"), "the board restarts itself once this closes, so it names no board: {shown}");
         assert!(!shown.contains("pid") && !shown.contains("02c7fe0") && !shown.contains("lead: restarts"), "the detail lines wait behind d: {shown}");
         press(&mut app, key(KeyCode::Char('d')));
         let shown = screen(&mut app, 100);
@@ -285,6 +335,23 @@ mod tests {
         assert!(screen(&mut app, 100).contains("What's new"), "d again goes back");
         press(&mut app, key(KeyCode::Char('x')));
         assert!(matches!(app.mode, Mode::Normal) && app.update.is_none(), "any other key closes it");
+        assert!(app.restart_after_update, "closing the summary lets the board restart onto the new kelpie at once");
+        assert!(crate::issue_recheck::for_update(&state, 0, "9cbd545", crate::messages::now()).is_none(), "a bug the summary showed is never shown again");
+    }
+
+    #[test]
+    fn the_restarts_follow_the_rounds_after_the_update_while_the_window_is_open() {
+        let mut app = test_app(Vec::new());
+        let shown = summary(&[], &[]);
+        app.stale = vec!["lead: restarts when idle".to_string()];
+        app.stale_at = 999;
+        assert_eq!(app.restart_lines(&shown), ["The lead and 2 sessions restart when they're idle"], "a round from before the update says nothing about it");
+        app.stale_at = 1010;
+        assert_eq!(app.restart_lines(&shown), ["✓ 2 sessions are on the new kelpie", "The lead restarts when it's idle"]);
+        app.stale = Vec::new();
+        assert_eq!(app.restart_lines(&shown), ["✓ The lead and 2 sessions are on the new kelpie"]);
+        let old = Summary { sessions: Vec::new(), ..summary(&[], &[]) };
+        assert_eq!(app.restart_lines(&old), ["The lead and 2 sessions restart when they're idle"], "a summary an older kelpie wrote keeps its words, without the board");
     }
 
     #[test]

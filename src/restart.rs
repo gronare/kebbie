@@ -639,7 +639,7 @@ impl Memory {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Line {
     pub label: String,
     pub said: String,
@@ -701,6 +701,10 @@ pub fn failed_said(error: &str) -> String {
 }
 
 pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Line>> {
+    run_counted(mode, memory, only, &mut |_, _| {})
+}
+
+pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted: &mut dyn FnMut(usize, usize)) -> Result<Vec<Line>> {
     let (auto, idle_minutes) = config::restart_settings()?;
     let mode = match mode {
         Mode::Routine { .. } => Mode::Routine { min_idle: idle_minutes * 60 },
@@ -716,10 +720,10 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
     let mut live: HashMap<String, u32> = HashMap::new();
     let mut installed: Option<String> = None;
     let mut lines = Vec::new();
-    for pane in herdr::agents()?.iter().filter_map(Pane::from_agent) {
-        if only.is_some_and(|only| pane.session.as_deref() != Some(only)) {
-            continue;
-        }
+    let panes: Vec<Pane> = herdr::agents()?.iter().filter_map(Pane::from_agent).filter(|pane| only.is_none_or(|only| pane.session.as_deref() == Some(only))).collect();
+    let total = panes.len();
+    for (index, pane) in panes.into_iter().enumerate() {
+        counted(index, total);
         let line = |verdict: &Verdict| Line { label: pane.label.clone(), said: verdict.words(auto), stale: verdict.stale() };
         if pane.agent != Agent::Claude {
             lines.push(line(&Verdict::Skip(format!("kelpie restarts Claude sessions; {} is left as it runs", pane.agent.name()))));
@@ -820,6 +824,7 @@ pub fn run(mode: Mode, memory: &mut Memory, only: Option<&str>) -> Result<Vec<Li
             }
         }
     }
+    counted(total, total);
     if only.is_none() {
         let gone: Vec<String> = asked.iter().filter(|(session, entry)| live.get(*session).map(|pid| u64::from(*pid)) != entry["pid"].as_u64()).map(|(session, _)| session.clone()).collect();
         for session in gone {

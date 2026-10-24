@@ -187,6 +187,8 @@ struct App {
     progress_file: Option<PathBuf>,
     recheck: Option<Sender<()>>,
     stale: Vec<String>,
+    stale_at: u64,
+    restart_after_update: bool,
     filter: Option<(Column, String)>,
     ctrl_c: Option<Instant>,
     notice: Option<(String, Instant)>,
@@ -876,6 +878,11 @@ impl Rebuild {
         ready
     }
 
+    fn changed(&self) -> bool {
+        let now = self.path.as_deref().and_then(built);
+        now.is_some() && now != self.started
+    }
+
     fn restart(&self, app: &App) -> String {
         let Some(path) = &self.path else { return "Cannot tell where kelpie's binary is".to_string() };
         let column = match (app.page, app.column) {
@@ -901,7 +908,7 @@ impl App {
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), answering: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
-            updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(),
+            updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             filter: None, ctrl_c: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
         }
     }
@@ -957,8 +964,8 @@ pub fn run(overlay: bool) -> Result<String> {
             while let Ok(updates) = update_notices.try_recv() {
                 app.updates = updates;
             }
-            while let Ok(stale) = restarter.try_recv() {
-                app.stale = stale;
+            while let Ok((at, stale)) = restarter.try_recv() {
+                (app.stale_at, app.stale) = (at, stale);
             }
             while let Ok(update) = snapshots.try_recv() {
                 match update {
@@ -1024,7 +1031,7 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             app.fetch_failures = fetcher.failures();
             app.away = permit::away_since().is_some();
-            if app.may_restart() && rebuild.ready() {
+            if app.may_restart() && ((std::mem::take(&mut app.restart_after_update) && rebuild.changed()) || rebuild.ready()) {
                 let error = rebuild.restart(&app);
                 terminal = init_terminal();
                 app.show_as(Err(error), true);

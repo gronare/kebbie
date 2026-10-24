@@ -63,6 +63,8 @@ Going back to an older kelpie, it reads a task's session record, now JSON, as it
 
 ```
 ╭ Updating kelpie ───────────────────────────────────────────╮
+│ ████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  31%  │
+│                                                            │
 │ ✓ Fetched main (3 new commits)                             │
 │ ▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 1:42│
 │   Claude Code and vault plugins                            │
@@ -72,7 +74,9 @@ Going back to an older kelpie, it reads a task's session record, now JSON, as it
 ╰────────────────────────────────────────────────────────────╯
 ```
 
-The step running shows how long it has run. While kelpie builds, the bar counts the crates cargo has finished against the crates the build needs, which kelpie reads from `cargo metadata`; until it has that count it names the crate compiling. On the release channel the bar counts the megabytes of the release binary downloaded. The update runs on in the background: `esc` hides the window, the status line shows `⇣ updating kelpie · U` meanwhile, and `U` opens the window again. The board does not restart on a new binary while its update runs. In a terminal the running step is redrawn in place; piped, each step prints one plain line.
+The bar on top is the whole update: fetching, getting the binary, the plugins and the restarts of the sessions that can restart now. It reaches the end only once those restarts are done; a session that restarts when it is idle does not hold it. Each step weighs what it took on this machine's channel the last time, kept in `update-durations.json` in the state directory and moved halfway to each new measure; a first update guesses that a `main` build takes most of the time and that on the release channel the plugins and restarts do. Within a step the bar follows the crates built, the megabytes downloaded, the plugins updated and the sessions gone through. The bar starts slow and speeds up towards the end, as people feel such a bar is the shortest wait (Harrison et al., "Rethinking the progress bar", 2007), and it never moves back.
+
+The step running shows how long it has run. While kelpie builds, the bar counts the crates cargo has finished against the crates the build needs, which kelpie reads from `cargo metadata`; until it has that count it names the crate compiling. On the release channel the bar counts the megabytes of the release binary downloaded. The update runs on in the background: `esc` hides the window, the status line shows `⇣ updating kelpie · U` meanwhile, and `U` opens the window again. The board does not restart on a new binary while its update runs. In a terminal the bar and the steps are redrawn in place; piped, each step prints one plain line. The summary shows once the bar is full.
 
 When it is done, the window says what the update brought:
 
@@ -87,14 +91,14 @@ When it is done, the window says what the update brought:
 │  • A bug you ran into: update stopped on a newer config key│
 │                                                            │
 │ Restarting                                                 │
-│  The lead and 2 sessions restart when they're idle.        │
-│  The board restarts when you open it again.                │
+│  ✓ The lead and 3 sessions are on the new kelpie           │
+│  1 session restarts when it's idle                         │
 │                                                            │
 │ d details · any other key closes                           │
 ╰────────────────────────────────────────────────────────────╯
 ```
 
-**What's new** and **Fixed** are the handwritten notes in kelpie's `CHANGES.md`: on the release channel the sections of the versions after the one you had, up to the one installed; on the `main` channel the entries added since the commit you had. With nothing written it says `No notes for this update`; it never lists commits. **Fixed** also names the bugs in kelpie you ran into that the recheck closed in this version, as they come in. **Restarting** sums the sessions up. `d` shows the details: each component's version before and after with its commit, the lead's kelpie, each session's line, the plugins, the board and the keeper. An update that stops names the step it stopped at and why.
+**What's new** and **Fixed** are the handwritten notes in kelpie's `CHANGES.md`: on the release channel the sections of the versions after the one you had, up to the one installed; on the `main` channel the entries added since the commit you had. With nothing written it says `No notes for this update`; it never lists commits. On the `main` channel the commit you had is the one your kelpie binary was built from, so a checkout that already held the new commits before the update still shows what they wrote. **Fixed** also names the bugs in kelpie you ran into that the recheck closed on the build this update installed, as they come in; one an earlier update closed, or one already shown, stays out. **Restarting** sums the sessions up and follows them while the window is open, so a session that restarts when it's idle moves to `on the new kelpie` once it has. The board's window names no board: the board restarts itself onto the new kelpie when you close the summary. `kelpie update` in a terminal says on one line that open boards restart on the new kelpie when you next open them. `d` shows the details: each component's version before and after with its commit, the lead's kelpie, each session's line, the plugins, the board and the keeper. An update that stops names the step it stopped at and why.
 
 ## When restarts happen
 
@@ -107,7 +111,7 @@ A restart on its own never interrupts work:
 - A session with text in its input box that you have not sent, or whose box kelpie cannot read, waits until the box is empty, so a restart never loses a draft. A restart you ask for refuses typed text too, but goes ahead when the box cannot be read.
 - A session kelpie cannot restart safely is skipped with the reason: one whose session id herdr does not know, whose command line cannot be read or has an option kelpie does not know, whose Claude runs in another folder than its pane, or whose conversation file is missing.
 
-`kelpie update` sums the sessions up in a sentence or two, such as `The lead and 2 sessions restart when they're idle.`, and names only what needs you: a session waiting for your answer, or a restart that failed. Its details then list one line per session: `restarted`, `restarts when idle`, `you are in it: restarts when you leave it`, `its input box holds text or cannot be read: restarts once it is empty`, `waiting for your answer: background work running`, or `skipped: <reason>`.
+`kelpie update` sums the sessions up in a line or two, such as `✓ The lead and 3 sessions are on the new kelpie` and `1 session restarts when it's idle`, and names only what needs you: a session waiting for your answer, one a restart did not move, or a restart that failed. Its details then list one line per session: `restarted`, `restarts when idle`, `you are in it: restarts when you leave it`, `its input box holds text or cannot be read: restarts once it is empty`, `waiting for your answer: background work running`, or `skipped: <reason>`.
 
 ## Restarting the lead after an update
 

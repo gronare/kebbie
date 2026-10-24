@@ -288,10 +288,10 @@ pub struct Fixed {
     pub last: u64,
 }
 
-fn fixed_between(state: &Path, since: u64, now: u64) -> Option<Fixed> {
+fn fixed_where(state: &Path, wanted: impl Fn(&Rechecked) -> bool) -> Option<Fixed> {
     let fixed: Vec<(Issue, Rechecked)> = issues::load(&issues::dir(state)).into_iter()
         .filter_map(|issue| Rechecked::of(&issue).map(|rechecked| (issue, rechecked)))
-        .filter(|(issue, rechecked)| issue.status == "fixed" && issue.source.is_none() && rechecked.verdict == "fixed" && rechecked.at > since && rechecked.at <= now)
+        .filter(|(issue, rechecked)| issue.status == "fixed" && issue.source.is_none() && rechecked.verdict == "fixed" && wanted(rechecked))
         .collect();
     let latest = fixed.iter().map(|(_, rechecked)| rechecked).max_by_key(|rechecked| rechecked.at)?;
     let (last, version) = (latest.at, latest.version.clone());
@@ -305,7 +305,18 @@ fn dismissed_at(state: &Path) -> u64 {
 }
 
 pub fn shown(state: &Path, now: u64) -> Option<Fixed> {
-    fixed_between(state, dismissed_at(state).max(now.saturating_sub(SHOWN_FOR + 1)), now)
+    let since = dismissed_at(state).max(now.saturating_sub(SHOWN_FOR + 1));
+    fixed_where(state, |rechecked| rechecked.at > since && rechecked.at <= now)
+}
+
+fn same_commit(one: &str, other: &str) -> bool {
+    !one.is_empty() && !other.is_empty() && (one.starts_with(other) || other.starts_with(one))
+}
+
+// An update's summary names only what was rechecked on the build it installed after it began, and nothing a summary or the fixed line already showed.
+pub fn for_update(state: &Path, started: u64, head: &str, now: u64) -> Option<Fixed> {
+    let dismissed = dismissed_at(state);
+    fixed_where(state, |rechecked| rechecked.at >= started && rechecked.at > dismissed && rechecked.at <= now && same_commit(&rechecked.head, head))
 }
 
 pub fn dismiss(state: &Path, shown: &Fixed, now: u64) -> Result<()> {
@@ -392,6 +403,26 @@ mod tests {
         issues::reopen_in(&issues::dir(&state), &Caller::Lead, "aaaaaa", "3333333").unwrap();
         assert_eq!(shown(&state, NOW + 60), None, "a reopened issue is no longer shown as fixed");
         assert!(crate::messages::load().iter().all(|message| !message.text.contains("aaaaaa")), "nobody is told");
+    }
+
+    #[test]
+    fn an_update_names_only_the_bugs_rechecked_on_its_build_since_it_began_and_never_one_shown_before() {
+        let state = crate::sh::test_dir("recheck-for-update");
+        let closed = |id: &str, rechecked: &str| {
+            let mut found = issue(id, "1111111");
+            found.status = "fixed".to_string();
+            found.rechecked = Some(rechecked.to_string());
+            filed(&state, &found);
+        };
+        closed("earlier", &format!("2222222 fixed {} 0.27.0", NOW - 600));
+        closed("other", &format!("4444444 fixed {} 0.27.0", NOW + 20));
+        closed("this", &format!("3333333 fixed {} 0.27.0", NOW + 30));
+        let titles = |fixed: Option<Fixed>| fixed.map(|fixed| fixed.bugs).unwrap_or_default();
+        assert_eq!(titles(for_update(&state, NOW, "3333333abcdef", NOW + 60)), ["push hid git's error (this)"], "an earlier update's fix and one on another build stay out, though both carry the same version");
+        assert_eq!(titles(shown(&state, NOW + 60)).len(), 3, "the fixed line itself still counts all three");
+        dismiss(&state, &for_update(&state, NOW, "3333333", NOW + 60).unwrap(), NOW + 60).unwrap();
+        assert!(for_update(&state, NOW, "3333333", NOW + 60).is_none(), "once shown, never again");
+        assert!(for_update(&state, NOW + 31, "3333333", NOW + 60).is_none(), "a recheck before the update began is not this update's");
     }
 
     #[test]

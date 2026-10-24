@@ -624,8 +624,12 @@ fn run(arguments: &Arguments) -> Result<String> {
                 (None, false) => release::Request::Channel,
             };
             update::run(&doctor::Env::current().claude_dir, true, &request).map(|outcome| {
-                let fixed = lead::state_dir().ok().and_then(|state| issue_recheck::shown(&state, messages::now()));
-                update::text(&outcome, &fixed.filter(|fixed| fixed.version == outcome.summary.version).map(|fixed| fixed.bugs).unwrap_or_default())
+                let state = lead::state_dir().ok();
+                let fixed = state.as_deref().and_then(|state| issue_recheck::for_update(state, outcome.started, &outcome.summary.head, messages::now()));
+                if let (Some(state), Some(fixed)) = (state.as_deref(), fixed.as_ref()) {
+                    let _ = issue_recheck::dismiss(state, fixed, messages::now());
+                }
+                update::text(&outcome, &fixed.map(|fixed| fixed.bugs).unwrap_or_default())
             })
         }
         None | Some("help") => Ok(USAGE.to_string()),

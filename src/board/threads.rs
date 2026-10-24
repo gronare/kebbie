@@ -107,7 +107,7 @@ pub(super) fn spawn_update_checker() -> (Receiver<Vec<(String, String)>>, Sender
 }
 
 // With the keeper on, the board only keeps one running and shows what it saw; with it off, the full board restarts sessions itself.
-pub(super) fn spawn_restarter(overlay: bool) -> Receiver<Vec<String>> {
+pub(super) fn spawn_restarter(overlay: bool) -> Receiver<(u64, Vec<String>)> {
     let (stale_tx, stale_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut memory = crate::restart::Memory::default();
@@ -124,7 +124,7 @@ pub(super) fn spawn_restarter(overlay: bool) -> Receiver<Vec<String>> {
                 }
                 crate::keeper::Owner::Board if !overlay && ran.is_none_or(|at| at.elapsed() >= Duration::from_secs(60)) => {
                     ran = Some(Instant::now());
-                    crate::restart::run(crate::restart::Mode::Routine { min_idle: 0 }, &mut memory, None).ok().map(|lines| crate::keeper::stale_lines(&lines))
+                    crate::restart::run(crate::restart::Mode::Routine { min_idle: 0 }, &mut memory, None).ok().map(|lines| (crate::messages::now(), crate::keeper::stale_lines(&lines)))
                 }
                 crate::keeper::Owner::Board => None,
             };

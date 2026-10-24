@@ -35,6 +35,8 @@ pub struct Step {
     pub state: State,
     #[serde(default)]
     pub since: u64,
+    #[serde(default)]
+    pub took: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -42,6 +44,7 @@ pub struct Step {
 pub enum Meter {
     Build { done: u64, total: Option<u64>, compiling: Option<String> },
     Download { what: String, got: u64, total: Option<u64> },
+    Count { what: String, done: u64, total: u64 },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -50,6 +53,12 @@ pub struct Summary {
     pub new: Vec<String>,
     pub fixed: Vec<String>,
     pub restart: Vec<String>,
+    #[serde(default)]
+    pub sessions: Vec<crate::restart::Line>,
+    #[serde(default)]
+    pub restarted_at: u64,
+    #[serde(default)]
+    pub head: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -60,6 +69,8 @@ pub struct Progress {
     pub summary: Option<Summary>,
     #[serde(default)]
     pub finished: bool,
+    #[serde(default)]
+    pub weights: Vec<u64>,
 }
 
 pub fn file(state: &Path) -> PathBuf {
@@ -77,7 +88,7 @@ pub struct Tracker {
 
 impl Tracker {
     pub fn start(path: &Path, fetch: &str, build: &str, now: u64) -> Tracker {
-        let step = |label: &str| Step { label: label.to_string(), state: State::Pending, since: 0 };
+        let step = |label: &str| Step { label: label.to_string(), state: State::Pending, since: 0, took: 0 };
         let steps = vec![step(fetch), step(build), step("Claude Code and vault plugins"), step("Restart sessions")];
         let mut tracker = Tracker { path: path.to_path_buf(), progress: Progress { started: now, steps, ..Progress::default() } };
         tracker.begin(FETCH, fetch, now);
@@ -99,6 +110,9 @@ impl Tracker {
             step.label = label.to_string();
             if state == State::Current {
                 step.since = now;
+            }
+            if state == State::Done && step.state == State::Current && step.since > 0 {
+                step.took = crate::messages::now().saturating_sub(step.since);
             }
             step.state = state;
         }
@@ -146,6 +160,87 @@ impl Tracker {
     }
 }
 
+pub const DURATIONS: &str = "update-durations.json";
+const CAP: f64 = 0.99;
+const EASING: f64 = 1.5;
+
+pub fn default_weights(channel: crate::config::Channel) -> Vec<u64> {
+    match channel {
+        crate::config::Channel::Main => vec![5, 150, 10, 15],
+        crate::config::Channel::Release => vec![4, 6, 15, 20],
+    }
+}
+
+fn read_durations(state: &Path) -> serde_json::Map<String, Value> {
+    std::fs::read_to_string(state.join(DURATIONS)).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()).and_then(|value| value.as_object().cloned()).unwrap_or_default()
+}
+
+pub fn weights(state: &Path, channel: crate::config::Channel) -> Vec<u64> {
+    let defaults = default_weights(channel);
+    let stored: Vec<u64> = read_durations(state).get(channel.key()).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).collect();
+    if stored.len() == defaults.len() { stored } else { defaults }
+}
+
+pub fn record_durations(state: &Path, channel: crate::config::Channel, progress: &Progress) {
+    let mut weights = weights(state, channel);
+    for (weight, step) in weights.iter_mut().zip(&progress.steps) {
+        if step.state == State::Done && step.since > 0 {
+            *weight = (*weight + step.took).div_ceil(2).max(1);
+        }
+    }
+    let mut stored = read_durations(state);
+    stored.insert(channel.key().to_string(), Value::from(weights));
+    let _ = crate::state::write(&state.join(DURATIONS), Value::Object(stored).to_string());
+}
+
+fn within(step: &Step, meter: Option<&Meter>, weight: u64, now: u64) -> f64 {
+    let share = |done: u64, total: u64| if total == 0 { 0.0 } else { done as f64 / total as f64 };
+    let measured = match meter {
+        Some(Meter::Build { done, total: Some(total), .. }) => Some(share(*done, *total)),
+        Some(Meter::Download { got, total: Some(total), .. }) => Some(share(*got, *total)),
+        Some(Meter::Count { done, total, .. }) => Some(share(*done, *total)),
+        _ => None,
+    };
+    measured.unwrap_or_else(|| (now.saturating_sub(step.since) as f64 / weight.max(1) as f64).min(0.9)).min(1.0)
+}
+
+pub fn fraction(progress: &Progress, now: u64) -> f64 {
+    if progress.finished && progress.steps.iter().all(|step| step.state == State::Done) {
+        return 1.0;
+    }
+    let weights = if progress.weights.len() == progress.steps.len() { progress.weights.clone() } else { default_weights(crate::config::Channel::Main) };
+    let total: u64 = weights.iter().map(|weight| (*weight).max(1)).sum();
+    let done: f64 = progress.steps.iter().zip(&weights).map(|(step, weight)| match step.state {
+        State::Done => (*weight).max(1) as f64,
+        State::Current => (*weight).max(1) as f64 * within(step, progress.meter.as_ref(), *weight, now),
+        State::Pending | State::Failed => 0.0,
+    }).sum();
+    (done / total.max(1) as f64).min(CAP)
+}
+
+// Harrison et al., "Rethinking the progress bar" (UIST 2007): a bar that starts slow and speeds up at the end is felt as the shortest wait, so the shown share is the true one to the power 1.5.
+pub fn eased(fraction: f64) -> f64 {
+    if fraction >= 1.0 { 1.0 } else { fraction.max(0.0).powf(EASING).min(CAP) }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Overall {
+    shown: f64,
+}
+
+impl Overall {
+    pub fn advance(&mut self, progress: &Progress, now: u64) -> f64 {
+        self.shown = self.shown.max(eased(fraction(progress, now)));
+        self.shown
+    }
+}
+
+pub fn overall_line(shown: f64, width: usize) -> String {
+    let percent = format!("{:>3}%", (shown * 100.0).floor() as u64);
+    let room = width.saturating_sub(percent.chars().count() + 2).max(4);
+    format!("{}  {percent}", bar((shown * 1000.0).round() as u64, 1000, room))
+}
+
 pub fn elapsed(seconds: u64) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
@@ -174,6 +269,7 @@ pub fn meter_text(meter: Option<&Meter>, width: usize) -> String {
         Some(Meter::Build { compiling: Some(name), .. }) => return format!("compiling {name}"),
         Some(Meter::Download { got, total: Some(total), .. }) => (*got, *total, format!("{}/{} MB", megabytes(*got), megabytes(*total))),
         Some(Meter::Download { got, .. }) => return format!("{} MB", megabytes(*got)),
+        Some(Meter::Count { what, done, total }) => (*done, *total, format!("{done}/{total} {what}")),
         _ => return String::new(),
     };
     let room = width.saturating_sub(unit.chars().count() + 2);
@@ -302,39 +398,38 @@ pub fn watch(mut tracker: Tracker, dir: PathBuf, root: PathBuf, build_label: Str
 pub struct Printer {
     tty: bool,
     shown: Vec<State>,
-    open: bool,
+    drawn: usize,
+    overall: Overall,
 }
 
 impl Printer {
     pub fn new(tty: bool) -> Printer {
-        Printer { tty, shown: Vec::new(), open: false }
+        Printer { tty, shown: Vec::new(), drawn: 0, overall: Overall::default() }
     }
 
     pub fn frame(&mut self, progress: &Progress, now: u64, width: usize) -> String {
-        let mut out = String::new();
         let lines = lines(progress, now, width);
-        for (index, (state, text)) in lines.iter().enumerate() {
-            let before = self.shown.get(index).copied().unwrap_or(State::Pending);
-            let ended = matches!(state, State::Done | State::Failed);
-            if self.tty && *state == State::Current {
-                out.push_str(&format!("\r\x1b[K{text}"));
-                self.open = true;
-            } else if ended && before != *state {
-                if self.tty && self.open {
-                    out.push_str("\r\x1b[K");
+        let mut out = String::new();
+        if self.tty {
+            if self.drawn > 0 {
+                out.push_str(&format!("\x1b[{}A", self.drawn));
+            }
+            let block: Vec<String> = std::iter::once(overall_line(self.overall.advance(progress, now), width)).chain(lines.iter().map(|(_, text)| text.clone())).collect();
+            for text in &block {
+                out.push_str(&format!("\r\x1b[K{text}\n"));
+            }
+            self.drawn = block.len();
+        } else {
+            for (index, (state, text)) in lines.iter().enumerate() {
+                let before = self.shown.get(index).copied().unwrap_or(State::Pending);
+                let ended = matches!(state, State::Done | State::Failed);
+                if (ended && before != *state) || (*state == State::Current && before == State::Pending) {
+                    out.push_str(&format!("{text}\n"));
                 }
-                out.push_str(&format!("{text}\n"));
-                self.open = false;
-            } else if !self.tty && *state == State::Current && before == State::Pending {
-                out.push_str(&format!("{text}\n"));
             }
         }
         self.shown = lines.into_iter().map(|(state, _)| state).collect();
         out
-    }
-
-    pub fn close(&mut self) -> String {
-        if std::mem::take(&mut self.open) { "\r\x1b[K".to_string() } else { String::new() }
     }
 }
 
@@ -350,7 +445,6 @@ pub fn print_while(path: PathBuf, stop: Arc<AtomicBool>) -> std::thread::JoinHan
                 print!("{}", printer.frame(&progress, crate::messages::now(), width.saturating_sub(1)));
             }
             if last {
-                print!("{}", printer.close());
                 let _ = std::io::stdout().flush();
                 return;
             }
@@ -420,22 +514,77 @@ mod tests {
     }
 
     #[test]
-    fn a_tty_redraws_the_running_step_in_place_and_a_pipe_prints_plain_lines() {
+    fn a_tty_redraws_the_bar_and_the_steps_in_place_and_a_pipe_prints_plain_lines() {
         let mut started = progress();
         started.steps[BUILD].state = State::Pending;
         started.steps[FETCH].state = State::Current;
         started.steps[FETCH].label = "Fetching main".to_string();
         started.meter = None;
         let mut tty = Printer::new(true);
-        assert_eq!(tty.frame(&started, 100, 60), "\r\x1b[K▸ Fetching main  0:00");
+        let first = tty.frame(&started, 100, 60);
+        assert!(first.starts_with("\r\x1b[K░") && first.contains("  0%\n\r\x1b[K▸ Fetching main  0:00\n\r\x1b[K  Building kelpie\n"), "{first:?}");
         let building = progress();
         let drawn = tty.frame(&building, 202, 60);
-        assert_eq!(drawn, "\r\x1b[K✓ Fetched main (3 new commits)\n\r\x1b[K▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 1:42", "the finished step stays as a line, the running one is drawn over");
-        assert_eq!(tty.close(), "\r\x1b[K");
+        assert!(drawn.starts_with("\x1b[5A\r\x1b[K█") && drawn.contains("\r\x1b[K✓ Fetched main (3 new commits)\n\r\x1b[K▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 1:42\n"), "the cursor goes back up over the block and draws it anew: {drawn:?}");
         let mut pipe = Printer::new(false);
         assert_eq!(pipe.frame(&started, 100, 60), "▸ Fetching main  0:00\n");
         assert_eq!(pipe.frame(&building, 150, 60), "✓ Fetched main (3 new commits)\n▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 0:50\n");
         assert_eq!(pipe.frame(&building, 202, 60), "", "nothing is redrawn into a pipe");
+    }
+
+    fn timed(states: [State; 4], weights: Vec<u64>) -> Progress {
+        let steps = states.iter().map(|state| Step { label: String::new(), state: *state, since: 100, took: 0 }).collect();
+        Progress { started: 100, steps, weights, ..Progress::default() }
+    }
+
+    #[test]
+    fn the_weights_come_from_what_each_step_took_last_time_on_that_channel() {
+        use crate::config::Channel;
+        let state = crate::sh::test_dir("progress-weights");
+        assert_eq!(weights(&state, Channel::Main), default_weights(Channel::Main));
+        assert!(default_weights(Channel::Main)[BUILD] > default_weights(Channel::Main).iter().sum::<u64>() / 2, "on main the build carries the bar");
+        let release = default_weights(Channel::Release);
+        assert!(release[PLUGINS] + release[RESTART] > release[FETCH] + release[BUILD], "on release the plugins and restarts carry it");
+        let mut ran = timed([State::Done; 4], Vec::new());
+        for (step, took) in ran.steps.iter_mut().zip([10, 50, 20, 40]) {
+            step.took = took;
+        }
+        ran.steps[FETCH].since = 0;
+        record_durations(&state, Channel::Main, &ran);
+        assert_eq!(weights(&state, Channel::Main), [5, 100, 15, 28], "halfway to what each step took; a step that never ran keeps its weight");
+        assert_eq!(weights(&state, Channel::Release), release, "each channel keeps its own");
+    }
+
+    #[test]
+    fn the_bar_eases_in_grows_only_and_reaches_the_end_only_when_everything_is_done() {
+        let mut last = 0.0;
+        for step in 0..=100 {
+            let shown = eased(f64::from(step) / 100.0 * CAP);
+            assert!(shown >= last && shown < 1.0, "{step}: {shown}");
+            last = shown;
+        }
+        assert!(eased(0.5) < 0.5, "slow at the start, fast at the end");
+        let mut running = timed([State::Done, State::Done, State::Done, State::Current], vec![5, 150, 10, 15]);
+        running.meter = Some(Meter::Count { what: "sessions".to_string(), done: 3, total: 3 });
+        assert!(fraction(&running, 100) < 1.0, "every session gone through, yet the update has not said it is done");
+        running.finished = true;
+        assert!(fraction(&running, 100) < 1.0, "finished with a step still running is not done");
+        running.steps[RESTART].state = State::Done;
+        assert_eq!(fraction(&running, 100), 1.0);
+        let mut overall = Overall::default();
+        let ahead = timed([State::Current, State::Pending, State::Pending, State::Pending], vec![5, 150, 10, 15]);
+        let high = overall.advance(&ahead, 105);
+        assert!(overall.advance(&ahead, 100) == high && high > 0.0, "never backwards");
+    }
+
+    #[test]
+    fn on_the_release_channel_a_quick_download_leaves_most_of_the_bar_to_the_plugins_and_restarts() {
+        let weights = default_weights(crate::config::Channel::Release);
+        let mut downloaded = timed([State::Done, State::Done, State::Current, State::Pending], weights);
+        downloaded.meter = Some(Meter::Count { what: "plugins".to_string(), done: 0, total: 2 });
+        assert!(fraction(&downloaded, 100) < 0.3, "{}", fraction(&downloaded, 100));
+        downloaded.meter = Some(Meter::Count { what: "plugins".to_string(), done: 2, total: 2 });
+        assert!(fraction(&downloaded, 100) > 0.5 && fraction(&downloaded, 100) < 0.9, "the restarts still carry the rest: {}", fraction(&downloaded, 100));
     }
 
     #[test]

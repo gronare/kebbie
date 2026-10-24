@@ -734,7 +734,7 @@ fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_f
     let output = lab.with_sessions(&sessions, &["update"]);
     let said = stdout(&output);
     assert!(output.status.success(), "{said}\n{}", stderr(&output));
-    assert!(said.contains("Restarting\n  2 sessions restart when they're idle.\n  1 session restarted on the new kelpie.\n  1 session waits for your answer, as background work is still running.\n"), "the summary sums the sessions up: {said}");
+    assert!(said.contains("Restarting\n  ✓ 1 session is on the new kelpie\n  2 sessions restart when they're idle\n  1 session waits for your answer, as background work is still running\n"), "the summary sums the sessions up: {said}");
     assert!(said.starts_with("▸ Fetching main") && said.contains("\n✓ Sessions move to the new kelpie\n"), "a pipe gets one plain line per step: {said}");
     let tail: Vec<&str> = said.lines().skip_while(|line| *line != "Claude sessions:").collect();
     assert_eq!(tail, [

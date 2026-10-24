@@ -83,9 +83,10 @@ pub fn between(old: Option<&str>, new: &str, old_version: Option<&str>, new_vers
     notes
 }
 
-pub fn for_update(root: &Path, old_head: Option<&str>, old_version: Option<&str>, new_version: &str, main: bool) -> Notes {
+// `olds` are the commits the update may have come from, best first: the old binary's own commit, then the checkout's head before the update.
+pub fn for_update(root: &Path, olds: &[String], old_version: Option<&str>, new_version: &str, main: bool) -> Notes {
     let Ok(new) = std::fs::read_to_string(root.join(FILE)) else { return Notes::default() };
-    let old = old_head.and_then(|head| crate::update_check::git(root, &["show", &format!("{head}:{FILE}")]).ok());
+    let old = olds.iter().find_map(|commit| crate::update_check::git(root, &["show", &format!("{commit}:{FILE}")]).ok());
     between(old.as_deref(), &new, old_version, new_version, main)
 }
 
@@ -141,9 +142,27 @@ mod tests {
         git(&["commit", "--quiet", "-m", "one"]);
         let old = git(&["rev-parse", "HEAD"]);
         std::fs::write(root.join(FILE), "## Unreleased\n\n### What's new\n- Old line\n- New line\n").unwrap();
-        assert_eq!(for_update(&root, Some(&old), Some("0.27.0"), "0.27.0", true).new, ["New line"]);
-        assert_eq!(for_update(&root, Some("0000000"), Some("0.27.0"), "0.27.0", true).new, ["Old line", "New line"], "an old commit this clone lacks falls back to the versions");
-        assert_eq!(for_update(&root.join("nowhere"), Some(&old), None, "0.27.0", true), Notes::default());
+        assert_eq!(for_update(&root, std::slice::from_ref(&old), Some("0.27.0"), "0.27.0", true).new, ["New line"]);
+        assert_eq!(for_update(&root, &["0000000".to_string()], Some("0.27.0"), "0.27.0", true).new, ["Old line", "New line"], "an old commit this clone lacks falls back to the versions");
+        assert_eq!(for_update(&root.join("nowhere"), &[old], None, "0.27.0", true), Notes::default());
+    }
+
+    #[test]
+    fn a_checkout_already_at_the_new_commit_shows_the_fixed_line_added_since_the_binary_was_built() {
+        let root = crate::sh::test_dir("changes-built");
+        let git = |args: &[&str]| crate::update_check::git(&root, &[&["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"], args].concat()).unwrap();
+        git(&["init", "--quiet"]);
+        let before = "# Changes\n\n## Unreleased\n\n### What's new\n- The update shows each step\n\n### Fixed\n";
+        std::fs::write(root.join(FILE), before).unwrap();
+        git(&["add", FILE]);
+        git(&["commit", "--quiet", "-m", "one"]);
+        let built = git(&["rev-parse", "--short=7", "HEAD"]);
+        std::fs::write(root.join(FILE), format!("{before}- The lead restarts onto each new kelpie again\n")).unwrap();
+        git(&["commit", "--quiet", "-am", "two"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        let notes = for_update(&root, &[built, head.clone()], Some("0.27.0"), "0.27.0", true);
+        assert_eq!((notes.new, notes.fixed), (Vec::<String>::new(), vec!["The lead restarts onto each new kelpie again".to_string()]), "the binary's commit is where the update came from, though the checkout was at the new one before the pull");
+        assert_eq!(for_update(&root, &[head], Some("0.27.0"), "0.27.0", true), Notes::default(), "the head alone would hide it");
     }
 
 }
