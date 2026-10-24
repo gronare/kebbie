@@ -260,11 +260,17 @@ pub fn send(state: &Path, url: &str, signals: &ErrorSignals) -> std::result::Res
 pub fn one_sender(state: &Path, run: impl FnOnce() -> Result<Vec<String>>) -> Result<Vec<String>> {
     use std::os::fd::AsRawFd;
     let file = crate::state::append_to(&dir(state).join(".send.lock")).map_err(|error| error.to_string())?;
-    // SAFETY: flock only reads the descriptor, which the File keeps open until it is dropped, and dropping it releases the lock.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Ok(Vec::new());
+    // A process forking at the same moment holds the descriptor for an instant, so a free lock is tried a few times before it counts as taken.
+    for attempt in 0..5 {
+        // SAFETY: flock only reads the descriptor, which the File keeps open until it is dropped, and dropping it releases the lock.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return run();
+        }
+        if attempt < 4 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
-    run()
+    Ok(Vec::new())
 }
 
 pub fn tick(state: &Path) -> Result<Vec<String>> {
