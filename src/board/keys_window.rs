@@ -387,7 +387,7 @@ fn narrow_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>, ba
 }
 
 // The keys window over a page, Backlog for the Work page with that column selected: two columns from 114 screen columns, else rows of up to three keys that scroll.
-pub(crate) fn draw(frame: &mut Frame, keys: &Keys, page: Ctx, lead: bool, update: Option<&str>, scroll: &mut Scroll) {
+pub(crate) fn draw(frame: &mut Frame, keys: &Keys, page: Ctx, lead: bool, update: Option<&str>, kebbie: &str, scroll: &mut Scroll) {
     let sheet = sheet(page);
     let backlog = page == Ctx::Backlog;
     let screen = frame.area();
@@ -400,7 +400,7 @@ pub(crate) fn draw(frame: &mut Frame, keys: &Keys, page: Ctx, lead: bool, update
     } else {
         (narrow_lines(keys, sheet, lead, update, backlog, inner), vec![Line::from(Span::styled("any key closes", style(MUTED)))])
     };
-    let room = (screen.height.saturating_sub(4) as usize).saturating_sub(footer.len()).max(1);
+    let room = (screen.height.saturating_sub(4) as usize).saturating_sub(footer.len() + 1).max(1);
     let visible = body.len().min(room);
     let max = body.len() - visible;
     scroll.max = max as u16;
@@ -411,6 +411,7 @@ pub(crate) fn draw(frame: &mut Frame, keys: &Keys, page: Ctx, lead: bool, update
     {
         last.spans.push(Span::styled(" · ↓ more", style(MUTED)));
     }
+    footer.push(Line::from(Span::styled(kebbie.to_string(), style(MUTED))));
     let mut lines: Vec<Line<'static>> = body.into_iter().skip(at).take(visible).collect();
     lines.append(&mut footer);
     let area = centered(screen, width, lines.len() as u16 + 2);
@@ -440,7 +441,7 @@ mod tests {
 
     fn rows_of(keys: &Keys, page: Ctx, lead: bool, width: u16, height: u16, scroll: &mut Scroll) -> Vec<String> {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| draw(frame, keys, page, lead, None, scroll)).unwrap();
+        terminal.draw(|frame| draw(frame, keys, page, lead, None, "kebbie main", scroll)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect()
     }
@@ -475,6 +476,7 @@ mod tests {
         assert!(screen.contains("h         hide or show the lead's chat") && screen.contains("ctrl+c    twice: quit the board"), "{screen}");
         assert!(screen.contains("in the card window  ← → image · ↑ ↓ j k scroll · f fullscreen · o open the image · p push"), "{screen}");
         assert!(screen.contains("areas (2) and routines (3) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
+        assert!(screen.contains(&crate::shown_kebbie()), "the window names the kebbie that runs: {screen}");
         assert!(!screen.contains("one at a time with tab") && !screen.contains("worktree.dev_server"), "the long texts stay out: {screen}");
         let (x, y) = find(&rows, "THE SELECTED TASK")[0];
         assert_eq!((buffer[(x as u16, y as u16)].fg, buffer[(x as u16 - 54 , y as u16)].fg), (PEACH, PEACH));
@@ -529,6 +531,9 @@ mod tests {
         let rows = rows_of(crate::keys::map(), Ctx::Routines, false, 80, 30, &mut scroll);
         let screen = rows.join("\n");
         assert!(screen.contains("keys · routines") && screen.contains("THE SELECTED ROUTINE") && screen.contains("D         delete") && !screen.contains("PUSH"), "{screen}");
+        let rows = rows_of(crate::keys::map(), Ctx::Work, false, 80, 20, &mut Scroll::default());
+        let closes = rows.iter().position(|row| row.contains("any key closes · ↓ more")).unwrap_or_else(|| panic!("{}", rows.join("\n")));
+        assert!(rows[closes + 1].contains("kebbie main"), "the last line names the kebbie that runs, below the scroll hint: {}", rows.join("\n"));
     }
 
     #[test]

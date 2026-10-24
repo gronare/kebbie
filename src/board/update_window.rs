@@ -85,7 +85,11 @@ fn running(progress: Option<&Progress>, overall: &Cell<Overall>, now: u64, width
 
 pub(super) fn finished(progress: Option<&Progress>, bugs: &[String], restart: &[String], width: usize) -> (String, Vec<Line<'static>>) {
     let summary = progress.and_then(|progress| progress.summary.clone()).unwrap_or_default();
-    let title = if summary.version.is_empty() { "kebbie".to_string() } else { format!("kebbie {}", summary.version) };
+    let title = match (summary.version.as_str(), summary.from.as_str(), summary.head.as_str()) {
+        ("", _, _) => "kebbie".to_string(),
+        (version, from, head) if !from.is_empty() && !head.is_empty() && from != head => format!("kebbie {version} · {from} → {head}"),
+        (version, _, _) => format!("kebbie {version}"),
+    };
     let mut lines = vec![Line::from(Span::styled("✓ Updated", bold(GREEN))), Line::default()];
     let fixed: Vec<String> = summary.fixed.iter().cloned().chain(bugs.iter().map(|title| crate::update::bug_line(title))).collect();
     if summary.new.is_empty() && fixed.is_empty() {
@@ -254,7 +258,7 @@ mod tests {
     fn summary(new: &[&str], fixed: &[&str]) -> Summary {
         let owned = |lines: &[&str]| lines.iter().map(|line| line.to_string()).collect();
         let line = |label: &str, said: &str| crate::restart::Line { label: label.to_string(), said: said.to_string(), stale: true };
-        Summary { version: "0.27.0".to_string(), new: owned(new), fixed: owned(fixed), restart: vec!["The lead and 2 sessions restart when they're idle".to_string(), "Open boards restart on the new kebbie when you next open them".to_string()], sessions: vec![line("lead", "restarts when idle"), line("billing@app", "restarts when idle"), line("api@app", "restarts when idle")], restarted_at: 1000, head: "9cbd545".to_string() }
+        Summary { version: "main".to_string(), new: owned(new), fixed: owned(fixed), restart: vec!["The lead and 2 sessions restart when they're idle".to_string(), "Open boards restart on the new kebbie when you next open them".to_string()], sessions: vec![line("lead", "restarts when idle"), line("billing@app", "restarts when idle"), line("api@app", "restarts when idle")], restarted_at: 1000, head: "9cbd545".to_string(), from: "02c7fe0".to_string() }
     }
 
     fn updating(app: &mut App, finish: Summary) -> mpsc::Sender<()> {
@@ -272,7 +276,7 @@ mod tests {
             tracker.done(progress::PLUGINS, "Updated the Claude Code and vault plugins");
             tracker.done(progress::RESTART, "Sessions move to the new kebbie");
             tracker.finish(finish.clone());
-            Ok("kebbie follows the main channel\nkebbie 0.27.0 rebuilt, 02c7fe0 → 9cbd545\n\nClaude sessions:\n  lead: restarts when idle\nkeeper: restarted on the new kebbie (pid 4242)".to_string())
+            Ok("kebbie follows the main channel\nkebbie main rebuilt, 02c7fe0 → 9cbd545\n\nClaude sessions:\n  lead: restarts when idle\nkeeper: restarted on the new kebbie (pid 4242)".to_string())
         });
         release
     }
@@ -281,7 +285,7 @@ mod tests {
     fn u_shows_the_steps_with_the_build_bar_and_esc_hides_the_window_while_the_update_keeps_going() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         let release = updating(&mut app, summary(&["The hub window shows your devices by name, and r removes one"], &[]));
-        app.updates = vec![("kebbie".to_string(), "0.27.0".to_string())];
+        app.updates = vec![("kebbie".to_string(), "main, 3 new".to_string())];
         press(&mut app, key(KeyCode::Char('U')));
         assert!(matches!(app.mode, Mode::Update), "the key returns while the update runs");
         waits_for(&mut app, "the build step", |app| progress::load(&app.progress_file()).is_some_and(|progress| progress.meter.is_some()));
@@ -322,21 +326,30 @@ mod tests {
         app.update.as_mut().unwrap().fixed_read = None;
         app.poll_update();
         let shown = screen(&mut app, 100);
-        for line in ["kebbie 0.27.0", "✓ Updated", "What's new", " • The hub window shows your devices by name, and r removes", "   one", "Fixed", " • A bug you ran into: bug ours", "Restarting", " The lead and 2 sessions restart when they're idle", "d details · any other key closes"] {
+        for line in ["kebbie main · 02c7fe0 → 9cbd545", "✓ Updated", "What's new", " • The hub window shows your devices by name, and r removes", "   one", "Fixed", " • A bug you ran into: bug ours", "Restarting", " The lead and 2 sessions restart when they're idle", "d details · any other key closes"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
         assert!(!shown.contains("bug earlier"), "a bug an earlier update closed was shown then: {shown}");
         assert!(!shown.contains("board") && !shown.contains("Open boards"), "the board restarts itself once this closes, so it names no board: {shown}");
-        assert!(!shown.contains("pid") && !shown.contains("02c7fe0") && !shown.contains("lead: restarts"), "the detail lines wait behind d: {shown}");
+        assert!(!shown.contains("pid") && !shown.contains("rebuilt") && !shown.contains("lead: restarts"), "the detail lines wait behind d: {shown}");
         press(&mut app, key(KeyCode::Char('d')));
         let shown = screen(&mut app, 100);
-        assert!(shown.contains("kebbie 0.27.0 rebuilt, 02c7fe0 → 9cbd545") && shown.contains("keeper: restarted on the new kebbie (pid 4242)") && shown.contains("d back · any other key closes"), "{shown}");
+        assert!(shown.contains("kebbie main rebuilt, 02c7fe0 → 9cbd545") && shown.contains("keeper: restarted on the new kebbie (pid 4242)") && shown.contains("d back · any other key closes"), "{shown}");
         press(&mut app, key(KeyCode::Char('d')));
         assert!(screen(&mut app, 100).contains("What's new"), "d again goes back");
         press(&mut app, key(KeyCode::Char('x')));
         assert!(matches!(app.mode, Mode::Normal) && app.update.is_none(), "any other key closes it");
         assert!(app.restart_after_update, "closing the summary lets the board restart onto the new kebbie at once");
         assert!(crate::issue_recheck::for_update(&state, 0, "9cbd545", crate::messages::now()).is_none(), "a bug the summary showed is never shown again");
+    }
+
+    #[test]
+    fn the_title_names_the_commits_on_main_and_the_version_on_release() {
+        let title = |summary: Summary| finished(Some(&Progress { summary: Some(summary), ..Progress::default() }), &[], &[], 80).0;
+        assert_eq!(title(summary(&[], &[])), "kebbie main · 02c7fe0 → 9cbd545");
+        assert_eq!(title(Summary { from: String::new(), ..summary(&[], &[]) }), "kebbie main", "without the old commit the title names main alone");
+        assert_eq!(title(Summary { version: "v0.28.0".to_string(), from: String::new(), ..summary(&[], &[]) }), "kebbie v0.28.0", "the release channel keeps its version");
+        assert_eq!(title(Summary::default()), "kebbie");
     }
 
     #[test]

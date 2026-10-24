@@ -96,7 +96,7 @@ pub(super) fn spawn_update_checker() -> (Receiver<Vec<(String, String)>>, Sender
                 } else {
                     update_check::current(&state, messages::now(), places.channel, update_check::installed(&places), || update_check::check(&places))
                 };
-                update_check::notice(&components, crate::release::read_override(&state).as_ref())
+                update_check::notice(&components, crate::release::read_override(&state).as_ref(), places.channel)
             }).unwrap_or_default();
             if notice_tx.send(notice).is_err() {
                 return;

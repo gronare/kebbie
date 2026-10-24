@@ -29,9 +29,9 @@ Each machine follows one channel:
 
 Because the release channel checks out tags in the install root, it refuses to touch an install root with uncommitted changes or one that sits on a branch. Develop in another checkout and try its commits with `kebbie update --from <path>`.
 
-The keeper checks for updates every 6 hours, and the board shows `↑ kebbie <version> · U updates` when the channel has something newer. On a release machine the notice names the new tag, never what main carries.
+The keeper checks for updates every 6 hours, and the board shows a notice beside `U updates` when the channel has something newer. On a release machine it names the new tag, `↑ kebbie v0.28.0 · U updates`, never what main carries. On the main channel it counts the commits on origin's default branch the installed build lacks, `↑ kebbie main, 3 new · U updates`, or says `↑ kebbie main · U updates` when the count cannot be read; `kebbie update --check` says `3 new on main` and `kebbie doctor` `kebbie main, 3 new`.
 
-The installed version is the one the binary itself reports, with the commit it was built from, not the version in the checkout's files. A checkout that moved ahead without a rebuild shows as `0.24.0 installed (e70d5d5), 0.25.0 in the checkout: rebuild`, the board offers the update, and `U` rebuilds it.
+The installed version is the one the binary itself reports, with the commit it was built from, not the version in the checkout's files. A checkout that moved ahead without a rebuild shows as `0.24.0 installed (e70d5d5), 0.25.0 in the checkout: rebuild` (on the main channel `main installed (e70d5d5), the checkout is newer: rebuild`), the board offers the update, and `U` rebuilds it.
 
 ## Overrides
 
@@ -78,7 +78,7 @@ The bar on top is the whole update: fetching, getting the binary, the plugins an
 
 The step running shows how long it has run. While kebbie builds, the bar counts the crates cargo has finished against the crates the build needs, which kebbie reads from `cargo metadata`; until it has that count it names the crate compiling. On the release channel the bar counts the megabytes of the release binary downloaded. The update runs on in the background: `esc` hides the window, the status line shows `⇣ updating kebbie · U` meanwhile, and `U` opens the window again. The board does not restart on a new binary while its update runs. In a terminal the bar and the steps are redrawn in place; piped, each step prints one plain line. The summary shows once the bar is full.
 
-When it is done, the window says what the update brought:
+When it is done, the window says what the update brought, under the title `kebbie main · 02c7fe0 → 9cbd545`, the commits it went from and to, on the main channel and the new version, such as `kebbie 0.27.0`, on the release channel. The details behind `d` say `kebbie main rebuilt, 02c7fe0 → 9cbd545` on main:
 
 ```
 ╭ kebbie 0.27.0 ─────────────────────────────────────────────╮

@@ -123,7 +123,7 @@ pub(super) fn load_fixed() -> Option<Fixed> {
 
 pub(super) fn fixed_lines(fixed: Option<&Fixed>, questions: bool, width: usize) -> Vec<Line<'static>> {
     let Some(fixed) = fixed else { return Vec::new() };
-    let mut lines = vec![Line::default(), Line::from(Span::styled(format!("✓ {}", crate::issue_recheck::headline(fixed)), style(GREEN)))];
+    let mut lines = vec![Line::default(), Line::from(Span::styled(format!("✓ {}", crate::issue_recheck::headline(fixed, crate::config::channel().unwrap_or_default())), style(GREEN)))];
     for title in fixed.titles.iter().take(FIXED_TITLES) {
         let title = wrap(title, width.saturating_sub(4), 1).into_iter().next().unwrap_or_default();
         lines.push(Line::from(vec![Span::raw("  "), Span::styled(title, style(TEXT))]));
@@ -144,7 +144,7 @@ impl App {
         if let Ok(state) = crate::lead::state_dir() {
             let _ = crate::issue_recheck::dismiss(&state, &fixed, crate::messages::now());
         }
-        let notice = fixed.titles.iter().fold(Notice::new(Tone::Done, crate::issue_recheck::headline(&fixed)).next("kebbie issues --all lists them, each with the commit that fixed it."), |notice, title| notice.detail("fixed", title));
+        let notice = fixed.titles.iter().fold(Notice::new(Tone::Done, crate::issue_recheck::headline(&fixed, crate::config::channel().unwrap_or_default())).next("kebbie issues --all lists them, each with the commit that fixed it."), |notice, title| notice.detail("fixed", title));
         self.subject = Some(super::notices::Subject::plain("issues"));
         self.show_as(notice.ok(), true);
         true

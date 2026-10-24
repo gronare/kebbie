@@ -323,16 +323,17 @@ pub fn dismiss(state: &Path, shown: &Fixed, now: u64) -> Result<()> {
     crate::state::write(&dismissed_file(state), shown.last.min(now).max(dismissed_at(state)).to_string())
 }
 
-pub fn headline(fixed: &Fixed) -> String {
+pub fn headline(fixed: &Fixed, channel: crate::config::Channel) -> String {
     let wishes = fixed.wishes.min(fixed.titles.len());
     let bugs = fixed.titles.len() - wishes;
-    let kebbie = if fixed.version.is_empty() { "the kebbie update".to_string() } else { format!("kebbie {}", fixed.version) };
+    let kebbie = if fixed.version.is_empty() { "the kebbie update".to_string() } else { crate::shown_version(channel, &fixed.version) };
     format!("{} in {kebbie}: {}", if bugs > 0 { "Fixed" } else { "Done" }, issues::counted(bugs, wishes))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Channel;
     use crate::permit::Caller;
     use crate::trusted_spawn::{REVIEWER_BIN, SPAWNED};
 
@@ -561,7 +562,7 @@ mod tests {
         fix(&state, "aaaaaa", "2222222", "0.26.3", NOW);
         assert_eq!(shown(&state, NOW).unwrap().titles.len(), 1);
         fix(&state, "bbbbbb", "2222222", "0.26.3", NOW + 100);
-        assert_eq!(headline(&shown(&state, NOW + 100).unwrap()), "Fixed in kebbie 0.26.3: 2 bugs you ran into", "a later recheck adds to the line");
+        assert_eq!(headline(&shown(&state, NOW + 100).unwrap(), Channel::Release), "Fixed in kebbie 0.26.3: 2 bugs you ran into", "a later recheck adds to the line");
         assert!(shown(&state, NOW + 100 + SHOWN_FOR + 1).is_none(), "it leaves by itself");
         let dismissed = shown(&state, NOW + 100).unwrap();
         dismiss(&state, &dismissed, NOW + 100).unwrap();
@@ -611,10 +612,11 @@ mod tests {
         issues::close_in(&dir, &Caller::User, "aaaaaa", Some("fixed")).unwrap();
         assert_eq!(shown(&state, NOW), None);
         let fixed = |titles: usize, wishes: usize| Fixed { version: "0.27.0".to_string(), titles: vec!["x".to_string(); titles], bugs: Vec::new(), wishes, last: 0 };
-        assert_eq!(headline(&Fixed { version: String::new(), ..fixed(1, 0) }), "Fixed in the kebbie update: 1 bug you ran into");
-        assert_eq!(headline(&fixed(1, 0)), "Fixed in kebbie 0.27.0: 1 bug you ran into");
-        assert_eq!(headline(&fixed(3, 1)), "Fixed in kebbie 0.27.0: 2 bugs you ran into and 1 wish you made");
-        assert_eq!(headline(&fixed(2, 2)), "Done in kebbie 0.27.0: 2 wishes you made");
+        assert_eq!(headline(&Fixed { version: String::new(), ..fixed(1, 0) }, Channel::Release), "Fixed in the kebbie update: 1 bug you ran into");
+        assert_eq!(headline(&fixed(1, 0), Channel::Release), "Fixed in kebbie 0.27.0: 1 bug you ran into");
+        assert_eq!(headline(&fixed(3, 1), Channel::Release), "Fixed in kebbie 0.27.0: 2 bugs you ran into and 1 wish you made");
+        assert_eq!(headline(&fixed(2, 2), Channel::Release), "Done in kebbie 0.27.0: 2 wishes you made");
+        assert_eq!(headline(&fixed(1, 0), Channel::Main), "Fixed in kebbie main: 1 bug you ran into", "the main channel names no number");
         assert_eq!(Rechecked { head: "2222222".to_string(), verdict: "fixed".to_string(), at: 1, version: String::new() }.text(), "2222222 fixed 1");
     }
 

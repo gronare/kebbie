@@ -59,6 +59,8 @@ pub struct Summary {
     pub restarted_at: u64,
     #[serde(default)]
     pub head: String,
+    #[serde(default)]
+    pub from: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

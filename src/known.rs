@@ -241,12 +241,12 @@ pub fn announce() -> Result<Vec<String>> {
 
 // The kebbie on PATH, which a keeper left running on an older binary is not.
 pub fn installed() -> String {
-    crate::peers::kebbie_command().ok().and_then(|kebbie| crate::sh::run(&kebbie, &["--version"], None).ok()).map(|version| version.trim().to_string()).filter(|version| !version.is_empty()).unwrap_or_else(this_kebbie)
+    crate::peers::kebbie_command().ok().and_then(|kebbie| crate::sh::run(&kebbie, &crate::BUILT_VERSION, None).ok()).map(|version| version.trim().to_string()).filter(|version| !version.is_empty()).unwrap_or_else(this_kebbie)
 }
 
 // A keeper left running on an older binary than is installed must not tell sessions its own, older kebbie.
 fn installed_is_me() -> bool {
-    crate::peers::kebbie_command().ok().and_then(|kebbie| crate::sh::run(&kebbie, &["--version"], None).ok()).is_some_and(|version| version.trim() == this_kebbie())
+    crate::peers::kebbie_command().ok().and_then(|kebbie| crate::sh::run(&kebbie, &crate::BUILT_VERSION, None).ok()).is_some_and(|version| version.trim() == this_kebbie())
 }
 
 fn due(dir: &Path, session: &Session, installed: &str) -> bool {

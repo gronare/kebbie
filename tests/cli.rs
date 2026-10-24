@@ -268,7 +268,7 @@ fn a_session_sees_in_its_prompt_hook_that_it_runs_an_older_kebbie_than_is_instal
     assert!(task.starts_with("kebbie: you started on kebbie 0.0.1; kebbie ") && task.contains("is installed. What changed for you reaches you as a message from kebbie"), "{task}");
     let lead = stdout(&lab.run(&["messages", "--unread"]));
     assert!(lead.starts_with("kebbie: you started on kebbie 0.0.1;"), "{lead}");
-    let current = String::from_utf8(lab.run(&["--version"]).stdout).unwrap().trim().to_string();
+    let current = String::from_utf8(lab.run(&["version", "--built"]).stdout).unwrap().trim().to_string();
     fs::write(roles.join("billing@app.known.json"), format!(r#"{{"started":"{current}","known":{{"kebbie":"{current}","role":"","skills":{{}},"commands":{{}}}}}}"#)).unwrap();
     assert_eq!(stdout(&lab.run_with_stdin(&["hook"], &prompt)), "", "a session on the installed kebbie hears nothing");
 }

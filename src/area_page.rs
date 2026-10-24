@@ -873,7 +873,7 @@ impl Page {
             }
             Mode::Help(scroll) => {
                 let mut scroll = *scroll;
-                keys_window::draw(frame, keys::map(), Ctx::Areas, false, None, &mut scroll);
+                keys_window::draw(frame, keys::map(), Ctx::Areas, false, None, &crate::shown_kebbie(), &mut scroll);
                 self.mode = Mode::Help(scroll);
             }
             Mode::Message { text, next } => {

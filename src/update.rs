@@ -62,7 +62,7 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
     let outcome = result.map(|lines| {
         let after = update_check::installed(&places);
         let running = release::read_override(&state);
-        let mut details = versions(&before, &after);
+        let mut details = versions(&before, &after, channel);
         details.insert(0, match &running {
             Some(running) => format!("kebbie is {}", running.describe(channel)),
             None => format!("kebbie follows the {} channel", channel.key()),
@@ -76,8 +76,9 @@ pub fn run(claude_dir: &Path, visible: bool, request: &Request) -> Result<Outcom
         let olds = old_commits(&before, old_head.as_deref());
         let notes = root.as_deref().map(|root| changes::for_update(root, &olds, was.as_deref(), &version, main)).unwrap_or_default();
         let head = root.as_deref().and_then(|root| update_check::git(root, &["rev-parse", "--short=7", "HEAD"]).ok()).unwrap_or_default();
+        let from = if channel == Channel::Main { olds.first().cloned().unwrap_or_default() } else { String::new() };
         let restarted = tracker.progress.summary.take().unwrap_or_default();
-        Outcome { summary: Summary { version, new: notes.new, fixed: notes.fixed, head, ..restarted }, details, started: tracker.progress.started }
+        Outcome { summary: Summary { version: crate::shown_number(channel, &version), new: notes.new, fixed: notes.fixed, head, from, ..restarted }, details, started: tracker.progress.started }
     });
     match &outcome {
         Ok(outcome) => {
@@ -282,14 +283,21 @@ pub fn live_sessions(update: &[crate::restart::Line], stale: Option<&[String]>) 
 pub fn check(claude_dir: &Path) -> String {
     let places = Places::new(update_check::install_root(), claude_dir.to_path_buf(), config::channel().unwrap_or_default());
     let running = lead::state_location().ok().and_then(|state| release::read_override(&state)).map(|running| running.describe(places.channel));
-    format!("channel {}\n\n{}", places.channel.key(), update_check::render(&update_check::check(&places), running.as_deref()))
+    format!("channel {}\n\n{}", places.channel.key(), update_check::render(&update_check::check(&places), running.as_deref(), places.channel))
 }
 
-fn versions(before: &[Component], after: &[Component]) -> Vec<String> {
+fn versions(before: &[Component], after: &[Component], channel: Channel) -> Vec<String> {
     after.iter().map(|now| {
         let earlier = before.iter().find(|was| was.name == now.name);
         let was = earlier.and_then(|was| was.installed.clone());
         let built = (earlier.and_then(|was| was.built.as_ref()), now.built.as_ref());
+        if channel == Channel::Main && now.name == update_check::KEBBIE && now.installed.is_some() {
+            return match built {
+                (Some(old), Some(new)) if old != new => format!("kebbie main rebuilt, {old} → {new}"),
+                _ if was == now.installed => "kebbie main, already latest".to_string(),
+                _ => "kebbie main rebuilt".to_string(),
+            };
+        }
         match (was, &now.installed) {
             (Some(was), Some(now_version)) if &was == now_version => match built {
                 (Some(old), Some(new)) if old != new => format!("{} {was} rebuilt, {old} → {new}", now.label()),
@@ -629,12 +637,17 @@ mod tests {
         let component = |name: &str, installed: Option<&str>| Component { name: name.to_string(), installed: installed.map(str::to_string), ..Component::default() };
         let before = [component("kebbie", Some("0.18.1")), component("vault", Some("0.2.16")), component("notes-vault-mcp", Some("0.6.0"))];
         let after = [component("kebbie", Some("0.18.2")), component("vault", Some("0.2.16")), component("notes-vault-mcp", Some("0.6.1"))];
-        assert_eq!(versions(&before, &after), ["kebbie 0.18.1 → 0.18.2", "vault plugin 0.2.16, already latest", "notes-vault-mcp 0.6.0 → 0.6.1"]);
-        assert_eq!(versions(&before[..1], &after[..2]), ["kebbie 0.18.1 → 0.18.2", "vault plugin → 0.2.16"]);
-        assert_eq!(versions(&[], &[component("kebbie", None)]), ["kebbie: version unknown"]);
+        assert_eq!(versions(&before, &after, Channel::Release), ["kebbie 0.18.1 → 0.18.2", "vault plugin 0.2.16, already latest", "notes-vault-mcp 0.6.0 → 0.6.1"]);
+        assert_eq!(versions(&before[..1], &after[..2], Channel::Release), ["kebbie 0.18.1 → 0.18.2", "vault plugin → 0.2.16"]);
+        assert_eq!(versions(&[], &[component("kebbie", None)], Channel::Release), ["kebbie: version unknown"]);
         let built = |sha: &str| Component { built: Some(sha.to_string()), ..component("kebbie", Some("0.25.0")) };
-        assert_eq!(versions(&[built("e70d5d5")], &[built("1234567")]), ["kebbie 0.25.0 rebuilt, e70d5d5 → 1234567"], "a rebuild within one version names both commits");
-        assert_eq!(versions(&[built("e70d5d5")], &[built("e70d5d5")]), ["kebbie 0.25.0, already latest"]);
+        assert_eq!(versions(&[built("e70d5d5")], &[built("1234567")], Channel::Release), ["kebbie 0.25.0 rebuilt, e70d5d5 → 1234567"], "a rebuild within one version names both commits");
+        assert_eq!(versions(&[built("e70d5d5")], &[built("e70d5d5")], Channel::Release), ["kebbie 0.25.0, already latest"]);
+        assert_eq!(versions(&[built("02c7fe0")], &[built("9cbd545")], Channel::Main), ["kebbie main rebuilt, 02c7fe0 → 9cbd545"], "the main channel names no number");
+        assert_eq!(versions(&[built("9cbd545")], &[built("9cbd545")], Channel::Main), ["kebbie main, already latest"]);
+        let bumped = Component { built: Some("9cbd545".to_string()), ..component("kebbie", Some("0.26.0")) };
+        assert_eq!(versions(&[built("02c7fe0")], &[bumped.clone(), component("vault", Some("0.2.16"))], Channel::Main), ["kebbie main rebuilt, 02c7fe0 → 9cbd545", "vault plugin → 0.2.16"], "a new number on main is still a rebuild, and the vault keeps its version");
+        assert_eq!(versions(&[built("02c7fe0")], &[bumped], Channel::Release), ["kebbie 0.25.0 → 0.26.0"]);
     }
 
 

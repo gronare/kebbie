@@ -111,18 +111,18 @@ pub struct Plugin {
     pub root: PathBuf,
 }
 
-pub fn herdr_plugin(list: Option<&str>) -> (Check, Option<Plugin>) {
+pub fn herdr_plugin(list: Option<&str>, channel: config::Channel) -> (Check, Option<Plugin>) {
     let register = both("herdr plugin install gronare/kebbie (or herdr plugin link <a kebbie checkout>)", "herdr plugin install gronare/kebbie (or herdr plugin link <a kebbie checkout>)");
     let Some(list) = list else { return (fail("herdr plugin", "herdr plugin list --json failed", one("install herdr first")), None) };
     let value: Value = serde_json::from_str(list).unwrap_or_default();
     let found = value["result"]["plugins"].as_array().into_iter().flatten().find(|plugin| plugin["plugin_id"] == "kebbie");
     let Some(found) = found else { return (fail("herdr plugin", "kebbie is not registered with herdr", register), None) };
     let plugin = Plugin { enabled: found["enabled"] == true, root: PathBuf::from(found["plugin_root"].as_str().unwrap_or_default()) };
-    let version = found["version"].as_str().unwrap_or("?");
+    let kebbie = crate::shown_version(channel, found["version"].as_str().unwrap_or("?"));
     let check = if plugin.enabled {
-        ok("herdr plugin", format!("kebbie {version} enabled, at {}", plugin.root.display()))
+        ok("herdr plugin", format!("{kebbie} enabled, at {}", plugin.root.display()))
     } else {
-        fail("herdr plugin", format!("kebbie {version} is registered but disabled"), one("herdr plugin enable kebbie"))
+        fail("herdr plugin", format!("{kebbie} is registered but disabled"), one("herdr plugin enable kebbie"))
     };
     (check, Some(plugin))
 }
@@ -172,20 +172,25 @@ pub fn cargo(tool: &Tool, found: Option<&Path>, channel: crate::config::Channel,
     }
 }
 
-pub fn claude_plugin(installed: Option<&Value>, settings: &Value, checkout: Option<&str>) -> Check {
+pub fn claude_plugin(installed: Option<&Value>, settings: &Value, checkout: Option<&str>, channel: config::Channel) -> Check {
     let install = one("claude plugin marketplace add ~/.local/share/kebbie/current && claude plugin install kebbie@kebbie");
     let Some(installed) = installed else { return warn("claude plugin", "no installed_plugins.json; the review skills and hook are missing", install) };
     let Some((id, installs)) = installed["plugins"].as_object().into_iter().flatten().find(|(id, _)| id.starts_with("kebbie@")) else {
         return warn("claude plugin", "kebbie is not installed in Claude Code; the review skills and hook are missing", install);
     };
     let version = installs[0]["version"].as_str().unwrap_or("?");
+    let shown = crate::shown_number(channel, version);
     if settings["enabledPlugins"][id] == false {
-        return warn("claude plugin", format!("{id} {version} is installed but disabled"), one(format!("claude plugin enable {id}")));
+        return warn("claude plugin", format!("{id} {shown} is installed but disabled"), one(format!("claude plugin enable {id}")));
     }
     if let Some(checkout) = checkout.filter(|checkout| *checkout != version) {
-        return warn("claude plugin", format!("{id} {version} runs in Claude Code, but kebbie's checkout is {checkout}; Claude Code runs a cached copy"), one("kebbie update"));
+        let behind = match channel {
+            config::Channel::Main => format!("{id} runs in Claude Code from an older copy than kebbie's checkout; Claude Code runs a cached copy"),
+            config::Channel::Release => format!("{id} {version} runs in Claude Code, but kebbie's checkout is {checkout}; Claude Code runs a cached copy"),
+        };
+        return warn("claude plugin", behind, one("kebbie update"));
     }
-    ok("claude plugin", format!("{id} {version}"))
+    ok("claude plugin", format!("{id} {shown}"))
 }
 
 pub fn plugin_source(source: &crate::update::Marketplace, channel: crate::config::Channel) -> Check {
@@ -585,12 +590,12 @@ pub fn checks(env: &Env) -> Vec<Check> {
         checks.push(self::tool(&tool, found.as_deref(), output.as_deref()));
     }
     let list = herdr.and_then(|herdr| run(&herdr.to_string_lossy(), &["plugin", "list", "--json", "--plugin", "kebbie"], None).ok());
-    let (check, plugin) = herdr_plugin(list.as_deref());
+    let channel = config::channel_in(&env.config).unwrap_or_default();
+    let (check, plugin) = herdr_plugin(list.as_deref(), channel);
     checks.push(check);
     if let Some(plugin) = &plugin {
         checks.push(plugin_binary(&plugin.root));
     }
-    let channel = config::channel_in(&env.config).unwrap_or_default();
     if let Some((tool, found)) = &cargo {
         let origin = plugin.as_ref().and_then(|plugin| crate::update::binary_origin(&plugin.root));
         checks.push(self::cargo(tool, found.as_deref(), channel, origin.as_ref()));
@@ -598,7 +603,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let installed = read_json(&env.claude_dir.join("plugins/installed_plugins.json"));
     let claude_settings = read_json(&env.claude_dir.join("settings.json")).unwrap_or_default();
     let checkout = plugin.as_ref().and_then(|plugin| read_json(&plugin.root.join(".claude-plugin/plugin.json"))).and_then(|manifest| manifest["version"].as_str().map(str::to_string));
-    checks.push(claude_plugin(installed.as_ref(), &claude_settings, checkout.as_deref()));
+    checks.push(claude_plugin(installed.as_ref(), &claude_settings, checkout.as_deref(), channel));
     let kebbie_id = installed.as_ref().and_then(|installed| installed["plugins"].as_object()?.keys().find(|id| id.starts_with("kebbie@")).cloned());
     if let Some(id) = kebbie_id {
         checks.push(plugin_source(&crate::update::marketplace(&env.claude_dir, &id), channel));
@@ -691,6 +696,7 @@ pub fn failed(checks: &[Check]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Channel;
     use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
 
@@ -748,12 +754,13 @@ mod tests {
     #[test]
     fn the_herdr_plugin_is_read_from_plugin_list() {
         let list = r#"{"result":{"plugins":[{"plugin_id":"kebbie","enabled":true,"plugin_root":"/src/kebbie","version":"0.11.0"}],"type":"plugin_list"}}"#;
-        let (check, plugin) = herdr_plugin(Some(list));
+        let (check, plugin) = herdr_plugin(Some(list), Channel::Release);
         assert_eq!((check.level, check.fact.as_str()), (Level::Ok, "kebbie 0.11.0 enabled, at /src/kebbie"));
+        assert_eq!(herdr_plugin(Some(list), Channel::Main).0.fact, "kebbie main enabled, at /src/kebbie", "the main channel names no number");
         assert_eq!(plugin.unwrap().root, PathBuf::from("/src/kebbie"));
-        let (check, _) = herdr_plugin(Some(&list.replace("true", "false")));
+        let (check, _) = herdr_plugin(Some(&list.replace("true", "false")), Channel::Release);
         assert_eq!((check.level, check.fix[0].as_str()), (Level::Fail, "herdr plugin enable kebbie"));
-        let (check, plugin) = herdr_plugin(Some(r#"{"result":{"plugins":[]}}"#));
+        let (check, plugin) = herdr_plugin(Some(r#"{"result":{"plugins":[]}}"#), Channel::Release);
         assert!(check.level == Level::Fail && plugin.is_none() && check.fix[0].contains("herdr plugin install"));
         let dir = scratch("plugin");
         let missing = plugin_binary(&dir);
@@ -766,7 +773,6 @@ mod tests {
 
     #[test]
     fn the_plugin_binary_says_where_it_came_from_and_whether_cargo_is_needed() {
-        use crate::config::Channel;
         use crate::update::{Origin, binary_origin};
         let dir = scratch("origin");
         std::fs::create_dir_all(dir.join("target/release")).unwrap();
@@ -790,20 +796,22 @@ mod tests {
     #[test]
     fn the_claude_plugin_is_read_from_installed_plugins() {
         let installed: Value = serde_json::from_str(r#"{"version":2,"plugins":{"kebbie@kebbie":[{"version":"0.11.0"}]}}"#).unwrap();
-        assert_eq!(claude_plugin(Some(&installed), &Value::Null, None).fact, "kebbie@kebbie 0.11.0");
+        assert_eq!(claude_plugin(Some(&installed), &Value::Null, None, Channel::Release).fact, "kebbie@kebbie 0.11.0");
         let disabled: Value = serde_json::from_str(r#"{"enabledPlugins":{"kebbie@kebbie":false}}"#).unwrap();
-        assert_eq!(claude_plugin(Some(&installed), &disabled, None).fix, ["claude plugin enable kebbie@kebbie"]);
+        assert_eq!(claude_plugin(Some(&installed), &disabled, None, Channel::Release).fix, ["claude plugin enable kebbie@kebbie"]);
         let other: Value = serde_json::from_str(r#"{"plugins":{"vault@x":[{}]}}"#).unwrap();
-        assert_eq!(claude_plugin(Some(&other), &Value::Null, None).level, Level::Warn);
-        assert_eq!(claude_plugin(None, &Value::Null, None).level, Level::Warn);
-        let behind = claude_plugin(Some(&installed), &Value::Null, Some("0.12.0"));
+        assert_eq!(claude_plugin(Some(&other), &Value::Null, None, Channel::Release).level, Level::Warn);
+        assert_eq!(claude_plugin(None, &Value::Null, None, Channel::Release).level, Level::Warn);
+        let behind = claude_plugin(Some(&installed), &Value::Null, Some("0.12.0"), Channel::Release);
         assert_eq!((behind.level, behind.fix), (Level::Warn, vec!["kebbie update".to_string()]), "a cached copy older than the checkout is a warning");
-        assert_eq!(claude_plugin(Some(&installed), &Value::Null, Some("0.11.0")).level, Level::Ok);
+        assert_eq!(claude_plugin(Some(&installed), &Value::Null, Some("0.11.0"), Channel::Release).level, Level::Ok);
+        assert_eq!(claude_plugin(Some(&installed), &Value::Null, None, Channel::Main).fact, "kebbie@kebbie main", "the main channel names no number");
+        let behind = claude_plugin(Some(&installed), &Value::Null, Some("0.12.0"), Channel::Main);
+        assert!(behind.level == Level::Warn && !behind.fact.contains("0.1"), "{}", behind.fact);
     }
 
     #[test]
     fn a_release_machine_warns_while_the_claude_plugin_still_follows_github() {
-        use crate::config::Channel;
         use crate::update::Marketplace;
         let warned = plugin_source(&Marketplace::Git, Channel::Release);
         assert_eq!((warned.level, warned.fix.clone()), (Level::Warn, vec![crate::update::IN_PLACE_FIX.to_string()]));

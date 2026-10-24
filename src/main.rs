@@ -344,8 +344,8 @@ the repo's log line from the commit subjects, done waits for the note's solution
 it, and reset puts it back in the backlog. Without the plugin none of this runs.
 
 Without a name, land, follow, review, evidence, push, stage, unstage, done, drop and reset act on the task whose worktree you are in.
--C <dir> runs as if started in <dir>. kebbie --version (or kebbie version) prints the version and the commit and
-date it was built from.";
+-C <dir> runs as if started in <dir>. kebbie --version (or kebbie version) prints kebbie main on the main channel
+and the version, such as kebbie 0.27.0, on the release channel.";
 
 struct Arguments {
     positionals: Vec<String>,
@@ -447,8 +447,9 @@ fn run(arguments: &Arguments) -> Result<String> {
     }
     let name = arguments.positional(1);
     match arguments.positional(0) {
-        None if arguments.flag("--version") => Ok(version(env!("KEBBIE_BUILT_FROM"))),
-        Some("version") => Ok(version(env!("KEBBIE_BUILT_FROM"))),
+        None if arguments.flag("--version") => Ok(shown_kebbie()),
+        Some("version") if arguments.flag("--built") => Ok(version(env!("KEBBIE_BUILT_FROM"))),
+        Some("version") => Ok(shown_kebbie()),
         Some("start") => {
             let name = name.ok_or("kebbie start needs a task name")?;
             let prompt = arguments.positionals[2..].join(" ");
@@ -667,10 +668,28 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
     }
 }
 
-// Many commits carry one version number, so the commit and its date say which code this binary is.
+// kebbie's own callers compare this form through kebbie version --built, so its number and commit stay whatever the user is shown.
 fn version(built: &str) -> String {
     let version = env!("CARGO_PKG_VERSION");
     if built.is_empty() { format!("kebbie {version}") } else { format!("kebbie {version} ({built})") }
+}
+
+pub const BUILT_VERSION: [&str; 2] = ["version", "--built"];
+
+pub fn shown_number(channel: config::Channel, number: &str) -> String {
+    match channel {
+        config::Channel::Main => "main".to_string(),
+        config::Channel::Release => number.to_string(),
+    }
+}
+
+pub fn shown_version(channel: config::Channel, number: &str) -> String {
+    let shown = shown_number(channel, number);
+    if shown.is_empty() { "kebbie".to_string() } else { format!("kebbie {shown}") }
+}
+
+pub fn shown_kebbie() -> String {
+    shown_version(config::channel().unwrap_or_default(), env!("CARGO_PKG_VERSION"))
 }
 
 fn doctor() -> ExitCode {
@@ -721,6 +740,15 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_user_sees_kebbie_main_on_the_main_channel_and_the_number_on_release() {
+        assert_eq!(shown_version(config::Channel::Main, "0.27.0"), "kebbie main");
+        assert_eq!(shown_version(config::Channel::Release, "0.27.0"), "kebbie 0.27.0");
+        assert_eq!(shown_version(config::Channel::Release, ""), "kebbie", "an unknown number shows as kebbie alone");
+        assert_eq!(shown_number(config::Channel::Main, "0.27.0"), "main", "the update window's title after kebbie");
+        assert_eq!(BUILT_VERSION, ["version", "--built"], "kebbie's own callers read the number and commit through this form");
+    }
 
     #[test]
     fn the_version_names_the_commit_and_its_date_the_binary_was_built_from() {
