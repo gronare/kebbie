@@ -4,6 +4,7 @@ mod area_page;
 mod areas;
 mod backlog;
 mod backlog_file;
+mod changes;
 mod board;
 mod ci;
 mod config;
@@ -61,6 +62,7 @@ mod trusted_spawn;
 mod typing;
 mod update;
 mod update_check;
+mod update_progress;
 mod usage;
 mod vault;
 mod vault_cli;
@@ -613,7 +615,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("keeper") if arguments.flag("--start") => keeper::start(),
         Some("keeper") => keeper::run(),
         Some("update") if arguments.flag("--check") => Ok(update::check(&doctor::Env::current().claude_dir)),
-        Some("update") if arguments.flag("--finish") => update::finish(&doctor::Env::current().claude_dir).map(|lines| lines.join("\n")),
+        Some("update") if arguments.flag("--finish") => update::finish(&doctor::Env::current().claude_dir, std::env::var_os(update_progress::ENV).map(std::path::PathBuf::from).as_deref()).map(|lines| lines.join("\n")),
         Some("update") => {
             let request = match (arguments.value("--from"), arguments.flag("--stable")) {
                 (Some(_), true) => return Err("kelpie update takes --from <branch or path> or --stable, not both".to_string()),
@@ -621,7 +623,10 @@ fn run(arguments: &Arguments) -> Result<String> {
                 (None, true) => release::Request::Stable,
                 (None, false) => release::Request::Channel,
             };
-            update::run(&doctor::Env::current().claude_dir, true, &request)
+            update::run(&doctor::Env::current().claude_dir, true, &request).map(|outcome| {
+                let fixed = lead::state_dir().ok().and_then(|state| issue_recheck::shown(&state, messages::now()));
+                update::text(&outcome, &fixed.filter(|fixed| fixed.version == outcome.summary.version).map(|fixed| fixed.bugs).unwrap_or_default())
+            })
         }
         None | Some("help") => Ok(USAGE.to_string()),
         Some(other) => Err(format!("Unknown command \"{other}\"\n\n{USAGE}")),

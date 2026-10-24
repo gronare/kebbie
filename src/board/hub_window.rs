@@ -62,6 +62,7 @@ pub(super) enum Pick {
     Main,
     Details,
     Removing(usize),
+    Naming(usize),
     Leaving,
 }
 
@@ -70,6 +71,8 @@ pub(super) enum View {
     Name { url: String, note: Option<String>, buffer: String },
     Running(Flow),
     Overview(Pick),
+    Label { id: Id, buffer: String },
+    Rename { buffer: String, error: Option<String> },
     Said(String),
 }
 
@@ -96,6 +99,7 @@ fn spawn(title: &'static str, waiting: String, step: impl FnOnce(&Sender<Event>,
 pub(super) struct Row {
     pub(super) id: Id,
     pub(super) name: String,
+    pub(super) named: bool,
     pub(super) facts: String,
 }
 
@@ -130,9 +134,10 @@ impl Window {
 
     pub(super) fn rows(&self, now: u64) -> Vec<Row> {
         let Ok(Some(joined)) = identity::load(&self.paths.state) else { return Vec::new() };
-        joined.devices.iter().map(|paired| match self.listed.devices.iter().find(|known| known.device == paired.id) {
-            Some(known) => Row { id: paired.id.clone(), name: devices::name_of(known), facts: devices::facts(known, now) },
-            None => Row { id: paired.id.clone(), name: format!("Device {}", devices::short(&paired.id)), facts: format!("paired {}", devices::on_day(paired.paired_at, now)) },
+        joined.devices.iter().map(|paired| {
+            let named = devices::named(&paired.id, &self.listed, &joined.devices);
+            let facts = self.listed.devices.iter().find(|known| known.device == paired.id).map_or_else(|| format!("paired {}", devices::on_day(paired.paired_at, now)), |known| devices::facts(known, now));
+            Row { id: paired.id.clone(), named: named.is_some(), name: named.unwrap_or_else(|| devices::UNNAMED.to_string()), facts }
         }).collect()
     }
 
@@ -309,6 +314,44 @@ impl Window {
                 KeyCode::Char('y') => self.leave(),
                 _ => self.view = View::Overview(Pick::Main),
             },
+            View::Overview(Pick::Naming(index)) => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => *index = index.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => *index = (*index + 1).min(devices.saturating_sub(1)),
+                KeyCode::Enter => {
+                    let index = *index;
+                    if let Some(row) = self.rows(crate::messages::now()).into_iter().nth(index) {
+                        self.view = View::Label { id: row.id, buffer: if row.named { row.name } else { String::new() } };
+                    }
+                }
+                _ => self.view = View::Overview(Pick::Main),
+            },
+            View::Label { id, buffer } => match key.code {
+                KeyCode::Esc => self.view = View::Overview(Pick::Main),
+                KeyCode::Enter => {
+                    let said = devices::label(&self.paths.state, id, buffer);
+                    self.view = match said {
+                        Ok(_) => View::Overview(Pick::Main),
+                        Err(error) => View::Said(error),
+                    };
+                }
+                KeyCode::Backspace => {
+                    buffer.pop();
+                }
+                KeyCode::Char(character) => buffer.push(character),
+                _ => {}
+            },
+            View::Rename { buffer, error } => match key.code {
+                KeyCode::Esc => self.view = View::Overview(Pick::Main),
+                KeyCode::Enter => match crate::hub::rename_machine(&self.paths.config, buffer) {
+                    Ok(_) => self.view = View::Overview(Pick::Main),
+                    Err(why) => *error = Some(why),
+                },
+                KeyCode::Backspace => {
+                    buffer.pop();
+                }
+                KeyCode::Char(character) => buffer.push(character),
+                _ => {}
+            },
             View::Overview(Pick::Removing(index)) => match key.code {
                 KeyCode::Up | KeyCode::Char('k') => *index = index.saturating_sub(1),
                 KeyCode::Down | KeyCode::Char('j') => *index = (*index + 1).min(devices.saturating_sub(1)),
@@ -326,6 +369,15 @@ impl Window {
             },
             View::Overview(Pick::Main) => match key.code {
                 KeyCode::Char('a') => self.add_device(),
+                KeyCode::Char('n') if devices > 0 => {
+                    let first = self.rows(crate::messages::now()).iter().position(|row| !row.named).unwrap_or(0);
+                    self.view = View::Overview(Pick::Naming(first));
+                }
+                KeyCode::Char('n') => self.view = View::Said("No device sees this board, so there is none to name.".to_string()),
+                KeyCode::Char('m') => {
+                    let current = self.configured_name().or_else(|| identity::load(&self.paths.state).ok().flatten().map(|joined| joined.name)).unwrap_or_default();
+                    self.view = View::Rename { buffer: current, error: None };
+                }
                 KeyCode::Char('r') if devices > 0 => self.view = View::Overview(Pick::Removing(0)),
                 KeyCode::Char('r') => self.view = View::Said("No device sees this board, so there is none to remove.".to_string()),
                 KeyCode::Char('l') => self.view = View::Overview(Pick::Leaving),
@@ -344,12 +396,12 @@ impl Window {
     }
 
     pub(super) fn typing(&self) -> bool {
-        matches!(self.view, View::Choose { typing: Some(_), .. } | View::Name { .. })
+        matches!(self.view, View::Choose { typing: Some(_), .. } | View::Name { .. } | View::Label { .. } | View::Rename { .. })
     }
 
     pub(super) fn paste(&mut self, text: &str) -> bool {
         match &mut self.view {
-            View::Choose { typing: Some(buffer), .. } | View::Name { buffer, .. } => {
+            View::Choose { typing: Some(buffer), .. } | View::Name { buffer, .. } | View::Label { buffer, .. } | View::Rename { buffer, .. } => {
                 buffer.push_str(text.trim());
                 true
             }
@@ -411,7 +463,7 @@ fn device_lines(rows: &[Row], selected: Option<usize>) -> Vec<Line<'static>> {
         let name = format!("{}{}", row.name, " ".repeat(column.saturating_sub(text_width(&row.name))));
         Line::from(vec![
             Span::styled(if chosen { "▸ " } else { "  " }, style(MAUVE)),
-            Span::styled(name, if chosen { bold(MAUVE) } else { style(TEXT) }),
+            Span::styled(name, if chosen { bold(MAUVE) } else if row.named { style(TEXT) } else { style(MUTED) }),
             Span::styled(row.facts.clone(), style(MUTED)),
         ])
     }).collect()
@@ -423,7 +475,11 @@ fn overview(window: &Window, pick: Pick) -> Vec<Line<'static>> {
     let relay = relay::load(&window.paths.state);
     let rows = window.rows(now);
     let (sent, said) = board_line(&relay, !rows.is_empty(), now);
-    let mut lines = vec![text(format!("Connected to {} as {}", host(&joined.url), joined.name)), status(sent, said)];
+    let connected = match window.configured_name().filter(|name| *name != joined.name) {
+        Some(name) => Line::from(vec![Span::styled(format!("Connected to {} as {name}", host(&joined.url)), style(TEXT)), Span::styled("  renaming on the hub…", style(MUTED))]),
+        None => text(format!("Connected to {} as {}", host(&joined.url), joined.name)),
+    };
+    let mut lines = vec![connected, status(sent, said)];
     if relay.plan_inactive.is_some() {
         lines.push(muted("Everything here keeps working; your devices get the board again once it is active."));
     }
@@ -447,7 +503,9 @@ fn overview(window: &Window, pick: Pick) -> Vec<Line<'static>> {
         return lines;
     }
     let mut title = vec![Span::styled("Devices that see this board", bold(PEACH))];
-    if window.listed.error.is_some() {
+    if window.listed.outdated {
+        title.push(Span::styled("  update the hub to see device names", style(MUTED)));
+    } else if window.listed.error.is_some() {
         let age = window.listed.fetched_at.map_or("the hub did not answer".to_string(), |at| format!("as of {}; the hub did not answer", devices::ago(at, now)));
         title.push(Span::styled(format!("  {age}"), style(MUTED)));
     }
@@ -456,7 +514,7 @@ fn overview(window: &Window, pick: Pick) -> Vec<Line<'static>> {
         lines.push(muted("  None yet. Add your phone or a browser with a."));
     }
     let selected = match pick {
-        Pick::Removing(index) => Some(index.min(rows.len().saturating_sub(1))),
+        Pick::Removing(index) | Pick::Naming(index) => Some(index.min(rows.len().saturating_sub(1))),
         _ => None,
     };
     lines.extend(device_lines(&rows, selected));
@@ -466,11 +524,15 @@ fn overview(window: &Window, pick: Pick) -> Vec<Line<'static>> {
             lines.push(Line::from(Span::styled(format!("Remove {}? It stops seeing this board.", row.name), style(YELLOW))));
             lines.push(keys(&[("y", "remove"), ("↑↓", "another"), ("esc", "keep it")]));
         }
+        (Pick::Naming(_), Some(row)) => {
+            lines.push(Line::from(Span::styled(format!("Name {} on this machine?", row.name), style(YELLOW))));
+            lines.push(keys(&[("⏎", "name it"), ("↑↓", "another"), ("esc", "back")]));
+        }
         (Pick::Leaving, _) => {
             lines.push(Line::from(Span::styled("Disconnect this machine? Your devices lose its board and the keys go.", style(YELLOW))));
             lines.push(keys(&[("y", "disconnect"), ("any other key", "keeps it")]));
         }
-        _ => lines.push(keys(&[("a", "add a phone or browser"), ("r", "remove a device"), ("l", "disconnect this machine"), ("esc", "close")])),
+        _ => lines.push(keys(&[("a", "add"), ("n", "name device"), ("m", "rename machine"), ("r", "remove"), ("l", "disconnect"), ("esc", "close")])),
     }
     lines
 }
@@ -537,6 +599,8 @@ pub(super) fn draw(frame: &mut Frame, window: &Window) {
         View::Name { buffer, url, .. } => ("kelpie hub · name this machine", vec![text(format!("The name {} and your devices show for this machine:", host(url))), typed(buffer), Line::default(), keys(&[("⏎", "connect and save it as [machine] name"), ("esc", "close")])]),
         View::Running(flow) => (flow.title, running(frame, flow, window.paths.truecolor)),
         View::Overview(pick) => ("kelpie hub", overview(window, *pick)),
+        View::Label { buffer, .. } => ("kelpie hub · name a device", vec![text("The name this machine shows for the device (the hub has no way to rename it):"), typed(buffer), Line::default(), keys(&[("⏎", "save it on this machine"), ("esc", "back")])]),
+        View::Rename { buffer, error } => ("kelpie hub · rename this machine", [text("The name the hub and your devices show for this machine:"), typed(buffer)].into_iter().chain(error.iter().map(|error| Line::from(Span::styled(error.clone(), style(RED))))).chain([Line::default(), keys(&[("⏎", "save it as [machine] name"), ("esc", "back")])]).collect()),
         View::Said(said) => ("kelpie hub", said.lines().map(text).chain([Line::default(), keys(&[("any key", "goes on")])]).collect()),
     };
     modal(frame, title.to_string(), lines, WIDTH);
@@ -637,13 +701,13 @@ mod tests {
         let mut machine = identity::Identity::new("https://kelpie.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_test".to_string(), &SecretKeys::generate(), now).unwrap();
         let (laptop, phone) = (Id::new(Prefix::Device).unwrap(), Id::new(Prefix::Device).unwrap());
         for id in [&laptop, &phone] {
-            machine.admit(identity::Device { id: id.clone(), keys: SecretKeys::generate().public(), paired_at: now });
+            machine.admit(identity::Device { id: id.clone(), keys: SecretKeys::generate().public(), paired_at: now, label: None });
         }
         identity::save(&paths.state, &machine).unwrap();
         let listed = Listed { devices: vec![
             AdmittedDevice { device: laptop.clone(), name: Some("Safari on Mac".to_string()), paired_at: now, last_seen: Some(now - 120), notifications: false },
             AdmittedDevice { device: phone.clone(), name: Some("iPhone".to_string()), paired_at: now, last_seen: None, notifications: true },
-        ], fetched_at: Some(now - 300), error: None };
+        ], fetched_at: Some(now - 300), error: None, outdated: false };
         std::fs::write(identity::dir(&paths.state).join("devices.json"), serde_json::to_string(&listed).unwrap()).unwrap();
         std::fs::write(identity::dir(&paths.state).join("relay.json"), serde_json::to_string(&relay).unwrap()).unwrap();
         Joined { paths, phone, laptop }
@@ -734,13 +798,13 @@ mod tests {
         let joined = joined(cached, relay::Relay { posted_at: Some(now - 150), rev: 3, ..Default::default() });
         let mut app = opened(&joined);
         let shown = screen(&mut app, 110, 40);
-        for line in ["Connected to kelpie.example.com as mac", "● Board sent 2 min ago", "Devices that see this board", "Safari on Mac  paired today · seen 2 min ago", "iPhone         paired today · notifications on", "a add a phone or browser · r remove a device · l disconnect this machine · esc close"] {
+        for line in ["Connected to kelpie.example.com as mac", "● Board is being sent", "Devices that see this board", "Safari on Mac  paired today · seen 2 min ago", "iPhone         paired today · notifications on", "a add · n name device · m rename machine · r remove · l disconnect · esc close"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
         assert!(!shown.contains(joined.phone.as_str()) && !shown.contains("https://") && !shown.contains("mch_"), "no ids and no scheme: {shown}");
-        assert_eq!(colour_of(&mut app, "● Board sent"), GREEN);
+        assert_eq!(colour_of(&mut app, "● Board is being sent"), GREEN);
         assert_eq!(colour_of(&mut app, "Devices that see"), PEACH);
-        assert_eq!(colour_of(&mut app, "a add a phone"), MAUVE);
+        assert_eq!(colour_of(&mut app, "a add ·"), MAUVE);
         assert_eq!(colour_of(&mut app, "paired today · seen"), MUTED);
     }
 
@@ -763,7 +827,7 @@ mod tests {
         assert!(screen(&mut app, 110, 40).contains("● Board not sent: the hub answered 400 not-a-board (2 min ago)"));
         let mut app = opened(&joined(cached, relay::Relay { posted_at: Some(now - 150), error: Some("could not reach the hub: once".to_string()), error_at: Some(now - 300), ..Default::default() }));
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("● Board sent 2 min ago"), "a post after the failure wins: {shown}");
+        assert!(shown.contains("● Board is being sent") && !shown.contains("Board sent"), "a post after the failure wins, and a board that goes out shows no ticking time: {shown}");
 
         let mut app = opened(&joined(cached, relay::Relay::default()));
         assert!(screen(&mut app, 110, 40).contains("● Board not sent yet; the keeper sends it within a minute"));
@@ -794,7 +858,7 @@ mod tests {
         let shown = screen(&mut app, 110, 40);
         assert!(shown.contains("Disconnect this machine? Your devices lose its board and the keys go.") && shown.contains("y disconnect · any other key keeps it"), "{shown}");
         press(&mut app, key(KeyCode::Char('n')));
-        assert!(screen(&mut app, 110, 40).contains("l disconnect this machine"), "anything but y keeps it");
+        assert!(screen(&mut app, 110, 40).contains("l disconnect · esc close"), "anything but y keeps it");
     }
 
     #[test]
@@ -852,4 +916,81 @@ mod tests {
         let device = browser.device.as_ref().unwrap().device.clone().unwrap();
         assert_eq!(identity::load(&state).unwrap().unwrap().devices[0].id, device);
     }
+    fn outdated(state: &Path, _: u64) -> Result<Listed> {
+        Ok(Listed { error: Some("this hub cannot list devices yet; update kelpie-hub".to_string()), outdated: true, ..devices::load(state) })
+    }
+
+    #[test]
+    fn a_hub_without_the_device_list_asks_for_an_update_and_an_unreachable_one_says_it_did_not_answer() {
+        let shown = screen(&mut opened(&joined(outdated, relay::Relay::default())), 110, 40);
+        assert!(shown.contains("Devices that see this board  update the hub to see device names") && !shown.contains("did not answer"), "{shown}");
+        let shown = screen(&mut opened(&joined(unreachable, relay::Relay::default())), 110, 40);
+        assert!(shown.contains("the hub did not answer") && !shown.contains("update the hub"), "{shown}");
+    }
+
+    #[test]
+    fn a_device_without_a_name_reads_unnamed_and_n_names_it_on_this_machine() {
+        let joined = joined(cached, relay::Relay::default());
+        let mut listed = devices::load(&joined.paths.state);
+        listed.devices[1].name = None;
+        std::fs::write(identity::dir(&joined.paths.state).join("devices.json"), serde_json::to_string(&listed).unwrap()).unwrap();
+        let mut app = opened(&joined);
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("Unnamed device") && !shown.contains("Device "), "{shown}");
+        assert_eq!(colour_of(&mut app, "Unnamed device"), MUTED);
+        assert!(shown.lines().filter(|row| row.contains("esc close")).count() == 1 && shown.contains("a add · n name device · m rename machine · r remove · l disconnect · esc close"), "the keys stay on one line: {shown}");
+        press(&mut app, key(KeyCode::Char('n')));
+        assert!(screen(&mut app, 110, 40).contains("Name Unnamed device on this machine?"), "n picks the first device without a name");
+        press(&mut app, key(KeyCode::Enter));
+        for character in "Kitchen iPad".chars() {
+            press(&mut app, key(KeyCode::Char(character)));
+        }
+        press(&mut app, key(KeyCode::Enter));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("Kitchen iPad   paired today") && !shown.contains("Unnamed"), "{shown}");
+        let saved = identity::load(&joined.paths.state).unwrap().unwrap();
+        assert_eq!(saved.devices.iter().find(|device| device.id == joined.phone).and_then(|device| device.label.as_deref()), Some("Kitchen iPad"), "kept in identity.json, as the hub has no machine-side rename");
+        assert_eq!(devices::find(&devices::load(&joined.paths.state), &saved.devices, "kitchen ipad").unwrap(), joined.phone, "kelpie hub remove finds it by that name too");
+    }
+
+    #[test]
+    fn m_renames_this_machine_in_config_toml_and_shows_the_name_at_once_until_the_hub_has_it() {
+        let joined = joined(cached, relay::Relay::default());
+        let mut app = opened(&joined);
+        press(&mut app, key(KeyCode::Char('m')));
+        assert!(screen(&mut app, 110, 40).contains("mac▏"), "prefilled with [machine] name");
+        for _ in 0..3 {
+            press(&mut app, key(KeyCode::Backspace));
+        }
+        press(&mut app, key(KeyCode::Enter));
+        assert!(screen(&mut app, 110, 40).contains("machine.name: must be a non-empty string"), "the config's own check");
+        for character in "Studio Mac".chars() {
+            press(&mut app, key(KeyCode::Char(character)));
+        }
+        press(&mut app, key(KeyCode::Enter));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("Connected to kelpie.example.com as Studio Mac  renaming on the hub…"), "{shown}");
+        assert_eq!(crate::config::load_machine(&joined.paths.config).unwrap().machine_name.as_deref(), Some("Studio Mac"));
+        let mut renamed = identity::load(&joined.paths.state).unwrap().unwrap();
+        renamed.name = "Studio Mac".to_string();
+        identity::save(&joined.paths.state, &renamed).unwrap();
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("as Studio Mac") && !shown.contains("renaming"), "the keeper's rename confirmed it: {shown}");
+    }
+
+    #[test]
+    fn m_refuses_to_write_through_a_linked_config_and_says_where_to_set_it() {
+        let joined = joined(cached, relay::Relay::default());
+        let real = joined.paths.state.join("team.toml");
+        std::fs::rename(&joined.paths.config, &real).unwrap();
+        std::os::unix::fs::symlink(&real, &joined.paths.config).unwrap();
+        let mut app = opened(&joined);
+        press(&mut app, key(KeyCode::Char('m')));
+        press(&mut app, key(KeyCode::Char('2')));
+        press(&mut app, key(KeyCode::Enter));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("is a link") && shown.contains("[machine] name = \"mac2\""), "{shown}");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "[machine]\nname = \"mac\"\n", "the linked file is left as it was");
+    }
+
 }

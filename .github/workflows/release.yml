@@ -79,6 +79,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            CHANGES.md
+            scripts/release-notes.sh
+          sparse-checkout-cone-mode: false
+      - name: The release notes, from the version's section of CHANGES.md
+        run: sh scripts/release-notes.sh "${GITHUB_REF_NAME#v}" > release-notes.md
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -90,7 +98,7 @@ jobs:
           [ $# -eq 4 ] || { echo "::error::expected 4 binaries, got $*"; exit 1; }
           sha256sum kelpie-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
-      - name: Draft a GitHub Release with the binaries and notes from the commits since the last tag
+      - name: Draft a GitHub Release with the binaries and the version's notes
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,7 +106,7 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber kelpie-*.tar.gz SHA256SUMS
           else
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes --title "kelpie ${GITHUB_REF_NAME#v}" kelpie-*.tar.gz SHA256SUMS
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --notes-file ../release-notes.md --title "kelpie ${GITHUB_REF_NAME#v}" kelpie-*.tar.gz SHA256SUMS
           fi
       - name: Publish the release once every binary and SHA256SUMS is attached
         working-directory: dist

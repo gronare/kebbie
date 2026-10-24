@@ -25,6 +25,7 @@ pub(crate) mod terminal;
 #[cfg(test)]
 mod test_support;
 mod threads;
+mod update_window;
 pub(crate) mod widgets;
 
 use std::collections::HashMap;
@@ -110,6 +111,7 @@ enum Mode {
     NoteCard { key: String, scroll: u16, nudged: bool },
     Help(keys_window::Scroll),
     Hub(Box<hub_window::Window>),
+    Update,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -181,15 +183,14 @@ struct App {
     plans: HashMap<String, Text<'static>>,
     updates: Vec<(String, String)>,
     updater: Updater,
-    update_running: bool,
-    update_shown: bool,
+    update: Option<update_window::Run>,
+    progress_file: Option<PathBuf>,
     recheck: Option<Sender<()>>,
     stale: Vec<String>,
     filter: Option<(Column, String)>,
     ctrl_c: Option<Instant>,
     notice: Option<(String, Instant)>,
     lead_chat: Option<bool>,
-    lead_versions: Option<(String, String)>,
     restart_auto: bool,
     lead_restarter: Updater,
     subject: Option<notices::Subject>,
@@ -346,12 +347,6 @@ impl App {
         self.mode = Mode::Working { label, result };
     }
 
-    fn start_update(&mut self) {
-        let updater = self.updater.clone();
-        self.update_running = true;
-        self.in_background("Updating kelpie, its plugins and the vault plugin…".to_string(), move || updater());
-    }
-
     fn restart_lead(&mut self) {
         if self.lead_line().is_none() {
             return self.say("The lead runs the installed kelpie; nothing to restart".to_string());
@@ -362,22 +357,22 @@ impl App {
     }
 
     fn lead_line(&self) -> Option<String> {
-        crate::lead_restart::line(&self.stale, self.lead_versions.as_ref(), self.restart_auto)
+        self.lead_line_for(usize::MAX)
+    }
+
+    fn lead_line_for(&self, width: usize) -> Option<String> {
+        crate::lead_restart::line(&self.stale, self.restart_auto, width)
     }
 
     fn take_working_result(&mut self) {
         let Mode::Working { result, .. } = &self.mode else { return };
         let Ok(result) = result.try_recv() else { return };
-        if std::mem::take(&mut self.update_running) {
-            self.update_shown = true;
-            self.updates.clear();
-            if let Some(recheck) = &self.recheck {
-                let _ = recheck.send(());
-            }
-        }
-        let update = self.update_shown;
-        let result = if update { result.map(|said| updated(&said)) } else { result };
-        self.show_as(result, update);
+        self.show(result);
+    }
+
+    // A rebuilt binary takes over only once nothing is open, and never while an update this board runs is going or its summary is unread.
+    fn may_restart(&self) -> bool {
+        matches!(self.mode, Mode::Normal | Mode::Help(_) | Mode::Message(_)) && self.update.is_none() && self.areas.is_idle() && self.routines.is_idle()
     }
 
     fn show(&mut self, result: Result<String>) {
@@ -508,6 +503,7 @@ impl App {
             working @ Mode::Working { .. } => self.mode = working,
             Mode::Questions(window) => self.handle_questions(window, key),
             Mode::Hub(window) => self.handle_hub(window, key),
+            Mode::Update => self.handle_update(key),
             Mode::Report { id, scroll, read, .. } => self.confirm_report(id, scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
@@ -905,8 +901,8 @@ impl App {
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), answering: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
-            updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel)), update_running: false, update_shown: false, recheck: None, stale: Vec::new(),
-            filter: None, ctrl_c: None, notice: None, lead_chat: None, lead_versions: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
+            updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(),
+            filter: None, ctrl_c: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
         }
     }
 }
@@ -957,9 +953,7 @@ pub fn run(overlay: bool) -> Result<String> {
             app.poll_answer();
             app.take_working_result();
             app.poll_hub();
-            if !matches!(app.mode, Mode::Message(_)) {
-                app.update_shown = false;
-            }
+            app.poll_update();
             while let Ok(updates) = update_notices.try_recv() {
                 app.updates = updates;
             }
@@ -998,7 +992,6 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.usage = snapshot.usage;
                         app.ongoing = snapshot.ongoing;
                         app.lead_chat = snapshot.lead_chat;
-                        app.lead_versions = snapshot.lead_versions;
                         app.restart_auto = snapshot.restart_auto;
                         app.backlog_selected = app.backlog_selected.min(app.backlog_len().saturating_sub(1));
                         let newest = app.messages.last().map_or(0, |message| message.at);
@@ -1031,7 +1024,7 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             app.fetch_failures = fetcher.failures();
             app.away = permit::away_since().is_some();
-            if (matches!(app.mode, Mode::Normal | Mode::Help(_)) || matches!(app.mode, Mode::Message(_)) && !app.update_shown) && app.areas.is_idle() && app.routines.is_idle() && rebuild.ready() {
+            if app.may_restart() && rebuild.ready() {
                 let error = rebuild.restart(&app);
                 terminal = init_terminal();
                 app.show_as(Err(error), true);
@@ -1071,18 +1064,9 @@ fn act_kind(act: Act) -> &'static str {
     }
 }
 
-fn updated(said: &str) -> String {
-    if Notice::parse(said).is_some() {
-        return said.to_string();
-    }
-    let (first, rest) = said.split_once('\n').unwrap_or((said, ""));
-    Notice::new(Tone::Done, "Update finished").next(first).detail("result", rest.trim()).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -1235,51 +1219,21 @@ mod tests {
     }
 
     #[test]
-    fn u_runs_the_update_in_the_background_and_shows_its_result() {
-        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
-        let (release, gate) = mpsc::channel::<()>();
-        let gate = std::sync::Mutex::new(gate);
-        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let seen = ran.clone();
-        app.updater = std::sync::Arc::new(move || {
-            gate.lock().unwrap().recv().map_err(|error| error.to_string())?;
-            seen.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok("kelpie 0.18.1 → 0.18.2".to_string())
-        });
-        let (recheck, rechecked) = mpsc::channel();
-        app.recheck = Some(recheck);
-        app.updates = vec![("kelpie".to_string(), "0.18.2".to_string())];
-        app.handle_normal(key(KeyCode::Char('U')));
-        assert!(matches!(app.mode, Mode::Working { .. }), "the key returns while the update is still running");
-        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
-        release.send(()).unwrap();
-        for _ in 0..200 {
-            app.take_working_result();
-            if matches!(app.mode, Mode::Message(_)) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        let Mode::Message(text) = &app.mode else { panic!("the result is shown") };
-        assert_eq!(text, "✓ Update finished\n  next: kelpie 0.18.1 → 0.18.2", "the update's result stays open, though it asks nothing");
-        assert!(app.update_shown && app.updates.is_empty() && rechecked.try_recv().is_ok(), "the notice goes and a fresh check is asked for");
-        assert!(shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "U"), "U is in the keys help");
-    }
-
-    #[test]
     fn while_the_lead_runs_an_older_kelpie_one_line_says_so_and_l_restarts_it() {
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
         let (rows, _) = render(&mut app, 170, 30);
-        assert!(!rows.join("\n").contains("The lead runs"), "nothing pending, no line");
+        assert!(!rows.join("\n").contains("↻ The lead"), "nothing pending, no line");
         app.handle_normal(key(KeyCode::Char('L')));
         assert!(matches!(app.mode, Mode::Normal) && app.notice.as_ref().is_some_and(|(text, _)| text.contains("nothing to restart")), "L does nothing while the lead is current");
-        app.lead_versions = Some(("kelpie 0.26.1".to_string(), "kelpie 0.26.2".to_string()));
-        let (rows, _) = render(&mut app, 170, 30);
-        assert!(!rows.join("\n").contains("↻ The lead runs"), "the versions alone show nothing while the restart routine does not count the lead stale");
         app.stale = vec!["lead: restarts when idle".to_string()];
+        for width in [80, 120] {
+            let (rows, _) = render(&mut app, width, 30);
+            assert!(rows.iter().any(|row| row.trim_end().ends_with("↻ The lead restarts on the new kelpie when it's idle · L restarts it now")), "the whole line at {width} columns: {}", rows.join("\n"));
+        }
+        let (rows, _) = render(&mut app, 60, 30);
+        assert!(rows.iter().any(|row| row.trim_end().ends_with("↻ Lead restarts when idle · L now")), "a narrow board takes the short wording, never a cut one: {}", rows.join("\n"));
         let (rows, _) = render(&mut app, 170, 30);
-        let (x, y) = find(&rows, "↻ The lead runs kelpie 0.26.1")[0];
-        assert!(rows[y].contains("kelpie 0.26.2 is installed · restarts when idle · L restarts it now"), "{}", rows[y]);
+        let (x, y) = find(&rows, "↻ The lead restarts on the new kelpie")[0];
         assert!(rows[y + 1].trim().is_empty() && rows[y + 2].contains("WORK"), "one line, then the columns: {}", rows.join("\n"));
         assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Key(KeyCode::Char('L'))), "a click on the line restarts too");
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1310,7 +1264,7 @@ mod tests {
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2, "a refused restart can be pressed again");
         app.page = Page::Areas;
         let (rows, _) = render(&mut app, 170, 30);
-        assert!(!rows.join("\n").contains("↻ The lead runs"), "the Work page only");
+        assert!(!rows.join("\n").contains("↻ The lead"), "the Work page only");
         assert!(shown(keys::map(), Ctx::Work, false).iter().any(|(key, _)| key == "L"), "L is in the keys help");
     }
 }

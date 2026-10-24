@@ -283,6 +283,7 @@ pub fn settle(state: &Path, root: &Path, id: &str, checked: &Checked, outcome: R
 pub struct Fixed {
     pub version: String,
     pub titles: Vec<String>,
+    pub bugs: Vec<String>,
     pub wishes: usize,
     pub last: u64,
 }
@@ -295,7 +296,8 @@ fn fixed_between(state: &Path, since: u64, now: u64) -> Option<Fixed> {
     let latest = fixed.iter().map(|(_, rechecked)| rechecked).max_by_key(|rechecked| rechecked.at)?;
     let (last, version) = (latest.at, latest.version.clone());
     let wishes = fixed.iter().filter(|(issue, _)| issue.kind == "wish").count();
-    Some(Fixed { version, titles: fixed.into_iter().map(|(issue, _)| issue.title).collect(), wishes, last })
+    let bugs = fixed.iter().filter(|(issue, _)| issue.kind != "wish").map(|(issue, _)| issue.title.clone()).collect();
+    Some(Fixed { version, titles: fixed.into_iter().map(|(issue, _)| issue.title).collect(), bugs, wishes, last })
 }
 
 fn dismissed_at(state: &Path) -> u64 {
@@ -386,7 +388,7 @@ mod tests {
         assert_eq!(issue.history, [format!("fixed in 0.26.3 ({}), checked automatically", shas[1])]);
         assert!(issues::list_in(&issues::dir(&state), true, false).contains("checked automatically"));
         assert_eq!(issue.rechecked.as_deref(), Some(format!("{} fixed {NOW} 0.26.3", shas[2]).as_str()), "the result lives on the issue");
-        assert_eq!(shown(&state, NOW + 60), Some(Fixed { version: "0.26.3".to_string(), titles: vec!["push hid git's error (aaaaaa)".to_string()], wishes: 0, last: NOW }));
+        assert_eq!(shown(&state, NOW + 60), Some(Fixed { version: "0.26.3".to_string(), titles: vec!["push hid git's error (aaaaaa)".to_string()], bugs: vec!["push hid git's error (aaaaaa)".to_string()], wishes: 0, last: NOW }));
         issues::reopen_in(&issues::dir(&state), &Caller::Lead, "aaaaaa", "3333333").unwrap();
         assert_eq!(shown(&state, NOW + 60), None, "a reopened issue is no longer shown as fixed");
         assert!(crate::messages::load().iter().all(|message| !message.text.contains("aaaaaa")), "nobody is told");
@@ -536,7 +538,7 @@ mod tests {
         fix(&state, "cccccc", "2222222", "0.26.3", NOW + 200);
         assert_eq!(shown(&state, NOW + 200).unwrap().titles, ["push hid git's error (cccccc)"], "a fix after the dismissal shows again, alone");
         fix(&state, "dddddd", "3333333", "0.26.4", NOW + 300);
-        assert_eq!(shown(&state, NOW + 300), Some(Fixed { version: "0.26.4".to_string(), titles: vec!["push hid git's error (cccccc)".to_string(), "push hid git's error (dddddd)".to_string()], wishes: 0, last: NOW + 300 }), "every undismissed fix shows, under the latest fix's version");
+        assert_eq!(shown(&state, NOW + 300), Some(Fixed { version: "0.26.4".to_string(), titles: vec!["push hid git's error (cccccc)".to_string(), "push hid git's error (dddddd)".to_string()], bugs: vec!["push hid git's error (cccccc)".to_string(), "push hid git's error (dddddd)".to_string()], wishes: 0, last: NOW + 300 }), "every undismissed fix shows, under the latest fix's version");
     }
 
     #[test]
@@ -577,7 +579,7 @@ mod tests {
         assert_eq!(stored(&state, "aaaaaa").rechecked, None);
         issues::close_in(&dir, &Caller::User, "aaaaaa", Some("fixed")).unwrap();
         assert_eq!(shown(&state, NOW), None);
-        let fixed = |titles: usize, wishes: usize| Fixed { version: "0.27.0".to_string(), titles: vec!["x".to_string(); titles], wishes, last: 0 };
+        let fixed = |titles: usize, wishes: usize| Fixed { version: "0.27.0".to_string(), titles: vec!["x".to_string(); titles], bugs: Vec::new(), wishes, last: 0 };
         assert_eq!(headline(&Fixed { version: String::new(), ..fixed(1, 0) }), "Fixed in the kelpie update: 1 bug you ran into");
         assert_eq!(headline(&fixed(1, 0)), "Fixed in kelpie 0.27.0: 1 bug you ran into");
         assert_eq!(headline(&fixed(3, 1)), "Fixed in kelpie 0.27.0: 2 bugs you ran into and 1 wish you made");

@@ -57,6 +57,45 @@ A restart is `claude --resume <session id>` in the same pane, with the process's
 
 Going back to an older kelpie, it reads a task's session record, now JSON, as its session id: it finds no conversation by it and resumes the task's newest one, and the task loses its recorded mode and profile until its next start.
 
+## What an update shows
+
+`U` on the board opens the update's window, and `kelpie update` in a terminal prints the same steps:
+
+```
+╭ Updating kelpie ───────────────────────────────────────────╮
+│ ✓ Fetched main (3 new commits)                             │
+│ ▸ Building kelpie  ████████████░░░░░░░░  212/348 crates 1:42│
+│   Claude Code and vault plugins                            │
+│   Restart sessions                                         │
+│                                                            │
+│ esc hides this; the update keeps going                     │
+╰────────────────────────────────────────────────────────────╯
+```
+
+The step running shows how long it has run. While kelpie builds, the bar counts the crates cargo has finished against the crates the build needs, which kelpie reads from `cargo metadata`; until it has that count it names the crate compiling. On the release channel the bar counts the megabytes of the release binary downloaded. The update runs on in the background: `esc` hides the window, the status line shows `⇣ updating kelpie · U` meanwhile, and `U` opens the window again. The board does not restart on a new binary while its update runs. In a terminal the running step is redrawn in place; piped, each step prints one plain line.
+
+When it is done, the window says what the update brought:
+
+```
+╭ kelpie 0.27.0 ─────────────────────────────────────────────╮
+│ ✓ Updated                                                  │
+│                                                            │
+│ What's new                                                 │
+│  • The hub window shows your devices by name, and r removes│
+│    one                                                     │
+│ Fixed                                                      │
+│  • A bug you ran into: update stopped on a newer config key│
+│                                                            │
+│ Restarting                                                 │
+│  The lead and 2 sessions restart when they're idle.        │
+│  The board restarts when you open it again.                │
+│                                                            │
+│ d details · any other key closes                           │
+╰────────────────────────────────────────────────────────────╯
+```
+
+**What's new** and **Fixed** are the handwritten notes in kelpie's `CHANGES.md`: on the release channel the sections of the versions after the one you had, up to the one installed; on the `main` channel the entries added since the commit you had. With nothing written it says `No notes for this update`; it never lists commits. **Fixed** also names the bugs in kelpie you ran into that the recheck closed in this version, as they come in. **Restarting** sums the sessions up. `d` shows the details: each component's version before and after with its commit, the lead's kelpie, each session's line, the plugins, the board and the keeper. An update that stops names the step it stopped at and why.
+
 ## When restarts happen
 
 With `restart.auto` on, the default, `kelpie update` restarts idle sessions at once, and the keeper restarts each other stale session once it has been idle and out of focus for `restart.idle_minutes`; the lead waits one minute instead. With `[keeper] enabled = false`, the full board does this every minute; the `prefix+t` popup does not. The status line shows `↻ N stale` while sessions wait. With `restart.auto = false`, nothing restarts on its own: `kelpie restart`, `kelpie lead --restart` and the board's `L` do it when you choose.
@@ -68,15 +107,15 @@ A restart on its own never interrupts work:
 - A session with text in its input box that you have not sent, or whose box kelpie cannot read, waits until the box is empty, so a restart never loses a draft. A restart you ask for refuses typed text too, but goes ahead when the box cannot be read.
 - A session kelpie cannot restart safely is skipped with the reason: one whose session id herdr does not know, whose command line cannot be read or has an option kelpie does not know, whose Claude runs in another folder than its pane, or whose conversation file is missing.
 
-`kelpie update` ends with one line per session: `restarted`, `restarts when idle`, `you are in it: restarts when you leave it`, `its input box holds text or cannot be read: restarts once it is empty`, `waiting for your answer: background work running`, or `skipped: <reason>`.
+`kelpie update` sums the sessions up in a sentence or two, such as `The lead and 2 sessions restart when they're idle.`, and names only what needs you: a session waiting for your answer, or a restart that failed. Its details then list one line per session: `restarted`, `restarts when idle`, `you are in it: restarts when you leave it`, `its input box holds text or cannot be read: restarts once it is empty`, `waiting for your answer: background work running`, or `skipped: <reason>`.
 
 ## Restarting the lead after an update
 
-The lead is usually the session you are talking to, so an update often lands while it works or while you are in its pane. kelpie records which kelpie the lead started on, and while the lead counts as stale the Work page shows one line under the status line, such as `↻ The lead runs kelpie 0.26.1; kelpie 0.26.2 is installed · you are in it: restarts when you leave it · L restarts it now`.
+The lead is usually the session you are talking to, so an update often lands while it works or while you are in its pane. kelpie records which kelpie the lead started on, and while the lead counts as stale the Work page shows one line under the status line, such as `↻ The lead restarts on the new kelpie when it's idle · L restarts it now`, or `when you leave it` while you are in its pane. It is never cut: on a narrow board it reads `↻ Lead restarts when idle · L now`. Which kelpie the lead runs and which is installed, with their commits and dates, are in the update's details (`d` in its window).
 
-With `restart.auto` on, the keeper restarts the lead the same way it restarts any session, but a minute after it is idle and you are out of its pane, such as on the board beside it, rather than after `restart.idle_minutes`. The restart is `kelpie lead --restart`, so the conversation is resumed under the new role, and the lead says in one line that it will be restarted; you never need another pane for it. With `restart.auto = false` the line says only `L restarts it`, and the lead says so too.
+With `restart.auto` on, the keeper restarts the lead the same way it restarts any session, but a minute after it is idle and you are out of its pane, such as on the board beside it, rather than after `restart.idle_minutes`. The restart is `kelpie lead --restart`, so the conversation is resumed under the new role, and the lead says in one line that it will be restarted; you never need another pane for it. With `restart.auto = false` the line says `↻ The lead runs the old kelpie until you restart it · L restarts it`, and the lead says so too.
 
-`L` on the board, or a click on the line, restarts the lead at once, also while you are in its pane. It is refused with the plain reason while the lead works, waits on a question, holds text you have not sent or has background work running, and you can press it again later. The keeper and `L` never restart the lead together: each takes the lead's lock first, and the second is refused. Once the lead runs the installed kelpie, the line goes. A refusal costs nothing: the line says `not restarted yet: <reason>` and the keeper tries again on its next round, a minute later. A restart that fails after it ended or started the lead's Claude is told in the messages, and the keeper waits 30 minutes before it tries again, which the line says; `L` does not wait.
+`L` on the board, or a click on the line, restarts the lead at once, also while you are in its pane. It is refused with the plain reason while the lead works, waits on a question, holds text you have not sent or has background work running, and you can press it again later. The keeper and `L` never restart the lead together: each takes the lead's lock first, and the second is refused. Once the lead runs the installed kelpie, the line goes. A refusal costs nothing: the line stays as it is and the keeper tries again on its next round, a minute later. A restart that fails after it ended or started the lead's Claude is told in the messages, the line says `↻ The lead's restart on the new kelpie failed · L tries again`, and the keeper waits 30 minutes before it tries again; `L` does not wait.
 
 ## Bugs you ran into in kelpie
 

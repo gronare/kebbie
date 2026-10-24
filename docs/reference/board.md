@@ -8,8 +8,8 @@ The board runs in the lead Space, as a popup over any Space with `prefix+t`, or 
 
 | Part | Shows |
 | --- | --- |
-| Status line, top | The page tabs, `1 Work  2 Areas  3 Routines`, with `⚠N` on Routines while N routine runs wait for you with findings. Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; `! N bugs to send · B` while bugs in kelpie you ran into wait for you to send them to its maintainers; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `☾ away` in away mode; `chat hidden` while the lead's chat is hidden; `↑ kelpie <version> · U updates` when a newer version is out. |
-| Lead line, under the status line | While the lead counts as stale: `↻ The lead runs <old>; <new> is installed · <what happens to it> · L restarts it now`, `· L restarts it` alone with `restart.auto` off, or the error of a restart that failed. See [Restarting the lead after an update](../explanation/updates-and-restarts.md#restarting-the-lead-after-an-update). |
+| Status line, top | The page tabs, `1 Work  2 Areas  3 Routines`, with `⚠N` on Routines while N routine runs wait for you with findings. Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; `! N bugs to send · B` while bugs in kelpie you ran into wait for you to send them to its maintainers; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `☾ away` in away mode; `chat hidden` while the lead's chat is hidden; `↑ kelpie <version> · U updates` when a newer version is out; `⇣ updating kelpie · U` while an update whose window you hid runs, and `✓ kelpie updated · U` once its summary waits for you. |
+| Lead line, under the status line | While the lead counts as stale: `↻ The lead restarts on the new kelpie when it's idle · L restarts it now`, `↻ The lead runs the old kelpie until you restart it · L restarts it` with `restart.auto` off, or `↻ The lead's restart on the new kelpie failed · L tries again`. A narrow board takes a shorter wording, never a cut one. See [Restarting the lead after an update](../explanation/updates-and-restarts.md#restarting-the-lead-after-an-update). |
 | Hub line, under it | While the hub refuses the board for a lapsed subscription: `Your kelpie hub subscription isn't active: <link> · H hub`. |
 | Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). A task's halves in other repos sit next to each other. Under the tasks: the bugs to send while `B` shows them, `✓ Fixed in kelpie <version>: N bugs you ran into` with their titles after an update's recheck fixed some (`i` shows the list and clears the line), and the main checkouts with files changed outside any task. |
 | Backlog, right | An ONGOING section of vault project notes in progress (status active or draft) when the vault is on, and the items from the configured sources, by priority. ONGOING sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md). |
@@ -67,7 +67,7 @@ kelpie keeps one phase per task, and only what changes it writes it: its start, 
 | `/` | Filter the selected column: type part of a name, `⏎` keeps the filter, `esc` clears it. |
 | `R` | Ask the lead to refresh the backlog. |
 | `A` | Away mode on or off. |
-| `U` | Run `kelpie update`. |
+| `U` | Run `kelpie update` in a window that shows each step, with a bar while kelpie builds or downloads; `esc` hides it while the update goes on, and `U` opens it again. Done, it shows what's new and fixed from kelpie's release notes and what restarts; `d` shows the details, any other key closes it. See [What an update shows](../explanation/updates-and-restarts.md#what-an-update-shows). |
 | `L` | Restart the lead on the installed kelpie now, resuming its conversation, while the lead line shows. Refused with the plain reason while the lead works, asks, holds text you have not sent or has background work running; press it again later. |
 | `?` | The keys window: every key on the page you are on, one short line each, grouped by what you want to do, under the title `keys · work`, `keys · areas` or `keys · routines`. On a screen about 114 columns wide or more it is two columns; narrower, up to three keys a row, scrolling with `↑` `↓` and `pgup` `pgdn` when it does not fit. A moved key shows as you set it, and `↑` and the version beside `U` when there is a newer one. Any other key closes it. |
 | `esc` | One step back: close a window, a menu or the filter. At the top, close the board when it is a popup; on the full board it does nothing. |
@@ -224,21 +224,23 @@ Connected, it looks like this:
 ```
 ╭ kelpie hub ──────────────────────────────────────────────────────────────────────────╮
 │ Connected to kelpie.gronare.com as mac                                               │
-│ ● Board sent 2 min ago                                                               │
+│ ● Board is being sent                                                                │
 │                                                                                      │
 │ Devices that see this board                                                          │
 │   Safari on Mac  paired yesterday · seen 2 min ago                                   │
 │   iPhone         paired today · notifications on                                     │
 │                                                                                      │
-│ a add a phone or browser · r remove a device · l disconnect this machine · esc close │
+│ a add · n name device · m rename machine · r remove · l disconnect · esc close       │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-The first line names the hub without its scheme and the machine by its name. The dot under it is green with when the board last went out, red with why it did not (a lapsed subscription with its link, a hub that can't be reached, or what the hub answered), and amber before the first post. Each device shows by the name it was given when it was added, when it was paired, when it last read the board, and `notifications on` when it has them. The list comes from the hub in the background, so the window opens at once; while the hub does not answer it shows the last list it gave and how old it is.
+The first line names the hub without its scheme and the machine by its name. While `[machine] name` differs from the name the hub has, it shows the new name with `renaming on the hub…` until the keeper's next post renames it. The dot under it is green while the board goes out, with no time, red with why it did not and how long ago (a lapsed subscription with its link, a hub that can't be reached, or what the hub answered), and amber before the first post. Each device shows by the name this machine gave it with `n`, else the name it was given when it was added, else `Unnamed device` in grey; then when it was paired, when it last read the board, and `notifications on` when it has them. The list comes from the hub in the background, so the window opens at once; while the hub does not answer it shows the last list it gave and how old it is, and a hub too old to list devices says `update the hub to see device names`.
 
 | Key | Action |
 | --- | --- |
 | `a` | Add a phone or browser: a link and its QR code, then the six digits to compare. `y` admits it when the phone shows the same, `n` refuses it. |
+| `n` | Name a device on this machine: `↑` `↓` pick one (a device without a name first), `⏎` types its name. The hub has no way for a machine to rename a device, so the name is kept in this machine's `hub/identity.json` and shown here and in `kelpie hub status`; an empty name takes it off. |
+| `m` | Rename this machine: the field holds `[machine] name`, and `⏎` writes it to `config.toml` (checked as [`machine.name`](configuration.md#keys) is). A `config.toml` that is a link is not written through; the window says where to set it. The keeper sends the new name to the hub on its next post. |
 | `r` | Remove a device: `↑` `↓` pick one, `y` removes it. It stops seeing this machine's board and keeps the boards of your other machines. |
 | `l` | Disconnect this machine, after `y`: each device loses its board, and the keys and the token go. The command is `kelpie hub leave`. |
 | `?` | Details for troubleshooting: the hub's address, the machine's id and each device's id. `?` again goes back. |

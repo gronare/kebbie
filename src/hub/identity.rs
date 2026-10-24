@@ -16,6 +16,8 @@ pub struct Device {
     pub id: Id,
     pub keys: PublicKeys,
     pub paired_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 // The machine's keys and token never leave this file, so it has no Debug and nothing prints it.
@@ -75,7 +77,9 @@ impl Identity {
         digest[..16].iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
-    pub fn admit(&mut self, device: Device) {
+    pub fn admit(&mut self, mut device: Device) {
+        let label = self.devices.iter().find(|known| known.id == device.id).and_then(|known| known.label.clone());
+        device.label = device.label.or(label);
         self.devices.retain(|known| known.id != device.id);
         self.devices.push(device);
     }

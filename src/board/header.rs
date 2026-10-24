@@ -21,6 +21,9 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
     let mut spans = vec![Span::styled("kelpie", bold(MAUVE)), Span::raw(if compact { "  " } else { "   " })];
     if compact {
         let offers = super::bug_report::indicator(app.offers.len(), true);
+        if let Some(pill_text) = app.update_pill() {
+            spans.extend(pill(pill_text.split(' ').next().unwrap_or_default().to_string(), MAUVE, true));
+        }
         for (shown, color, lit) in [(format!("● {needs}"), PEACH, needs > 0), (format!("◐ {working}"), BLUE, working > 0), (format!("◇ {review}"), TEAL, review > 0), (format!("✓ {ready}"), GREEN, ready > 0), (format!("⧗ {ci}"), YELLOW, ci > 0), (format!("? {questions}"), YELLOW, questions > 0), (offers.clone().unwrap_or_default(), YELLOW, offers.is_some()), (format!("↻ {}", app.stale.len()), MAUVE, !app.stale.is_empty()), ("☾".to_string(), MAUVE, app.away)] {
             if lit {
                 spans.extend(pill(shown, color, true));
@@ -46,6 +49,9 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
     }
     if app.away {
         spans.extend(pill("☾ away".to_string(), MAUVE, true));
+    }
+    if let Some(update) = app.update_pill() {
+        spans.extend(pill(update, MAUVE, true));
     }
     if app.lead_chat == Some(true) {
         spans.extend(pill(format!("◧ chat hidden · {}", keys::map().label(Act::HideChat)), MAUVE, true));

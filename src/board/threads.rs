@@ -26,7 +26,6 @@ pub(super) struct Snapshot {
     pub(super) usage: Option<Usage>,
     pub(super) ongoing: Vec<Ongoing>,
     pub(super) lead_chat: Option<bool>,
-    pub(super) lead_versions: Option<(String, String)>,
     pub(super) restart_auto: bool,
 }
 
@@ -72,7 +71,7 @@ pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::resu
             }
             let snapshot = status::gather().and_then(|items| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().collect();
-                Ok(Snapshot { checkouts: status::checkouts()?, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), lead_versions: crate::lead_restart::versions(), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto) })
+                Ok(Snapshot { checkouts: status::checkouts()?, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto) })
             });
             if snapshot_tx.send(snapshot).is_err() {
                 return;

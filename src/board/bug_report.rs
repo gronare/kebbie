@@ -477,7 +477,7 @@ mod tests {
     fn the_issues_an_update_fixed_show_under_work_until_the_inbox_key_lists_and_clears_them() {
         let titles: Vec<String> = ["push hid git's error", "the board froze on resize", "stage lost a commit", "a fourth"].iter().map(|title| title.to_string()).collect();
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
-        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: titles.clone(), wishes: 0, last: 500 });
+        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: titles.clone(), bugs: titles.clone(), wishes: 0, last: 500 });
         let (rows, _) = render(&mut app, 120, 40);
         let screen = rows.join("\n");
         assert!(screen.contains("✓ Fixed in kelpie 0.26.3: 4 bugs you ran into") && screen.contains("  i shows the list"), "{screen}");
@@ -486,7 +486,7 @@ mod tests {
         assert!(app.fixed.is_none() && app.fixed_seen == 500, "the line goes once it was opened, and a snapshot read before it cannot bring it back");
         let Mode::Message(text) = &app.mode else { panic!("a window that stays until a key") };
         assert!(text.contains("Fixed in kelpie 0.26.3: 4 bugs you ran into") && text.contains("a fourth") && text.contains("kelpie issues --all"), "{text}");
-        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: vec!["x".to_string()], wishes: 0, last: 600 });
+        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: vec!["x".to_string()], bugs: vec!["x".to_string()], wishes: 0, last: 600 });
         app.questions = crate::messages::fold(QUESTION);
         let hint = |questions: bool| fixed_lines(app.fixed.as_ref(), questions, 120).iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
         assert!(hint(true).contains("i shows the list, once the questions are answered"), "{}", hint(true));

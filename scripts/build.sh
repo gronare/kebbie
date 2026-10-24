@@ -77,6 +77,10 @@ download() {
   rm -rf "$work" && mkdir -p "$work" "$root/target/release" || return 1
   trap 'rm -rf "$work"' EXIT
   say "downloading $asset from $base/$tag"
+  if [ -n "${KELPIE_PROGRESS_DIR:-}" ]; then
+    size=$(curl -fsSIL --connect-timeout 10 --max-time 30 "$base/$tag/$asset" 2>/dev/null | awk 'tolower($1) == "content-length:" { size = $2 + 0 } END { print size + 0 }')
+    printf '%s %s %s\n' "$tag" "${size:-0}" "$work/$asset" > "$KELPIE_PROGRESS_DIR/download"
+  fi
   if ! curl -fsSL --connect-timeout 10 --max-time 300 -o "$work/$asset" "$base/$tag/$asset" || ! curl -fsSL --connect-timeout 10 --max-time 60 -o "$work/SHA256SUMS" "$base/$tag/SHA256SUMS"; then
     say "could not download $asset (no network, or $tag is not published with it yet)"
     unpublished=yes
@@ -148,4 +152,9 @@ fi
 check_toolchain || exit 1
 say "building from source: $reason"
 rm -f "$origin_file"
-(cd "$root" && cargo build --release "$@")
+# With KELPIE_PROGRESS_DIR the update reads cargo's JSON and Compiling lines from there; the end of the log is the error a failed build gives.
+if [ -n "${KELPIE_PROGRESS_DIR:-}" ]; then
+  (cd "$root" && cargo build --release --message-format=json-render-diagnostics "$@" > "$KELPIE_PROGRESS_DIR/cargo.jsonl" 2> "$KELPIE_PROGRESS_DIR/cargo.log") || { tail -n 30 "$KELPIE_PROGRESS_DIR/cargo.log" >&2; exit 1; }
+else
+  (cd "$root" && cargo build --release "$@")
+fi

@@ -15,20 +15,20 @@ pub fn versions() -> Option<(String, String)> {
 }
 
 // `stale` is the restart routine's "label: said" lines; the line shows only while the lead is among them.
-pub fn line(stale: &[String], versions: Option<&(String, String)>, auto: bool) -> Option<String> {
+pub fn line(stale: &[String], auto: bool, width: usize) -> Option<String> {
     let said = stale.iter().find_map(|line| line.strip_prefix(LEAD_LABEL).and_then(|rest| rest.strip_prefix(": "))).filter(|said| *said != "restarted")?;
     let key = keys::map().label(Act::RestartLead);
-    let head = match versions {
-        Some((from, to)) => format!("↻ The lead runs {from}; {to} is installed"),
-        None => "↻ The lead runs older code than is installed".to_string(),
-    };
-    Some(if said.starts_with("restart failed") {
-        format!("{head} · {said} · {key} tries again")
-    } else if auto {
-        format!("{head} · {said} · {key} restarts it now")
+    let wordings = if said.starts_with("restart failed") {
+        [format!("↻ The lead's restart on the new kelpie failed · {key} tries again"), format!("↻ Lead restart failed · {key} retries")]
+    } else if !auto || said.contains("run kelpie restart") {
+        [format!("↻ The lead runs the old kelpie until you restart it · {key} restarts it"), format!("↻ Lead on old kelpie · {key} restarts")]
+    } else if said.starts_with("you are in it") {
+        [format!("↻ The lead restarts on the new kelpie when you leave it · {key} restarts it now"), format!("↻ Lead restarts when you leave · {key} now")]
     } else {
-        format!("{head} · {key} restarts it")
-    })
+        [format!("↻ The lead restarts on the new kelpie when it's idle · {key} restarts it now"), format!("↻ Lead restarts when idle · {key} now")]
+    };
+    let [long, short] = wordings;
+    Some(if crate::board::widgets::text_width(&long) <= width { long } else { short })
 }
 
 pub fn outcome(ran: std::result::Result<String, String>) -> Result<String> {
@@ -68,14 +68,21 @@ mod tests {
 
     #[test]
     fn the_board_line_shows_while_the_lead_is_stale_and_says_what_happens_and_which_key_restarts_it() {
-        let versions = ("kelpie 0.26.1".to_string(), "kelpie 0.26.2".to_string());
         let stale = |said: &str| vec!["billing@app: restarts when idle".to_string(), format!("lead: {said}")];
-        assert_eq!(line(&["billing@app: restarts when idle".to_string()], Some(&versions), true), None, "no line while the lead is not stale");
-        assert_eq!(line(&stale("restarted"), Some(&versions), true), None, "the round that restarted it shows no line");
-        assert_eq!(line(&stale("you are in it: restarts when you leave it"), Some(&versions), true).unwrap(), "↻ The lead runs kelpie 0.26.1; kelpie 0.26.2 is installed · you are in it: restarts when you leave it · L restarts it now");
-        assert_eq!(line(&stale("restart failed: Claude did not come back"), Some(&versions), true).unwrap(), "↻ The lead runs kelpie 0.26.1; kelpie 0.26.2 is installed · restart failed: Claude did not come back · L tries again");
-        assert_eq!(line(&stale("stale: run kelpie restart when you want it"), Some(&versions), false).unwrap(), "↻ The lead runs kelpie 0.26.1; kelpie 0.26.2 is installed · L restarts it", "with restart.auto off nothing restarts it on its own, so the line says only the key");
-        assert_eq!(line(&stale("restarts when idle"), None, true).unwrap(), "↻ The lead runs older code than is installed · restarts when idle · L restarts it now");
+        assert_eq!(line(&["billing@app: restarts when idle".to_string()], true, 120), None, "no line while the lead is not stale");
+        assert_eq!(line(&stale("restarted"), true, 120), None, "the round that restarted it shows no line");
+        assert_eq!(line(&stale("restarts when idle"), true, 120).unwrap(), "↻ The lead restarts on the new kelpie when it's idle · L restarts it now");
+        assert_eq!(line(&stale("not restarted yet: the lead is working"), true, 120).unwrap(), "↻ The lead restarts on the new kelpie when it's idle · L restarts it now");
+        assert_eq!(line(&stale("you are in it: restarts when you leave it"), true, 120).unwrap(), "↻ The lead restarts on the new kelpie when you leave it · L restarts it now");
+        assert_eq!(line(&stale("restart failed: Claude did not come back"), true, 120).unwrap(), "↻ The lead's restart on the new kelpie failed · L tries again");
+        assert_eq!(line(&stale("stale: run kelpie restart when you want it"), false, 120).unwrap(), "↻ The lead runs the old kelpie until you restart it · L restarts it", "with restart.auto off nothing restarts it on its own");
+        for said in ["restarts when idle", "you are in it: restarts when you leave it", "restart failed: Claude did not come back", "stale: run kelpie restart when you want it"] {
+            for width in [76, 116, 40] {
+                let shown = line(&stale(said), true, width).unwrap();
+                assert!(crate::board::widgets::text_width(&shown) <= width, "{shown} is cut at {width}");
+                assert!(!shown.contains('(') && !shown.contains("2026"), "no commit or date: {shown}");
+            }
+        }
     }
 
     #[test]

@@ -131,6 +131,16 @@ pub fn join_named(state: &Path, config: &Path, url: &str, code: &str, given: Opt
     }.ok()
 }
 
+pub fn rename_machine(config: &Path, name: &str) -> Result<String> {
+    let name = crate::config::valid_machine_name(name)?;
+    if linked(config) {
+        return Err(format!("{} is a link, so kelpie writes no per-machine key through it; set [machine] name = {name:?} there or in a config.toml of this machine's own", crate::config::shown(config)));
+    }
+    crate::routine_file::check_machine_name_in(config, &name)?;
+    crate::routine_file::set_machine_name_in(config, &name)?;
+    Ok(name)
+}
+
 // Only a name set in config.toml renames the machine on the hub; the host's name, which may drift, never does.
 pub fn configured_name(config: &Path) -> Option<String> {
     crate::config::load_machine(config).ok()?.machine_name
@@ -211,7 +221,7 @@ pub fn board_line(relay: &relay::Relay, paired: bool, now: u64) -> (Sent, String
             };
             (Sent::Failed, format!("Board not sent: {reason}{when}"))
         }
-        (_, Some(at)) => (Sent::Yes, format!("Board sent {}", devices::ago(at, now))),
+        (_, Some(_)) => (Sent::Yes, "Board is being sent".to_string()),
         (_, None) if paired => (Sent::NotYet, "Board not sent yet; the keeper sends it within a minute".to_string()),
         (_, None) => (Sent::NotYet, "Nothing sent yet; the board goes out once a device is added".to_string()),
     }
@@ -234,7 +244,7 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
     }
     for device in &identity.devices {
         let line = match listed.devices.iter().find(|known| known.device == device.id) {
-            Some(known) => format!("device:   {} · {} ({})", devices::name_of(known), devices::facts(known, now), device.id),
+            Some(known) => format!("device:   {} · {} ({})", devices::named(&device.id, &listed, &identity.devices).unwrap_or_else(|| devices::name_of(known)), devices::facts(known, now), device.id),
             None => format!("device:   {} paired {}", device.id, ago(Some(device.paired_at), now)),
         };
         lines.push(line);

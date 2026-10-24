@@ -38,6 +38,8 @@ Run kelpie from your own checkout while you change it.
 
    A task that changes a command, a key or a notice then updates its page under `docs/`, and the reviewer holds one that does not. See [Keep docs in step with changes](keep-docs-in-step.md).
 
+6. Add a line to `CHANGES.md` under `## Unreleased` for each change a user would notice, in the commit that makes it. Machines on the `main` channel show it after their next update, and the release takes it along. See [Write the notes as you go](release-kelpie.md#write-the-notes-as-you-go).
+
 To try a task's commits in the kelpie you run before pushing them, turn on `stage_on_main` for the repo and stage the task: see [Try a task before pushing](try-a-task-before-pushing.md).
 
 To try your commits on a machine that follows a channel instead, see [Try unreleased code](try-unreleased-code.md).

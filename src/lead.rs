@@ -454,6 +454,9 @@ pub fn renew_board() -> Result<String> {
     };
     let built = built.duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0);
     let pid = process["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()).ok_or("board: herdr names no process for it")?;
+    if pid == std::process::id() || pid == std::os::unix::process::parent_id() {
+        return Ok("board: restarts on the new kelpie once the update's window closes".to_string());
+    }
     let started = crate::restart::started(pid, crate::restart::now()).ok_or("board: cannot read when it started")?;
     if started > built {
         return Ok("board: up to date".to_string());

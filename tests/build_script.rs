@@ -83,11 +83,18 @@ impl Lab {
     }
 
     fn build(&self, channel: Option<&str>) -> Output {
+        self.build_reporting(channel, None)
+    }
+
+    fn build_reporting(&self, channel: Option<&str>, progress: Option<&Path>) -> Output {
         let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", self.bin.display());
         let mut command = Command::new("sh");
         command.arg("scripts/build.sh").current_dir(&self.root).env_clear().env("PATH", path).env("HOME", self.dir.join("home")).env("KELPIE_RELEASES_URL", format!("file://{}", self.releases.display()));
         if let Some(channel) = channel {
             command.env("KELPIE_CHANNEL", channel);
+        }
+        if let Some(progress) = progress {
+            command.env("KELPIE_PROGRESS_DIR", progress);
         }
         command.output().unwrap()
     }
@@ -241,4 +248,32 @@ fn the_workspace_declares_the_rust_version_it_needs() {
     let pinned: toml::Table = toml::from_str(include_str!("../rust-toolchain.toml")).unwrap();
     let number = |version: &str| version.split('.').map(|part| part.parse::<u64>().unwrap()).collect::<Vec<_>>();
     assert!(number(needed) <= number(pinned["toolchain"]["channel"].as_str().unwrap()), "the pinned toolchain builds what rust-version promises");
+}
+
+#[test]
+fn with_a_progress_folder_cargo_reports_into_it_and_a_download_names_its_size_and_file() {
+    let lab = Lab::new("progress");
+    let progress = lab.dir.join("progress");
+    fs::create_dir_all(&progress).unwrap();
+    executable(&lab.bin.join("cargo"), &format!("#!/bin/sh\necho \"$*\" >> '{}'\necho '{{\"reason\":\"compiler-artifact\"}}'\necho '   Compiling kelpie v1.2.3' >&2\nmkdir -p target/release && printf '#!/bin/sh\\necho built\\n' > target/release/kelpie && chmod 755 target/release/kelpie\n", lab.cargo_log.display()));
+    let built = lab.build_reporting(Some("main"), Some(&progress));
+    assert!(built.status.success(), "{}", stderr(&built));
+    assert_eq!(fs::read_to_string(&lab.cargo_log).unwrap().trim(), "build --release --message-format=json-render-diagnostics", "cargo's JSON goes to the update, so its quiet flag does not");
+    assert_eq!(fs::read_to_string(progress.join("cargo.jsonl")).unwrap(), "{\"reason\":\"compiler-artifact\"}\n");
+    assert!(fs::read_to_string(progress.join("cargo.log")).unwrap().contains("Compiling kelpie v1.2.3") && !stderr(&built).contains("Compiling"), "{}", stderr(&built));
+    executable(&lab.bin.join("cargo"), "#!/bin/sh\necho 'error[E0425]: cannot find value `x`' >&2\nexit 101\n");
+    lab.edit_source("fn main() { x }\n");
+    let failed = lab.build_reporting(Some("main"), Some(&progress));
+    assert!(!failed.status.success() && stderr(&failed).contains("error[E0425]: cannot find value `x`"), "a failed build still says why: {}", stderr(&failed));
+
+    let lab = Lab::new("progress-download");
+    lab.publish(PREBUILT, None);
+    let downloaded = lab.build_reporting(None, Some(&progress));
+    assert!(downloaded.status.success(), "{}", stderr(&downloaded));
+    let said = fs::read_to_string(progress.join("download")).unwrap();
+    let words: Vec<&str> = said.split_whitespace().collect();
+    let size = fs::metadata(lab.releases.join("v1.2.3").join(format!("kelpie-1.2.3-{}.tar.gz", triple()))).unwrap().len();
+    assert_eq!((words[0], words[1].parse::<u64>().unwrap()), ("v1.2.3", size), "{said}");
+    assert!(words[2].ends_with(&format!("kelpie-1.2.3-{}.tar.gz", triple())), "{said}");
+    assert_eq!(lab.binary(), PREBUILT);
 }

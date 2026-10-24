@@ -16,6 +16,8 @@ pub struct Listed {
     pub fetched_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outdated: bool,
 }
 
 fn file(state: &Path) -> PathBuf {
@@ -36,17 +38,38 @@ pub fn fetch(state: &Path, now: u64) -> Result<Listed> {
     let mut listed = load(state);
     match Client::new(&identity.url, Some(identity.token()), CALL).get::<AdmittedDevices>("/v1/m/devices") {
         Ok(answer) => {
-            listed = Listed { devices: answer.devices, fetched_at: Some(now), error: None };
+            listed = Listed { devices: answer.devices, fetched_at: Some(now), error: None, outdated: false };
         }
-        Err(error) if error.status() == Some(404) => listed.error = Some("this hub cannot list devices yet; update kelpie-hub".to_string()),
-        Err(error) => listed.error = Some(error.to_string()),
+        Err(error) if matches!(error.status(), Some(404 | 405)) => (listed.error, listed.outdated) = (Some("this hub cannot list devices yet; update kelpie-hub".to_string()), true),
+        Err(error) => (listed.error, listed.outdated) = (Some(error.to_string()), false),
     }
     save(state, &listed)?;
     Ok(listed)
 }
 
+pub const UNNAMED: &str = "Unnamed device";
+
+// This machine's own label wins over the name the device gave itself, as the hub has no way for a machine to rename a device.
+pub fn named(id: &Id, listed: &Listed, paired: &[identity::Device]) -> Option<String> {
+    paired.iter().find(|known| &known.id == id).and_then(|known| known.label.clone())
+        .or_else(|| listed.devices.iter().find(|known| &known.device == id).and_then(|known| known.name.clone()))
+}
+
 pub fn name_of(device: &AdmittedDevice) -> String {
-    device.name.clone().unwrap_or_else(|| format!("Device {}", short(&device.device)))
+    device.name.clone().unwrap_or_else(|| format!("{UNNAMED} {}", short(&device.device)))
+}
+
+fn called(id: &Id, listed: &Listed, paired: &[identity::Device]) -> String {
+    named(id, listed, paired).unwrap_or_else(|| format!("{UNNAMED} {}", short(id)))
+}
+
+pub fn label(state: &Path, device: &Id, name: &str) -> Result<String> {
+    let mut identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kelpie hub connect first")?;
+    let known = identity.devices.iter_mut().find(|known| &known.id == device).ok_or("this machine has no such device")?;
+    let name = name.trim();
+    known.label = (!name.is_empty()).then(|| name.to_string());
+    identity::save(state, &identity)?;
+    Ok(if name.is_empty() { "Took this machine's name for the device off.".to_string() } else { format!("Named it {name} on this machine.") })
 }
 
 pub fn short(id: &Id) -> String {
@@ -59,11 +82,12 @@ pub fn find(listed: &Listed, paired: &[identity::Device], wanted: &str) -> Resul
     if let Some(device) = paired.iter().find(|device| device.id.as_str() == wanted) {
         return Ok(device.id.clone());
     }
-    let named: Vec<&AdmittedDevice> = listed.devices.iter().filter(|device| name_of(device).eq_ignore_ascii_case(wanted)).collect();
+    let ids: Vec<&Id> = paired.iter().map(|device| &device.id).chain(listed.devices.iter().map(|device| &device.device).filter(|id| !paired.iter().any(|known| &known.id == *id))).collect();
+    let named: Vec<&Id> = ids.iter().copied().filter(|id| called(id, listed, paired).eq_ignore_ascii_case(wanted)).collect();
     match named.as_slice() {
-        [device] => Ok(device.device.clone()),
+        [device] => Ok((*device).clone()),
         [] => {
-            let known = listed.devices.iter().map(name_of).collect::<Vec<_>>();
+            let known = ids.iter().map(|id| called(id, listed, paired)).collect::<Vec<_>>();
             let known = if known.is_empty() { "this machine lists no devices".to_string() } else { format!("this machine's devices are {}", known.join(", ")) };
             Err(format!("no device named {wanted:?}; {known}"))
         }
@@ -74,7 +98,7 @@ pub fn find(listed: &Listed, paired: &[identity::Device], wanted: &str) -> Resul
 pub fn remove(state: &Path, device: &Id) -> Result<String> {
     let identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kelpie hub connect first")?;
     let mut listed = load(state);
-    let name = listed.devices.iter().find(|known| &known.device == device).map_or_else(|| format!("device {}", short(device)), name_of);
+    let name = named(device, &listed, &identity.devices).unwrap_or_else(|| format!("device {}", short(device)));
     match Client::new(&identity.url, Some(identity.token()), CALL).delete(&format!("/v1/m/devices/{device}")) {
         Ok(()) => {}
         Err(HubError::Status { status: 404, .. }) => {}

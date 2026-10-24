@@ -91,7 +91,7 @@ impl Run<'_> {
             return Err(self.ended(&admitted));
         }
         let mut current = identity::load(state)?.ok_or("this machine left the hub while pairing")?;
-        current.admit(Device { id: device.clone(), keys: device_keys, paired_at: now });
+        current.admit(Device { id: device.clone(), keys: device_keys, paired_at: now, label: None });
         if let Some(moved) = self.client.moved() {
             current.url = moved;
         }

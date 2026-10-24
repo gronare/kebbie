@@ -603,7 +603,7 @@ fn a_phone_paired_while_the_rename_is_on_its_way_is_kept() {
     let pairing = state.clone();
     let url = serving(move |_| {
         let mut paired = identity::load(&pairing).unwrap().unwrap();
-        paired.admit(identity::Device { id: Id::new(kelpie_hub_protocol::Prefix::Device).unwrap(), keys: kelpie_hub_protocol::SecretKeys::generate().public(), paired_at: now() });
+        paired.admit(identity::Device { id: Id::new(kelpie_hub_protocol::Prefix::Device).unwrap(), keys: kelpie_hub_protocol::SecretKeys::generate().public(), paired_at: now(), label: None });
         identity::save(&pairing, &paired).unwrap();
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"name\":\"studio\"}".to_string()
     });

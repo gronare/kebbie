@@ -34,7 +34,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let full = frame.area();
     let area = full.inner(Margin { horizontal: 2, vertical: 1 });
     let fold = if app.page == Page::Work { app.fold } else { Fold::Hidden };
-    let lead_line = app.lead_line().filter(|_| app.page == Page::Work);
+    let lead_line = app.lead_line_for(area.width as usize).filter(|_| app.page == Page::Work);
     let hub_line = app.hub_banner.clone().filter(|_| app.page == Page::Work).map(|plan| format!("{plan} · {} hub", keys::map().label(keys::Act::Hub)));
     let banners = [lead_line.map(|line| (line, MAUVE, keys::Act::RestartLead)), hub_line.map(|line| (line, YELLOW, keys::Act::Hub))].into_iter().flatten().collect::<Vec<_>>();
     let [top, _, lead_area, body, messages_area, bottom] = Layout::vertical([
@@ -127,6 +127,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Options(index) => modal_hits = draw_options(frame, app, *index),
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),
         Mode::Hub(window) => super::hub_window::draw(frame, window),
+        Mode::Update => super::update_window::draw(frame, app),
         Mode::Report { id, scroll, read, nudged } => {
             let (id, nudged) = (id.clone(), *nudged);
             let (drawn, seen) = super::bug_report::draw_report(frame, app, &id, *scroll, *read, nudged);
