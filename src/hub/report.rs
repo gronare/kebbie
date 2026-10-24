@@ -397,7 +397,7 @@ fn deliver(state: &Path, issue: &mut Issue, report: BugReport, url: &str, now: u
 pub const SENT_KIND: &str = "report-sent";
 
 pub fn sent_line(report: &str, issue: &str, title: &str) -> String {
-    format!("Sent bug report {report} to kelpie's maintainers: kelpie issue {issue}, \"{title}\", redacted as kelpie issue show {issue} and kelpie issue report {issue} show it.")
+    format!("Sent bug {issue} to kelpie's maintainers as report {report}: \"{title}\", redacted; kelpie issue report {issue} shows the text that went.")
 }
 
 // The digest is of the report the user read; anything else that would go out instead is refused.
@@ -406,17 +406,17 @@ pub fn send_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub
     let dir = issues::dir(state);
     let mut issue = issues::find(&dir, id)?;
     if let Some(report) = &issue.report {
-        return Err(format!("kelpie issue {} went to kelpie's maintainers already, as report {report}", issue.id));
+        return Err(format!("Bug {} went to kelpie's maintainers already, as report {report}", issue.id));
     }
     if issue.kind != "bug" || issue.source.is_some() {
-        return Err(format!("kelpie issue {} is not a bug kelpie filed here; only those go to kelpie's maintainers", issue.id));
+        return Err(format!("{} is a wish or another install's report; only a bug you ran into goes to kelpie's maintainers", issue.id));
     }
     let report = payload(&issue, scrub);
     if report.digest() != *read {
-        return Err(format!("kelpie issue {} changed since you read it, so nothing was sent; read it again with kelpie issue report {0}", issue.id));
+        return Err(format!("Bug {} changed since you read it, so nothing was sent; read it again with kelpie issue report {0}", issue.id));
     }
     let sent = deliver(state, &mut issue, report, url, now)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent kelpie issue {} to kelpie's maintainers as report {sent}", issue.id)).next("It stays logged here; after each update the keeper rechecks it and closes it once a commit plainly fixes it.").ok()
+    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent bug {} to kelpie's maintainers as report {sent}", issue.id)).next("It stays on this machine too; after each update the keeper rechecks it and closes it once a commit plainly fixes it.").ok()
 }
 
 const ARMED: &str = "always-armed";
@@ -443,12 +443,12 @@ pub fn arm_in(state: &Path, caller: &Caller, on: bool, text: crate::config::Repo
         if file.exists() {
             std::fs::remove_file(&file).map_err(|error| format!("{}: {error}", file.display()))?;
         }
-        return Ok("kelpie shows each bug report and asks before sending it.".to_string());
+        return Ok("kelpie now shows you each bug before it goes to its maintainers, and sends it only on your yes.".to_string());
     }
     crate::permit::user_only_as(caller, "Letting kelpie send reports to its maintainers without asking")?;
     crate::state::write(&file, issues::today(now))?;
     Ok(if text == crate::config::ReportText::Always {
-        format!("kelpie now sends each bug it files about itself to kelpie's maintainers without asking, redacted, and each send is a line under messages. {DISARM_COMMAND} stops it.")
+        format!("kelpie now sends each bug you run into to its maintainers without asking, redacted, and each send is a line under messages. {DISARM_COMMAND} stops it.")
     } else {
         format!("Armed, but [report] text is \"{}\" in config.toml; with text = \"always\" there, kelpie sends bug reports without asking. {DISARM_COMMAND} disarms it.", text.key())
     })
@@ -473,7 +473,7 @@ pub fn send_unasked_in(state: &Path, text: crate::config::ReportText, url: &str,
     for mut issue in waiting {
         let report = payload(&issue, &scrub);
         let sent = deliver(state, &mut issue, report, url, now)?;
-        notes.push(format!("reports: sent kelpie issue {} as report {sent}, as [report] text = \"always\" says", issue.id));
+        notes.push(format!("reports: sent bug {} to kelpie's maintainers as report {sent}, as [report] text = \"always\" says", issue.id));
     }
     Ok(notes)
 }
@@ -492,7 +492,7 @@ pub fn decline_in(state: &Path, caller: &Caller, id: &str, now: u64) -> Result<S
     let mut issue = issues::find(&dir, id)?;
     issue.declined = Some(issues::today(now));
     issues::save(&dir, &issue)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Kept kelpie issue {} on this machine", issue.id)).next(format!("kelpie issue report {} sends it later.", issue.id)).ok()
+    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Kept bug {} on this machine only", issue.id)).next(format!("kelpie issue report {} sends it to kelpie's maintainers later.", issue.id)).ok()
 }
 
 fn ask_send() -> bool {

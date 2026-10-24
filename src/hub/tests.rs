@@ -638,7 +638,7 @@ fn with_text_always_a_bug_goes_out_unasked_redacted_and_each_send_is_a_line_unde
     let line = crate::messages::load_in(&user).pop().unwrap();
     assert_eq!((line.from.as_str(), line.to.as_str(), line.kind.as_deref()), ("kelpie", crate::messages::USER_LABEL, Some(report::SENT_KIND)));
     assert_eq!(line.text, report::sent_line(&number, &id, "push in <repo> hid git's error"));
-    assert!(line.text.starts_with(&format!("Sent bug report {number} to kelpie's maintainers: kelpie issue {id}, \"push in <repo> hid git's error\"")), "{}", line.text);
+    assert!(line.text.starts_with(&format!("Sent bug {id} to kelpie's maintainers as report {number}: \"push in <repo> hid git's error\"")), "{}", line.text);
     assert!(report::send_unasked_in(&user, always, &hub.url, &|| panic!("nothing waits, so nothing is scrubbed"), now()).unwrap().is_empty(), "a sent bug goes once");
     report::arm_in(&user, &crate::permit::Caller::User, false, always, now()).unwrap();
     assert!(!report::armed(&user), "kelpie issue report --ask disarms it");
@@ -654,7 +654,7 @@ fn a_bug_the_user_sends_is_a_line_under_messages_too() {
     let read = report::payload(&crate::issues::find(&crate::issues::dir(&user), &id).unwrap(), &scrub).digest();
     report::send_in(&user, &crate::permit::Caller::User, &id, &hub.url, &scrub, &read, now()).unwrap();
     let line = crate::messages::load_in(&user).pop().unwrap();
-    assert!(line.kind.as_deref() == Some(report::SENT_KIND) && line.text.starts_with("Sent bug report ") && line.text.contains(&format!("kelpie issue {id}")), "{line:?}");
+    assert!(line.kind.as_deref() == Some(report::SENT_KIND) && line.text.starts_with(&format!("Sent bug {id} to kelpie's maintainers as report ")), "{line:?}");
 }
 
 #[test]

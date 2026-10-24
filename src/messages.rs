@@ -1828,8 +1828,8 @@ mod tests {
     #[test]
     fn what_kelpie_sent_its_maintainers_shows_on_the_board_and_never_in_the_leads_digest() {
         let dir = state("maintainers");
-        log_for_user_in(&dir, "Sent bug report 4 to kelpie's maintainers: kelpie issue a1b2c3", crate::hub::report::SENT_KIND).unwrap();
-        log_for_user_in(&dir, "Sent an error signal to kelpie's maintainers: keeper.push internal-error (×1)", crate::signals::KIND).unwrap();
+        log_for_user_in(&dir, "Sent bug a1b2c3 to kelpie's maintainers as report 4", crate::hub::report::SENT_KIND).unwrap();
+        log_for_user_in(&dir, "Sent kelpie's maintainers an error signal, a count of kelpie's own failures: keeper.push internal-error (×1)", crate::signals::KIND).unwrap();
         assert_eq!(shown_in_log(load_in(&dir)).len(), 2, "the board's log shows both");
         assert_eq!(unread_in(&dir).unwrap(), "", "the lead's digest has neither");
         fs::remove_dir_all(&dir).unwrap();

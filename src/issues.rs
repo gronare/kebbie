@@ -212,7 +212,7 @@ pub fn list_in(dir: &Path, all: bool, as_json: bool) -> String {
         return serde_json::to_string_pretty(&issues.iter().map(Issue::to_json).collect::<Vec<_>>()).unwrap_or_default();
     }
     if issues.is_empty() {
-        return if all { "No kelpie issues on this machine.".to_string() } else { "No open kelpie issues; --all lists the closed ones too.".to_string() };
+        return if all { "No bugs or wishes about kelpie on this machine.".to_string() } else { "No open bugs or wishes about kelpie; --all lists the closed ones too.".to_string() };
     }
     issues.iter().map(|issue| {
         let link = issue.link_label().map(|label| format!("  {label}")).unwrap_or_default();
@@ -472,11 +472,18 @@ pub fn cross_check(state: &Path, root: Option<&Path>, new: &str, version: &str, 
     let synced = sync_github(&dir, gh);
     let issues: Vec<Issue> = load(&dir).into_iter().filter(local).collect();
     crate::issue_recheck::mark(state, &filed_before(&issues, root, new), new, version);
-    let mut parts = vec![format!("{} open", issues.len())];
+    let wishes = issues.iter().filter(|issue| issue.kind == "wish").count();
+    let mut parts = vec![counted(issues.len() - wishes, wishes)];
     if !synced.is_empty() {
         parts.push(synced.join(", "));
     }
-    Some(format!("kelpie issues: {}", parts.join("; ")))
+    Some(format!("Open in kelpie: {}", parts.join("; ")))
+}
+
+pub fn counted(bugs: usize, wishes: usize) -> String {
+    let bugs = (bugs > 0 || wishes == 0).then(|| format!("{bugs} {} you ran into", if bugs == 1 { "bug" } else { "bugs" }));
+    let wishes = (wishes > 0).then(|| format!("{wishes} {} you made", if wishes == 1 { "wish" } else { "wishes" }));
+    bugs.into_iter().chain(wishes).collect::<Vec<_>>().join(" and ")
 }
 
 // The install root's HEAD is the code just built, also when an older binary finishes the update.
@@ -573,7 +580,7 @@ mod tests {
         assert!(show_in(&dir, &second).unwrap().contains("issues/40"), "a refused link leaves the issue as it was");
         assert!(show_in(&dir, "../etc").unwrap_err().contains("not an issue id"));
         assert!(show_in(&dir, "abcdef").unwrap_err().contains("No kelpie issue"));
-        assert_eq!(list_in(&crate::sh::test_dir("issues-none"), false, false), "No open kelpie issues; --all lists the closed ones too.");
+        assert_eq!(list_in(&crate::sh::test_dir("issues-none"), false, false), "No open bugs or wishes about kelpie; --all lists the closed ones too.");
     }
 
     fn issue(id: &str, commit: &str, body: &str) -> Issue {
@@ -682,7 +689,7 @@ mod tests {
         assert_eq!(older.iter().map(|issue| issue.id.as_str()).collect::<Vec<_>>(), ["aaaaaa"], "the issues filed on the new commit, however it is spelled, the closed one and one filed with no commit to place are left out");
         assert!(filed_before(&issues, None, &shas[2]).is_empty(), "with no install history nothing can be placed");
         let summary = cross_check(&state, Some(&root), &shas[2], "0.27.0", "/no/such/gh-kelpie");
-        assert_eq!(summary.as_deref(), Some("kelpie issues: 4 open"), "no word of the recheck");
+        assert_eq!(summary.as_deref(), Some("Open in kelpie: 4 bugs you ran into"), "no word of the recheck");
         assert_eq!(wanted(&state, "aaaaaa"), Some(format!("{}\n0.27.0\n", shas[2])));
         for id in ["bbbbbb", "cccccc", "dddddd", "c00001"] {
             assert_eq!(wanted(&state, id), None, "{id}");
@@ -819,7 +826,7 @@ esac
         let state = crate::sh::test_dir("issues-held");
         let dir = super::dir(&state);
         assert_eq!(hold_in(&dir, &Caller::Lead, "  kelpie push hid\n git's error ", true).unwrap(), "Held for a calm moment: kelpie push hid git's error");
-        assert!(load(&dir).is_empty() && list_in(&dir, true, false) == "No kelpie issues on this machine." && crate::hub::report::offers(&state, true).is_empty(), "a held line is no issue, and the board never offers it");
+        assert!(load(&dir).is_empty() && list_in(&dir, true, false) == "No bugs or wishes about kelpie on this machine." && crate::hub::report::offers(&state, true).is_empty(), "a held line is no issue, and the board never offers it");
         assert_eq!(hold_in(&dir, &Caller::Lead, "kelpie push and land both hid git's error", true).unwrap(), "Held for a calm moment: kelpie push and land both hid git's error · it replaces: kelpie push hid git's error");
         assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "kelpie push and land both hid git's error");
         assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "Nothing held.", "a proposal taken is not raised again, whether the user said no or answered something else");

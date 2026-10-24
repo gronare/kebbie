@@ -287,8 +287,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   the board) (--start starts it
                                   detached unless one runs, --status shows its pid, binary, uptime and each routine's
                                   last run, --stop stops it)
-  kelpie issues [--json] [--all]  the problems and wishes about kelpie itself saved on this machine (open ones;
-                                  --all every status): id, kind, status, the version they were filed on, GitHub link
+  kelpie issues [--json] [--all]  the bugs in kelpie you ran into and your wishes for it, saved on this machine (open
+                                  ones; --all every status): id, kind, status, the version they were filed on, GitHub link
   kelpie issue add --kind bug|wish --title <title> [<text>|-]
                                   save one, the text from the argument or stdin: what happened, what you expected,
                                   how to reproduce; the user's or the lead's (a task tells the lead)
@@ -308,12 +308,12 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   without your Submit (kelpie update looks the issues up with gh, and the keeper
                                   rechecks each open one filed on older code against the new commits and closes
                                   the ones they plainly fix)
-  kelpie issue report <id>        show a kelpie bug filed here as it would go to kelpie's maintainers (paths under your home
-                                  as ~, no repo names, remote URLs or tokens) and send it on your y, signed with this
-                                  install's key; the board counts each new one in its header and B lists them ([report]
+  kelpie issue report <id>        show a bug in kelpie you ran into as it would go to kelpie's maintainers (paths under
+                                  your home as ~, no repo names, remote URLs or tokens) and send it on your y, signed with
+                                  this install's key; the board counts each new one in its header and B lists them ([report]
                                   text = \"never\" hides the offer); sent once, and the issue keeps the report's id
   kelpie issue report --always | --ask
-                                  in your own terminal: let kelpie send its bug reports without asking, redacted,
+                                  in your own terminal: let kelpie send each bug you run into without asking, redacted,
                                   each send a line under messages (with [report] text = \"always\" in config.toml);
                                   --ask asks again before every one
   kelpie update                   update everything to this machine's channel ([update] channel: release, the

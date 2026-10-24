@@ -209,7 +209,7 @@ fn the_user_files_a_kelpie_issue_and_a_task_is_sent_to_the_lead_instead() {
     assert!(file.contains("by = \"user\"") && file.ends_with("it said nothing\n"), "{file}");
     assert!(stdout(&lab.run(&["issue", "show", &id])).contains("it said nothing"));
     assert!(run_as_user(&lab, &["issue", "close", &id, "fixed"]).status.success());
-    assert_eq!(stdout(&lab.run(&["issues"])), "No open kelpie issues; --all lists the closed ones too.");
+    assert_eq!(stdout(&lab.run(&["issues"])), "No open bugs or wishes about kelpie; --all lists the closed ones too.");
     assert!(stdout(&lab.run(&["issues", "--all", "--json"])).contains("\"status\": \"fixed\""));
 }
 
@@ -220,7 +220,7 @@ fn a_held_proposal_is_never_an_issue_and_a_task_cannot_hold_one() {
     assert!(!refused.status.success() && stderr(&refused).contains("kelpie tell lead"), "{}", stderr(&refused));
     let held = run_as_user(&lab, &["issue", "hold", "kelpie push hid git's error"]);
     assert_eq!(stdout(&held), "Held for a calm moment: kelpie push hid git's error", "{}", stderr(&held));
-    assert_eq!(stdout(&lab.run(&["issues", "--all"])), "No kelpie issues on this machine.");
+    assert_eq!(stdout(&lab.run(&["issues", "--all"])), "No bugs or wishes about kelpie on this machine.");
     assert_eq!(stdout(&run_as_user(&lab, &["issue", "hold", "--take"])), "kelpie push hid git's error");
     assert_eq!(stdout(&run_as_user(&lab, &["issue", "hold", "--take"])), "Nothing held.");
 }

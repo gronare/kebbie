@@ -55,13 +55,13 @@ Some of kelpie's work runs on a clock rather than on a command:
 - a ready task's rules check gets its read-only reviewer, checked every 5 seconds (see [The review gate](review-gate.md)),
 - tasks an API error stopped are resumed, every 30 seconds (see [When the API stops a task](lead-and-away-mode.md#when-the-api-stops-a-task)),
 - the update check reads its cache every 10 minutes and fetches when the last fetch is 6 hours old,
-- after an update, each open kelpie issue filed on older code is rechecked against the new commits, checked every 30 seconds (see [Your kelpie issues](updates-and-restarts.md#your-kelpie-issues)),
+- after an update, each open kelpie issue filed on older code is rechecked against the new commits, checked every 30 seconds (see [Bugs you ran into in kelpie](updates-and-restarts.md#bugs-you-ran-into-in-kelpie)),
 - due [routines](routines.md) start their runs as tasks, every minute,
 - tasks that follow main are rebased when it moves, every minute (see [`kelpie follow`](../reference/commands.md#kelpie-follow-name-onoff)),
 - queued tasks start once every task they wait for has ended as done, every 15 seconds (see [`kelpie after`](../reference/commands.md#kelpie-after-name)),
 - with a hub connected and a phone paired, the board goes to the hub sealed to each phone when it changes, checked every 15 seconds, and at least once a minute (see [See your board on your phone](../how-to/see-your-board-on-your-phone.md)),
 - error signals counted since the last send go to kelpie's maintainers, checked every hour and sent at most once a day (see [Error signals](../how-to/report-a-problem-with-kelpie.md#error-signals)),
-- with `[report] text = "always"` armed, kelpie bugs you or the lead filed go to kelpie's maintainers, every minute,
+- with `[report] text = "always"` armed, the bugs in kelpie you ran into go to kelpie's maintainers, every minute,
 - with `[report] inbox_token` set, on the machine of whoever runs the hub that takes the reports, the reports the hub let through are filed as kelpie issues, every 10 minutes (see [Receiving reports](../how-to/report-a-problem-with-kelpie.md#receiving-reports)).
 
 The keeper runs all of them, each on its own interval, and sleeps in between. It has no terminal and logs to `keeper.log` in the state directory. A lock file in the state directory keeps it to one per machine; the kernel releases the lock when the keeper exits, so a crashed one never blocks the next. A routine that fails is retried later each time, up to every 15 minutes, and its error is logged once.

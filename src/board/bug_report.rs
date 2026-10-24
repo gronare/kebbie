@@ -100,7 +100,7 @@ pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'s
     let key = keys::key(Act::Reports);
     let panel = &app.offer_panel;
     let mut lines = vec![Line::default(), group_line("Send to kelpie's maintainers?", app.offers.len(), YELLOW)];
-    let hint = if panel.focused { format!("↑ ↓ pick · ⏎ shows the text and asks · n keeps it here only · esc back · {key} hides") } else { format!("kelpie bugs you or the lead filed · {key} selects · {key} again hides") };
+    let hint = if panel.focused { format!("↑ ↓ pick · ⏎ shows the text and asks · n keeps it here only · esc back · {key} hides") } else { format!("bugs in kelpie you ran into · {key} selects · {key} again hides") };
     lines.push(Line::from(Span::styled(hint, style(MUTED))));
     let mut rows = Vec::new();
     let mut selected_line = None;
@@ -133,7 +133,7 @@ pub(super) fn fixed_lines(fixed: Option<&Fixed>, questions: bool, width: usize) 
         lines.push(Line::from(Span::styled(format!("  … and {more} more"), style(MUTED))));
     }
     let after = if questions { ", once the questions are answered" } else { "" };
-    lines.push(Line::from(Span::styled(format!("  {} lists them and clears this{after}", keys::key(Act::Inbox)), style(MUTED))));
+    lines.push(Line::from(Span::styled(format!("  {} shows the list{after}", keys::key(Act::Inbox)), style(MUTED))));
     lines
 }
 
@@ -270,7 +270,7 @@ pub(super) fn draw_report(frame: &mut Frame, app: &App, id: &str, scroll: u16, r
     let last = rows.len().saturating_sub(view);
     let scroll = usize::from(scroll).min(last);
     let read = read || scroll >= last;
-    let mut lines = vec![Line::from(Span::styled(format!("kelpie issue {} as it would go out{}:", offer.id, if last > 0 { format!(", rows {}–{} of {}", scroll + 1, scroll + view, rows.len()) } else { String::new() }), style(MUTED))), Line::default()];
+    let mut lines = vec![Line::from(Span::styled(format!("Bug {} as it would go to kelpie's maintainers{}:", offer.id, if last > 0 { format!(", rows {}–{} of {}", scroll + 1, scroll + view, rows.len()) } else { String::new() }), style(MUTED))), Line::default()];
     lines.extend(rows.iter().enumerate().skip(scroll).take(view).map(|(index, row)| Line::from(Span::styled(row.clone(), if index == 0 { bold(TEXT) } else { style(TEXT) }))));
     lines.push(Line::default());
     lines.push(Line::from(vec![Span::styled("Send this report to kelpie's maintainers?", style(YELLOW)), Span::styled("  y / n", style(MUTED))]));
@@ -477,20 +477,20 @@ mod tests {
     fn the_issues_an_update_fixed_show_under_work_until_the_inbox_key_lists_and_clears_them() {
         let titles: Vec<String> = ["push hid git's error", "the board froze on resize", "stage lost a commit", "a fourth"].iter().map(|title| title.to_string()).collect();
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
-        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: titles.clone(), last: 500 });
+        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: titles.clone(), wishes: 0, last: 500 });
         let (rows, _) = render(&mut app, 120, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("✓ kelpie 0.26.3 fixed 4 of your issues") && screen.contains("  i lists them and clears this"), "{screen}");
+        assert!(screen.contains("✓ Fixed in kelpie 0.26.3: 4 bugs you ran into") && screen.contains("  i shows the list"), "{screen}");
         assert!(screen.contains("  push hid git's error") && screen.contains("  stage lost a commit") && !screen.contains("a fourth") && screen.contains("… and 1 more"), "{screen}");
         press(&mut app, key(KeyCode::Char('i')));
         assert!(app.fixed.is_none() && app.fixed_seen == 500, "the line goes once it was opened, and a snapshot read before it cannot bring it back");
         let Mode::Message(text) = &app.mode else { panic!("a window that stays until a key") };
-        assert!(text.contains("kelpie 0.26.3 fixed 4 of your issues") && text.contains("a fourth") && text.contains("kelpie issues --all"), "{text}");
-        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: vec!["x".to_string()], last: 600 });
+        assert!(text.contains("Fixed in kelpie 0.26.3: 4 bugs you ran into") && text.contains("a fourth") && text.contains("kelpie issues --all"), "{text}");
+        app.fixed = Some(Fixed { version: "0.26.3".to_string(), titles: vec!["x".to_string()], wishes: 0, last: 600 });
         app.questions = crate::messages::fold(QUESTION);
         let hint = |questions: bool| fixed_lines(app.fixed.as_ref(), questions, 120).iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(hint(true).contains("i lists them and clears this, once the questions are answered"), "{}", hint(true));
-        assert!(hint(false).ends_with("i lists them and clears this"), "{}", hint(false));
+        assert!(hint(true).contains("i shows the list, once the questions are answered"), "{}", hint(true));
+        assert!(hint(false).ends_with("i shows the list"), "{}", hint(false));
         press(&mut app, key(KeyCode::Esc));
         press(&mut app, key(KeyCode::Char('i')));
         assert!(matches!(app.mode, Mode::Questions(_)) && app.fixed.is_some(), "questions come first");

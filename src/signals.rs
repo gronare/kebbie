@@ -184,7 +184,7 @@ fn without(folded: &mut Folded, sent: &ErrorSignals) {
 pub fn summary(signals: &ErrorSignals) -> String {
     let rows = signals.counts.iter().map(|row| format!("{} {} (×{})", row.component, row.kind.key(), row.count)).collect::<Vec<_>>().join(", ");
     let built = signals.commit.as_ref().map_or(signals.version.to_string(), |commit| format!("{} ({commit})", signals.version));
-    format!("Sent an error signal to kelpie's maintainers: {rows}; with kelpie {built} on {} {} and nothing else. [report] signals = false in config.toml turns these off.", signals.os, signals.arch)
+    format!("Sent kelpie's maintainers an error signal, a count of kelpie's own failures: {rows}; with kelpie {built} on {} {} and nothing else. [report] signals = false in config.toml turns these off.", signals.os, signals.arch)
 }
 
 // A refusal the hub would give again writes its batch off, so one bad batch never holds back every later count.
@@ -277,10 +277,10 @@ pub fn doctor(state: &Path, settings: &crate::config::Report, now: u64) -> Check
     let name = "maintainers".to_string();
     let armed = crate::hub::report::armed(state);
     let text = match settings.text() {
-        crate::config::ReportText::Ask => "kelpie bugs you or the lead file are shown and asked each time ([report] text = \"ask\")",
-        crate::config::ReportText::Always if armed => "kelpie bugs you or the lead file go out redacted without asking, each one said under messages ([report] text = \"always\", armed)",
-        crate::config::ReportText::Always => "[report] text = \"always\" is set but not armed, so bug reports are still shown and asked each time",
-        crate::config::ReportText::Never => "kelpie bugs you or the lead file stay on this machine ([report] text = \"never\")",
+        crate::config::ReportText::Ask => "each bug you run into in kelpie is shown to you and goes to its maintainers only on your yes ([report] text = \"ask\")",
+        crate::config::ReportText::Always if armed => "each bug you run into in kelpie goes to its maintainers redacted, without asking, each send a line under messages ([report] text = \"always\", armed)",
+        crate::config::ReportText::Always => "[report] text = \"always\" is set but not armed, so each bug you run into is still shown to you and sent only on your yes",
+        crate::config::ReportText::Never => "the bugs you run into in kelpie stay on this machine ([report] text = \"never\")",
     };
     let unarmed = settings.text() == crate::config::ReportText::Always && !armed;
     let arm = || vec![format!("run {} in your own terminal to send them without asking", crate::hub::report::ARM_COMMAND)];
@@ -435,7 +435,7 @@ mod tests {
         let shown = crate::messages::load_in(&state);
         let line = shown.last().unwrap();
         assert_eq!((line.from.as_str(), line.to.as_str(), line.kind.as_deref()), ("kelpie", crate::messages::USER_LABEL, Some(KIND)));
-        assert!(line.text.starts_with("Sent an error signal to kelpie's maintainers: board.draw panic (×1), keeper.push internal-error (×3); with kelpie ") && line.text.ends_with("[report] signals = false in config.toml turns these off."), "{}", line.text);
+        assert!(line.text.starts_with("Sent kelpie's maintainers an error signal, a count of kelpie's own failures: board.draw panic (×1), keeper.push internal-error (×3); with kelpie ") && line.text.ends_with("[report] signals = false in config.toml turns these off."), "{}", line.text);
 
         record_in(&state, &name("keeper.push"), SignalKind::InternalError);
         assert!(tick_in(&state, true, NOW + 3600, &mut |_| panic!("a second send the same day")).unwrap().is_empty());
@@ -469,7 +469,7 @@ mod tests {
         assert!(crate::messages::load_in(&state).is_empty());
         let off = crate::config::Report { signals: Some(false), ..Default::default() };
         let check = doctor(&state, &off, NOW);
-        assert!(check.level == Level::Ok && check.fact.starts_with("error signals off ([report] signals = false); kelpie bugs you or the lead file are shown and asked each time"), "{}", check.fact);
+        assert!(check.level == Level::Ok && check.fact.starts_with("error signals off ([report] signals = false); each bug you run into in kelpie is shown to you and goes to its maintainers only on your yes"), "{}", check.fact);
     }
 
     #[test]
@@ -482,7 +482,7 @@ mod tests {
         assert!(unarmed.level == Level::Warn && unarmed.fact.contains("[report] text = \"always\" is set but not armed") && unarmed.fix == ["run kelpie issue report --always in your own terminal to send them without asking"], "{unarmed:?}");
         crate::hub::report::arm_in(&state, &crate::permit::Caller::User, true, crate::config::ReportText::Always, NOW).unwrap();
         let armed = doctor(&state, &always, NOW);
-        assert!(armed.level == Level::Ok && armed.fact.contains("go out redacted without asking"), "{armed:?}");
+        assert!(armed.level == Level::Ok && armed.fact.contains("goes to its maintainers redacted, without asking"), "{armed:?}");
     }
 
     #[test]

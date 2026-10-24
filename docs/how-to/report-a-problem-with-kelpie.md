@@ -35,13 +35,13 @@ kelpie issue show <id>
 
 ## After an update
 
-You do nothing. After `kelpie update`, the keeper rechecks each of your open issues that was filed on older code, one at a time in the background. Older code means a commit this install's history holds and the new build descends from; an issue filed on a build the history cannot place, such as one built outside git, is not rechecked, and you close it yourself. A read-only Claude reads the issue, every commit since the build it was filed on with its full message, and kelpie's source as it is now, and answers fixed, not fixed or unclear. It answers fixed only when a commit plainly addresses the issue and the code shows it.
+You do nothing. After `kelpie update`, the keeper rechecks each open bug and wish that was filed on older code, one at a time in the background. Older code means a commit this install's history holds and the new build descends from; an issue filed on a build the history cannot place, such as one built outside git, is not rechecked, and you close it yourself. A read-only Claude reads the issue, every commit since the build it was filed on with its full message, and kelpie's source as it is now, and answers fixed, not fixed or unclear. It answers fixed only when a commit plainly addresses the issue and the code shows it.
 
 - **Fixed:** kelpie closes the issue as `fixed` and records `fixed in <version> (<sha>), checked automatically` in it.
 - **Not fixed or unclear:** the issue stays open, and is not checked again until the next update.
 - **No answer** (Claude failed, or gave none within 15 minutes): the issue stays open, with one line in `keeper.log` in the state directory, also when an open board runs the routines with `[keeper] enabled = false`.
 
-Nobody asks you anything. The board shows one line under Work as soon as the first recheck closes an issue, such as `✓ kelpie 0.26.3 fixed 2 of your issues`, with the titles below it, and adds to it as the other rechecks finish. `i` lists them all and clears the line, once any questions are answered; a fix that lands later shows again. The line also goes by itself three days after the last fix, and an issue you reopen leaves it. `kelpie issues --all` shows every closed issue with its last recorded line.
+Nobody asks you anything. The board shows one line under Work as soon as the first recheck closes an issue, such as `✓ Fixed in kelpie 0.26.3: 2 bugs you ran into`, with the titles below it, and adds to it as the other rechecks finish; a fixed wish counts as `1 wish you made`. `i` shows the list and clears the line, once any questions are answered; a fix that lands later shows again. The line also goes by itself three days after the last fix, and an issue you reopen leaves it. `kelpie issues --all` shows every closed issue with its last recorded line.
 
 When a fixed issue comes back, reopen it rather than filing a new one; the lead proposes this when what you hit matches a closed issue. A reopened bug is offered for sending again, even one sent or kept here before:
 
@@ -60,7 +60,7 @@ With `gh` installed and logged in, the update also finds the issues you sent on 
 
 ## Send it to kelpie's maintainers
 
-When you or the lead saves a bug about kelpie, the board's header counts it, such as `! 2 bugs to send · B`. The list itself stays hidden until you press `B`: it opens under Work, below the tasks, under **Send to kelpie's maintainers?**, with the first bug selected. `↑` `↓` or a click pick one, and `⏎` or a second click shows the report exactly as it would go out and asks `y / n`. A long one scrolls with `↓` and `pgdn`, and `y` counts only once you have read to its end. `esc` goes back to the tasks with the list left open, and `B` hides it again; the board remembers whether it shows.
+When you or the lead saves a bug in kelpie you ran into, the board's header counts it, such as `! 2 bugs to send · B`. The list itself stays hidden until you press `B`: it opens under Work, below the tasks, under **Send to kelpie's maintainers?**, with the first bug selected. `↑` `↓` or a click pick one, and `⏎` or a second click shows the report exactly as it would go out and asks `y / n`. A long one scrolls with `↓` and `pgdn`, and `y` counts only once you have read to its end. `esc` goes back to the tasks with the list left open, and `B` hides it again; the board remembers whether it shows.
 
 - `y` sends it, as long as the issue is unchanged since you read it; an edit in between sends nothing and asks you to read it again. kelpie answers the reports endpoint's proof-of-work challenge (about a second), signs the report with this install's key and records the report's id in the issue, so it is never sent twice.
 - `n` keeps it on this machine only, and the board stops offering it. `n` in the list does the same for the selected bug without opening it.
@@ -78,12 +78,12 @@ It prints the same text and asks `y/N`. Only you can send: kelpie refuses it, an
 
 The install key is made on the first report and kept in `report/install-key.json` in the state directory, readable by you alone. The project's maintainers see that key as the report's sender; a key they have not seen before waits until they let it through, so the first report from a new install may take a while to be read.
 
-Every report sent, from the board, from `kelpie issue report` or unasked, adds a line under messages on the board: `Sent bug report <report> to kelpie's maintainers: kelpie issue <id>, "<title>", redacted as kelpie issue show <id> and kelpie issue report <id> show it.`
+Every report sent, from the board, from `kelpie issue report` or unasked, adds a line under messages on the board: `Sent bug <id> to kelpie's maintainers as report <report>: "<title>", redacted; kelpie issue report <id> shows the text that went.`
 
 `[report] text` in config.toml decides how bugs go out:
 
 - `"ask"`, the default: as above, every time.
-- `"always"`: kelpie sends each bug it files about itself within a minute, redacted the same way, without asking. Each send is a line under messages, so you still see what went. The key alone does nothing: run `kelpie issue report --always` in your own terminal to arm it, and `kelpie issue report --ask` to go back to being asked. The lead can write config.toml but cannot arm it; `kelpie doctor` says when the key is set and not armed.
+- `"always"`: kelpie sends each bug you or the lead saves within a minute, redacted the same way, without asking. Each send is a line under messages, so you still see what went. The key alone does nothing: run `kelpie issue report --always` in your own terminal to arm it, and `kelpie issue report --ask` to go back to being asked. The lead can write config.toml but cannot arm it; `kelpie doctor` says when the key is set and not armed.
 - `"never"`: the board never offers one; `kelpie issue report <id>` still sends one when you ask.
 
 `[report] url` sends reports to another endpoint, such as a [kelpie hub](https://github.com/gronare/kelpie-hub) you run. See [Configuration](../reference/configuration.md).
@@ -100,7 +100,7 @@ Once a day at most, the keeper sends the counts since the last send. Each signal
 - the error kind: `panic`, `internal-error` or `corrupt-state`,
 - how many times it happened.
 
-Never an error message, a path, a repo, task, branch or host name, or anything from your work: the format has no field for text, and the hub refuses one that carries any. It is signed with the same install key as reports. Each send adds a line under messages on the board, such as `Sent an error signal to kelpie's maintainers: keeper.push internal-error (×3); with kelpie 0.26.3 (16983b9) on macos aarch64 and nothing else. [report] signals = false in config.toml turns these off.`
+Never an error message, a path, a repo, task, branch or host name, or anything from your work: the format has no field for text, and the hub refuses one that carries any. It is signed with the same install key as reports. Each send adds a line under messages on the board, such as `Sent kelpie's maintainers an error signal, a count of kelpie's own failures: keeper.push internal-error (×3); with kelpie 0.26.3 (16983b9) on macos aarch64 and nothing else. [report] signals = false in config.toml turns these off.`
 
 Signals are on by default. To turn them off, in config.toml:
 

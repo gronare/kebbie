@@ -983,15 +983,15 @@ pub fn describe(loaded: &Loaded) -> String {
     key("hub.url", format!("{:?}", hub_url.value), hub_url.layer,
         "The hub kelpie hub connect and the board's hub window connect this machine to: the kelpie hub unless set, or your own kelpie hub at an https address (http only on this machine). Choosing your own hub there sets it; the hub a machine is connected to stays in kelpie's state with its keys, so changing this key later moves nothing (kelpie hub move does). config.toml only.");
     key("report.signals", report_signals.value.to_string(), report_signals.layer,
-        "Whether kelpie sends its maintainers error signals: when kelpie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kelpie's version and commit, the OS and CPU architecture, the component (a fixed name from kelpie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Each send is a line under messages on the board; false sends none and drops what was counted; config.toml only.");
+        "Whether kelpie sends its maintainers error signals, counts of kelpie's own failures: when kelpie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kelpie's version and commit, the OS and CPU architecture, the component (a fixed name from kelpie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Each send is a line under messages on the board; false sends none and drops what was counted; config.toml only.");
     key("report.text", format!("{:?}", report_text.value.key()), report_text.layer,
-        "What happens to a kelpie bug you or the lead filed, with its text redacted (paths under your home as ~, no repo names, remote URLs or tokens): \"ask\" shows it on the board as it would go out and only your yes sends it; \"always\" sends it without asking, and says so under messages, once you arm it with kelpie issue report --always in your own terminal (until then it asks); \"never\" keeps it on this machine, though kelpie issue report <id> still sends one when you ask. Signed with this install's key; config.toml only.");
+        "What happens to a bug in kelpie you ran into, once you or the lead saved it, with its text redacted (paths under your home as ~, no repo names, remote URLs or tokens): \"ask\" shows it on the board as it would go to kelpie's maintainers and only your yes sends it; \"always\" sends it without asking, and says so under messages, once you arm it with kelpie issue report --always in your own terminal (until then it asks); \"never\" keeps it on this machine, though kelpie issue report <id> still sends one when you ask. Signed with this install's key; config.toml only.");
     key("report.url", format!("{:?}", report_url.value), report_url.layer,
         "Where reports go: the project's reports endpoint, unless you run your own kelpie hub for them; config.toml only.");
     key("report.inbox_token", if report_inbox.value { "set".to_string() } else { "none".to_string() }, report_inbox.layer,
         "For kelpie's maintainers: the token kelpie-hub admin token --name <name> minted. With it the keeper fetches the reports the hub lets through every 10 minutes, files each as a kelpie issue and acknowledges it, and kelpie doctor counts the ones waiting in quarantine; never in a repo config, and never shown.");
     key("issues.propose", propose_issues.value.to_string(), propose_issues.layer,
-        "Whether the lead proposes saving a kelpie issue when kelpie itself cost something (an error, a workaround, a missing capability), one per turn at most, and saves it on your yes; false keeps the lead from proposing or filing them, and it files one only when you ask it to. Takes effect when the lead next restarts (L on the board); config.toml only.");
+        "Whether the lead proposes saving a bug or wish about kelpie when kelpie itself cost something (an error, a workaround, a missing capability), one per turn at most, and saves it on your yes; false keeps the lead from proposing or filing them, and it files one only when you ask it to. Takes effect when the lead next restarts (L on the board); config.toml only.");
     lines.push("[keys]  (config.toml only)\n  The board's keys, as name = \"key\" by action: a plain character for an action whose key is one (esc, ctrl+c, ⏎, the arrows and tab stay), and one not taken by another action where both act; moving two at once in the table works. An entry that breaks a rule is ignored, and named below. Help, hints and messages show the key in effect.".to_string());
     lines.extend(board_keys.describe(&key_errors).into_iter().map(|line| format!("  {line}")));
     lines.push(format!("[[routines]]  (config.toml or a repo config)\n  Checks kelpie runs on a schedule, each as a task that reports, plans or fixes, one table each with the keys {}; a repo config's run in its repo, one in config.toml names its repo. Listed below are config.toml's and this repo's; kelpie routines lists every one with its next run, and docs/reference/configuration.md shows each key.", crate::routines::KEYS.join(", ")));
@@ -1419,7 +1419,7 @@ mod tests {
         assert!(unknown_machine("[issues]\npropose = false\n").is_empty());
         assert!(parse_repo("[issues]\npropose = false\n", "app.toml").unwrap_err().contains("issues: applies to every repo, so it lives in config.toml; set [issues] propose in"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: off });
-        assert!(shown.contains("issues.propose = false  (machine config)\n  Whether the lead proposes saving a kelpie issue") && shown.contains("Takes effect when the lead next restarts"), "{shown}");
+        assert!(shown.contains("issues.propose = false  (machine config)\n  Whether the lead proposes saving a bug or wish about kelpie") && shown.contains("Takes effect when the lead next restarts"), "{shown}");
     }
 
     #[test]
@@ -1521,8 +1521,8 @@ mod tests {
         assert!(parse_machine("[report]\ntext = \"sometimes\"\n", "config.toml").unwrap_err().contains("report.text: must be \"ask\", \"always\" or \"never\""));
         assert!(parse_machine("[report]\nsignals = \"yes\"\n", "config.toml").unwrap_err().contains("report.signals: must be true or false"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
-        assert!(shown.contains("report.signals = true  (default)\n  Whether kelpie sends its maintainers error signals") && shown.contains("Never an error message, path, repo, task or host name"), "{shown}");
-        assert!(shown.contains("report.text = \"ask\"  (default)\n  What happens to a kelpie bug you or the lead filed"), "{shown}");
+        assert!(shown.contains("report.signals = true  (default)\n  Whether kelpie sends its maintainers error signals, counts of kelpie's own failures") && shown.contains("Never an error message, path, repo, task or host name"), "{shown}");
+        assert!(shown.contains("report.text = \"ask\"  (default)\n  What happens to a bug in kelpie you ran into"), "{shown}");
     }
 
     #[test]

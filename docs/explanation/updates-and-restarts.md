@@ -78,9 +78,9 @@ With `restart.auto` on, the keeper restarts the lead the same way it restarts an
 
 `L` on the board, or a click on the line, restarts the lead at once, also while you are in its pane. It is refused with the plain reason while the lead works, waits on a question, holds text you have not sent or has background work running, and you can press it again later. The keeper and `L` never restart the lead together: each takes the lead's lock first, and the second is refused. Once the lead runs the installed kelpie, the line goes. A refusal costs nothing: the line says `not restarted yet: <reason>` and the keeper tries again on its next round, a minute later. A restart that fails after it ended or started the lead's Claude is told in the messages, and the keeper waits 30 minutes before it tries again, which the line says; `L` does not wait.
 
-## Your kelpie issues
+## Bugs you ran into in kelpie
 
-An update can fix the problems kelpie logged about itself. After `kelpie update`, the keeper rechecks each open [kelpie issue](../how-to/report-a-problem-with-kelpie.md#after-an-update) filed on older code in the background: a read-only Claude reads the issue, the commits since and the new source, and kelpie closes the issues a commit plainly fixes. You are not asked anything; the board shows one line naming what the update fixed.
+An update can fix the bugs in kelpie you ran into and the wishes you saved for it. After `kelpie update`, the keeper rechecks each open one ([kelpie issue](../how-to/report-a-problem-with-kelpie.md#after-an-update)) filed on older code in the background: a read-only Claude reads the issue, the commits since and the new source, and kelpie closes the issues a commit plainly fixes. You are not asked anything; the board shows one line naming what the update fixed, such as `✓ Fixed in kelpie 0.27.0: 1 bug you ran into`.
 
 ## The keeper
 

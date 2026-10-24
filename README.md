@@ -17,7 +17,7 @@ A kelpie is the working dog that keeps a herd moving while the drover directs. h
 - **Try it on local main first.** In a repo you run from its main checkout, `kelpie stage` puts a ready task's commits on local main, unpushed, until you push main.
 - **Your board on your phone.** Connect a kelpie hub through your browser (`H` on the board) and add your phone: the board goes to it sealed, with a notification when a task needs you. The phone only reads.
 - **Optional vault integration.** With the [notes-vault-mcp](https://github.com/gronare/notes-vault-mcp) plugin, every task gets a note, edits wait until the problem is written down, pushes are logged, an Areas page shows each repo's state, and kelpie on a second machine sharing the vault asks before it starts a note the first one works on.
-- **Update channels and fresh sessions.** Follow tagged releases or the main branch, and the board tells you when a new version is out. One `kelpie update` brings everything along, idle Claude sessions resume on the new code with their conversation intact, and the issues you filed about kelpie are rechecked against the new commits.
+- **Update channels and fresh sessions.** Follow tagged releases or the main branch, and the board tells you when a new version is out. One `kelpie update` brings everything along, idle Claude sessions resume on the new code with their conversation intact, and the bugs in kelpie you ran into are rechecked against the new commits.
 - **kelpie's own bugs reach its maintainers on your yes.** You see the redacted text before anything is sent. Error signals carry only counts and versions, never your text, and `[report] signals = false` turns them off.
 
 ## Install

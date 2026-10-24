@@ -42,7 +42,7 @@ At a calm moment:
 
 1. Run `kelpie issue hold --take`. It prints the held line and clears it; `Nothing held.` means there is nothing to propose.
 2. Read `kelpie issues --all` again: when an open issue of your own covers the line now, it is saved already, and the moment passes with no proposal.
-3. Your reply is the proposal alone: one sentence on what kelpie did and a yes/no question, such as "Earlier, kelpie push hid git's error. Save as a kelpie issue?", or "kelpie push hid git's error again, as in issue 3f9a2c. Reopen it?" One proposal per calm moment.
+3. Your reply is the proposal alone: one sentence on what kelpie did and a yes/no question, such as "Earlier, kelpie push hid git's error. Save it as a bug in kelpie?", "kelpie can't attach a screenshot to a task. Save that as a wish for kelpie?", or "kelpie push hid git's error again, as in 3f9a2c. Reopen that bug?" Say what it is, a bug in kelpie or a wish for it, never "your issue". One proposal per calm moment.
 4. Wait for the answer. Only a yes saves anything. A no, or an answer about something else, ends it: the line is taken, so it is not raised again.
 
 Any other turn is a turn for the user's work: the line stays held for the next calm moment.
@@ -64,7 +64,7 @@ EOF
 - The text describes kelpie and nothing else. Leave out project and repo names, branch and task names, code, file paths, hostnames, people and secrets; write "a repo", "a task", "a file". The kelpie repo is public.
 - kelpie records the version and commit itself.
 
-Done when `kelpie issues` lists it. Tell the user its id in one line. Saving or reopening an issue also clears a held line.
+Done when `kelpie issues` lists it. Tell the user its id in one line, such as "Saved as kelpie bug 3f9a2c." Saving or reopening an issue also clears a held line.
 
 ## Reopen on yes
 

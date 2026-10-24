@@ -126,7 +126,7 @@ What happened: …
 | `report` | The report id it went to kelpie's maintainers under. Set once; the issue is never sent again. Optional. |
 | `declined` | The date you answered `n` to sending it. The board offers it no more. Optional. |
 | `source` | `report <id>` for an issue the keeper filed from a report another install sent, under the id `r<id>`. Such an issue shows as `[report <id>, untrusted]`, its text fenced; it is never offered for sending, and never rechecked after an update. Optional. |
-| `rechecked` | The last recheck after an update: the build's commit, the verdict (`started`, `fixed`, `not-fixed`, `unclear` or `failed`), when, as seconds since 1970, and the build's version. An issue is rechecked once per build. The board's `kelpie <version> fixed N of your issues` counts your issues still `fixed` by a recheck in the last three days and since you last cleared it, under the latest fix's version. Optional. |
+| `rechecked` | The last recheck after an update: the build's commit, the verdict (`started`, `fixed`, `not-fixed`, `unclear` or `failed`), when, as seconds since 1970, and the build's version. An issue is rechecked once per build. The board's `Fixed in kelpie <version>: N bugs you ran into` counts this machine's own issues still `fixed` by a recheck in the last three days and since you last cleared it, under the latest fix's version. Optional. |
 | `history` | What happened to it since it was filed, oldest first: `fixed in <version> (<sha>), checked automatically` from a recheck, `came back on <version> (<commit>)` from `kelpie issue reopen`, with `(was report <id>)` when it had been sent; a reopen clears `report`, `sent` and `declined`, so the bug is offered for sending again. Optional. |
 
 ## The verdict file
