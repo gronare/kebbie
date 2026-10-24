@@ -1,29 +1,36 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+use kelpie_hub_protocol::Id;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
 use crate::config::DEFAULT_HUB_URL;
-use crate::hub::connect::{self, hub_name};
-use crate::hub::{identity, pair, qr, relay};
+use crate::hub::connect;
+use crate::hub::devices::{self, Listed};
+use crate::hub::{Sent, board_line, host, identity, pair, qr, relay};
 use crate::sh::Result;
-use super::widgets::{MUTED, PEACH, RED, TEXT, YELLOW, modal, style};
+use super::widgets::{GREEN, MAUVE, MUTED, PEACH, RED, TEXT, YELLOW, bold, modal, style, text_width};
 use super::{App, Mode};
 
 pub(super) type Post = fn() -> Result<()>;
+pub(super) type Fetch = fn(&Path, u64) -> Result<Listed>;
+
+const WIDTH: u16 = 88;
 
 #[derive(Clone)]
 pub(super) struct Paths {
     pub(super) state: PathBuf,
     pub(super) config: PathBuf,
     pub(super) post: Post,
+    pub(super) fetch: Fetch,
     pub(super) opener: Option<&'static str>,
+    pub(super) truecolor: bool,
 }
 
 pub(super) enum Event {
@@ -50,17 +57,27 @@ impl Drop for Flow {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Pick {
+    Main,
+    Details,
+    Removing(usize),
+    Leaving,
+}
+
 pub(super) enum View {
     Choose { configured: Option<String>, typing: Option<String>, error: Option<String> },
     Name { url: String, note: Option<String>, buffer: String },
     Running(Flow),
-    Overview { leaving: bool },
+    Overview(Pick),
     Said(String),
 }
 
 pub(super) struct Window {
     pub(super) paths: Paths,
     pub(super) view: View,
+    pub(super) listed: Listed,
+    fetching: Option<Receiver<Result<Listed>>>,
 }
 
 fn spawn(title: &'static str, waiting: String, step: impl FnOnce(&Sender<Event>, &(dyn Fn() -> bool + Sync), Receiver<bool>) -> Event + Send + 'static) -> Flow {
@@ -76,17 +93,47 @@ fn spawn(title: &'static str, waiting: String, step: impl FnOnce(&Sender<Event>,
     Flow { title, waiting, link: None, code: None, digits: None, events, answer: Some(answer), stop }
 }
 
+pub(super) struct Row {
+    pub(super) id: Id,
+    pub(super) name: String,
+    pub(super) facts: String,
+}
+
 impl Window {
     pub(super) fn open(paths: Paths) -> Window {
         let view = match identity::load(&paths.state) {
-            Ok(Some(_)) => View::Overview { leaving: false },
+            Ok(Some(_)) => View::Overview(Pick::Main),
             Ok(None) => match connect::configured_hub(&paths.config) {
                 Ok(configured) => View::Choose { configured, typing: None, error: None },
                 Err(error) => View::Said(error),
             },
             Err(error) => View::Said(error),
         };
-        Window { paths, view }
+        let listed = devices::load(&paths.state);
+        let mut window = Window { paths, view, listed, fetching: None };
+        window.refetch();
+        window
+    }
+
+    // The hub answers over the network, so the list comes from a thread and the window shows the last one meanwhile.
+    fn refetch(&mut self) {
+        if !matches!(identity::load(&self.paths.state), Ok(Some(_))) {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        let (state, fetch) = (self.paths.state.clone(), self.paths.fetch);
+        thread::spawn(move || {
+            let _ = sender.send(fetch(&state, crate::messages::now()));
+        });
+        self.fetching = Some(receiver);
+    }
+
+    pub(super) fn rows(&self, now: u64) -> Vec<Row> {
+        let Ok(Some(joined)) = identity::load(&self.paths.state) else { return Vec::new() };
+        joined.devices.iter().map(|paired| match self.listed.devices.iter().find(|known| known.device == paired.id) {
+            Some(known) => Row { id: paired.id.clone(), name: devices::name_of(known), facts: devices::facts(known, now) },
+            None => Row { id: paired.id.clone(), name: format!("Device {}", devices::short(&paired.id)), facts: format!("paired {}", devices::on_day(paired.paired_at, now)) },
+        }).collect()
     }
 
     fn configured_name(&self) -> Option<String> {
@@ -112,8 +159,8 @@ impl Window {
             Err(error) => return self.view = View::Said(error),
         };
         let url = url.to_string();
-        let waiting = format!("Waiting for the browser to approve it at {}…", hub_name(&url));
-        self.view = View::Running(spawn("Connect a hub", waiting, move |events, stop, _| {
+        let waiting = format!("Waiting for you to approve it in the browser at {}…", host(&url));
+        self.view = View::Running(spawn("kelpie hub · connect", waiting, move |events, stop, _| {
             let now = crate::messages::now();
             let name = prepared.named.name().to_string();
             let result = (|| {
@@ -134,31 +181,51 @@ impl Window {
 
     fn test_own(&mut self, address: String) {
         let config = self.paths.config.clone();
-        self.view = View::Running(spawn("Connect a hub", format!("Testing {address}…"), move |_, _, _| Event::Tested(connect::own_hub(&config, &address))));
+        self.view = View::Running(spawn("kelpie hub · connect", format!("Testing {address}…"), move |_, _, _| Event::Tested(connect::own_hub(&config, &address))));
     }
 
     fn add_device(&mut self) {
         let paths = self.paths.clone();
-        self.view = View::Running(spawn("Add a phone or browser", "Waiting for the phone to open the link…".to_string(), move |events, stop, answers| {
+        self.view = View::Running(spawn("kelpie hub · add a device", "Waiting for your phone or browser to open the link…".to_string(), move |events, stop, answers| {
+            let now = crate::messages::now();
             let result = pair::add_device(&paths.state, pair::TIMEOUT, |added| {
                 let _ = events.send(Event::Shown { link: added.url.clone(), code: None });
             }, |digits| {
                 let _ = events.send(Event::Digits(digits.to_string()));
                 answers.recv().unwrap_or(false)
-            }, Some(stop), crate::messages::now());
+            }, Some(stop), now);
             Event::Done(result.map(|device| {
                 let posted = (paths.post)().err().map_or(String::new(), |error| format!(" The first board did not go out yet: {error}."));
-                format!("Added {device}; it shows this machine's board from now on.{posted}")
+                format!("Added {}; it shows this board from now on.{posted}", devices::added_name(&paths.state, &device, now))
+            }))
+        }));
+    }
+
+    fn remove_device(&mut self, row: Row) {
+        let paths = self.paths.clone();
+        self.view = View::Running(spawn("kelpie hub · remove a device", format!("Removing {}…", row.name), move |_, _, _| {
+            Event::Done(devices::remove(&paths.state, &row.id).map(|said| {
+                let posted = (paths.post)().err().map_or(String::new(), |error| format!(" The board did not go out again yet: {error}."));
+                format!("{said}{posted}")
             }))
         }));
     }
 
     fn leave(&mut self) {
         let state = self.paths.state.clone();
-        self.view = View::Running(spawn("Leave the hub", "Taking the phones off and forgetting the keys…".to_string(), move |_, _, _| Event::Done(crate::hub::leave(&state))));
+        self.view = View::Running(spawn("kelpie hub · disconnect", "Taking your devices off and forgetting the keys…".to_string(), move |_, _, _| Event::Done(crate::hub::leave(&state))));
     }
 
     pub(super) fn poll(&mut self) {
+        if let Some(fetching) = &self.fetching
+            && let Ok(answer) = fetching.try_recv()
+        {
+            match answer {
+                Ok(listed) => self.listed = listed,
+                Err(error) => self.listed.error = Some(error),
+            }
+            self.fetching = None;
+        }
         let View::Running(flow) = &mut self.view else { return };
         let mut next = None;
         while let Ok(event) = flow.events.try_recv() {
@@ -179,6 +246,7 @@ impl Window {
     // false closes the window.
     pub(super) fn key(&mut self, key: KeyEvent) -> bool {
         let escape = key.code == KeyCode::Esc;
+        let devices = self.rows(crate::messages::now()).len();
         match &mut self.view {
             View::Choose { typing: Some(buffer), .. } => match key.code {
                 KeyCode::Esc => self.view = View::Choose { configured: None, typing: None, error: None },
@@ -237,20 +305,39 @@ impl Window {
                 _ => {}
             },
             View::Running(_) => return !escape,
-            View::Overview { leaving: true, .. } => match key.code {
+            View::Overview(Pick::Leaving) => match key.code {
                 KeyCode::Char('y') => self.leave(),
-                _ => self.view = View::Overview { leaving: false },
+                _ => self.view = View::Overview(Pick::Main),
             },
-            View::Overview { leaving: false, .. } => match key.code {
+            View::Overview(Pick::Removing(index)) => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => *index = index.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => *index = (*index + 1).min(devices.saturating_sub(1)),
+                KeyCode::Char('y') => {
+                    let index = *index;
+                    if let Some(row) = self.rows(crate::messages::now()).into_iter().nth(index) {
+                        self.remove_device(row);
+                    }
+                }
+                _ => self.view = View::Overview(Pick::Main),
+            },
+            View::Overview(Pick::Details) => match key.code {
+                KeyCode::Char('?') => self.view = View::Overview(Pick::Main),
+                _ => return !escape && key.code != KeyCode::Char('q'),
+            },
+            View::Overview(Pick::Main) => match key.code {
                 KeyCode::Char('a') => self.add_device(),
-                KeyCode::Char('l') => self.view = View::Overview { leaving: true },
+                KeyCode::Char('r') if devices > 0 => self.view = View::Overview(Pick::Removing(0)),
+                KeyCode::Char('r') => self.view = View::Said("No device sees this board, so there is none to remove.".to_string()),
+                KeyCode::Char('l') => self.view = View::Overview(Pick::Leaving),
+                KeyCode::Char('?') => self.view = View::Overview(Pick::Details),
                 _ => return !escape && key.code != KeyCode::Char('q'),
             },
             View::Said(_) => {
                 if !matches!(identity::load(&self.paths.state), Ok(Some(_))) {
                     return false;
                 }
-                self.view = View::Overview { leaving: false };
+                self.view = View::Overview(Pick::Main);
+                self.refetch();
             }
         }
         true
@@ -279,56 +366,137 @@ fn muted(line: impl Into<String>) -> Line<'static> {
     Line::from(Span::styled(line.into(), style(MUTED)))
 }
 
+fn heading(line: &str) -> Line<'static> {
+    Line::from(Span::styled(line.to_string(), bold(PEACH)))
+}
+
 fn typed(buffer: &str) -> Line<'static> {
     Line::from(vec![Span::styled(buffer.to_string(), style(TEXT)), Span::styled("▏", style(PEACH))])
 }
 
-// A phone's camera wants dark modules on light whatever the terminal's colours, so the code is drawn black on white.
-pub(super) fn qr_lines(link: &str) -> Vec<Line<'static>> {
-    let paper = Style::new().fg(Color::Black).bg(Color::White);
+pub(super) fn keys(pairs: &[(&str, &str)]) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (position, (key, does)) in pairs.iter().enumerate() {
+        if position > 0 {
+            spans.push(Span::styled(" · ", style(MUTED)));
+        }
+        spans.push(Span::styled(key.to_string(), style(MAUVE)));
+        spans.push(Span::styled(format!(" {does}"), style(MUTED)));
+    }
+    Line::from(spans)
+}
+
+fn option(key: &str, what: String) -> Line<'static> {
+    Line::from(vec![Span::styled(format!("{key}  "), style(MAUVE)), Span::styled(what, style(TEXT))])
+}
+
+pub(super) fn qr_lines(link: &str, truecolor: bool) -> Vec<Line<'static>> {
+    let paper = if truecolor { Style::new().fg(Color::Rgb(0, 0, 0)).bg(Color::Rgb(255, 255, 255)) } else { Style::new() };
     qr::lines(link).unwrap_or_default().into_iter().map(|row| Line::from(Span::styled(row, paper))).collect()
 }
 
-fn overview(paths: &Paths, leaving: bool) -> Vec<Line<'static>> {
-    let Ok(Some(identity)) = identity::load(&paths.state) else { return vec![muted("Not connected to a hub."), muted("any key closes")] };
+fn status(sent: Sent, said: String) -> Line<'static> {
+    let dot = match sent {
+        Sent::Yes => GREEN,
+        Sent::Failed => RED,
+        Sent::NotYet => YELLOW,
+    };
+    Line::from(vec![Span::styled("● ", style(dot)), Span::styled(said, style(TEXT))])
+}
+
+fn device_lines(rows: &[Row], selected: Option<usize>) -> Vec<Line<'static>> {
+    let column = rows.iter().map(|row| text_width(&row.name)).max().unwrap_or(0) + 2;
+    rows.iter().enumerate().map(|(index, row)| {
+        let chosen = selected == Some(index);
+        let name = format!("{}{}", row.name, " ".repeat(column.saturating_sub(text_width(&row.name))));
+        Line::from(vec![
+            Span::styled(if chosen { "▸ " } else { "  " }, style(MAUVE)),
+            Span::styled(name, if chosen { bold(MAUVE) } else { style(TEXT) }),
+            Span::styled(row.facts.clone(), style(MUTED)),
+        ])
+    }).collect()
+}
+
+fn overview(window: &Window, pick: Pick) -> Vec<Line<'static>> {
+    let Ok(Some(joined)) = identity::load(&window.paths.state) else { return vec![muted("This machine is not connected."), keys(&[("any key", "close")])] };
     let now = crate::messages::now();
-    let mut lines = vec![text(format!("hub      {}", hub_name(&identity.url))), text(format!("machine  {} ({})", identity.name, identity.machine))];
-    if let Some(plan) = relay::load(&paths.state).plan_inactive {
-        lines.push(Line::from(Span::styled(plan, style(YELLOW))));
-        lines.push(muted("Everything on this machine keeps working; the phone gets the board again once it is active."));
+    let relay = relay::load(&window.paths.state);
+    let rows = window.rows(now);
+    let (sent, said) = board_line(&relay, !rows.is_empty(), now);
+    let mut lines = vec![text(format!("Connected to {} as {}", host(&joined.url), joined.name)), status(sent, said)];
+    if relay.plan_inactive.is_some() {
+        lines.push(muted("Everything here keeps working; your devices get the board again once it is active."));
     }
     lines.push(Line::default());
-    if identity.devices.is_empty() {
-        lines.push(muted("No phone or browser shows this machine's board yet."));
+    if pick == Pick::Details {
+        lines.push(heading("Details"));
+        let column = rows.iter().map(|row| text_width(&row.name)).chain([text_width("Machine id")]).max().unwrap_or(0) + 2;
+        let fact = |label: &str, value: String| Line::from(vec![Span::styled(format!("{label}{}", " ".repeat(column.saturating_sub(text_width(label)))), style(MUTED)), Span::styled(value, style(TEXT))]);
+        lines.push(fact("Hub", joined.url.clone()));
+        lines.push(fact("Machine id", joined.machine.to_string()));
+        for row in &rows {
+            lines.push(fact(&row.name, row.id.to_string()));
+        }
+        lines.push(muted(match (&window.listed.error, window.listed.fetched_at) {
+            (Some(error), _) => format!("The hub did not list the devices: {error}"),
+            (None, Some(at)) => format!("Devices listed by the hub {}", devices::ago(at, now)),
+            (None, None) => "Asking the hub for the devices…".to_string(),
+        }));
+        lines.push(Line::default());
+        lines.push(keys(&[("?", "back"), ("esc", "close")]));
+        return lines;
     }
-    for device in &identity.devices {
-        lines.push(text(format!("device   {} paired {} ago", device.id, crate::keeper::span(now.saturating_sub(device.paired_at)))));
+    let mut title = vec![Span::styled("Devices that see this board", bold(PEACH))];
+    if window.listed.error.is_some() {
+        let age = window.listed.fetched_at.map_or("the hub did not answer".to_string(), |at| format!("as of {}; the hub did not answer", devices::ago(at, now)));
+        title.push(Span::styled(format!("  {age}"), style(MUTED)));
     }
+    lines.push(Line::from(title));
+    if rows.is_empty() {
+        lines.push(muted("  None yet. Add your phone or a browser with a."));
+    }
+    let selected = match pick {
+        Pick::Removing(index) => Some(index.min(rows.len().saturating_sub(1))),
+        _ => None,
+    };
+    lines.extend(device_lines(&rows, selected));
     lines.push(Line::default());
-    lines.push(if leaving {
-        Line::from(Span::styled("Leave the hub? Each phone loses this machine's board and the keys go. y leave · any other key keeps it", style(YELLOW)))
-    } else {
-        muted("a add a phone or browser · l leave the hub · esc close")
-    });
+    match (pick, selected.and_then(|index| rows.get(index))) {
+        (Pick::Removing(_), Some(row)) => {
+            lines.push(Line::from(Span::styled(format!("Remove {}? It stops seeing this board.", row.name), style(YELLOW))));
+            lines.push(keys(&[("y", "remove"), ("↑↓", "another"), ("esc", "keep it")]));
+        }
+        (Pick::Leaving, _) => {
+            lines.push(Line::from(Span::styled("Disconnect this machine? Your devices lose its board and the keys go.", style(YELLOW))));
+            lines.push(keys(&[("y", "disconnect"), ("any other key", "keeps it")]));
+        }
+        _ => lines.push(keys(&[("a", "add a phone or browser"), ("r", "remove a device"), ("l", "disconnect this machine"), ("esc", "close")])),
+    }
     lines
 }
 
-fn running(frame: &Frame, flow: &Flow) -> Vec<Line<'static>> {
+fn running(frame: &Frame, flow: &Flow, truecolor: bool) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(link) = &flow.link {
-        lines.push(text(if flow.code.is_some() { "Open this link in your browser, or scan the code with your phone:" } else { "On your phone, scan the code, or open this link in a browser, and add it:" }));
-        lines.push(text(link.clone()));
+        lines.push(text(if flow.code.is_some() { "Open this link in your browser, or scan the code with your phone:" } else { "Scan the code with your phone, or open this link in a browser:" }));
+        lines.push(Line::from(Span::styled(link.clone(), style(TEXT))));
         if let Some(code) = &flow.code {
-            lines.push(Line::from(vec![Span::styled("The page shows ", style(TEXT)), Span::styled(code.clone(), style(PEACH)), Span::styled("; approve it only when it does.", style(TEXT))]));
+            lines.push(Line::from(vec![Span::styled("Approve it only when the page shows ", style(TEXT)), Span::styled(code.clone(), style(PEACH)), Span::styled(".", style(TEXT))]));
         }
     }
     match &flow.digits {
-        Some(digits) => lines.push(Line::from(vec![Span::styled("Does the phone show ", style(TEXT)), Span::styled(digits.clone(), style(PEACH)), Span::styled("?  y yes, add it · n no", style(TEXT))])),
-        None => lines.push(muted(format!("{}  esc stops", flow.waiting))),
+        Some(digits) => {
+            lines.push(Line::default());
+            lines.push(Line::from(vec![Span::styled("Does your phone show ", style(TEXT)), Span::styled(digits.clone(), bold(PEACH)), Span::styled("?", style(TEXT))]));
+            lines.push(keys(&[("y", "yes, add it"), ("n", "no")]));
+        }
+        None => {
+            lines.push(muted(flow.waiting.clone()));
+        }
     }
     if let Some(link) = flow.link.as_deref().filter(|_| flow.digits.is_none()) {
-        let code = qr_lines(link);
-        let room = frame.area().height.saturating_sub(6) as usize;
+        let code = qr_lines(link, truecolor);
+        let room = frame.area().height.saturating_sub(7) as usize;
         if code.len() + lines.len() < room {
             lines.push(Line::default());
             lines.extend(code);
@@ -336,34 +504,42 @@ fn running(frame: &Frame, flow: &Flow) -> Vec<Line<'static>> {
             lines.push(muted("A taller terminal shows a QR code of the link here."));
         }
     }
+    if flow.digits.is_none() {
+        lines.push(Line::default());
+        lines.push(keys(&[("esc", "stop")]));
+    }
+    lines
+}
+
+fn choose(configured: Option<&String>, error: Option<&String>) -> Vec<Line<'static>> {
+    let mut lines = vec![text("Show this board on your phone or in a browser."), Line::default()];
+    match configured {
+        Some(url) => lines.push(text(format!("Connect to {}, as [hub] url says.", host(url)))),
+        None => {
+            lines.push(heading("Choose a hub"));
+            lines.push(option("k", format!("kelpie hub ({}): sign in or sign up in your browser", host(DEFAULT_HUB_URL))));
+            lines.push(option("o", "your own hub, at its address".to_string()));
+        }
+    }
+    lines.extend(error.map(|error| Line::from(Span::styled(error.clone(), style(RED)))));
+    lines.push(Line::default());
+    lines.push(match configured {
+        Some(_) => keys(&[("⏎", "connect"), ("esc", "close")]),
+        None => keys(&[("k", "kelpie hub"), ("o", "your own"), ("esc", "close")]),
+    });
     lines
 }
 
 pub(super) fn draw(frame: &mut Frame, window: &Window) {
     let (title, lines) = match &window.view {
-        View::Choose { configured: Some(url), error, .. } => {
-            let mut lines = vec![text("Show this machine's board on your phone through a kelpie hub."), Line::default(), text(format!("[hub] url names {}.", hub_name(url)))];
-            lines.extend(error.iter().map(|error| Line::from(Span::styled(error.clone(), style(RED)))));
-            lines.push(Line::default());
-            lines.push(muted("⏎ connect there · esc close"));
-            ("Connect a hub", lines)
-        }
-        View::Choose { typing: None, error, .. } => {
-            let mut lines = vec![text("Show this machine's board on your phone through a kelpie hub."), Line::default(),
-                text(format!("k  the kelpie hub ({DEFAULT_HUB_URL}), with an account you make in the browser")),
-                text("o  your own kelpie hub, at its address")];
-            lines.extend(error.iter().map(|error| Line::from(Span::styled(error.clone(), style(RED)))));
-            lines.push(Line::default());
-            lines.push(muted("k or ⏎ the kelpie hub · o your own · esc close"));
-            ("Connect a hub", lines)
-        }
-        View::Choose { typing: Some(buffer), .. } => ("Your own hub", vec![text("The hub's address, such as https://hub.example.com:"), typed(buffer), muted("⏎ tests it and saves it as [hub] url · esc back")]),
-        View::Name { buffer, url, .. } => ("Name this machine", vec![text(format!("The name {} and your phone show for this machine:", hub_name(url))), typed(buffer), muted("⏎ connects and saves it as [machine] name · esc close")]),
-        View::Running(flow) => (flow.title, running(frame, flow)),
-        View::Overview { leaving } => ("kelpie hub", overview(&window.paths, *leaving)),
-        View::Said(said) => ("kelpie hub", said.lines().map(text).chain([muted("any key goes on")]).collect()),
+        View::Choose { typing: Some(buffer), .. } => ("kelpie hub · your own", vec![text("Your hub's address, like https://hub.example.com:"), typed(buffer), Line::default(), keys(&[("⏎", "test it and save it as [hub] url"), ("esc", "back")])]),
+        View::Choose { configured, error, .. } => ("kelpie hub", choose(configured.as_ref(), error.as_ref())),
+        View::Name { buffer, url, .. } => ("kelpie hub · name this machine", vec![text(format!("The name {} and your devices show for this machine:", host(url))), typed(buffer), Line::default(), keys(&[("⏎", "connect and save it as [machine] name"), ("esc", "close")])]),
+        View::Running(flow) => (flow.title, running(frame, flow, window.paths.truecolor)),
+        View::Overview(pick) => ("kelpie hub", overview(window, *pick)),
+        View::Said(said) => ("kelpie hub", said.lines().map(text).chain([Line::default(), keys(&[("any key", "goes on")])]).collect()),
     };
-    modal(frame, title.to_string(), lines, 76);
+    modal(frame, title.to_string(), lines, WIDTH);
 }
 
 impl App {
@@ -371,7 +547,7 @@ impl App {
         let paths = match &self.hub_paths {
             Some(paths) => paths.clone(),
             None => match crate::lead::state_dir() {
-                Ok(state) => Paths { state, config: crate::config::path(), post: crate::hub::tick, opener: self.viewer },
+                Ok(state) => Paths { state, config: crate::config::path(), post: crate::hub::tick, fetch: devices::fetch, opener: self.viewer, truecolor: qr::truecolor() },
                 Err(error) => return self.show(Err(error)),
             },
         };
@@ -396,20 +572,36 @@ impl App {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use kelpie_hub_protocol::{Id, Prefix, SecretKeys};
+    use kelpie_hub_api::AdmittedDevice;
+    use kelpie_hub_protocol::{Prefix, SecretKeys};
 
     use super::*;
     use crate::board::test_support::*;
+
+    fn cached(state: &Path, _: u64) -> Result<Listed> {
+        Ok(devices::load(state))
+    }
+
+    fn unreachable(_: &Path, _: u64) -> Result<Listed> {
+        Err("could not reach the hub: connection refused".to_string())
+    }
 
     fn paths(config: &str) -> Paths {
         let state = crate::sh::test_dir("board-hub");
         let file = state.join("config.toml");
         std::fs::write(&file, config).unwrap();
-        Paths { state, config: file, post: || Ok(()), opener: None }
+        Paths { state, config: file, post: || Ok(()), fetch: cached, opener: None, truecolor: true }
     }
 
     fn screen(app: &mut App, width: u16, height: u16) -> String {
         render(app, width, height).0.join("\n")
+    }
+
+    fn colour_of(app: &mut App, needle: &str) -> Color {
+        let (rows, buffer) = render(app, 110, 40);
+        let (y, row) = rows.iter().enumerate().find(|(_, row)| row.contains(needle)).unwrap_or_else(|| panic!("{needle} is not shown: {}", rows.join("\n")));
+        let x = row[..row.find(needle).unwrap()].chars().count();
+        buffer[(x as u16, y as u16)].fg
     }
 
     fn window(app: &mut App) -> &mut Window {
@@ -419,101 +611,218 @@ mod tests {
         }
     }
 
-    fn until(app: &mut App, what: &str, done: impl Fn(&View) -> bool) {
+    fn until(app: &mut App, what: &str, done: impl Fn(&Window) -> bool) {
         let started = Instant::now();
-        while !done(&window(app).view) {
+        while !done(window(app)) {
             assert!(started.elapsed() < crate::hub::tests::WAIT, "{what} never came");
             std::thread::sleep(Duration::from_millis(20));
             app.poll_hub();
         }
     }
 
+    fn fetched(app: &mut App) {
+        until(app, "the device list", |window| window.fetching.is_none());
+    }
+
+    struct Joined {
+        paths: Paths,
+        phone: Id,
+        laptop: Id,
+    }
+
+    fn joined(fetch: Fetch, relay: relay::Relay) -> Joined {
+        let mut paths = paths("[machine]\nname = \"mac\"\n");
+        paths.fetch = fetch;
+        let now = crate::messages::now();
+        let mut machine = identity::Identity::new("https://kelpie.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_test".to_string(), &SecretKeys::generate(), now).unwrap();
+        let (laptop, phone) = (Id::new(Prefix::Device).unwrap(), Id::new(Prefix::Device).unwrap());
+        for id in [&laptop, &phone] {
+            machine.admit(identity::Device { id: id.clone(), keys: SecretKeys::generate().public(), paired_at: now });
+        }
+        identity::save(&paths.state, &machine).unwrap();
+        let listed = Listed { devices: vec![
+            AdmittedDevice { device: laptop.clone(), name: Some("Safari on Mac".to_string()), paired_at: now, last_seen: Some(now - 120), notifications: false },
+            AdmittedDevice { device: phone.clone(), name: Some("iPhone".to_string()), paired_at: now, last_seen: None, notifications: true },
+        ], fetched_at: Some(now - 300), error: None };
+        std::fs::write(identity::dir(&paths.state).join("devices.json"), serde_json::to_string(&listed).unwrap()).unwrap();
+        std::fs::write(identity::dir(&paths.state).join("relay.json"), serde_json::to_string(&relay).unwrap()).unwrap();
+        Joined { paths, phone, laptop }
+    }
+
+    fn opened(joined: &Joined) -> App {
+        let mut app = test_app(Vec::new());
+        app.hub_paths = Some(joined.paths.clone());
+        press(&mut app, key(KeyCode::Char('H')));
+        fetched(&mut app);
+        app
+    }
+
     #[test]
-    fn h_opens_the_hub_window_with_the_kelpie_hub_or_your_own_when_not_connected() {
+    fn not_connected_the_window_offers_the_kelpie_hub_or_your_own_with_the_keys_in_the_keys_windows_colours() {
         let mut app = test_app(Vec::new());
         app.hub_paths = Some(paths(""));
         press(&mut app, key(KeyCode::Char('H')));
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("Connect a hub") && shown.contains(&format!("k  the kelpie hub ({DEFAULT_HUB_URL})")) && shown.contains("o  your own kelpie hub"), "{shown}");
+        for line in ["Show this board on your phone or in a browser.", "Choose a hub", &format!("k  kelpie hub ({}): sign in or sign up in your browser", host(DEFAULT_HUB_URL)), "o  your own hub, at its address", "k kelpie hub · o your own · esc close"] {
+            assert!(shown.contains(line), "{line}: {shown}");
+        }
+        assert_eq!(colour_of(&mut app, "k kelpie hub ·"), MAUVE);
+        assert_eq!(colour_of(&mut app, "Choose a hub"), PEACH);
         press(&mut app, key(KeyCode::Char('o')));
         for character in "https://hub.example.com".chars() {
             press(&mut app, key(KeyCode::Char(character)));
         }
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("Your own hub") && shown.contains("https://hub.example.com▏") && shown.contains("saves it as [hub] url"), "{shown}");
+        assert!(shown.contains("kelpie hub · your own") && shown.contains("https://hub.example.com▏") && shown.contains("⏎ test it and save it as [hub] url · esc back"), "{shown}");
         press(&mut app, key(KeyCode::Esc));
-        assert!(screen(&mut app, 110, 40).contains("o  your own kelpie hub"), "esc goes back to the choice");
+        assert!(screen(&mut app, 110, 40).contains("o  your own hub"), "esc goes back to the choice");
         press(&mut app, key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal), "a second esc closes the window");
 
         app.hub_paths = Some(paths("[hub]\nurl = \"https://hub.example.com\"\n"));
         press(&mut app, key(KeyCode::Char('H')));
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("[hub] url names https://hub.example.com") && shown.contains("⏎ connect there") && !shown.contains("your own"), "{shown}");
+        assert!(shown.contains("Connect to hub.example.com, as [hub] url says.") && shown.contains("⏎ connect · esc close") && !shown.contains("your own"), "{shown}");
         press(&mut app, key(KeyCode::Enter));
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("Name this machine") && shown.contains(&format!("{}▏", crate::config::short_hostname())), "an unset name is asked for once, with the host's: {shown}");
+        assert!(shown.contains("kelpie hub · name this machine") && shown.contains(&format!("{}▏", crate::config::short_hostname())), "an unset name is asked for once, with the host's: {shown}");
     }
 
     #[test]
-    fn a_running_step_shows_the_link_its_code_and_a_black_on_white_qr_code_then_the_digits_to_answer() {
+    fn a_running_step_shows_the_link_its_code_and_a_true_black_on_white_qr_code_then_the_digits_to_answer() {
         let mut app = test_app(Vec::new());
         let link = "http://localhost:8470/connect?code=K7QF-M2XD#k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&m=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB".to_string();
         let shown_link = link.clone();
-        let flow = spawn("Connect a hub", "Waiting for the browser…".to_string(), move |events, _, answers| {
+        let flow = spawn("kelpie hub · connect", "Waiting for the browser…".to_string(), move |events, _, answers| {
             let _ = events.send(Event::Shown { link: shown_link, code: Some("K7QF-M2XD".to_string()) });
             let _ = events.send(Event::Digits("123456".to_string()));
             Event::Done(Ok(format!("answered {}", answers.recv().unwrap_or(false))))
         });
-        app.mode = Mode::Hub(Box::new(Window { paths: paths(""), view: View::Running(flow) }));
-        until(&mut app, "the link", |view| matches!(view, View::Running(flow) if flow.digits.is_some()));
+        app.mode = Mode::Hub(Box::new(Window { paths: paths(""), view: View::Running(flow), listed: Listed::default(), fetching: None }));
+        until(&mut app, "the link", |window| matches!(&window.view, View::Running(flow) if flow.digits.is_some()));
         let View::Running(flow) = &mut window(&mut app).view else { unreachable!() };
         let digits = flow.digits.take();
         let shown = screen(&mut app, 110, 50);
-        assert!(shown.contains("The page shows K7QF-M2XD; approve it only when it does.") && shown.contains("http://localhost:8470/connect?code=K7QF-M2XD"), "{shown}");
+        assert!(shown.contains("Approve it only when the page shows K7QF-M2XD.") && shown.contains("http://localhost:8470/connect?code=K7QF-M2XD") && shown.contains("esc stop"), "{shown}");
         let (rows, buffer) = render(&mut app, 110, 50);
         let (x, y) = rows.iter().enumerate().find_map(|(y, row)| row.find('█').map(|byte| (row[..byte].chars().count(), y))).unwrap_or_else(|| panic!("no QR code: {shown}"));
         let cell = &buffer[(x as u16, y as u16)];
-        assert_eq!((cell.fg, cell.bg), (Color::Black, Color::White), "dark modules on light, whatever the terminal's colours");
-        assert_eq!(rows.iter().filter(|row| row.contains('█')).count(), qr::lines(&link).unwrap().iter().filter(|row| row.contains('█')).count(), "the whole code is drawn");
+        assert_eq!((cell.fg, cell.bg), (Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255)), "true black on white, which no theme remaps");
+        let drawn = rows.iter().filter(|row| row.contains('█')).count();
+        assert_eq!(drawn, qr::lines(&link).unwrap().iter().filter(|row| row.contains('█')).count(), "the whole code is drawn, two modules a row");
+        window(&mut app).paths.truecolor = false;
+        let (rows, buffer) = render(&mut app, 110, 50);
+        let (x, y) = rows.iter().enumerate().find_map(|(y, row)| row.find('█').map(|byte| (row[..byte].chars().count(), y))).unwrap();
+        assert_eq!((buffer[(x as u16, y as u16)].fg, buffer[(x as u16, y as u16)].bg), (Color::Reset, Color::Reset), "without 24-bit colour the terminal's own colours");
         let short = screen(&mut app, 110, 20);
         assert!(short.contains("A taller terminal shows a QR code") && !short.contains('█'), "{short}");
 
         let View::Running(flow) = &mut window(&mut app).view else { unreachable!() };
         flow.digits = digits;
         let shown = screen(&mut app, 110, 50);
-        assert!(shown.contains("Does the phone show 123456?  y yes, add it · n no") && !shown.contains('█'), "{shown}");
+        assert!(shown.contains("Does your phone show 123456?") && shown.contains("y yes, add it · n no") && !shown.contains('█'), "{shown}");
         press(&mut app, key(KeyCode::Char('y')));
-        until(&mut app, "the outcome", |view| matches!(view, View::Said(_)));
+        until(&mut app, "the outcome", |window| matches!(window.view, View::Said(_)));
         assert!(screen(&mut app, 110, 50).contains("answered true"));
         press(&mut app, key(KeyCode::Char('x')));
         assert!(matches!(app.mode, Mode::Normal), "a machine still not connected closes the window after the outcome");
     }
 
     #[test]
-    fn connected_the_window_shows_the_hub_the_machine_its_devices_and_a_lapsed_plan_which_the_board_shows_too() {
-        let mut app = test_app(Vec::new());
-        let paths = paths("[machine]\nname = \"mac\"\n");
-        let mut joined = identity::Identity::new("https://hub.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_test".to_string(), &SecretKeys::generate(), crate::messages::now()).unwrap();
-        let device = Id::new(Prefix::Device).unwrap();
-        joined.admit(identity::Device { id: device.clone(), keys: SecretKeys::generate().public(), paired_at: crate::messages::now() - 120 });
-        identity::save(&paths.state, &joined).unwrap();
-        let plan = "Your kelpie hub subscription isn't active: https://billing.example.com/start".to_string();
-        std::fs::write(identity::dir(&paths.state).join("relay.json"), serde_json::to_string(&relay::Relay { plan_inactive: Some(plan.clone()), ..Default::default() }).unwrap()).unwrap();
-        app.hub_paths = Some(paths);
-        press(&mut app, key(KeyCode::Char('H')));
+    fn connected_the_window_names_the_hub_the_machine_a_green_sent_board_and_each_device_by_name() {
+        let now = crate::messages::now();
+        let joined = joined(cached, relay::Relay { posted_at: Some(now - 150), rev: 3, ..Default::default() });
+        let mut app = opened(&joined);
         let shown = screen(&mut app, 110, 40);
-        for line in ["hub      https://hub.example.com", "machine  mac (", &format!("device   {device} paired 2m ago"), "Your kelpie hub subscription isn't active:", "https://billing.example.com/start", "a add a phone or browser · l leave the hub · esc close"] {
+        for line in ["Connected to kelpie.example.com as mac", "● Board sent 2 min ago", "Devices that see this board", "Safari on Mac  paired today · seen 2 min ago", "iPhone         paired today · notifications on", "a add a phone or browser · r remove a device · l disconnect this machine · esc close"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
-        press(&mut app, key(KeyCode::Char('l')));
-        assert!(screen(&mut app, 110, 40).contains("Leave the hub? Each phone loses this machine's board"));
-        press(&mut app, key(KeyCode::Char('n')));
-        assert!(screen(&mut app, 110, 40).contains("l leave the hub"), "anything but y keeps it");
-        press(&mut app, key(KeyCode::Esc));
+        assert!(!shown.contains(joined.phone.as_str()) && !shown.contains("https://") && !shown.contains("mch_"), "no ids and no scheme: {shown}");
+        assert_eq!(colour_of(&mut app, "● Board sent"), GREEN);
+        assert_eq!(colour_of(&mut app, "Devices that see"), PEACH);
+        assert_eq!(colour_of(&mut app, "a add a phone"), MAUVE);
+        assert_eq!(colour_of(&mut app, "paired today · seen"), MUTED);
+    }
+
+    #[test]
+    fn the_board_line_is_red_with_the_reason_when_posts_fail_and_amber_before_the_first() {
+        let now = crate::messages::now();
+        let plan = "Your kelpie hub subscription isn't active: https://billing.example.com/start".to_string();
+        let mut app = opened(&joined(cached, relay::Relay { posted_at: Some(now - 600), plan_inactive: Some(plan.clone()), error: Some(plan.clone()), error_at: Some(now - 5), ..Default::default() }));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains(&format!("● {plan}")) && shown.contains("Everything here keeps working"), "{shown}");
+        assert_eq!(colour_of(&mut app, "● Your kelpie hub"), RED);
         app.hub_banner = Some(plan.clone());
-        let board = screen(&mut app, 110, 40);
-        assert!(board.contains(&format!("{plan} · H hub")), "{board}");
+        press(&mut app, key(KeyCode::Esc));
+        assert!(screen(&mut app, 110, 40).contains(&format!("{plan} · H hub")), "the board shows a lapsed plan too");
+
+        let mut app = opened(&joined(cached, relay::Relay { posted_at: Some(now - 600), error: Some("could not reach the hub: connection refused".to_string()), error_at: Some(now - 120), ..Default::default() }));
+        assert!(screen(&mut app, 110, 40).contains("● Board not sent: the hub can't be reached (2 min ago)"));
+        assert_eq!(colour_of(&mut app, "● Board not sent"), RED);
+        let mut app = opened(&joined(cached, relay::Relay { posted_at: Some(now - 600), error: Some("the hub answered 400 not-a-board".to_string()), error_at: Some(now - 120), ..Default::default() }));
+        assert!(screen(&mut app, 110, 40).contains("● Board not sent: the hub answered 400 not-a-board (2 min ago)"));
+        let mut app = opened(&joined(cached, relay::Relay { posted_at: Some(now - 150), error: Some("could not reach the hub: once".to_string()), error_at: Some(now - 300), ..Default::default() }));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("● Board sent 2 min ago"), "a post after the failure wins: {shown}");
+
+        let mut app = opened(&joined(cached, relay::Relay::default()));
+        assert!(screen(&mut app, 110, 40).contains("● Board not sent yet; the keeper sends it within a minute"));
+        assert_eq!(colour_of(&mut app, "● Board not sent yet"), YELLOW);
+    }
+
+    #[test]
+    fn an_unreachable_hub_shows_the_last_list_with_its_age() {
+        let mut app = opened(&joined(unreachable, relay::Relay::default()));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("Devices that see this board  as of 5 min ago; the hub did not answer") && shown.contains("Safari on Mac"), "{shown}");
+    }
+
+    #[test]
+    fn question_mark_shows_the_hub_url_the_machine_id_and_each_device_id_and_toggles_back() {
+        let joined = joined(cached, relay::Relay::default());
+        let mut app = opened(&joined);
+        let machine = identity::load(&joined.paths.state).unwrap().unwrap().machine;
+        press(&mut app, key(KeyCode::Char('?')));
+        let shown = screen(&mut app, 110, 40);
+        for line in ["Details", "Hub            https://kelpie.example.com", &format!("Machine id     {machine}"), &format!("Safari on Mac  {}", joined.laptop), &format!("iPhone         {}", joined.phone), "Devices listed by the hub 5 min ago", "? back · esc close"] {
+            assert!(shown.contains(line), "{line}: {shown}");
+        }
+        press(&mut app, key(KeyCode::Char('?')));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("Devices that see this board") && !shown.contains(joined.phone.as_str()), "{shown}");
+        press(&mut app, key(KeyCode::Char('l')));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("Disconnect this machine? Your devices lose its board and the keys go.") && shown.contains("y disconnect · any other key keeps it"), "{shown}");
+        press(&mut app, key(KeyCode::Char('n')));
+        assert!(screen(&mut app, 110, 40).contains("l disconnect this machine"), "anything but y keeps it");
+    }
+
+    #[test]
+    fn r_picks_a_device_with_the_arrows_and_y_removes_it_from_this_machine_on_the_hub() {
+        let hub = crate::hub::tests::open_hub(|_| {});
+        let mut browser = crate::hub::tests::member(&hub);
+        let state = crate::hub::tests::connected_state(&hub, &mut browser);
+        let mut app = test_app(Vec::new());
+        let config = state.join("config.toml");
+        std::fs::write(&config, "[machine]\nname = \"mac\"\n").unwrap();
+        app.hub_paths = Some(Paths { state: state.clone(), config, post: || Ok(()), fetch: devices::fetch, opener: None, truecolor: true });
+        press(&mut app, key(KeyCode::Char('H')));
+        fetched(&mut app);
+        assert!(screen(&mut app, 110, 40).contains("browser  paired today"), "the name the hub holds");
+        press(&mut app, key(KeyCode::Char('r')));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("▸ browser") && shown.contains("Remove browser? It stops seeing this board.") && shown.contains("y remove · ↑↓ another · esc keep it"), "{shown}");
+        assert_eq!(colour_of(&mut app, "browser  paired"), MAUVE, "the picked device");
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Char('y')));
+        until(&mut app, "the removal", |window| matches!(window.view, View::Said(_)));
+        assert!(screen(&mut app, 110, 40).contains("Removed browser; it no longer sees this board."));
+        assert!(identity::load(&state).unwrap().unwrap().devices.is_empty(), "the machine seals to it no more");
+        let machine = identity::load(&state).unwrap().unwrap().machine;
+        assert!(hub.hub.store().admitted_device_views(&machine).unwrap().is_empty());
+        press(&mut app, key(KeyCode::Char('x')));
+        fetched(&mut app);
+        assert!(screen(&mut app, 110, 40).contains("None yet. Add your phone or a browser with a."));
     }
 
     #[test]
@@ -521,23 +830,26 @@ mod tests {
         let hub = crate::hub::tests::open_hub(|_| {});
         let mut browser = crate::hub::tests::member(&hub);
         let mut app = test_app(Vec::new());
-        let paths = paths(&format!("[machine]\nname = \"mac\"\n\n[hub]\nurl = \"{}\"\n", hub.url));
+        let mut paths = paths(&format!("[machine]\nname = \"mac\"\n\n[hub]\nurl = \"{}\"\n", hub.url));
+        paths.fetch = devices::fetch;
         let state = paths.state.clone();
         app.hub_paths = Some(paths);
         press(&mut app, key(KeyCode::Char('H')));
         press(&mut app, key(KeyCode::Enter));
-        until(&mut app, "the link", |view| matches!(view, View::Running(flow) if flow.link.is_some()));
+        until(&mut app, "the link", |window| matches!(&window.view, View::Running(flow) if flow.link.is_some()));
         let View::Running(flow) = &window(&mut app).view else { unreachable!() };
         let (link, code) = (flow.link.clone().unwrap(), flow.code.clone().unwrap());
-        assert!(screen(&mut app, 110, 50).contains(&format!("The page shows {code}")));
+        assert!(screen(&mut app, 110, 50).contains(&format!("Approve it only when the page shows {code}.")));
         let approval = hub.runtime.block_on(browser.approve_connect(&link, true)).unwrap();
         hub.runtime.block_on(browser.show_board(approval, crate::hub::tests::WAIT)).unwrap();
-        until(&mut app, "the outcome", |view| matches!(view, View::Said(_)));
+        until(&mut app, "the outcome", |window| matches!(window.view, View::Said(_)));
         let View::Said(said) = &window(&mut app).view else { unreachable!() };
         assert_eq!(said, &format!("Connected to {} as mac; the browser that approved it shows its board.", hub.url));
         press(&mut app, key(KeyCode::Char('x')));
+        fetched(&mut app);
+        let shown = screen(&mut app, 110, 50);
+        assert!(shown.contains(&format!("Connected to {} as mac", host(&hub.url))) && shown.contains("browser  paired today"), "the outcome gives way to the overview: {shown}");
         let device = browser.device.as_ref().unwrap().device.clone().unwrap();
-        assert!(screen(&mut app, 110, 50).contains(&format!("device   {device} paired")), "the outcome gives way to the overview");
         assert_eq!(identity::load(&state).unwrap().unwrap().devices[0].id, device);
     }
 }

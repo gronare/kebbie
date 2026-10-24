@@ -1839,7 +1839,7 @@ dependencies = [
 [[package]]
 name = "kelpie-hub"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=349f96497f0c23e9eef88e02c096295aedae16da#349f96497f0c23e9eef88e02c096295aedae16da"
+source = "git+https://github.com/gronare/kelpie-hub?rev=5ceb3ead857c1f526cf8906152731cbc81c813c2#5ceb3ead857c1f526cf8906152731cbc81c813c2"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -1867,12 +1867,13 @@ dependencies = [
  "tokio-rustls",
  "tower-service",
  "webauthn-rs",
+ "webauthn-rs-proto",
 ]
 
 [[package]]
 name = "kelpie-hub-api"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=349f96497f0c23e9eef88e02c096295aedae16da#349f96497f0c23e9eef88e02c096295aedae16da"
+source = "git+https://github.com/gronare/kelpie-hub?rev=5ceb3ead857c1f526cf8906152731cbc81c813c2#5ceb3ead857c1f526cf8906152731cbc81c813c2"
 dependencies = [
  "base64 0.23.1",
  "kelpie-hub-protocol",
@@ -1883,7 +1884,7 @@ dependencies = [
 [[package]]
 name = "kelpie-hub-fakes"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=349f96497f0c23e9eef88e02c096295aedae16da#349f96497f0c23e9eef88e02c096295aedae16da"
+source = "git+https://github.com/gronare/kelpie-hub?rev=5ceb3ead857c1f526cf8906152731cbc81c813c2#5ceb3ead857c1f526cf8906152731cbc81c813c2"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -1899,12 +1900,13 @@ dependencies = [
  "sha2 0.11.1",
  "tokio",
  "webauthn-authenticator-rs",
+ "webauthn-rs-proto",
 ]
 
 [[package]]
 name = "kelpie-hub-protocol"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kelpie-hub?rev=349f96497f0c23e9eef88e02c096295aedae16da#349f96497f0c23e9eef88e02c096295aedae16da"
+source = "git+https://github.com/gronare/kelpie-hub?rev=5ceb3ead857c1f526cf8906152731cbc81c813c2#5ceb3ead857c1f526cf8906152731cbc81c813c2"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",

@@ -217,14 +217,31 @@ An answer that takes a comment opens the comment box in place of the row, under 
 
 `H` opens it. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md).
 
-Not connected, it asks which hub: `k` or `⏎` the kelpie hub, `o` your own, whose address you type and `⏎` tests before it is saved as [`hub.url`](configuration.md#keys). With `hub.url` set, `⏎` connects there. With `machine.name` unset, it asks for the name once, with the host's short name filled in. It then shows the link, the code the page shows and a QR code of the link, black on white, opens the link in your browser (not over SSH), and waits for you to approve the machine there; a terminal too short for the QR code says so. `esc` stops waiting. The outcome shows in one line.
+Not connected, it asks which hub: `k` or `⏎` the kelpie hub, `o` your own, whose address you type and `⏎` tests before it is saved as [`hub.url`](configuration.md#keys). With `hub.url` set, `⏎` connects there. With `machine.name` unset, it asks for the name once, with the host's short name filled in. It then shows the link, the code the page shows and a QR code of the link, true black on white in a terminal with 24-bit colour (`COLORTERM=truecolor`) and in the terminal's own colours otherwise, opens the link in your browser (not over SSH), and waits for you to approve the machine there; a terminal too short for the QR code says so. `esc` stops waiting. The outcome shows in one line.
 
-Connected, it shows the hub, the machine's name and id, each paired phone or browser with when it paired, and a lapsed subscription's line with its link.
+Connected, it looks like this:
+
+```
+╭ kelpie hub ──────────────────────────────────────────────────────────────────────────╮
+│ Connected to kelpie.gronare.com as mac                                               │
+│ ● Board sent 2 min ago                                                               │
+│                                                                                      │
+│ Devices that see this board                                                          │
+│   Safari on Mac  paired yesterday · seen 2 min ago                                   │
+│   iPhone         paired today · notifications on                                     │
+│                                                                                      │
+│ a add a phone or browser · r remove a device · l disconnect this machine · esc close │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+The first line names the hub without its scheme and the machine by its name. The dot under it is green with when the board last went out, red with why it did not (a lapsed subscription with its link, a hub that can't be reached, or what the hub answered), and amber before the first post. Each device shows by the name it was given when it was added, when it was paired, when it last read the board, and `notifications on` when it has them. The list comes from the hub in the background, so the window opens at once; while the hub does not answer it shows the last list it gave and how old it is.
 
 | Key | Action |
 | --- | --- |
 | `a` | Add a phone or browser: a link and its QR code, then the six digits to compare. `y` admits it when the phone shows the same, `n` refuses it. |
-| `l` | Leave the hub, after `y`: each phone loses the board, and the keys and the token go. |
+| `r` | Remove a device: `↑` `↓` pick one, `y` removes it. It stops seeing this machine's board and keeps the boards of your other machines. |
+| `l` | Disconnect this machine, after `y`: each device loses its board, and the keys and the token go. The command is `kelpie hub leave`. |
+| `?` | Details for troubleshooting: the hub's address, the machine's id and each device's id. `?` again goes back. |
 | `esc`, `q` | Close the window. |
 
 ## Areas page

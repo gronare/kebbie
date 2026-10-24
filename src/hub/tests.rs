@@ -221,7 +221,7 @@ fn leaving_takes_the_phone_off_the_board_and_forgets_the_keys() {
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
     assert_eq!(hub.boards(&phone).len(), 1);
     let left = super::leave(&state).unwrap();
-    assert!(left.contains("Left") && left.contains("remove-machine"), "{left}");
+    assert!(left.contains("Disconnected this machine from") && left.contains("remove-machine"), "{left}");
     assert!(hub.runtime.block_on(phone.boards()).unwrap().is_empty(), "the phone no longer gets this machine's board");
     assert!(identity::load(&state).unwrap().is_none() && !state.join("hub").exists());
 }
@@ -722,6 +722,70 @@ fn connected(hub: &TestHub, browser: &mut kelpie_hub_fakes::browser::Browser) ->
     state
 }
 
+pub(crate) fn connected_state(hub: &TestHub, browser: &mut kelpie_hub_fakes::browser::Browser) -> PathBuf {
+    let state = crate::sh::test_dir("hub-connected-device");
+    let mut pending = super::connect::start(&hub.url, "mac").unwrap();
+    let approval = hub.runtime.block_on(browser.approve_connect(&pending.link(), true)).unwrap();
+    let answer = pending.wait(&mut |_| true).unwrap();
+    let machine_state = state.clone();
+    let machine = std::thread::spawn(move || super::connect::finish(&machine_state, &pending, &answer, None, || Ok(()), now()));
+    hub.runtime.block_on(browser.show_board(approval, WAIT)).unwrap();
+    machine.join().unwrap().unwrap();
+    state
+}
+
+#[test]
+fn status_names_each_device_with_when_it_was_paired_and_seen_and_whether_it_has_notifications() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
+    let device = browser.device.as_ref().unwrap().device.clone().unwrap();
+    hub.hub.store().subscribe_push(&device, "https://push.example/one", &[4; 65], &[1; 16], now()).unwrap();
+    super::devices::fetch(&state, now()).unwrap();
+    let shown = super::status_text(&state, Some("mac"), now()).unwrap();
+    let line = shown.lines().find(|line| line.starts_with("device:")).unwrap();
+    assert!(line.starts_with("device:   browser · paired today · seen ") && line.ends_with(&format!(" ago · notifications on ({device})")), "{shown}");
+
+    let listed = super::devices::fetch(&crate::sh::test_dir("hub-not-joined"), now());
+    assert!(listed.unwrap_err().contains("not connected"));
+    let down = crate::sh::test_dir("hub-down");
+    std::fs::create_dir_all(identity::dir(&down)).unwrap();
+    std::fs::copy(identity::dir(&state).join("identity.json"), identity::dir(&down).join("identity.json")).unwrap();
+    std::fs::copy(identity::dir(&state).join("devices.json"), identity::dir(&down).join("devices.json")).unwrap();
+    pointed_at(&down, "http://127.0.0.1:9");
+    let kept = super::devices::fetch(&down, now() + 120).unwrap();
+    assert_eq!(kept.devices.len(), 1, "the last list stays when the hub does not answer");
+    assert!(kept.error.as_deref().is_some_and(|error| error.contains("could not reach the hub")));
+    let shown = super::status_text(&down, Some("mac"), now() + 120).unwrap();
+    assert!(shown.contains("browser · paired today") && shown.contains("names and last reads as of 2 min ago; the hub did not list them"), "{shown}");
+}
+
+#[test]
+fn remove_device_takes_one_device_off_this_machine_by_name_and_it_keeps_the_other_machines_board() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let mac = connected_state(&hub, &mut browser);
+    let studio = connected_state(&hub, &mut browser);
+    let device = browser.device.as_ref().unwrap().device.clone().unwrap();
+    relay::relay(&mac, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
+    relay::relay(&studio, &board_of(&[asking("search", "greenhouse")]), now()).unwrap();
+    assert_eq!(hub.runtime.block_on(browser.device.as_ref().unwrap().boards()).unwrap().len(), 2);
+
+    let identity = identity::load(&mac).unwrap().unwrap();
+    let listed = super::devices::fetch(&mac, now()).unwrap();
+    let unknown = super::devices::find(&listed, &identity.devices, "iPad").unwrap_err();
+    assert_eq!(unknown, "no device named \"iPad\"; this machine's devices are browser");
+    assert_eq!(super::devices::find(&listed, &identity.devices, "BROWSER").unwrap(), device, "a name matches whatever its case");
+    assert_eq!(super::devices::find(&listed, &identity.devices, device.as_str()).unwrap(), device, "and so does the id");
+    let said = super::devices::remove(&mac, &device).unwrap();
+    assert_eq!(said, "Removed browser; it no longer sees this board.");
+    assert!(identity::load(&mac).unwrap().unwrap().devices.is_empty(), "the machine stops sealing to it");
+    assert!(super::devices::load(&mac).devices.is_empty());
+    let boards = hub.runtime.block_on(browser.device.as_ref().unwrap().boards()).unwrap();
+    assert_eq!(boards.iter().map(|board| board.machine.clone()).collect::<Vec<_>>(), [identity::load(&studio).unwrap().unwrap().machine], "the other machine's board stays");
+    assert_eq!(super::devices::remove(&mac, &device).unwrap(), format!("Removed device {}; it no longer sees this board.", super::devices::short(&device)), "a device the hub no longer lists is gone already");
+}
+
 #[test]
 fn a_machine_connects_through_the_browser_which_then_shows_its_board_without_digits() {
     let hub = open_hub(|_| {});
@@ -779,7 +843,8 @@ fn a_connect_waits_while_pending_slows_down_when_asked_and_ends_on_a_denial_or_a
     let hub = open_hub(|config| config.connect_ttl = 0);
     let mut pending = super::connect::start(&hub.url, "mac").unwrap();
     let expired = pending.wait(&mut |_| true).err().unwrap();
-    assert!(expired.contains("code expired"), "{expired}");
+    // With a zero lifetime the hub may sweep the code before the first poll, so it can also answer that it no longer knows it.
+    assert!(expired.contains("code expired") || expired.contains("no longer knows this connect"), "{expired}");
     let state = crate::sh::test_dir("hub-connect-expired");
     assert!(identity::load(&state).unwrap().is_none());
 }

@@ -239,7 +239,8 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   words, the pages whose title or headings match, each with its path and first
                                   sentence, best first; without, the docs index by section; never needs the network,
                                   and without the docs points at kelpie help and the docs online
-  kelpie hub [status]             the hub this machine posts its board to, the phones paired with it, the last post
+  kelpie hub [status]             the hub this machine posts its board to, its devices by name with when each was
+                                  paired and last seen and whether it has notifications on, and the last post
   kelpie hub connect [--name <name>]
                                   connect this machine to a hub through your browser: [hub] url, or asks for the kelpie
                                   hub or your own (tested, then saved as [hub] url); prints a link, a code to check
@@ -248,6 +249,9 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   sets, or asks for it in a terminal; H on the board does the same; yours only
   kelpie hub add-device           add a phone or browser: shows a link and its QR code, then six digits to compare
                                   with the phone's before it admits the phone on your y; yours only, in your own terminal
+  kelpie hub remove-device <name|id>
+                                  stop showing this machine's board on one device; it keeps the boards of your other
+                                  machines; yours only
   kelpie hub join <url> <code> [--name <name>]
                                   join a kelpie hub with a code from kelpie-hub admin join-code, for scripts: makes
                                   this machine's keys, kept in kelpie's state and never printed; it goes by [machine]
@@ -259,7 +263,7 @@ const USAGE: &str = "kelpie: herding coding agents in herdr
                                   needs you, asks, is ready to push or its CI fails; yours only, in your own terminal
   kelpie hub move <url>           the hub moved: post there once <url> answers as a hub; move only to a hub you run or trust;
                                   a redirect to another host is never followed by itself; yours only
-  kelpie hub leave                forget the hub: take each paired phone off and remove the keys and token
+  kelpie hub leave                disconnect this machine: take each device off its board and remove the keys and token
   kelpie doctor                   check that this machine has what kelpie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
                                   (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)

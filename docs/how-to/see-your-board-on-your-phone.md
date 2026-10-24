@@ -36,7 +36,7 @@ On the board, press `H`, then `a`. Or, in your own terminal:
 kelpie hub add-device
 ```
 
-1. kelpie shows a link and its QR code. Scan it with the phone, sign in or make an account, and add the phone.
+1. kelpie shows a link and its QR code. Scan it with the phone, sign in with your passkey or make an account, and add the phone. The page proposes a name for the device from its browser, such as `iPhone` or `Safari on Mac`; change it there if you like. That is the name kelpie shows for it.
 2. The phone and the machine both show six digits. Answer `y` on the machine only when they are the same. The phone's own tap goes through the hub, so only your `y` admits it; anything else adds nothing, and you start again.
 
 Within a few seconds the phone shows the board. Add each phone or browser the same way; one add-device adds one.
@@ -56,7 +56,7 @@ In the app's **Maskiner** (machines) tab, tap **Slå på notiser** (turn on noti
 kelpie hub status
 ```
 
-It shows the hub, the machine's name, the paired phones and when the board last went out. The board's `H` window shows the same, and `kelpie doctor` has a `hub` line: connected, reachable, and the last post. The keeper posts the board when it changes and once a minute while nothing does, so the phone can tell that the machine is awake; a machine not heard from for three minutes shows as sleeping.
+It shows the hub, the machine's name, each device by name with when it was paired, when it last read the board and whether it has notifications on, and when the board last went out. The board's `H` window shows the same, its dot green while the board goes out and red with the reason when it does not, and `kelpie doctor` has a `hub` line: connected, reachable, and the last post. The keeper posts the board when it changes and once a minute while nothing does, so the phone can tell that the machine is awake; a machine not heard from for three minutes shows as sleeping.
 
 ## When the subscription lapses
 
@@ -82,12 +82,20 @@ kelpie hub move https://hub.example.net
 
 kelpie checks only that the address answers as a hub, then sends the machine's token there with every post. Whether it is your hub is yours to check: move only to a hub you run or trust.
 
-## Stop
+## Remove a device
+
+```bash
+kelpie hub remove-device iPhone
+```
+
+Or `r` in the board's `H` window: pick the device with `↑` `↓` and press `y`. It takes the name `kelpie hub status` shows, or the device's id. The device stops seeing this machine's board, and this machine stops sealing the board to it; it keeps seeing your other machines' boards.
+
+## Disconnect this machine
 
 ```bash
 kelpie hub leave
 ```
 
-Or `l` in the board's `H` window. It takes each paired phone off this machine's board and forgets the keys and the token. The hub keeps a row for the machine until its admin removes it.
+Or `l` in the board's `H` window. It takes each device off this machine's board and forgets the keys and the token. The hub keeps a row for the machine until its admin removes it.
 
 Every command: [The hub](../reference/commands.md#the-hub).

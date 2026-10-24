@@ -227,7 +227,7 @@ pub fn cli(state: &Path, config: &Path, given: Option<&str>, interactive: bool, 
     let mut pending = start(&chosen.url, prepared.named.name())?;
     let link = pending.link();
     println!("Open this link to connect {} to {}, and check that the page shows {}:\n{link}", pending.name, hub_name(&pending.url), pending.user_code());
-    if let Some(code) = qr::terminal(&link).filter(|_| interactive) {
+    if let Some(code) = qr::for_stdout(&link) {
         println!("{code}");
     }
     if let Some(program) = opener() {
@@ -251,13 +251,13 @@ pub fn add_device_cli(state: &Path, interactive: bool, now: u64) -> Result<Strin
     }
     let device = pair::add_device(state, pair::TIMEOUT, |added| {
         println!("On your phone or in a browser, open this link (or scan the code) and add it:\n{}", added.url);
-        if let Some(code) = qr::terminal(&added.url) {
+        if let Some(code) = qr::for_stdout(&added.url) {
             println!("{code}");
         }
         println!("Waiting for it (10 minutes)…");
     }, super::ask_digits, None, now)?;
     let posted = super::tick().err().map_or(String::new(), |error| format!(" The first board did not go out yet: {error}."));
-    Ok(format!("Added {device}; it shows this machine's board from now on.{posted}"))
+    Ok(format!("Added {}; it shows this machine's board from now on.{posted}", super::devices::added_name(state, &device, now)))
 }
 
 #[cfg(test)]

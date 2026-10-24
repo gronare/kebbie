@@ -1,5 +1,6 @@
 pub mod board;
 pub mod connect;
+pub mod devices;
 pub mod http;
 pub mod identity;
 pub mod inbox;
@@ -188,18 +189,59 @@ fn ago(at: Option<u64>, now: u64) -> String {
     at.map_or("never".to_string(), |at| format!("{} ago", crate::keeper::span(now.saturating_sub(at))))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Sent {
+    Yes,
+    Failed,
+    NotYet,
+}
+
+// The newest of the last post and the last failure says how the board stands, so a failure fixed by a later post shows as sent.
+pub fn board_line(relay: &relay::Relay, paired: bool, now: u64) -> (Sent, String) {
+    let failed_last = relay.error_at.is_some_and(|failed| relay.posted_at.is_none_or(|posted| failed >= posted));
+    if let Some(plan) = &relay.plan_inactive {
+        return (Sent::Failed, plan.clone());
+    }
+    match (&relay.error, relay.posted_at) {
+        (Some(error), _) if failed_last => {
+            let when = relay.error_at.map_or(String::new(), |at| format!(" ({})", devices::ago(at, now)));
+            let reason = match error.strip_prefix("could not reach the hub: ") {
+                Some(_) => "the hub can't be reached".to_string(),
+                None => error.clone(),
+            };
+            (Sent::Failed, format!("Board not sent: {reason}{when}"))
+        }
+        (_, Some(at)) => (Sent::Yes, format!("Board sent {}", devices::ago(at, now))),
+        (_, None) if paired => (Sent::NotYet, "Board not sent yet; the keeper sends it within a minute".to_string()),
+        (_, None) => (Sent::NotYet, "Nothing sent yet; the board goes out once a device is added".to_string()),
+    }
+}
+
+pub fn host(url: &str) -> &str {
+    url.split_once("://").map_or(url, |(_, rest)| rest)
+}
+
 pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<String> {
     let Some(identity) = identity::load(state)? else {
         return Ok("Not connected to a hub. kelpie hub connect, or H on the board, shows this machine's board on your phone.".to_string());
     };
     let relay = relay::load(state);
+    let listed = devices::load(state);
     let mut lines = vec![format!("hub:      {}", identity.url), format!("machine:  {} ({})", identity.name, identity.machine)];
     lines.extend(rename_line(&identity, configured).map(|line| format!("name:     {line}")));
     if identity.devices.is_empty() {
         lines.push("devices:  none; kelpie hub add-device adds your phone".to_string());
     }
     for device in &identity.devices {
-        lines.push(format!("device:   {} paired {}", device.id, ago(Some(device.paired_at), now)));
+        let line = match listed.devices.iter().find(|known| known.device == device.id) {
+            Some(known) => format!("device:   {} · {} ({})", devices::name_of(known), devices::facts(known, now), device.id),
+            None => format!("device:   {} paired {}", device.id, ago(Some(device.paired_at), now)),
+        };
+        lines.push(line);
+    }
+    if let Some(error) = &listed.error {
+        let known = listed.fetched_at.map_or("names and last reads are unknown".to_string(), |at| format!("names and last reads as of {}", devices::ago(at, now)));
+        lines.push(format!("          {known}; the hub did not list them: {error}"));
     }
     lines.push(match relay.posted_at {
         Some(at) => format!("board:    rev {} posted {}", relay.rev, ago(Some(at), now)),
@@ -225,11 +267,11 @@ pub fn move_to(state: &Path, url: &str) -> Result<String> {
 
 // A device the hub still lists would keep the last board, so leaving takes each one off before the keys go.
 pub fn leave(state: &Path) -> Result<String> {
-    let Some(identity) = identity::load(state)? else { return Ok("Not joined to a hub; nothing to leave.".to_string()) };
+    let Some(identity) = identity::load(state)? else { return Ok("Not connected to a hub; nothing to disconnect.".to_string()) };
     let client = Client::new(&identity.url, Some(identity.token()), CALL);
     let kept: Vec<String> = identity.devices.iter().filter_map(|device| client.delete(&format!("/v1/m/devices/{}", device.id)).err().filter(|error| error.status() != Some(404)).map(|error| format!("{}: {error}", device.id))).collect();
     identity::forget(state)?;
-    let mut notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Left {}", identity.url)).next(format!("The hub still lists machine {}; its admin removes it with kelpie-hub admin remove-machine {}.", identity.machine, identity.machine));
+    let mut notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Disconnected this machine from {}", identity.url)).next(format!("The hub still lists machine {}; its admin removes it with kelpie-hub admin remove-machine {}.", identity.machine, identity.machine));
     for line in &kept {
         notice = notice.detail("not removed", line);
     }
@@ -266,6 +308,9 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
         None | Some("status") => {
             let configured = configured_name(&crate::config::path());
             sync_name(&state, configured.as_deref())?;
+            if identity::load(&state)?.is_some() {
+                devices::fetch(&state, now)?;
+            }
             status_text(&state, configured.as_deref(), now)
         }
         Some("connect") => {
@@ -292,6 +337,16 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             let posted = tick().err().map_or(String::new(), |error| format!(" The first board did not go out yet: {error}."));
             crate::notice::Notice::new(crate::notice::Tone::Done, format!("Paired {device}")).next(format!("The phone shows this machine's board from now on.{posted}")).ok()
         }
+        Some("remove-device") => {
+            crate::permit::user_only("removing a device")?;
+            let wanted = rest.first().ok_or("kelpie hub remove-device needs the device's name or id, as kelpie hub status shows it")?;
+            let identity = identity::load(&state)?.ok_or("this machine is not connected to a hub; kelpie hub connect first")?;
+            let listed = devices::fetch(&state, now)?;
+            let device = devices::find(&listed, &identity.devices, wanted)?;
+            let said = devices::remove(&state, &device)?;
+            let posted = tick().err().map_or(String::new(), |error| format!(" The board did not go out again yet: {error}."));
+            crate::notice::Notice::new(crate::notice::Tone::Done, said).next(format!("The other devices keep seeing this board.{posted}")).ok()
+        }
         Some("leave") => {
             crate::permit::user_only("leaving the hub")?;
             leave(&state)
@@ -301,7 +356,7 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             let url = rest.first().ok_or("kelpie hub move needs the hub's new address: kelpie hub move https://hub.example.com")?;
             move_to(&state, url)
         }
-        Some(other) => Err(format!("kelpie hub knows connect, add-device, join, pair, move, status and leave, not {other}")),
+        Some(other) => Err(format!("kelpie hub knows connect, add-device, remove-device, join, pair, move, status and leave, not {other}")),
     }
 }
 
