@@ -26,6 +26,9 @@ use identity::Identity;
 
 pub const EVERY: u64 = 15;
 
+pub const UNREAD: &str = "no browser can read this machine's board, as it holds no account key, which only connecting from the link kebbie hub connect shows hands over";
+pub const RECONNECT: &str = "kebbie hub leave, then kebbie hub connect";
+
 // Polling the inbox marks queued commands delivered, so it stays unpolled until a kind listed here is applied through protocol::authorize.
 pub const ACCEPTS: &[Kind] = &[];
 
@@ -126,7 +129,7 @@ pub fn join_named(state: &Path, config: &Path, url: &str, code: &str, given: Opt
     let configured = crate::config::load_machine(config)?.machine_name;
     let named = checked_name(config, configured.as_deref(), given, ask)?;
     let joined = join(state, url, code, named.name(), now)?;
-    let notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Joined {} as {}", joined.url, joined.name)).next("kebbie hub add-device adds your phone; the keeper posts the board once a device is paired.");
+    let notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Joined {} as {}", joined.url, joined.name)).next(format!("It belongs to no account, so no browser reads its board; to see it in the browser: {RECONNECT}."));
     match name_detail(config, named, configured, &joined.name) {
         Some((label, text)) => notice.detail(label, text),
         None => notice,
@@ -209,7 +212,10 @@ pub enum Sent {
 }
 
 // The newest of the last post and the last failure says how the board stands, so a failure fixed by a later post shows as sent.
-pub fn board_line(relay: &relay::Relay, paired: bool, now: u64) -> (Sent, String) {
+pub fn board_line(relay: &relay::Relay, pinned: bool, now: u64) -> (Sent, String) {
+    if !pinned {
+        return (Sent::Failed, format!("Board not sent: {UNREAD}; {RECONNECT}"));
+    }
     let failed_last = relay.error_at.is_some_and(|failed| relay.posted_at.is_none_or(|posted| failed >= posted));
     if let Some(plan) = &relay.plan_inactive {
         return (Sent::Failed, plan.clone());
@@ -224,8 +230,7 @@ pub fn board_line(relay: &relay::Relay, paired: bool, now: u64) -> (Sent, String
             (Sent::Failed, format!("Board not sent: {reason}{when}"))
         }
         (_, Some(_)) => (Sent::Yes, "Board is being sent".to_string()),
-        (_, None) if paired => (Sent::NotYet, "Board not sent yet; the keeper sends it within a minute".to_string()),
-        (_, None) => (Sent::NotYet, "Nothing sent yet; the board goes out once a device is added".to_string()),
+        (_, None) => (Sent::NotYet, "Board not sent yet; the keeper sends it within a minute".to_string()),
     }
 }
 
@@ -241,12 +246,16 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
     let listed = devices::load(state);
     let mut lines = vec![format!("hub:      {}", identity.url), format!("machine:  {} ({})", identity.name, identity.machine)];
     lines.extend(rename_line(&identity, configured).map(|line| format!("name:     {line}")));
-    if identity.devices.is_empty() {
-        lines.push("devices:  none; kebbie hub add-device adds your phone".to_string());
-    }
+    lines.push(match &identity.account {
+        Some(account) => {
+            let (signing, encryption) = account.prints();
+            format!("account:  {} · signing key {signing} · encryption key {encryption}", account.key.account)
+        }
+        None => format!("account:  none, so {UNREAD}; connect it from the link: {RECONNECT}"),
+    });
     for device in &identity.devices {
         let line = match listed.devices.iter().find(|known| known.device == device.id) {
-            Some(known) => format!("device:   {} · {} ({})", devices::named(&device.id, &listed, &identity.devices).unwrap_or_else(|| devices::name_of(known)), devices::facts(known, now), device.id),
+            Some(known) => format!("device:   {} · {} ({})", devices::name_of(known), devices::facts(known, now), device.id),
             None => format!("device:   {} paired {}", device.id, ago(Some(device.paired_at), now)),
         };
         lines.push(line);
@@ -262,7 +271,7 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
     if let Some(error) = &relay.error {
         lines.push(format!("error:    {error} ({})", ago(relay.error_at, now)));
     }
-    let commands = if ACCEPTS.is_empty() { "none; the phone reads the board".to_string() } else { ACCEPTS.iter().map(|kind| kind.name()).collect::<Vec<_>>().join(", ") };
+    let commands = if ACCEPTS.is_empty() { "none; the web app reads the board".to_string() } else { ACCEPTS.iter().map(|kind| kind.name()).collect::<Vec<_>>().join(", ") };
     lines.push(format!("commands: {commands}"));
     Ok(lines.join("\n"))
 }
@@ -277,7 +286,7 @@ pub fn move_to(state: &Path, url: &str) -> Result<String> {
     crate::notice::Notice::new(crate::notice::Tone::Done, format!("Moved from {before} to {}", identity.url)).next("The keeper posts the board there from now on.").ok()
 }
 
-// A device the hub still lists would keep the last board, so leaving takes each one off before the keys go.
+// A device the hub still lists would keep getting notices from the machine, so leaving takes each one off before the keys go.
 pub fn leave(state: &Path) -> Result<String> {
     let Some(identity) = identity::load(state)? else { return Ok("Not connected to a hub; nothing to leave.".to_string()) };
     let client = Client::new(&identity.url, Some(identity.token()), CALL);
@@ -293,7 +302,7 @@ pub fn leave(state: &Path) -> Result<String> {
 pub fn tick() -> Result<()> {
     let state = crate::lead::state_dir()?;
     sync_name(&state, configured_name(&crate::config::path()).as_deref())?;
-    if identity::load(&state)?.is_none_or(|identity| identity.devices.is_empty()) {
+    if identity::load(&state)?.is_none_or(|identity| identity.account.is_none() && identity.devices.is_empty()) {
         return Ok(());
     }
     let now = crate::messages::now();
@@ -329,10 +338,6 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             crate::permit::user_only("connecting a hub")?;
             connect::cli(&state, &crate::config::path(), name, interactive(), now)
         }
-        Some("add-device") => {
-            crate::permit::user_only("adding a device")?;
-            connect::add_device_cli(&state, interactive(), now)
-        }
         Some("join") => {
             crate::permit::user_only("joining a hub")?;
             let (Some(url), Some(code)) = (rest.first(), rest.get(1)) else { return Err("kebbie hub join needs the hub's address and a join code: kebbie hub join https://hub.example.com <join code>".to_string()) };
@@ -343,11 +348,10 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             crate::permit::user_only("pairing a device")?;
             pair::interactive_only(interactive())?;
             let device = pair::pair(&state, pair::TIMEOUT, |code| {
-                println!("Open the hub on your phone, tap Pair and enter this code: {code}");
-                println!("Waiting for the phone (10 minutes)…");
+                println!("Enter this pairing code on the device: {code}");
+                println!("Waiting for the device (10 minutes)…");
             }, ask_digits, now)?;
-            let posted = tick().err().map_or(String::new(), |error| format!(" The first board did not go out yet: {error}."));
-            crate::notice::Notice::new(crate::notice::Tone::Done, format!("Paired {device}")).next(format!("The phone shows this machine's board from now on.{posted}")).ok()
+            crate::notice::Notice::new(crate::notice::Tone::Done, format!("Paired {device}")).next("It gets this machine's notices from now on.").ok()
         }
         Some("remove-device") => {
             crate::permit::user_only("removing a device")?;
@@ -356,8 +360,7 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             let listed = devices::fetch(&state, now)?;
             let device = devices::find(&listed, &identity.devices, wanted)?;
             let said = devices::remove(&state, &device)?;
-            let posted = tick().err().map_or(String::new(), |error| format!(" The board did not go out again yet: {error}."));
-            crate::notice::Notice::new(crate::notice::Tone::Done, said).next(format!("The other devices keep seeing this board.{posted}")).ok()
+            crate::notice::Notice::new(crate::notice::Tone::Done, said).next("The other devices keep getting its notices.").ok()
         }
         Some("leave") => {
             crate::permit::user_only("leaving the hub")?;
@@ -368,14 +371,14 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             let url = rest.first().ok_or("kebbie hub move needs the hub's new address: kebbie hub move https://hub.example.com")?;
             move_to(&state, url)
         }
-        Some(other) => Err(format!("kebbie hub knows connect, add-device, remove-device, join, pair, move, status and leave, not {other}")),
+        Some(other) => Err(format!("kebbie hub knows connect, remove-device, join, pair, move, status and leave, not {other}")),
     }
 }
 
 pub fn config_line(state: Option<&Path>) -> String {
     let identity = state.and_then(|state| identity::load(state).ok().flatten());
     let value = identity.map_or("none".to_string(), |identity| format!("{:?}", identity.url));
-    format!("hub.connected = {value}  (kebbie hub connect)\n  The hub this machine posts its board to, sealed to the phones it paired with; kebbie hub connect or join sets it, kebbie hub leave forgets it, kebbie hub move moves it. Kept in kebbie's state with the machine's keys, not in config.toml.")
+    format!("hub.connected = {value}  (kebbie hub connect)\n  The hub this machine posts its board to, sealed to the account that connected it; kebbie hub connect or join sets it, kebbie hub leave forgets it, kebbie hub move moves it. Kept in kebbie's state with the machine's keys, not in config.toml.")
 }
 
 fn check(level: Level, name: &str, fact: impl Into<String>, fix: Vec<String>) -> Check {
@@ -389,15 +392,16 @@ pub fn doctor(state: &Path, configured: Option<&str>, now: u64, reach: impl FnOn
     };
     let relay = relay::load(state);
     let posted = relay.posted_at.map_or("no board posted yet".to_string(), |at| format!("board rev {} posted {}", relay.rev, ago(Some(at), now)));
-    let fact = format!("{} as {} · {} paired · {posted}", identity.url, identity.name, identity.devices.len());
+    let account = if identity.account.is_some() { "account key pinned" } else { "no account key" };
+    let fact = format!("{} as {} · {account} · {posted}", identity.url, identity.name);
     if let Err(error) = reach(&identity.url) {
         return check(Level::Warn, name, format!("{fact}; not reachable: {error}"), vec!["check the address and your network; kebbie hub status shows the last error".to_string()]);
     }
-    if identity.devices.is_empty() {
-        return check(Level::Warn, name, format!("{fact}; no phone paired, so no board goes out"), vec!["kebbie hub add-device".to_string()]);
+    if identity.account.is_none() {
+        return check(Level::Warn, name, format!("{fact}; {UNREAD}"), vec![format!("{RECONNECT}, and open the link it shows")]);
     }
     if let Some(plan) = &relay.plan_inactive {
-        return check(Level::Warn, name, format!("{fact}; {plan}"), vec!["everything on this machine keeps working; the phone gets the board again once the subscription is active".to_string()]);
+        return check(Level::Warn, name, format!("{fact}; {plan}"), vec!["everything on this machine keeps working; the board goes out again once the subscription is active".to_string()]);
     }
     if let Some(error) = &relay.error {
         return check(Level::Warn, name, format!("{fact}; last post failed {}: {error}", ago(relay.error_at, now)), vec!["kebbie hub status; the keeper retries by itself".to_string()]);

@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use kebbie_hub::{Config, Hub, serve};
 use kebbie_hub_fakes::PairError;
+use kebbie_hub_fakes::browser::Browser;
 use kebbie_hub_fakes::phone::PhoneState;
-use kebbie_hub_protocol::{Board, Group, Id};
+use kebbie_hub_protocol::{Board, Group, Id, Kind};
 
 use super::board::tests::asking;
 use super::board::build;
@@ -48,6 +49,12 @@ impl TestHub {
     }
 
     fn pair(&self, state: &Path, accept: bool) -> (crate::sh::Result<Id>, Result<Id, PairError>, PhoneState) {
+        let mut phone = PhoneState::new(&self.url);
+        let (machine, phone_side) = self.pair_phone(state, &mut phone, accept);
+        (machine, phone_side, phone)
+    }
+
+    fn pair_phone(&self, state: &Path, phone: &mut PhoneState, accept: bool) -> (crate::sh::Result<Id>, Result<Id, PairError>) {
         let (code_out, code_in) = mpsc::channel::<String>();
         let (digits_out, digits_in) = mpsc::channel::<String>();
         let machine_state = state.to_path_buf();
@@ -55,16 +62,15 @@ impl TestHub {
             super::pair::pair(&machine_state, WAIT, |code| code_out.send(code.to_string()).unwrap(), |digits| accept && digits_in.recv_timeout(WAIT).is_ok_and(|phone| phone == digits), crate::messages::now())
         });
         let code = code_in.recv_timeout(WAIT).unwrap();
-        let mut phone = PhoneState::new(&self.url);
         let phone_side = self.runtime.block_on(phone.pair(&code, WAIT, async move |digits: String| {
             let _ = digits_out.send(digits);
             true
         }));
-        (machine.join().unwrap(), phone_side, phone)
+        (machine.join().unwrap(), phone_side)
     }
 
-    fn boards(&self, phone: &PhoneState) -> Vec<(u64, Board)> {
-        self.runtime.block_on(phone.boards()).unwrap().into_iter().map(|entry| (entry.rev, entry.board.unwrap())).collect()
+    fn boards(&self, browser: &mut Browser) -> Vec<(u64, Board)> {
+        self.runtime.block_on(browser.boards()).unwrap().into_iter().filter_map(|entry| Some((entry.rev?, entry.board.ok()?))).collect()
     }
 }
 
@@ -84,7 +90,7 @@ fn a_machine_joins_and_keeps_its_keys_to_itself() {
     assert_eq!((joined.url.as_str(), joined.name.as_str()), (hub.url.as_str(), "mac"));
     assert!(joined.token().starts_with("khm_"));
     let shown = super::status_text(&state, Some("mac"), now()).unwrap();
-    assert!(shown.contains(&hub.url) && shown.contains("mac") && shown.contains("kebbie hub add-device"), "{shown}");
+    assert!(shown.contains(&hub.url) && shown.contains("mac") && shown.contains("account:  none, so no browser can read this machine's board") && shown.contains("kebbie hub leave, then kebbie hub connect"), "{shown}");
     let (signing, encryption) = joined.secret().to_bytes();
     let file = std::fs::read_to_string(state.join("hub/identity.json")).unwrap();
     for secret in [joined.token().to_string(), format!("{:?}", kebbie_hub_api::Bytes32(signing)), format!("{:?}", kebbie_hub_api::Bytes32(encryption))] {
@@ -106,7 +112,7 @@ fn plain_http_is_for_a_hub_on_this_machine_only() {
 }
 
 #[test]
-fn a_phone_pairs_after_the_digits_match_and_reads_the_board_the_keeper_posts() {
+fn a_phone_pairs_after_the_digits_match_and_the_machine_keeps_its_keys_for_notices() {
     let hub = TestHub::start();
     let state = hub.joined("mac");
     let (machine, phone_side, phone) = hub.pair(&state, true);
@@ -115,37 +121,104 @@ fn a_phone_pairs_after_the_digits_match_and_reads_the_board_the_keeper_posts() {
     let paired = identity::load(&state).unwrap().unwrap();
     assert_eq!(paired.devices.len(), 1);
     assert_eq!((&paired.devices[0].id, paired.devices[0].keys), (&device, phone.public()), "the machine keeps the keys the phone committed to");
+    assert_eq!(relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().posted, None, "a paired phone is no account, so no board goes out");
+}
+
+#[test]
+fn a_machine_connected_from_the_link_pins_the_account_and_seals_its_board_to_it_and_no_device() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
+    let pinned = identity::load(&state).unwrap().unwrap();
+    let key = browser.account_key().unwrap().clone();
+    let account = pinned.account.as_ref().expect("the machine pinned the account the browser handed over");
+    assert_eq!((&account.key, account.fingerprints), (&key, key.fingerprints()));
+    assert!(pinned.devices.is_empty(), "the browser is no device of the machine");
+    let shown = super::status_text(&state, Some("mac"), now()).unwrap();
+    let (signing, encryption) = account.prints();
+    assert!(shown.contains(&format!("account:  {} · signing key {signing} · encryption key {encryption}", key.account)), "{shown}");
+    let phone = hub.pair(&state, true).2;
 
     let mut working = task(Some("working"), Some("working"), 1);
     working.name = "search".to_string();
     let first = board_of(&[asking("refunds", "greenhouse"), working.clone()]);
     let at = now();
     let one = relay::relay(&state, &first, at).unwrap().posted.unwrap();
-    let seen = hub.boards(&phone);
-    assert_eq!(seen.len(), 1);
-    let (rev, opened) = &seen[0];
-    assert_eq!(*rev, one);
-    assert_eq!(opened.items, first.items, "the phone opens exactly the board the machine sealed");
+    let read = hub.runtime.block_on(browser.boards()).unwrap();
+    assert_eq!(read.len(), 1);
+    let opened = read[0].board.as_ref().unwrap();
+    assert_eq!((read[0].rev, &opened.items), (Some(one), &first.items), "the browser opens exactly the board the machine sealed, with the account's key");
     assert_eq!(opened.items[0].question.as_ref().unwrap().text, "Keep the old endpoint for a release?");
+    let sealed = relay::seal_board(&identity::load(&state).unwrap().unwrap(), &first, one + 1, at).unwrap();
+    assert_eq!(sealed.keys.keys().cloned().collect::<std::collections::BTreeSet<_>>(), [pinned.machine.clone(), key.account.clone()].into(), "sealed to the machine and the account, no device row");
+    assert!(sealed.for_recipient(&phone.device.clone().unwrap()).is_none(), "the paired phone gets no row of the board");
 
     assert_eq!(relay::relay(&state, &first, at + 1).unwrap().posted, None, "an unchanged board is not posted again");
-    assert_eq!(hub.boards(&phone)[0].0, one);
-
     working.git.as_mut().unwrap().ahead = 2;
     let second = board_of(&[asking("refunds", "greenhouse"), working]);
     let two = relay::relay(&state, &second, at + 2).unwrap().posted.unwrap();
     assert!(two > one);
-    let (rev, opened) = &hub.boards(&phone)[0];
+    let (rev, opened) = &hub.boards(&mut browser)[0];
     assert_eq!((*rev, opened.items[1].git.as_ref().unwrap().ahead), (two, 2));
 
-    let three = relay::relay(&state, &second, at + 2 + HEARTBEAT).unwrap().posted.expect("the heartbeat posts the same board so the phone sees the machine awake");
-    assert!(three > two);
-    assert_eq!(hub.boards(&phone)[0].0, three);
-
     std::fs::remove_file(state.join("hub/relay.json")).unwrap();
-    let four = relay::relay(&state, &second, at + 3 + HEARTBEAT).unwrap().posted.unwrap();
-    assert!(four > three, "a lost relay.json never rolls the revision back: {four} after {three}");
-    assert_eq!(hub.boards(&phone)[0].0, four);
+    let three = relay::relay(&state, &second, at + 3).unwrap().posted.unwrap();
+    assert!(three > two, "a lost relay.json never rolls the revision back: {three} after {two}");
+    assert_eq!(hub.boards(&mut browser)[0].0, three);
+}
+
+#[test]
+fn an_unchanged_board_is_posted_again_well_within_the_day_a_board_lives() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
+    let board = board_of(&[asking("refunds", "greenhouse")]);
+    let at = now();
+    let identity = identity::load(&state).unwrap().unwrap();
+    let sealed = relay::seal_board(&identity, &board, 1, at).unwrap();
+    assert!(sealed.header.exp - sealed.header.at <= Kind::Board.max_ttl(), "the hub refuses a board meant to live longer than a day");
+    assert!(HEARTBEAT * 60 <= Kind::Board.max_ttl(), "a sleeping-but-alive machine reposts many times within a board's day");
+    let one = relay::relay(&state, &board, at).unwrap().posted.unwrap();
+    assert_eq!(relay::relay(&state, &board, at + HEARTBEAT - 1).unwrap().posted, None);
+    let two = relay::relay(&state, &board, at + HEARTBEAT).unwrap().posted.expect("the heartbeat posts the same board so the web app sees the machine awake");
+    assert!(two > one);
+    assert_eq!(hub.boards(&mut browser)[0].0, two);
+}
+
+#[test]
+fn a_machine_connected_by_a_typed_code_posts_no_board_and_says_to_reconnect_from_the_link() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected(&hub, &mut browser);
+    assert!(identity::load(&state).unwrap().unwrap().account.is_none());
+    assert_eq!(relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap(), relay::Outcome::default(), "no board nobody can read");
+    let read = hub.runtime.block_on(browser.boards()).unwrap();
+    assert!(read.len() == 1 && read[0].rev.is_none(), "the hub holds no board of it: {read:?}");
+    let shown = super::status_text(&state, Some("mac"), now()).unwrap();
+    assert!(shown.contains("account:  none, so no browser can read this machine's board") && shown.contains("connect it from the link: kebbie hub leave, then kebbie hub connect"), "{shown}");
+    let (sent, said) = super::board_line(&relay::load(&state), false, now());
+    assert!(sent == super::Sent::Failed && said.contains("kebbie hub leave, then kebbie hub connect"), "{said}");
+    let check = super::doctor(&state, Some("mac"), now(), |_| Ok(()));
+    assert!(check.level == crate::doctor::Level::Warn && check.fact.contains("no account key") && check.fix == ["kebbie hub leave, then kebbie hub connect, and open the link it shows"], "{} {:?}", check.fact, check.fix);
+}
+
+#[test]
+fn an_account_key_the_browser_did_not_commit_to_with_the_machines_secret_is_refused_and_nothing_is_pinned() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = crate::sh::test_dir("hub-mismatch");
+    let mut pending = super::connect::start(&hub.url, "mac").unwrap();
+    let link = pending.link();
+    let (before, secret) = link.split_once("#k=").unwrap();
+    let swapped = if secret.starts_with('A') { "B" } else { "A" };
+    let approval = hub.runtime.block_on(browser.approve_connect(&format!("{before}#k={swapped}{}", &secret[1..]), true)).unwrap();
+    let answer = pending.wait(&mut |_| true).unwrap();
+    let machine = std::thread::spawn(move || super::connect::finish(&state, &pending, &answer, None, || Ok(()), now()).map(|finished| (finished, state)));
+    assert!(hub.runtime.block_on(browser.hand_off(approval, WAIT)).is_err(), "the browser sees the machine refuse");
+    let (finished, state) = machine.join().unwrap().unwrap();
+    let remark = finished.remark.unwrap();
+    assert!(remark.starts_with("No board goes out: the hub handed over an account key the browser did not commit to; nothing was pinned; start again with kebbie hub leave, then kebbie hub connect"), "{remark}");
+    assert!(identity::load(&state).unwrap().unwrap().account.is_none());
 }
 
 #[test]
@@ -214,15 +287,17 @@ fn a_notice_fits_one_push_and_names_no_task_in_its_header() {
 }
 
 #[test]
-fn leaving_takes_the_phone_off_the_board_and_forgets_the_keys() {
-    let hub = TestHub::start();
-    let state = hub.joined("mac");
+fn leaving_takes_the_paired_phone_off_the_machine_and_forgets_the_keys() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
     let phone = hub.pair(&state, true).2;
+    let machine = identity::load(&state).unwrap().unwrap().machine;
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
-    assert_eq!(hub.boards(&phone).len(), 1);
+    assert_eq!(hub.boards(&mut browser).len(), 1);
     let left = super::leave(&state).unwrap();
     assert!(left.contains("This machine left") && left.contains("remove-machine"), "{left}");
-    assert!(hub.runtime.block_on(phone.boards()).unwrap().is_empty(), "the phone no longer gets this machine's board");
+    assert!(!hub.hub.store().admitting_machines(phone.device.as_ref().unwrap()).unwrap().contains(&machine), "the phone gets no more notices from this machine");
     assert!(identity::load(&state).unwrap().is_none() && !state.join("hub").exists());
 }
 
@@ -277,42 +352,41 @@ fn pointed_at(state: &Path, url: &str) {
 
 #[test]
 fn a_hub_that_moved_port_is_followed_with_the_same_method_and_body_and_kept() {
-    let hub = TestHub::start();
+    let hub = open_hub(|_| {});
     let old = moved_to(&hub.url);
     let state = crate::sh::test_dir("hub-moved");
     let joined = super::join(&state, &old, &hub.hub.mint_join_code().unwrap(), "mac", now()).unwrap();
     assert_eq!(joined.url, hub.url, "a join posted through a 308 reached the hub with its body, and the new address is kept");
 
-    let mut kept = identity::load(&state).unwrap().unwrap();
-    kept.url = old.clone();
-    identity::save(&state, &kept).unwrap();
-    let phone = hub.pair(&state, true).2;
+    let mut browser = member(&hub);
+    let state = connected_at(&hub, &old, &mut browser);
+    assert_eq!(identity::load(&state).unwrap().unwrap().url, hub.url, "connecting and pinning through the old port moves it");
+    pointed_at(&state, &old);
+    hub.pair(&state, true).0.unwrap();
     assert_eq!(identity::load(&state).unwrap().unwrap().url, hub.url, "pairing through the old port moves it too");
 
-    let mut kept = identity::load(&state).unwrap().unwrap();
-    kept.url = old;
-    identity::save(&state, &kept).unwrap();
+    pointed_at(&state, &old);
     let rev = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().posted.expect("a board PUT through a 308 is stored");
-    assert_eq!(hub.boards(&phone)[0].0, rev);
+    assert_eq!(hub.boards(&mut browser)[0].0, rev);
     assert_eq!(identity::load(&state).unwrap().unwrap().url, hub.url);
 }
 
 #[test]
 fn doctor_says_whether_the_hub_is_joined_reachable_and_posting() {
-    let hub = TestHub::start();
+    let hub = open_hub(|_| {});
     let alone = crate::sh::test_dir("hub-doctor-none");
     let check = super::doctor(&alone, Some("mac"), now(), |_| Ok(()));
     assert_eq!(check.level, crate::doctor::Level::Ok);
     assert!(check.fact.contains("not connected") && check.fact.contains("kebbie hub connect"), "{}", check.fact);
-    let state = hub.joined("mac");
-    let lonely = super::doctor(&state, Some("mac"), now(), super::reach);
+    let lonely = super::doctor(&hub.joined("mac"), Some("mac"), now(), super::reach);
     assert_eq!(lonely.level, crate::doctor::Level::Warn);
-    assert!(lonely.fact.contains("no phone paired") && lonely.fix == ["kebbie hub add-device"], "{}", lonely.fact);
-    hub.pair(&state, true).0.unwrap();
+    assert!(lonely.fact.contains("no account key") && lonely.fact.contains("no browser can read this machine's board"), "{}", lonely.fact);
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
     let posting = super::doctor(&state, Some("mac"), now(), super::reach);
     assert_eq!(posting.level, crate::doctor::Level::Ok, "{}", posting.fact);
-    assert!(posting.fact.contains(&hub.url) && posting.fact.contains("1 paired") && posting.fact.contains("board rev ") && posting.fact.contains(" posted "), "{}", posting.fact);
+    assert!(posting.fact.contains(&hub.url) && posting.fact.contains("account key pinned") && posting.fact.contains("board rev ") && posting.fact.contains(" posted "), "{}", posting.fact);
     let down = super::doctor(&state, Some("mac"), now(), |_| Err("connection refused".to_string()));
     assert!(down.level == crate::doctor::Level::Warn && down.fact.contains("not reachable: connection refused"), "{}", down.fact);
     assert!(super::config_line(Some(&state)).starts_with(&format!("hub.connected = {:?}  (kebbie hub connect)", hub.url)));
@@ -342,9 +416,9 @@ fn the_keeper_posts_the_board_and_an_open_board_does_when_it_is_off() {
 
 #[test]
 fn a_redirect_to_another_host_is_refused_until_the_user_moves_the_hub() {
-    let hub = TestHub::start();
-    let state = hub.joined("mac");
-    let phone = hub.pair(&state, true).2;
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
     let port = hub.url.rsplit(':').next().unwrap();
     let elsewhere = moved_to(&format!("http://localhost:{port}"));
     let mut kept = identity::load(&state).unwrap().unwrap();
@@ -353,7 +427,7 @@ fn a_redirect_to_another_host_is_refused_until_the_user_moves_the_hub() {
     let refused = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap_err();
     assert!(refused.contains(&format!("the hub points to http://localhost:{port}")) && refused.contains("kebbie hub move"), "{refused}");
     assert_eq!(identity::load(&state).unwrap().unwrap().url, elsewhere, "the stored address stays");
-    assert!(hub.boards(&phone).is_empty(), "nothing reached the hub");
+    assert!(hub.boards(&mut browser).is_empty(), "nothing reached the hub");
     let fresh = crate::sh::test_dir("hub-elsewhere");
     let join = super::join(&fresh, &elsewhere, &hub.hub.mint_join_code().unwrap(), "mac", now()).err().unwrap();
     assert!(join.contains("the hub points to"), "the join code never follows to another host: {join}");
@@ -365,7 +439,7 @@ fn a_redirect_to_another_host_is_refused_until_the_user_moves_the_hub() {
     assert!(moved.contains(&format!("to {}", hub.url)), "{moved}");
     assert_eq!(identity::load(&state).unwrap().unwrap().url, hub.url);
     let rev = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().posted.unwrap();
-    assert_eq!(hub.boards(&phone)[0].0, rev);
+    assert_eq!(hub.boards(&mut browser)[0].0, rev);
 }
 
 fn reported_bug(state: &Path) -> String {
@@ -520,13 +594,13 @@ fn a_join_never_writes_the_machine_name_through_a_linked_config_toml() {
 
 #[test]
 fn a_name_set_after_joining_renames_the_machine_on_the_hub_and_a_failure_shows_until_it_works() {
-    let hub = TestHub::start();
-    let state = hub.joined("mac");
-    let phone = hub.pair(&state, true).2;
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
     super::sync_name(&state, Some("studio")).unwrap();
     assert_eq!(identity::load(&state).unwrap().unwrap().name, "studio");
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
-    let names: Vec<String> = hub.runtime.block_on(phone.boards()).unwrap().into_iter().map(|entry| entry.name).collect();
+    let names: Vec<String> = hub.runtime.block_on(browser.boards()).unwrap().into_iter().map(|entry| entry.name).collect();
     assert_eq!(names, ["studio"]);
     assert!(!super::status_text(&state, Some("studio"), now()).unwrap().contains("name:"));
 
@@ -603,7 +677,7 @@ fn a_phone_paired_while_the_rename_is_on_its_way_is_kept() {
     let pairing = state.clone();
     let url = serving(move |_| {
         let mut paired = identity::load(&pairing).unwrap().unwrap();
-        paired.admit(identity::Device { id: Id::new(kebbie_hub_protocol::Prefix::Device).unwrap(), keys: kebbie_hub_protocol::SecretKeys::generate().public(), paired_at: now(), label: None });
+        paired.admit(identity::Device { id: Id::new(kebbie_hub_protocol::Prefix::Device).unwrap(), keys: kebbie_hub_protocol::SecretKeys::generate().public(), paired_at: now() });
         identity::save(&pairing, &paired).unwrap();
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{\"name\":\"studio\"}".to_string()
     });
@@ -698,10 +772,8 @@ pub(crate) fn open_hub(configure: impl FnOnce(&mut Config)) -> TestHub {
     })
 }
 
-pub(crate) fn member(hub: &TestHub) -> kebbie_hub_fakes::browser::Browser {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let handle = format!("carl{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    let mut browser = kebbie_hub_fakes::browser::Browser::new(&hub.url, kebbie_hub::DEV_ORIGIN, &handle);
+pub(crate) fn member(hub: &TestHub) -> Browser {
+    let mut browser = Browser::new(&hub.url, kebbie_hub::DEV_ORIGIN);
     hub.runtime.block_on(browser.sign_up_with_invite(&hub.hub.mint_invite().unwrap())).unwrap();
     browser
 }
@@ -712,7 +784,7 @@ fn named_config(name: &str) -> PathBuf {
     config
 }
 
-fn connected(hub: &TestHub, browser: &mut kebbie_hub_fakes::browser::Browser) -> PathBuf {
+fn connected(hub: &TestHub, browser: &mut Browser) -> PathBuf {
     let state = crate::sh::test_dir("hub-connected");
     let mut pending = super::connect::start(&hub.url, "mac").unwrap();
     hub.runtime.block_on(browser.approve_connect(&pending.link(), false)).unwrap();
@@ -722,29 +794,34 @@ fn connected(hub: &TestHub, browser: &mut kebbie_hub_fakes::browser::Browser) ->
     state
 }
 
-pub(crate) fn connected_state(hub: &TestHub, browser: &mut kebbie_hub_fakes::browser::Browser) -> PathBuf {
-    let state = crate::sh::test_dir("hub-connected-device");
-    let mut pending = super::connect::start(&hub.url, "mac").unwrap();
+pub(crate) fn connected_state(hub: &TestHub, browser: &mut Browser) -> PathBuf {
+    connected_at(hub, &hub.url, browser)
+}
+
+fn connected_at(hub: &TestHub, url: &str, browser: &mut Browser) -> PathBuf {
+    let state = crate::sh::test_dir("hub-connected-account");
+    let mut pending = super::connect::start(url, "mac").unwrap();
     let approval = hub.runtime.block_on(browser.approve_connect(&pending.link(), true)).unwrap();
     let answer = pending.wait(&mut |_| true).unwrap();
     let machine_state = state.clone();
     let machine = std::thread::spawn(move || super::connect::finish(&machine_state, &pending, &answer, None, || Ok(()), now()));
-    hub.runtime.block_on(browser.show_board(approval, WAIT)).unwrap();
-    machine.join().unwrap().unwrap();
+    hub.runtime.block_on(browser.hand_off(approval, WAIT)).unwrap();
+    assert_eq!(machine.join().unwrap().unwrap().remark, None);
     state
 }
 
 #[test]
 fn status_names_each_device_with_when_it_was_paired_and_seen_and_whether_it_has_notifications() {
     let hub = open_hub(|_| {});
-    let mut browser = member(&hub);
-    let state = connected_state(&hub, &mut browser);
-    let device = browser.device.as_ref().unwrap().device.clone().unwrap();
+    let state = hub.joined("mac");
+    let phone = hub.pair(&state, true).2;
+    hub.runtime.block_on(phone.rename("iPhone")).unwrap();
+    let device = phone.device.clone().unwrap();
     hub.hub.store().subscribe_push(&device, "https://push.example/one", &[4; 65], &[1; 16], now()).unwrap();
     super::devices::fetch(&state, now()).unwrap();
     let shown = super::status_text(&state, Some("mac"), now()).unwrap();
     let line = shown.lines().find(|line| line.starts_with("device:")).unwrap();
-    assert!(line.starts_with("device:   browser · paired today · seen ") && line.ends_with(&format!(" ago · notifications on ({device})")), "{shown}");
+    assert!(line.starts_with("device:   iPhone · paired today · seen ") && line.ends_with(&format!(" ago · notifications on ({device})")), "{shown}");
 
     let listed = super::devices::fetch(&crate::sh::test_dir("hub-not-joined"), now());
     assert!(listed.unwrap_err().contains("not connected"));
@@ -757,37 +834,36 @@ fn status_names_each_device_with_when_it_was_paired_and_seen_and_whether_it_has_
     assert_eq!(kept.devices.len(), 1, "the last list stays when the hub does not answer");
     assert!(kept.error.as_deref().is_some_and(|error| error.contains("could not reach the hub")));
     let shown = super::status_text(&down, Some("mac"), now() + 120).unwrap();
-    assert!(shown.contains("browser · paired today") && shown.contains("names and last reads as of 2 min ago; the hub did not list them"), "{shown}");
+    assert!(shown.contains("iPhone · paired today") && shown.contains("names and last reads as of 2 min ago; the hub did not list them"), "{shown}");
 }
 
 #[test]
-fn remove_device_takes_one_device_off_this_machine_by_name_and_it_keeps_the_other_machines_board() {
+fn remove_device_takes_one_device_off_this_machine_by_name_and_the_other_machine_keeps_it() {
     let hub = open_hub(|_| {});
-    let mut browser = member(&hub);
-    let mac = connected_state(&hub, &mut browser);
-    let studio = connected_state(&hub, &mut browser);
-    let device = browser.device.as_ref().unwrap().device.clone().unwrap();
-    relay::relay(&mac, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
-    relay::relay(&studio, &board_of(&[asking("search", "greenhouse")]), now()).unwrap();
-    assert_eq!(hub.runtime.block_on(browser.device.as_ref().unwrap().boards()).unwrap().len(), 2);
+    let mac = hub.joined("mac");
+    let studio = hub.joined("studio");
+    let mut phone = PhoneState::new(&hub.url);
+    hub.pair_phone(&mac, &mut phone, true).0.unwrap();
+    hub.pair_phone(&studio, &mut phone, true).0.unwrap();
+    hub.runtime.block_on(phone.rename("iPhone")).unwrap();
+    let device = phone.device.clone().unwrap();
 
     let identity = identity::load(&mac).unwrap().unwrap();
     let listed = super::devices::fetch(&mac, now()).unwrap();
     let unknown = super::devices::find(&listed, &identity.devices, "iPad").unwrap_err();
-    assert_eq!(unknown, "no device named \"iPad\"; this machine's devices are browser");
-    assert_eq!(super::devices::find(&listed, &identity.devices, "BROWSER").unwrap(), device, "a name matches whatever its case");
+    assert_eq!(unknown, "no device named \"iPad\"; this machine's devices are iPhone");
+    assert_eq!(super::devices::find(&listed, &identity.devices, "IPHONE").unwrap(), device, "a name matches whatever its case");
     assert_eq!(super::devices::find(&listed, &identity.devices, device.as_str()).unwrap(), device, "and so does the id");
     let said = super::devices::remove(&mac, &device).unwrap();
-    assert_eq!(said, "Removed browser; it no longer sees this board.");
-    assert!(identity::load(&mac).unwrap().unwrap().devices.is_empty(), "the machine stops sealing to it");
+    assert_eq!(said, "Removed iPhone; it gets no more notices from this machine.");
+    assert!(identity::load(&mac).unwrap().unwrap().devices.is_empty(), "the machine stops sealing notices to it");
     assert!(super::devices::load(&mac).devices.is_empty());
-    let boards = hub.runtime.block_on(browser.device.as_ref().unwrap().boards()).unwrap();
-    assert_eq!(boards.iter().map(|board| board.machine.clone()).collect::<Vec<_>>(), [identity::load(&studio).unwrap().unwrap().machine], "the other machine's board stays");
-    assert_eq!(super::devices::remove(&mac, &device).unwrap(), format!("Removed device {}; it no longer sees this board.", super::devices::short(&device)), "a device the hub no longer lists is gone already");
+    assert_eq!(super::devices::fetch(&studio, now()).unwrap().devices.iter().map(|known| known.device.clone()).collect::<Vec<_>>(), std::slice::from_ref(&device), "the other machine still admits it");
+    assert_eq!(super::devices::remove(&mac, &device).unwrap(), format!("Removed device {}; it gets no more notices from this machine.", super::devices::short(&device)), "a device the hub no longer lists is gone already");
 }
 
 #[test]
-fn a_machine_connects_through_the_browser_which_then_shows_its_board_without_digits() {
+fn a_machine_connects_through_the_browser_which_hands_over_the_account_key_without_digits() {
     let hub = open_hub(|_| {});
     let config = named_config("mac");
     let state = crate::sh::test_dir("hub-connect");
@@ -800,21 +876,19 @@ fn a_machine_connects_through_the_browser_which_then_shows_its_board_without_dig
     assert_eq!(shown.name, "mac");
     let approval = hub.runtime.block_on(browser.approve_connect(&link, true)).unwrap();
     let answer = pending.wait(&mut |_| panic!("an approved connect answers the first poll")).unwrap();
-    assert!(answer.pairing.is_some(), "the token answer names the browser's pairing");
+    assert!(answer.pairing.is_some(), "the token answer names the account handoff");
     let machine_state = state.clone();
     let machine = std::thread::spawn(move || super::connect::finish(&machine_state, &pending, &answer, None, || Ok(()), now()));
-    let paired = hub.runtime.block_on(browser.show_board(approval, WAIT)).unwrap();
+    let paired = hub.runtime.block_on(browser.hand_off(approval, WAIT)).unwrap();
     let finished = machine.join().unwrap().unwrap();
-    assert_eq!((finished.identity.name.as_str(), finished.remark), ("mac", None), "the browser that approved it shows the board, so nothing more is said");
+    assert_eq!((finished.identity.name.as_str(), finished.remark), ("mac", None), "the account can read the board, so nothing more is said");
     assert_eq!(super::connect::name_line(&config, prepared, "mac"), None, "a configured name leaves config.toml alone");
     let identity = identity::load(&state).unwrap().unwrap();
     assert_eq!((identity.url.as_str(), identity.name.as_str(), identity.machine.clone()), (hub.url.as_str(), "mac", paired));
     assert!(identity.token().starts_with("khm_"));
-    let device = browser.device.as_ref().unwrap();
-    assert_eq!(identity.devices.iter().map(|known| (known.id.clone(), known.keys)).collect::<Vec<_>>(), [(device.device.clone().unwrap(), device.public())]);
+    assert_eq!(identity.account.map(|account| account.fingerprints), browser.account_key().map(|key| key.fingerprints()));
     let posted = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().posted.unwrap();
-    let boards = hub.runtime.block_on(device.boards()).unwrap();
-    assert_eq!(boards[0].rev, posted, "the browser reads the board the machine sealed to it");
+    assert_eq!(hub.boards(&mut browser)[0].0, posted, "the browser reads the board the machine sealed to the account");
     let again = super::connect::prepare(&state, &config, None, None).err().unwrap();
     assert!(again.contains("kebbie hub leave first"), "{again}");
 }
@@ -878,40 +952,8 @@ fn an_own_hub_is_tested_before_it_is_saved_once_and_never_through_a_linked_confi
     assert_eq!(std::fs::read_to_string(&shared).unwrap(), "[keeper]\nenabled = true\n");
 }
 
-fn add_device(hub: &TestHub, state: &Path, browser: &mut kebbie_hub_fakes::browser::Browser, phone_shows: impl Fn(&str) -> String + Send + 'static, answer: bool) -> (crate::sh::Result<Id>, Result<Id, PairError>) {
-    let (link_out, link_in) = mpsc::channel::<String>();
-    let (digits_out, digits_in) = mpsc::channel::<String>();
-    let machine_state = state.to_path_buf();
-    let machine = std::thread::spawn(move || {
-        super::pair::add_device(&machine_state, WAIT, |added| link_out.send(added.url.clone()).unwrap(), |digits| answer && digits_in.recv_timeout(WAIT).is_ok_and(|phone| phone == digits), None, now())
-    });
-    let link = link_in.recv_timeout(WAIT).unwrap();
-    assert!(link.starts_with("http://localhost:8470/add?code="), "{link}");
-    let phone = hub.runtime.block_on(browser.add_this_phone(&link, WAIT, async move |digits: String| {
-        let _ = digits_out.send(phone_shows(&digits));
-        true
-    }));
-    (machine.join().unwrap(), phone)
-}
-
 #[test]
-fn a_device_added_from_the_machine_is_admitted_only_on_the_users_y_to_matching_digits() {
-    let hub = open_hub(|_| {});
-    let mut browser = member(&hub);
-    let state = connected(&hub, &mut browser);
-    let (declined, _) = add_device(&hub, &state, &mut browser, |digits| digits.to_string(), false);
-    assert!(declined.unwrap_err().contains("the digits did not match"));
-    let (differ, _) = add_device(&hub, &state, &mut browser, |_| "000000".to_string(), true);
-    assert!(differ.unwrap_err().contains("nothing was paired"), "digits that differ admit nothing, whatever the phone tapped");
-    assert!(identity::load(&state).unwrap().unwrap().devices.is_empty());
-    let (added, phone) = add_device(&hub, &state, &mut browser, |digits| digits.to_string(), true);
-    let device = added.unwrap();
-    assert_eq!(phone.unwrap(), identity::load(&state).unwrap().unwrap().machine);
-    assert_eq!(identity::load(&state).unwrap().unwrap().devices.iter().map(|known| known.id.clone()).collect::<Vec<_>>(), [device]);
-}
-
-#[test]
-fn a_lapsed_plan_is_said_on_status_doctor_and_add_device_and_nothing_local_stops() {
+fn a_lapsed_plan_is_said_on_status_doctor_and_pair_and_nothing_local_stops() {
     const BILLING: &str = "https://billing.example.com/start";
     let hub = open_hub(|config| {
         config.plans = true;
@@ -920,9 +962,7 @@ fn a_lapsed_plan_is_said_on_status_doctor_and_add_device_and_nothing_local_stops
     let mut browser = member(&hub);
     let account = hub.runtime.block_on(browser.account()).unwrap().account;
     hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Active, None).unwrap();
-    let state = connected(&hub, &mut browser);
-    let (added, _) = add_device(&hub, &state, &mut browser, |digits| digits.to_string(), true);
-    added.unwrap();
+    let state = connected_state(&hub, &mut browser);
     hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Inactive, None).unwrap();
     let said = format!("Your kebbie hub subscription isn't active: {BILLING}");
     let failed = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap_err();
@@ -931,9 +971,9 @@ fn a_lapsed_plan_is_said_on_status_doctor_and_add_device_and_nothing_local_stops
     assert!(super::status_text(&state, Some("mac"), now()).unwrap().contains(&said));
     let check = super::doctor(&state, Some("mac"), now(), |_| Ok(()));
     assert!(check.level == crate::doctor::Level::Warn && check.fact.contains(&said) && check.fix[0].contains("keeps working"), "{}", check.fact);
-    let refused = super::pair::add_device(&state, WAIT, |_| panic!("no link without a plan"), |_| true, None, now()).unwrap_err();
+    let refused = super::pair::pair(&state, WAIT, |_| panic!("no code without a plan"), |_| true, now()).unwrap_err();
     assert_eq!(refused, said);
-    assert_eq!(identity::load(&state).unwrap().unwrap().devices.len(), 1, "the paired device stays");
+    assert!(identity::load(&state).unwrap().unwrap().account.is_some(), "the pinned account stays");
     hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Active, None).unwrap();
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now() + HEARTBEAT).unwrap();
     assert_eq!(relay::load(&state).plan_inactive, None, "a post that goes through clears it");
@@ -1078,11 +1118,11 @@ fn connect_names_the_machine_after_the_hub_then_draws_the_card_and_ends_on_the_c
     assert!(shown.contains(&format!("│  {}   Connect {host} to your own hub", code_rows[0])), "the title on the code's first row");
     assert!(shown.contains("\x1b[J"), "the card is drawn again in place when it changes");
     let done = shown.rsplit("\x1b[J").next().unwrap();
-    for line in [format!("│  ✓  {host} is connected to {address}"), "│     Sign in with your passkey on any phone or browser".to_string(), format!("│     to see its board:  {address}")] {
+    for line in [format!("│  ✓  {host} is connected to {address}"), "│     No browser can read its board; connect it from the link:".to_string(), "│     kebbie hub leave, then kebbie hub connect".to_string()] {
         assert!(done.contains(&line), "{line}: {done}");
     }
     assert!(done.lines().nth(1).is_some_and(|line| line.starts_with('╭')) && !done.contains("Waiting"), "the connected card replaces the waiting one: {done}");
     assert!(!shown.contains("carl"), "no account name anywhere");
-    assert!(said.contains("No browser shows its board yet: kebbie hub add-device adds your phone.") && said.contains(&format!("[machine] name = {host:?}")), "{said}");
+    assert!(said.contains("No board goes out: no browser can read this machine's board, as it holds no account key, which only connecting from the link kebbie hub connect shows hands over. Connect it from the link: kebbie hub leave, then kebbie hub connect, and open the link it shows.") && said.contains(&format!("[machine] name = {host:?}")), "{said}");
     assert_eq!(identity::load(&state).unwrap().unwrap().name, host);
 }

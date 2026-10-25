@@ -5,8 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- Connecting a machine from its link hands it your account's key: the machine checks the key against the link's secret, pins it, and seals every board to your account alone, so any phone or browser you sign in on with your passkey reads it, with nothing to add on the machine; kebbie hub status shows the account and its key's two fingerprints
+- A machine approved by its typed code, or joined with a join code, posts no board, and the card, the H window, kebbie hub status and kebbie doctor say to connect it from the link: kebbie hub leave, then kebbie hub connect
+- The board goes out at least once a minute while nothing changes, well within the day the hub keeps it, so an idle machine stays awake on the web and one really asleep shows as asleep
+- kebbie hub pair and remove-device are for devices that take notices; the board no longer goes to devices
 - Connecting a hub opens the browser only when you press ⏎, so you can read the card first
-- The hub's QR codes, for connecting and for adding a phone, are drawn small in the terminal's own colours, in octant blocks in Ghostty, kitty and WezTerm, which the iPhone camera reads as a code and not as text, and in braille elsewhere; KEBBIE_QR=octant or braille picks one, and in a narrow pane the code sits under the text
+- The hub's QR code for connecting is drawn small in the terminal's own colours, in octant blocks in Ghostty, kitty and WezTerm, which the iPhone camera reads as a code and not as text, and in braille elsewhere; KEBBIE_QR=octant or braille picks one, and in a narrow pane the code sits under the text
 - kebbie setup and kebbie hub connect pick the hub with ↑ ↓ and ⏎; k and o still choose at once
 - The hub window shows this machine on its hub with when the board last went out and where to sign in to see it; n renames this machine and l leaves the hub
 - Connecting a hub shows a card: a QR code, the code to check on the page, the time left, and c to copy the link

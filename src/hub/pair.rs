@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use kebbie_hub_api::{Bytes32, DeviceAdd, MAX_WAIT_SECONDS, PairingFailure, PairingOpened, PairingRefusal, PairingReply, PairingState, PairingView};
-use kebbie_hub_protocol::{ConnectSecret, Id, MachinePairing};
+use kebbie_hub_api::{Bytes32, MAX_WAIT_SECONDS, PairingFailure, PairingOpened, PairingRefusal, PairingReply, PairingState, PairingView};
+use kebbie_hub_protocol::{AccountFingerprints, ConnectSecret, Id, MachinePairing, pin_account};
 
 use super::http::{Client, HubError, LONG_POLL};
 use super::identity::{self, Device, Identity};
@@ -90,13 +90,44 @@ impl Run<'_> {
         if admitted.state != PairingState::Admitted {
             return Err(self.ended(&admitted));
         }
+        self.keep(state, |current| current.admit(Device { id: device.clone(), keys: device_keys, paired_at: now }))?;
+        Ok(device)
+    }
+
+    fn keep(&self, state: &Path, change: impl FnOnce(&mut Identity)) -> Result<()> {
         let mut current = identity::load(state)?.ok_or("this machine left the hub while pairing")?;
-        current.admit(Device { id: device.clone(), keys: device_keys, paired_at: now, label: None });
+        change(&mut current);
         if let Some(moved) = self.client.moved() {
             current.url = moved;
         }
-        identity::save(state, &current)?;
-        Ok(device)
+        identity::save(state, &current)
+    }
+
+    // The secret reached the browser past the hub, in the link's fragment, so only an account key that hashes with it to the commitment is pinned.
+    fn pin(&self, state: &Path, identity: &Identity, secret: &ConnectSecret, now: u64) -> Result<AccountFingerprints> {
+        let committed = self.next(PairingState::Open)?;
+        if committed.state != PairingState::Committed {
+            return Err(self.ended(&committed));
+        }
+        let commitment = committed.commitment.ok_or("the hub left out the browser's commitment")?;
+        self.client.post::<_, PairingView>(&format!("{}/reply", self.path), &PairingReply { keys: identity.public(), nonce: Bytes32(identity::random32()?) }).map_err(hub_error)?;
+        let revealed = self.next(PairingState::Replied)?;
+        if revealed.state != PairingState::Revealed {
+            return Err(self.ended(&revealed));
+        }
+        let key = revealed.account_key.ok_or("the hub left out the account's key")?;
+        let nonce = revealed.account_nonce.ok_or("the hub left out the account's nonce")?;
+        let named = committed.account.as_ref().is_none_or(|account| *account == key.account);
+        let Some(fingerprints) = pin_account(&commitment.0, &key, &nonce.0, &secret.pairing_code()).ok().filter(|_| named) else {
+            refuse(&self.client, &self.path, PairingFailure::Mismatch)?;
+            return Err(format!("the hub handed over an account key the browser did not commit to; nothing was pinned; start again with {}", self.again));
+        };
+        let admitted: PairingView = self.client.post(&format!("{}/admit", self.path), &serde_json::Value::Null).map_err(hub_error)?;
+        if admitted.state != PairingState::Admitted {
+            return Err(self.ended(&admitted));
+        }
+        self.keep(state, |current| current.pin(key, now))?;
+        Ok(fingerprints)
     }
 }
 
@@ -115,18 +146,9 @@ pub fn pair(state: &Path, timeout: Duration, show_code: impl FnOnce(&str), confi
     run(&identity, &opened.pairing, timeout, None, "kebbie hub pair").finish(state, &identity, &opened.code, confirm, now)
 }
 
-// The phone's own tap goes through the hub, so only the user's answer here admits it.
-pub fn add_device(state: &Path, timeout: Duration, show: impl FnOnce(&DeviceAdd), confirm: impl FnOnce(&str) -> bool, stop: Stop, now: u64) -> Result<Id> {
+pub fn pin(state: &Path, pairing: &str, secret: &ConnectSecret, timeout: Duration, stop: Stop, now: u64) -> Result<AccountFingerprints> {
     let identity = joined(state)?;
-    let added: DeviceAdd = Client::new(&identity.url, Some(identity.token()), LONG_POLL).post("/v1/m/devices/add", &serde_json::Value::Null).map_err(hub_error)?;
-    show(&added);
-    run(&identity, &added.pairing, timeout, stop, "kebbie hub add-device").finish(state, &identity, &added.code, confirm, now)
-}
-
-// The secret reached the browser past the hub, in the link's fragment, so only a reveal that hashes with it to the commitment is admitted.
-pub fn admit_browser(state: &Path, pairing: &str, secret: &ConnectSecret, timeout: Duration, stop: Stop, now: u64) -> Result<Id> {
-    let identity = joined(state)?;
-    run(&identity, pairing, timeout, stop, "kebbie hub add-device").finish(state, &identity, &secret.pairing_code(), |_| true, now)
+    run(&identity, pairing, timeout, stop, "kebbie hub leave, then kebbie hub connect").pin(state, &identity, secret, now)
 }
 
 #[cfg(test)]

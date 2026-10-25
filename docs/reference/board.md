@@ -276,12 +276,12 @@ Connected, it looks like this:
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-The first line names the machine by its name and the hub without its scheme. While `[machine] name` differs from the name the hub has, it shows the new name with `renaming on the hub…` until the keeper's next post renames it. The dot is green with how long ago the board went out, red with why it did not and how long ago on the line under it (a lapsed subscription with its link, a hub that can't be reached, or what the hub answered), and amber before the first post.
+The first line names the machine by its name and the hub without its scheme. While `[machine] name` differs from the name the hub has, it shows the new name with `renaming on the hub…` until the keeper's next post renames it. The dot is green with how long ago the board went out, red with why it did not and how long ago on the line under it (a lapsed subscription with its link, a hub that can't be reached, or what the hub answered), and amber before the first post. A machine that holds no account key, because it was approved by its typed code or joined with a join code, posts no board: the dot is red, the line under it says no browser can read the board, and in place of where to sign in the window says to connect it from the link, `kebbie hub leave`, then `kebbie hub connect`.
 
 | Key | Action |
 | --- | --- |
 | `n` | Rename this machine: the field holds `[machine] name`, and `⏎` writes it to `config.toml` (checked as [`machine.name`](configuration.md#keys) is). A `config.toml` that is a link is not written through; the window says where to set it. The keeper sends the new name to the hub on its next post. |
-| `l` | Leave the hub, after `y`: each device loses this machine's board, and the keys and the token go. The command is `kebbie hub leave`. |
+| `l` | Leave the hub, after `y`: the machine stops posting its board, its paired devices are taken off it, and the keys and the token go. The command is `kebbie hub leave`. |
 | `esc`, `q` | Close the window. |
 
 ## Areas page

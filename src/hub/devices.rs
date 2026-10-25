@@ -49,28 +49,16 @@ pub fn fetch(state: &Path, now: u64) -> Result<Listed> {
 
 pub const UNNAMED: &str = "Unnamed device";
 
-// This machine's own label wins over the name the device gave itself, as the hub has no way for a machine to rename a device.
-pub fn named(id: &Id, listed: &Listed, paired: &[identity::Device]) -> Option<String> {
-    paired.iter().find(|known| &known.id == id).and_then(|known| known.label.clone())
-        .or_else(|| listed.devices.iter().find(|known| &known.device == id).and_then(|known| known.name.clone()))
+pub fn named(id: &Id, listed: &Listed) -> Option<String> {
+    listed.devices.iter().find(|known| &known.device == id).and_then(|known| known.name.clone())
 }
 
 pub fn name_of(device: &AdmittedDevice) -> String {
     device.name.clone().unwrap_or_else(|| format!("{UNNAMED} {}", short(&device.device)))
 }
 
-fn called(id: &Id, listed: &Listed, paired: &[identity::Device]) -> String {
-    named(id, listed, paired).unwrap_or_else(|| format!("{UNNAMED} {}", short(id)))
-}
-
-#[allow(dead_code)]
-pub fn label(state: &Path, device: &Id, name: &str) -> Result<String> {
-    let mut identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kebbie hub connect first")?;
-    let known = identity.devices.iter_mut().find(|known| &known.id == device).ok_or("this machine has no such device")?;
-    let name = name.trim();
-    known.label = (!name.is_empty()).then(|| name.to_string());
-    identity::save(state, &identity)?;
-    Ok(if name.is_empty() { "Took this machine's name for the device off.".to_string() } else { format!("Named it {name} on this machine.") })
+fn called(id: &Id, listed: &Listed) -> String {
+    named(id, listed).unwrap_or_else(|| format!("{UNNAMED} {}", short(id)))
 }
 
 pub fn short(id: &Id) -> String {
@@ -84,11 +72,11 @@ pub fn find(listed: &Listed, paired: &[identity::Device], wanted: &str) -> Resul
         return Ok(device.id.clone());
     }
     let ids: Vec<&Id> = paired.iter().map(|device| &device.id).chain(listed.devices.iter().map(|device| &device.device).filter(|id| !paired.iter().any(|known| &known.id == *id))).collect();
-    let named: Vec<&Id> = ids.iter().copied().filter(|id| called(id, listed, paired).eq_ignore_ascii_case(wanted)).collect();
+    let named: Vec<&Id> = ids.iter().copied().filter(|id| called(id, listed).eq_ignore_ascii_case(wanted)).collect();
     match named.as_slice() {
         [device] => Ok((*device).clone()),
         [] => {
-            let known = ids.iter().map(|id| called(id, listed, paired)).collect::<Vec<_>>();
+            let known = ids.iter().map(|id| called(id, listed)).collect::<Vec<_>>();
             let known = if known.is_empty() { "this machine lists no devices".to_string() } else { format!("this machine's devices are {}", known.join(", ")) };
             Err(format!("no device named {wanted:?}; {known}"))
         }
@@ -99,7 +87,7 @@ pub fn find(listed: &Listed, paired: &[identity::Device], wanted: &str) -> Resul
 pub fn remove(state: &Path, device: &Id) -> Result<String> {
     let identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kebbie hub connect first")?;
     let mut listed = load(state);
-    let name = named(device, &listed, &identity.devices).unwrap_or_else(|| format!("device {}", short(device)));
+    let name = named(device, &listed).unwrap_or_else(|| format!("device {}", short(device)));
     match Client::new(&identity.url, Some(identity.token()), CALL).delete(&format!("/v1/m/devices/{device}")) {
         Ok(()) => {}
         Err(HubError::Status { status: 404, .. }) => {}
@@ -110,7 +98,7 @@ pub fn remove(state: &Path, device: &Id) -> Result<String> {
     identity::save(state, &current)?;
     listed.devices.retain(|known| &known.device != device);
     save(state, &listed)?;
-    Ok(format!("Removed {name}; it no longer sees this board."))
+    Ok(format!("Removed {name}; it gets no more notices from this machine."))
 }
 
 pub fn ago(at: u64, now: u64) -> String {
@@ -139,8 +127,4 @@ pub fn facts(device: &AdmittedDevice, now: u64) -> String {
         facts.push("notifications on".to_string());
     }
     facts.join(" · ")
-}
-
-pub fn added_name(state: &Path, device: &Id, now: u64) -> String {
-    fetch(state, now).ok().and_then(|listed| listed.devices.into_iter().find(|known| &known.device == device)).map_or_else(|| format!("device {}", short(device)), |known| name_of(&known))
 }

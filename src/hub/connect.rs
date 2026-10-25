@@ -1,4 +1,3 @@
-use std::io::IsTerminal;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -172,13 +171,13 @@ pub struct Finished {
 pub fn finish(state: &Path, pending: &Pending, connected: &Connected, stop: Stop, post: impl FnOnce() -> Result<()>, now: u64) -> Result<Finished> {
     let identity = pending.save(state, connected, now)?;
     let Some(pairing) = &connected.pairing else {
-        return Ok(Finished { identity, remark: Some("No browser shows its board yet: kebbie hub add-device adds your phone.".to_string()) });
+        return Ok(Finished { identity, remark: Some(format!("No board goes out: {}. Connect it from the link: {}, and open the link it shows.", super::UNREAD, super::RECONNECT)) });
     };
-    let remark = match pair::admit_browser(state, pairing, pending.secret(), pair::TIMEOUT, stop, now) {
+    let remark = match pair::pin(state, pairing, pending.secret(), pair::TIMEOUT, stop, now) {
         Ok(_) => post().err().map(|error| format!("The first board did not go out yet: {error}.")),
-        Err(error) => Some(format!("The browser that approved it was not added ({error}); kebbie hub add-device adds it.")),
+        Err(error) => Some(format!("No board goes out: {error}.")),
     };
-    Ok(Finished { identity, remark })
+    Ok(Finished { identity: identity::load(state)?.unwrap_or(identity), remark })
 }
 
 pub struct Prepared {
@@ -377,7 +376,7 @@ pub fn connect_on(console: &mut dyn Console, run: &Run) -> Result<String> {
     });
     console.keys(false)?;
     let finished = finish(run.state, &pending, &waited?, None, run.post, run.now)?;
-    let done = card::boxed(&card::connected_text(&finished.identity.name, &finished.identity.url, "its"), colour);
+    let done = card::boxed(&card::connected_text(&finished.identity.name, &finished.identity.url, "its", finished.identity.account.is_some()), colour);
     if live { drawn.draw(console, &[String::new()])? } else { console.write("\n")? };
     console.write(&format!("{}\n", done.join("\n")))?;
     let lines = [chosen.note, finished.remark, name_line(run.config, prepared, &pending.name)];
@@ -391,22 +390,6 @@ pub fn cli(state: &Path, config: &Path, given: Option<&str>, interactive: bool, 
     }
     let stdin = std::io::stdin();
     connect_on(&mut console::Lines { input: stdin.lock(), output: std::io::stdout() }, &run)
-}
-
-pub fn add_device_cli(state: &Path, interactive: bool, now: u64) -> Result<String> {
-    if !interactive {
-        return Err("kebbie hub add-device asks you to compare six digits with the phone, so it runs in your own terminal".to_string());
-    }
-    let device = pair::add_device(state, pair::TIMEOUT, |added| {
-        println!("On your phone or in a browser, open this link (or scan the code) and add it:\n{}", added.url);
-        let (glyphs, colour) = (qr::glyphs(), card::colour_for(std::io::stdout().is_terminal()));
-        for line in qr::lines(&added.url, glyphs).unwrap_or_default() {
-            println!("{}", card::paint(&vec![piece(line, card::Tone::Dots)], colour));
-        }
-        println!("Waiting for it (10 minutes)…");
-    }, super::ask_digits, None, now)?;
-    let posted = super::tick().err().map_or(String::new(), |error| format!(" The first board did not go out yet: {error}."));
-    Ok(format!("Added {}; it shows this machine's board from now on.{posted}", super::devices::added_name(state, &device, now)))
 }
 
 #[cfg(test)]

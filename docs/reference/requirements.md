@@ -47,7 +47,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `push block` | Inside a repo: whether its task worktrees get the push block. |
 | `docs` | Inside a repo: whether `docs.required` is on, and a suggestion to turn it on when `gh` says the repo is public on GitHub. Without `gh` or a GitHub remote the line is left out. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
-| `hub` | Whether the machine joined a kebbie hub; when it has, the hub's address and the machine's name, how many phones are paired and when the board last went out, warning when the hub does not answer, no phone is paired or the last post failed. |
+| `hub` | Whether the machine joined a kebbie hub; when it has, the hub's address and the machine's name, whether it pinned an account key and when the board last went out, warning when the hub does not answer, the machine holds no account key (so no browser can read its board) or the last post failed. |
 | `maintainers` | Whether error signals go to kebbie's maintainers (`report.signals`), when they last went and whether that failed, and what happens to kebbie's own bug reports (`report.text`); a warning while `"always"` is set but not armed. |
 | `reports` | With `report.inbox_token` set only: the reports endpoint, how many reports were filed here, the last fetch and its error, and how many reports wait in quarantine on the hub. |
 | `machine` | With the vault on or a hub connected only: the name the phone and the other machines on the vault see, a warning while `machine.name` is unset. |

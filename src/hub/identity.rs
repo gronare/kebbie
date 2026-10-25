@@ -2,7 +2,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use kebbie_hub_api::Bytes32;
-use kebbie_hub_protocol::{Id, PublicKeys, SecretKeys};
+use kebbie_hub_protocol::{AccountFingerprints, AccountKey, Id, PublicKeys, SecretKeys};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -16,8 +16,13 @@ pub struct Device {
     pub id: Id,
     pub keys: PublicKeys,
     pub paired_at: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Account {
+    pub key: AccountKey,
+    pub fingerprints: AccountFingerprints,
+    pub pinned_at: u64,
 }
 
 // The machine's keys and token never leave this file, so it has no Debug and nothing prints it.
@@ -34,9 +39,17 @@ pub struct Identity {
     #[serde(default)]
     pub devices: Vec<Device>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<Account>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rename_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rename_stopped: Option<String>,
+}
+
+impl Account {
+    pub fn prints(&self) -> (String, String) {
+        (format!("{:?}", Bytes32(self.fingerprints.signing)), format!("{:?}", Bytes32(self.fingerprints.encryption)))
+    }
 }
 
 pub fn dir(state: &Path) -> PathBuf {
@@ -56,7 +69,7 @@ pub fn random32() -> Result<[u8; 32]> {
 impl Identity {
     pub fn new(url: &str, machine: Id, name: &str, token: String, keys: &SecretKeys, now: u64) -> Result<Identity> {
         let (signing, encryption) = keys.to_bytes();
-        Ok(Identity { url: url.to_string(), machine, name: name.to_string(), token, signing: Bytes32(signing), encryption: Bytes32(encryption), collapse: Bytes32(random32()?), joined_at: now, devices: Vec::new(), rename_error: None, rename_stopped: None })
+        Ok(Identity { url: url.to_string(), machine, name: name.to_string(), token, signing: Bytes32(signing), encryption: Bytes32(encryption), collapse: Bytes32(random32()?), joined_at: now, devices: Vec::new(), account: None, rename_error: None, rename_stopped: None })
     }
 
     pub fn secret(&self) -> SecretKeys {
@@ -77,11 +90,13 @@ impl Identity {
         digest[..16].iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
-    pub fn admit(&mut self, mut device: Device) {
-        let label = self.devices.iter().find(|known| known.id == device.id).and_then(|known| known.label.clone());
-        device.label = device.label.or(label);
+    pub fn admit(&mut self, device: Device) {
         self.devices.retain(|known| known.id != device.id);
         self.devices.push(device);
+    }
+
+    pub fn pin(&mut self, key: AccountKey, now: u64) {
+        self.account = Some(Account { fingerprints: key.fingerprints(), key, pinned_at: now });
     }
 }
 

@@ -111,31 +111,29 @@ pub fn notices(board: &Board) -> Vec<Pending> {
     board.items.iter().filter_map(pending).collect()
 }
 
-fn recipients(identity: &Identity) -> Vec<(Id, PublicKeys)> {
+fn devices(identity: &Identity) -> Vec<(Id, PublicKeys)> {
     identity.devices.iter().map(|device| (device.id.clone(), device.keys)).collect()
 }
 
-// Who the board is sealed to counts, so a newly paired phone gets it while nothing on the board changed.
+// Who the board is sealed to counts, so a newly pinned account gets it while nothing on the board changed.
 pub fn fingerprint(board: &Board, identity: &Identity) -> String {
     let mut unrevised = board.clone();
     unrevised.rev = 0;
-    let devices: Vec<&str> = identity.devices.iter().map(|device| device.id.as_str()).collect();
-    hash(&format!("{}\n{}", serde_json::to_string(&unrevised).unwrap_or_default(), devices.join(",")))
+    let account = identity.account.as_ref().map(|account| account.prints().1).unwrap_or_default();
+    hash(&format!("{}\n{account}", serde_json::to_string(&unrevised).unwrap_or_default()))
 }
 
-fn sealed(identity: &Identity, payload: &Payload, header: Header, with_machine: bool) -> Result<Envelope> {
-    let mut to = recipients(identity);
-    if with_machine {
-        to.insert(0, (identity.machine.clone(), identity.public()));
-    }
-    seal(header, payload, &identity.secret(), &to).map_err(|error| error.to_string())
+fn sealed(identity: &Identity, payload: &Payload, header: Header, to: &[(Id, PublicKeys)]) -> Result<Envelope> {
+    seal(header, payload, &identity.secret(), to).map_err(|error| error.to_string())
 }
 
+// Only the account the machine pinned and the machine itself read a board, so a machine without one posts none.
 pub fn seal_board(identity: &Identity, board: &Board, rev: u64, now: u64) -> Result<Envelope> {
+    let account = identity.account.as_ref().ok_or_else(|| format!("No board goes out: {}", super::UNREAD))?;
     let mut board = board.clone();
     board.rev = rev;
     let header = Header::new(Id::new(Prefix::Board).map_err(|error| error.to_string())?, Kind::Board, identity.machine.clone(), identity.machine.clone(), now);
-    sealed(identity, &Payload::Board(board), header, true)
+    sealed(identity, &Payload::Board(board), header, &[(identity.machine.clone(), identity.public()), account.key.recipient()])
 }
 
 fn shortened(notice: &Notice, keep: usize) -> Notice {
@@ -161,7 +159,7 @@ pub fn seal_notice(identity: &Identity, pending: &Pending, board_rev: u64, now: 
         let mut header = Header::new(Id::new(Prefix::Notice).map_err(|error| error.to_string())?, Kind::Notice, identity.machine.clone(), identity.machine.clone(), now);
         header.urgency = Some(pending.urgency);
         header.collapse = notice.address.as_deref().map(|address| identity.collapse_tag(address));
-        let envelope = sealed(identity, &Payload::Notice(notice), header, false)?;
+        let envelope = sealed(identity, &Payload::Notice(notice), header, &devices(identity))?;
         if fits(identity, &envelope) {
             return Ok(envelope);
         }
@@ -187,10 +185,10 @@ fn keep_move(state: &Path, client: &Client) {
     }
 }
 
-// The heartbeat reposts an unchanged board, since the phone counts a machine silent for three minutes as asleep; a revision of at least the time keeps it rising when relay.json is lost, as the phone refuses one that goes back.
+// The heartbeat reposts an unchanged board, since the web app counts a machine silent for three minutes as asleep and the hub keeps a board a day at most; a revision of at least the time keeps it rising when relay.json is lost, as the web app refuses one that goes back.
 pub fn relay(state: &Path, board: &Board, now: u64) -> Result<Outcome> {
     let Some(identity) = identity::load(state)? else { return Ok(Outcome::default()) };
-    if identity.devices.is_empty() {
+    if identity.account.is_none() && identity.devices.is_empty() {
         return Ok(Outcome::default());
     }
     let mut relay = load(state);
@@ -198,7 +196,7 @@ pub fn relay(state: &Path, board: &Board, now: u64) -> Result<Outcome> {
     let mut outcome = Outcome::default();
     let print = fingerprint(board, &identity);
     let heartbeat_due = relay.posted_at.is_none_or(|at| now.saturating_sub(at) >= HEARTBEAT);
-    if relay.fingerprint.as_deref() != Some(print.as_str()) || heartbeat_due {
+    if identity.account.is_some() && (relay.fingerprint.as_deref() != Some(print.as_str()) || heartbeat_due) {
         let rev = (relay.rev + 1).max(now);
         let envelope = seal_board(&identity, board, rev, now)?;
         let stored: BoardStored = match client.put("/v1/m/board", &BoardUpload { rev, envelope }) {
@@ -221,7 +219,7 @@ pub fn relay(state: &Path, board: &Board, now: u64) -> Result<Outcome> {
         if relay.notices.contains_key(&pending.key) {
             continue;
         }
-        if relay.primed {
+        if relay.primed && !identity.devices.is_empty() {
             let envelope = match seal_notice(&identity, pending, relay.rev, now) {
                 Ok(envelope) => envelope,
                 Err(error) => {

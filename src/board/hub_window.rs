@@ -157,7 +157,7 @@ impl Window {
 
     fn leave(&mut self) {
         let state = self.paths.state.clone();
-        self.view = View::Running(spawn("kebbie hub · leave the hub", "Taking your devices off and forgetting the keys…".to_string(), move |_, _| Event::Done(crate::hub::leave(&state))));
+        self.view = View::Running(spawn("kebbie hub · leave the hub", "Leaving and forgetting the keys…".to_string(), move |_, _| Event::Done(crate::hub::leave(&state))));
     }
 
     pub(super) fn poll(&mut self) {
@@ -490,7 +490,7 @@ fn overview(window: &Window, leaving: bool) -> Vec<Line<'static>> {
     let Ok(Some(joined)) = identity::load(&window.paths.state) else { return vec![muted("This machine is not connected."), keys(&[("any key", "close")])] };
     let now = crate::messages::now();
     let relay = relay::load(&window.paths.state);
-    let (sent, said) = board_line(&relay, !joined.devices.is_empty(), now);
+    let (sent, said) = board_line(&relay, joined.account.is_some(), now);
     let said = match (sent, relay.posted_at) {
         (Sent::Yes, Some(at)) => format!("board sent {}", devices::ago(at, now)),
         _ => said,
@@ -509,14 +509,14 @@ fn overview(window: &Window, leaving: bool) -> Vec<Line<'static>> {
         lines.push(text(format!("  {said}")));
     }
     if relay.plan_inactive.is_some() {
-        lines.push(muted("Everything here keeps working; your devices get the board again once it is active."));
+        lines.push(muted("Everything here keeps working; the board goes out again once it is active."));
     }
     lines.extend(window.told.iter().map(muted));
     lines.push(Line::default());
-    lines.extend(drawn(card::connected_text(&joined.name, &joined.url, "this").split_off(2).into_iter().map(|row| row.into_iter().map(|(said, kind)| (said.trim_start().to_string(), kind)).collect()).collect()));
+    lines.extend(drawn(card::connected_text(&joined.name, &joined.url, "this", joined.account.is_some()).split_off(2).into_iter().map(|row| row.into_iter().map(|(said, kind)| (said.trim_start().to_string(), kind)).collect()).collect()));
     lines.push(Line::default());
     if leaving {
-        lines.push(Line::from(Span::styled("Leave the hub? Your devices lose this board, and the keys go.", style(YELLOW))));
+        lines.push(Line::from(Span::styled("Leave the hub? This machine stops posting its board, and the keys go.", style(YELLOW))));
         lines.push(keys(&[("y", "leave the hub"), ("any other key", "keeps it")]));
     } else {
         lines.push(keys(&[("n", "rename"), ("l", "leave the hub"), ("esc", "close")]));
@@ -572,7 +572,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use kebbie_hub_protocol::{Id, Prefix, SecretKeys};
+    use kebbie_hub_protocol::{AccountKey, Id, Prefix, SecretKeys};
 
     use ratatui::style::Color;
 
@@ -631,10 +631,16 @@ mod tests {
     }
 
     fn joined(relay: relay::Relay) -> Paths {
+        joined_with(relay, true)
+    }
+
+    fn joined_with(relay: relay::Relay, pinned: bool) -> Paths {
         let paths = paths("[machine]\nname = \"mac\"\n");
         let now = crate::messages::now();
         let mut machine = identity::Identity::new("https://kebbie.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_test".to_string(), &SecretKeys::generate(), now).unwrap();
-        machine.admit(identity::Device { id: Id::new(Prefix::Device).unwrap(), keys: SecretKeys::generate().public(), paired_at: now, label: None });
+        if pinned {
+            machine.pin(AccountKey::new(Id::account([7; 16]), 1, SecretKeys::generate().public()).unwrap(), now);
+        }
         identity::save(&paths.state, &machine).unwrap();
         std::fs::write(identity::dir(&paths.state).join("relay.json"), serde_json::to_string(&relay).unwrap()).unwrap();
         paths
@@ -807,7 +813,7 @@ mod tests {
         assert_eq!(colour_of(&mut app, "● mac"), GREEN);
         press(&mut app, key(KeyCode::Char('l')));
         let shown = screen(&mut app, 110, 40);
-        assert!(shown.contains("Leave the hub? Your devices lose this board, and the keys go.") && shown.contains("y leave the hub · any other key keeps it"), "{shown}");
+        assert!(shown.contains("Leave the hub? This machine stops posting its board, and the keys go.") && shown.contains("y leave the hub · any other key keeps it"), "{shown}");
         press(&mut app, key(KeyCode::Char('x')));
         assert!(screen(&mut app, 110, 40).contains("l leave the hub · esc close"), "anything but y keeps it");
     }
@@ -834,6 +840,16 @@ mod tests {
         let mut app = opened(joined(relay::Relay::default()));
         assert!(screen(&mut app, 110, 40).contains("  Board not sent yet; the keeper sends it within a minute"));
         assert_eq!(colour_of(&mut app, "● mac"), YELLOW);
+    }
+
+    #[test]
+    fn a_machine_with_no_account_key_is_red_and_says_to_connect_it_from_the_link() {
+        let now = crate::messages::now();
+        let mut app = opened(joined_with(relay::Relay { posted_at: Some(now - 12), rev: 3, ..Default::default() }, false));
+        let shown = screen(&mut app, 110, 40);
+        assert!(shown.contains("Board not sent: no browser can read this machine's board") && shown.contains("No browser can read this board; connect it from the link:") && shown.contains("kebbie hub leave, then kebbie hub connect"), "{shown}");
+        assert!(!shown.contains("Sign in with your passkey") && !shown.contains("board sent"), "{shown}");
+        assert_eq!(colour_of(&mut app, "● mac"), RED);
     }
 
     #[test]
@@ -888,12 +904,12 @@ mod tests {
         let waiting = flow.card.clone().unwrap();
         assert!(screen(&mut app, 110, 50).contains(&format!("Check the page shows  {}", waiting.code)));
         let approval = hub.runtime.block_on(browser.approve_connect(&waiting.link, true)).unwrap();
-        hub.runtime.block_on(browser.show_board(approval, crate::hub::tests::WAIT)).unwrap();
+        hub.runtime.block_on(browser.hand_off(approval, crate::hub::tests::WAIT)).unwrap();
         until(&mut app, "the outcome", |window| matches!(window.view, View::Overview { .. }));
         let shown = screen(&mut app, 110, 50);
-        assert!(shown.contains(&format!("● mac on {}", host(&hub.url))) && shown.contains("n rename · l leave the hub"), "{shown}");
-        let device = browser.device.as_ref().unwrap().device.clone().unwrap();
-        assert_eq!(identity::load(state).unwrap().unwrap().devices[0].id, device);
+        assert!(shown.contains(&format!("● mac on {}", host(&hub.url))) && shown.contains("Sign in with your passkey on any phone or browser") && shown.contains("n rename · l leave the hub"), "{shown}");
+        let pinned = identity::load(state).unwrap().unwrap().account.map(|account| account.fingerprints);
+        assert_eq!(pinned, browser.account_key().map(|key| key.fingerprints()), "the machine pinned the account the browser handed over");
     }
 
 }

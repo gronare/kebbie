@@ -126,13 +126,16 @@ pub fn footer(link: &str, foot: Foot) -> Vec<Row> {
     rows
 }
 
-pub fn connected_text(name: &str, url: &str, whose: &str) -> Vec<Row> {
-    vec![
-        vec![piece("✓  ", Tone::Good), piece(format!("{name} is connected to {}", super::host(url)), Tone::Text)],
-        Vec::new(),
-        vec![piece("   Sign in with your passkey on any phone or browser", Tone::Text)],
-        vec![piece(format!("   to see {whose} board:  "), Tone::Text), piece(super::host(url), Tone::Title)],
-    ]
+pub fn connected_text(name: &str, url: &str, whose: &str, readable: bool) -> Vec<Row> {
+    let mut rows = vec![vec![piece("✓  ", Tone::Good), piece(format!("{name} is connected to {}", super::host(url)), Tone::Text)], Vec::new()];
+    if readable {
+        rows.push(vec![piece("   Sign in with your passkey on any phone or browser", Tone::Text)]);
+        rows.push(vec![piece(format!("   to see {whose} board:  "), Tone::Text), piece(super::host(url), Tone::Title)]);
+    } else {
+        rows.push(vec![piece(format!("   No browser can read {whose} board; connect it from the link:"), Tone::Text)]);
+        rows.push(vec![piece(format!("   {}", super::RECONNECT), Tone::Title)]);
+    }
+    rows
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -278,6 +281,7 @@ mod tests {
 
     #[test]
     fn the_connected_card_names_the_machine_and_the_hub_and_no_account() {
-        assert_eq!(plain(&connected_text("mac", DEFAULT_HUB_URL, "its")), ["✓  mac is connected to hub.kebbie.dev", "", "   Sign in with your passkey on any phone or browser", "   to see its board:  hub.kebbie.dev"]);
+        assert_eq!(plain(&connected_text("mac", DEFAULT_HUB_URL, "its", true)), ["✓  mac is connected to hub.kebbie.dev", "", "   Sign in with your passkey on any phone or browser", "   to see its board:  hub.kebbie.dev"]);
+        assert_eq!(plain(&connected_text("mac", DEFAULT_HUB_URL, "its", false)), ["✓  mac is connected to hub.kebbie.dev", "", "   No browser can read its board; connect it from the link:", "   kebbie hub leave, then kebbie hub connect"], "a machine with no account key says so instead of sending you to sign in");
     }
 }
