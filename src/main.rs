@@ -243,8 +243,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   sentence, best first; without, the docs index by section; never needs the network,
                                   and without the docs points at kebbie help and the docs online
   kebbie hub [status]             the hub this machine posts its board to, the account key it pinned with its two
-                                  fingerprints, its paired devices by name with when each was paired and last seen and
-                                  whether it has notifications on, and the last post
+                                  fingerprints, and the last post
   kebbie hub connect [--name <name>]
                                   connect this machine to a hub through your browser: [hub] url, or asks for the kebbie
                                   hub or your own (tested, then saved as [hub] url); then goes by [machine] name, which
@@ -253,20 +252,14 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   approve it there; the browser hands over your account's key, and the board is sealed
                                   to it, so any phone or browser you sign in on with your passkey reads it; the keeper
                                   posts it when it changes and every minute; H on the board does the same; yours only
-  kebbie hub remove-device <name|id>
-                                  stop sending this machine's notices to one paired device; it keeps those of your
-                                  other machines; yours only
   kebbie hub join <url> <code> [--name <name>]
                                   join a kebbie hub with a code from kebbie-hub admin join-code, for scripts: makes
                                   this machine's keys, kept in kebbie's state and never printed; it goes by [machine]
                                   name, which --name sets, or asks for it in a terminal (the short host name
                                   otherwise); yours only
-  kebbie hub pair                 pair a device that takes notices by a code typed on it, then six digits to compare
-                                  with the device's before it admits it; the keeper then sends it a notice when a task
-                                  needs you, asks, is ready to push or its CI fails; yours only, in your own terminal
   kebbie hub move <url>           the hub moved: post there once <url> answers as a hub; move only to a hub you run or trust;
                                   a redirect to another host is never followed by itself; yours only
-  kebbie hub leave                leave the hub: take each paired device off this machine and remove the keys and token
+  kebbie hub leave                leave the hub: remove this machine's keys, token and pinned account key
   kebbie doctor                   check that this machine has what kebbie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
                                   (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)

@@ -4,19 +4,11 @@ use std::path::{Path, PathBuf};
 use kebbie_hub_api::Bytes32;
 use kebbie_hub_protocol::{AccountFingerprints, AccountKey, Id, PublicKeys, SecretKeys};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::sh::Result;
 
 pub const DIR: &str = "hub";
 const FILE: &str = "identity.json";
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Device {
-    pub id: Id,
-    pub keys: PublicKeys,
-    pub paired_at: u64,
-}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Account {
@@ -34,10 +26,7 @@ pub struct Identity {
     token: String,
     signing: Bytes32,
     encryption: Bytes32,
-    collapse: Bytes32,
     pub joined_at: u64,
-    #[serde(default)]
-    pub devices: Vec<Device>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<Account>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,9 +56,9 @@ pub fn random32() -> Result<[u8; 32]> {
 }
 
 impl Identity {
-    pub fn new(url: &str, machine: Id, name: &str, token: String, keys: &SecretKeys, now: u64) -> Result<Identity> {
+    pub fn new(url: &str, machine: Id, name: &str, token: String, keys: &SecretKeys, now: u64) -> Identity {
         let (signing, encryption) = keys.to_bytes();
-        Ok(Identity { url: url.to_string(), machine, name: name.to_string(), token, signing: Bytes32(signing), encryption: Bytes32(encryption), collapse: Bytes32(random32()?), joined_at: now, devices: Vec::new(), account: None, rename_error: None, rename_stopped: None })
+        Identity { url: url.to_string(), machine, name: name.to_string(), token, signing: Bytes32(signing), encryption: Bytes32(encryption), joined_at: now, account: None, rename_error: None, rename_stopped: None }
     }
 
     pub fn secret(&self) -> SecretKeys {
@@ -82,17 +71,6 @@ impl Identity {
 
     pub fn token(&self) -> &str {
         &self.token
-    }
-
-    // An opaque tag per task, so a newer notice replaces the older one and the push service never learns the task's name.
-    pub fn collapse_tag(&self, address: &str) -> String {
-        let digest = Sha256::new().chain_update(b"kebbie collapse\0").chain_update(self.collapse.0).chain_update(address.as_bytes()).finalize();
-        digest[..16].iter().map(|byte| format!("{byte:02x}")).collect()
-    }
-
-    pub fn admit(&mut self, device: Device) {
-        self.devices.retain(|known| known.id != device.id);
-        self.devices.push(device);
     }
 
     pub fn pin(&mut self, key: AccountKey, now: u64) {
@@ -127,20 +105,15 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn the_identity_is_kept_private_and_its_collapse_tag_names_no_task() {
+    fn the_identity_is_kept_private() {
         let state = crate::sh::test_dir("hub-identity");
         let keys = SecretKeys::generate();
-        let identity = Identity::new("https://hub.example.com", Id::new(kebbie_hub_protocol::Prefix::Machine).unwrap(), "mac", "khm_secret".to_string(), &keys, 1).unwrap();
+        let identity = Identity::new("https://hub.example.com", Id::new(kebbie_hub_protocol::Prefix::Machine).unwrap(), "mac", "khm_secret".to_string(), &keys, 1);
         save(&state, &identity).unwrap();
         assert_eq!(std::fs::metadata(file(&state)).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(dir(&state)).unwrap().permissions().mode() & 0o777, 0o700);
         let loaded = load(&state).unwrap().unwrap();
         assert_eq!(loaded.public(), keys.public());
-        let tag = loaded.collapse_tag("refunds@greenhouse");
-        assert_eq!(tag.len(), 32);
-        assert_eq!(tag, loaded.collapse_tag("refunds@greenhouse"));
-        assert_ne!(tag, loaded.collapse_tag("search@greenhouse"));
-        assert!(!tag.contains("refunds"));
         forget(&state).unwrap();
         assert!(load(&state).unwrap().is_none());
     }

@@ -49,7 +49,6 @@ enum Method {
     Get,
     Post,
     Put,
-    Delete,
 }
 
 pub struct Client {
@@ -85,10 +84,6 @@ impl Client {
 
     pub fn put<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T, HubError> {
         parse(&self.send(Method::Put, path, Some(json(body)))?)
-    }
-
-    pub fn delete(&self, path: &str) -> Result<(), HubError> {
-        self.send(Method::Delete, path, None).map(|_| ())
     }
 
     pub fn reachable(&self) -> Result<(), HubError> {
@@ -128,8 +123,8 @@ impl Client {
     fn once(&self, method: Method, url: &str, body: Option<&[u8]>) -> Result<ureq::http::Response<ureq::Body>, HubError> {
         let bearer = self.token.as_ref().map(|token| format!("Bearer {token}"));
         let answer = match method {
-            Method::Get | Method::Delete => {
-                let request = if method == Method::Get { self.agent.get(url) } else { self.agent.delete(url) };
+            Method::Get => {
+                let request = self.agent.get(url);
                 match &bearer { Some(bearer) => request.header("authorization", bearer).call(), None => request.call() }
             }
             Method::Post | Method::Put => {

@@ -281,7 +281,7 @@ The first line names the machine by its name and the hub without its scheme. Whi
 | Key | Action |
 | --- | --- |
 | `n` | Rename this machine: the field holds `[machine] name`, and `⏎` writes it to `config.toml` (checked as [`machine.name`](configuration.md#keys) is). A `config.toml` that is a link is not written through; the window says where to set it. The keeper sends the new name to the hub on its next post. |
-| `l` | Leave the hub, after `y`: the machine stops posting its board, its paired devices are taken off it, and the keys and the token go. The command is `kebbie hub leave`. |
+| `l` | Leave the hub, after `y`: the machine stops posting its board, and the keys, the token and the account key go. The command is `kebbie hub leave`. |
 | `esc`, `q` | Close the window. |
 
 ## Areas page

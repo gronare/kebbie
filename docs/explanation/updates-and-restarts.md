@@ -85,8 +85,7 @@ When it is done, the window says what the update brought, under the title `kebbi
 │ ✓ Updated                                                  │
 │                                                            │
 │ What's new                                                 │
-│  • The hub window shows your devices by name, and r removes│
-│    one                                                     │
+│  • The hub window shows when the board last went out       │
 │ Fixed                                                      │
 │  • A bug you ran into: update stopped on a newer config key│
 │                                                            │

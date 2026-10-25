@@ -10,7 +10,7 @@ Each change a user would notice gets one line in `CHANGES.md`, under `## Unrelea
 ## Unreleased
 
 ### What's new
-- The hub window shows your devices by name, and r removes one
+- The hub window shows when the board last went out
 
 ### Fixed
 - Update no longer stops on a config key from a newer kebbie

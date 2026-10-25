@@ -14,7 +14,7 @@ kebbie lets you run many Claude Code sessions at once without losing track of th
 
 **The vault plugin, optional.** [notes-vault-mcp](https://github.com/gronare/notes-vault-mcp) keeps notes in a vault. When it is installed and enabled, kebbie finds it and uses it: each task gets a note, edits wait until the problem is written down, and pushes are logged. Without it, kebbie keeps its own state and loses nothing it needs to run. See [The vault](vault.md).
 
-**The hub, optional.** A [kebbie hub](https://github.com/gronare/kebbie-hub) relays each machine's board, sealed to the account that connected it, to any phone or browser signed in with that account's passkey, and takes kebbie's error signals and bug reports for its maintainers. The phone only reads: the hub cannot start anything on the machine. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md) and [What goes to the hub](trust-boundary.md#what-goes-to-the-hub).
+**The hub, optional.** A [kebbie hub](https://github.com/gronare/kebbie-hub) relays each machine's board, sealed to the account that connected it, to any phone or browser signed in with that account's passkey, and takes kebbie's error signals and bug reports for its maintainers. The phone only reads: the hub cannot start anything on the machine. Notifications through the hub are not available in this version. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md) and [What goes to the hub](trust-boundary.md#what-goes-to-the-hub).
 
 ## What a task is
 

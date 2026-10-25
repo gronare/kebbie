@@ -2,7 +2,6 @@ pub mod board;
 pub mod card;
 pub mod connect;
 pub mod console;
-pub mod devices;
 pub mod http;
 pub mod identity;
 pub mod inbox;
@@ -17,7 +16,7 @@ use std::io::Write;
 use std::path::Path;
 
 use kebbie_hub_api::{JoinRequest, Joined, MachineName};
-use kebbie_hub_protocol::{Kind, SecretKeys};
+use kebbie_hub_protocol::SecretKeys;
 
 use crate::doctor::{Check, Level};
 use crate::sh::Result;
@@ -28,9 +27,6 @@ pub const EVERY: u64 = 15;
 
 pub const UNREAD: &str = "no browser can read this machine's board, as it holds no account key, which only connecting from the link kebbie hub connect shows hands over";
 pub const RECONNECT: &str = "kebbie hub leave, then kebbie hub connect";
-
-// Polling the inbox marks queued commands delivered, so it stays unpolled until a kind listed here is applied through protocol::authorize.
-pub const ACCEPTS: &[Kind] = &[];
 
 fn loopback(host: &str) -> bool {
     let name = host.rsplit_once(':').filter(|(name, port)| !name.is_empty() && port.chars().all(|character| character.is_ascii_digit())).map_or(host, |(name, _)| name);
@@ -167,7 +163,7 @@ pub fn sync_name(state: &Path, configured: Option<&str>) -> Result<()> {
     if (&name, &error, &stopped) == (&identity.name, &identity.rename_error, &identity.rename_stopped) {
         return Ok(());
     }
-    // A pairing may have saved a device since the load above, so only the name fields are written over a fresh load.
+    // A connect may have pinned the account since the load above, so only the name fields are written over a fresh load.
     let Some(mut current) = identity::load(state)? else { return Ok(()) };
     current.name = name;
     current.rename_error = error;
@@ -195,9 +191,26 @@ pub fn join(state: &Path, url: &str, code: &str, name: &str, now: u64) -> Result
         Some(401) => "the hub refused that join code: it is used, expired or mistyped; mint a new one with kebbie-hub admin join-code".to_string(),
         _ => error.to_string(),
     })?;
-    let identity = Identity::new(&client.moved().unwrap_or(url), joined.machine, name, joined.token, &keys, now)?;
+    let identity = Identity::new(&client.moved().unwrap_or(url), joined.machine, name, joined.token, &keys, now);
     identity::save(state, &identity)?;
     Ok(identity)
+}
+
+pub fn since(at: u64, now: u64) -> String {
+    let seconds = now.saturating_sub(at);
+    match seconds {
+        0..60 => format!("{seconds} s ago"),
+        60..3600 => format!("{} min ago", seconds / 60),
+        3600..86_400 => format!("{} h ago", seconds / 3600),
+        _ => {
+            let day = |at: u64| (at as i64 + crate::routines::local_offset(at)).div_euclid(86_400);
+            match day(now) - day(at) {
+                ..=0 => "today".to_string(),
+                1 => "yesterday".to_string(),
+                days => format!("{days} days ago"),
+            }
+        }
+    }
 }
 
 fn ago(at: Option<u64>, now: u64) -> String {
@@ -222,7 +235,7 @@ pub fn board_line(relay: &relay::Relay, pinned: bool, now: u64) -> (Sent, String
     }
     match (&relay.error, relay.posted_at) {
         (Some(error), _) if failed_last => {
-            let when = relay.error_at.map_or(String::new(), |at| format!(" ({})", devices::ago(at, now)));
+            let when = relay.error_at.map_or(String::new(), |at| format!(" ({})", since(at, now)));
             let reason = match error.strip_prefix("could not reach the hub: ") {
                 Some(_) => "the hub can't be reached".to_string(),
                 None => error.clone(),
@@ -243,7 +256,6 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
         return Ok("Not connected to a hub. kebbie hub connect, or H on the board, shows this machine's board on your phone.".to_string());
     };
     let relay = relay::load(state);
-    let listed = devices::load(state);
     let mut lines = vec![format!("hub:      {}", identity.url), format!("machine:  {} ({})", identity.name, identity.machine)];
     lines.extend(rename_line(&identity, configured).map(|line| format!("name:     {line}")));
     lines.push(match &identity.account {
@@ -253,17 +265,6 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
         }
         None => format!("account:  none, so {UNREAD}; connect it from the link: {RECONNECT}"),
     });
-    for device in &identity.devices {
-        let line = match listed.devices.iter().find(|known| known.device == device.id) {
-            Some(known) => format!("device:   {} · {} ({})", devices::name_of(known), devices::facts(known, now), device.id),
-            None => format!("device:   {} paired {}", device.id, ago(Some(device.paired_at), now)),
-        };
-        lines.push(line);
-    }
-    if let Some(error) = &listed.error {
-        let known = listed.fetched_at.map_or("names and last reads are unknown".to_string(), |at| format!("names and last reads as of {}", devices::ago(at, now)));
-        lines.push(format!("          {known}; the hub did not list them: {error}"));
-    }
     lines.push(match relay.posted_at {
         Some(at) => format!("board:    rev {} posted {}", relay.rev, ago(Some(at), now)),
         None => "board:    not posted yet".to_string(),
@@ -271,8 +272,6 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
     if let Some(error) = &relay.error {
         lines.push(format!("error:    {error} ({})", ago(relay.error_at, now)));
     }
-    let commands = if ACCEPTS.is_empty() { "none; the web app reads the board".to_string() } else { ACCEPTS.iter().map(|kind| kind.name()).collect::<Vec<_>>().join(", ") };
-    lines.push(format!("commands: {commands}"));
     Ok(lines.join("\n"))
 }
 
@@ -286,23 +285,16 @@ pub fn move_to(state: &Path, url: &str) -> Result<String> {
     crate::notice::Notice::new(crate::notice::Tone::Done, format!("Moved from {before} to {}", identity.url)).next("The keeper posts the board there from now on.").ok()
 }
 
-// A device the hub still lists would keep getting notices from the machine, so leaving takes each one off before the keys go.
 pub fn leave(state: &Path) -> Result<String> {
     let Some(identity) = identity::load(state)? else { return Ok("Not connected to a hub; nothing to leave.".to_string()) };
-    let client = Client::new(&identity.url, Some(identity.token()), CALL);
-    let kept: Vec<String> = identity.devices.iter().filter_map(|device| client.delete(&format!("/v1/m/devices/{}", device.id)).err().filter(|error| error.status() != Some(404)).map(|error| format!("{}: {error}", device.id))).collect();
     identity::forget(state)?;
-    let mut notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("This machine left {}", identity.url)).next(format!("The hub still lists machine {}; its admin removes it with kebbie-hub admin remove-machine {}.", identity.machine, identity.machine));
-    for line in &kept {
-        notice = notice.detail("not removed", line);
-    }
-    notice.ok()
+    crate::notice::Notice::new(crate::notice::Tone::Done, format!("This machine left {}", identity.url)).next(format!("The hub still lists machine {}; its admin removes it with kebbie-hub admin remove-machine {}.", identity.machine, identity.machine)).ok()
 }
 
 pub fn tick() -> Result<()> {
     let state = crate::lead::state_dir()?;
     sync_name(&state, configured_name(&crate::config::path()).as_deref())?;
-    if identity::load(&state)?.is_none_or(|identity| identity.account.is_none() && identity.devices.is_empty()) {
+    if identity::load(&state)?.is_none_or(|identity| identity.account.is_none()) {
         return Ok(());
     }
     let now = crate::messages::now();
@@ -315,13 +307,6 @@ pub fn interactive() -> bool {
     unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 }
 }
 
-fn ask_digits(digits: &str) -> bool {
-    print!("Does the phone show {digits}? [y/N] ");
-    let _ = std::io::stdout().flush();
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim(), "y" | "Y" | "yes")
-}
-
 pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<String> {
     let state = crate::lead::state_dir()?;
     let now = crate::messages::now();
@@ -329,9 +314,6 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
         None | Some("status") => {
             let configured = configured_name(&crate::config::path());
             sync_name(&state, configured.as_deref())?;
-            if identity::load(&state)?.is_some() {
-                devices::fetch(&state, now)?;
-            }
             status_text(&state, configured.as_deref(), now)
         }
         Some("connect") => {
@@ -344,24 +326,6 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             let ask: Option<&AskName> = if interactive() { Some(&ask_name) } else { None };
             join_named(&state, &crate::config::path(), url, code, name, ask, now)
         }
-        Some("pair") => {
-            crate::permit::user_only("pairing a device")?;
-            pair::interactive_only(interactive())?;
-            let device = pair::pair(&state, pair::TIMEOUT, |code| {
-                println!("Enter this pairing code on the device: {code}");
-                println!("Waiting for the device (10 minutes)…");
-            }, ask_digits, now)?;
-            crate::notice::Notice::new(crate::notice::Tone::Done, format!("Paired {device}")).next("It gets this machine's notices from now on.").ok()
-        }
-        Some("remove-device") => {
-            crate::permit::user_only("removing a device")?;
-            let wanted = rest.first().ok_or("kebbie hub remove-device needs the device's name or id, as kebbie hub status shows it")?;
-            let identity = identity::load(&state)?.ok_or("this machine is not connected to a hub; kebbie hub connect first")?;
-            let listed = devices::fetch(&state, now)?;
-            let device = devices::find(&listed, &identity.devices, wanted)?;
-            let said = devices::remove(&state, &device)?;
-            crate::notice::Notice::new(crate::notice::Tone::Done, said).next("The other devices keep getting its notices.").ok()
-        }
         Some("leave") => {
             crate::permit::user_only("leaving the hub")?;
             leave(&state)
@@ -371,7 +335,7 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             let url = rest.first().ok_or("kebbie hub move needs the hub's new address: kebbie hub move https://hub.example.com")?;
             move_to(&state, url)
         }
-        Some(other) => Err(format!("kebbie hub knows connect, remove-device, join, pair, move, status and leave, not {other}")),
+        Some(other) => Err(format!("kebbie hub knows connect, join, move, status and leave, not {other}")),
     }
 }
 

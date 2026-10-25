@@ -8,14 +8,13 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Connecting a machine from its link hands it your account's key: the machine checks the key against the link's secret, pins it, and seals every board to your account alone, so any phone or browser you sign in on with your passkey reads it, with nothing to add on the machine; kebbie hub status shows the account and its key's two fingerprints
 - A machine approved by its typed code, or joined with a join code, posts no board, and the card, the H window, kebbie hub status and kebbie doctor say to connect it from the link: kebbie hub leave, then kebbie hub connect
 - The board goes out at least once a minute while nothing changes, well within the day the hub keeps it, so an idle machine stays awake on the web and one really asleep shows as asleep
-- kebbie hub pair and remove-device are for devices that take notices; the board no longer goes to devices
+- Notifications through the hub are not available in this version: the phone shows the board when you open it, and notify.command still tells you on the machine when a task needs you
 - Connecting a hub opens the browser only when you press ⏎, so you can read the card first
 - The hub's QR code for connecting is drawn small in the terminal's own colours, in octant blocks in Ghostty, kitty and WezTerm, which the iPhone camera reads as a code and not as text, and in braille elsewhere; KEBBIE_QR=octant or braille picks one, and in a narrow pane the code sits under the text
 - kebbie setup and kebbie hub connect pick the hub with ↑ ↓ and ⏎; k and o still choose at once
 - The hub window shows this machine on its hub with when the board last went out and where to sign in to see it; n renames this machine and l leaves the hub
 - Connecting a hub shows a card: a QR code, the code to check on the page, the time left, and c to copy the link
 - kebbie setup offers the hub as an optional last step, and asks which hub before the machine's name
-- kebbie hub remove-device removes a device from the command line
 - Signing in on the kebbie hub no longer asks for an account name
 - kebbie speaks of the bugs in kebbie you ran into, plainly, on the board and in its messages
 - The update shows each step as it goes, with a bar while kebbie builds or downloads, and ends with what's new and what restarts

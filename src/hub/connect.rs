@@ -137,7 +137,7 @@ impl Pending {
             return Err(super::already(&joined));
         }
         let url = self.client.moved().unwrap_or_else(|| self.url.clone());
-        let identity = Identity::new(&url, connected.machine.clone(), &self.name, connected.token.clone(), &self.keys, now)?;
+        let identity = Identity::new(&url, connected.machine.clone(), &self.name, connected.token.clone(), &self.keys, now);
         identity::save(state, &identity)?;
         Ok(identity)
     }

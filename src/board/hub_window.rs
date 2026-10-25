@@ -14,7 +14,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::config::DEFAULT_HUB_URL;
 use crate::hub::card::{self, Copied, Foot, Row, Tone};
-use crate::hub::{Sent, board_line, connect, devices, host, identity, qr, relay};
+use crate::hub::{Sent, board_line, connect, host, identity, qr, relay, since};
 use crate::sh::Result;
 use super::widgets::{GREEN, MAUVE, MUTED, PEACH, RED, SURFACE, TEXT, YELLOW, bold, modal, style, text_width};
 use super::{App, Mode};
@@ -492,7 +492,7 @@ fn overview(window: &Window, leaving: bool) -> Vec<Line<'static>> {
     let relay = relay::load(&window.paths.state);
     let (sent, said) = board_line(&relay, joined.account.is_some(), now);
     let said = match (sent, relay.posted_at) {
-        (Sent::Yes, Some(at)) => format!("board sent {}", devices::ago(at, now)),
+        (Sent::Yes, Some(at)) => format!("board sent {}", since(at, now)),
         _ => said,
     };
     let renaming = window.configured_name().filter(|name| *name != joined.name);
@@ -637,7 +637,7 @@ mod tests {
     fn joined_with(relay: relay::Relay, pinned: bool) -> Paths {
         let paths = paths("[machine]\nname = \"mac\"\n");
         let now = crate::messages::now();
-        let mut machine = identity::Identity::new("https://kebbie.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_test".to_string(), &SecretKeys::generate(), now).unwrap();
+        let mut machine = identity::Identity::new("https://kebbie.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_test".to_string(), &SecretKeys::generate(), now);
         if pinned {
             machine.pin(AccountKey::new(Id::account([7; 16]), 1, SecretKeys::generate().public()).unwrap(), now);
         }

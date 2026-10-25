@@ -36,12 +36,12 @@ Open the hub in the phone's browser, `hub.kebbie.dev` or your own, and sign in w
 
 To keep the hub on the phone's home screen:
 
-- iPhone: in Safari, tap Share, then **Add to Home Screen**. Open kebbie from the home screen from now on: iOS delivers notifications only to an app on the home screen.
+- iPhone: in Safari, tap Share, then **Add to Home Screen**.
 - Android: in Chrome, open the menu and tap **Add to Home screen** (or **Install app**).
 
 ## Notifications
 
-A notice goes out once for each moment a task needs you: a new question, a task that needs you for something else, a head ready to push, a failed CI run. It is sealed to the devices paired with the machine by `kebbie hub pair`, each with a code typed on the device and six digits compared on both. The hub's web app reads the board with your passkey and pairs no device, so in this version it gets no notifications.
+Notifications through the hub are not available in this version: the phone shows the board when you open it, and nothing is pushed to it. To hear when a task needs you, set a [notify command](get-notifications.md) on the machine.
 
 ## Check that it works
 
@@ -49,7 +49,7 @@ A notice goes out once for each moment a task needs you: a new question, a task 
 kebbie hub status
 ```
 
-It shows the hub, the machine's name, the account whose key the machine pinned with the key's two fingerprints, each paired device by name with when it was paired, when it was last seen and whether it has notifications on, and when the board last went out. The board's `H` window shows the machine on its hub with a dot, green with when the board last went out and red with the reason when it does not, and `kebbie doctor` has a `hub` line: connected, reachable, and the last post. The keeper posts the board when it changes and once a minute while nothing does, so the phone can tell that the machine is awake; a machine not heard from for three minutes shows as asleep. The hub keeps a board a day at most, so the once-a-minute post keeps an awake machine's board fresh, and a machine that has slept longer shows as asleep with when it was last seen.
+It shows the hub, the machine's name, the account whose key the machine pinned with the key's two fingerprints, and when the board last went out. The board's `H` window shows the machine on its hub with a dot, green with when the board last went out and red with the reason when it does not, and `kebbie doctor` has a `hub` line: connected, reachable, and the last post. The keeper posts the board when it changes and once a minute while nothing does, so the phone can tell that the machine is awake; a machine not heard from for three minutes shows as asleep. The hub keeps a board a day at most, so the once-a-minute post keeps an awake machine's board fresh, and a machine that has slept longer shows as asleep with when it was last seen.
 
 ## When the subscription lapses
 
@@ -63,7 +63,7 @@ A hub you run yourself mints a join code for a machine with `kebbie-hub admin jo
 kebbie hub join https://hub.example.com <join code>
 ```
 
-It names the machine as `kebbie hub connect` does, and a join code works once. A machine that joined this way belongs to no account, so it holds no account key and no browser reads its board. It can still pair a device for notices with `kebbie hub pair`.
+It names the machine as `kebbie hub connect` does, and a join code works once. A machine that joined this way belongs to no account, so it holds no account key and no browser reads its board.
 
 ## When the hub moves
 
@@ -75,20 +75,12 @@ kebbie hub move https://hub.example.net
 
 kebbie checks only that the address answers as a hub, then sends the machine's token there with every post. Whether it is your hub is yours to check: move only to a hub you run or trust.
 
-## Remove a device
-
-```bash
-kebbie hub remove-device iPhone
-```
-
-It takes a device paired with `kebbie hub pair`, by the name `kebbie hub status` shows or by its id. The device gets no more notices from this machine; it keeps those of your other machines. The board is sealed to your account, not to devices, so this changes nothing about who reads it.
-
 ## Leave the hub
 
 ```bash
 kebbie hub leave
 ```
 
-Or `l` in the board's `H` window, then `y`. It takes each paired device off this machine, forgets the keys and the token, and posts no more boards. The hub keeps a row for the machine, shown as asleep, until you remove it in the web app or the hub's admin removes it.
+Or `l` in the board's `H` window, then `y`. It forgets the keys, the token and the account key, and posts no more boards. The hub keeps a row for the machine, shown as asleep, until you remove it in the web app or the hub's admin removes it.
 
 Every command: [The hub](../reference/commands.md#the-hub).
