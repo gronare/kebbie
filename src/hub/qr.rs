@@ -74,7 +74,7 @@ pub fn octant(mask: u8) -> char {
     OCTANTS[usize::from(mask)]
 }
 
-// Two modules across and four down a character: on a cell twice as tall as wide every module is square.
+// Two modules across and four down a character, on a cell twice as tall as wide every module square; the glyphs draw the light modules and the quiet zone, so on a dark terminal its background is the dark modules.
 pub fn lines(text: &str, glyphs: Glyphs) -> Option<Vec<String>> {
     let code = QrCode::encode_text(text, QrCodeEcc::Low).ok()?;
     let span = -BORDER..code.size() + BORDER;
@@ -83,7 +83,7 @@ pub fn lines(text: &str, glyphs: Glyphs) -> Option<Vec<String>> {
         Glyphs::Braille => braille,
     };
     Some(span.clone().step_by(4).map(|y| span.clone().step_by(2).map(|x| {
-        let mask = (0..8u8).filter(|cell| code.get_module(x + i32::from(cell % 2), y + i32::from(cell / 2))).fold(0u8, |mask, cell| mask | 1 << cell);
+        let mask = (0..8u8).filter(|cell| !code.get_module(x + i32::from(cell % 2), y + i32::from(cell / 2))).fold(0u8, |mask, cell| mask | 1 << cell);
         glyph(mask)
     }).collect()).collect())
 }
@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn a_link_draws_two_modules_across_and_four_down_with_four_light_modules_around_and_every_module_in_place() {
+    fn a_link_draws_a_glyph_for_each_light_module_two_across_and_four_down_with_four_light_modules_around_and_every_module_in_place() {
         let code = QrCode::encode_text(LINK, QrCodeEcc::Low).unwrap();
         let size = code.size() as usize;
         for (glyphs, glyph) in [(Glyphs::Octant, octant as fn(u8) -> char), (Glyphs::Braille, braille)] {
@@ -174,11 +174,14 @@ mod tests {
             assert!(!drawn.concat().contains('\x1b'), "no colour in the glyphs");
             let grid = modules(&drawn, glyph);
             for (y, row) in grid.iter().enumerate() {
-                for (x, dark) in row.iter().enumerate() {
+                for (x, drawn) in row.iter().enumerate() {
                     let inside = (4..size + 4).contains(&x) && (4..size + 4).contains(&y);
-                    assert_eq!(*dark, inside && code.get_module(x as i32 - 4, y as i32 - 4), "{glyphs:?} module {x},{y}");
+                    assert_eq!(*drawn, !(inside && code.get_module(x as i32 - 4, y as i32 - 4)), "{glyphs:?} module {x},{y}: a glyph draws each light module");
                 }
             }
+            assert!(grid[..4].iter().chain(&grid[size + 4..size + 8]).all(|row| row[..size + 8].iter().all(|drawn| *drawn)), "{glyphs:?}: the quiet zone above and below is drawn light");
+            assert!(grid[4..size + 4].iter().all(|row| row[..4].iter().chain(&row[size + 4..size + 8]).all(|drawn| *drawn)), "{glyphs:?}: the quiet zone left and right is drawn light");
+            assert!(!grid[4][4..11].iter().any(|drawn| *drawn), "{glyphs:?}: the finder's dark top edge is left to the background");
         }
     }
 }

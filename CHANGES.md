@@ -26,6 +26,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - L on the board asks whether to start the lead fresh, on a new conversation from its role and the vault, or resume it; kebbie lead --restart --fresh starts it fresh, and the board says when the lead's context is nearly full
 
 ### Fixed
+- The hub's QR code draws its light modules and quiet zone in the text colour and leaves the dark ones to the background, so on a dark theme it reads dark on light as a QR code should
 - L on the board restarts the lead whenever you press it, and its result goes by like the board's other results
 - prefix+space brings the board back in the lead Space after you quit it or closed its pane, and creates the lead Space with its board when there is none, never a second board
 - The lead and other sessions restart onto each new kebbie again; a restart for an earlier update no longer holds them back
