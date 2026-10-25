@@ -4,7 +4,7 @@ Run many Claude Code tasks at once in [herdr](https://herdr.dev), each in its ow
 
 ![kebbie: from a sentence to the lead to a push on main](docs/assets/demo.gif)
 
-A kebbie is the working dog that keeps a herd moving while the drover directs. herdr holds the agents; kebbie keeps their work moving towards you.
+A kebbie is a shepherd's crook, the Scots word for a staff with a hooked head. herdr holds the agents; kebbie keeps their work moving towards you.
 
 ## What you get
 
