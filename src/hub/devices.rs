@@ -63,6 +63,7 @@ fn called(id: &Id, listed: &Listed, paired: &[identity::Device]) -> String {
     named(id, listed, paired).unwrap_or_else(|| format!("{UNNAMED} {}", short(id)))
 }
 
+#[allow(dead_code)]
 pub fn label(state: &Path, device: &Id, name: &str) -> Result<String> {
     let mut identity = identity::load(state)?.ok_or("this machine is not connected to a hub; kebbie hub connect first")?;
     let known = identity.devices.iter_mut().find(|known| &known.id == device).ok_or("this machine has no such device")?;

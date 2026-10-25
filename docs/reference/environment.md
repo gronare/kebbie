@@ -18,6 +18,7 @@
 | `KEBBIE_CHANNEL` | `update.channel` | Read by `scripts/build.sh`: `release` never builds from source. |
 | `KEBBIE_VAULT_BIN` | none | A vault command that stands in for the vault plugin, for tests. |
 | `KEBBIE_IMAGES` | detected | How the board draws images such as a sign-off card's screenshots: `kitty`, `sixel` or `iterm2` use that graphics protocol, `halfblocks` draws a preview in text cells without querying the terminal, `off` shows their paths instead. Detected, it asks the terminal when the first image is about to show; inside herdr (`TERM_PROGRAM=herdr`) it asks nothing and uses Kitty, and the board not on a terminal shows paths. |
+| `KEBBIE_QR` | detected | How the hub's QR codes are drawn: `octant` in octant blocks; `braille` in braille dots in the terminal's own colours. Detected, it is `octant` in Ghostty (`GHOSTTY_RESOURCES_DIR` set, as inside herdr in Ghostty, or `TERM_PROGRAM=ghostty`), kitty (`KITTY_WINDOW_ID` set or `TERM=xterm-kitty`) and WezTerm (`WEZTERM_PANE` set or `TERM_PROGRAM=WezTerm`), and `braille` anywhere else. |
 | `HERDR_BIN_PATH` | `herdr` | The herdr binary. `false` makes kebbie reach no herdr at all. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Where kebbie reads Claude Code's installed plugins and their settings. |
 | `CODEX_HOME` | `~/.codex` | Codex's home: where `kebbie setup codex` installs kebbie's plugin, and where kebbie reads a Codex task's session files and the folders Codex trusts. |

@@ -124,31 +124,45 @@ pub fn install(yes: bool) -> Result<String> {
     let asking = if yes { Asking::Yes } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) { Asking::Terminal } else { Asking::Closed };
     let stdin = std::io::stdin();
     install_on(&machine, asking, &mut stdin.lock(), &mut std::io::stdout())?;
-    let connected = crate::hub::identity::load(&state).ok().flatten().is_some();
-    let offered = hub_offer(asking, connected, &mut stdin.lock(), &mut std::io::stdout())?;
-    println!("{}", offered.unwrap_or_else(|| hub_connected(crate::hub::cli(Some("connect"), &[], None))));
+    let connected = crate::hub::identity::load(&state).ok().flatten().map(|identity| crate::hub::host(&identity.url).to_string());
+    let offered = hub_offer(asking, connected.as_deref(), &mut stdin.lock(), &mut std::io::stdout())?;
+    if let Some(said) = offered.or_else(|| hub_connected(crate::hub::cli(Some("connect"), &[], None))) {
+        println!("{said}");
+    }
+    println!("\n  Setup done.");
     Ok(crate::doctor::summary(&crate::doctor::checks(&crate::doctor::Env::current())))
 }
 
-const HUB_STEP: &str = "kebbie hub";
+const HUB_STEP: &str = "hub";
+const LATER: &str = "later: H on the board";
 
 // None means the user said yes; the connect reads the terminal itself, so it runs after this lock on stdin is gone.
-pub fn hub_offer(asking: Asking, connected: bool, input: &mut impl BufRead, output: &mut impl Write) -> Result<Option<String>> {
-    if connected {
-        return Ok(Some(line("already", HUB_STEP, "connected; kebbie hub status shows it")));
+pub fn hub_offer(asking: Asking, connected: Option<&str>, input: &mut impl BufRead, output: &mut impl Write) -> Result<Option<String>> {
+    if let Some(host) = connected {
+        return Ok(Some(line("already", HUB_STEP, format!("connected to {host}"))));
     }
+    let question = format!("{}\n\n  See this machine's board on your phone or in a browser,\n  end-to-end encrypted.  Set up the hub now?", line("to do", HUB_STEP, "not set up · optional"));
     Ok(match asking {
-        Asking::Closed => Some(line("skipped", HUB_STEP, "no terminal to ask in: kebbie hub connect shows the board on your phone")),
-        Asking::Yes => Some(line("skipped", HUB_STEP, "kebbie hub connect shows the board on your phone when you want it")),
-        Asking::Terminal if !yes("Connect a hub now, to see the board on your phone? (kebbie hub connect)", input, output)? => Some(line("skipped", HUB_STEP, "kebbie hub connect, or H on the board, connects one later")),
+        Asking::Closed => Some(line("skipped", HUB_STEP, format!("optional, and no terminal to ask in; {LATER}"))),
+        Asking::Yes => Some(line("skipped", HUB_STEP, format!("optional; {LATER}"))),
+        Asking::Terminal if !ask(&question, input, output)? => Some(line("skipped", HUB_STEP, LATER)),
         Asking::Terminal => None,
     })
 }
 
-pub fn hub_connected(result: Result<String>) -> String {
+fn ask(question: &str, input: &mut impl BufRead, output: &mut impl Write) -> Result<bool> {
+    write!(output, "{question} [y/N] ").map_err(|error| error.to_string())?;
+    output.flush().map_err(|error| error.to_string())?;
+    let mut answer = String::new();
+    input.read_line(&mut answer).map_err(|error| error.to_string())?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
+}
+
+pub fn hub_connected(result: Result<String>) -> Option<String> {
     match result {
-        Ok(said) => line("done", HUB_STEP, said.replace('\n', " ")),
-        Err(error) => line("failed", HUB_STEP, error),
+        Ok(said) => Some(said).filter(|said| !said.is_empty()),
+        Err(error) if error == crate::hub::connect::STOPPED => Some(line("skipped", HUB_STEP, format!("stopped; {LATER}"))),
+        Err(error) => Some(line("failed", HUB_STEP, error)),
     }
 }
 
@@ -343,24 +357,37 @@ pub fn codex_in(home: &Path, kebbie: &str, uninstall: bool, input: &mut impl Buf
 mod tests {
     use super::*;
 
+    fn offer(asking: Asking, connected: Option<&str>, answers: &str) -> (Option<String>, String) {
+        let mut output = Vec::new();
+        let offered = hub_offer(asking, connected, &mut answers.as_bytes(), &mut output).unwrap();
+        (offered, String::from_utf8(output).unwrap())
+    }
+
     #[test]
-    fn setup_offers_a_hub_last_and_connects_only_on_a_yes_in_a_terminal() {
-        let offer = |asking: Asking, connected: bool, answers: &str| {
-            let mut output = Vec::new();
-            let offered = hub_offer(asking, connected, &mut answers.as_bytes(), &mut output).unwrap();
-            (offered, String::from_utf8(output).unwrap())
-        };
-        let (offered, asked) = offer(Asking::Terminal, false, "y\n");
-        assert_eq!(offered, None, "a yes runs kebbie hub connect");
-        assert!(asked.contains("Connect a hub now") && asked.contains("(kebbie hub connect)"), "{asked}");
-        for (asking, answers) in [(Asking::Terminal, "n\n"), (Asking::Terminal, ""), (Asking::Closed, "y\n"), (Asking::Yes, "y\n")] {
-            let (offered, asked) = offer(asking, false, answers);
-            assert!(offered.as_deref().is_some_and(|line| line.starts_with("skipped") && line.contains("kebbie hub connect")), "{asking:?}: {offered:?}");
-            assert!(asking == Asking::Terminal || asked.is_empty(), "only a terminal is asked");
+    fn setup_asks_for_the_hub_as_an_optional_step_and_enter_skips_it() {
+        let (offered, asked) = offer(Asking::Terminal, None, "\n");
+        assert_eq!(asked, format!("{}\n\n  See this machine's board on your phone or in a browser,\n  end-to-end encrypted.  Set up the hub now? [y/N] ", line("to do", "hub", "not set up · optional")));
+        assert!(asked.starts_with("to do    hub                 not set up · optional"), "{asked}");
+        assert_eq!(offered.as_deref(), Some(line("skipped", "hub", "later: H on the board").as_str()), "N is the default");
+        assert_eq!(offer(Asking::Terminal, None, "n\n").0, offered);
+        for asking in [Asking::Closed, Asking::Yes] {
+            let (offered, asked) = offer(asking, None, "y\n");
+            assert!(offered.as_deref().is_some_and(|said| said.starts_with("skipped") && said.ends_with("later: H on the board")) && asked.is_empty(), "{asking:?}: {offered:?}");
         }
-        let (offered, asked) = offer(Asking::Terminal, true, "y\n");
-        assert!(offered.unwrap().starts_with("already") && asked.is_empty(), "a connected machine is not asked");
-        assert!(hub_connected(Ok("Connected to x as mac\nset: y".to_string())).starts_with("done") && hub_connected(Err("Cancelled".to_string())).starts_with("failed"));
+    }
+
+    #[test]
+    fn setup_connects_the_hub_on_a_yes_and_a_connected_machine_is_not_asked() {
+        let (offered, asked) = offer(Asking::Terminal, None, "y\n");
+        assert_eq!(offered, None, "a yes runs kebbie hub connect");
+        assert!(asked.ends_with("Set up the hub now? [y/N] "), "{asked}");
+        let (offered, asked) = offer(Asking::Terminal, Some("hub.kebbie.dev"), "y\n");
+        assert_eq!(offered.as_deref(), Some(line("already", "hub", "connected to hub.kebbie.dev").as_str()));
+        assert!(asked.is_empty(), "a connected machine is not asked");
+        assert_eq!(hub_connected(Ok(String::new())), None, "the card said it all");
+        assert_eq!(hub_connected(Ok("[machine] name set".to_string())).as_deref(), Some("[machine] name set"));
+        assert_eq!(hub_connected(Err(crate::hub::connect::STOPPED.to_string())).as_deref(), Some(line("skipped", "hub", "stopped; later: H on the board").as_str()));
+        assert!(hub_connected(Err("Cancelled".to_string())).unwrap().starts_with("failed"));
     }
 
     #[test]

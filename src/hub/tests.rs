@@ -221,7 +221,7 @@ fn leaving_takes_the_phone_off_the_board_and_forgets_the_keys() {
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
     assert_eq!(hub.boards(&phone).len(), 1);
     let left = super::leave(&state).unwrap();
-    assert!(left.contains("Disconnected this machine from") && left.contains("remove-machine"), "{left}");
+    assert!(left.contains("This machine left") && left.contains("remove-machine"), "{left}");
     assert!(hub.runtime.block_on(phone.boards()).unwrap().is_empty(), "the phone no longer gets this machine's board");
     assert!(identity::load(&state).unwrap().is_none() && !state.join("hub").exists());
 }
@@ -804,8 +804,8 @@ fn a_machine_connects_through_the_browser_which_then_shows_its_board_without_dig
     let machine_state = state.clone();
     let machine = std::thread::spawn(move || super::connect::finish(&machine_state, &pending, &answer, None, || Ok(()), now()));
     let paired = hub.runtime.block_on(browser.show_board(approval, WAIT)).unwrap();
-    let said = machine.join().unwrap().unwrap();
-    assert_eq!(said, format!("Connected to {} as mac; the browser that approved it shows its board.", hub.url));
+    let finished = machine.join().unwrap().unwrap();
+    assert_eq!((finished.identity.name.as_str(), finished.remark), ("mac", None), "the browser that approved it shows the board, so nothing more is said");
     assert_eq!(super::connect::name_line(&config, prepared, "mac"), None, "a configured name leaves config.toml alone");
     let identity = identity::load(&state).unwrap().unwrap();
     assert_eq!((identity.url.as_str(), identity.name.as_str(), identity.machine.clone()), (hub.url.as_str(), "mac", paired));
@@ -856,27 +856,23 @@ fn an_own_hub_is_tested_before_it_is_saved_once_and_never_through_a_linked_confi
     let config = dir.join("config.toml");
     std::fs::write(&config, "# mine\n[machine]\nname = \"mac\"\n").unwrap();
     let web = serving(|_| "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 15\r\nconnection: close\r\n\r\n<html>hi</html>".to_string());
-    let refused = super::connect::own_hub(&config, &web).err().unwrap();
+    let refused = super::connect::probe(&web).err().unwrap();
     assert!(refused.contains("does not answer as a kebbie hub") && refused.contains("nothing changed"), "{refused}");
-    assert!(super::connect::own_hub(&config, "http://hub.example.com").err().unwrap().contains("takes https"));
+    assert!(super::connect::probe("http://hub.example.com").err().unwrap().contains("takes https"));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), "# mine\n[machine]\nname = \"mac\"\n", "a hub that fails the test is not saved");
-    let chosen = super::connect::choose_hub(&config, Some(&|| Ok(Some(format!("{}/", hub.url))))).unwrap();
+    let chosen = super::connect::save_own(&config, super::connect::probe(&format!("{}/", hub.url)).unwrap());
     assert_eq!(chosen.url, hub.url);
     assert_eq!(chosen.note.as_deref(), Some(format!("[hub] url = {:?} set in {}", hub.url, config.display()).as_str()));
     let written = std::fs::read_to_string(&config).unwrap();
     assert_eq!(written, format!("# mine\n[machine]\nname = \"mac\"\n\n[hub]\nurl = {:?}\n", hub.url));
-    let again = super::connect::choose_hub(&config, Some(&|| panic!("a set [hub] url is not asked again"))).unwrap();
-    assert_eq!((again.url, again.note), (hub.url.clone(), None));
-    assert_eq!(std::fs::read_to_string(&config).unwrap(), written, "written once");
-    let kebbie = super::connect::choose_hub(&dir.join("fresh.toml"), Some(&|| Ok(None))).unwrap();
-    assert_eq!(kebbie.url, crate::config::DEFAULT_HUB_URL);
-    assert!(!dir.join("fresh.toml").exists(), "the kebbie hub needs no key");
+    assert_eq!(super::connect::configured_hub(&config).unwrap(), Some(hub.url.clone()), "a set [hub] url is not asked again");
+    assert!(super::connect::probe("hub.invalid").err().unwrap().starts_with("https://hub.invalid does not answer"), "a bare address is tried over https");
 
     let shared = dir.join("dotfiles.toml");
     std::fs::write(&shared, "[keeper]\nenabled = true\n").unwrap();
     let linked = dir.join("linked.toml");
     std::os::unix::fs::symlink(&shared, &linked).unwrap();
-    let chosen = super::connect::own_hub(&linked, &hub.url).unwrap();
+    let chosen = super::connect::save_own(&linked, super::connect::probe(&hub.url).unwrap());
     let note = chosen.note.unwrap();
     assert!(note.contains("is a link") && note.contains(&format!("[hub] url = {:?}", hub.url)), "{note}");
     assert_eq!(std::fs::read_to_string(&shared).unwrap(), "[keeper]\nenabled = true\n");
@@ -941,4 +937,152 @@ fn a_lapsed_plan_is_said_on_status_doctor_and_add_device_and_nothing_local_stops
     hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Active, None).unwrap();
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now() + HEARTBEAT).unwrap();
     assert_eq!(relay::load(&state).plan_inactive, None, "a post that goes through clears it");
+}
+
+type Approve<'a> = Box<dyn FnOnce(&str) + 'a>;
+
+struct Script<'a> {
+    answers: std::collections::VecDeque<String>,
+    said: String,
+    keys: std::collections::VecDeque<Option<super::console::Key>>,
+    copies: Vec<String>,
+    on_copied: Option<Approve<'a>>,
+    picks: Option<std::collections::VecDeque<ratatui::crossterm::event::KeyCode>>,
+}
+
+impl<'a> Script<'a> {
+    fn new(answers: &[&str]) -> Script<'a> {
+        Script { answers: answers.iter().map(|answer| answer.to_string()).collect(), said: String::new(), keys: Default::default(), copies: Vec::new(), on_copied: None, picks: None }
+    }
+}
+
+impl super::console::Console for Script<'_> {
+    fn write(&mut self, text: &str) -> crate::sh::Result<()> {
+        self.said.push_str(text);
+        Ok(())
+    }
+
+    fn colour(&self) -> super::card::Colour {
+        super::card::Colour::None
+    }
+
+    fn live(&self) -> bool {
+        true
+    }
+
+    fn glyphs(&self) -> super::qr::Glyphs {
+        super::qr::Glyphs::Octant
+    }
+
+    fn edit(&mut self, render: &dyn Fn(&str) -> (super::card::Row, super::card::Row), start: &str) -> crate::sh::Result<Option<String>> {
+        let (before, after) = render(start);
+        self.said.push_str(&format!("{}{}\n", super::card::paint(&before, super::card::Colour::None), super::card::paint(&after, super::card::Colour::None)));
+        Ok(self.answers.pop_front().map(|answer| if answer.is_empty() { start.to_string() } else { answer }))
+    }
+
+    fn key(&mut self, _: Duration) -> crate::sh::Result<Option<super::console::Key>> {
+        if let (Some(link), Some(approve)) = (self.copies.first(), self.on_copied.take_if(|_| self.keys.is_empty())) {
+            approve(link);
+        }
+        Ok(self.keys.pop_front().flatten())
+    }
+
+    fn arrows(&self) -> bool {
+        self.picks.is_some()
+    }
+
+    fn pick(&mut self, render: &dyn Fn(usize) -> Vec<super::card::Row>, count: usize, shortcuts: &[char]) -> crate::sh::Result<Option<usize>> {
+        let mut picks = self.picks.take().unwrap_or_default();
+        let said = &mut self.said;
+        super::console::pick_with(&mut |text| { said.push_str(text); Ok(()) }, &mut || picks.pop_front().map(|code| (code, false)).ok_or_else(|| "no more keys".to_string()), render, count, shortcuts, super::card::Colour::None)
+    }
+
+    fn copy(&mut self, text: &str) -> crate::sh::Result<super::card::Copied> {
+        self.copies.push(text.to_string());
+        Ok(super::card::Copied::Confirmed)
+    }
+}
+
+#[test]
+fn the_hub_is_chosen_first_with_k_the_answer_to_enter_and_your_own_is_tested_before_it_is_saved() {
+    let hub = open_hub(|_| {});
+    let config = crate::sh::test_dir("hub-choose").join("config.toml");
+    let mut console = Script::new(&[""]);
+    let chosen = super::connect::choose_on(&mut console, &config).unwrap().unwrap();
+    assert_eq!(chosen.url, crate::config::DEFAULT_HUB_URL);
+    assert_eq!(console.said, "\n  Hub\n\n  k  kebbie hub     hub.kebbie.dev · free to connect and read\n  o  your own hub   a server you run kebbie-hub on\n\n  › k\n");
+    let mut console = Script::new(&["o", "http://hub.example.com", &hub.url]);
+    let chosen = super::connect::choose_on(&mut console, &config).unwrap().unwrap();
+    assert_eq!(chosen.url, hub.url);
+    assert!(console.said.contains("\n  Address of the server that runs kebbie-hub\n  › \n  ✗ http://hub.example.com: a hub on another machine takes https"), "{}", console.said);
+    assert!(console.said.ends_with("  ✓ answers as a kebbie hub   plain http, on this machine only\n"), "{}", console.said);
+    assert_eq!(super::connect::configured_hub(&config).unwrap(), Some(hub.url.clone()));
+    assert!(super::connect::choose_on(&mut Script::new(&[]), &config).unwrap().is_none(), "no answer stops");
+}
+
+#[test]
+fn in_a_terminal_the_hub_is_picked_with_the_arrows_and_enter_and_k_or_o_choose_at_once() {
+    use ratatui::crossterm::event::KeyCode;
+    let hub = open_hub(|_| {});
+    let config = crate::sh::test_dir("hub-pick").join("config.toml");
+    let mut console = Script::new(&[]);
+    console.picks = Some([KeyCode::Down, KeyCode::Up, KeyCode::Enter].into());
+    assert_eq!(super::connect::choose_on(&mut console, &config).unwrap().unwrap().url, crate::config::DEFAULT_HUB_URL);
+    let first = "▸ k  kebbie hub     hub.kebbie.dev · free to connect and read\n  o  your own hub   a server you run kebbie-hub on\n\n  ↑↓ choose · ⏎ connect · k kebbie hub · o your own · esc cancel\n";
+    let second = "  k  kebbie hub     hub.kebbie.dev · free to connect and read\n▸ o  your own hub   a server you run kebbie-hub on\n\n  ↑↓ choose · ⏎ connect · k kebbie hub · o your own · esc cancel\n";
+    assert_eq!(console.said, format!("\n  Hub\n\n{first}\x1b[4F\x1b[J{second}\x1b[4F\x1b[J{first}\x1b[4F\x1b[J{}", &first[..first.find("\n\n").unwrap() + 1]));
+    let mut console = Script::new(&[&hub.url]);
+    console.picks = Some([KeyCode::Char('o')].into());
+    assert_eq!(super::connect::choose_on(&mut console, &config).unwrap().unwrap().url, hub.url, "o goes straight to your own hub");
+    let mut console = Script::new(&[]);
+    console.picks = Some([KeyCode::Esc].into());
+    assert!(super::connect::choose_on(&mut console, &config).unwrap().is_none(), "esc cancels");
+}
+
+#[test]
+fn connect_names_the_machine_after_the_hub_then_draws_the_card_and_ends_on_the_connected_card() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let dir = crate::sh::test_dir("hub-connect-card");
+    let (state, config) = (dir.join("state"), dir.join("config.toml"));
+    std::fs::write(&config, format!("[hub]\nurl = \"{}\"\n", hub.url)).unwrap();
+    let host = crate::config::short_hostname();
+    let mut console = Script::new(&[""]);
+    console.keys = [Some(super::console::Key::Open), Some(super::console::Key::Copy), None].into();
+    let (opener, opened) = (dir.join("open"), dir.join("opened"));
+    crate::executable::write(&opener, format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", opened.display())).unwrap();
+    let opener = opener.display().to_string();
+    console.on_copied = Some(Box::new(|link: &str| {
+        hub.runtime.block_on(browser.approve_connect(link, false)).unwrap();
+    }));
+    let run = super::connect::Run { state: &state, config: &config, given: None, interactive: true, opener: Some(&opener), post: || Ok(()), now: now() };
+    let said = super::connect::connect_on(&mut console, &run).unwrap();
+    let shown = &console.said;
+    assert!(shown.starts_with(&format!("\n  Name this machine\n  Your phone and your other machines show it.\n\n  › {host}        ⏎ keeps {host:?}\n")), "the name comes after the hub, with the host's kept on ⏎: {shown}");
+    let address = super::host(&hub.url);
+    let code = shown.split("Check the page shows  ").nth(1).and_then(|rest| rest.get(..9)).unwrap_or_else(|| panic!("no code: {shown}"));
+    assert!(code.chars().nth(4) == Some('-'), "{code}");
+    let short = super::card::short_link(&console.copies[0]);
+    assert!(short.ends_with(&format!("/connect?code={code}#…")), "{short}");
+    for line in [format!("Connect {host} to your own hub"), address.to_string(), "⧗ Waiting for you · 10 min left".to_string(), "  No browser here? Scan the code, or open".to_string(), format!("  {short}   c copies it"), format!("  {short}   ✓ copied")] {
+        assert!(shown.contains(&line), "{line}: {shown}");
+    }
+    let offered = shown.find("⏎ open in browser · or scan with your phone").unwrap_or_else(|| panic!("the card offers ⏎: {shown}"));
+    let done_at = shown.find("✓ Opened in your browser").unwrap_or_else(|| panic!("⏎ opened it: {shown}"));
+    assert!(offered < done_at, "the browser opens on ⏎, not before: {shown}");
+    assert_eq!(std::fs::read_to_string(&opened).unwrap(), console.copies[0], "⏎ opens the whole link");
+    assert!(!shown.contains("#k="), "the secret is never drawn");
+    assert!(console.copies[0].contains("#k="), "c copies the whole link");
+    let code_rows = super::qr::lines(&console.copies[0], super::qr::Glyphs::Octant).unwrap();
+    assert!(code_rows.iter().all(|row| shown.contains(&format!("│  {row}   "))), "the octant code sits in the card, text to its right");
+    assert!(shown.contains(&format!("│  {}   Connect {host} to your own hub", code_rows[0])), "the title on the code's first row");
+    assert!(shown.contains("\x1b[J"), "the card is drawn again in place when it changes");
+    let done = shown.rsplit("\x1b[J").next().unwrap();
+    for line in [format!("│  ✓  {host} is connected to {address}"), "│     Sign in with your passkey on any phone or browser".to_string(), format!("│     to see its board:  {address}")] {
+        assert!(done.contains(&line), "{line}: {done}");
+    }
+    assert!(done.lines().nth(1).is_some_and(|line| line.starts_with('╭')) && !done.contains("Waiting"), "the connected card replaces the waiting one: {done}");
+    assert!(!shown.contains("carl"), "no account name anywhere");
+    assert!(said.contains("No browser shows its board yet: kebbie hub add-device adds your phone.") && said.contains(&format!("[machine] name = {host:?}")), "{said}");
+    assert_eq!(identity::load(&state).unwrap().unwrap().name, host);
 }

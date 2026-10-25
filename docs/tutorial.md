@@ -43,9 +43,9 @@ Setup prints one line per step, each starting with `done`, `already`, `skipped` 
 - it installs the Claude Code plugin from the same folder, so the plugin always matches the binary;
 - it shows the four keys it adds to the end of herdr's `config.toml` and writes them only on your `y`: `prefix+space` goes to the lead, `prefix+tab` moves between the board and the lead's chat, `prefix+t` opens the board, `prefix+u` updates kebbie. A key you already use for something else is left alone and named;
 - it reloads herdr's config so the keys work, or tells you to restart herdr when it cannot.
-- last, it asks whether to connect a kebbie hub now, to see the board on your phone, and runs `kebbie hub connect` only on your `y` (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)); you can do it later with `H` on the board.
+- last, the hub, which is optional: it asks whether to set it up now, to see this machine's board on your phone or in a browser, and runs `kebbie hub connect` only on your `y` (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)). `⏎` skips it; you can do it later with `H` on the board.
 
-It ends with the warnings and failures from `kebbie doctor`. You can run setup again at any time; it changes only what is missing.
+It ends with `Setup done.` and the warnings and failures from `kebbie doctor`. You can run setup again at any time; it changes only what is missing.
 
 kebbie sends its maintainers error signals when kebbie itself crashes or hits some internal errors: only its version and commit, your OS and CPU architecture, the part of kebbie that failed, the kind of failure and a count, at most once a day, each send shown under messages on the board. A bug report with text is shown to you and sent only on your `y`. To turn the signals off, put this in `~/.config/kebbie/config.toml`:
 

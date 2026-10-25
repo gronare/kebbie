@@ -246,10 +246,11 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   paired and last seen and whether it has notifications on, and the last post
   kebbie hub connect [--name <name>]
                                   connect this machine to a hub through your browser: [hub] url, or asks for the kebbie
-                                  hub or your own (tested, then saved as [hub] url); prints a link, a code to check
-                                  and a QR code, opens the browser and waits for you to approve it there; the browser
-                                  that approves it can show the board at once; goes by [machine] name, which --name
-                                  sets, or asks for it in a terminal; H on the board does the same; yours only
+                                  hub or your own (tested, then saved as [hub] url); then goes by [machine] name, which
+                                  --name sets, or asks for it in a terminal; shows a card with a QR code, the code to
+                                  check and the time left, ⏎ opens the browser, c copies the link, and waits for you to
+                                  approve it there; the browser that approves it can show the board at once; H on the
+                                  board does the same; yours only
   kebbie hub add-device           add a phone or browser: shows a link and its QR code, then six digits to compare
                                   with the phone's before it admits the phone on your y; yours only, in your own terminal
   kebbie hub remove-device <name|id>
@@ -266,14 +267,15 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   needs you, asks, is ready to push or its CI fails; yours only, in your own terminal
   kebbie hub move <url>           the hub moved: post there once <url> answers as a hub; move only to a hub you run or trust;
                                   a redirect to another host is never followed by itself; yours only
-  kebbie hub leave                disconnect this machine: take each device off its board and remove the keys and token
+  kebbie hub leave                leave the hub: take each device off this machine's board and remove the keys and token
   kebbie doctor                   check that this machine has what kebbie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
                                   (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)
   kebbie setup [--yes]            put kebbie on PATH (~/.local/bin/kebbie), install or update its Claude Code plugin
                                   and add its keys to herdr's config.toml where missing, appending and asking first
                                   (--yes does not ask, and never writes through a link); says whether herdr needs a
-                                  restart and ends with kebbie doctor's warnings; safe to run again
+                                  restart, offers the hub as an optional last step, and ends with kebbie doctor's
+                                  warnings; safe to run again
   kebbie setup vault              install the optional vault plugin in Claude Code (marketplace, plugin, its options),
                                   showing each claude command and running it only on your y
   kebbie setup codex [--uninstall]

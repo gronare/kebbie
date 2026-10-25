@@ -1,5 +1,7 @@
 pub mod board;
+pub mod card;
 pub mod connect;
+pub mod console;
 pub mod devices;
 pub mod http;
 pub mod identity;
@@ -277,11 +279,11 @@ pub fn move_to(state: &Path, url: &str) -> Result<String> {
 
 // A device the hub still lists would keep the last board, so leaving takes each one off before the keys go.
 pub fn leave(state: &Path) -> Result<String> {
-    let Some(identity) = identity::load(state)? else { return Ok("Not connected to a hub; nothing to disconnect.".to_string()) };
+    let Some(identity) = identity::load(state)? else { return Ok("Not connected to a hub; nothing to leave.".to_string()) };
     let client = Client::new(&identity.url, Some(identity.token()), CALL);
     let kept: Vec<String> = identity.devices.iter().filter_map(|device| client.delete(&format!("/v1/m/devices/{}", device.id)).err().filter(|error| error.status() != Some(404)).map(|error| format!("{}: {error}", device.id))).collect();
     identity::forget(state)?;
-    let mut notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("Disconnected this machine from {}", identity.url)).next(format!("The hub still lists machine {}; its admin removes it with kebbie-hub admin remove-machine {}.", identity.machine, identity.machine));
+    let mut notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("This machine left {}", identity.url)).next(format!("The hub still lists machine {}; its admin removes it with kebbie-hub admin remove-machine {}.", identity.machine, identity.machine));
     for line in &kept {
         notice = notice.detail("not removed", line);
     }

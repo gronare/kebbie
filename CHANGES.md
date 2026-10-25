@@ -5,11 +5,13 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
-- The hub window shows the devices that see your board by name, with when each was paired and last seen, and r removes one
-- In the hub window, n names a device on this machine and m renames this machine
-- The hub window says the board is being sent without a ticking clock, and asks you to update the hub when it is too old to list devices
+- Connecting a hub opens the browser only when you press ⏎, so you can read the card first
+- The hub's QR codes, for connecting and for adding a phone, are drawn small in the terminal's own colours, in octant blocks in Ghostty, kitty and WezTerm, which the iPhone camera reads as a code and not as text, and in braille elsewhere; KEBBIE_QR=octant or braille picks one, and in a narrow pane the code sits under the text
+- kebbie setup and kebbie hub connect pick the hub with ↑ ↓ and ⏎; k and o still choose at once
+- The hub window shows this machine on its hub with when the board last went out and where to sign in to see it; n renames this machine and l leaves the hub
+- Connecting a hub shows a card: a QR code, the code to check on the page, the time left, and c to copy the link
+- kebbie setup offers the hub as an optional last step, and asks which hub before the machine's name
 - kebbie hub remove-device removes a device from the command line
-- The QR code for adding a phone is drawn in true black and white, so every terminal theme shows it scannable
 - Signing in on the kebbie hub no longer asks for an account name
 - kebbie speaks of the bugs in kebbie you ran into, plainly, on the board and in its messages
 - The update shows each step as it goes, with a bar while kebbie builds or downloads, and ends with what's new and what restarts

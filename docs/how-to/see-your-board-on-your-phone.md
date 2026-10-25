@@ -17,20 +17,20 @@ On the board, press `H`. Or, in your own terminal:
 kebbie hub connect
 ```
 
-1. Choose the hub. The kebbie hub, at `https://hub.kebbie.dev`, is the default. To use a hub you run yourself, choose your own and give its address: kebbie checks that it answers as a kebbie hub over `https` (`http` only for a hub on this machine), then saves it as [`[hub] url`](../reference/configuration.md#keys). With `[hub] url` set, kebbie connects there without asking.
-2. Name the machine, once. The phone shows it by its one name, [`[machine] name`](../reference/configuration.md#keys), the same name your other machines on the vault see it by. Set already, kebbie uses it; `--name <name>` sets it; otherwise kebbie asks, with the host's short name as the answer to Enter, and writes it to config.toml once the hub took it.
-3. kebbie prints a link, a code such as `K7QF-M2XD` and a QR code of the link, and opens the link in your browser (not over SSH). Open it on the computer, or scan the QR code with your phone.
+1. Choose the hub: the kebbie hub, at `hub.kebbie.dev`, which is free to connect and read, or your own, a server you run kebbie-hub on. In a terminal `↑` `↓` move the highlight and Enter chooses, `k` and `o` choose at once and `esc` cancels; without a terminal kebbie asks for `k` or `o`, with `k` the answer to Enter. For your own, give its address: kebbie checks that it answers as a kebbie hub over `https` (`http` only for a hub on this machine), says `✓ answers as a kebbie hub`, then saves it as [`[hub] url`](../reference/configuration.md#keys). With `[hub] url` set, kebbie connects there without asking.
+2. Name the machine, once. The phone shows it by its one name, [`[machine] name`](../reference/configuration.md#keys), the same name your other machines on the vault see it by. Set already, kebbie uses it; `--name <name>` sets it; otherwise kebbie asks, and Enter keeps the host's short name. It writes the name to config.toml once the hub took it.
+3. kebbie shows a card with a QR code of the link, the machine and the hub, a code such as `Z78K-XF53` and how long the code has left. Nothing opens by itself: press Enter to open the link in your browser (not over SSH), and the card's `⏎ open in browser · or scan with your phone` becomes `✓ Opened in your browser`. Or scan the QR code with your phone. In Ghostty, kitty and WezTerm it is in the terminal's own colours; in other terminals it is drawn in braille, and if the camera keeps reading the text beside it instead, frame the code alone or set `KEBBIE_QR=octant` when your terminal draws block characters well. Without a terminal kebbie prints the whole link and opens nothing. Without a browser on this machine, `c` copies the link to paste elsewhere; the link shown under the card stops at its `#`, since what follows is the secret that ties your browser to this machine.
 4. On the page, check that it shows the same code, sign in with your passkey or make an account, and approve the machine. With the box to also show its board in that browser ticked, the browser shows the board at once, with no digits to compare: the link carries a secret that never reaches the hub, and the machine admits only the browser that holds it.
 
-kebbie waits up to 10 minutes and ends in one line: connected, cancelled in the browser, or the code expired. The machine's keys and the hub's token for it stay in `hub/` in kebbie's state directory, readable by you alone. Nothing prints them.
+kebbie waits up to 10 minutes and ends on a card saying the machine is connected to the hub, or in one line: cancelled in the browser, or the code expired. The machine's keys and the hub's token for it stay in `hub/` in kebbie's state directory, readable by you alone. Nothing prints them.
 
 A config.toml that is a link, say into a dotfiles repo shared by several machines, is never written: kebbie says which line to set there or in a config.toml of this machine's own.
 
-To rename the machine later, change `[machine] name`: the keeper renames it on the hub with its next post, and `kebbie hub status` does it at once. Your phone shows the new name when it next reads the board, unless you gave the machine a name of your own on the phone when you paired it. While the hub is unreachable, `kebbie hub status` and `kebbie doctor` show the name the hub still has and why the rename failed. With `[machine] name` unset the hub keeps the name the machine connected with, even when the host is renamed.
+To rename the machine later, change `[machine] name`, or press `n` in the board's `H` window: the keeper renames it on the hub with its next post, and `kebbie hub status` does it at once. Your phone shows the new name when it next reads the board, unless you gave the machine a name of your own on the phone when you paired it. While the hub is unreachable, `kebbie hub status` and `kebbie doctor` show the name the hub still has and why the rename failed. With `[machine] name` unset the hub keeps the name the machine connected with, even when the host is renamed.
 
 ## Add a phone
 
-On the board, press `H`, then `a`. Or, in your own terminal:
+In your own terminal:
 
 ```bash
 kebbie hub add-device
@@ -56,7 +56,7 @@ In the app's **Maskiner** (machines) tab, tap **Slå på notiser** (turn on noti
 kebbie hub status
 ```
 
-It shows the hub, the machine's name, each device by name with when it was paired, when it last read the board and whether it has notifications on, and when the board last went out. The board's `H` window shows the same, its dot green while the board goes out and red with the reason when it does not, and `kebbie doctor` has a `hub` line: connected, reachable, and the last post. The keeper posts the board when it changes and once a minute while nothing does, so the phone can tell that the machine is awake; a machine not heard from for three minutes shows as sleeping.
+It shows the hub, the machine's name, each device by name with when it was paired, when it last read the board and whether it has notifications on, and when the board last went out. The board's `H` window shows the machine on its hub with a dot, green with when the board last went out and red with the reason when it does not, and `kebbie doctor` has a `hub` line: connected, reachable, and the last post. The keeper posts the board when it changes and once a minute while nothing does, so the phone can tell that the machine is awake; a machine not heard from for three minutes shows as sleeping.
 
 ## When the subscription lapses
 
@@ -88,14 +88,14 @@ kebbie checks only that the address answers as a hub, then sends the machine's t
 kebbie hub remove-device iPhone
 ```
 
-Or `r` in the board's `H` window: pick the device with `↑` `↓` and press `y`. It takes the name `kebbie hub status` shows, or the device's id. The device stops seeing this machine's board, and this machine stops sealing the board to it; it keeps seeing your other machines' boards.
+It takes the name `kebbie hub status` shows, or the device's id. The device stops seeing this machine's board, and this machine stops sealing the board to it; it keeps seeing your other machines' boards.
 
-## Disconnect this machine
+## Leave the hub
 
 ```bash
 kebbie hub leave
 ```
 
-Or `l` in the board's `H` window. It takes each device off this machine's board and forgets the keys and the token. The hub keeps a row for the machine until its admin removes it.
+Or `l` in the board's `H` window, then `y`. It takes each device off this machine's board and forgets the keys and the token. The hub keeps a row for the machine until its admin removes it.
 
 Every command: [The hub](../reference/commands.md#the-hub).

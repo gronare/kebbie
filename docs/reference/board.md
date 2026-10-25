@@ -218,33 +218,70 @@ An answer that takes a comment opens the comment box in place of the row, under 
 
 `H` opens it. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md).
 
-Not connected, it asks which hub: `k` or `⏎` the kebbie hub, `o` your own, whose address you type and `⏎` tests before it is saved as [`hub.url`](configuration.md#keys). With `hub.url` set, `⏎` connects there. With `machine.name` unset, it asks for the name once, with the host's short name filled in. It then shows the link, the code the page shows and a QR code of the link, true black on white in a terminal with 24-bit colour (`COLORTERM=truecolor`) and in the terminal's own colours otherwise, opens the link in your browser (not over SSH), and waits for you to approve the machine there; a terminal too short for the QR code says so. `esc` stops waiting. The outcome shows in one line.
+Not connected, it offers two hubs, the picked row highlighted:
+
+```
+╭ kebbie hub ──────────────────────────────────────────────────────────────────────────╮
+│ See this board on your phone, end-to-end encrypted.                                  │
+│                                                                                      │
+│  k  kebbie hub     hub.kebbie.dev · free to connect and read                         │
+│  o  your own hub   a server you run kebbie-hub on                                    │
+│                                                                                      │
+│ k kebbie hub · o your own · ↑↓ ⏎ choose · esc close                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+`k` or `o` chooses, and so do `↑` `↓` and `⏎`. Your own hub asks for the address of the server that runs kebbie-hub (a bare host name is tried over `https`); `⏎` tests it and shows `✓ answers as a kebbie hub` with `TLS ok`, or `plain http, on this machine only` for a hub on `localhost`, and a second `⏎` saves it as [`hub.url`](configuration.md#keys) and connects. With `hub.url` set, `⏎` connects there. With `machine.name` unset, it asks for the name once, with the host's short name filled in.
+
+While it waits for you to approve the machine, the window shows the machine and the hub with a QR code of the link, two modules across and four down a character, so on a cell twice as tall as wide every module is square, with four modules of quiet zone around it. In Ghostty (herdr inside Ghostty too), kitty and WezTerm, which draw block characters themselves, the code is drawn in octant blocks, in the terminal's own colours without a background. In any other terminal it is drawn in braille, a raised dot for each dark module in the terminal's own colours; a phone camera can read braille next to text as text and flip between the two, so scan it with nothing else in the frame. `KEBBIE_QR=octant` or `KEBBIE_QR=braille` picks one. The text sits to the right of the code from its top row, or above it when the window is too narrow for both side by side:
+
+```
+╭ kebbie hub · connect ────────────────────────────────────────────────────────────────╮
+│                               Connect mac to kebbie hub                              │
+│   𜵊𜷝𜵇▌𜶪𜴴𜴝𜶘𜴃𜶃𜶚𜶁𜶁𜵄𜶞𜵊▝𜶖𜴶𜵊𜷝𜵇▌     hub.kebbie.dev                                         │
+│   𜴬𜴪𜴨𜴍𜷈𜷄𜶏𜶇𜶻𜷄𜵊𜴌𜷈𜷈𜵇𜴓𜵎𜶃𜴊𜴬𜴪𜴨𜴍                                                            │
+│   ▀𜷥𜵸𜴌𜵧𜴊𜵕▟𜵹𜴰𜵬𜴢𜶾𜷅𜴲𜵳𜶻𜶦𜶤𜶶𜶚𜶃𜵈     ⏎ open in browser · or scan with your phone            │
+│   𜵭𜶁▆𜴰𜶯𜶁𜷍𜷛𜶫𜵅𜴃𜴇𜶉𜴿𜵢𜶽𜴺𜶠𜴅𜶮𜵮𜴪𜺨     Check the page shows  Z78K-XF53                        │
+│   𜴬𜵛𜵴𜶝𜷍𜴥𜶴🯦𜴀𜶉𜴴𜷜𜵆𜶡𜷉🯧𜵱𜷓𜵆𜶔𜵣𜴩𜴊                                                            │
+│   𜵅𜴘𜵊𜴌𜵦𜶏𜵛▄𜴠𜷌𜵊𜴌𜵦𜵍𜴼𜶦🯦𜴡𜵊𜴌𜵰𜴅▖     ⧗ Waiting for you · 9 min left                         │
+│   𜵲𜷃𜴟𜴌▛𜴙𜵂𜶘🮅𜶀𜶏𜷊𜶐𜶈𜶒𜶑𜶣▀█𜶒𜴗𜶤▘                                                            │
+│   🯧𜷟𜵀𜴌▚▆𜴰𜷐𜵆𜶋𜴓𜵆𜶆𜴖𜵎𜵋𜵅𜵌𜴛𜶽𜶁▜🯦                                                            │
+│   𜵲𜶭𜵋𜴊𜷡𜴯𜴲𜵅𜷂𜶥𜶹𜶶𜵺𜷍𜴊𜵲𜶷𜶦𜷞𜶜𜶘𜴐𜵈                                                            │
+│   𜵢𜴩𜴨𜵅𜶢𜶿𜴌𜶐𜶏𜴶𜵊𜴌𜷈▝𜵢𜶂𜴺𜷇𜵊𜴌𜷀𜴝                                                             │
+│   ▌🮅𜴍▌𜵝𜴾𜶲𜶫𜵆𜴒𜶃𜷆𜴕𜶓𜷃𜺨𜶃𜷌𜷠🮅𜴬𜴒▘                                                            │
+│   🮂🮂🮂𜺨𜺨𜺫🮂 𜺨🮂𜺫𜺨𜺨🮂🮂𜺫  𜺨🮂𜺫🮂                                                             │
+│                                                                                      │
+│                                                                                      │
+│ No browser here? Scan the code, or open                                              │
+│ hub.kebbie.dev/connect?code=Z78K-XF53#…                                              │
+│                                                                                      │
+│ ⏎ open · c copy link · esc stop                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+The window takes the board's whole width and height for the code; a board too small for even the stacked layout shows the rest without it.
+
+Nothing opens by itself: `⏎` opens the link in your browser, where the board sits and not over SSH, and the line `⏎ open in browser · or scan with your phone` becomes `✓ Opened in your browser`. Without a browser there, neither the line nor `⏎ open` shows. The code is the one the page shows; approve the machine only when they match. The time left counts down. The link is shown up to its `#`: what follows is the secret that ties the approving browser to this machine, and `c` copies the whole link, through `pbcopy`, `wl-copy` or `xclip` where the board sits and through the terminal (OSC 52) over SSH, when it also shows the whole link in case the terminal did not take it. `esc` stops waiting.
 
 Connected, it looks like this:
 
 ```
 ╭ kebbie hub ──────────────────────────────────────────────────────────────────────────╮
-│ Connected to hub.kebbie.dev as mac                                               │
-│ ● Board is being sent                                                                │
+│ ● mac on hub.kebbie.dev   board sent 12 s ago                                        │
 │                                                                                      │
-│ Devices that see this board                                                          │
-│   Safari on Mac  paired yesterday · seen 2 min ago                                   │
-│   iPhone         paired today · notifications on                                     │
+│ Sign in with your passkey on any phone or browser                                    │
+│ to see this board:  hub.kebbie.dev                                                   │
 │                                                                                      │
-│ a add · n name device · m rename machine · r remove · l disconnect · esc close       │
+│ n rename · l leave the hub · esc close                                               │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-The first line names the hub without its scheme and the machine by its name. While `[machine] name` differs from the name the hub has, it shows the new name with `renaming on the hub…` until the keeper's next post renames it. The dot under it is green while the board goes out, with no time, red with why it did not and how long ago (a lapsed subscription with its link, a hub that can't be reached, or what the hub answered), and amber before the first post. Each device shows by the name this machine gave it with `n`, else the name it was given when it was added, else `Unnamed device` in grey; then when it was paired, when it last read the board, and `notifications on` when it has them. The list comes from the hub in the background, so the window opens at once; while the hub does not answer it shows the last list it gave and how old it is, and a hub too old to list devices says `update the hub to see device names`.
+The first line names the machine by its name and the hub without its scheme. While `[machine] name` differs from the name the hub has, it shows the new name with `renaming on the hub…` until the keeper's next post renames it. The dot is green with how long ago the board went out, red with why it did not and how long ago on the line under it (a lapsed subscription with its link, a hub that can't be reached, or what the hub answered), and amber before the first post.
 
 | Key | Action |
 | --- | --- |
-| `a` | Add a phone or browser: a link and its QR code, then the six digits to compare. `y` admits it when the phone shows the same, `n` refuses it. |
-| `n` | Name a device on this machine: `↑` `↓` pick one (a device without a name first), `⏎` types its name. The hub has no way for a machine to rename a device, so the name is kept in this machine's `hub/identity.json` and shown here and in `kebbie hub status`; an empty name takes it off. |
-| `m` | Rename this machine: the field holds `[machine] name`, and `⏎` writes it to `config.toml` (checked as [`machine.name`](configuration.md#keys) is). A `config.toml` that is a link is not written through; the window says where to set it. The keeper sends the new name to the hub on its next post. |
-| `r` | Remove a device: `↑` `↓` pick one, `y` removes it. It stops seeing this machine's board and keeps the boards of your other machines. |
-| `l` | Disconnect this machine, after `y`: each device loses its board, and the keys and the token go. The command is `kebbie hub leave`. |
-| `?` | Details for troubleshooting: the hub's address, the machine's id and each device's id. `?` again goes back. |
+| `n` | Rename this machine: the field holds `[machine] name`, and `⏎` writes it to `config.toml` (checked as [`machine.name`](configuration.md#keys) is). A `config.toml` that is a link is not written through; the window says where to set it. The keeper sends the new name to the hub on its next post. |
+| `l` | Leave the hub, after `y`: each device loses this machine's board, and the keys and the token go. The command is `kebbie hub leave`. |
 | `esc`, `q` | Close the window. |
 
 ## Areas page
