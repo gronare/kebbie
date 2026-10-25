@@ -11,6 +11,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Notifications through the hub are not available in this version: the phone shows the board when you open it, and notify.command still tells you on the machine when a task needs you
 - Connecting a hub opens the browser only when you press ⏎, so you can read the card first
 - The hub's QR code for connecting is drawn small in the terminal's own colours, in octant blocks in Ghostty, kitty and WezTerm, which the iPhone camera reads as a code and not as text, and in braille elsewhere; KEBBIE_QR=octant or braille picks one, and in a narrow pane the code sits under the text
+- KEBBIE_HUB_DEV=1 points kebbie hub, the H window and the connect card at a dev hub on localhost:8470 (KEBBIE_HUB_DEV_URL for another address), with its own identity in hub-dev/, and says dev hub wherever it shows the hub; the real hub connection stays as it is, and the keeper posts the board to both
 - kebbie setup and kebbie hub connect pick the hub with ↑ ↓ and ⏎; k and o still choose at once
 - The hub window shows this machine on its hub with when the board last went out and where to sign in to see it; n renames this machine and l leaves the hub
 - Connecting a hub shows a card: a QR code, the code to check on the page, the time left, and c to copy the link

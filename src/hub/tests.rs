@@ -960,3 +960,77 @@ fn connect_names_the_machine_after_the_hub_then_draws_the_card_and_ends_on_the_c
     assert!(said.contains("No board goes out: no browser can read this machine's board, as it holds no account key, which only connecting from the link kebbie hub connect shows hands over. Connect it from the link: kebbie hub leave, then kebbie hub connect, and open the link it shows.") && said.contains(&format!("[machine] name = {host:?}")), "{said}");
     assert_eq!(identity::load(&state).unwrap().unwrap().name, host);
 }
+
+#[test]
+fn kebbie_hub_dev_set_to_anything_but_0_or_false_picks_the_dev_hub_on_localhost_8470_unless_kebbie_hub_dev_url_names_another() {
+    let env = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(set, _)| *set == name).map(|(_, value)| value.to_string());
+    for (pairs, dev) in [
+        (&[][..], None),
+        (&[("KEBBIE_HUB_DEV", "")][..], None),
+        (&[("KEBBIE_HUB_DEV", "0")], None),
+        (&[("KEBBIE_HUB_DEV", "False")], None),
+        (&[("KEBBIE_HUB_DEV_URL", "http://localhost:9000")], None),
+        (&[("KEBBIE_HUB_DEV", "1")], Some("http://localhost:8470")),
+        (&[("KEBBIE_HUB_DEV", "yes"), ("KEBBIE_HUB_DEV_URL", "")], Some("http://localhost:8470")),
+        (&[("KEBBIE_HUB_DEV", "1"), ("KEBBIE_HUB_DEV_URL", " http://127.0.0.1:9000/ ")], Some("http://127.0.0.1:9000")),
+    ] {
+        assert_eq!(super::dev_in(env(pairs)).as_deref(), dev, "{pairs:?}");
+    }
+    assert_eq!(super::dev_label(super::DEV_URL), "dev hub · localhost:8470");
+}
+
+fn real_identity(state: &Path) -> Vec<u8> {
+    let machine = identity::Identity::new("https://hub.example.com", Id::new(kebbie_hub_protocol::Prefix::Machine).unwrap(), "mac", "khm_real".to_string(), &kebbie_hub_protocol::SecretKeys::generate(), 1);
+    identity::save_at(&identity::dir_of(state, false), &machine).unwrap();
+    std::fs::read(identity::dir_of(state, false).join("identity.json")).unwrap()
+}
+
+#[test]
+fn on_the_dev_hub_connect_and_status_use_the_dev_address_and_identity_and_leave_the_real_ones_byte_for_byte() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let dir = crate::sh::test_dir("hub-dev-connect");
+    let (state, config) = (dir.join("state"), dir.join("config.toml"));
+    let settings = "[machine]\nname = \"mac\"\n\n[hub]\nurl = \"https://hub.example.com\"\n";
+    std::fs::write(&config, settings).unwrap();
+    let real = real_identity(&state);
+    let said = super::on_dev_hub(&hub.url, || {
+        let mut console = Script::new(&[]);
+        console.keys = [Some(super::console::Key::Copy), None].into();
+        console.on_copied = Some(Box::new(|link: &str| {
+            hub.runtime.block_on(browser.approve_connect(link, false)).unwrap();
+        }));
+        let run = super::connect::Run { state: &state, config: &config, given: None, interactive: true, opener: None, post: || Ok(()), now: now() };
+        super::connect::connect_on(&mut console, &run).unwrap();
+        console.said
+    });
+    let shown = format!("dev hub · {}", super::host(&hub.url));
+    assert!(said.contains("Connect mac to dev hub") && said.contains(&shown) && said.contains(&format!("mac is connected to {shown}")) && !said.contains("hub.example.com"), "{said}");
+    let dev = identity::load_at(&identity::dir_of(&state, true)).unwrap().unwrap();
+    assert_eq!((dev.url.as_str(), dev.name.as_str()), (hub.url.as_str(), "mac"));
+    assert_eq!(std::fs::read(state.join("hub/identity.json")).unwrap(), real, "the real identity is left byte for byte");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), settings, "[hub] url is neither read nor written");
+    let status = super::on_dev_hub(&hub.url, || super::status_text(&state, Some("mac"), now()).unwrap());
+    assert!(status.starts_with(&format!("{shown} (KEBBIE_HUB_DEV is set")) && status.contains(&format!("hub:      {}", hub.url)), "{status}");
+    let status = super::status_text(&state, Some("mac"), now()).unwrap();
+    assert!(status.starts_with("hub:      https://hub.example.com") && !status.contains("dev hub"), "without the variable the real one: {status}");
+    let none = super::on_dev_hub(super::DEV_URL, || super::status_text(&crate::sh::test_dir("hub-dev-none"), None, now()).unwrap());
+    assert!(none.starts_with("dev hub · localhost:8470 (KEBBIE_HUB_DEV is set") && none.contains("Not connected to a hub"), "{none}");
+}
+
+#[test]
+fn the_keeper_posts_the_board_to_the_real_hub_and_the_dev_hub_each_with_its_own_identity_and_leaves_the_real_identity_as_it_was() {
+    let (real_hub, dev_hub) = (open_hub(|_| {}), open_hub(|_| {}));
+    let (mut real_browser, mut dev_browser) = (member(&real_hub), member(&dev_hub));
+    let state = connected_state(&real_hub, &mut real_browser);
+    let dev_state = connected_state(&dev_hub, &mut dev_browser);
+    std::fs::rename(identity::dir_of(&dev_state, false), identity::dir_of(&state, true)).unwrap();
+    let real = std::fs::read(state.join("hub/identity.json")).unwrap();
+    super::tick_in(&state, Some("mac"), now(), || Ok(board_of(&[asking("refunds", "greenhouse")]))).unwrap();
+    assert_eq!(real_hub.boards(&mut real_browser).len(), 1, "the real hub has its board");
+    assert_eq!(dev_hub.boards(&mut dev_browser).len(), 1, "the dev hub has its board");
+    assert_eq!(std::fs::read(state.join("hub/identity.json")).unwrap(), real);
+    assert!(identity::dir_of(&state, true).join("relay.json").exists() && identity::dir_of(&state, false).join("relay.json").exists(), "each hub keeps its own relay record");
+    assert_eq!(super::on_dev_hub(&dev_hub.url, || identity::load(&state).unwrap().unwrap().url), dev_hub.url);
+    assert_eq!(identity::load(&state).unwrap().unwrap().url, real_hub.url);
+}

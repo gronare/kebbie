@@ -449,6 +449,7 @@ fn choice(index: usize, selected: usize, about: String) -> Line<'static> {
 fn choose(configured: Option<&String>, selected: usize, error: Option<&String>) -> Vec<Line<'static>> {
     let mut lines = vec![text("See this board on your phone, end-to-end encrypted."), Line::default()];
     match configured {
+        Some(url) if crate::hub::dev().is_some() => lines.push(text(format!("Connect to the {}, as {} says.", crate::hub::dev_label(url), crate::hub::DEV_VAR))),
         Some(url) => lines.push(text(format!("Connect to {}, as [hub] url says.", host(url)))),
         None => {
             lines.push(choice(0, selected, format!("{} · free to connect and read", host(DEFAULT_HUB_URL))));
@@ -496,7 +497,7 @@ fn overview(window: &Window, leaving: bool) -> Vec<Line<'static>> {
         _ => said,
     };
     let renaming = window.configured_name().filter(|name| *name != joined.name);
-    let mut first = vec![Span::styled("● ", status(sent)), Span::styled(format!("{} on {}", renaming.as_deref().unwrap_or(&joined.name), host(&joined.url)), style(TEXT))];
+    let mut first = vec![Span::styled("● ", status(sent)), Span::styled(format!("{} on {}", renaming.as_deref().unwrap_or(&joined.name), card::hub_shown(&joined.url)), style(TEXT))];
     if renaming.is_some() {
         first.push(Span::styled("  renaming on the hub…", style(MUTED)));
     }
@@ -677,6 +678,19 @@ mod tests {
         let mut app = opened(paths("[hub]\nurl = \"https://hub.example.com\"\n"));
         let shown = screen(&mut app, 110, 40);
         assert!(shown.contains("Connect to hub.example.com, as [hub] url says.") && shown.contains("⏎ connect · esc close") && !shown.contains("your own"), "{shown}");
+    }
+
+    #[test]
+    fn on_the_dev_hub_the_window_connects_there_and_shows_it_as_the_dev_hub() {
+        crate::hub::on_dev_hub(crate::hub::DEV_URL, || {
+            let mut app = opened(paths("[hub]\nurl = \"https://hub.example.com\"\n"));
+            let shown = screen(&mut app, 110, 40);
+            assert!(shown.contains("Connect to the dev hub · localhost:8470, as KEBBIE_HUB_DEV says.") && !shown.contains("hub.example.com") && !shown.contains("your own"), "{shown}");
+            let paths = joined(relay::Relay { rev: 3, posted_at: Some(crate::messages::now()), ..Default::default() });
+            assert!(paths.state.join("hub-dev/identity.json").exists() && !paths.state.join("hub").exists(), "the dev identity has its own directory");
+            let shown = screen(&mut opened(paths), 110, 40);
+            assert!(shown.contains("● mac on dev hub · kebbie.example.com"), "{shown}");
+        });
     }
 
     #[test]

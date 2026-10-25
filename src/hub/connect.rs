@@ -19,7 +19,13 @@ const SLOW_DOWN_STEP: u64 = 5;
 pub const STOPPED: &str = "stopped; this machine is not connected";
 
 pub fn hub_name(url: &str) -> String {
-    if url == crate::config::DEFAULT_HUB_URL { format!("the kebbie hub ({url})") } else { url.to_string() }
+    if super::dev().is_some() {
+        format!("the dev hub ({url})")
+    } else if url == crate::config::DEFAULT_HUB_URL {
+        format!("the kebbie hub ({url})")
+    } else {
+        url.to_string()
+    }
 }
 
 // Nothing answers GET /v1/hub with a HubInfo but a kebbie hub, and hub_url already holds the address to https.
@@ -41,7 +47,7 @@ pub struct Chosen {
 }
 
 pub fn configured_hub(config: &Path) -> Result<Option<String>> {
-    Ok(crate::config::load_machine(config)?.hub_url)
+    super::configured_url(config)
 }
 
 // A config.toml linked in from dotfiles is shared with other machines, so kebbie writes no key through it and says where to set it.

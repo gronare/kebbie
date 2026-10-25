@@ -40,6 +40,14 @@ Run kebbie from your own checkout while you change it.
 
 6. Add a line to `CHANGES.md` under `## Unreleased` for each change a user would notice, in the commit that makes it. Machines on the `main` channel show it after their next update, and the release takes it along. See [Write the notes as you go](release-kebbie.md#write-the-notes-as-you-go).
 
+To work on the hub client against a kebbie-hub you run yourself, start the hub in its own repo in dev mode, on `localhost:8470`, and set `KEBBIE_HUB_DEV=1` in the shell you run kebbie from:
+
+```bash
+KEBBIE_HUB_DEV=1 kebbie hub connect
+```
+
+kebbie then connects to that hub and keeps its keys in `hub-dev/` in the state directory, and `kebbie hub status`, the board's `H` window and the connect card say `dev hub · localhost:8470`; your real hub connection in `hub/` and `[hub] url` stay as they are, and the keeper posts the board to both. `KEBBIE_HUB_DEV_URL` points it at another address. See [Environment variables](../reference/environment.md).
+
 To try a task's commits in the kebbie you run before pushing them, turn on `stage_on_main` for the repo and stage the task: see [Try a task before pushing](try-a-task-before-pushing.md).
 
 To try your commits on a machine that follows a channel instead, see [Try unreleased code](try-unreleased-code.md).

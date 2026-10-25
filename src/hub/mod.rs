@@ -28,6 +28,48 @@ pub const EVERY: u64 = 15;
 pub const UNREAD: &str = "no browser can read this machine's board, as it holds no account key, which only connecting from the link kebbie hub connect shows hands over";
 pub const RECONNECT: &str = "kebbie hub leave, then kebbie hub connect";
 
+pub const DEV_VAR: &str = "KEBBIE_HUB_DEV";
+pub const DEV_URL_VAR: &str = "KEBBIE_HUB_DEV_URL";
+pub const DEV_URL: &str = "http://localhost:8470";
+
+pub fn dev_in(env: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let on = env(DEV_VAR).map(|value| value.trim().to_ascii_lowercase()).is_some_and(|value| !matches!(value.as_str(), "" | "0" | "false"));
+    on.then(|| env(DEV_URL_VAR).map(|url| url.trim().trim_end_matches('/').to_string()).filter(|url| !url.is_empty()).unwrap_or_else(|| DEV_URL.to_string()))
+}
+
+#[cfg(test)]
+thread_local! {
+    static DEV_HERE: std::cell::RefCell<Option<Option<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+// The one switch to the dev hub: the hub's address and the identity's directory both follow it, so a dev session never reads or writes the real connection.
+pub fn dev() -> Option<String> {
+    #[cfg(test)]
+    if let Some(set) = DEV_HERE.with(|here| here.borrow().clone()) {
+        return set;
+    }
+    dev_in(|name| std::env::var(name).ok())
+}
+
+#[cfg(test)]
+pub(crate) fn on_dev_hub<T>(url: &str, run: impl FnOnce() -> T) -> T {
+    DEV_HERE.with(|here| *here.borrow_mut() = Some(Some(url.to_string())));
+    let done = run();
+    DEV_HERE.with(|here| *here.borrow_mut() = None);
+    done
+}
+
+pub fn dev_label(url: &str) -> String {
+    format!("dev hub · {}", host(url))
+}
+
+pub fn configured_url(config: &Path) -> Result<Option<String>> {
+    match dev() {
+        Some(url) => Ok(Some(url)),
+        None => Ok(crate::config::load_machine(config)?.hub_url),
+    }
+}
+
 fn loopback(host: &str) -> bool {
     let name = host.rsplit_once(':').filter(|(name, port)| !name.is_empty() && port.chars().all(|character| character.is_ascii_digit())).map_or(host, |(name, _)| name);
     matches!(name, "localhost" | "127.0.0.1" | "[::1]")
@@ -148,7 +190,11 @@ pub fn configured_name(config: &Path) -> Option<String> {
 }
 
 pub fn sync_name(state: &Path, configured: Option<&str>) -> Result<()> {
-    let Some(identity) = identity::load(state)? else { return Ok(()) };
+    sync_name_at(&identity::dir(state), configured)
+}
+
+fn sync_name_at(dir: &Path, configured: Option<&str>) -> Result<()> {
+    let Some(identity) = identity::load_at(dir)? else { return Ok(()) };
     let unchanged = (identity.name.clone(), None, None);
     let (name, error, stopped) = match configured.filter(|name| *name != identity.name) {
         None => unchanged,
@@ -164,11 +210,11 @@ pub fn sync_name(state: &Path, configured: Option<&str>) -> Result<()> {
         return Ok(());
     }
     // A connect may have pinned the account since the load above, so only the name fields are written over a fresh load.
-    let Some(mut current) = identity::load(state)? else { return Ok(()) };
+    let Some(mut current) = identity::load_at(dir)? else { return Ok(()) };
     current.name = name;
     current.rename_error = error;
     current.rename_stopped = stopped;
-    identity::save(state, &current)
+    identity::save_at(dir, &current)
 }
 
 fn rename_line(identity: &Identity, configured: Option<&str>) -> Option<String> {
@@ -252,11 +298,14 @@ pub fn host(url: &str) -> &str {
 }
 
 pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<String> {
+    let dev = dev().map(|url| format!("{} ({DEV_VAR} is set; the real hub connection is left as it is)", dev_label(&url)));
     let Some(identity) = identity::load(state)? else {
-        return Ok("Not connected to a hub. kebbie hub connect, or H on the board, shows this machine's board on your phone.".to_string());
+        let not = "Not connected to a hub. kebbie hub connect, or H on the board, shows this machine's board on your phone.";
+        return Ok(dev.map_or(not.to_string(), |dev| format!("{dev}\n{not}")));
     };
     let relay = relay::load(state);
-    let mut lines = vec![format!("hub:      {}", identity.url), format!("machine:  {} ({})", identity.name, identity.machine)];
+    let mut lines: Vec<String> = dev.into_iter().collect();
+    lines.extend([format!("hub:      {}", identity.url), format!("machine:  {} ({})", identity.name, identity.machine)]);
     lines.extend(rename_line(&identity, configured).map(|line| format!("name:     {line}")));
     lines.push(match &identity.account {
         Some(account) => {
@@ -292,14 +341,29 @@ pub fn leave(state: &Path) -> Result<String> {
 }
 
 pub fn tick() -> Result<()> {
-    let state = crate::lead::state_dir()?;
-    sync_name(&state, configured_name(&crate::config::path()).as_deref())?;
-    if identity::load(&state)?.is_none_or(|identity| identity.account.is_none()) {
-        return Ok(());
+    let (state, now) = (crate::lead::state_dir()?, crate::messages::now());
+    tick_in(&state, configured_name(&crate::config::path()).as_deref(), now, || board::gather(&state, now))
+}
+
+// The keeper posts to the real hub and to the dev hub alike, whichever this machine is connected to, so a keeper started without KEBBIE_HUB_DEV still serves a dev connection.
+pub fn tick_in(state: &Path, configured: Option<&str>, now: u64, gather: impl Fn() -> Result<kebbie_hub_protocol::Board>) -> Result<()> {
+    let mut board = None;
+    let mut failed = Vec::new();
+    for dir in [identity::dir_of(state, false), identity::dir_of(state, true)] {
+        let posted = (|| {
+            sync_name_at(&dir, configured)?;
+            if identity::load_at(&dir)?.is_none_or(|identity| identity.account.is_none()) {
+                return Ok(());
+            }
+            let board = match &board {
+                Some(board) => board,
+                None => board.insert(gather()?),
+            };
+            relay::relay_at(&dir, board, now).map(|_| ())
+        })();
+        failed.extend(posted.err());
     }
-    let now = crate::messages::now();
-    let board = board::gather(&state, now)?;
-    relay::relay(&state, &board, now).map(|_| ())
+    if failed.is_empty() { Ok(()) } else { Err(failed.join("; ")) }
 }
 
 pub fn interactive() -> bool {

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::sh::Result;
 
 pub const DIR: &str = "hub";
+pub const DEV_DIR: &str = "hub-dev";
 const FILE: &str = "identity.json";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -42,11 +43,11 @@ impl Account {
 }
 
 pub fn dir(state: &Path) -> PathBuf {
-    state.join(DIR)
+    dir_of(state, super::dev().is_some())
 }
 
-fn file(state: &Path) -> PathBuf {
-    dir(state).join(FILE)
+pub fn dir_of(state: &Path, dev: bool) -> PathBuf {
+    state.join(if dev { DEV_DIR } else { DIR })
 }
 
 pub fn random32() -> Result<[u8; 32]> {
@@ -79,7 +80,11 @@ impl Identity {
 }
 
 pub fn load(state: &Path) -> Result<Option<Identity>> {
-    let path = file(state);
+    load_at(&dir(state))
+}
+
+pub fn load_at(dir: &Path) -> Result<Option<Identity>> {
+    let path = dir.join(FILE);
     match std::fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str(&text).map(Some).map_err(|error| format!("{}: {error}", path.display())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -88,8 +93,12 @@ pub fn load(state: &Path) -> Result<Option<Identity>> {
 }
 
 pub fn save(state: &Path, identity: &Identity) -> Result<()> {
+    save_at(&dir(state), identity)
+}
+
+pub fn save_at(dir: &Path, identity: &Identity) -> Result<()> {
     let text = serde_json::to_string_pretty(identity).map_err(|error| error.to_string())?;
-    crate::state::write(&file(state), text)
+    crate::state::write(&dir.join(FILE), text)
 }
 
 pub fn forget(state: &Path) -> Result<()> {
@@ -110,7 +119,7 @@ mod tests {
         let keys = SecretKeys::generate();
         let identity = Identity::new("https://hub.example.com", Id::new(kebbie_hub_protocol::Prefix::Machine).unwrap(), "mac", "khm_secret".to_string(), &keys, 1);
         save(&state, &identity).unwrap();
-        assert_eq!(std::fs::metadata(file(&state)).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(dir(&state).join(FILE)).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(dir(&state)).unwrap().permissions().mode() & 0o777, 0o700);
         let loaded = load(&state).unwrap().unwrap();
         assert_eq!(loaded.public(), keys.public());

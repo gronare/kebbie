@@ -33,7 +33,17 @@ pub enum Copied {
 }
 
 pub fn hub_label(url: &str) -> &'static str {
-    if url == DEFAULT_HUB_URL { "kebbie hub" } else { "your own hub" }
+    if super::dev().is_some() {
+        "dev hub"
+    } else if url == DEFAULT_HUB_URL {
+        "kebbie hub"
+    } else {
+        "your own hub"
+    }
+}
+
+pub fn hub_shown(url: &str) -> String {
+    if super::dev().is_some() { super::dev_label(url) } else { super::host(url).to_string() }
 }
 
 // The fragment carries the secret, so the shown link stops at it and c copies the whole one.
@@ -70,7 +80,7 @@ pub struct Waiting<'a> {
 pub fn waiting_text(waiting: &Waiting) -> Vec<Row> {
     let mut rows = vec![
         vec![piece(format!("Connect {} to {}", waiting.name, hub_label(waiting.url)), Tone::Title)],
-        vec![piece(super::host(waiting.url), Tone::Text)],
+        vec![piece(hub_shown(waiting.url), Tone::Text)],
         Vec::new(),
     ];
     match waiting.browser {
@@ -127,7 +137,7 @@ pub fn footer(link: &str, foot: Foot) -> Vec<Row> {
 }
 
 pub fn connected_text(name: &str, url: &str, whose: &str, readable: bool) -> Vec<Row> {
-    let mut rows = vec![vec![piece("✓  ", Tone::Good), piece(format!("{name} is connected to {}", super::host(url)), Tone::Text)], Vec::new()];
+    let mut rows = vec![vec![piece("✓  ", Tone::Good), piece(format!("{name} is connected to {}", hub_shown(url)), Tone::Text)], Vec::new()];
     if readable {
         rows.push(vec![piece("   Sign in with your passkey on any phone or browser", Tone::Text)]);
         rows.push(vec![piece(format!("   to see {whose} board:  "), Tone::Text), piece(super::host(url), Tone::Title)]);

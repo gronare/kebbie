@@ -1561,3 +1561,59 @@ fn restart_fresh_starts_the_lead_on_a_new_conversation_and_keeps_the_old_one_on_
     let refused = run(&["lead", "--restart", "--fresh"]);
     assert!(!refused.status.success() && stderr(&refused).contains("Not restarted: the lead is working."), "{}", stderr(&refused));
 }
+
+#[test]
+fn kebbie_hub_dev_points_connect_and_status_at_the_dev_hub_and_its_own_identity_and_leaves_the_real_one_alone() {
+    use std::io::{BufRead, BufReader};
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let lab = Lab::new("hub-dev");
+    let mut config = kebbie_hub::Config::new(lab.root.join("hub-data"));
+    config.connect_interval = 0;
+    let hub = kebbie_hub::Hub::open(config).unwrap();
+    let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    runtime.spawn(kebbie_hub::serve(listener, std::sync::Arc::clone(&hub), std::future::pending()));
+    let settings = "[machine]\nname = \"mac\"\n\n[hub]\nurl = \"https://hub.example.com\"\n";
+    fs::write(&lab.config, settings).unwrap();
+    let joined = lab.run(&["hub", "join", &url, &hub.mint_join_code().unwrap()]);
+    assert!(joined.status.success(), "{}", stderr(&joined));
+    let real = lab.state.join("hub/identity.json");
+    let before = fs::read(&real).unwrap();
+
+    let status = lab.command().env("KEBBIE_HUB_DEV", "1").args(["hub", "status"]).output().unwrap();
+    assert!(stdout(&status).starts_with("dev hub · localhost:8470 (KEBBIE_HUB_DEV is set") && stdout(&status).contains("Not connected to a hub"), "{}", stdout(&status));
+
+    let mut connect = lab.command().env("KEBBIE_HUB_DEV", "1").env("KEBBIE_HUB_DEV_URL", &url).args(["hub", "connect"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut shown = String::new();
+    let mut lines = BufReader::new(connect.stdout.take().unwrap()).lines();
+    let link = loop {
+        let line = lines.next().expect("the card names the link").unwrap();
+        shown.push_str(&line);
+        shown.push('\n');
+        if let Some(at) = line.find("http").filter(|_| line.contains("#k=")) {
+            break line[at..].trim().to_string();
+        }
+    };
+    let mut browser = kebbie_hub_fakes::browser::Browser::new(&url, kebbie_hub::DEV_ORIGIN);
+    runtime.block_on(browser.sign_up_with_invite(&hub.mint_invite().unwrap())).unwrap();
+    runtime.block_on(browser.approve_connect(&link, false)).unwrap();
+    let rest: String = lines.map_while(Result::ok).collect::<Vec<_>>().join("\n");
+    assert!(connect.wait().unwrap().success(), "{shown}{rest}");
+    let address = url.trim_start_matches("http://");
+    assert!(shown.contains("Connect mac to dev hub") && shown.contains(&format!("dev hub · {address}")) && rest.contains(&format!("mac is connected to dev hub · {address}")), "{shown}{rest}");
+    let dev = fs::read_to_string(lab.state.join("hub-dev/identity.json")).unwrap();
+    assert!(dev.contains(&format!("\"url\": \"{url}\"")), "{dev}");
+    assert_eq!(fs::read(&real).unwrap(), before, "the real identity is left byte for byte");
+    assert_eq!(fs::read_to_string(&lab.config).unwrap(), settings, "[hub] url is left as it is");
+
+    let dev_status = lab.command().env("KEBBIE_HUB_DEV", "1").env("KEBBIE_HUB_DEV_URL", &url).args(["hub", "status"]).output().unwrap();
+    assert!(stdout(&dev_status).contains(&format!("dev hub · {address}")) && stdout(&dev_status).contains("account:  none"), "{}", stdout(&dev_status));
+    for off in [None, Some("0"), Some("false")] {
+        let mut command = lab.command();
+        if let Some(value) = off {
+            command.env("KEBBIE_HUB_DEV", value);
+        }
+        let status = command.args(["hub", "status"]).output().unwrap();
+        assert!(stdout(&status).starts_with(&format!("hub:      {url}")) && !stdout(&status).contains("dev hub"), "{off:?}: {}", stdout(&status));
+    }
+}

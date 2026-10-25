@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use kebbie_hub_api::{BoardStored, BoardUpload};
 use kebbie_hub_protocol::{Board, Envelope, Header, Id, Kind, Payload, Prefix, seal};
@@ -23,16 +23,16 @@ pub struct Relay {
     pub plan_inactive: Option<String>,
 }
 
-fn file(state: &Path) -> PathBuf {
-    identity::dir(state).join(FILE)
-}
-
 pub fn load(state: &Path) -> Relay {
-    std::fs::read_to_string(file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    load_at(&identity::dir(state))
 }
 
-fn save(state: &Path, relay: &Relay) -> Result<()> {
-    crate::state::write(&file(state), serde_json::to_string_pretty(relay).map_err(|error| error.to_string())?)
+fn load_at(dir: &Path) -> Relay {
+    std::fs::read_to_string(dir.join(FILE)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+fn save(dir: &Path, relay: &Relay) -> Result<()> {
+    crate::state::write(&dir.join(FILE), serde_json::to_string_pretty(relay).map_err(|error| error.to_string())?)
 }
 
 fn hash(text: &str) -> String {
@@ -56,27 +56,32 @@ pub fn seal_board(identity: &Identity, board: &Board, rev: u64, now: u64) -> Res
     seal(header, &Payload::Board(board), &identity.secret(), &[(identity.machine.clone(), identity.public()), account.key.recipient()]).map_err(|error| error.to_string())
 }
 
-fn failed(state: &Path, relay: &mut Relay, error: &HubError, now: u64) -> String {
+fn failed(dir: &Path, relay: &mut Relay, error: &HubError, now: u64) -> String {
     relay.plan_inactive = matches!(error, HubError::PlanInactive { .. }).then(|| error.to_string());
     relay.error = Some(error.to_string());
     relay.error_at = Some(now);
-    let _ = save(state, relay);
+    let _ = save(dir, relay);
     error.to_string()
 }
 
-fn keep_move(state: &Path, client: &Client) {
-    if let (Some(moved), Ok(Some(mut identity))) = (client.moved(), identity::load(state))
+fn keep_move(dir: &Path, client: &Client) {
+    if let (Some(moved), Ok(Some(mut identity))) = (client.moved(), identity::load_at(dir))
         && identity.url != moved
     {
         identity.url = moved;
-        let _ = identity::save(state, &identity);
+        let _ = identity::save_at(dir, &identity);
     }
 }
 
 // The heartbeat reposts an unchanged board, since the web app counts a machine silent for three minutes as asleep and the hub keeps a board a day at most; a revision of at least the time keeps it rising when relay.json is lost, as the web app refuses one that goes back.
+#[cfg(test)]
 pub fn relay(state: &Path, board: &Board, now: u64) -> Result<Option<u64>> {
-    let Some(identity) = identity::load(state)?.filter(|identity| identity.account.is_some()) else { return Ok(None) };
-    let mut relay = load(state);
+    relay_at(&identity::dir(state), board, now)
+}
+
+pub fn relay_at(dir: &Path, board: &Board, now: u64) -> Result<Option<u64>> {
+    let Some(identity) = identity::load_at(dir)?.filter(|identity| identity.account.is_some()) else { return Ok(None) };
+    let mut relay = load_at(dir);
     let print = fingerprint(board, &identity);
     let heartbeat_due = relay.posted_at.is_none_or(|at| now.saturating_sub(at) >= HEARTBEAT);
     if relay.fingerprint.as_deref() == Some(print.as_str()) && !heartbeat_due {
@@ -88,8 +93,8 @@ pub fn relay(state: &Path, board: &Board, now: u64) -> Result<Option<u64>> {
     let stored: BoardStored = match client.put("/v1/m/board", &BoardUpload { rev, envelope }) {
         Ok(stored) => stored,
         Err(error) => {
-            keep_move(state, &client);
-            return Err(failed(state, &mut relay, &error, now));
+            keep_move(dir, &client);
+            return Err(failed(dir, &mut relay, &error, now));
         }
     };
     relay.rev = relay.rev.max(stored.rev);
@@ -98,7 +103,7 @@ pub fn relay(state: &Path, board: &Board, now: u64) -> Result<Option<u64>> {
     relay.error = None;
     relay.error_at = None;
     relay.plan_inactive = None;
-    save(state, &relay)?;
-    keep_move(state, &client);
+    save(dir, &relay)?;
+    keep_move(dir, &client);
     Ok(Some(stored.rev))
 }
