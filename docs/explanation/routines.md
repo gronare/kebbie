@@ -1,27 +1,37 @@
 # Routines
 
-A routine is a check kebbie runs on a schedule: the health of a cluster every six hours, the dependency updates of an app every Monday morning. Each run is an ordinary kebbie task. It gets a worktree, a Space and a Claude, it investigates what the routine asks, and it ends in one of three ways: all is well, it reports what it found, or it fixes it.
+This page explains routines: checks kebbie runs on a schedule, each as a task that reports, plans or fixes.
 
-## What a run is
+A routine checks the health of a cluster every six hours, say, or the dependency updates of an app every Monday morning. Each run is an ordinary kebbie task. It gets a worktree, a Space and a Claude, it investigates what the routine asks, and it ends in one of three ways: all is well, it reports what it found, or it fixes it.
 
-You write a routine as a `[[routines]]` table, in config.toml or in a repo's own config (see [`[[routines]]`](../reference/configuration.md#routines)), or let the board's Routines page or `kebbie routine add` write it into config.toml for you. It names the repo the run works in, a schedule, a prompt in your words and a mode.
+## A routine is a table, a run is a task
 
-When a run is due, kebbie starts a task named `<id>-<yyyymmdd-hhmm>` in that repo through the same start path as `kebbie start`, without taking focus. The task's first prompt is built from the routine: its title, your prompt, the mode's instructions and how to finish. The run's Claude works in Claude's `auto` permission mode, since nobody is there to answer a permission prompt, and without a vault note: a run that finds nothing leaves nothing behind.
+You write a routine as a `[[routines]]` table, in config.toml or in a repo's own config (see [`[[routines]]`](../reference/configuration.md#routines)). The board's Routines page or `kebbie routine add` can write it into config.toml for you. It names the repo the run works in, a schedule, a prompt in your words and a mode.
+
+When a run is due, kebbie starts a task named `<id>-<yyyymmdd-hhmm>` in that repo through the same start path as `kebbie start`, without taking focus. The task's first prompt is built from the routine: its title, your prompt, the mode's instructions and how to finish.
+
+The run's Claude works in Claude's `auto` permission mode, since nobody is there to answer a permission prompt. It runs without a vault note, so a run that finds nothing leaves nothing behind.
+
+## Runs show on the board like any task
 
 On the board a run's task shows a `routine` marker next to its name and reports like any other task. The Routines page (`3`) lists the routines themselves, with their last runs, and marks its tab with `⚠` while a run's findings wait for you. The lead knows routine tasks come from kebbie and treats them like the rest.
 
-## When it runs
+## The keeper starts runs when they are due
 
 The keeper checks the routines every minute. A routine is due:
 
 - with `every`, once that interval has passed since its last run started; a new routine runs at the first check,
 - with `at`, once that local time has come since its last run started; a new routine waits for the next time.
 
-A machine that slept through several slots runs the routine once when it wakes, not once per missed slot. A run never starts while the last run's task is still open: the next one waits until you, the lead or the task itself closed it. With `[keeper] enabled = false` an open board runs the checks instead, and a lock keeps two boards from starting the same run.
+A machine that slept through several slots runs the routine once when it wakes, not once per missed slot. A run never starts while the last run's task is still open: the next one waits until you, the lead or the task itself closed it.
+
+With `[keeper] enabled = false` an open board runs the checks instead, and a lock keeps two boards from starting the same run.
+
+## You can see and start runs yourself
 
 `kebbie routines` and the Routines page show each routine's next run and the outcome of its last one. `kebbie routine run <id>` starts a run at once, by the same rules.
 
-## The modes
+## The mode decides what a run may change
 
 | Mode | The task | When all is well | Otherwise |
 | --- | --- | --- | --- |
@@ -29,17 +39,28 @@ A machine that slept through several slots runs the routine once when it wakes, 
 | `plan` | investigates and changes nothing until you approve | `kebbie routine ok "<summary>"` | writes a plan and asks you to approve it with `kebbie ask --plan`, then carries it out in commits |
 | `fix` | investigates and fixes | `kebbie routine ok "<summary>"` | fixes what it found in commits and reports ready, with a card of what it found and changed |
 
-`kebbie routine ok` records the run as ok and closes the task, which works only while the task has no changes and no commits. Only that task's own Claude can say it.
+## Only the run itself says all is well
 
-## Outcomes and notifications
+`kebbie routine ok` records the run as ok and closes the task. It works only while the task has no changes and no commits, and only that task's own Claude can say it.
 
-Each routine keeps its last run in the state directory: when it started, its task, its outcome and a one-line summary. The outcome is `running` from the start, `ok` after `kebbie routine ok`, `findings` from the task's first report or question, and `failed` when the run could not start or its task closed before it said anything.
+## A quiet night stays quiet
 
-A run with findings sends `notify.command` a `routine-findings` event in place of that report's usual event, and a failed run sends `routine-failed`. A run whose Claude asks whether you trust its folder sends `needs-you`, and the Routines page shows it waiting for that answer. An ok run sends nothing, so a quiet night stays quiet. See [Notify command](../reference/configuration.md#notify-command).
+Each routine keeps its last run in the state directory: when it started, its task, its outcome and a one-line summary.
+
+| Outcome | When |
+| --- | --- |
+| `running` | from the start |
+| `ok` | after `kebbie routine ok` |
+| `findings` | from the task's first report or question |
+| `failed` | when the run could not start, or its task closed before it said anything |
+
+A run with findings sends `notify.command` a `routine-findings` event in place of that report's usual event, and a failed run sends `routine-failed`. A run whose Claude asks whether you trust its folder sends `needs-you`, and the Routines page shows it waiting for that answer. An ok run sends nothing. See [Notify command](../reference/configuration.md#notify-command).
 
 ## The push exception
 
-A task never pushes, and the lead pushes a task only under a permission you gave. A fix routine with `push = true` is that permission given in advance: when the run starts, kebbie gives its task the same push permission as the board's `a` key. Once the task reports ready and the reviewer's rules check passes its commits, the lead lands and pushes the fix without waiting for you, as it would any task you let it push. Use it for fixes you would accept unseen, such as an incident runbook step or a routine bump. Without `push = true` you push a routine's fix yourself.
+A task never pushes, and the lead pushes a task only under a permission you gave. A fix routine with `push = true` is that permission given in advance: when the run starts, kebbie gives its task the same push permission as the board's `a` key.
+
+Once the task reports ready and the reviewer's rules check passes its commits, the lead lands and pushes the fix without waiting for you, as it would any task you let it push. Use it for fixes you would accept unseen, such as an incident runbook step or a routine bump. Without `push = true` you push a routine's fix yourself.
 
 ## Related
 

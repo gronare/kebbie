@@ -1,6 +1,6 @@
 # Decide what a task does with what it notices
 
-A task's Claude notices things outside its task: a bug nearby, a stale doc, a refactor worth doing. `task.also_noticed` decides what it does with them.
+Choose with `task.also_noticed` what a task does with things it notices outside its task: a bug nearby, a stale doc, a refactor worth doing.
 
 | Value | The task |
 | --- | --- |
@@ -15,8 +15,6 @@ A task's Claude notices things outside its task: a bug nearby, a stale doc, a re
    also_noticed = "fix"
    ```
 
-   Or in a repo config for one repo, `~/.config/kebbie/repos/app.toml`, which wins.
-
 2. Check the value in effect:
 
    ```bash
@@ -25,8 +23,12 @@ A task's Claude notices things outside its task: a bug nearby, a stale doc, a re
 
 New tasks follow it from their start.
 
+If you want it for one repo, set it in that repo's config, `~/.config/kebbie/repos/app.toml`, which wins.
+
 ## What you see
 
-The task's sign-off card lists each thing under **Also noticed**, with what the task did: where it filed it, the commit that fixed it, or what you answered. A line marked `not filed` is one the task could not file; the lead files it.
+The task's sign-off card lists each thing under **Also noticed**, with what the task did: where it filed it, the commit that fixed it, or what you answered. A line marked `not filed` is one the task could not file. The lead files it.
 
-The reviewer reads the setting too. Under `"backlog"` and `"ask"` a change the task did not need is a finding; under `"fix"` a small fix in its own commit passes, and one mixed into the task's commits does not.
+## The reviewer reads it too
+
+Under `"backlog"` and `"ask"`, a change the task did not need is a finding. Under `"fix"`, a small fix in its own commit passes, and one mixed into the task's commits does not.

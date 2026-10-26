@@ -12,4 +12,6 @@ See how much of your Claude plan's five-hour session and weekly limit you have u
 
 2. Send any Claude session a prompt. The board shows the usage from the next response on.
 
-The numbers come only on a Claude.ai plan, not with an API key, and are as fresh as the last response of any session.
+The numbers are as fresh as the last response of any session.
+
+- If you use an API key rather than a Claude.ai plan, no numbers come.

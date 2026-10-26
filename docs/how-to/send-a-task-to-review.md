@@ -10,9 +10,11 @@ Hold a risky task's push until an independent, read-only Claude has passed its c
 
    The task moves to To review. Its push waits.
 
-2. Wait for the verdict. The row shows `reviewed` on a pass or `review: N findings`. The lead passes the findings that matter to the task, which fixes them and reports ready. kebbie then reviews the changed code again.
+2. Wait for the verdict. The row shows `reviewed` on a pass or `review: N findings`.
 
-3. Once the reviewer has passed the current code, the task shows under Ready to push: the pass is its rules approval too. Press `p`.
+   On findings, the lead passes the ones that matter to the task, which fixes them and reports ready. kebbie then reviews the changed code again.
+
+3. Press `p` once the task shows under Ready to push. The reviewer's pass on the current code is its rules approval too.
 
 ## Pick the reviewer's model
 
@@ -23,7 +25,7 @@ model = "opus"
 
 ## Hold changes that leave the docs behind
 
-In a repo with `docs.required`, the reviewer also checks the docs. When the commits touch no README or `docs/` file and change what a user sees or does, the verdict is `changes` with a finding such as:
+In a repo with `docs.required`, the reviewer also checks the docs. When the commits change what a user sees or does and touch no README or `docs/` file, the verdict is `changes` with a finding such as:
 
 ```
 - src/peers.rs:88 — documents nothing for the new `--json` option of `kebbie peers`; update docs/reference/commands.md (keep-docs).
@@ -33,11 +35,11 @@ See [Keep docs in step with changes](keep-docs-in-step.md).
 
 ## Read the verdict
 
-The full verdict is `verdicts/<task>@<repo>.md` in the state directory: `ok` or `changes`, the sha it reviewed, and findings with `file:line`, bugs first.
+The full verdict is `verdicts/<task>@<repo>.md` in the state directory. It holds `ok` or `changes`, the sha it reviewed, and findings with `file:line`, bugs first.
 
 ## Take it back out
 
-Press `v` again, or:
+Press `v` again, or run:
 
 ```bash
 kebbie review --withdraw billing

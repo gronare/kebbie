@@ -18,14 +18,17 @@ Run one task that changes two repos at once, such as an event one service sends 
 
    To reach one half, address it as `payload-v2@web`.
 
-3. On the board, the halves sit next to each other. Push each half on its own with `p`, in the order the change needs: usually the side that accepts the new field first.
+3. Push each half on its own with `p`, in the order the change needs: usually the side that accepts the new field first. On the board, the halves sit next to each other.
+
+- If you use the vault, both halves share one task note.
+- If your repos live outside kebbie's search folders, set `KEBBIE_REPO_DIRS`. See below.
 
 ## Where kebbie finds the repos
 
-`--repo` takes a folder name. kebbie looks in `~/projects`, `~/personal`, `~/src` and `~/code`, in them or one level down, and clones a missing repo from an owner among your other checkouts' remotes. To look elsewhere:
+`--repo` takes a folder name. kebbie looks in `~/projects`, `~/personal`, `~/src` and `~/code`, in them or one level down. It clones a missing repo from an owner among your other checkouts' remotes.
+
+To look elsewhere:
 
 ```bash
 export KEBBIE_REPO_DIRS="$HOME/work:$HOME/code"
 ```
-
-With the vault, both halves share one task note.

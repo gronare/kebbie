@@ -1,28 +1,73 @@
 # Board
 
-![The Areas page: areas with their repos, actions and vault log](../assets/clips/areas-page.gif)
+What the board shows and every key on it. The board runs in the lead Space, as a popup over any Space with `prefix+t`, or in the current pane with `kebbie board`. `?` on the board lists every key.
 
-The board runs in the lead Space, as a popup over any Space with `prefix+t`, or in the current pane with `kebbie board`. A board you quit in the lead Space starts again the next time `prefix+space` takes you there. `?` on the board lists every key.
+A board you quit in the lead Space starts again the next time `prefix+space` takes you there.
 
 ## Layout
 
 | Part | Shows |
 | --- | --- |
-| Status line, top | The page tabs, `1 Work  2 Areas  3 Routines`, with `⚠N` on Routines while N routine runs wait for you with findings. Counts of tasks that need you, are working, are to review, are ready to push and wait for CI; waiting questions; `! N bugs to send · B` while bugs in kebbie you ran into wait for you to send them to its maintainers; plan usage; `↻ N stale` while Claude sessions wait to be restarted; `☾ away` in away mode; `chat hidden` while the lead's chat is hidden; `↑ kebbie v0.28.0 · U updates` when a newer release is out, or on the main channel `↑ kebbie main, 3 new · U updates` with the commits the installed build lacks; `⇣ updating kebbie · U` while an update whose window you hid runs, and `✓ kebbie updated · U` once its summary waits for you. |
-| Lead line, under the status line | While the lead counts as stale: `↻ The lead restarts on the new kebbie when it's idle · L restarts it now`, `↻ The lead runs the old kebbie until you restart it · L restarts it` with `restart.auto` off, or `↻ The lead's restart on the new kebbie failed · L tries again`. A narrow board takes a shorter wording, never a cut one. See [Restarting the lead after an update](../explanation/updates-and-restarts.md#restarting-the-lead-after-an-update). |
-| Context line, under it | While the lead's context is 85% full or more: `The lead's context is N% full · L to restart it fresh`, `Lead context N% · L` on a narrow board. A click on it asks as `L` does. No line while the share is unknown. See [Starting the lead fresh](../explanation/lead-and-away-mode.md#starting-the-lead-fresh). |
+| Status line, top | The page tabs, `1 Work  2 Areas  3 Routines`, then counts and markers, below. |
+| Lead line, under the status line | Whether the lead still runs an old kebbie, while it counts as stale. |
+| Context line, under it | While the lead's context is 85% full or more: `The lead's context is N% full · L to restart it fresh`. |
 | Hub line, under it | While the hub refuses the board for a lapsed subscription: `Your kebbie hub subscription isn't active: <link> · H hub`. |
-| Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). A task's halves in other repos sit next to each other. Under the tasks: the bugs to send while `B` shows them, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles after an update's recheck fixed some (`i` shows the list and clears the line), and the main checkouts with files changed outside any task. |
-| Backlog, right | An ONGOING section of vault project notes in progress (status active or draft) when the vault is on, and the items from the configured sources, by priority. ONGOING sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md). |
+| Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). |
+| Backlog, right | Vault notes in progress, under ONGOING, and the items from the configured sources, by priority. |
 | Messages, bottom | What sessions tell each other, newest last. |
+
+The status line shows:
+
+| Marker | Means |
+| --- | --- |
+| `⚠N` on Routines | N routine runs wait for you with findings. |
+| Counts | Tasks that need you, are working, are to review, are ready to push and wait for CI, and waiting questions. |
+| `! N bugs to send · B` | Bugs in kebbie you ran into wait for you to send them to its maintainers. |
+| Plan usage | How much of the plan is used. |
+| `↻ N stale` | Claude sessions wait to be restarted. |
+| `☾ away` | Away mode is on. |
+| `chat hidden` | The lead's chat is hidden. |
+| `↑ kebbie v0.28.0 · U updates` | A newer release is out. On the main channel, `↑ kebbie main, 3 new · U updates` with the commits the installed build lacks. |
+| `⇣ updating kebbie · U` | An update whose window you hid runs. |
+| `✓ kebbie updated · U` | The update's summary waits for you. |
 
 In a narrow pane the two columns stack, and the status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
 
-A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases it when its turn in the push line comes, `e` rebases now, and a task you keep rebased on main catches up by itself. The open task says `follows main` while that is on. A task whose Claude runs in bypass permissions mode says `bypass` on its row and `bypass permissions: Claude asks for no permission` when open. Under it, a `you:` line gives your next step from the task's last report; while Claude waits on a prompt of its own, such as a permission or trust question, it says `answer Claude's prompt in its Space (g) or through the lead`: `g` takes you there, and the lead has the question and its options in its chat (see [Claude's own prompts in a task](../explanation/lead-and-away-mode.md#claudes-own-prompts-in-a-task)). While its dev server runs, a `web` line shows the server's address as a link. While a push waits for the task's Claude to test the files the default branch changed under it, the row and the open task say `push waits for tests · you`, or `· lead` when the lead pushed; kebbie pushes once the task reports ready with the same commits.
+The lead line reads:
+
+- `↻ The lead restarts on the new kebbie when it's idle · L restarts it now`;
+- `↻ The lead runs the old kebbie until you restart it · L restarts it` with `restart.auto` off;
+- `↻ The lead's restart on the new kebbie failed · L tries again`.
+
+A narrow board takes a shorter wording, never a cut one. See [Restarting the lead after an update](../explanation/updates-and-restarts.md#restarting-the-lead-after-an-update).
+
+The context line reads `Lead context N% · L` on a narrow board. A click on it asks as `L` does. No line shows while the share is unknown. See [Starting the lead fresh](../explanation/lead-and-away-mode.md#starting-the-lead-fresh).
+
+Work:
+
+- A task's halves in other repos sit next to each other.
+- Under the tasks: the bugs to send while `B` shows them, and the main checkouts with files changed outside any task.
+- After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles. `i` shows the list and clears the line.
+
+Backlog: ONGOING lists vault project notes in progress (status active or draft) when the vault is on. It sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md).
+
+### A task row
+
+A task row shows its commits, uncommitted and untracked files, and how far it is behind the default branch. Behind is information only: push rebases it when its turn in the push line comes, `e` rebases now, and a task you keep rebased on main catches up by itself.
+
+| Line or mark | Means |
+| --- | --- |
+| `follows main` | On the open task, while it is kept rebased on main. |
+| `bypass` | Its Claude runs in bypass permissions mode. The open task says `bypass permissions: Claude asks for no permission`. |
+| `you:` | Your next step, from the task's last report. |
+| `web` | While its dev server runs: the server's address as a link. |
+| `push waits for tests · you` | A push waits for the task's Claude to test the files the default branch changed under it. `· lead` when the lead pushed. kebbie pushes once the task reports ready with the same commits. |
+
+While Claude waits on a prompt of its own, such as a permission or trust question, the `you:` line says `answer Claude's prompt in its Space (g) or through the lead`. `g` takes you there, and the lead has the question and its options in its chat. See [Claude's own prompts in a task](../explanation/lead-and-away-mode.md#claudes-own-prompts-in-a-task).
 
 The selected task opens in place with its review progress, its question and options, its report, its latest test run, and a warning about files changed in a main checkout outside any task.
 
-The `tests` line shows the last test command the task's Claude ran, as kebbie recorded it (see [`kebbie evidence`](commands.md#kebbie-evidence-name---json)):
+The `tests` line shows the last test command the task's Claude ran, as kebbie recorded it (see [`kebbie evidence`](commands.md#kebbie-evidence-name---json)). The wide panel shows the same line. No line means no test run is recorded.
 
 | Line | Means |
 | --- | --- |
@@ -30,21 +75,82 @@ The `tests` line shows the last test command the task's Claude ran, as kebbie re
 | `○ cargo test · 493 passed · at a1b2c3d, code changed since`, yellow | It passed, but a commit changed the code after it, or the worktree has changes it did not run on. |
 | `✗ cargo test failed · 2 failed · at a1b2c3d`, red | The latest run failed. |
 
-No line means no test run is recorded. The wide panel shows the same line.
-
 ## Groups
 
 | Group | Contains |
 | --- | --- |
-| Needs you | A question on screen, such as a permission or trust prompt, whatever else the task is doing; an open question from `kebbie ask`; messages held behind a draft in its input box; a task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question, or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)); a task that reported needs-you, or ready with nothing committed; a task whose turn ended without a report even after kebbie asked for one; a task whose CI failed after a push of only some of its commits, marked `CI failed: <workflow> · <job> · <step>`, and `its Claude says outside the code: <reason>` once its Claude has said so (`C` dismisses it); a push under way whose Claude reported needs-you; a push that left its repo's push line unpushed, marked `out of the push line: <why>` (its Claude did not report ready within 30 minutes, it reported needs-you, or it has commits nobody checked since you chose push; push again and it joins the end of the line); a push or close kebbie could not finish; a pushed task whose CI gh has not been able to read for 15 minutes, its row marked `gh cannot read it: <error>` meanwhile; a task an API error stopped that kebbie will not resume, marked `stopped by <reason>: <Claude Code's words>`. Open questions first. |
-| Working | Started with a prompt, or at work since its last report or since you answered it; a pushed task whose CI is green and that kebbie closes once its note is written, marked `pushed · kebbie closes it`. kebbie resuming it after an API error leaves it here, marked `retrying after overload (2/4, next 21:14)`, `out of allowance until 17:00`, then `resumed after …` until Claude answers. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task). |
+| Needs you | Tasks waiting on your answer or action, open questions first. |
+| Working | Tasks at work since their prompt, their last report or your answer. |
 | To review | Reported ready and sent to the reviewer, waiting for a pass on its current code. |
-| Ready to push | Reported ready with its commits, marked `reviewer checking rules` while the reviewer checks them against the rules skill, `rules: N breaks` when it found some, and `lead checking rules` when the reviewer gave no verdict and the lead checks them; an approved row says nothing of the rules, and with the count of uncommitted files when you edited after the report. How far it is behind the default branch does not matter. A push under way stays here, marked `pushing for you · <what it waits for>`: its turn, as `2nd in line after <title>` while other pushes of its repo go first and `kebbie pushes it now` at the head; the tests for files the default branch changed under it, a conflict, or a fix for CI that failed after the push. A task on local main stays here too, marked `on local main · waiting for your push`, until main is pushed and it closes as landed. Each repo pushes one task at a time, in the order you pushed them, and rebases a task only when its turn comes; a head whose Claude works keeps its place while the line waits for it, for up to 30 minutes. See [Pushing](../explanation/trunk-based.md#one-push-line-per-repo). |
-| CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. A report its Claude writes meanwhile keeps it here unless it says needs-you or blocked. The row names the runs, and the open task links each run's page. See [`kebbie ci`](commands.md#kebbie-ci---json). |
-| Waiting for work | Started without a prompt, or whose start never reached its Claude; reported blocked on something outside you; pushed in part with `keep open` and nothing left on top; or kept open and its red CI dismissed. |
-| Queued | Waiting to start after other tasks, with no worktree, Space or Claude. The row, marked `⧗`, carries a title from its backlog item or the first sentence of its prompt, which it keeps once started until Claude names the session. Its second line, whole, says why it waits and what starts it: `Waits for Billing totals (ready to push): it uses the rounding field. Starts by itself once it is pushed and CI is green.` The reason is the one given with `kebbie start --why`. It starts by itself once each of them has ended as done. A task queued with `--at` waits for that time as well, or only for it, and the row says when: `Starts 15:00 today.`, `Starts Fri 24 Oct 09:00.` When one of them is dropped, reset or gone, the row moves to Needs you with the reason instead. See [`kebbie after`](commands.md#kebbie-after-name). |
+| Ready to push | Reported ready with its commits, and pushes under way. |
+| CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. |
+| Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
+| Queued | Waiting to start after other tasks or at a time, with no worktree, Space or Claude. |
 
-kebbie keeps one phase per task, and only what changes it writes it: its start, the first prompt it takes up, its report, its question and your answer, a push and its hand-over, a CI verdict, an API error it will not resume. The group follows that phase. Whether its Claude is mid-turn shows as the row's `◐`, never as a move: a task reading kebbie's update notice, or one the lead tells to fix a commit, stays in its group until it reports. Only a prompt of your own, typed into its Space or sent as your answer, moves a task that waits for you or for work under Working; a message from the lead, another task or kebbie does not. Four things put a task under Needs you whatever its phase, for as long as they last: Claude's own prompt on its screen, an open question, messages held behind your draft, and landed work kebbie leaves to you.
+kebbie keeps one phase per task, and only what changes it writes it: its start, the first prompt it takes up, its report, its question and your answer, a push and its hand-over, a CI verdict, an API error it will not resume. The group follows that phase.
+
+- Whether its Claude is mid-turn shows as the row's `◐`, never as a move. A task reading kebbie's update notice, or one the lead tells to fix a commit, stays in its group until it reports.
+- Only a prompt of your own, typed into its Space or sent as your answer, moves a task that waits for you or for work under Working. A message from the lead, another task or kebbie does not.
+- Four things put a task under Needs you whatever its phase, for as long as they last: Claude's own prompt on its screen, an open question, messages held behind your draft, and landed work kebbie leaves to you.
+
+### Needs you
+
+- A question on screen, such as a permission or trust prompt, whatever else the task is doing.
+- An open question from `kebbie ask`.
+- Messages held behind a draft in its input box.
+- A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question, or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
+- A task that reported needs-you, or ready with nothing committed.
+- A task whose turn ended without a report even after kebbie asked for one.
+- A task whose CI failed after a push of only some of its commits, marked `CI failed: <workflow> · <job> · <step>`, and `its Claude says outside the code: <reason>` once its Claude has said so. `C` dismisses it.
+- A push under way whose Claude reported needs-you.
+- A push that left its repo's push line unpushed, marked `out of the push line: <why>`: its Claude did not report ready within 30 minutes, it reported needs-you, or it has commits nobody checked since you chose push. Push again and it joins the end of the line.
+- A push or close kebbie could not finish.
+- A pushed task whose CI gh has not been able to read for 15 minutes, its row marked `gh cannot read it: <error>` meanwhile.
+- A task an API error stopped that kebbie will not resume, marked `stopped by <reason>: <Claude Code's words>`.
+
+### Working
+
+- Started with a prompt, or at work since its last report or since you answered it.
+- A pushed task whose CI is green and that kebbie closes once its note is written, marked `pushed · kebbie closes it`.
+- A task kebbie resumes after an API error, marked `retrying after overload (2/4, next 21:14)`, `out of allowance until 17:00`, then `resumed after …` until Claude answers. See [When the API stops a task](../explanation/lead-and-away-mode.md#when-the-api-stops-a-task).
+
+### Ready to push
+
+A ready row is marked by its rules check:
+
+- `reviewer checking rules` while the reviewer checks its commits against the rules skill;
+- `rules: N breaks` when it found some;
+- `lead checking rules` when the reviewer gave no verdict and the lead checks them;
+- nothing of the rules once approved, and the count of uncommitted files when you edited after the report.
+
+How far it is behind the default branch does not matter. A push under way stays here, marked `pushing for you · <what it waits for>`:
+
+- its turn, as `2nd in line after <title>` while other pushes of its repo go first, and `kebbie pushes it now` at the head;
+- the tests for files the default branch changed under it, a conflict, or a fix for CI that failed after the push.
+
+Each repo pushes one task at a time, in the order you pushed them, and rebases a task only when its turn comes. A head whose Claude works keeps its place while the line waits for it, for up to 30 minutes. See [Pushing](../explanation/trunk-based.md#one-push-line-per-repo).
+
+A task on local main stays here too, marked `on local main · waiting for your push`, until main is pushed and it closes as landed.
+
+### CI running
+
+A report its Claude writes meanwhile keeps it here unless it says needs-you or blocked. The row names the runs, and the open task links each run's page. See [`kebbie ci`](commands.md#kebbie-ci---json).
+
+### Waiting for work
+
+- Started without a prompt, or its start never reached its Claude.
+- Reported blocked on something outside you.
+- Pushed in part with `keep open` and nothing left on top.
+- Kept open and its red CI dismissed.
+
+### Queued
+
+The row, marked `⧗`, carries a title from its backlog item or the first sentence of its prompt, which it keeps once started until Claude names the session. See [`kebbie after`](commands.md#kebbie-after-name).
+
+- Its second line, whole, says why it waits and what starts it: `Waits for Billing totals (ready to push): it uses the rounding field. Starts by itself once it is pushed and CI is green.` The reason is the one given with `kebbie start --why`.
+- It starts by itself once each task it waits for has ended as done.
+- A task queued with `--at` waits for that time as well, or only for it, and the row says when: `Starts 15:00 today.`, `Starts Fri 24 Oct 09:00.`
+- When a task it waits for is dropped, reset or gone, the row moves to Needs you with the reason instead.
 
 ## Keys
 
@@ -59,23 +165,45 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 | `←` `→` | Switch between Work and Backlog. |
 | `1`, `2`, `3` | The Work page, the Areas page, the Routines page. |
 | `tab` | Move focus to the lead's chat, showing it first when it is hidden. |
-| `h` | Hide the lead's chat, or show it again: the board takes the whole width while the chat runs on. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
+| `h` | Hide the lead's chat so the board takes the whole width while the chat runs on, or show it again. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
 | `i` | The inbox: the questions waiting on you, opened at the first. Works on the Areas page too. |
 | `m` | Messages: once shows them on one line, again opens them, again hides them. |
-| `B` | Bugs in kebbie you ran into, to send to kebbie's maintainers: shows the list under Work with the first one selected, and hides it again. Hidden at first; while any wait, the header counts them, such as `! 2 bugs to send · B`. The board remembers whether it shows. See [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers). |
+| `B` | Show or hide the [bugs to send](#bugs-to-send) under Work, with the first one selected. |
 | `H` | The [hub](#the-hub-window) window, to see this board on your phone. |
 | `n` | New task: a name, then an optional prompt. Starts in the background. In the Backlog column, a new item. |
 | `/` | Filter the selected column: type part of a name, `⏎` keeps the filter, `esc` clears it. |
 | `R` | Ask the lead to refresh the backlog. |
 | `A` | Away mode on or off. |
-| `U` | Run `kebbie update` in a window that shows each step, with a bar while kebbie builds or downloads; `esc` hides it while the update goes on, and `U` opens it again. Done, it shows what's new and fixed from kebbie's release notes and what restarts; `d` shows the details, any other key closes it. See [What an update shows](../explanation/updates-and-restarts.md#what-an-update-shows). |
-| `L` | Restart the lead on the installed kebbie now, whether or not the lead line shows. It opens `Restart the lead` with two rows: `New conversation`, selected, starts its Claude fresh from its role and the vault, the old conversation left on disk; `Resume this conversation` restarts it on the same one, as to pick up a new Claude Code. `↑` `↓` (or `j` `k`) move, `⏎` or a click picks, `1` and `2` pick directly, `esc` cancels. The result goes by like the board's other results. Refused with the plain reason as a toast, before it asks, while the lead works, asks, holds text you have not sent or has background work running; press it again later. See [Starting the lead fresh](../explanation/lead-and-away-mode.md#starting-the-lead-fresh). |
-| `?` | The keys window: every key on the page you are on, one short line each, grouped by what you want to do, under the title `keys · work`, `keys · areas` or `keys · routines`. On a screen about 114 columns wide or more it is two columns; narrower, up to three keys a row, scrolling with `↑` `↓` and `pgup` `pgdn` when it does not fit. A moved key shows as you set it, and `↑` and the version beside `U` when there is a newer one. The last line names the kebbie that runs: `kebbie main` on the main channel, `kebbie 0.27.0` on the release channel. Any other key closes it. |
+| `U` | Run `kebbie update` in a window that shows each step. |
+| `L` | Restart the lead on the installed kebbie now, whether or not the lead line shows. |
+| `?` | The keys window: every key on the page you are on. Any other key closes it. |
 | `esc` | One step back: close a window, a menu or the filter. At the top, close the board when it is a popup; on the full board it does nothing. |
 | `q` | Close the current view, like `esc`. At the top, close the popup; on the full board it says that `ctrl+c` twice quits. |
 | `ctrl+c` | Twice within 2 seconds quits the board. The first press says so. |
 
-On a queued row, `⏎` offers three things: `g` starts it now from the default branch, without the changes of what it waits for, its Claude told what is missing; `l` sets when it starts (`15:00`, `tomorrow 09:00`, `fri 09:00`, `24 oct 09:00`, `in 2h`), and it starts then once what it waits for is done too; `x` drops the wait, so it never starts and its backlog item goes back to the backlog. `g` and `x` ask first.
+`B`: the list is hidden at first. While any bug waits, the header counts them, such as `! 2 bugs to send · B`. The board remembers whether it shows. See [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers).
+
+`U` shows a bar while kebbie builds or downloads. `esc` hides the window while the update goes on, and `U` opens it again. Done, it shows what's new and fixed from kebbie's release notes and what restarts; `d` shows the details, any other key closes it. See [What an update shows](../explanation/updates-and-restarts.md#what-an-update-shows).
+
+`L` opens `Restart the lead` with two rows. See [Starting the lead fresh](../explanation/lead-and-away-mode.md#starting-the-lead-fresh).
+
+- `New conversation`, selected, starts its Claude fresh from its role and the vault, the old conversation left on disk.
+- `Resume this conversation` restarts it on the same one, as to pick up a new Claude Code.
+- `↑` `↓` (or `j` `k`) move, `⏎` or a click picks, `1` and `2` pick directly, `esc` cancels.
+- The result goes by like the board's other results.
+- It is refused with the plain reason as a toast, before it asks, while the lead works, asks, holds text you have not sent or has background work running. Press it again later.
+
+`?` groups the keys by what you want to do, one short line each, under the title `keys · work`, `keys · areas` or `keys · routines`.
+
+- On a screen about 114 columns wide or more it is two columns. Narrower, it shows up to three keys a row, scrolling with `↑` `↓` and `pgup` `pgdn` when it does not fit.
+- A moved key shows as you set it, and `↑` and the version beside `U` when there is a newer one.
+- The last line names the kebbie that runs: `kebbie main` on the main channel, `kebbie 0.27.0` on the release channel.
+
+On a queued row, `⏎` offers three things. `g` and `x` ask first.
+
+- `g` starts it now from the default branch, without the changes of what it waits for, its Claude told what is missing.
+- `l` sets when it starts (`15:00`, `tomorrow 09:00`, `fri 09:00`, `24 oct 09:00`, `in 2h`), and it starts then once what it waits for is done too.
+- `x` drops the wait, so it never starts and its backlog item goes back to the backlog.
 
 A question that asks first, as reset, drop and done do, takes `y` to go ahead and `n` or `esc` to cancel. Any other key keeps the question and says "press y or n".
 
@@ -90,20 +218,39 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `s` | Show the sign-off card. | It has a card and no open question. |
 | `w` | Start or stop the dev server. | `worktree.dev_server` is set. |
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
-| `1`–`9` | Open one of its links in the browser, listed under LINKS by what each is: the running dev server, each CI run, a mock, a pull request or another address its report or card names, and its vault note, which opens in Obsidian. The highlighted link's whole address shows on the description line. Where the board has no browser, as over ssh, it says the address instead. | It has that link. |
+| `1`–`9` | Open one of its links in the browser, listed under LINKS. | It has that link. |
 | `v` | Send to review; on a task in review, withdraw it. | It has commits and Claude is not mid-turn. |
-| `e` | Rebase onto the default branch now, in the background, without pushing; the result shows when it is done. A conflict goes to its Claude, as with [`kebbie land`](commands.md#kebbie-land-name). | It is behind the default branch and Claude is not mid-turn. |
+| `e` | Rebase onto the default branch now, in the background, without pushing. | It is behind the default branch and Claude is not mid-turn. |
 | `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn. |
-| `p` | Push: open the push window; `y` or `p` there puts the task in its repo's push line, which rebases it onto the default branch and pushes it when its turn comes, at once when the line is empty. On a task already in the line, `p` takes it out again, unpushed; not a fix for red CI, whose commits are on the default branch already (`C` dismisses that). `e` is not offered while a task is in the line. | Claude is not mid-turn and it is not waiting for the reviewer. |
-| `M` | Put on local main to try it: its commits go on the main checkout's local default branch, unpushed, after the tasks staged before it, and the row says `on local main · waiting for your push`. On a staged task, take them off again; the other staged tasks stay. See [`kebbie stage`](commands.md#kebbie-stage-name). | To put on: the repo sets `worktree.stage_on_main`, it has commits, Claude is not mid-turn, it is not waiting for the reviewer and has no CI watch. To take off: always. |
-| `C` | Dismiss the red CI of a pushed task whose failure is not the code's: kept on record with the reason its Claude gave, and the task closes once its commits are on main. Asks first. Yours alone. | The task's CI failed. |
-| `d` | Done: close a task you already pushed elsewhere and free its worktree, also one under CI running or with failed CI you choose to leave. Asks first. The keeper closes a landed task by itself; `d` is for the ones it leaves to you. | Claude is not mid-turn. |
+| `p` | Push: open the push window. On a task already in the line, take it out again, unpushed. | Claude is not mid-turn and it is not waiting for the reviewer. |
+| `M` | Put on local main to try it; on a staged task, take it off again. | See below. |
+| `C` | Dismiss the red CI of a pushed task whose failure is not the code's. Asks first. Yours alone. | The task's CI failed. |
+| `d` | Done: close a task you already pushed elsewhere and free its worktree. Asks first. | Claude is not mid-turn. |
 | `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task. |
-| `u` | Keep it rebased on main, or switch that off; `●` marks it on. When main moves, the keeper rebases it, never pushes it. See [`kebbie follow`](commands.md#kebbie-follow-name-onoff). Off by default; `done`, `drop` and `reset` switch it off. | It is a task. |
+| `u` | Keep it rebased on main, or switch that off; `●` marks it on. | It is a task. |
 | `z` | Reset: its work goes, its backlog item returns. Asks first. | Always. |
 | `x` | Drop. Asks first; on uncommitted work or unpushed commits, asks again to force. | Always. |
 
-kebbie's messages reach a Claude that kebbie started on Claude Code 2.1.224 or later through that session's inbox socket: it shows in the conversation as one dim line from kebbie that ctrl+o expands, Claude reads it between tool calls or starts a turn when idle, and your draft is never touched. kebbie's notices to the lead that ask nothing of it now (a push, a close, a start, an update) are not delivered live: they show in the message log and reach the lead with your next prompt to it. kebbie then checks the conversation for it as it does for a typed message, and after 10 minutes without it the board says it was not delivered (a rules check or a hand-over is held and sent again). For an older Claude Code, or when the inbox refuses a message, kebbie types it instead. kebbie starts the lead and its tasks with `crossSessionInbound` set to `accept`, so any process of your user on the machine can message them: the same trust as typing into their panes, and the sandbox, when on, limits what a task can reach. kebbie types into a Claude's input box only when the box is empty. While you have a draft there, a message to that Claude waits and goes in once the box is clear. After typing, kebbie checks the conversation for it; when Claude has not taken it, kebbie presses Enter again after 5, 10 and 20 seconds, and after 40 seconds the board says it was not delivered.
+- `1`–`9`: the links are listed by what each is: the running dev server, each CI run, a mock, a pull request or another address its report or card names, and its vault note, which opens in Obsidian. The highlighted link's whole address shows on the description line. Where the board has no browser, as over ssh, it says the address instead.
+- `e`: the result shows when it is done. A conflict goes to its Claude, as with [`kebbie land`](commands.md#kebbie-land-name).
+- `p`: `y` or `p` in the push window puts the task in its repo's push line, which rebases it onto the default branch and pushes it when its turn comes, at once when the line is empty. Taking it out does not work for a fix for red CI, whose commits are on the default branch already (`C` dismisses that). `e` is not offered while a task is in the line.
+- `M` puts its commits on the main checkout's local default branch, unpushed, after the tasks staged before it, and the row says `on local main · waiting for your push`. Taking them off leaves the other staged tasks. To put on, the repo sets `worktree.stage_on_main`, it has commits, Claude is not mid-turn, it is not waiting for the reviewer and has no CI watch. To take off: always. See [`kebbie stage`](commands.md#kebbie-stage-name).
+- `C` keeps the failure on record with the reason its Claude gave, and the task closes once its commits are on main.
+- `d` also closes one under CI running or with failed CI you choose to leave. The keeper closes a landed task by itself; `d` is for the ones it leaves to you.
+- `u`: when main moves, the keeper rebases it, never pushes it. Off by default; `done`, `drop` and `reset` switch it off. See [`kebbie follow`](commands.md#kebbie-follow-name-onoff).
+
+### How messages reach a Claude
+
+kebbie's messages reach a Claude that kebbie started on Claude Code 2.1.224 or later through that session's inbox socket. It shows in the conversation as one dim line from kebbie that ctrl+o expands. Claude reads it between tool calls or starts a turn when idle, and your draft is never touched.
+
+- kebbie's notices to the lead that ask nothing of it now (a push, a close, a start, an update) are not delivered live. They show in the message log and reach the lead with your next prompt to it.
+- kebbie then checks the conversation for it as it does for a typed message. After 10 minutes without it, the board says it was not delivered; a rules check or a hand-over is held and sent again.
+- kebbie starts the lead and its tasks with `crossSessionInbound` set to `accept`, so any process of your user on the machine can message them. That is the same trust as typing into their panes, and the sandbox, when on, limits what a task can reach.
+
+For an older Claude Code, or when the inbox refuses a message, kebbie types it instead:
+
+- It types into a Claude's input box only when the box is empty. While you have a draft there, a message to that Claude waits and goes in once the box is clear.
+- After typing, kebbie checks the conversation for it. When Claude has not taken it, kebbie presses Enter again after 5, 10 and 20 seconds, and after 40 seconds the board says it was not delivered.
 
 ### In the Backlog column
 
@@ -111,38 +258,46 @@ kebbie's messages reach a Claude that kebbie started on Claude Code 2.1.224 or l
 | --- | --- | --- |
 | `g` | Start the item as a task, with the item as its prompt. Asks for a name, suggested from the title. | On an item. |
 | `g` | Go to the task working on this note, or resume the note as a new task. | On an ONGOING note. |
-| `⏎` | The note's card: its whole title, area, status and summary, who works on it (machine, task and since when), its task and whether it runs here, and its opening, the text before its first heading and its first two sections, from the local vault index. `↓` `↑` `pgdn` `pgup` scroll it, `g` or `⏎` does what `g` does on the row, `esc` closes it. A click on the selected note opens it too. | On an ONGOING note. |
+| `⏎` | The note's card. | On an ONGOING note. |
 | `l` | Start the item as a task later: a name, then a time. It waits under Queued until then, as with [`kebbie start --at`](commands.md#kebbie-start-name-prompt). | On an item. |
 | `R` | Ask the lead to refresh the backlog. | On an item. |
 | `n` | Add an item to the local backlog: a title, then a priority. | `"local"` is a source. |
 
+The note's card shows its whole title, area, status and summary, and who works on it (machine, task and since when). It shows its task and whether it runs here, and its opening: the text before its first heading and its first two sections, from the local vault index.
+
+- `↓` `↑` `pgdn` `pgup` scroll it.
+- `g` or `⏎` does what `g` does on the row.
+- `esc` closes it.
+- A click on the selected note opens it too.
+
 ### The card window
 
-Opened by `s` on a task with a sign-off card and no open question, in a narrow board and a wide one alike. The title names the task; the first line says whether the card is current at its commit, or written at an earlier one with the code changed since.
+Opened by `s` on a task with a sign-off card and no open question, in a narrow board and a wide one alike. The title names the task. The first line says whether the card is current at its commit, or written at an earlier one with the code changed since.
 
-The card's text follows in parts, each under a header on a rule. A paragraph that opens with a short label and a colon, such as `To check:` or `Please confirm:`, starts a part of its own headed by that label; the text before the first label is headed `CARD`, and a card with no label is one `CARD` part. `**bold**` shows bold.
+The card's text follows in parts, each under a header on a rule. A paragraph that opens with a short label and a colon, such as `To check:` or `Please confirm:`, starts a part of its own headed by that label. The text before the first label is headed `CARD`, and a card with no label is one `CARD` part. `**bold**` shows bold.
 
 The images show one at a time, each as large as its space allows:
 
 - In a window 120 columns wide or more, the text sits on the left with an `IMAGES` part listing every image by file name and alt text, and the selected image fills the right side. Over it, `1/3 <file name>  <alt text>` says which image it is; the file name is a link to the file. A click on an image in the list selects it.
 - In a narrower window the parts stack, and the lower part of the window shows the selected image across the window's width under `IMAGE 1/3 <file name>`.
 
-How an image shows depends on the terminal:
+How an image shows depends on the terminal. `KEBBIE_IMAGES` picks the protocol by hand; see [environment](environment.md).
 
 - With a graphics protocol (Kitty, Sixel or iTerm2) the image is sharp. Inside herdr kebbie uses the Kitty protocol, which herdr passes on to a Kitty-capable outer terminal such as Ghostty or Kitty.
 - With only halfblocks the image is a coarse preview in text cells, with `preview · f larger · o opens the image` under it.
 - With images off (`KEBBIE_IMAGES=off`, or the board not on a terminal), or a file that does not decode as an image, only its name shows.
 
-`KEBBIE_IMAGES` picks the protocol by hand; see [environment](environment.md).
-
 | Key | Action | Shown when |
 | --- | --- | --- |
 | `←` `→` | The previous or next image, wrapping around. | The card has two images or more. |
 | `↑` `↓`, `j` `k` | Scroll the text. `PageUp`, `PageDown` scroll by ten lines. | Always. |
-| `f` | Fullscreen: the selected image alone over the whole board, as large as it fits. `←` `→` go between the card's images; `esc`, `q` or `f` go back to the card. | The card has an image and images are on. |
-| `o` | Open the selected image in the system viewer: `open` on macOS, `xdg-open` on Linux. In fullscreen it opens the image shown. | The card has an image, the board does not run over SSH (`SSH_CONNECTION` or `SSH_TTY`), and on Linux `DISPLAY` or `WAYLAND_DISPLAY` is set. |
+| `f` | Fullscreen: the selected image alone over the whole board, as large as it fits. | The card has an image and images are on. |
+| `o` | Open the selected image in the system viewer: `open` on macOS, `xdg-open` on Linux. | See below. |
 | `p` | Go on to the push window. | Always. |
 | `esc`, `q` | Close. | Always. |
+
+- In fullscreen, `←` `→` go between the card's images, `esc`, `q` or `f` go back to the card, and `o` opens the image shown.
+- `o` is shown when the card has an image, the board does not run over SSH (`SSH_CONNECTION` or `SSH_TTY`), and on Linux `DISPLAY` or `WAYLAND_DISPLAY` is set.
 
 In a narrow board the selected task also shows the card under its row: whether it is current, its first two lines of text, and how many images it has.
 
@@ -150,12 +305,14 @@ In a narrow board the selected task also shows the card under its row: whether i
 
 Opened by `p`. The window is in four parts, each under a header on a rule:
 
-- `CARD`: the task's sign-off card, marked current at its commit or written before the code changed. Its images are listed by file name; `s` on the board shows them.
-- `TESTS`: the latest recorded test run, as on the task's row. A run before a clean rebase, a reworded message or a squash still counts as current.
-- `COMMITS`: the commits that will land, with their count.
-- `MESSAGE`: the selected commit's full message, set off by a bar so it does not read as part of the card.
+| Part | Shows |
+| --- | --- |
+| `CARD` | The task's sign-off card, marked current at its commit or written before the code changed. Its images are listed by file name; `s` on the board shows them. |
+| `TESTS` | The latest recorded test run, as on the task's row. A run before a clean rebase, a reworded message or a squash still counts as current. |
+| `COMMITS` | The commits that will land, with their count. |
+| `MESSAGE` | The selected commit's full message, set off by a bar so it does not read as part of the card. |
 
-The keys sit under a rule at the bottom and stay there: a window taller than the screen scrolls the parts above them, keeping the selected commit in view.
+The keys sit under a rule at the bottom and stay there. A window taller than the screen scrolls the parts above them, keeping the selected commit in view.
 
 | Key | Action |
 | --- | --- |
@@ -173,13 +330,18 @@ Only messages and squashes change here; the code stays identical. A commit that 
 
 ### The inbox
 
-Opened by `i` at the first question, or by `s` on a task at that task's question. It shows one question at a time; the title reads `question 2/3 · plan · <task>`, with `plan` for a plan to approve and `ask` for a plain question. In a window 120 columns wide or more, the questions also list on the left under `QUESTIONS`, set off by a bar, with the open one highlighted; a click on one opens it.
+Opened by `i` at the first question, or by `s` on a task at that task's question. It shows one question at a time.
 
-The question's text comes first, in bold. A plan question then shows its plan under a `PLAN` header, which gives how far down the plan you have scrolled, as a percentage, and `changed since asked` when the vault note changed after the question was asked. The plan fills the height that is left.
+- The title reads `question 2/3 · plan · <task>`, with `plan` for a plan to approve and `ask` for a plain question.
+- In a window 120 columns wide or more, the questions also list on the left under `QUESTIONS`, set off by a bar, with the open one highlighted. A click on one opens it.
+- The question's text comes first, in bold.
+- A plan question then shows its plan under a `PLAN` header, which gives how far down the plan you have scrolled, as a percentage, and `changed since asked` when the vault note changed after the question was asked. The plan fills the height that is left.
 
-The answers sit on one row at the bottom under an `ANSWER` header, each as its key and a short name, the selected one highlighted. The line under the row says what the selected answer means, with `recommended` on the one the task recommends. A plan question offers `a` approve, `c` approve with a comment, `r` ask for changes, `x` reject with a comment and `w` in my own words; a plain question numbers its options `1` to `9` and adds `w` in my own words. A click on an answer selects it.
+The answers sit on one row at the bottom under an `ANSWER` header, each as its key and a short name, the selected one highlighted. The line under the row says what the selected answer means, with `recommended` on the one the task recommends. A click on an answer selects it.
 
-An answer that takes a comment opens the comment box in place of the row, under the answer's name and meaning; the plan gives up only the box's rows. The comment is optional, except for "In my own words", where it is the answer.
+- A plan question offers `a` approve, `c` approve with a comment, `r` ask for changes, `x` reject with a comment and `w` in my own words.
+- A plain question numbers its options `1` to `9` and adds `w` in my own words.
+- An answer that takes a comment opens the comment box in place of the row, under the answer's name and meaning; the plan gives up only the box's rows. The comment is optional, except for "In my own words", where it is the answer.
 
 | Key | Action |
 | --- | --- |
@@ -209,10 +371,12 @@ An answer that takes a comment opens the comment box in place of the row, under 
 | Key | Action |
 | --- | --- |
 | `↑` `↓`, `j` `k` | Pick a bug. `↑` on the first goes back to the tasks. |
-| `⏎` | Show the report as it would go out and ask `y / n`. In that window `↓` and `pgdn` scroll, `y` sends once you have read to the end, `n` keeps it on this machine only, `esc` decides later. |
+| `⏎` | Show the report as it would go out and ask `y / n`. |
 | `n` | Keep the selected bug on this machine only, without opening it. |
 | `esc`, `q` | Back to the tasks; the list stays. |
 | `B` | Hide the list. |
+
+In the report window `↓` and `pgdn` scroll, `y` sends once you have read to the end, `n` keeps it on this machine only, and `esc` decides later.
 
 ### The hub window
 
@@ -231,9 +395,12 @@ Not connected, it offers two hubs, the picked row highlighted:
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-`k` or `o` chooses, and so do `↑` `↓` and `⏎`. Your own hub asks for the address of the server that runs kebbie-hub (a bare host name is tried over `https`); `⏎` tests it and shows `✓ answers as a kebbie hub` with `TLS ok`, or `plain http, on this machine only` for a hub on `localhost`, and a second `⏎` saves it as [`hub.url`](configuration.md#keys) and connects. With `hub.url` set, `⏎` connects there. With `machine.name` unset, it asks for the name once, with the host's short name filled in.
+- `k` or `o` chooses, and so do `↑` `↓` and `⏎`.
+- Your own hub asks for the address of the server that runs kebbie-hub; a bare host name is tried over `https`. `⏎` tests it and shows `✓ answers as a kebbie hub` with `TLS ok`, or `plain http, on this machine only` for a hub on `localhost`. A second `⏎` saves it as [`hub.url`](configuration.md#keys) and connects.
+- With `hub.url` set, `⏎` connects there.
+- With `machine.name` unset, it asks for the name once, with the host's short name filled in.
 
-While it waits for you to approve the machine, the window shows the machine and the hub with a QR code of the link, two modules across and four down a character, so on a cell twice as tall as wide every module is square, with four modules of quiet zone around it. In Ghostty (herdr inside Ghostty too), kitty and WezTerm, which draw block characters themselves, the code is drawn in octant blocks, in the terminal's own colours without a background: the blocks are the light modules and the quiet zone, and the terminal's background shows through as the dark modules, so on a dark theme the code reads the right way round, dark on light. In any other terminal it is drawn in braille the same way, a raised dot for each light module; a phone camera can read braille next to text as text and flip between the two, so scan it with nothing else in the frame. `KEBBIE_QR=octant` or `KEBBIE_QR=braille` picks one. The text sits to the right of the code from its top row, or above it when the window is too narrow for both side by side:
+While it waits for you to approve the machine, the window shows the machine and the hub with a QR code of the link. The text sits to the right of the code from its top row, or above it when the window is too narrow for both side by side:
 
 ```
 ╭ kebbie hub · connect ────────────────────────────────────────────────────────────────╮
@@ -261,7 +428,20 @@ While it waits for you to approve the machine, the window shows the machine and 
 
 The window takes the board's whole width and height for the code; a board too small for even the stacked layout shows the rest without it.
 
-Nothing opens by itself: `⏎` opens the link in your browser, where the board sits and not over SSH, and the line `⏎ open in browser · or scan with your phone` becomes `✓ Opened in your browser`. Without a browser there, neither the line nor `⏎ open` shows. The code is the one the page shows; approve the machine only when they match. The time left counts down. The link is shown up to its `#`: what follows is the secret that ties the approving browser to this machine, and `c` copies the whole link, through `pbcopy`, `wl-copy` or `xclip` where the board sits and through the terminal (OSC 52) over SSH, when it also shows the whole link in case the terminal did not take it. `esc` stops waiting.
+The QR code:
+
+- It packs two modules across and four down a character, so on a cell twice as tall as wide every module is square, with four modules of quiet zone around it.
+- In Ghostty (herdr inside Ghostty too), kitty and WezTerm, which draw block characters themselves, it is drawn in octant blocks, in the terminal's own colours without a background. The blocks are the light modules and the quiet zone, and the terminal's background shows through as the dark modules, so on a dark theme the code reads the right way round, dark on light.
+- In any other terminal it is drawn in braille the same way, a raised dot for each light module. A phone camera can read braille next to text as text and flip between the two, so scan it with nothing else in the frame.
+- `KEBBIE_QR=octant` or `KEBBIE_QR=braille` picks one.
+
+While it waits:
+
+- Nothing opens by itself. `⏎` opens the link in your browser, where the board sits and not over SSH, and the line `⏎ open in browser · or scan with your phone` becomes `✓ Opened in your browser`. Without a browser there, neither the line nor `⏎ open` shows.
+- The code is the one the page shows; approve the machine only when they match. The time left counts down.
+- The link is shown up to its `#`: what follows is the secret that ties the approving browser to this machine.
+- `c` copies the whole link, through `pbcopy`, `wl-copy` or `xclip` where the board sits and through the terminal (OSC 52) over SSH. Over SSH it also shows the whole link, in case the terminal did not take it.
+- `esc` stops waiting.
 
 Connected, it looks like this:
 
@@ -276,21 +456,29 @@ Connected, it looks like this:
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
-The first line names the machine by its name and the hub without its scheme. While `[machine] name` differs from the name the hub has, it shows the new name with `renaming on the hub…` until the keeper's next post renames it. The dot is green with how long ago the board went out, red with why it did not and how long ago on the line under it (a lapsed subscription with its link, a hub that can't be reached, or what the hub answered), and amber before the first post. A machine that holds no account key, because it was approved by its typed code or joined with a join code, posts no board: the dot is red, the line under it says no browser can read the board, and in place of where to sign in the window says to connect it from the link, `kebbie hub leave`, then `kebbie hub connect`.
+- The first line names the machine by its name and the hub without its scheme. While `[machine] name` differs from the name the hub has, it shows the new name with `renaming on the hub…` until the keeper's next post renames it.
+- The dot is green with how long ago the board went out, and amber before the first post.
+- It is red with why the board did not go out and how long ago on the line under it: a lapsed subscription with its link, a hub that can't be reached, or what the hub answered.
+- A machine that holds no account key, because it was approved by its typed code or joined with a join code, posts no board. The dot is red, the line under it says no browser can read the board, and in place of where to sign in the window says to connect it from the link, `kebbie hub leave`, then `kebbie hub connect`.
 
 | Key | Action |
 | --- | --- |
-| `n` | Rename this machine: the field holds `[machine] name`, and `⏎` writes it to `config.toml` (checked as [`machine.name`](configuration.md#keys) is). A `config.toml` that is a link is not written through; the window says where to set it. The keeper sends the new name to the hub on its next post. |
+| `n` | Rename this machine: the field holds `[machine] name`, and `⏎` writes it to `config.toml`. |
 | `l` | Leave the hub, after `y`: the machine stops posting its board, and the keys, the token and the account key go. The command is `kebbie hub leave`. |
 | `esc`, `q` | Close the window. |
 
+A new name is checked as [`machine.name`](configuration.md#keys) is. A `config.toml` that is a link is not written through; the window says where to set it. The keeper sends the new name to the hub on its next post.
+
 ## Areas page
+
+![The Areas page: areas with their repos, actions and vault log](../assets/clips/areas-page.gif)
 
 Press `2` to open it and `1` to go back. It needs the vault: it lists the vault's system notes (`Areas/*.md`) with their repos. `kebbie areas` prints the same.
 
-Areas group into **needs you** (main ahead of origin, commits since the last release, or a task waiting on you), **active** and **quiet**. Each shows its running tasks, open notes and backlog, main against origin, the last tag and commits since, and the last vault log line. Areas without a repo on this machine still list.
-
-An area's repo is the system note's `path`, else where the vault's hooks saw it, else a checkout named after the area.
+- Areas group into **needs you** (main ahead of origin, commits since the last release, or a task waiting on you), **active** and **quiet**.
+- Each shows its running tasks, open notes and backlog, main against origin, the last tag and commits since, and the last vault log line.
+- Areas without a repo on this machine still list.
+- An area's repo is the system note's `path`, else where the vault's hooks saw it, else a checkout named after the area.
 
 `⏎` lists an area's actions, `←` `→` move into the detail to pick one, and each letter works directly:
 
@@ -308,7 +496,11 @@ An area's repo is the system note's `path`, else where the vault's hooks saw it,
 
 ## Routines page
 
-Press `3` to open it. It lists every routine from config.toml and the repo configs, one row each: its last run's outcome, its name, its schedule, and how its last run stands or when it runs next. Routines whose findings wait for you come first, paused ones last. The selected routine shows on the right: what it does in your words, its repo, what it may do and its last few runs. In a narrow pane the list stands alone; `⏎` opens the selected routine on the whole width and `esc` goes back.
+Press `3` to open it. It lists every routine from config.toml and the repo configs, one row each: its last run's outcome, its name, its schedule, and how its last run stands or when it runs next.
+
+- Routines whose findings wait for you come first, paused ones last.
+- The selected routine shows on the right: what it does in your words, its repo, what it may do and its last few runs.
+- In a narrow pane the list stands alone; `⏎` opens the selected routine on the whole width and `esc` goes back.
 
 | Mark | Last run |
 | --- | --- |
@@ -340,7 +532,11 @@ A run is an ordinary task. It shows on the Work page like any other, marked `rou
 
 Each step takes the mouse too: a click selects a repo or what it may do, a second click on it goes on, the hints under a step (`⏎ next`, `esc cancel`, and `y`, `g` and `←` on the table) work as keys, and the wheel moves through the list.
 
-Then it shows the `[[routines]]` table it will add. Nothing is written before `y`; `g` adds it and starts a run at once, `←` goes back. A new routine always goes to config.toml, as `kebbie routine add` adds it. Editing, pausing and deleting change the routine in the file it is in, a repo config's in that repo config, and keep the rest of the file as it was. The page reads the files again every 15 seconds, so a change made by hand shows within a minute.
+Then it shows the `[[routines]]` table it will add. Nothing is written before `y`; `g` adds it and starts a run at once, `←` goes back.
+
+- A new routine always goes to config.toml, as `kebbie routine add` adds it.
+- Editing, pausing and deleting change the routine in the file it is in, a repo config's in that repo config, and keep the rest of the file as it was.
+- The page reads the files again every 15 seconds, so a change made by hand shows within a minute.
 
 With no routines yet, the page explains what a routine is and offers three to start from: a health check, a dependency bump and keeping CI green.
 

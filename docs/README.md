@@ -1,6 +1,8 @@
 # kebbie documentation
 
-New to kebbie? Start with the tutorial. Come back to the how-to guides when you have something to get done, to the reference when you need an exact name, and to the explanations when you want to know why. On a machine with kebbie installed, `kebbie docs <words>` finds the page.
+Start with the tutorial. Use the how-to guides to get something done, the reference for an exact name, and the explanations for why.
+
+With kebbie installed, `kebbie docs <words>` finds the page.
 
 ## Tutorial
 

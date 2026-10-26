@@ -11,9 +11,16 @@ Start a task's dev server and worker from the board, each on the worktree's own 
    dev_worker = "bin/jobs"
    ```
 
-2. Make sure each worktree has a port: `PORT=` in its `.env`, or a port in its setup note. The setup skill picks a free one. Without either, no `PORT` is set.
+2. Give each worktree a port: `PORT=` in its `.env`, or a port in its setup note. The setup skill picks a free one.
+3. Select the task on the board.
+4. Press `w`.
 
-3. On the board, select the task and press `w`. The server starts in a `server` tab of the task's Space with `PORT` set, and a `web` line under the task links to it. Press `w` again to stop it. `b` does the same for the worker.
+The server starts in a `server` tab of the task's Space with `PORT` set, and a `web` line under the task links to it.
+
+- If you want to stop it, press `w` again.
+- If you want the worker, press `b`. It starts and stops the same way.
+- If a worktree has neither a `PORT=` nor a port in its setup note, no `PORT` is set.
+- If kebbie runs on a remote machine and your browser is on your laptop, see [Open dev servers from a remote machine](open-dev-servers-from-a-remote-machine.md).
 
 ## Change the link
 
@@ -26,8 +33,6 @@ dev_url = "https://{worktree}.test"
 ```
 
 `""` turns the link off. See [URL placeholders](../reference/configuration.md#url-placeholders).
-
-When kebbie runs on a remote machine and your browser is on your laptop, see [Open dev servers from a remote machine](open-dev-servers-from-a-remote-machine.md).
 
 ## Rename the tabs
 

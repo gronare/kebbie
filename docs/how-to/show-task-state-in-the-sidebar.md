@@ -13,6 +13,6 @@ Tag each Space in herdr's sidebar with its task's next step, model and context, 
 
    It prints nothing; it keeps the tags up to date.
 
-2. Lay out the sidebar to show them. [`examples/herdr-config.toml`](../../examples/herdr-config.toml) is a complete herdr config with kebbie's keys, the sync and a sidebar layout that uses each tag.
+2. Lay out the sidebar to show the tags. [`examples/herdr-config.toml`](../../examples/herdr-config.toml) is a complete herdr config with kebbie's keys, the sync and a sidebar layout that uses each tag. The tags show within three seconds.
 
-To stop the sync, remove its line from `tab_bar_right`.
+- If you want to stop the sync, remove its line from `tab_bar_right`.

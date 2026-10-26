@@ -1,6 +1,6 @@
 # Requirements
 
-kebbie runs on macOS and Linux, inside herdr 0.9.0 or later.
+What kebbie needs on a machine and in a repo, and what `kebbie doctor` checks. kebbie runs on macOS and Linux, inside herdr 0.9.0 or later.
 
 ## Tools
 
@@ -10,21 +10,44 @@ kebbie runs on macOS and Linux, inside herdr 0.9.0 or later.
 | `herdr` 0.9.0+ | everything | `brew install herdr` | `curl -fsSL https://herdr.dev/install.sh \| sh` |
 | `claude` (Claude Code) | everything | `curl -fsSL https://claude.ai/install.sh \| bash` | the same |
 | `jq` | the sidebar sync and the review hook | `brew install jq` | `sudo apt install jq` |
-| `cargo` | building kebbie on the `main` channel or from `kebbie update --from`; without rustup, `rustc` must be at least the `rust-version` in `Cargo.toml` | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | the same |
+| `cargo` | building kebbie on the `main` channel or from `kebbie update --from` | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | the same |
 | `fzf` 0.71+ | the review split's file list | `brew install fzf` | `git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf && ~/.fzf/install` |
 | `nvim` 0.10+ | the review split's diffs | `brew install neovim` | a [release](https://github.com/neovim/neovim/releases) |
 | `curl` | downloading a release's prebuilt binary, and the review list reloading on change | `brew install curl` | `sudo apt install curl` |
 | `tig` | the history split | `brew install tig` | `sudo apt install tig` |
 
-Distro packages of `fzf` and `nvim` are often older than these versions.
+- Without rustup, `rustc` must be at least the `rust-version` in `Cargo.toml`.
+- Distro packages of `fzf` and `nvim` are often older than these versions.
+- Rust is only needed where kebbie is built from source. A release tag installs a prebuilt binary on macOS (Apple silicon and Intel) and on Linux with glibc (x86_64 and arm64); see [Prebuilt binaries](../explanation/updates-and-restarts.md#prebuilt-binaries).
+- Plan usage on the board needs a Claude.ai plan; an API key gives no usage numbers.
 
-The task sandbox (`task.sandbox`, on by default) needs Claude Code 2.1.285 or later. On Linux it also needs `bubblewrap` and `socat` (`sudo apt install bubblewrap socat`) and the seccomp filter that blocks Unix sockets (`npm install -g @anthropic-ai/sandbox-runtime`). Without them kebbie refuses to start tasks until they are installed or `task.sandbox = false`. macOS needs nothing more.
+The task sandbox (`task.sandbox`, on by default) needs Claude Code 2.1.285 or later. macOS needs nothing more. On Linux it also needs:
 
-Rust is only needed where kebbie is built from source. A release tag installs a prebuilt binary on macOS (Apple silicon and Intel) and on Linux with glibc (x86_64 and arm64); see [Prebuilt binaries](../explanation/updates-and-restarts.md#prebuilt-binaries).
+```
+sudo apt install bubblewrap socat
+```
 
-Plan usage on the board needs a Claude.ai plan; an API key gives no usage numbers.
+and the seccomp filter that blocks Unix sockets:
 
-A task whose profile runs Codex needs Codex CLI 0.163.0 or later (`curl -fsSL https://chatgpt.com/codex/install.sh | sh`, `brew install --cask codex` or `npm install -g @openai/codex`) and kebbie's plugin in it (`kebbie setup codex`).
+```
+npm install -g @anthropic-ai/sandbox-runtime
+```
+
+Without them kebbie refuses to start tasks until they are installed or `task.sandbox = false`.
+
+A task whose profile runs Codex needs Codex CLI 0.163.0 or later and kebbie's plugin in it (`kebbie setup codex`). Install Codex with one of:
+
+```
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```
+
+```
+brew install --cask codex
+```
+
+```
+npm install -g @openai/codex
+```
 
 ## What `kebbie doctor` checks
 
@@ -45,17 +68,25 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `state dir` | The state directories. |
 | `config`, `repo config` | config.toml and every file in the repos folder parse, with no unknown or misplaced keys and no broken links. |
 | `push block` | Inside a repo: whether its task worktrees get the push block. |
-| `docs` | Inside a repo: whether `docs.required` is on, and a suggestion to turn it on when `gh` says the repo is public on GitHub. Without `gh` or a GitHub remote the line is left out. |
+| `docs` | Inside a repo: whether `docs.required` is on. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
-| `hub` | Whether the machine joined a kebbie hub; when it has, the hub's address and the machine's name, whether it pinned an account key and when the board last went out, warning when the hub does not answer, the machine holds no account key (so no browser can read its board) or the last post failed. |
-| `maintainers` | Whether error signals go to kebbie's maintainers (`report.signals`), when they last went and whether that failed, and what happens to kebbie's own bug reports (`report.text`); a warning while `"always"` is set but not armed. |
-| `reports` | With `report.inbox_token` set only: the reports endpoint, how many reports were filed here, the last fetch and its error, and how many reports wait in quarantine on the issues endpoint. |
-| `machine` | With the vault on or a hub connected only: the name the phone and the other machines on the vault see, a warning while `machine.name` is unset. |
+| `hub` | Whether the machine joined a kebbie hub, and how its board posts go. |
+| `maintainers` | Where error signals and kebbie's own bug reports go. |
+| `reports` | With `report.inbox_token` set only: the reports endpoint and what it filed here. |
+| `machine` | With the vault on or a hub connected only: the name the phone and the other machines on the vault see. |
 | `notify` | Whether `notify.command` is set. It is never run. |
-| `sandbox` | Whether tasks run in the sandbox: on and ready, on with what is missing on Linux (a `fail`, since tasks then do not start), or off with `task.sandbox = false` (a `warn` that says a task's shell can pass as you). |
+| `sandbox` | Whether tasks run in the sandbox. |
 | `vault` | The vault plugin: on, missing (fine, it is optional) or too old. |
-| `codex`, `codex plugin`, `codex hooks` | Codex on `PATH` at 0.163.0 or later, kebbie's plugin in its cache and current, and nothing in Codex's `config.toml` that turns kebbie's hooks off (`[features] hooks = false`, or one of them turned off in `/hooks`). Only `codex` shows until a profile runs Codex or Codex is on `PATH`; a gap is a `warn` until a profile runs Codex, and a `fail` after. |
+| `codex`, `codex plugin`, `codex hooks` | Codex at 0.163.0 or later, kebbie's plugin in it, and its hooks on. |
 | `backlog …` | Each backlog source can be read, and an installed source not in use. |
+
+- `docs` suggests turning `docs.required` on when `gh` says the repo is public on GitHub. Without `gh` or a GitHub remote the line is left out.
+- `hub`: when the machine has joined, it shows the hub's address and the machine's name, whether it pinned an account key and when the board last went out. It warns when the hub does not answer, the machine holds no account key (so no browser can read its board) or the last post failed.
+- `maintainers`: whether error signals go to kebbie's maintainers (`report.signals`), when they last went and whether that failed, and what happens to kebbie's own bug reports (`report.text`). It warns while `"always"` is set but not armed.
+- `reports`: how many reports were filed here, the last fetch and its error, and how many reports wait in quarantine on the issues endpoint.
+- `machine` warns while `machine.name` is unset.
+- `sandbox` is on and ready; on with what is missing on Linux, a `fail` since tasks then do not start; or off with `task.sandbox = false`, a `warn` that says a task's shell can pass as you.
+- `codex` looks for Codex on `PATH`, kebbie's plugin in its cache and current, and nothing in Codex's `config.toml` that turns kebbie's hooks off (`[features] hooks = false`, or one of them turned off in `/hooks`). Only `codex` shows until a profile runs Codex or Codex is on `PATH`. A gap is a `warn` until a profile runs Codex, and a `fail` after.
 
 ## Repos
 

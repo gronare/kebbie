@@ -1,6 +1,10 @@
 # Run a task with Codex
 
-A task can run OpenAI's Codex CLI instead of Claude Code. It gets the same pooled worktree, card on the board, push block and `kebbie report` before each turn ends, and the task role written for Codex: Codex can't run kebbie's setup and rules skills, so it prepares its worktree with the repo's own `worktree.setup_command` and is not told the rules skill. Its commits are still checked against the rules skill when it reports ready, as any task's are. The lead and the reviewer stay Claude.
+Run a task on OpenAI's Codex CLI instead of Claude Code.
+
+A Codex task gets the same pooled worktree, card on the board, push block and `kebbie report` before each turn ends. The lead and the reviewer stay Claude.
+
+Its task role is written for Codex. Codex can't run kebbie's setup and rules skills, so it prepares its worktree with the repo's own `worktree.setup_command` and is not told the rules skill. Its commits are still checked against the rules skill when it reports ready, as any task's are.
 
 ## Before you start
 
@@ -9,13 +13,17 @@ A task can run OpenAI's Codex CLI instead of Claude Code. It gets the same poole
 
 ## Install kebbie's plugin in Codex
 
-Codex runs kebbie's hooks from a Codex plugin. Install it once:
+Codex runs kebbie's hooks from a Codex plugin.
 
-```bash
-kebbie setup codex
-```
+1. Install it once:
 
-It says what it writes and asks before writing anything. The plugin goes in Codex's plugin cache, `$CODEX_HOME/plugins/cache/kebbie/kebbie/local/` (`CODEX_HOME` defaults to `~/.codex`), and holds three hooks:
+   ```bash
+   kebbie setup codex
+   ```
+
+   It says what it writes and asks before writing anything.
+
+The plugin goes in Codex's plugin cache, `$CODEX_HOME/plugins/cache/kebbie/kebbie/local/` (`CODEX_HOME` defaults to `~/.codex`), and holds three hooks:
 
 | Hook | What it does in a kebbie task |
 | --- | --- |
@@ -25,44 +33,51 @@ It says what it writes and asks before writing anything. The plugin goes in Code
 
 Outside a kebbie task's worktree each hook does nothing.
 
-`kebbie setup codex` never edits Codex's `config.toml` or `hooks.json`. Codex loads the plugin only in the sessions kebbie starts: kebbie turns it on with `-c plugins.kebbie@kebbie.enabled=true` and trusts its three hooks by their hash with `-c hooks.state=…`, for that session alone. Your own Codex sessions don't load it.
+- `kebbie setup codex` never edits Codex's `config.toml` or `hooks.json`.
+- Codex loads the plugin only in the sessions kebbie starts. kebbie turns it on with `-c plugins.kebbie@kebbie.enabled=true` and trusts its three hooks by their hash with `-c hooks.state=…`, for that session alone. Your own Codex sessions don't load it.
+- Codex trusts the hooks by their command line, not by the launcher script they run. So kebbie starts a Codex task only when every file of the plugin is exactly what it writes, and a missing, out-of-date or changed plugin stops the start with `run kebbie setup codex`.
+- A second run that finds nothing to change writes nothing.
+- `kebbie setup codex` is yours to run: a task cannot run it.
 
-Codex trusts the hooks by their command line, not by the launcher script they run, so kebbie starts a Codex task only when every file of the plugin is exactly what it writes. A missing, out-of-date or changed plugin stops the start with `run kebbie setup codex`. Run it again after kebbie's binary moves; `kebbie doctor` then says the plugin is out of date. A second run that finds nothing to change writes nothing. `kebbie setup codex --uninstall` removes the plugin.
-
-`kebbie setup codex` is yours to run: a task cannot run it.
+If kebbie's binary moves, run `kebbie setup codex` again; `kebbie doctor` then says the plugin is out of date. If you want the plugin gone, run `kebbie setup codex --uninstall`.
 
 ## Write a Codex profile
 
-`~/.config/kebbie/profiles/coder.toml`:
+1. Write `~/.config/kebbie/profiles/coder.toml`:
 
-```toml
-about = "Codex on a GPT model"
-for = "a second opinion on a bug, work you want Codex to do"
-agent = "codex"
-model = "gpt-5.5"
-effort = "high"
-permission_mode = "acceptEdits"
-```
+   ```toml
+   about = "Codex on a GPT model"
+   for = "a second opinion on a bug, work you want Codex to do"
+   agent = "codex"
+   model = "gpt-5.5"
+   effort = "high"
+   permission_mode = "acceptEdits"
+   ```
 
-Check it:
+2. Check it:
 
-```bash
-kebbie profiles
-```
+   ```bash
+   kebbie profiles
+   ```
 
-Under the profile, a `codex:` line shows the Codex binary, its version and whether kebbie's plugin is installed.
+   Under the profile, a `codex:` line shows the Codex binary, its version and whether kebbie's plugin is installed.
 
-A Codex profile takes `about`, `for`, `agent`, `model`, `effort`, `role`, `skills`, `permission_mode` and `sandbox.enabled`. `model` goes to `codex --model`, `effort` to `model_reasoning_effort`. `deny`, `allow`, `[claude]` and the other `[sandbox]` keys set Claude Code's options, which Codex doesn't read, so a Codex profile that has them doesn't load and `kebbie profiles` names the key.
+A Codex profile takes `about`, `for`, `agent`, `model`, `effort`, `role`, `skills`, `permission_mode` and `sandbox.enabled`. `model` goes to `codex --model`, `effort` to `model_reasoning_effort`.
+
+`deny`, `allow`, `[claude]` and the other `[sandbox]` keys set Claude Code's options, which Codex doesn't read. A Codex profile that has them doesn't load, and `kebbie profiles` names the key.
 
 ## Start the task
 
-```bash
-kebbie start flaky-test --profile coder "Find why the checkout test fails one run in ten"
-```
+1. Start it with the profile:
+
+   ```bash
+   kebbie start flaky-test --profile coder "Find why the checkout test fails one run in ten"
+   ```
 
 The lead can choose the profile too, by its `for`.
 
-When Codex asks something before it runs, kebbie answers nothing and the start says what Codex asks: whether you trust the repo's folder, the first time Codex runs in it, or whether to trust hooks of your own that are new or changed. Answer it in the task's Space, and kebbie types the task's prompt in once the keeper or an open board runs. A folder you already trust in Codex is answered for you.
+- If Codex asks something before it runs, kebbie answers nothing and the start says what Codex asks: whether you trust the repo's folder, the first time Codex runs in it, or whether to trust hooks of your own that are new or changed. Answer it in the task's Space, and kebbie types the task's prompt in once the keeper or an open board runs.
+- If you already trust the folder in Codex, that question is answered for you.
 
 ## How the sandbox and the permission mode map
 
@@ -83,7 +98,7 @@ Codex has no inbox kebbie can write to, so kebbie types a message into the task'
 
 ## Compressed sessions
 
-Codex can compress a session file it hasn't written to for a week to `.jsonl.zst`. kebbie still finds such a session and resumes it, but can't read it, so it doesn't send the task's first prompt again and can't tell from it whether a typed message arrived.
+Codex can compress a session file it hasn't written to for a week to `.jsonl.zst`. kebbie still finds such a session and resumes it, but can't read it. So it doesn't send the task's first prompt again and can't tell from it whether a typed message arrived.
 
 ## What a Codex task doesn't get
 

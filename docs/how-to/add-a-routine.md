@@ -4,20 +4,24 @@ Have kebbie run a check on a schedule, as a task that reports what it finds or p
 
 ## Add one from the board
 
-1. Open the board's Routines page with `3` and press `n`.
-2. Answer the five steps: what it should do, the repo, when (`07:00`, `mon 08:00` or `every 6h`), what it may do, and its name.
-3. Check the table it shows and press `y` to add it to config.toml, or `g` to add it and run it at once.
+1. Press `3` on the board for the Routines page.
 
-The same from a shell:
+2. Press `n`.
+
+3. Answer the five steps: what it should do, the repo, when (`07:00`, `mon 08:00` or `every 6h`), what it may do, and its name.
+
+4. Check the table it shows. Press `y` to add it to config.toml, or `g` to add it and run it at once.
+
+If you work in a shell, add it with:
 
 ```bash
 kebbie routine add --title "Cluster health" --repo infra --every 6h \
   "Check the cluster with kubectl: every node Ready, no pod crash-looping, every volume healthy."
 ```
 
-Or ask the lead for it in your words: it shows you the routine's title, repo, schedule, mode and push, and adds it with `kebbie routine add` once you say yes. It sets `--push` only when you ask for it.
+If you would rather ask the lead, say it in your words. It shows you the routine's title, repo, schedule, mode and push, and adds it with `kebbie routine add` once you say yes. It sets `--push` only when you ask for it.
 
-To write the table yourself, or to keep a routine in a repo's own config, follow the examples below.
+If you write the table yourself, or keep a routine in a repo's own config, follow the examples below.
 
 ## Check a cluster's health every six hours
 
@@ -38,20 +42,25 @@ The cluster's manifests live in a gitops repo, `~/code/infra`, so the routine go
 
    `mode` is left at `"report"`: the task looks and changes nothing.
 
-2. Check it parses and see when it runs:
+2. Check it parses:
 
    ```bash
    kebbie doctor
+   ```
+
+3. See when it runs:
+
+   ```bash
    kebbie routines
    ```
 
-3. To try it at once, start a run now:
+4. To try it at once, start a run now:
 
    ```bash
    kebbie routine run cluster-health
    ```
 
-When all is well the task closes itself with `kebbie routine ok` and you hear nothing. When it finds something, it waits under Needs you with a card listing each finding, and your notify command gets a `routine-findings` event.
+When all is well, the task closes itself with `kebbie routine ok` and you hear nothing. When it finds something, it waits under Needs you with a card listing each finding, and your notify command gets a `routine-findings` event.
 
 ## Propose dependency updates every Monday
 
@@ -66,9 +75,15 @@ When all is well the task closes itself with `kebbie routine ok` and you hear no
    prompt = "Find the outdated dependencies, read their changelogs for breaking changes, and propose which to update and how."
    ```
 
-2. Check it with `kebbie routines`.
+2. Check it:
 
-On Monday at 07:00, or when the machine wakes after it, the task investigates and puts a plan to you on the board. Approve it there and the task makes the updates in commits and reports ready; you push them as any task.
+   ```bash
+   kebbie routines
+   ```
+
+3. On Monday at 07:00, or when the machine wakes after it, the task investigates and puts a plan to you on the board. Approve it there.
+
+4. The task makes the updates in commits and reports ready. Push them as any task.
 
 ## A routine in config.toml
 

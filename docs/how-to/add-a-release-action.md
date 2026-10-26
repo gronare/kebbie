@@ -2,6 +2,10 @@
 
 Release a repo from the board's Areas page with one key: bump the version, build, commit, tag and push.
 
+![The Areas page: areas with their repos, actions and vault log](../assets/clips/areas-page.gif)
+
+The Areas page needs the vault. The main checkout must be on the default branch, clean and not behind origin.
+
 1. Add an `[[actions]]` table to the repo config, `~/.config/kebbie/repos/billing.toml`:
 
    ```toml
@@ -23,15 +27,21 @@ Release a repo from the board's Areas page with one key: bump the version, build
    kebbie doctor
    ```
 
-3. On the board, press `2` for the Areas page, select the repo's area and press `R`.
+3. On the board, press `2` for the Areas page.
 
-4. Enter the version; the next patch version is prefilled. The window shows every step, including the exact lines the bump changes. Press `y` to run it, and `y` again to push.
+4. Select the repo's area and press `R`.
 
-The main checkout must be on the default branch, clean and not behind origin.
+5. Enter the version. The next patch version is prefilled.
+
+6. Read the steps in the window, including the exact lines the bump changes, and press `y` to run them.
+
+7. Press `y` again to push.
+
+Every key: [`[[actions]]`](../reference/configuration.md#actions).
 
 ## Hand the rest to a task
 
-An action can start a task instead of running a script, and one action can offer another when it is done:
+An action can start a task instead of running a script. With `then`, one action offers another when it is done.
 
 ```toml
 [[actions]]
@@ -54,5 +64,3 @@ title = "Bump the client"
 ask = ["package", "version"]
 task = "Bump {package} to {version}; commit."
 ```
-
-The Areas page needs the vault. Every key: [`[[actions]]`](../reference/configuration.md#actions).

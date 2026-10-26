@@ -6,9 +6,11 @@ A herdr split next to Claude with the files of the work under review: a file lis
 
 | Item | Value |
 | --- | --- |
-| Files listed | The work under review, in the order of Claude's numbered review guide. Claude takes the files it changed in this session, or, for work from elsewhere, what the unpushed commits, uncommitted changes and project notes say belongs to it, and asks when that is unclear. Asking for everything lists every change against the base. |
+| Files listed | The work under review, in the order of Claude's numbered review guide. |
 | Base inside a worktree | Where the branch left the remote's default branch, so the split shows that task's work, committed or not. |
 | Base elsewhere | The argument to `/kebbie:review-split`, when given. |
+
+Claude takes the files it changed in this session. For work from elsewhere, it takes what the unpushed commits, uncommitted changes and project notes say belongs to it, and asks when that is unclear. Asking for everything lists every change against the base.
 
 ## Keys
 

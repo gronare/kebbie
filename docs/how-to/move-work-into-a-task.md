@@ -1,25 +1,28 @@
 # Move work into a task
 
-You started changing code in the main checkout and it should be a task. Move it, so the main checkout is clean again.
+Turn changes you started in the main checkout into a task, so the main checkout is clean again.
 
 ## From inside Claude
 
-In the Claude session that did the work:
+1. In the Claude session that did the work, run:
 
-```text
-/kebbie:move-to-worktree billing
-```
+   ```text
+   /kebbie:move-to-worktree billing
+   ```
 
 Claude claims the files and commits it made, moves them and its own pane into a worktree and Space named `billing`, runs the setup skill there and continues.
 
 ## From the command line
 
-From the main checkout:
+1. From the main checkout, name the task and the uncommitted files to take:
 
-```bash
-kebbie move billing app/models/invoice.rb app/models/line.rb
-```
+   ```bash
+   kebbie move billing app/models/invoice.rb app/models/line.rb
+   ```
 
-kebbie takes branch `billing` if it exists, else the unpushed commits, plus the uncommitted files you name, and opens the worktree as a Space. Add `--pane <id>` to move that herdr pane along, or `--no-focus` to stay where you are.
+   kebbie takes branch `billing` if it exists, else the unpushed commits, plus the files you name, and opens the worktree as a Space.
 
-Its last line names the setup skill to run in the new worktree. Run it there, or ask the Claude you moved to.
+2. Run the setup skill that the last line names in the new worktree, or ask the Claude you moved to run it.
+
+- If you want a herdr pane to move along, add `--pane <id>`.
+- If you want to stay where you are, add `--no-focus`.
