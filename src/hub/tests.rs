@@ -361,10 +361,10 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
 
     let maintainer = crate::sh::test_dir("report-maintainer");
     let token = hub.hub.mint_admin_token("maintainer", kebbie_hub::store::AdminScope::Reports).unwrap().unwrap();
-    let settings = crate::config::Report { url: Some(hub.url.clone()), inbox_token: Some(token.clone()), ..Default::default() };
+    let settings = crate::config::Report { inbox_token: Some(token.clone()), ..Default::default() };
     assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "an unknown install's report waits in quarantine");
     let check = inbox::doctor(&maintainer, &settings, now()).unwrap();
-    assert!(check.level == crate::doctor::Level::Warn && check.fact.contains("1 reports wait in quarantine: kebbie-hub admin reports --quarantine"), "{}", check.fact);
+    assert!(check.level == crate::doctor::Level::Warn && check.fact.contains("1 reports wait in quarantine"), "{}", check.fact);
 
     let key = report::install_key(&user).unwrap().public();
     hub.hub.store().set_key_status(&key, kebbie_hub::store::KeyStatus::Allowed, now()).unwrap();

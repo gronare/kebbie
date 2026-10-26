@@ -1,6 +1,6 @@
 # Report a problem with kebbie
 
-Keep what kebbie got wrong, or could not do, on your machine, see after an update which of it may be fixed, and send a bug to kebbie's maintainers when you choose: through the hub, from the board's `B` list or `kebbie issue report`. A GitHub issue is optional, and only ever one you open yourself. Separately, kebbie counts its own crashes and internal errors and sends the maintainers those counts, with no text at all.
+Keep what kebbie got wrong, or could not do, on your machine, see after an update which of it may be fixed, and send a bug to kebbie's maintainers when you choose: to kebbie's issues endpoint, from the board's `B` list or `kebbie issue report`. A GitHub issue is optional, and only ever one you open yourself. Separately, kebbie counts its own crashes and internal errors and sends the maintainers those counts, with no text at all.
 
 ## Save it
 
@@ -86,8 +86,6 @@ Every report sent, from the board, from `kebbie issue report` or unasked, adds a
 - `"always"`: kebbie sends each bug you or the lead saves within a minute, redacted the same way, without asking. Each send is a line under messages, so you still see what went. The key alone does nothing: run `kebbie issue report --always` in your own terminal to arm it, and `kebbie issue report --ask` to go back to being asked. The lead can write config.toml but cannot arm it; `kebbie doctor` says when the key is set and not armed.
 - `"never"`: the board never offers one; `kebbie issue report <id>` still sends one when you ask.
 
-`[report] url` sends reports to another endpoint, such as a [kebbie hub](https://github.com/gronare/kebbie-hub) you run. See [Configuration](../reference/configuration.md).
-
 ## Error signals
 
 When kebbie itself fails, it counts it: a panic anywhere in kebbie, and some internal errors, where a check in kebbie's code that should never fail did or one of its own state files does not read back. Your errors are not counted: a bad config, the network being down or `gh` missing stay on your screen.
@@ -100,7 +98,7 @@ Once a day at most, the keeper sends the counts since the last send. Each signal
 - the error kind: `panic`, `internal-error` or `corrupt-state`,
 - how many times it happened.
 
-Never an error message, a path, a repo, task, branch or host name, or anything from your work: the format has no field for text, and the hub refuses one that carries any. It is signed with the same install key as reports. Each send adds a line under messages on the board, such as `Sent kebbie's maintainers an error signal, a count of kebbie's own failures: keeper.push internal-error (×3); with kebbie 0.26.3 (16983b9) on macos aarch64 and nothing else. [report] signals = false in config.toml turns these off.`
+Never an error message, a path, a repo, task, branch or host name, or anything from your work: the format has no field for text, and the endpoint refuses one that carries any. It is signed with the same install key as reports. Each send adds a line under messages on the board, such as `Sent kebbie's maintainers an error signal, a count of kebbie's own failures: keeper.push internal-error (×3); with kebbie 0.26.3 (16983b9) on macos aarch64 and nothing else. [report] signals = false in config.toml turns these off.`
 
 Signals are on by default. To turn them off, in config.toml:
 
@@ -111,13 +109,9 @@ signals = false   # sends no error signals and drops what was counted
 
 `kebbie doctor`'s `maintainers` line shows both choices, and `kebbie config` lists `report.signals` and `report.text`. A config with the older `[report] enabled = false` keeps both off.
 
-### Receiving reports
-
-If you run the hub that takes your users' reports, mint a token on it with `kebbie-hub admin token --name <this machine>` and set it in your own config.toml as `[report] inbox_token`. The keeper then fetches the reports the hub has let through every 10 minutes, files each as a kebbie issue on your machine, with the id `r<report id>` and the sender's title, and acknowledges it on the hub, once per report. `kebbie issues` and `kebbie issue show` mark such an issue `[report <id>, untrusted]` and show its text fenced as data; it is never rechecked after an update. `kebbie doctor` counts the reports still waiting in quarantine; `kebbie-hub admin reports --quarantine` lists them and `kebbie-hub admin reports allow <key>` lets a sender through. The token belongs in config.toml only; a repo config with `[report]` is refused.
-
 ## Or open a GitHub issue yourself
 
-The hub report above is how a bug reaches kebbie's maintainers. A GitHub issue is an optional alternative, and nothing in kebbie opens one for you: not the keeper, not an update, not the lead or a task. kebbie refuses `kebbie issue send` and `kebbie issue link` to the lead, tasks and sandboxed processes, and the lead never suggests a GitHub issue unless you ask for one; then it tells you to run this yourself:
+The report above is how a bug reaches kebbie's maintainers. A GitHub issue is an optional alternative, and nothing in kebbie opens one for you: not the keeper, not an update, not the lead or a task. kebbie refuses `kebbie issue send` and `kebbie issue link` to the lead, tasks and sandboxed processes, and the lead never suggests a GitHub issue unless you ask for one; then it tells you to run this yourself:
 
 ```bash
 kebbie issue send <id>

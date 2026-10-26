@@ -86,9 +86,9 @@ pub fn doctor(state: &Path, settings: &crate::config::Report, now: u64) -> Optio
     let checked = ledger.checked_at.map_or("not fetched yet".to_string(), |at| format!("fetched {} ago", crate::keeper::span(now.saturating_sub(at))));
     let fact = format!("{} · {} filed · {checked}", settings.url(), ledger.filed.len());
     Some(if let Some(error) = &ledger.error {
-        Check { level: Level::Warn, name, fact: format!("{fact}; last fetch failed: {error}"), fix: vec!["check [report] inbox_token against kebbie-hub admin token; the keeper retries every 10 minutes".to_string()] }
+        Check { level: Level::Warn, name, fact: format!("{fact}; last fetch failed: {error}"), fix: vec!["check [report] inbox_token against the token the issues endpoint issued; the keeper retries every 10 minutes".to_string()] }
     } else if ledger.quarantined > 0 {
-        Check { level: Level::Warn, name, fact: format!("{fact}; {} reports wait in quarantine: kebbie-hub admin reports --quarantine", ledger.quarantined), fix: vec!["kebbie-hub admin reports allow <key> or block <key> on the hub".to_string()] }
+        Check { level: Level::Warn, name, fact: format!("{fact}; {} reports wait in quarantine", ledger.quarantined), fix: vec!["allow or block their senders on the issues endpoint".to_string()] }
     } else {
         Check { level: Level::Ok, name, fact, fix: Vec::new() }
     })
