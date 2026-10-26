@@ -315,6 +315,9 @@ pub fn repo_files(dir: &Path, current: Option<&Path>) -> (Vec<Check>, Option<Wor
 pub fn setup_skill(skill: &Setting<String>, installed: Option<&Value>, settings: &Value) -> Check {
     let name = "setup skill";
     let shown = format!("{} ({})", skill.value, skill.layer.label());
+    if let Some(path) = config::skill_path(&skill.value) {
+        return if path.is_file() { ok(name, format!("{shown}: a file a task reads")) } else { warn(name, format!("{shown}: no file at {}, so a task sets its worktree up without it", path.display()), one("create the file, or set worktree.setup_skill to a skill or a file this machine has")) };
+    }
     let Some((plugin, _)) = skill.value.split_once(':') else {
         return ok(name, format!("{shown}: a user or project skill, not checked"));
     };
@@ -983,6 +986,13 @@ mod tests {
         let off = setup_skill(&skill("my-tools:set-up-worktree", config::Layer::Repo), Some(&installed), &disabled);
         assert_eq!((off.level, off.fix[0].as_str()), (Level::Warn, "claude plugin enable my-tools@private"));
         assert_eq!(setup_skill(&skill("set-up-worktree", config::Layer::Machine), None, &Value::Null).level, Level::Ok);
+        let dir = crate::sh::test_dir("doctor-setup-file");
+        std::fs::write(dir.join("SETUP.md"), "Run make deps.\n").unwrap();
+        let file = setup_skill(&skill(&dir.join("SETUP.md").display().to_string(), config::Layer::Repo), None, &Value::Null);
+        assert_eq!((file.level, file.fact.ends_with("a file a task reads")), (Level::Ok, true), "{file:?}");
+        let gone = setup_skill(&skill(&dir.join("gone.md").display().to_string(), config::Layer::Repo), None, &Value::Null);
+        assert!(gone.level == Level::Warn && gone.fact.contains("no file at"), "{gone:?}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

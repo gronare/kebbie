@@ -123,9 +123,9 @@ pub fn rules_check(cwd: &Path) -> Result<Option<String>> {
     let rules = config::resolve(Some(&repo))?.settings.rules_skill.value;
     let sha = git(&slot.path, &["rev-parse", "--short", "HEAD"])?;
     Ok(Some(format!(
-        "{address}{READY_AT}{sha}: check its commits against `{rules}` (git -C {} log -p {upstream}..HEAD). When they hold, run \
+        "{address}{READY_AT}{sha}: check its commits against {} (git -C {} log -p {upstream}..HEAD). When they hold, run \
          kebbie -C {} approve {task}; when one breaks a rule, kebbie tell {address} which commit and what to fix.",
-        slot.path.display(), repo.display()
+        config::rules_named(&rules), slot.path.display(), repo.display()
     )))
 }
 

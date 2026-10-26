@@ -447,10 +447,42 @@ pub fn skill_name(name: &str) -> bool {
     [plugin, skill].iter().all(|part| !part.is_empty() && *part != "." && *part != ".." && !part.contains(['/', '\\', ':']))
 }
 
+// A skill setting may name a Markdown file instead, by an absolute path or one under ~.
+pub fn skill_path(value: &str) -> Option<PathBuf> {
+    let path = match value.strip_prefix("~/") {
+        Some(rest) => PathBuf::from(std::env::var("HOME").ok().filter(|home| !home.is_empty())?).join(rest),
+        None if value.starts_with('/') => PathBuf::from(value),
+        None => return None,
+    };
+    Some(path)
+}
+
+pub fn quoted_file(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path).map(|text| format!("--- {} ---\n{}\n--- end of {} ---", path.display(), text.trim_end(), path.display())).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn markdown(value: &str) -> bool {
+    (value.starts_with('/') || value.starts_with("~/")) && Path::new(value).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+}
+
+pub fn follow(value: &str) -> String {
+    match skill_path(value) {
+        Some(path) => format!("read `{}` and follow it", path.display()),
+        None => format!("run the skill `{value}` and follow it"),
+    }
+}
+
+pub fn rules_named(value: &str) -> String {
+    match skill_path(value) {
+        Some(path) => format!("the rules in `{}`", path.display()),
+        None => format!("the skill `{value}`"),
+    }
+}
+
 fn skill(table: &Table, field: &str, key: &str) -> Result<Option<String>> {
     let name = text(table, field, key)?;
     match name {
-        Some(name) if !skill_name(&name) => Err(format!("{key}: \"{name}\" is not a skill name; use <skill> or <plugin>:<skill>, without / or ..")),
+        Some(name) if !skill_name(&name) && !markdown(&name) => Err(format!("{key}: \"{name}\" is not a skill name or a Markdown file; use <skill>, <plugin>:<skill>, or a path to a .md file starting with / or ~/")),
         name => Ok(name),
     }
 }
@@ -937,7 +969,7 @@ pub fn entries(loaded: &Loaded) -> Vec<Entry> {
     key("board.groups", quoted(&order), groups.layer, Kind::List, Scope::Machine,
         &format!("The order of the Work column's groups, by name: {}; groups the list leaves out follow in this default order, so a partial list moves only the ones it names; config.toml only.", quoted(&Group::ALL.map(Group::key))));
     key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer, Kind::Skill, Scope::Either,
-        "The skill a task's Claude runs first to make its worktree runnable.");
+        "The skill a task's Claude runs first to make its worktree runnable: kebbie's own, a skill of yours by name (<skill> or <plugin>:<skill>), or a Markdown file by an absolute or ~ path, whose text the task gets in its role.");
     key("worktree.setup_command", setup_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), setup_command.layer, Kind::Text, Scope::Either,
         "The repo's own command that prepares an existing worktree, run from inside it; the setup skill runs it. A path applies only in a repo that has the file; elsewhere, and when none, bin/setup-worktree when the repo has one.");
     key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer, Kind::Text, Scope::Either,
@@ -958,7 +990,7 @@ pub fn entries(loaded: &Loaded) -> Vec<Entry> {
     key("worktree.clean_on_release", quoted(&cleaned), clean_on_release.layer, Kind::List, Scope::Either,
         "Build output kebbie removes from a worktree when it goes back to the pool (done, drop, reset, a landed task closing), so the pool's disk use stays bounded; folders inside the worktree, each removed only when git ignores it and tracks nothing in it, and \"target\" only where the worktree has a Cargo.toml. [] keeps everything.");
     key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer, Kind::Skill, Scope::Either,
-        "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the reviewer checks a ready task against it, tidy reshapes commits by it.");
+        "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the reviewer checks a ready task against it, tidy reshapes commits by it. kebbie's own, a skill of yours by name (<skill> or <plugin>:<skill>), or a Markdown file by an absolute or ~ path, whose text the task and the reviewer get.");
     let own: Vec<&str> = test_commands.value.iter().map(String::as_str).collect();
     key("task.test_commands", quoted(&own), test_commands.layer, Kind::List, Scope::Either,
         &format!("Test commands of this repo that kebbie records when a task's Claude runs them, on top of the built-in {}; matched on the command's start, after any cd … && and VAR=value. kebbie evidence, the board, the push dialog and the reviewer show the runs.", quoted(&crate::evidence::DEFAULT_COMMANDS)));
@@ -1120,6 +1152,17 @@ mod tests {
         for bad in ["..", "kebbie:..", "kebbie:../../outside", "../../outside", "a/b", "/abs", "x:", ":x", "a:b:c", "a\\b"] {
             assert!(!skill_name(bad), "{bad}");
         }
+        for file in ["/home/u/code/team/RULES.md", "~/notes/setup.MD"] {
+            assert_eq!(repo(&format!("[task]\nrules_skill = {file:?}\n[worktree]\nsetup_skill = {file:?}\n")).rules_skill.as_deref(), Some(file), "a Markdown file by an absolute or ~ path");
+        }
+        for not_a_file in ["code/RULES.md", "/home/u/RULES.txt", "~/RULES"] {
+            assert!(parse_repo(&format!("[task]\nrules_skill = {not_a_file:?}\n"), "app.toml").unwrap_err().contains("or a path to a .md file starting with / or ~/"), "{not_a_file}");
+        }
+        assert_eq!(skill_path("kebbie:work-rules"), None);
+        assert_eq!(skill_path("/x/RULES.md"), Some(PathBuf::from("/x/RULES.md")));
+        assert_eq!(skill_path("~/RULES.md"), Some(PathBuf::from(std::env::var("HOME").unwrap()).join("RULES.md")));
+        assert_eq!((follow("kebbie:set-up-worktree"), follow("/x/SETUP.md")), ("run the skill `kebbie:set-up-worktree` and follow it".to_string(), "read `/x/SETUP.md` and follow it".to_string()));
+        assert_eq!((rules_named("kebbie:work-rules"), rules_named("/x/RULES.md")), ("the skill `kebbie:work-rules`".to_string(), "the rules in `/x/RULES.md`".to_string()));
         let refused = parse_repo("[task]\nrules_skill = \"kebbie:../../outside\"\n", "app.toml").unwrap_err();
         assert!(refused.contains("task.rules_skill") && refused.contains("not a skill name"), "{refused}");
         assert!(parse_repo("[worktree]\nsetup_skill = \"../x\"\n", "app.toml").is_err());

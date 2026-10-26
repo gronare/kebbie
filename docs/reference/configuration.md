@@ -48,7 +48,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
-| `worktree.setup_skill` | `"kebbie:set-up-worktree"` | either | The skill a task's Claude runs first to make its worktree runnable. |
+| `worktree.setup_skill` | `"kebbie:set-up-worktree"` | either | The skill a task's Claude runs first to make its worktree runnable, or a Markdown file of steps. |
 | `worktree.setup_command` | none | either | The repo's own command that prepares a worktree, run from inside it by the setup skill. |
 | `worktree.dev_server` | none | either | The command the board's `w` runs in a server tab of the task's Space. Unset, there is no `w`. |
 | `worktree.dev_worker` | none | either | A second command, such as a job runner, that `b` runs in a worker tab. Unset, there is no `b`. |
@@ -59,7 +59,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | `worktree.server_name` | `"server"` | config.toml only | The name of the tab `w` starts, and of the Space's tag in herdr's sidebar while it runs. |
 | `worktree.worker_name` | `"worker"` | config.toml only | The same for `b`'s tab. |
 
-- `worktree.setup_skill`: `plugin:skill` for a plugin's skill; a bare name for one in `~/.claude/skills` or the repo's `.claude/skills`.
+- `worktree.setup_skill`: `plugin:skill` for a plugin's skill; a bare name for one in `~/.claude/skills` or the repo's `.claude/skills`; or a Markdown file by an absolute or `~` path, such as `"~/code/app/SETUP.md"`, whose text the task gets in its role.
 - `worktree.setup_command`: a command naming a path applies only in a repo that has that file. Where it does not apply, and when unset, the skill runs `bin/setup-worktree` if the repo has one.
 - `worktree.dev_server` and `worktree.dev_worker` run with `PORT` set to the worktree's port.
 - `worktree.dev_url` fills in the [URL placeholders](#url-placeholders).
@@ -71,7 +71,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
-| `task.rules_skill` | `"kebbie:work-rules"` | either | The skill with the rules for how work is planned, built and committed. |
+| `task.rules_skill` | `"kebbie:work-rules"` | either | The skill with the rules for how work is planned, built and committed, or a Markdown file of rules. |
 | `task.test_commands` | `[]` | either | Test commands kebbie records when a task's Claude runs them, on top of the built-in ones. |
 | `task.also_noticed` | `"backlog"` | either | What a task's Claude does with what it notices outside its task: `"backlog"`, `"fix"` or `"ask"`. |
 | `task.profile` | none | either | The [profile](#profiles) a task starts with when `kebbie start` names none with `--profile`. |
@@ -79,7 +79,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | `task.permission_mode` | none | either | The [permission mode](https://code.claude.com/docs/en/permission-modes) a task's Claude starts in. |
 | `[[routines]]` | none | either | Checks kebbie runs on a schedule, each as a task that reports, plans or fixes. See [`[[routines]]`](#routines). |
 
-`task.rules_skill`: a task's Claude follows it, the reviewer checks a ready task against it, and `tidy` reshapes commits by it. With the default, kebbie also refuses a ready report while a commit lacks a subject, a blank line and a body.
+`task.rules_skill`: a task's Claude follows it, the reviewer checks a ready task against it, and `tidy` reshapes commits by it. It names a skill as `worktree.setup_skill` does, or a Markdown file by an absolute or `~` path, such as `"~/code/team/RULES.md"`: the task gets the file's text in its role and the reviewer in its brief. With the default, kebbie also refuses a ready report while a commit lacks a subject, a blank line and a body.
 
 `task.test_commands`: the built-in ones are `cargo test`, `bin/rails test`, `pytest`, `npm test`, `go test` and others; `kebbie config` lists them. A command counts when it starts with one of these, whole words, after any `cd … &&` and `VAR=value`. See [`kebbie evidence`](commands.md#kebbie-evidence-name---json).
 

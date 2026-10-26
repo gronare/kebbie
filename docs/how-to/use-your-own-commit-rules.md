@@ -2,7 +2,7 @@
 
 Make tasks commit the way your team does. kebbie leaves commit style to a skill: the task follows it, the reviewer checks a ready task against it, and `tidy` reshapes commits by it.
 
-1. Write a Claude Code skill with your rules: a plugin's skill, or one in `~/.claude/skills` or the repo's `.claude/skills`. kebbie's default, [`kebbie:work-rules`](../../skills/work-rules/SKILL.md), is a starting point.
+1. Write your rules: as a Claude Code skill, a plugin's or one in `~/.claude/skills` or the repo's `.claude/skills`, or as a Markdown file anywhere on disk. kebbie's default, [`kebbie:work-rules`](../../skills/work-rules/SKILL.md), is a starting point.
 
 2. Name it in `~/.config/kebbie/config.toml` for every repo, or in a repo config such as `~/.config/kebbie/repos/app.toml` for one repo:
 
@@ -10,6 +10,8 @@ Make tasks commit the way your team does. kebbie leaves commit style to a skill:
    [task]
    rules_skill = "my-rules"
    ```
+
+   A file goes by its absolute or `~` path, such as `rules_skill = "~/code/team/RULES.md"`. The task gets its text in its role, and the reviewer in its brief.
 
 3. Start a task, or restart a running one. New tasks follow the skill from their start, and a running task once it restarts. The reviewer checks by it from the next ready report.
 

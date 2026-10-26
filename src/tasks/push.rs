@@ -179,9 +179,10 @@ pub fn tidy(cwd: &Path, name: Option<&str>, note: &str) -> Result<String> {
     let upstream = default_branch(&repo)?;
     let rules = config::resolve(Some(&repo))?.settings.rules_skill.value;
     let mut prompt = format!(
-        "Reshape this branch's commits on top of {upstream} for review, following the skill `{rules}`. Interactive git is not \
+        "Reshape this branch's commits on top of {upstream} for review, following {}. Interactive git is not \
          available: use git rebase with GIT_SEQUENCE_EDITOR editing the todo, git commit --amend, or git reset --soft and recommit. \
-         The final tree must be identical: git diff against the old head must be empty. Do not push. Show the commit list before and after."
+         The final tree must be identical: git diff against the old head must be empty. Do not push. Show the commit list before and after.",
+        config::rules_named(&rules)
     );
     if !note.trim().is_empty() {
         prompt.push_str(&format!(" From the user: {}", note.trim()));

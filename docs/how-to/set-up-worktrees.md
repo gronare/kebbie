@@ -27,7 +27,7 @@ The setup skill runs `bin/setup-worktree` whenever a repo has one.
 - If you write `bin/setup-worktree` yourself, make it executable, take no arguments, make it safe to run again, and run it from inside a worktree. See the example below.
 - If your script has another name, set `setup_command` under `[worktree]` in the repo config. See below.
 - If several repos share the script name, set `setup_command` once in `config.toml`. A command that names a path applies only in repos that have that file; the others keep the default setup.
-- If you want your own setup skill, set `setup_skill` under `[worktree]`, for example `setup_skill = "my-tools:set-up-worktree"`.
+- If you want your own setup skill, set `setup_skill` under `[worktree]`, for example `setup_skill = "my-tools:set-up-worktree"`, or name a Markdown file of steps by its path, such as `setup_skill = "~/code/app/SETUP.md"`.
 
 ## A setup script for a Rails app
 

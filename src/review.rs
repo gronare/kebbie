@@ -274,10 +274,11 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     let kebbie = install_root()?;
     let rules = &settings.rules_skill.value;
     let rules_file = self::rules_file(rules, &slot.path, &kebbie);
+    let quoted = quoted_rules(rules);
     let tests = crate::evidence::brief_for(state, address, &slot.path, &upstream, &sha);
     let docs = if settings.docs_required.value { Some(docs_brief(&slot.path, &upstream, &sha, &kebbie.join(KEEP_DOCS))?) } else { None };
-    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value, docs: docs.as_deref() });
-    let answer = ask_reviewer(&Ask { address, worktree: &slot.path, settings: &settings, rules_file: rules_file.as_deref(), docs: docs.is_some(), input: &input, timeout: None, role: "review", program: None, group_file: None, prompt: None })?;
+    let input = brief(&Brief { address, worktree: &slot.path, upstream: &upstream, sha: &sha, commits: &commits, rules, rules_file: rules_file.as_deref(), quoted: quoted.as_deref(), said: &said, tests: &tests, also_noticed: settings.also_noticed.value, docs: docs.as_deref() });
+    let answer = ask_reviewer(&Ask { address, worktree: &slot.path, settings: &settings, rules_file: rules_file.as_deref().filter(|_| quoted.is_none()), docs: docs.is_some(), input: &input, timeout: None, role: "review", program: None, group_file: None, prompt: None })?;
     let recorded = record(&answer, &sha).ok_or_else(|| no_verdict(&answer))?;
     let verdict = save(state, address, &recorded, rules_file.is_some(), || tasks::fingerprint_at(&slot.path, &upstream, &sha))?;
     Ok(format!("{address} reviewed at {}: {} — {}", &sha[..7.min(sha.len())], verdict.summary(), file.display()))
@@ -294,7 +295,15 @@ fn save(state: &Path, address: &str, recorded: &str, read_rules: bool, fingerpri
 }
 
 pub(crate) fn rules_file(rules: &str, worktree: &Path, kebbie: &Path) -> Option<PathBuf> {
+    if let Some(path) = config::skill_path(rules) {
+        return Some(path).filter(|path| path.is_file());
+    }
     crate::agent::claude::home().and_then(|home| skill_file(rules, worktree, &home, kebbie))
+}
+
+// A rules file named by its path reaches the reviewer quoted in its brief, so the folder it sits in is never opened to the reviewer.
+pub(crate) fn quoted_rules(rules: &str) -> Option<String> {
+    config::skill_path(rules).and_then(|path| config::quoted_file(&path).ok())
 }
 
 pub(crate) fn no_verdict(answer: &str) -> String {
@@ -470,6 +479,7 @@ struct Brief<'a> {
     commits: &'a str,
     rules: &'a str,
     rules_file: Option<&'a Path>,
+    quoted: Option<&'a str>,
     said: &'a [String],
     tests: &'a str,
     also_noticed: config::AlsoNoticed,
@@ -477,11 +487,12 @@ struct Brief<'a> {
 }
 
 fn brief(brief: &Brief) -> String {
-    let Brief { address, worktree, upstream, sha, commits, rules, rules_file, said, tests, also_noticed, docs } = *brief;
+    let Brief { address, worktree, upstream, sha, commits, rules, rules_file, quoted, said, tests, also_noticed, docs } = *brief;
     let docs = docs.map_or(String::new(), |docs| format!("{docs}\n\n"));
-    let rules = match rules_file {
-        Some(file) => format!("The rules skill in effect is `{rules}`, at {}: read it, and the files beside it that it points to, and check every commit against each of its rules.", file.display()),
-        None => format!("The rules skill in effect is `{rules}`, but kebbie found no file for it: say so on the line after the verdict line, and review without it."),
+    let rules = match (quoted, rules_file) {
+        (Some(text), _) => format!("The rules in effect are the file `{rules}` (task.rules_skill), quoted below: check every commit against each of its rules.\n\n{text}"),
+        (None, Some(file)) => format!("The rules skill in effect is `{rules}`, at {}: read it, and the files beside it that it points to, and check every commit against each of its rules.", file.display()),
+        (None, None) => format!("The rules skill in effect is `{rules}`, but kebbie found no file for it: say so on the line after the verdict line, and review without it."),
     };
     format!(
         "Review the branch of the task {address} in {}, at {sha}, by the kebbie:review instructions in your system prompt.\n\n\
@@ -757,13 +768,16 @@ mod tests {
         let transcript = lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\nnot json\n";
         let said = user_messages(&transcript);
         assert_eq!(said, ["Add refunds to the billing page.", "Refunds only within 30 days."]);
-        let mut shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: Some(Path::new("/kebbie/skills/work-rules/SKILL.md")), said: &said, tests: "- ✓ cargo test · 3 passed · at abc123 · `cargo test`", also_noticed: config::AlsoNoticed::Backlog, docs: None };
+        let mut shape = Brief { address: "billing@app", worktree: Path::new("/src/wt1.app"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add refunds", rules: "kebbie:work-rules", rules_file: Some(Path::new("/kebbie/skills/work-rules/SKILL.md")), quoted: None, said: &said, tests: "- ✓ cargo test · 3 passed · at abc123 · `cargo test`", also_noticed: config::AlsoNoticed::Backlog, docs: None };
         let text = brief(&shape);
         assert!(text.contains("origin/main..abc123:\nabc123 Add refunds"), "{text}");
         assert!(text.contains("`kebbie:work-rules`, at /kebbie/skills/work-rules/SKILL.md: read it"), "{text}");
         assert!(text.contains("does not need is a finding.\n\n- ✓ cargo test · 3 passed · at abc123"), "the reviewer reads the recorded test runs: {text}");
         shape.rules_file = None;
         assert!(brief(&shape).contains("kebbie found no file for it"));
+        let quoted = "--- /home/u/code/team/RULES.md ---\n1. One change per commit.\n--- end of /home/u/code/team/RULES.md ---";
+        let from_file = brief(&Brief { rules: "~/code/team/RULES.md", rules_file: Some(Path::new("/home/u/code/team/RULES.md")), quoted: Some(quoted), ..shape });
+        assert!(from_file.contains(&format!("The rules in effect are the file `~/code/team/RULES.md` (task.rules_skill), quoted below: check every commit against each of its rules.\n\n{quoted}")) && !from_file.contains("read it, and the files beside it"), "the reviewer gets the file's text: {from_file}");
         assert!(text.contains("against each of its rules.\n\nThe task's `task.also_noticed` is `backlog`: the task files what it notices outside its task and changes none of it, so every change the task's intent does not need is a finding."), "{text}");
         shape.also_noticed = config::AlsoNoticed::Ask;
         assert!(brief(&shape).contains("`ask`: the task changes something outside its task only when the user answered fix"));
@@ -780,7 +794,7 @@ mod tests {
     #[test]
     fn the_brief_carries_the_docs_check_only_when_kebbie_passes_one() {
         let said = ["Add a --json flag to kebbie peers.".to_string()];
-        let mut shape = Brief { address: "peers@kebbie", worktree: Path::new("/src/wt1.kebbie"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add --json", rules: "kebbie:work-rules", rules_file: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None };
+        let mut shape = Brief { address: "peers@kebbie", worktree: Path::new("/src/wt1.kebbie"), upstream: "origin/main", sha: "abc123", commits: "abc123 Add --json", rules: "kebbie:work-rules", rules_file: None, quoted: None, said: &said, tests: "", also_noticed: config::AlsoNoticed::Backlog, docs: None };
         assert!(!brief(&shape).contains("docs.required"), "a repo without docs.required gets no docs check");
         let skill = Path::new("/kebbie/skills/keep-docs/SKILL.md");
         let check = docs_check(&[], Some("docs/README.md"), skill);
@@ -833,6 +847,19 @@ mod tests {
         assert!(touched.contains("change `docs/README.md`, `docs/reference/commands.md`;") && touched.contains("The docs index is `docs/README.md`"), "{touched}");
         assert!(docs_brief(&dir, &head, &documented, skill).unwrap().contains("change `docs/README.md`"), "the range starts at upstream: {touched}");
         assert!(docs_brief(&dir, "no-such-ref", &head, skill).is_err(), "a diff git cannot make stops the review rather than passing it");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_rules_file_named_by_path_is_quoted_and_its_folder_stays_closed_to_the_reviewer() {
+        let dir = crate::sh::test_dir("review-rules-file");
+        let file = dir.join("RULES.md");
+        fs::write(&file, "1. One change per commit.\n").unwrap();
+        let rules = file.display().to_string();
+        assert_eq!(rules_file(&rules, &dir, &dir), Some(file.clone()));
+        assert_eq!(quoted_rules(&rules).as_deref(), Some(format!("--- {rules} ---\n1. One change per commit.\n--- end of {rules} ---").as_str()));
+        assert_eq!(quoted_rules("kebbie:work-rules"), None, "a skill is read by the reviewer from its folder");
+        assert_eq!(rules_file(&dir.join("gone.md").display().to_string(), &dir, &dir), None);
         fs::remove_dir_all(dir).unwrap();
     }
 

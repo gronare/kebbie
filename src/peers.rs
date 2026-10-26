@@ -174,6 +174,12 @@ pub fn worktree_values(place: &Place) -> Result<Vec<(&'static str, String)>> {
 fn prepare_line(agent: crate::agent::Agent, setup_skill: &str, command: Option<&str>, note: &str) -> String {
     if agent == crate::agent::Agent::Claude {
         let setup = command.map_or(String::new(), |command| format!(" It prepares the worktree with the repo's own command `{command}` (worktree.setup_command)."));
+        if let Some(path) = crate::config::skill_path(setup_skill) {
+            return match crate::config::quoted_file(&path) {
+                Ok(text) => format!("Before anything else, make this worktree runnable by the steps in `{}` (worktree.setup_skill), quoted below, without touching the main checkout, and leave a note in `{note}` on what you did.{setup}\n\n{text}\n\n", path.display()),
+                Err(error) => format!("Before anything else, make this worktree runnable without touching the main checkout: kebbie could not read worktree.setup_skill's file ({error}), so install its dependencies and create what it needs with the repo's own tools, and leave a note in `{note}` on what you did.{setup}"),
+            };
+        }
         return format!("Before anything else, run the skill `{setup_skill}` and follow it: it makes this worktree runnable without touching the main checkout, and leaves a note in `{note}` on what it did.{setup}");
     }
     let how = command.map_or("install its dependencies and create what it needs with the repo's own tools, never touching the main checkout".to_string(), |command| format!("run the repo's own setup command `{command}` from the worktree (worktree.setup_command)"));
@@ -181,6 +187,12 @@ fn prepare_line(agent: crate::agent::Agent, setup_skill: &str, command: Option<&
 }
 
 fn rules_line(rules_skill: &str) -> String {
+    if let Some(path) = crate::config::skill_path(rules_skill) {
+        return match crate::config::quoted_file(&path) {
+            Ok(text) => format!("\n\nThen follow the rules in `{}` (task.rules_skill), quoted below, for the rest of this task: they hold the user's rules for how work is planned, built and committed here, and when you report ready a read-only reviewer checks your commits against them.\n\n{text}", path.display()),
+            Err(error) => format!("\n\nThe user's rules for this task are in task.rules_skill's file, which kebbie could not read ({error}): give each commit a subject, a blank line and a body, and tell the user the rules file is missing."),
+        };
+    }
     format!("\n\nThen run the skill `{rules_skill}` and follow it for the rest of this task: it holds the user's rules for how work is planned, built and committed here. When you report ready, kebbie refuses a commit without a subject, a blank line and a body, and a read-only reviewer checks your commits against it.")
 }
 
@@ -415,6 +427,25 @@ mod tests {
             assert!(role.contains(&format!("Then run the skill `{skill}` and follow it for the rest of this task")), "{role}");
             assert!(!role.contains("{rules}"));
         }
+    }
+
+    #[test]
+    fn a_skill_setting_that_names_a_file_gives_the_task_its_text() {
+        let dir = crate::sh::test_dir("peers-skill-file");
+        let (rules, setup) = (dir.join("RULES.md"), dir.join("SETUP.md"));
+        std::fs::write(&rules, "# House rules\n\n1. One commit per change.\n").unwrap();
+        std::fs::write(&setup, "Run `make deps`.\n").unwrap();
+        let template = include_str!("../roles/task.md");
+        let role = fill(template, &[
+            ("prepare", &prepare_line(crate::agent::Agent::Claude, &setup.display().to_string(), None, "/n.md")),
+            ("rules", &rules_line(&rules.display().to_string())),
+        ]);
+        assert!(role.contains(&format!("by the steps in `{}` (worktree.setup_skill), quoted below", setup.display())) && role.contains(&format!("--- {} ---\nRun `make deps`.\n--- end of {} ---", setup.display(), setup.display())), "{role}");
+        assert!(role.contains(&format!("Then follow the rules in `{}` (task.rules_skill)", rules.display())) && role.contains("# House rules\n\n1. One commit per change.\n--- end of"), "{role}");
+        assert!(!role.contains("run the skill"), "a file is not named as a skill: {role}");
+        let gone = rules_line(&dir.join("gone.md").display().to_string());
+        assert!(gone.contains("which kebbie could not read") && gone.contains("gone.md"), "{gone}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
