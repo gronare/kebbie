@@ -151,14 +151,14 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | --- | --- | --- | --- |
 | `ci.watch` | `true` | either | Whether kebbie watches CI after a push and closes the task only once every workflow run for the pushed commit is green. |
 | `update.channel` | `"release"` | config.toml only | What `kebbie update` installs: `"release"`, the highest `vX.Y.Z` tag on origin, or `"main"`, origin's default branch. |
-| `restart.auto` | `true` | config.toml only | Whether kebbie restarts stale idle Claude sessions on its own and `kebbie update` restarts idle ones at once. |
-| `restart.idle_minutes` | `10` | config.toml only | How long, an integer from 1 to 1440 minutes, a stale session must be idle and out of focus before it is restarted. |
+| `restart.auto` | `true` | config.toml only | Whether kebbie restarts the Claude sessions that run older code than is installed, after an update or a new Claude Code; no other session restarts. |
+| `restart.idle_minutes` | `10` | config.toml only | How long, an integer from 1 to 1440 minutes, a session on older code waits to be idle and out of focus before that restart. |
 | `keeper.enabled` | `true` | config.toml only | Whether the keeper, one background kebbie per machine, runs the routines. |
 | `recover.enabled` | `true` | config.toml only | Whether kebbie resumes a task whose Claude an API error stopped. |
 
 `ci.watch` needs origin on GitHub and `gh` logged in. `false` closes the task right after the push, as for a repo without useful CI. See [Watch CI after a push](../explanation/trunk-based.md#ci-after-the-push).
 
-`restart.auto = false` restarts nothing on its own; the board still marks stale sessions.
+`restart.auto`: each restarted session resumes its conversation, and `kebbie update` restarts the idle ones at once. A session mid-turn, the pane you are in and one with background work running are never restarted on their own. `false` restarts nothing on its own; the board still marks the sessions on older code.
 
 `keeper.enabled`: the keeper's routines then go on with the board closed. `false` runs them in an open board instead, and the board then posts the hub's board once a minute. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). The routines are:
 

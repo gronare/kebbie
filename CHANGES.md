@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie config and the configuration reference say plainly that restart.auto restarts only the sessions running older code than is installed, after an update or a new Claude Code, and that restart.idle_minutes is how long such a session waits to be idle and out of focus first
 - kebbie setup adds three herdr keys, prefix+space, prefix+tab and prefix+t; updating is U on the board, so prefix+u is no longer added
 - Install with one command, curl -fsSL https://kebbie.dev/install.sh | sh: it checks what kebbie needs, installs the latest release in herdr and runs setup, with no herdr restart and no path to paste
 - Connecting a machine from its link hands it your account's key: the machine checks the key against the link's secret, pins it, and seals every board to your account alone, so any phone or browser you sign in on with your passkey reads it, with nothing to add on the machine; kebbie hub status shows the account and its key's two fingerprints

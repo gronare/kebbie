@@ -983,9 +983,9 @@ pub fn entries(loaded: &Loaded) -> Vec<Entry> {
     key("update.channel", format!("{:?}", channel.value.key()), channel.layer, Kind::Choice(vec![Channel::Release.key(), Channel::Main.key()]), Scope::Machine,
         "What kebbie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin whose release binary is published; \"main\", origin's default branch as it is pushed. kebbie update --from <branch or path> runs other code until kebbie update --stable; config.toml only.");
     key("restart.auto", auto_restart.value.to_string(), auto_restart.layer, Kind::Bool, Scope::Machine,
-        "Whether kebbie restarts Claude sessions that run an older Claude Code, plugin, MCP config or kebbie than is installed, each with claude --resume in its own pane, keeping its flags; kebbie update restarts the idle ones at once. false restarts nothing on its own: the board still marks stale sessions, and kebbie restart restarts them when you want; config.toml only.");
+        "Whether kebbie restarts the Claude sessions that run older code than is installed, after kebbie updates or a new Claude Code, plugin or MCP config is installed; no other session is ever restarted. Each resumes its conversation with claude --resume in its own pane, keeping its flags, and kebbie update restarts the idle ones at once. false restarts nothing on its own: the board still marks those sessions, and kebbie restart restarts them when you want; config.toml only.");
     key("restart.idle_minutes", idle_minutes.value.to_string(), idle_minutes.layer, Kind::Number, Scope::Machine,
-        "How long a stale session waits idle and unfocused before it is restarted; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
+        "How long a session that runs older code than is installed waits to be idle and out of focus before kebbie restarts it; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
     key("keeper.enabled", keeper.value.to_string(), keeper.layer, Kind::Bool, Scope::Machine,
         "Whether one background kebbie keeper per machine runs the routines (stale-session restarts, the update check, held messages, delivery checks of typed prompts, scheduled [[routines]]), so they go on with the board closed; herdr's startup, the board and kebbie update start it. false runs them in an open board instead; config.toml only.");
     key("recover.enabled", recover.value.to_string(), recover.layer, Kind::Bool, Scope::Machine,
@@ -1434,7 +1434,7 @@ mod tests {
         assert!(unknown_machine("[restart]\nidle = 5\n").contains("restart.idle: unknown key; known keys here: idle_minutes, auto"));
         assert!(parse_repo("[restart]\nauto = false\n", "app.toml").unwrap_err().contains("restart: applies to every repo, so it lives in config.toml"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
-        assert!(shown.contains("restart.auto = false  (machine config)\n  Whether kebbie restarts") && shown.contains("restart.idle_minutes = 25  (machine config)\n  How long a stale session waits"), "{shown}");
+        assert!(shown.contains("restart.auto = false  (machine config)\n  Whether kebbie restarts") && shown.contains("restart.idle_minutes = 25  (machine config)\n  How long a session that runs older code than is installed waits"), "{shown}");
     }
 
     #[test]
