@@ -228,6 +228,34 @@ impl Layer {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Scope {
+    Either,
+    Machine,
+    Repo,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Kind {
+    Bool,
+    Choice(Vec<&'static str>),
+    Text,
+    Number,
+    List,
+    Skill,
+    Secret,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entry {
+    pub key: &'static str,
+    pub value: String,
+    pub layer: Layer,
+    pub kind: Kind,
+    pub scope: Scope,
+    pub about: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Setting<T> {
     pub value: T,
@@ -891,8 +919,93 @@ fn quoted(items: &[&str]) -> String {
     format!("[{}]", items.iter().map(|item| format!("{item:?}")).collect::<Vec<_>>().join(", "))
 }
 
-pub fn describe(loaded: &Loaded) -> String {
+// The one list of keys: kebbie config prints it and the Settings page edits it.
+pub fn entries(loaded: &Loaded) -> Vec<Entry> {
     let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
+    let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
+    let (board_keys, _) = crate::keys::Keys::with(&load_machine(&loaded.machine).map(|machine| machine.keys).unwrap_or_default());
+    let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
+    let mut entries = Vec::new();
+    let mut key = |key: &'static str, value: String, layer: Layer, kind: Kind, scope: Scope, about: &str| {
+        entries.push(Entry { key, value, layer, kind, scope, about: about.to_string() });
+    };
+    key("board.backlog.sources", quoted(&names), sources.layer, Kind::List, Scope::Machine,
+        "Where the board's Backlog tab finds work: \"local\" (backlog.md next to the machine config), \"vault\" and \"linear\", in any combination; config.toml only.");
+    key("board.backlog.ongoing", format!("{:?}", ongoing.value.key()), ongoing.layer, Kind::Choice(OngoingAt::ALL.map(OngoingAt::key).to_vec()), Scope::Machine,
+        "Where the Backlog column shows ONGOING, the vault notes in progress: \"top\" above the backlog, \"bottom\" below it, \"hidden\" not at all; config.toml only.");
+    let order: Vec<&str> = groups.value.iter().map(|group| group.key()).collect();
+    key("board.groups", quoted(&order), groups.layer, Kind::List, Scope::Machine,
+        &format!("The order of the Work column's groups, by name: {}; groups the list leaves out follow in this default order, so a partial list moves only the ones it names; config.toml only.", quoted(&Group::ALL.map(Group::key))));
+    key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer, Kind::Skill, Scope::Either,
+        "The skill a task's Claude runs first to make its worktree runnable.");
+    key("worktree.setup_command", setup_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), setup_command.layer, Kind::Text, Scope::Either,
+        "The repo's own command that prepares an existing worktree, run from inside it; the setup skill runs it. A path applies only in a repo that has the file; elsewhere, and when none, bin/setup-worktree when the repo has one.");
+    key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer, Kind::Text, Scope::Either,
+        &format!("The shell command the board's {server_key} key runs in a server tab of the task's Space, with PORT set to the worktree's port; without one there is no {server_key}."));
+    key("worktree.dev_worker", dev_worker.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_worker.layer, Kind::Text, Scope::Either,
+        &format!("A second command, such as a job runner, the board's {worker_key} key runs in a worker tab of the task's Space, with the same PORT; without one there is no {worker_key}."));
+    key("worktree.dev_url", dev_url.value.as_ref().map_or("\"\" (no link)".to_string(), |url| format!("{url:?}")), dev_url.layer, Kind::Text, Scope::Either,
+        "The running dev server's address, shown on the board as a link: {worktree} (the worktree's folder), {repo}, {number} (its pool number) and {port} (its port) are filled in; a worktree without what it names gets no link, and \"\" turns the link off.");
+    key("worktree.dev_route", dev_route.value.to_string(), dev_route.layer, Kind::Bool, Scope::Repo,
+        "Whether kebbie routes writes a Caddy site for each of this repo's worktrees, at the host its dev_url names, proxied to the worktree's port; for a dev server on a remote machine opened in your laptop's browser. Off unless the repo turns it on; repo config only.");
+    key("worktree.stage_on_main", stage_on_main.value.to_string(), stage_on_main.layer, Kind::Bool, Scope::Repo,
+        "Whether kebbie stage may put a ready task's commits on this repo's local default branch, unpushed, so you can try them from the main checkout before you push main; for a repo you run from its main checkout, such as kebbie's own. Off unless the repo turns it on; repo config only.");
+    key("worktree.server_name", format!("{:?}", server_name.value), server_name.layer, Kind::Text, Scope::Machine,
+        &format!("The name of the tab the board's {server_key} starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; config.toml only."));
+    key("worktree.worker_name", format!("{:?}", worker_name.value), worker_name.layer, Kind::Text, Scope::Machine,
+        &format!("The same for the worker tab {worker_key} starts; config.toml only."));
+    let cleaned: Vec<&str> = clean_on_release.value.iter().map(String::as_str).collect();
+    key("worktree.clean_on_release", quoted(&cleaned), clean_on_release.layer, Kind::List, Scope::Either,
+        "Build output kebbie removes from a worktree when it goes back to the pool (done, drop, reset, a landed task closing), so the pool's disk use stays bounded; folders inside the worktree, each removed only when git ignores it and tracks nothing in it, and \"target\" only where the worktree has a Cargo.toml. [] keeps everything.");
+    key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer, Kind::Skill, Scope::Either,
+        "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the reviewer checks a ready task against it, tidy reshapes commits by it.");
+    let own: Vec<&str> = test_commands.value.iter().map(String::as_str).collect();
+    key("task.test_commands", quoted(&own), test_commands.layer, Kind::List, Scope::Either,
+        &format!("Test commands of this repo that kebbie records when a task's Claude runs them, on top of the built-in {}; matched on the command's start, after any cd … && and VAR=value. kebbie evidence, the board, the push dialog and the reviewer show the runs.", quoted(&crate::evidence::DEFAULT_COMMANDS)));
+    key("task.also_noticed", format!("{:?}", also_noticed.value.key()), also_noticed.layer, Kind::Choice(AlsoNoticed::ALL.map(AlsoNoticed::key).to_vec()), Scope::Either,
+        "What a task's Claude does with what it notices outside its task (a bug nearby, a stale doc, a refactor): \"backlog\" files it, in the vault's backlog with the vault plugin, else with kebbie backlog add; \"fix\" fixes a small related one in a commit of its own and files the rest; \"ask\" puts each to you with kebbie ask first. Each is listed under Also noticed on the sign-off card, and the reviewer counts an unrelated change under \"backlog\" or \"ask\" as a finding.");
+    key("task.permission_mode", permission_mode.value.as_ref().map_or("none".to_string(), |mode| format!("{mode:?}")), permission_mode.layer, Kind::Choice(std::iter::once("none").chain(PERMISSION_MODES).collect()), Scope::Either,
+        &format!("The permission mode a task's Claude starts in, one of {}; none leaves it to Claude's own default. kebbie start --mode overrides it for one task, and a restarted task keeps the mode it started in. \"bypassPermissions\" runs every tool without asking, for an isolated machine only; a task still never pushes nor approves its own commits.", quoted(&PERMISSION_MODES)));
+    key("task.profile", profile.value.as_ref().map_or(format!("none ({:?})", crate::profiles::TASK), |profile| format!("{profile:?}")), profile.layer, Kind::Text, Scope::Either,
+        &format!("The profile a task starts with when kebbie start names none with --profile: a file in {}/<name>.toml with the agent, model, extra role, skills, permission mode and rules it adds to kebbie's own; none starts the built-in task. A restarted task keeps the profile it started with; kebbie profiles lists them.", crate::profiles::dir().display()));
+    key("task.sandbox", sandbox.value.to_string(), sandbox.layer, Kind::Bool, Scope::Either,
+        &format!("Whether a task's and the reviewer's shell commands run in Claude Code's sandbox: writes only in the worktree, the task's temp folder and {}, network only to {} and a profile's own hosts, no Unix sockets; kebbie's own task commands ({}) run outside it, and kebbie refuses its user-only commands to a sandboxed process. On Linux it needs bubblewrap, socat and the seccomp filter, or kebbie refuses to start tasks; false runs them unsandboxed, where a task can pass as you to kebbie's user-only commands. A profile's [sandbox] enabled wins over it.", crate::sandbox::WRITES.join(", "), crate::sandbox::DOMAINS.join(", "), crate::sandbox::TASK_COMMANDS.join(", ")));
+    key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer, Kind::Text, Scope::Either,
+        "The model kebbie review's independent reviewer runs on, ahead of the reviewer profile's model; none leaves it to that profile, then to Claude's default.");
+    key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer, Kind::Text, Scope::Machine,
+        "The shell command kebbie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KEBBIE_EVENT, KEBBIE_TASK, KEBBIE_REPO and KEBBIE_TEXT describe it, and $1 is the text. None sends no notifications; config.toml only.");
+    key("vault.command", vault_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), vault_command.layer, Kind::Text, Scope::Machine,
+        "The notes-vault-mcp command kebbie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; config.toml only.");
+    key("ci.watch", ci_watch.value.to_string(), ci_watch.layer, Kind::Bool, Scope::Either,
+        "Whether kebbie watches GitHub Actions after a push and keeps the task open under CI running until every run for the pushed commit is green; a failed run moves the task to Needs you and its Claude gets the failing job's log. Needs origin on GitHub and gh logged in; false closes the task right after the push. A repo config can turn it off for one repo.");
+    key("docs.required", docs_required.value.to_string(), docs_required.layer, Kind::Bool, Scope::Repo,
+        "Whether this repo's docs must keep in step with its code: a task's Claude updates the README and docs/ when its change alters what a user sees or does, by the skill kebbie:keep-docs, and the reviewer fails a branch that changes such behaviour and leaves it undescribed in the README or docs/. Off unless the repo turns it on; repo config only. kebbie doctor suggests it for a public GitHub repo.");
+    key("update.channel", format!("{:?}", channel.value.key()), channel.layer, Kind::Choice(vec![Channel::Release.key(), Channel::Main.key()]), Scope::Machine,
+        "What kebbie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin whose release binary is published; \"main\", origin's default branch as it is pushed. kebbie update --from <branch or path> runs other code until kebbie update --stable; config.toml only.");
+    key("restart.auto", auto_restart.value.to_string(), auto_restart.layer, Kind::Bool, Scope::Machine,
+        "Whether kebbie restarts Claude sessions that run an older Claude Code, plugin, MCP config or kebbie than is installed, each with claude --resume in its own pane, keeping its flags; kebbie update restarts the idle ones at once. false restarts nothing on its own: the board still marks stale sessions, and kebbie restart restarts them when you want; config.toml only.");
+    key("restart.idle_minutes", idle_minutes.value.to_string(), idle_minutes.layer, Kind::Number, Scope::Machine,
+        "How long a stale session waits idle and unfocused before it is restarted; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
+    key("keeper.enabled", keeper.value.to_string(), keeper.layer, Kind::Bool, Scope::Machine,
+        "Whether one background kebbie keeper per machine runs the routines (stale-session restarts, the update check, held messages, delivery checks of typed prompts, scheduled [[routines]]), so they go on with the board closed; herdr's startup, the board and kebbie update start it. false runs them in an open board instead; config.toml only.");
+    key("recover.enabled", recover.value.to_string(), recover.layer, Kind::Bool, Scope::Machine,
+        "Whether kebbie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
+    key("machine.name", format!("{:?}", machine_name.value), machine_name.layer, Kind::Text, Scope::Machine,
+        "The machine's one name: your phone shows it through the hub, and kebbie claims vault notes under it; kebbie hub connect and kebbie hub join use it, set it from --name or ask for it when unset. A task started from a vault note writes it with the task's name into the note's kebbie frontmatter key, and kebbie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
+    key("hub.url", format!("{:?}", hub_url.value), hub_url.layer, Kind::Text, Scope::Machine,
+        "The hub kebbie hub connect and the board's hub window connect this machine to: the kebbie hub unless set, or your own kebbie hub at an https address (http only on this machine). Choosing your own hub there sets it; the hub a machine is connected to stays in kebbie's state with its keys, so changing this key later moves nothing (kebbie hub move does). config.toml only.");
+    key("report.signals", report_signals.value.to_string(), report_signals.layer, Kind::Bool, Scope::Machine,
+        "Whether kebbie sends its maintainers error signals, counts of kebbie's own failures: when kebbie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kebbie's version and commit, the OS and CPU architecture, the component (a fixed name from kebbie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Each send is a line under messages on the board; false sends none and drops what was counted; config.toml only.");
+    key("report.text", format!("{:?}", report_text.value.key()), report_text.layer, Kind::Choice(ReportText::ALL.map(ReportText::key).to_vec()), Scope::Machine,
+        "What happens to a bug in kebbie you ran into, once you or the lead saved it, with its text redacted (paths under your home as ~, no repo names, remote URLs or tokens): \"ask\" shows it on the board as it would go to kebbie's maintainers and only your yes sends it; \"always\" sends it without asking, and says so under messages, once you arm it with kebbie issue report --always in your own terminal (until then it asks); \"never\" keeps it on this machine, though kebbie issue report <id> still sends one when you ask. Signed with this install's key; config.toml only.");
+    key("report.inbox_token", if report_inbox.value { "set".to_string() } else { "none".to_string() }, report_inbox.layer, Kind::Secret, Scope::Machine,
+        "For kebbie's maintainers: the kha_ token the issues endpoint issued. With it the keeper fetches the reports the endpoint lets through every 10 minutes, files each as a kebbie issue and acknowledges it, and kebbie doctor counts the ones waiting in quarantine; never in a repo config, and never shown.");
+    key("issues.propose", propose_issues.value.to_string(), propose_issues.layer, Kind::Bool, Scope::Machine,
+        "Whether the lead proposes saving a bug or wish about kebbie when kebbie itself cost something (an error, a workaround, a missing capability), one per turn at most, and saves it on your yes; false keeps the lead from proposing or filing them, and it files one only when you ask it to. Takes effect when the lead next restarts (L on the board); config.toml only.");
+    entries
+}
+
+pub fn describe(loaded: &Loaded) -> String {
     let repo = match &loaded.repo {
         Some(path) => shown(path),
         None => "none: not in a git repo (--repo <path> names one)".to_string(),
@@ -905,87 +1018,8 @@ pub fn describe(loaded: &Loaded) -> String {
     lines.push(String::new());
     lines.push(format!("Each key below may be set in config.toml or, for one repo, in {}/<repo>.toml (named after the main checkout's folder), which wins; a key marked config.toml only applies to every repo.", repos_dir().display()));
     lines.push(String::new());
-    let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
-    let entries = load_machine(&loaded.machine).map(|machine| machine.keys).unwrap_or_default();
-    let (board_keys, key_errors) = crate::keys::Keys::with(&entries);
-    let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
-    let mut key = |name: &str, value: String, layer: Layer, about: &str| {
-        lines.push(format!("{name} = {value}  ({})", layer.label()));
-        lines.push(format!("  {about}"));
-    };
-    key("board.backlog.sources", quoted(&names), sources.layer,
-        "Where the board's Backlog tab finds work: \"local\" (backlog.md next to the machine config), \"vault\" and \"linear\", in any combination; config.toml only.");
-    key("board.backlog.ongoing", format!("{:?}", ongoing.value.key()), ongoing.layer,
-        "Where the Backlog column shows ONGOING, the vault notes in progress: \"top\" above the backlog, \"bottom\" below it, \"hidden\" not at all; config.toml only.");
-    let order: Vec<&str> = groups.value.iter().map(|group| group.key()).collect();
-    key("board.groups", quoted(&order), groups.layer,
-        &format!("The order of the Work column's groups, by name: {}; groups the list leaves out follow in this default order, so a partial list moves only the ones it names; config.toml only.", quoted(&Group::ALL.map(Group::key))));
-    key("worktree.setup_skill", format!("{:?}", setup_skill.value), setup_skill.layer,
-        "The skill a task's Claude runs first to make its worktree runnable.");
-    key("worktree.setup_command", setup_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), setup_command.layer,
-        "The repo's own command that prepares an existing worktree, run from inside it; the setup skill runs it. A path applies only in a repo that has the file; elsewhere, and when none, bin/setup-worktree when the repo has one.");
-    key("worktree.dev_server", dev_server.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_server.layer,
-        &format!("The shell command the board's {server_key} key runs in a server tab of the task's Space, with PORT set to the worktree's port; without one there is no {server_key}."));
-    key("worktree.dev_worker", dev_worker.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), dev_worker.layer,
-        &format!("A second command, such as a job runner, the board's {worker_key} key runs in a worker tab of the task's Space, with the same PORT; without one there is no {worker_key}."));
-    key("worktree.dev_url", dev_url.value.as_ref().map_or("\"\" (no link)".to_string(), |url| format!("{url:?}")), dev_url.layer,
-        "The running dev server's address, shown on the board as a link: {worktree} (the worktree's folder), {repo}, {number} (its pool number) and {port} (its port) are filled in; a worktree without what it names gets no link, and \"\" turns the link off.");
-    key("worktree.dev_route", dev_route.value.to_string(), dev_route.layer,
-        "Whether kebbie routes writes a Caddy site for each of this repo's worktrees, at the host its dev_url names, proxied to the worktree's port; for a dev server on a remote machine opened in your laptop's browser. Off unless the repo turns it on; repo config only.");
-    key("worktree.stage_on_main", stage_on_main.value.to_string(), stage_on_main.layer,
-        "Whether kebbie stage may put a ready task's commits on this repo's local default branch, unpushed, so you can try them from the main checkout before you push main; for a repo you run from its main checkout, such as kebbie's own. Off unless the repo turns it on; repo config only.");
-    key("worktree.server_name", format!("{:?}", server_name.value), server_name.layer,
-        &format!("The name of the tab the board's {server_key} starts the dev server in, and of the Space's tag in herdr's sidebar while it runs; config.toml only."));
-    key("worktree.worker_name", format!("{:?}", worker_name.value), worker_name.layer,
-        &format!("The same for the worker tab {worker_key} starts; config.toml only."));
-    let cleaned: Vec<&str> = clean_on_release.value.iter().map(String::as_str).collect();
-    key("worktree.clean_on_release", quoted(&cleaned), clean_on_release.layer,
-        "Build output kebbie removes from a worktree when it goes back to the pool (done, drop, reset, a landed task closing), so the pool's disk use stays bounded; folders inside the worktree, each removed only when git ignores it and tracks nothing in it, and \"target\" only where the worktree has a Cargo.toml. [] keeps everything.");
-    key("task.rules_skill", format!("{:?}", rules_skill.value), rules_skill.layer,
-        "The skill with the rules for how work is planned, built and committed; a task's Claude follows it, the reviewer checks a ready task against it, tidy reshapes commits by it.");
-    let own: Vec<&str> = test_commands.value.iter().map(String::as_str).collect();
-    key("task.test_commands", quoted(&own), test_commands.layer,
-        &format!("Test commands of this repo that kebbie records when a task's Claude runs them, on top of the built-in {}; matched on the command's start, after any cd … && and VAR=value. kebbie evidence, the board, the push dialog and the reviewer show the runs.", quoted(&crate::evidence::DEFAULT_COMMANDS)));
-    key("task.also_noticed", format!("{:?}", also_noticed.value.key()), also_noticed.layer,
-        "What a task's Claude does with what it notices outside its task (a bug nearby, a stale doc, a refactor): \"backlog\" files it, in the vault's backlog with the vault plugin, else with kebbie backlog add; \"fix\" fixes a small related one in a commit of its own and files the rest; \"ask\" puts each to you with kebbie ask first. Each is listed under Also noticed on the sign-off card, and the reviewer counts an unrelated change under \"backlog\" or \"ask\" as a finding.");
-    key("task.permission_mode", permission_mode.value.as_ref().map_or("none".to_string(), |mode| format!("{mode:?}")), permission_mode.layer,
-        &format!("The permission mode a task's Claude starts in, one of {}; none leaves it to Claude's own default. kebbie start --mode overrides it for one task, and a restarted task keeps the mode it started in. \"bypassPermissions\" runs every tool without asking, for an isolated machine only; a task still never pushes nor approves its own commits.", quoted(&PERMISSION_MODES)));
-    key("task.profile", profile.value.as_ref().map_or(format!("none ({:?})", crate::profiles::TASK), |profile| format!("{profile:?}")), profile.layer,
-        &format!("The profile a task starts with when kebbie start names none with --profile: a file in {}/<name>.toml with the agent, model, extra role, skills, permission mode and rules it adds to kebbie's own; none starts the built-in task. A restarted task keeps the profile it started with; kebbie profiles lists them.", crate::profiles::dir().display()));
-    key("task.sandbox", sandbox.value.to_string(), sandbox.layer,
-        &format!("Whether a task's and the reviewer's shell commands run in Claude Code's sandbox: writes only in the worktree, the task's temp folder and {}, network only to {} and a profile's own hosts, no Unix sockets; kebbie's own task commands ({}) run outside it, and kebbie refuses its user-only commands to a sandboxed process. On Linux it needs bubblewrap, socat and the seccomp filter, or kebbie refuses to start tasks; false runs them unsandboxed, where a task can pass as you to kebbie's user-only commands. A profile's [sandbox] enabled wins over it.", crate::sandbox::WRITES.join(", "), crate::sandbox::DOMAINS.join(", "), crate::sandbox::TASK_COMMANDS.join(", ")));
-    key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer,
-        "The model kebbie review's independent reviewer runs on, ahead of the reviewer profile's model; none leaves it to that profile, then to Claude's default.");
-    key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer,
-        "The shell command kebbie runs when something needs you (a task needs you or is ready, a question waits, the lead's summary); KEBBIE_EVENT, KEBBIE_TASK, KEBBIE_REPO and KEBBIE_TEXT describe it, and $1 is the text. None sends no notifications; config.toml only.");
-    key("vault.command", vault_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), vault_command.layer,
-        "The notes-vault-mcp command kebbie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; config.toml only.");
-    key("ci.watch", ci_watch.value.to_string(), ci_watch.layer,
-        "Whether kebbie watches GitHub Actions after a push and keeps the task open under CI running until every run for the pushed commit is green; a failed run moves the task to Needs you and its Claude gets the failing job's log. Needs origin on GitHub and gh logged in; false closes the task right after the push. A repo config can turn it off for one repo.");
-    key("docs.required", docs_required.value.to_string(), docs_required.layer,
-        "Whether this repo's docs must keep in step with its code: a task's Claude updates the README and docs/ when its change alters what a user sees or does, by the skill kebbie:keep-docs, and the reviewer fails a branch that changes such behaviour and leaves it undescribed in the README or docs/. Off unless the repo turns it on; repo config only. kebbie doctor suggests it for a public GitHub repo.");
-    key("update.channel", format!("{:?}", channel.value.key()), channel.layer,
-        "What kebbie update installs on this machine: \"release\", the highest vX.Y.Z tag on origin whose release binary is published; \"main\", origin's default branch as it is pushed. kebbie update --from <branch or path> runs other code until kebbie update --stable; config.toml only.");
-    key("restart.auto", auto_restart.value.to_string(), auto_restart.layer,
-        "Whether kebbie restarts Claude sessions that run an older Claude Code, plugin, MCP config or kebbie than is installed, each with claude --resume in its own pane, keeping its flags; kebbie update restarts the idle ones at once. false restarts nothing on its own: the board still marks stale sessions, and kebbie restart restarts them when you want; config.toml only.");
-    key("restart.idle_minutes", idle_minutes.value.to_string(), idle_minutes.layer,
-        "How long a stale session waits idle and unfocused before it is restarted; a session mid-turn, the pane you are in and one with background work running are never restarted on their own; config.toml only.");
-    key("keeper.enabled", keeper.value.to_string(), keeper.layer,
-        "Whether one background kebbie keeper per machine runs the routines (stale-session restarts, the update check, held messages, delivery checks of typed prompts, scheduled [[routines]]), so they go on with the board closed; herdr's startup, the board and kebbie update start it. false runs them in an open board instead; config.toml only.");
-    key("recover.enabled", recover.value.to_string(), recover.layer,
-        "Whether kebbie resumes a task whose Claude an API error stopped: after overload, a server error, a rate limit or a dropped connection it says carry on after 1, 2, 4 and 8 minutes; after a usage limit, once the allowance resets. A login, billing, invalid request or refusal error goes to you under Needs you at once. false leaves every such task idle; config.toml only.");
-    key("machine.name", format!("{:?}", machine_name.value), machine_name.layer,
-        "The machine's one name: your phone shows it through the hub, and kebbie claims vault notes under it; kebbie hub connect and kebbie hub join use it, set it from --name or ask for it when unset. A task started from a vault note writes it with the task's name into the note's kebbie frontmatter key, and kebbie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
-    key("hub.url", format!("{:?}", hub_url.value), hub_url.layer,
-        "The hub kebbie hub connect and the board's hub window connect this machine to: the kebbie hub unless set, or your own kebbie hub at an https address (http only on this machine). Choosing your own hub there sets it; the hub a machine is connected to stays in kebbie's state with its keys, so changing this key later moves nothing (kebbie hub move does). config.toml only.");
-    key("report.signals", report_signals.value.to_string(), report_signals.layer,
-        "Whether kebbie sends its maintainers error signals, counts of kebbie's own failures: when kebbie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kebbie's version and commit, the OS and CPU architecture, the component (a fixed name from kebbie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Each send is a line under messages on the board; false sends none and drops what was counted; config.toml only.");
-    key("report.text", format!("{:?}", report_text.value.key()), report_text.layer,
-        "What happens to a bug in kebbie you ran into, once you or the lead saved it, with its text redacted (paths under your home as ~, no repo names, remote URLs or tokens): \"ask\" shows it on the board as it would go to kebbie's maintainers and only your yes sends it; \"always\" sends it without asking, and says so under messages, once you arm it with kebbie issue report --always in your own terminal (until then it asks); \"never\" keeps it on this machine, though kebbie issue report <id> still sends one when you ask. Signed with this install's key; config.toml only.");
-    key("report.inbox_token", if report_inbox.value { "set".to_string() } else { "none".to_string() }, report_inbox.layer,
-        "For kebbie's maintainers: the kha_ token the issues endpoint issued. With it the keeper fetches the reports the endpoint lets through every 10 minutes, files each as a kebbie issue and acknowledges it, and kebbie doctor counts the ones waiting in quarantine; never in a repo config, and never shown.");
-    key("issues.propose", propose_issues.value.to_string(), propose_issues.layer,
-        "Whether the lead proposes saving a bug or wish about kebbie when kebbie itself cost something (an error, a workaround, a missing capability), one per turn at most, and saves it on your yes; false keeps the lead from proposing or filing them, and it files one only when you ask it to. Takes effect when the lead next restarts (L on the board); config.toml only.");
+    lines.extend(entries(loaded).iter().flat_map(|entry| [format!("{} = {}  ({})", entry.key, entry.value, entry.layer.label()), format!("  {}", entry.about)]));
+    let (board_keys, key_errors) = crate::keys::Keys::with(&load_machine(&loaded.machine).map(|machine| machine.keys).unwrap_or_default());
     lines.push("[keys]  (config.toml only)\n  The board's keys, as name = \"key\" by action: a plain character for an action whose key is one (esc, ctrl+c, ⏎, the arrows and tab stay), and one not taken by another action where both act; moving two at once in the table works. An entry that breaks a rule is ignored, and named below. Help, hints and messages show the key in effect.".to_string());
     lines.extend(board_keys.describe(&key_errors).into_iter().map(|line| format!("  {line}")));
     lines.push(format!("[[routines]]  (config.toml or a repo config)\n  Checks kebbie runs on a schedule, each as a task that reports, plans or fixes, one table each with the keys {}; a repo config's run in its repo, one in config.toml names its repo. Listed below are config.toml's and this repo's; kebbie routines lists every one with its next run, and docs/reference/configuration.md shows each key.", crate::routines::KEYS.join(", ")));
@@ -1545,6 +1579,32 @@ mod tests {
         assert!(shown.contains("worktree.dev_server = \"npm run dev\"  (repo config)"));
         let outside = Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         assert!(describe(&outside).contains("none: not in a git repo"));
+    }
+
+    fn sample(entry: &Entry) -> String {
+        if format!("x = {}", entry.value).parse::<Table>().is_ok() {
+            return entry.value.clone();
+        }
+        match &entry.kind {
+            Kind::Choice(options) => format!("{:?}", options[1]),
+            Kind::Secret => "\"kha_token\"".to_string(),
+            _ => "\"x\"".to_string(),
+        }
+    }
+
+    #[test]
+    fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
+        let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
+        let all = entries(&loaded);
+        assert_eq!(all.len(), 35);
+        for entry in all {
+            let (section, field) = entry.key.rsplit_once('.').unwrap();
+            let text = format!("[{section}]\n{field} = {}\n", sample(&entry));
+            assert_eq!(parse_machine(&text, "config.toml").is_ok(), entry.scope != Scope::Repo, "{}: {text}", entry.key);
+            assert_eq!(parse_repo(&text, "app.toml").is_ok(), entry.scope != Scope::Machine, "{}: {text}", entry.key);
+            let machine_only = entry.about.contains("config.toml only") || entry.about.contains("never in a repo config");
+            assert_eq!((machine_only, entry.about.contains("repo config only")), (entry.scope == Scope::Machine, entry.scope == Scope::Repo), "{}: {}", entry.key, entry.about);
+        }
     }
 
     fn place(number: Option<usize>, port: Option<u16>) -> Place {
