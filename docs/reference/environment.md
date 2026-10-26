@@ -13,7 +13,7 @@ The variables kebbie reads, the ones it sets for the commands it runs, and how t
 | `KEBBIE_REPO_DIRS` | `~/projects:~/personal:~/src:~/code` | Colon-separated folders where `start --repo` looks for checkouts, in them or one level down. |
 | `KEBBIE_LEAD_DIR` | `lead` in the state directory | The lead Claude's working directory. |
 | `KEBBIE_BIN` | `~/.local/share/kebbie/current/target/release/kebbie` | The binary the lead's role, the task role, kebbie's skills and the sidebar sync run. |
-| `KEBBIE_CLAUDE_BIN` | `claude` | The Claude Code binary `kebbie setup vault` runs. |
+| `KEBBIE_CLAUDE_BIN` | `claude` | The Claude Code binary `kebbie setup` and `kebbie setup vault` run for the vault plugin. |
 | `KEBBIE_GH_BIN` | `gh` | The GitHub CLI kebbie watches CI with. |
 | `GH_HOST` | none | A GitHub Enterprise host whose remotes kebbie watches CI for, besides github.com. |
 | `KEBBIE_RELEASES_URL` | `https://github.com/<owner>/<repo>/releases/download` for the install's GitHub origin | Where a release's prebuilt binaries are downloaded from. |

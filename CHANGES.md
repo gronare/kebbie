@@ -5,6 +5,9 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie setup is a guide of eight steps, one box each with the steps on the left: this machine's name, the agents (Claude Code, and Codex on or off), herdr's keys, the backlog's sources, the vault (a folder or an S3 bucket, configured for you with nothing to paste), the hub (straight to its connect card) and error signals, then a list of everything it will write or run, applied on ⏎ line by line, and next steps: what is still yours to do, each with its command or key, such as codex login, kebbie hub connect or a kebbie doctor fix; nothing is written before that, s skips a step, ← goes back and esc quits
+- Run again, kebbie setup starts from this machine's values and marks what is already in place; kebbie setup --yes takes the defaults without asking, for scripts, and kebbie setup vault and kebbie setup codex open the guide at their step
+- A herdr key you already use for something else is named in the setup guide, with a free key offered for kebbie's
 - The board has a Settings page, on , or with kebbie config edit: every key kebbie config prints, by section, with its value, the layer it comes from and what it does, changed in place in config.toml or the repo's config with its comments and order kept, each write checked by kebbie doctor; a key from a linked team file asks whether to change the team's file or override it here
 - On the Settings page, task.rules_skill and worktree.setup_skill offer a copy of kebbie's skill in ~/.claude/skills to edit as your own
 - task.rules_skill and worktree.setup_skill take a Markdown file by its absolute or ~ path as well as a skill's name: the task gets the file's text in its role, and the reviewer and the rules check in their brief

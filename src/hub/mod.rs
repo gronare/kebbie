@@ -371,6 +371,11 @@ pub fn interactive() -> bool {
     unsafe { libc::isatty(0) == 1 && libc::isatty(1) == 1 }
 }
 
+pub fn connect_to(url: &str) -> Result<String> {
+    crate::permit::user_only("connecting a hub")?;
+    connect::cli(&crate::lead::state_dir()?, &crate::config::path(), None, Some(url), interactive(), crate::messages::now())
+}
+
 pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<String> {
     let state = crate::lead::state_dir()?;
     let now = crate::messages::now();
@@ -382,7 +387,7 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
         }
         Some("connect") => {
             crate::permit::user_only("connecting a hub")?;
-            connect::cli(&state, &crate::config::path(), name, interactive(), now)
+            connect::cli(&state, &crate::config::path(), name, None, interactive(), now)
         }
         Some("join") => {
             crate::permit::user_only("joining a hub")?;

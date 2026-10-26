@@ -40,13 +40,18 @@ If a tool from step 1 is missing, the script names it and stops.
 
 ## 3. Setup
 
-Setup prints one line per step, each starting with `done`, `already`, `skipped` (with the reason) or `to do`. In order, it:
+The script opens the setup guide. Its steps are on the left; `↑` `↓` choose, `space` ticks a box, `⏎` goes on, `←` goes back, `s` skips a step and `esc` quits without writing anything.
 
-1. Links `~/.local/bin/kebbie` to the binary. When `~/.local/bin` is not on your `PATH`, it tells you the line to add to your shell profile.
-2. Installs the Claude Code plugin from the same folder, so the plugin always matches the binary.
-3. Shows the three keys it adds to the end of herdr's `config.toml` (below), and writes them only on your `y`. A key you already use for something else is left alone and named.
-4. Reloads herdr's config so the keys work, or tells you to restart herdr when it cannot.
-5. Asks whether to set up the hub now, which is optional, to see this machine's board on your phone or in a browser. It runs `kebbie hub connect` only on your `y` (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)). `⏎` skips it, and `H` on the board does it later.
+1. **Machine name.** Keep the name it offers, or type one, such as `mac`. Your phone and your other machines show it.
+2. **Agents.** Claude Code stays on. Leave Codex off for now.
+3. **herdr keys.** Keep **Add them**: the three keys below go at the end of herdr's `config.toml`. A key you already use for something else is named, with a free one offered.
+4. **Backlog.** Keep **Local file**: new ideas go to a `backlog.md` beside kebbie's config.
+5. **Vault.** Keep **None**. [Connect the vault](how-to/connect-the-vault.md) later if you keep notes in one.
+6. **Hub.** Pick **Later**. `H` on the board connects your phone any time (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)).
+7. **Error signals.** Read what a signal holds, below, and keep them on or turn them off.
+8. **Review and apply.** Read the list of what it writes and runs, then press `⏎`.
+
+Each line then turns `done` or `already`, and setup ends with `Setup done.` and, under `Next steps`, what is still yours to do, one command each, such as the fix for a `kebbie doctor` warning. It linked `~/.local/bin/kebbie` to the binary, installed the Claude Code plugin from the same folder, added the keys and reloaded herdr's config so they work. When `~/.local/bin` is not on your `PATH`, its line tells you what to add to your shell profile.
 
 | Key | What it does |
 | --- | --- |
@@ -56,13 +61,13 @@ Setup prints one line per step, each starting with `done`, `already`, `skipped` 
 
 Updating kebbie is `U` on the board.
 
-Setup ends with `Setup done.` and the warnings and failures from `kebbie doctor`. You can run setup again at any time; it changes only what is missing.
+You can run `kebbie setup` again at any time: it starts from what this machine has and changes only what you change.
 
 ### Error signals
 
 When kebbie itself crashes or hits some internal errors, it sends its maintainers an error signal, at most once a day. A signal holds only kebbie's version and commit, your OS and CPU architecture, the part of kebbie that failed, the kind of failure and a count. Each send is shown under messages on the board. A bug report with text is shown to you and sent only on your `y`.
 
-To turn the signals off, put this in `~/.config/kebbie/config.toml`:
+Turning them off in step 7 writes this in `~/.config/kebbie/config.toml`:
 
 ```toml
 [report]

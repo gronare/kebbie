@@ -54,7 +54,7 @@ Claims need a notes-vault-mcp that has `task claim`. With an older vault plugin 
 
 ## Each machine needs its own name
 
-Each machine carries one name, [`machine.name`](../reference/configuration.md#keys), in its claims and on your phone. Give each machine its own, such as `mac` and `devbox`. `/kebbie:configure` asks for it when it sets kebbie up, and `kebbie hub join` when you connect a phone.
+Each machine carries one name, [`machine.name`](../reference/configuration.md#keys), in its claims and on your phone. Give each machine its own, such as `mac` and `devbox`. `kebbie setup` asks for it first, `/kebbie:configure` when it sets kebbie up, and `kebbie hub join` when you connect a phone.
 
 `kebbie doctor` warns while it is unset, and the claims then carry the host's short name.
 

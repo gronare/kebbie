@@ -53,6 +53,7 @@ mod settings_page;
 mod sh;
 mod state;
 mod setup;
+mod setup_guide;
 mod shell_write;
 mod signals;
 mod status;
@@ -268,17 +269,21 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie doctor                   check that this machine has what kebbie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
                                   (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)
-  kebbie setup [--yes]            put kebbie on PATH (~/.local/bin/kebbie), install or update its Claude Code plugin
-                                  and add its keys to herdr's config.toml where missing, appending and asking first
-                                  (--yes does not ask, and never writes through a link); says whether herdr needs a
-                                  restart, offers the hub as an optional last step, and ends with kebbie doctor's
-                                  warnings; safe to run again
-  kebbie setup vault              install the optional vault plugin in Claude Code (marketplace, plugin, its options),
-                                  showing each claude command and running it only on your y
+  kebbie setup [--yes]            the setup guide, one step at a time: this machine's name, the agents (Claude Code,
+                                  Codex), herdr's three keys (appended to its config.toml, a taken key named with a
+                                  free one offered), the backlog's sources, the vault (a folder or an S3 bucket, its
+                                  plugin installed and configured), the hub and error signals; nothing is written
+                                  before ⏎ on the last step, which lists what it writes and runs; ends with kebbie
+                                  doctor's warnings; safe to run again, from this machine's values (--yes, and a run
+                                  without a terminal, ask nothing: link kebbie onto PATH, install or update its Claude
+                                  Code plugin, add the free herdr keys, never through a link)
+  kebbie setup vault              the guide at its Vault step; without a terminal, install the optional vault plugin
+                                  in Claude Code, showing each claude command and running it only on your y
   kebbie setup codex [--uninstall]
-                                  install kebbie's plugin into Codex's plugin cache, on your y, so tasks whose profile
-                                  runs Codex report, get their role and are recorded; never edits Codex's config.toml
-                                  or hooks.json (--uninstall removes the plugin)
+                                  the guide at its Agents step; without a terminal, install kebbie's plugin into
+                                  Codex's plugin cache, on your y, so tasks whose profile runs Codex report, get their
+                                  role and are recorded; never edits Codex's config.toml or hooks.json (--uninstall
+                                  removes the plugin)
   kebbie restart [--all]          restart, with claude --resume in its own pane and with its own flags, each Claude
                                   session that runs older code than is installed (Claude Code, a plugin, MCP servers,
                                   kebbie) and is idle, not the pane you are in and without background work (that one

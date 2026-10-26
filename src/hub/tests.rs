@@ -929,7 +929,7 @@ fn connect_names_the_machine_after_the_hub_then_draws_the_card_and_ends_on_the_c
     console.on_copied = Some(Box::new(|link: &str| {
         hub.runtime.block_on(browser.approve_connect(link, false)).unwrap();
     }));
-    let run = super::connect::Run { state: &state, config: &config, given: None, interactive: true, opener: Some(&opener), post: || Ok(()), now: now() };
+    let run = super::connect::Run { state: &state, config: &config, given: None, hub: None, interactive: true, opener: Some(&opener), post: || Ok(()), now: now() };
     let said = super::connect::connect_on(&mut console, &run).unwrap();
     let shown = &console.said;
     assert!(shown.starts_with(&format!("\n  Name this machine\n  Your phone and your other machines show it.\n\n  › {host}        ⏎ keeps {host:?}\n")), "the name comes after the hub, with the host's kept on ⏎: {shown}");
@@ -959,6 +959,26 @@ fn connect_names_the_machine_after_the_hub_then_draws_the_card_and_ends_on_the_c
     assert!(!shown.contains("carl"), "no account name anywhere");
     assert!(said.contains("No board goes out: no browser can read this machine's board, as it holds no account key, which only connecting from the link kebbie hub connect shows hands over. Connect it from the link: kebbie hub leave, then kebbie hub connect, and open the link it shows.") && said.contains(&format!("[machine] name = {host:?}")), "{said}");
     assert_eq!(identity::load(&state).unwrap().unwrap().name, host);
+}
+
+#[test]
+fn a_hub_the_setup_guide_chose_goes_straight_to_the_card_without_the_picker() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let dir = crate::sh::test_dir("hub-connect-chosen");
+    let (state, config) = (dir.join("state"), dir.join("config.toml"));
+    std::fs::write(&config, "[machine]\nname = \"mac\"\n").unwrap();
+    let mut console = Script::new(&[]);
+    console.keys = [Some(super::console::Key::Copy), None].into();
+    console.on_copied = Some(Box::new(|link: &str| {
+        hub.runtime.block_on(browser.approve_connect(link, false)).unwrap();
+    }));
+    let run = super::connect::Run { state: &state, config: &config, given: None, hub: Some(&hub.url), interactive: true, opener: None, post: || Ok(()), now: now() };
+    super::connect::connect_on(&mut console, &run).unwrap();
+    assert!(!console.said.contains("kebbie hub     hub.kebbie.dev") && !console.said.contains("  Hub\n") && !console.said.contains("Address of the server"), "no picker: {}", console.said);
+    assert!(console.said.contains("Connect mac to"), "the card comes first: {}", console.said);
+    assert_eq!(identity::load(&state).unwrap().unwrap().url, hub.url);
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), "[machine]\nname = \"mac\"\n", "the guide saves an own hub itself; the connect writes no [hub] url");
 }
 
 #[test]
@@ -1000,7 +1020,7 @@ fn on_the_dev_hub_connect_and_status_use_the_dev_address_and_identity_and_leave_
         console.on_copied = Some(Box::new(|link: &str| {
             hub.runtime.block_on(browser.approve_connect(link, false)).unwrap();
         }));
-        let run = super::connect::Run { state: &state, config: &config, given: None, interactive: true, opener: None, post: || Ok(()), now: now() };
+        let run = super::connect::Run { state: &state, config: &config, given: None, hub: None, interactive: true, opener: None, post: || Ok(()), now: now() };
         super::connect::connect_on(&mut console, &run).unwrap();
         console.said
     });

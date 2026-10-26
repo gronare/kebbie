@@ -21,7 +21,7 @@ Codex runs kebbie's hooks from a Codex plugin.
    kebbie setup codex
    ```
 
-   It says what it writes and asks before writing anything.
+   In a terminal it opens the setup guide at Agents: tick Codex, then `⏎` through to the last step and `⏎` again. Without a terminal it says what it writes and asks before writing anything.
 
 The plugin goes in Codex's plugin cache, `$CODEX_HOME/plugins/cache/kebbie/kebbie/local/` (`CODEX_HOME` defaults to `~/.codex`), and holds three hooks:
 

@@ -59,10 +59,10 @@ description = "kebbie: go to the lead, or back"
 key = "prefix+tab"
 type = "plugin_action"
 command = "kebbie.focus"
-description = "kebbie: between the board and the lead's chat"
+description = "kebbie: move between the board and the lead"
 
 [[keys.command]]
 key = "prefix+t"
 type = "plugin_action"
 command = "kebbie.board"
-description = "kebbie board"
+description = "kebbie: open the board"

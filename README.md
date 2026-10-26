@@ -28,7 +28,7 @@ You need macOS or Linux with `git`, `herdr` 0.9.0+, Claude Code, `jq` and `curl`
 curl -fsSL https://kebbie.dev/install.sh | sh
 ```
 
-The script checks those tools, installs the latest release as a herdr plugin with its prebuilt binary (macOS on Apple silicon or Intel, Linux on x86_64 or arm64), and runs `kebbie setup`. Setup links `kebbie` into `~/.local/bin`, installs the Claude Code plugin, asks before it adds kebbie's keys to your herdr config, and ends with what `kebbie doctor` still wants fixed. It is safe to run again.
+The script checks those tools, installs the latest release as a herdr plugin with its prebuilt binary (macOS on Apple silicon or Intel, Linux on x86_64 or arm64), and runs `kebbie setup`. Setup is a guide of eight steps: this machine's name, the agents, herdr's keys, where the backlog lives, the vault, the hub and error signals, then one look at everything before it writes any of it. It ends with what `kebbie doctor` still wants fixed, and is safe to run again.
 
 Press `prefix+space` and tell the lead what you want done. [Your first task](docs/tutorial.md) walks through it step by step.
 

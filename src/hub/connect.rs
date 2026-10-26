@@ -306,6 +306,7 @@ pub struct Run<'a> {
     pub state: &'a Path,
     pub config: &'a Path,
     pub given: Option<&'a str>,
+    pub hub: Option<&'a str>,
     pub interactive: bool,
     pub opener: Option<&'a str>,
     pub post: fn() -> Result<()>,
@@ -316,7 +317,8 @@ pub fn connect_on(console: &mut dyn Console, run: &Run) -> Result<String> {
     if let Some(joined) = identity::load(run.state)? {
         return Err(super::already(&joined));
     }
-    let chosen = match configured_hub(run.config)? {
+    let picked = run.hub.filter(|_| super::dev().is_none()).map(str::to_string);
+    let chosen = match picked.map_or_else(|| configured_hub(run.config), |url| Ok(Some(url)))? {
         Some(url) => Chosen { url, note: None },
         None if run.interactive => choose_on(console, run.config)?.ok_or(STOPPED)?,
         None => Chosen { url: DEFAULT_HUB_URL.to_string(), note: None },
@@ -389,8 +391,9 @@ pub fn connect_on(console: &mut dyn Console, run: &Run) -> Result<String> {
     Ok(lines.into_iter().flatten().collect::<Vec<_>>().join("\n"))
 }
 
-pub fn cli(state: &Path, config: &Path, given: Option<&str>, interactive: bool, now: u64) -> Result<String> {
-    let run = Run { state, config, given, interactive, opener: opener(), post: super::tick, now };
+// A hub already chosen, as the setup guide's hub step chooses it, skips the picker.
+pub fn cli(state: &Path, config: &Path, given: Option<&str>, hub: Option<&str>, interactive: bool, now: u64) -> Result<String> {
+    let run = Run { state, config, given, hub, interactive, opener: opener(), post: super::tick, now };
     if interactive {
         return connect_on(&mut console::Tty::new(), &run);
     }

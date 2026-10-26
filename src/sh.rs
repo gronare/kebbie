@@ -68,6 +68,17 @@ pub fn test_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
+// The input goes in on stdin and is never part of an error, since it may hold a secret.
+pub fn run_with_input(program: &str, args: &[&str], input: &str) -> Result<String> {
+    use std::io::Write;
+    let mut child = command(program, args, None).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|error| format!("{program}: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input.as_bytes());
+    }
+    let output = child.wait_with_output().map_err(|error| format!("{program}: {error}"))?;
+    if output.status.success() { Ok(String::from_utf8_lossy(&output.stdout).trim().to_string()) } else { Err(format!("{program} {} failed", args.join(" "))) }
+}
+
 pub fn run_visibly(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<()> {
     let status = command(program, args, cwd).stdin(Stdio::inherit()).status().map_err(|error| format!("{program}: {error}"))?;
     if status.success() { Ok(()) } else { Err(format!("{program} {} failed", args.join(" "))) }
