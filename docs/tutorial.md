@@ -21,21 +21,13 @@ On Linux, see [Requirements](reference/requirements.md) for each tool's install 
 
 ## 2. Install kebbie
 
-Install the herdr plugin at the latest release. The `curl` part asks GitHub for the latest release tag, and herdr clones that tag and installs its prebuilt binary:
-
 ```bash
-herdr plugin install --ref "$(curl -fsSL https://api.github.com/repos/gronare/kebbie/releases/latest | jq -r .tag_name)" gronare/kebbie
+curl -fsSL https://kebbie.dev/install.sh | sh
 ```
 
-herdr shows what the plugin will run and asks you to confirm.
+The script names any tool from step 1 that is missing and stops. Otherwise it installs the latest release as a herdr plugin with its prebuilt binary; herdr shows what the plugin will run and asks you to confirm. herdr picks the plugin up without a restart. The script then links `~/.local/share/kebbie/current` to where herdr installed it and runs setup.
 
-Restart herdr. On startup the plugin creates `~/.local/share/kebbie/current`, a link to where herdr installed it.
-
-## 3. Run setup
-
-```bash
-~/.local/share/kebbie/current/target/release/kebbie setup
-```
+## 3. Setup
 
 Setup prints one line per step, each starting with `done`, `already`, `skipped` (with the reason) or `to do`:
 
