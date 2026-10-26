@@ -65,7 +65,7 @@ const fn group(name: &'static str, items: &'static [Item]) -> Group {
     Group { name, note: ("", ""), items }
 }
 
-const PAGES: &[Act] = &[Act::WorkPage, Act::AreasPage, Act::RoutinesPage];
+const PAGES: &[Act] = &[Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage];
 
 const WINDOWS: Group = group("WINDOWS", &[
     bind(&[Act::Back], "one step back", "back"),
@@ -83,7 +83,7 @@ const WORK: Sheet = Sheet {
         group("MOVE AROUND", &[
             bind(&[Act::Move], "move", "move"),
             bind(&[Act::Switch], "work · backlog", "work · backlog"),
-            bind(PAGES, "work · areas · routines", "pages"),
+            bind(PAGES, "work · areas · routines · settings", "pages"),
             bind(&[Act::Filter], "filter the column", "filter"),
             bind(&[Act::Lead], "the lead's chat", "lead's chat"),
             bind(&[Act::HideChat], "hide or show the lead's chat", "hide chat"),
@@ -151,7 +151,7 @@ const AREAS: Sheet = Sheet {
         group("MOVE AROUND", &[
             bind(&[Act::Move], "move", "move"),
             bind(&[Act::Switch], "list · detail", "list · detail"),
-            bind(PAGES, "work · areas · routines", "pages"),
+            bind(PAGES, "work · areas · routines · settings", "pages"),
             bind(&[Act::Lead], "the lead's chat", "lead's chat"),
         ]),
         WAITING,
@@ -182,7 +182,7 @@ const ROUTINES: Sheet = Sheet {
     groups: &[
         group("MOVE AROUND", &[
             bind(&[Act::Move], "move", "move"),
-            bind(PAGES, "work · areas · routines", "pages"),
+            bind(PAGES, "work · areas · routines · settings", "pages"),
             bind(&[Act::Lead], "the lead's chat", "lead's chat"),
         ]),
         WAITING,
@@ -497,7 +497,7 @@ mod tests {
         assert!(screen.contains("╭ keys · work ─"), "{screen}");
         let row = row_with(&rows, "↑ ↓ j k   move");
         assert!(row.contains("← →   work · backlog"), "{row}");
-        let row = row_with(&rows, "1 2 3     pages");
+        let row = row_with(&rows, "1 2 3 ,   pages");
         assert!(row.contains("/     filter") && row.contains("tab  lead's chat"), "{row}");
         let row = row_with(&rows, "p         push");
         assert!(row.contains("v     to review") && row.contains("r    open review"), "{row}");

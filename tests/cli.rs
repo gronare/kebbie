@@ -293,6 +293,15 @@ fn a_kebbie_toml_inside_the_repo_has_no_effect() {
 }
 
 #[test]
+fn kebbie_config_edit_needs_a_terminal_and_writes_nothing_without_one() {
+    let lab = Lab::new("config-edit");
+    fs::write(&lab.config, "# mine\n[task]\nsandbox = true\n").unwrap();
+    let out = lab.run_with_stdin(&["config", "edit"], " \n");
+    assert!(!out.status.success() && stderr(&out).contains("kebbie config edit needs a terminal"), "{}", stderr(&out));
+    assert_eq!(fs::read_to_string(&lab.config).unwrap(), "# mine\n[task]\nsandbox = true\n");
+}
+
+#[test]
 fn the_repo_config_on_the_machine_layers_over_config_toml() {
     let lab = Lab::new("repo-config");
     let (_, slot) = lab.task_fixture();

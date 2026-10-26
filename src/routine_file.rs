@@ -196,7 +196,7 @@ fn write_config(file: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
-fn check(file: &Path, machine: bool, text: &str) -> Result<()> {
+pub(crate) fn check(file: &Path, machine: bool, text: &str) -> Result<()> {
     let source = file.display().to_string();
     if machine { crate::config::parse_machine(text, &source).map(|_| ()) } else { crate::config::parse_repo(text, &source).map(|_| ()) }
 }
@@ -210,7 +210,7 @@ fn read(file: &Path) -> Result<String> {
 }
 
 // Every change is checked as the whole file before it is written, so a file that parsed before still parses after.
-fn rewrite(file: &Path, machine: bool, change: impl FnOnce(&str) -> Result<String>) -> Result<()> {
+pub(crate) fn rewrite(file: &Path, machine: bool, change: impl FnOnce(&str) -> Result<String>) -> Result<()> {
     let text = read(file)?;
     check(file, machine, &text).map_err(|error| format!("{error}\nFix that first; kebbie changes a config file only when it parses."))?;
     let changed = change(&text)?;

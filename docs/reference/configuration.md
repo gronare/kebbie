@@ -1,6 +1,6 @@
 # Configuration
 
-Every key kebbie reads, the file it goes in and what it does. Every key has a default, so kebbie runs without a config file. `kebbie config` prints the keys with the value in effect, the layer it comes from and what it does.
+Every key kebbie reads, the file it goes in and what it does. Every key has a default, so kebbie runs without a config file. `kebbie config` prints the keys with the value in effect, the layer it comes from and what it does, and the board's [Settings page](board.md#settings-page) (`,`, or `kebbie config edit`) changes them in place.
 
 ## Files and layers
 

@@ -65,13 +65,13 @@ pub(super) fn header(app: &App, width: u16) -> (Line<'static>, Vec<(u16, u16, Pa
     let fresh = match app.page {
         Page::Work => format!("backlog: {sources}, {}   ", backlog::freshness(&app.sources, app.backlog.updated)),
         Page::Areas => format!("vault index: {}   ", backlog::age(app.areas.synced)),
-        Page::Routines => String::new(),
+        Page::Routines | Page::Settings => String::new(),
     };
     let fresh = format!("{}{fresh}", fetch::failed_note(&app.fetch_failures));
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     let waiting = app.routines.waiting();
     let warning = if waiting > 0 { format!("⚠{waiting} ") } else { String::new() };
-    let full = [(" 1 Work ", Page::Work), (" 2 Areas ", Page::Areas), (" 3 Routines ", Page::Routines)];
+    let full = [(" 1 Work ", Page::Work), (" 2 Areas ", Page::Areas), (" 3 Routines ", Page::Routines), (" , Settings ", Page::Settings)];
     let short = full.map(|(label, page)| if page == app.page { (label, page) } else { (&label[..3], page) });
     let width_of = |tabs: &[(&str, Page)]| tabs.iter().map(|(label, _)| label.chars().count()).sum::<usize>() + warning.chars().count();
     let tabs = if used + width_of(&full) <= width as usize { full } else { short };

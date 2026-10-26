@@ -16,7 +16,13 @@ impl App {
     pub(super) fn mouse(&mut self, event: MouseEvent, terminal: &mut DefaultTerminal) {
         let hit = self.hit_at(event.column, event.row);
         if let (Some(Hit::Tab(page)), MouseEventKind::Down(MouseButton::Left)) = (hit, event.kind) {
-            self.page = page;
+            if page == Page::Settings { self.open_settings() } else { self.page = page }
+            return;
+        }
+        if self.page == Page::Settings {
+            if let MouseEventKind::ScrollUp | MouseEventKind::ScrollDown = event.kind {
+                let _ = self.settings.handle(KeyEvent::from(if event.kind == MouseEventKind::ScrollUp { KeyCode::Up } else { KeyCode::Down }));
+            }
             return;
         }
         if self.page == Page::Routines {

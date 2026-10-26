@@ -45,6 +45,7 @@ use ratatui_image::protocol::Protocol;
 
 use crate::area_page::{self, Effect};
 use crate::routine_page;
+use crate::settings_page;
 use crate::backlog::{self, Backlog, Entry};
 use crate::config::{self, OngoingAt, Source};
 use crate::fetch::Fetcher;
@@ -81,6 +82,7 @@ enum Page {
     Work,
     Areas,
     Routines,
+    Settings,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -150,6 +152,7 @@ struct App {
     page: Page,
     areas: area_page::Page,
     routines: routine_page::Page,
+    settings: settings_page::Page,
     sources: Vec<Source>,
     fetch_failures: Vec<String>,
     away: bool,
@@ -342,7 +345,13 @@ impl App {
 
     // Pages switch only when nothing is open on either.
     fn at_rest(&self) -> bool {
-        matches!(self.mode, Mode::Normal) && self.areas.is_normal() && self.routines.is_normal()
+        matches!(self.mode, Mode::Normal) && self.areas.is_normal() && self.routines.is_normal() && self.settings.is_normal()
+    }
+
+    fn open_settings(&mut self) {
+        let repo = self.selected_task().and_then(|item| item.repo).or_else(|| self.checkouts.first().and_then(|checkout| self.repo_named(&checkout.name)));
+        self.settings.open(repo);
+        self.page = Page::Settings;
     }
 
     fn in_background(&mut self, label: String, step: impl FnOnce() -> Result<String> + Send + 'static) {
@@ -397,7 +406,7 @@ impl App {
 
     // A rebuilt binary takes over only once nothing is open, and never while an update this board runs is going or its summary is unread.
     fn may_restart(&self) -> bool {
-        matches!(self.mode, Mode::Normal | Mode::Help(_) | Mode::Message(_)) && self.update.is_none() && self.areas.is_idle() && self.routines.is_idle()
+        matches!(self.mode, Mode::Normal | Mode::Help(_) | Mode::Message(_)) && self.update.is_none() && self.areas.is_idle() && self.routines.is_idle() && self.settings.is_normal()
     }
 
     fn show(&mut self, result: Result<String>) {
@@ -469,10 +478,25 @@ impl App {
             return;
         }
         self.notice = None;
+        if self.page == Page::Settings {
+            if self.at_rest() {
+                match map.act(Ctx::Settings, &key) {
+                    Some(Act::WorkPage) => return self.page = Page::Work,
+                    Some(Act::AreasPage) => return self.page = Page::Areas,
+                    Some(Act::RoutinesPage) => return self.page = Page::Routines,
+                    _ => {}
+                }
+            }
+            if let settings_page::Effect::Left = self.settings.handle(key) {
+                self.page = Page::Work;
+            }
+            return;
+        }
         if self.at_rest() {
             let ctx = match self.page {
                 Page::Areas => Ctx::Areas,
                 Page::Routines => Ctx::Routines,
+                Page::Settings => Ctx::Settings,
                 Page::Work => self.ctx(),
             };
             match map.act(ctx, &key) {
@@ -488,6 +512,7 @@ impl App {
                 Some(Act::WorkPage) => return self.page = Page::Work,
                 Some(Act::AreasPage) => return self.page = Page::Areas,
                 Some(Act::RoutinesPage) => return self.page = Page::Routines,
+                Some(Act::SettingsPage) => return self.open_settings(),
                 Some(Act::Inbox) => {
                     self.page = Page::Work;
                     return self.open_questions(None);
@@ -915,6 +940,7 @@ impl Rebuild {
         let column = match (app.page, app.column) {
             (Page::Areas, _) => "areas",
             (Page::Routines, _) => "routines",
+            (Page::Settings, _) => "settings",
             (_, Column::Backlog) => "backlog",
             _ => "work",
         };
@@ -938,7 +964,7 @@ impl App {
         App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
-            page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), sources, fetch_failures: Vec::new(), away: false,
+            page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), settings: settings_page::Page::new(settings_page::Paths::current(), None), sources, fetch_failures: Vec::new(), away: false,
             messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), answering: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(),
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
@@ -973,6 +999,7 @@ pub fn run(overlay: bool) -> Result<String> {
             Some("backlog") => app.column = Column::Backlog,
             Some("areas") => app.page = Page::Areas,
             Some("routines") => app.page = Page::Routines,
+            Some("settings") => app.open_settings(),
             _ => {}
         }
         app.backlog_selected = parts.next().and_then(|index| index.parse().ok()).unwrap_or(0);
@@ -1229,13 +1256,13 @@ mod tests {
         };
         let state = crate::routines::State { last_start: Some(1), last_task: Some("cluster-health-20261019-0600@infra".to_string()), last_outcome: Some(crate::routines::Outcome::Findings), ..Default::default() };
         app.routines.shown(vec![(routine, state)]);
-        assert!(header(&app, 200).0.to_string().ends_with(" 1 Work  2 Areas  3 Routines ⚠1 "), "{}", header(&app, 200).0);
+        assert!(header(&app, 200).0.to_string().ends_with(" 1 Work  2 Areas  3 Routines ⚠1  , Settings "), "{}", header(&app, 200).0);
         press(&mut app, key(KeyCode::Char('3')));
         assert_eq!(app.page, Page::Routines);
         let (rows, _) = render(&mut app, 120, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("▌⚠ Cluster health") && screen.contains("⏎ options · n new · g run now · e edit · p pause · s last report · ? keys"), "{screen}");
-        assert!(header(&app, 70).0.to_string().ends_with(" 1  2  3 Routines ⚠1 "), "a narrow header names only the page it is on: {}", header(&app, 70).0);
+        assert!(header(&app, 70).0.to_string().ends_with(" 1  2  3 Routines ⚠1  , "), "a narrow header names only the page it is on: {}", header(&app, 70).0);
         let (x, y) = find(&rows, "3 Routines")[0];
         assert_eq!(app.hit_at(x as u16, y as u16), Some(Hit::Tab(Page::Routines)));
         press(&mut app, key(KeyCode::Enter));
@@ -1244,6 +1271,28 @@ mod tests {
         assert_eq!(app.selected_task().map(|item| item.name).as_deref(), Some("cluster-health-20261019-0600"), "with the run selected");
         app.routines.tasks.clear();
         assert!(!header(&app, 200).0.to_string().contains('⚠'), "a closed run's findings wait for no one");
+    }
+
+    #[test]
+    fn a_comma_opens_the_settings_page_on_the_selected_tasks_repo_and_esc_goes_back() {
+        let dir = crate::sh::test_dir("board-settings");
+        std::fs::write(dir.join("config.toml"), "[task]\nsandbox = false\n").unwrap();
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.settings = settings_page::Page::new(settings_page::Paths { machine: dir.join("config.toml"), repos_dir: dir.join("repos"), claude_home: dir.join("claude"), kebbie: dir.join("kebbie") }, None);
+        press(&mut app, key(KeyCode::Char(',')));
+        assert_eq!(app.page, Page::Settings);
+        let (rows, _) = render(&mut app, 140, 40);
+        let screen = rows.join("\n");
+        assert!(screen.contains("Settings") && screen.contains("task.sandbox") && screen.contains("○ off"), "{screen}");
+        assert!(screen.contains("↑ ↓ key · ← → section · ⏎ pick · d back to default · tab machine / repo · / search · esc board"), "the hint line names the page's keys: {screen}");
+        assert!(header(&app, 200).0.to_string().ends_with(" , Settings "), "{}", header(&app, 200).0);
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Char('2')));
+        assert_eq!(app.page, Page::Areas, "the page keys work from the settings page");
+        press(&mut app, key(KeyCode::Char(',')));
+        press(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.page, Page::Work, "esc goes back to the board");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

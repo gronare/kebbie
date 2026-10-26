@@ -5,6 +5,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- The board has a Settings page, on , or with kebbie config edit: every key kebbie config prints, by section, with its value, the layer it comes from and what it does, changed in place in config.toml or the repo's config with its comments and order kept, each write checked by kebbie doctor; a key from a linked team file asks whether to change the team's file or override it here
+- On the Settings page, task.rules_skill and worktree.setup_skill offer a copy of kebbie's skill in ~/.claude/skills to edit as your own
 - task.rules_skill and worktree.setup_skill take a Markdown file by its absolute or ~ path as well as a skill's name: the task gets the file's text in its role, and the reviewer and the rules check in their brief
 - kebbie config and the configuration reference say plainly that restart.auto restarts only the sessions running older code than is installed, after an update or a new Claude Code, and that restart.idle_minutes is how long such a session waits to be idle and out of focus first
 - kebbie setup adds three herdr keys, prefix+space, prefix+tab and prefix+t; updating is U on the board, so prefix+u is no longer added

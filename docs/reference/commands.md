@@ -507,6 +507,7 @@ After a ready report the keeper starts the reviewer. It checks the commits again
 | --- | --- |
 | `kebbie config [--repo <path>]` | The config layers found and every key with its value in effect, the layer it comes from and what it does. See [Configuration](configuration.md). |
 | `kebbie config --get <key>` | Print one machine-wide value for scripts: `worktree.server_name` or `worktree.worker_name`. |
+| `kebbie config edit [--repo <path>]` | The board's [Settings page](board.md#settings-page) on its own, for config.toml and the repo's config. Needs a terminal, and is yours only: the lead and tasks cannot run it. |
 | `kebbie docs [<words>]` | Search kebbie's docs on this machine, or list them. See [below](#kebbie-docs). |
 | `kebbie doctor` | Check this machine, with the fix for each gap, the task sandbox's state among them. Exits non-zero on a `fail`. See [Requirements](requirements.md#what-kebbie-doctor-checks). |
 | `kebbie routes [--plain-http]` | Print a Caddy config that serves each worktree's dev server at its own host. See [below](#kebbie-routes). |

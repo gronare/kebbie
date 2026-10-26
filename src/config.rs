@@ -896,7 +896,10 @@ pub fn resolve(repo: Option<&Path>) -> Result<Loaded> {
 }
 
 pub fn resolve_file(repo: Option<PathBuf>) -> Result<Loaded> {
-    let machine = path();
+    resolve_at(path(), repo)
+}
+
+pub fn resolve_at(machine: PathBuf, repo: Option<PathBuf>) -> Result<Loaded> {
     let own = repo.as_deref().map(load_repo).transpose()?.unwrap_or_default();
     Ok(Loaded { settings: settings(&own, &load_machine(&machine)?), machine, repo })
 }

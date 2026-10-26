@@ -48,6 +48,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Page::Work => hint_lines(app.selected_s_opens(), app.lead_chat.is_some()),
         Page::Areas => area_page::Page::hint_lines(),
         Page::Routines => crate::routine_page::Page::hint_lines(),
+        Page::Settings => app.settings.hint_lines(),
     };
     let updates: &[(String, String)] = if app.page == Page::Work { &app.updates } else { &[] };
     let status = match app.notice.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(3)) {
@@ -64,6 +65,12 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(Paragraph::new(status), bottom);
         app.routines.draw(frame, body);
         app.hits = if app.routines.is_normal() { tab_hits } else { Vec::new() };
+        return;
+    }
+    if app.page == Page::Settings {
+        frame.render_widget(Paragraph::new(status), bottom);
+        app.settings.draw(frame, body);
+        app.hits = if app.settings.is_normal() { tab_hits } else { Vec::new() };
         return;
     }
     let mut tab_hits = tab_hits;

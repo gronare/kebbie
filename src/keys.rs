@@ -9,6 +9,7 @@ pub enum Ctx {
     Backlog,
     Areas,
     Routines,
+    Settings,
     Card,
 }
 
@@ -20,6 +21,7 @@ pub enum Act {
     WorkPage,
     AreasPage,
     RoutinesPage,
+    SettingsPage,
     Lead,
     HideChat,
     Messages,
@@ -85,14 +87,15 @@ pub struct Binding {
     pub hint: Hint,
 }
 
-use Ctx::{Areas, Backlog, Card, Routines, Work};
+use Ctx::{Areas, Backlog, Card, Routines, Settings, Work};
 
 const BOARD: &[Ctx] = &[Work, Backlog];
 const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
+const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 47] = [
-        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::Lead, Act::HideChat, Act::Messages, Act::Reports, Act::Hub, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 48] = [
+        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Reports, Act::Hub, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
@@ -105,6 +108,7 @@ impl Act {
             Act::WorkPage => "work_page",
             Act::AreasPage => "areas_page",
             Act::RoutinesPage => "routines_page",
+            Act::SettingsPage => "settings_page",
             Act::Lead => "lead",
             Act::HideChat => "hide_chat",
             Act::Messages => "messages",
@@ -162,6 +166,7 @@ impl Act {
             Act::WorkPage => Default::Char('1'),
             Act::AreasPage => Default::Char('2'),
             Act::RoutinesPage => Default::Char('3'),
+            Act::SettingsPage => Default::Char(','),
             Act::HideChat => Default::Char('h'),
             Act::Messages => Default::Char('m'),
             Act::Reports => Default::Char('B'),
@@ -215,9 +220,10 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Switch, on: &[Areas], help: "list · detail", hint: Hint::No },
     Binding { act: Act::Move, on: ALL, help: "move", hint: Hint::No },
     Binding { act: Act::Move, on: &[Card], help: "in the card window: scroll", hint: Hint::No },
-    Binding { act: Act::WorkPage, on: ALL, help: "the work page", hint: Hint::No },
-    Binding { act: Act::AreasPage, on: ALL, help: "the areas page", hint: Hint::No },
-    Binding { act: Act::RoutinesPage, on: ALL, help: "the routines page; ⚠ on its tab counts the runs whose findings wait for you", hint: Hint::No },
+    Binding { act: Act::WorkPage, on: PAGES, help: "the work page", hint: Hint::No },
+    Binding { act: Act::AreasPage, on: PAGES, help: "the areas page", hint: Hint::No },
+    Binding { act: Act::RoutinesPage, on: PAGES, help: "the routines page; ⚠ on its tab counts the runs whose findings wait for you", hint: Hint::No },
+    Binding { act: Act::SettingsPage, on: ALL, help: "the settings page: every key kebbie config shows, with its value, the layer it comes from and what it does, changed in place", hint: Hint::No },
     Binding { act: Act::Lead, on: ALL, help: "move focus to the lead's chat, showing it first when it is hidden", hint: Hint::Full },
     Binding { act: Act::HideChat, on: BOARD, help: "hide or show the lead's chat: hidden, it runs on and the board takes the whole width (on the board in the lead Space)", hint: Hint::Full },
     Binding { act: Act::Inbox, on: ALL, help: "inbox: the questions waiting on you, one at a time with tab to the next; ↑ ↓ j k (and ← → in a plan) pick an answer and ⏎ sends it, pgup pgdn scroll the question or the plan, or its letter (a c r x, 1-9, w) answers directly; an answer with a comment opens the comment box, esc back to the answers; o opens a plan file, g goes to the task's Space", hint: Hint::Both },
@@ -438,7 +444,7 @@ mod tests {
             assert!(TABLE.iter().any(|row| row.act == act), "{} has no row", act.id());
         }
         let keys = Keys::defaults();
-        for ctx in [Work, Backlog, Areas, Routines, Card] {
+        for ctx in [Work, Backlog, Areas, Routines, Settings, Card] {
             let mut seen: Vec<(KeyCode, Act)> = Vec::new();
             for row in TABLE.iter().filter(|row| row.on.contains(&ctx)) {
                 for code in keys.codes(row.act) {

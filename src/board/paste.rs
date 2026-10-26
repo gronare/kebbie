@@ -54,6 +54,7 @@ impl App {
             }
             Mode::Normal if self.page == Page::Areas && self.areas.paste(&text) => None,
             Mode::Normal if self.page == Page::Routines && self.routines.paste(&text) => None,
+            Mode::Normal if self.page == Page::Settings && self.settings.paste(&text) => None,
             _ => Some(text),
         }
     }

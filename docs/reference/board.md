@@ -8,7 +8,7 @@ A board you quit in the lead Space starts again the next time `prefix+space` tak
 
 | Part | Shows |
 | --- | --- |
-| Status line, top | The page tabs, `1 Work  2 Areas  3 Routines`, then counts and markers, below. |
+| Status line, top | The page tabs, `1 Work  2 Areas  3 Routines  , Settings`, then counts and markers, below. |
 | Lead line, under the status line | Whether the lead still runs an old kebbie, while it counts as stale. |
 | Context line, under it | While the lead's context is 85% full or more: `The lead's context is N% full · L to restart it fresh`. |
 | Hub line, under it | While the hub refuses the board for a lapsed subscription: `Your kebbie hub subscription isn't active: <link> · H hub`. |
@@ -163,7 +163,7 @@ The row, marked `⧗`, carries a title from its backlog item or the first senten
 | `⏎` | Options for the selected task or backlog item. |
 | `↑` `↓`, `j` `k` | Move. |
 | `←` `→` | Switch between Work and Backlog. |
-| `1`, `2`, `3` | The Work page, the Areas page, the Routines page. |
+| `1`, `2`, `3`, `,` | The Work page, the Areas page, the Routines page, the [Settings page](#settings-page). |
 | `tab` | Move focus to the lead's chat, showing it first when it is hidden. |
 | `h` | Hide the lead's chat so the board takes the whole width while the chat runs on, or show it again. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
 | `i` | The inbox: the questions waiting on you, opened at the first. Works on the Areas page too. |
@@ -540,6 +540,40 @@ Then it shows the `[[routines]]` table it will add. Nothing is written before `y
 
 With no routines yet, the page explains what a routine is and offers three to start from: a health check, a dependency bump and keeping CI green.
 
+## Settings page
+
+Press `,` to open it, or run `kebbie config edit` for the same page on its own. It lists every key [`kebbie config`](configuration.md) prints, by section on the left, with its value, the layer it comes from and, under the selected key, what it does.
+
+| Tab | Shows and writes |
+| --- | --- |
+| This machine | `~/.config/kebbie/config.toml`, without the keys a repo config alone takes. |
+| Repo: `<repo>` | `~/.config/kebbie/repos/<repo>.toml` for the selected task's repo, without the keys marked config.toml only. |
+
+| Layer | Means |
+| --- | --- |
+| `default` | No file sets it; kebbie's built-in value applies. |
+| `machine` | config.toml sets it. |
+| `repo <repo>` | The repo config sets it, and it wins over config.toml. |
+| `team link` | The repo config is a link into a team repo, and the team's file sets it. |
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` | Select a key. |
+| `←` `→` | The previous or next section. |
+| `space` | Turn a `true` or `false` key on or off. |
+| `⏎` | Change the key: a pick list for a choice, the value in place for text, numbers and lists (`a, b` or `["a", "b"]`). |
+| `d` | Remove the key from the tab's file, so the layer below applies. |
+| `tab` | Switch between This machine and the repo. |
+| `/` | Search the keys by name and text; `⏎` keeps the search, `esc` clears it. |
+| `esc` | Back to the board, or quit `kebbie config edit`. |
+
+- Each change is checked before it is written, and a value kebbie would refuse writes nothing and says why.
+- A write changes only that key's line, keeping the file's comments and order, and goes to the tab's file.
+- After each write, kebbie doctor's check of that file shows on one line, such as `doctor: ok, config.toml parses`.
+- A change to a key from a `team link` asks first: `t` changes the team's file for everyone who links it, `o` makes the link a file of this machine's own with the change.
+- `task.rules_skill` and `worktree.setup_skill` offer kebbie's skill, your skill by name, a Markdown file by path, or a copy of kebbie's skill in `~/.claude/skills/<name>` to edit, which the key then names.
+- `report.inbox_token` is never shown; set it in config.toml by hand.
+
 ## Keys in config.toml
 
 `[keys]` in config.toml moves a key, as `action = "key"`. It lives in config.toml only; a repo config refuses it.
@@ -550,7 +584,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `hide_chat`, `messages`, `reports`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `reports`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

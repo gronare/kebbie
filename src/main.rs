@@ -8,6 +8,7 @@ mod changes;
 mod board;
 mod ci;
 mod config;
+mod config_edit;
 mod doctor;
 mod docs;
 mod evidence;
@@ -48,6 +49,7 @@ mod routine_page;
 mod routine_wizard;
 mod routines;
 mod sandbox;
+mod settings_page;
 mod sh;
 mod state;
 mod setup;
@@ -238,6 +240,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   config.toml, defaults; a symlink with its target) and every key with its value in
                                   effect, the layer it comes from and what it does (--get <key> prints one
                                   machine-wide value, for scripts)
+  kebbie config edit [--repo <path>]
+                                  the board's Settings page on its own: the same keys, edited in place in
+                                  config.toml or the repo's config, keeping the file's comments and order
   kebbie docs [words ...]         where kebbie's docs are on this machine (docs/ in the install's checkout); with
                                   words, the pages whose title or headings match, each with its path and first
                                   sentence, best first; without, the docs index by section; never needs the network,
@@ -595,6 +600,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("docs") => docs::print(&arguments.positionals[1..]),
         Some("profiles") => profiles::print(arguments.flag("--json")),
         Some("hub") => hub::cli(name, &arguments.positionals[2..], arguments.value("--name")),
+        Some("config") if name == Some("edit") => settings_page::edit(&cwd, arguments.value("--repo")),
         Some("config") => match arguments.value("--get") {
             Some(key) => config::get(key),
             None => config::show(&cwd, arguments.value("--repo")),
