@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn the_keys_kebbie_adds_are_the_ones_the_example_config_binds() {
         let keys: Vec<String> = kebbie_keys().iter().map(|binding| format!("{} {}", text(binding, "key"), text(binding, "command"))).collect();
-        assert_eq!(keys, ["prefix+space kebbie.lead", "prefix+tab kebbie.focus", "prefix+t kebbie.board", "prefix+u kebbie.update"]);
+        assert_eq!(keys, ["prefix+space kebbie.lead", "prefix+tab kebbie.focus", "prefix+t kebbie.board"], "updating is U on the board");
     }
 
     #[test]
@@ -437,8 +437,8 @@ mod tests {
         let dir = crate::sh::test_dir("setup-keys");
         let config = dir.join("herdr/config.toml");
         let (said, wrote, _) = keys(&config, Asking::Yes, "");
-        assert!(wrote && said.starts_with("done") && said.contains("prefix+space, prefix+tab, prefix+t, prefix+u"), "{said}");
-        assert_eq!(commands(&config).len(), 4, "a missing config is created with the four keys");
+        assert!(wrote && said.starts_with("done") && said.contains("prefix+space, prefix+tab, prefix+t "), "{said}");
+        assert_eq!(commands(&config).len(), 3, "a missing config is created with the three keys");
         let written = std::fs::read(&config).unwrap();
         let (said, wrote, _) = keys(&config, Asking::Yes, "");
         assert!(!wrote && said.starts_with("already"), "{said}");
@@ -447,10 +447,10 @@ mod tests {
         let own = "onboarding = false # mine\n\n[[keys.command]]\nkey = \"prefix+t\"\ntype = \"plugin_action\"\ncommand = \"kebbie.board\"\n\n[ui]\npane_borders  =  \"auto\"";
         std::fs::write(&config, own).unwrap();
         let (said, wrote, _) = keys(&config, Asking::Yes, "");
-        assert!(wrote && said.contains("added prefix+space, prefix+tab, prefix+u"), "{said}");
+        assert!(wrote && said.contains("added prefix+space, prefix+tab to"), "{said}");
         let after = std::fs::read_to_string(&config).unwrap();
         assert!(after.starts_with(own) && after[own.len()..].starts_with("\n\n[[keys.command]]"), "the user's bytes stay a prefix, and a missing last newline is added before kebbie's: {after}");
-        assert_eq!(commands(&config), ["prefix+t kebbie.board", "prefix+space kebbie.lead", "prefix+tab kebbie.focus", "prefix+u kebbie.update"]);
+        assert_eq!(commands(&config), ["prefix+t kebbie.board", "prefix+space kebbie.lead", "prefix+tab kebbie.focus"]);
         assert!(keys(&config, Asking::Yes, "").0.starts_with("already"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), after);
         std::fs::remove_dir_all(dir).unwrap();
@@ -463,8 +463,8 @@ mod tests {
         let own = "[keys]\ncycle_pane_next = \"prefix+tab\"\n\n[[keys.command]]\nkey = \"prefix+t\"\ntype = \"popup\"\ncommand = \"lazygit\"\n";
         std::fs::write(&config, own).unwrap();
         let (said, wrote, _) = keys(&config, Asking::Yes, "");
-        assert!(wrote && said.contains("added prefix+space, prefix+u") && said.contains("prefix+tab is already cycle_pane_next, so kebbie.focus gets no key") && said.contains("prefix+t is already lazygit"), "{said}");
-        assert_eq!(commands(&config), ["prefix+t lazygit", "prefix+space kebbie.lead", "prefix+u kebbie.update"]);
+        assert!(wrote && said.contains("added prefix+space to") && said.contains("prefix+tab is already cycle_pane_next, so kebbie.focus gets no key") && said.contains("prefix+t is already lazygit"), "{said}");
+        assert_eq!(commands(&config), ["prefix+t lazygit", "prefix+space kebbie.lead"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -479,7 +479,7 @@ mod tests {
         assert!(!wrote && said.contains("you said no") && asked.contains("[[keys.command]]\nkey = \"prefix+space\""), "{asked}");
         assert_eq!(std::fs::read_to_string(&config).unwrap(), "onboarding = false\n");
         assert!(keys(&config, Asking::Terminal, "y\n").1);
-        assert_eq!(commands(&config).len(), 4);
+        assert_eq!(commands(&config).len(), 3);
         let broken = "onboarding = \n";
         std::fs::write(&config, broken).unwrap();
         let (said, wrote, _) = keys(&config, Asking::Yes, "");
@@ -502,7 +502,7 @@ mod tests {
         let (said, wrote, asked) = keys(&config, Asking::Terminal, "y\n");
         assert!(wrote && asked.contains(&format!("(a link to {})", target.display())) && said.contains(&target.display().to_string()), "{asked}\n{said}");
         assert!(std::fs::symlink_metadata(&config).unwrap().file_type().is_symlink(), "the link stays a link");
-        assert_eq!(commands(&target).len(), 4);
+        assert_eq!(commands(&target).len(), 3);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

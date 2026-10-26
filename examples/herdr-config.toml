@@ -66,9 +66,3 @@ key = "prefix+t"
 type = "plugin_action"
 command = "kebbie.board"
 description = "kebbie board"
-
-[[keys.command]]
-key = "prefix+u"
-type = "plugin_action"
-command = "kebbie.update"
-description = "kebbie: update and reload"

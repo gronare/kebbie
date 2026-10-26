@@ -44,7 +44,7 @@ Setup prints one line per step, each starting with `done`, `already`, `skipped` 
 
 1. Links `~/.local/bin/kebbie` to the binary. When `~/.local/bin` is not on your `PATH`, it tells you the line to add to your shell profile.
 2. Installs the Claude Code plugin from the same folder, so the plugin always matches the binary.
-3. Shows the four keys it adds to the end of herdr's `config.toml` (below), and writes them only on your `y`. A key you already use for something else is left alone and named.
+3. Shows the three keys it adds to the end of herdr's `config.toml` (below), and writes them only on your `y`. A key you already use for something else is left alone and named.
 4. Reloads herdr's config so the keys work, or tells you to restart herdr when it cannot.
 5. Asks whether to set up the hub now, which is optional, to see this machine's board on your phone or in a browser. It runs `kebbie hub connect` only on your `y` (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)). `⏎` skips it, and `H` on the board does it later.
 
@@ -53,7 +53,8 @@ Setup prints one line per step, each starting with `done`, `already`, `skipped` 
 | `prefix+space` | Goes to the lead. |
 | `prefix+tab` | Moves between the board and the lead's chat. |
 | `prefix+t` | Opens the board. |
-| `prefix+u` | Updates kebbie. |
+
+Updating kebbie is `U` on the board.
 
 Setup ends with `Setup done.` and the warnings and failures from `kebbie doctor`. You can run setup again at any time; it changes only what is missing.
 
