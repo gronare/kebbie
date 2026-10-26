@@ -18,6 +18,16 @@ Each change a user would notice gets one line in `CHANGES.md`, under `## Unrelea
 
 Write what got better or what was fixed, as you would tell someone who uses kebbie: no commit ids, file names, function names or backticks. A line that runs long may continue on an indented line. Leave out what nobody using kebbie would notice. These lines are what the board shows after an update (on the `main` channel as soon as the commit lands) and what the GitHub Release says.
 
+## Check the docs
+
+kebbie.dev publishes `docs/` as it stands at the release tag, so the docs ship with the release. Ask Claude to check them first:
+
+```text
+/kebbie:keep-docs before a release
+```
+
+It lists the surface changes since the last tag and fixes each page that does not describe main yet. Commit its fixes before you release.
+
 ## Release
 
 ```bash
