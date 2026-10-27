@@ -123,6 +123,7 @@ pub struct Item {
     pub ci_dismissed: Vec<Value>,
     pub push_left: Option<String>,
     pub staged: bool,
+    pub steps: tasks::Steps,
 }
 
 impl Item {
@@ -158,7 +159,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), push_left: None, staged: false,
+            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), push_left: None, staged: false, steps: tasks::Steps::default(),
         }
     }
 
@@ -625,9 +626,12 @@ pub fn fork_point(path: &Path, upstream: &str) -> Result<String> {
     git(path, &args)
 }
 
+// The task's commits not yet on the default branch, so one pushed rebased elsewhere stops counting before its Claude rebases, from the fork point.
 fn own_commits(path: &Path, upstream: &str) -> Result<usize> {
-    let Ok(base) = fork_point(path, upstream) else { return Ok(ahead_behind(path, upstream)?.0) };
-    Ok(git(path, &["rev-list", "--count", &format!("{base}..HEAD")])?.parse().unwrap_or(0))
+    let open = tasks::open_commits(path, upstream)?;
+    let Ok(base) = fork_point(path, upstream) else { return Ok(open.len()) };
+    let own = git(path, &["rev-list", &format!("{base}..HEAD")])?;
+    Ok(open.iter().filter(|commit| own.lines().any(|sha| sha == commit.sha)).count())
 }
 
 // What a ready report stands on: commits of the task's own and no tracked file left uncommitted.
@@ -743,6 +747,8 @@ pub fn gather() -> Result<Vec<Item>> {
             every_pool_read = false;
             continue;
         };
+        let steps_on = crate::config::resolve(Some(repo)).is_ok_and(|config| config.settings.steps.value);
+        let upstream_sha = steps_on.then(|| crate::repo::git(repo, &["rev-parse", &upstream]).ok()).flatten();
         for slot in pool {
             let Some(task) = slot.task else { continue };
             let workspace = workspace_at(&slot.path);
@@ -753,6 +759,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 .and_then(|id| agents.iter().find(|agent| agent["workspace_id"].as_str() == Some(id.as_str())))
                 .map(agent_from);
             let agent_title = agent.as_ref().map(|agent| agent.title.clone());
+            let working = agent.as_ref().is_some_and(|agent| agent.status == "working");
             let (_, behind) = ahead_behind(&slot.path, &upstream)?;
             let ahead = own_commits(&slot.path, &upstream)?;
             let changed = changed_count(&slot.path)?;
@@ -762,6 +769,10 @@ pub fn gather() -> Result<Vec<Item>> {
             let head = crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).ok();
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             let server = tokens["server"].is_string();
+            let steps = match (state.as_deref(), &upstream_sha, &head) {
+                (Some(state), Some(upstream), Some(head)) => tasks::steps_read(state, &slot.path, &address, &tasks::StepTips { upstream: upstream.clone(), head: head.clone() }, working),
+                _ => tasks::Steps::default(),
+            };
             let mut item = Item {
                 review: review_progress(&slot.path, &upstream),
                 verdict: crate::review::shown(&address, &slot.path, &upstream),
@@ -792,13 +803,14 @@ pub fn gather() -> Result<Vec<Item>> {
                 ci_dismissed: state.as_deref().map(|state| tasks::ci_dismissed(state, &address)).unwrap_or_default(),
                 push_left: state.as_deref().and_then(|state| tasks::push_left(state, &address)),
                 staged: state.as_deref().is_some_and(|state| tasks::staged(state, repo, &address)),
+                steps,
                 phase: None,
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
             };
             item.phase = Some(match state.as_deref() {
                 Some(state) => crate::phase::current(state, &address, || item.derive_legacy()),
-                None => crate::phase::Record { phase: item.derive_legacy(), since: messages::now(), by: "migration".to_string() },
+                None => crate::phase::Record { phase: item.derive_legacy(), since: messages::now(), by: "migration".to_string(), from: None },
             });
             item.settle_orphaned_push();
             items.push(item);
@@ -852,6 +864,7 @@ pub fn gather() -> Result<Vec<Item>> {
             ci_dismissed: Vec::new(),
             push_left: None,
             staged: false,
+            steps: tasks::Steps::default(),
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -887,13 +900,14 @@ pub(crate) mod tests {
             ci_dismissed: Vec::new(),
             push_left: None,
             staged: false,
+            steps: tasks::Steps::default(),
         };
         rederive(&mut item);
         item
     }
 
     pub(crate) fn in_phase(item: &mut Item, phase: Phase) {
-        item.phase = Some(crate::phase::Record { phase, since: 0, by: "test".to_string() });
+        item.phase = Some(crate::phase::Record { phase, since: 0, by: "test".to_string(), from: None });
     }
 
     // As migration reads a task the first time; a test that changes a signal and wants it read again says so.
@@ -1643,6 +1657,21 @@ pub(crate) mod tests {
         sweep_phases(&state, std::slice::from_ref(&billing), true, began);
         assert_eq!((crate::phase::load(&state, "billing@web").is_some(), crate::phase::load(&state, "gone@web")), (true, None));
         std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_commit_whose_change_is_on_the_default_branch_stops_counting_before_its_claude_rebases() {
+        use crate::tasks::test_support::*;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        commit(&slot.path, "e", "fifth");
+        assert_eq!(own_commits(&slot.path, &upstream).unwrap(), 2);
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        pick(&dir, &fourth);
+        git(&dir, &["push", "--quiet", "origin", "HEAD"]).unwrap();
+        git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+        assert_eq!((ahead_behind(&slot.path, &upstream).unwrap().0, own_commits(&slot.path, &upstream).unwrap()), (2, 1), "the branch still holds fourth, the row counts fifth");
+        cleanup(dir, origin, &slot);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::status::{Checkout, Group, Item};
 use crate::tasks;
 use super::card::card_hint;
 use super::detail::unfolded_lines;
+use super::steps::{accept_wanted, step_lines, to_accept_note};
 use crate::config::OngoingAt;
 use super::{App, BacklogRow, Column, Hit};
 use super::widgets::{BLUE, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, column_title, group_line, options_hint, plural, row, style, wrap};
@@ -75,7 +76,9 @@ pub(super) fn row_facts(item: &Item) -> String {
     parts.extend(item.ci_note());
     parts.extend(item.recover_note());
     parts.extend(item.push_note());
-    if git.ahead > 0 {
+    if let Some(to_accept) = to_accept_note(item) {
+        parts.push(to_accept);
+    } else if git.ahead > 0 {
         parts.push(plural(git.ahead, "commit"));
     }
     if git.uncommitted > 0 {
@@ -140,6 +143,17 @@ fn wanted_lines(wanted: &str, color: Color, highlighted: bool, width: usize) -> 
     }).collect()
 }
 
+// The facts span is drawn muted whole; one fact in it takes its own colour.
+fn tint(line: &mut Line<'static>, fact: &str, color: Color) {
+    let Some(at) = line.spans.iter().rposition(|span| span.content.contains(fact)) else { return };
+    let span = line.spans.remove(at);
+    let (before, after) = span.content.split_once(fact).unwrap_or_default();
+    let parts = [(before.to_string(), span.style), (fact.to_string(), span.style.fg(color)), (after.to_string(), span.style)];
+    for (offset, (text, style)) in parts.into_iter().enumerate() {
+        line.spans.insert(at + offset, Span::styled(text, style));
+    }
+}
+
 pub(super) type Rows = Vec<(usize, usize, Hit)>;
 
 const ROUTINE_MARKER: &str = " routine";
@@ -181,6 +195,9 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         let dot = running_dot(item);
         let marker = if item.routine.is_some() { ROUTINE_MARKER } else { "" };
         let mut line = row(selected, focused, status_icon(item), &item.titled(), place, &row_facts(item), width.saturating_sub(if dot { 2 } else { 0 } + marker.chars().count()));
+        if let Some(to_accept) = to_accept_note(item) {
+            tint(&mut line, &to_accept, YELLOW);
+        }
         if !marker.is_empty() {
             line.spans.insert(4, Span::styled(marker, style(MUTED)));
         }
@@ -188,7 +205,8 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
             line.spans.extend([Span::raw(" "), Span::styled("●", style(GREEN))]);
         }
         lines.push(line);
-        if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()) {
+        lines.extend(step_lines(item, selected && open && unfold, width));
+        if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| accept_wanted(item)) {
             lines.extend(wanted_lines(&wanted, PEACH, selected && open && unfold, width));
         } else if let Some(waiting) = item.waiting() {
             lines.extend(wanted_lines(waiting, MUTED, selected && open && unfold, width));

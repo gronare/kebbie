@@ -77,40 +77,53 @@ pub struct Record {
     pub phase: Phase,
     pub since: u64,
     pub by: String,
+    pub from: Option<Phase>,
 }
 
 impl Record {
     pub fn to_json(&self) -> Value {
-        let (why, head, sha) = match &self.phase {
-            Phase::NeedsYou(why) => (Some(why.key()), None, None),
-            Phase::Ready { head } | Phase::Staged { head } => (None, head.as_deref(), None),
-            Phase::CiRunning { sha } | Phase::CiRed { sha } => (None, None, Some(sha.as_str())),
-            _ => (None, None, None),
-        };
-        let ahead = match &self.phase {
-            Phase::Pushing { ahead } => Some(*ahead),
-            _ => None,
-        };
-        json!({ "name": self.phase.key(), "why": why, "head": head, "sha": sha, "ahead": ahead, "since": self.since, "by": self.by })
+        let mut value = phase_json(&self.phase);
+        value["since"] = json!(self.since);
+        value["by"] = json!(self.by);
+        value["from"] = self.from.as_ref().map_or(Value::Null, phase_json);
+        value
     }
 
     pub fn from_json(value: &Value) -> Option<Record> {
-        let text = |key: &str| value[key].as_str().map(str::to_string);
-        let phase = match value["name"].as_str()? {
-            "starting" => Phase::Starting,
-            "working" => Phase::Working,
-            "idle" => Phase::Idle,
-            "needs-you" => Phase::NeedsYou(Why::of_key(value["why"].as_str()?)?),
-            "ready" => Phase::Ready { head: text("head") },
-            "staged" => Phase::Staged { head: text("head") },
-            "pushing" => Phase::Pushing { ahead: value["ahead"].as_u64().and_then(|ahead| usize::try_from(ahead).ok()).unwrap_or(0) },
-            "ci-running" => Phase::CiRunning { sha: text("sha")? },
-            "ci-red" => Phase::CiRed { sha: text("sha")? },
-            "closing" => Phase::Closing,
-            _ => return None,
-        };
-        Some(Record { phase, since: value["since"].as_u64().unwrap_or_default(), by: text("by").unwrap_or_default() })
+        let from = value.get("from").filter(|from| !from.is_null()).and_then(phase_of);
+        Some(Record { phase: phase_of(value)?, since: value["since"].as_u64().unwrap_or_default(), by: value["by"].as_str().unwrap_or_default().to_string(), from })
     }
+}
+
+fn phase_json(phase: &Phase) -> Value {
+    let (why, head, sha) = match phase {
+        Phase::NeedsYou(why) => (Some(why.key()), None, None),
+        Phase::Ready { head } | Phase::Staged { head } => (None, head.as_deref(), None),
+        Phase::CiRunning { sha } | Phase::CiRed { sha } => (None, None, Some(sha.as_str())),
+        _ => (None, None, None),
+    };
+    let ahead = match phase {
+        Phase::Pushing { ahead } => Some(*ahead),
+        _ => None,
+    };
+    json!({ "name": phase.key(), "why": why, "head": head, "sha": sha, "ahead": ahead })
+}
+
+fn phase_of(value: &Value) -> Option<Phase> {
+    let text = |key: &str| value[key].as_str().map(str::to_string);
+    Some(match value["name"].as_str()? {
+        "starting" => Phase::Starting,
+        "working" => Phase::Working,
+        "idle" => Phase::Idle,
+        "needs-you" => Phase::NeedsYou(Why::of_key(value["why"].as_str()?)?),
+        "ready" => Phase::Ready { head: text("head") },
+        "staged" => Phase::Staged { head: text("head") },
+        "pushing" => Phase::Pushing { ahead: value["ahead"].as_u64().and_then(|ahead| usize::try_from(ahead).ok()).unwrap_or(0) },
+        "ci-running" => Phase::CiRunning { sha: text("sha")? },
+        "ci-red" => Phase::CiRed { sha: text("sha")? },
+        "closing" => Phase::Closing,
+        _ => return None,
+    })
 }
 
 // What an actor did to a task; `next` turns it into the task's phase, and nothing else moves one.
@@ -129,7 +142,7 @@ pub enum Event<'a> {
     Staged { head: Option<&'a str> },
     Unstaged { head: Option<&'a str> },
     StageGaveUp,
-    KeptOpen { rest: usize, clean: bool, head: Option<&'a str> },
+    KeptOpen { rest: usize, steps_left: bool, clean: bool, head: Option<&'a str> },
     Closing,
     CiRed { sha: &'a str, pushing: bool },
     CiUnreadable,
@@ -246,17 +259,29 @@ impl Drop for Lock {
 }
 
 pub fn update(state: &Path, address: &str, by: &str, change: impl FnOnce(Option<&Phase>) -> Option<Phase>) -> Option<Phase> {
+    update_record(state, address, by, |current| change(current.map(|record| &record.phase)))
+}
+
+fn update_record(state: &Path, address: &str, by: &str, change: impl FnOnce(Option<&Record>) -> Option<Phase>) -> Option<Phase> {
     let _lock = Lock::take(state)?;
     let current = load(state, address);
-    let moved = change(current.as_ref().map(|record| &record.phase))?;
+    let moved = change(current.as_ref())?;
     if current.as_ref().is_none_or(|record| record.phase != moved) {
-        save(state, address, &Record { phase: moved.clone(), since: messages::now(), by: by.to_string() });
+        let from = match (&moved, &current) {
+            (Phase::Pushing { .. }, Some(Record { phase: Phase::Pushing { .. }, from, .. })) => from.clone(),
+            (Phase::Pushing { .. }, current) => current.as_ref().map(|record| record.phase.clone()),
+            _ => None,
+        };
+        save(state, address, &Record { phase: moved.clone(), since: messages::now(), by: by.to_string(), from });
     }
     Some(moved)
 }
 
 pub fn record(state: &Path, address: &str, by: &str, event: &Event) -> Option<Phase> {
-    update(state, address, by, |current| next(current, event))
+    update_record(state, address, by, |current| match (event, current.and_then(|record| record.from.as_ref())) {
+        (Event::KeptOpen { rest, steps_left, clean: true, .. }, Some(from @ (Phase::Starting | Phase::Working | Phase::Idle | Phase::NeedsYou(Why::Question)))) if *rest > 0 || *steps_left => Some(from.clone()),
+        _ => next(current.map(|record| &record.phase), event),
+    })
 }
 
 // A push git refused puts back the phase it had before, unless something moved it since the push wrote `written`.
@@ -288,7 +313,7 @@ pub fn current(state: &Path, address: &str, derive: impl FnOnce() -> Phase) -> R
     if let Some(record) = load(state, address) {
         return record;
     }
-    let derived = Record { phase: derive(), since: messages::now(), by: "migration".to_string() };
+    let derived = Record { phase: derive(), since: messages::now(), by: "migration".to_string(), from: None };
     let Some(_lock) = Lock::take(state) else { return derived };
     if let Some(record) = load(state, address) {
         return record;
@@ -306,7 +331,7 @@ mod tests {
         let state = crate::sh::test_dir("phase-file");
         for phase in [Phase::Starting, Phase::Working, Phase::Idle, Phase::Ready { head: Some("abc".to_string()) }, Phase::Ready { head: None }, Phase::Staged { head: Some("abc".to_string()) }, Phase::Pushing { ahead: 0 }, Phase::Pushing { ahead: 2 }, Phase::CiRunning { sha: "abc".to_string() }, Phase::CiRed { sha: "def".to_string() }, Phase::Closing]
             .into_iter().chain(Why::ALL.map(Phase::NeedsYou)) {
-            let record = Record { phase, since: 7, by: "report".to_string() };
+            let record = Record { phase, since: 7, by: "report".to_string(), from: None };
             save(&state, "billing@app", &record);
             assert_eq!(load(&state, "billing@app"), Some(record));
         }
@@ -322,7 +347,7 @@ mod tests {
         let started = load(&state, "billing@app").unwrap();
         assert_eq!(started.by, "start");
         assert_eq!(record(&state, "billing@app", "turn", &Event::TurnBegan { by_user: false }), Some(Phase::Working), "the prompt kebbie typed for the user starts the work");
-        save(&state, "billing@app", &Record { phase: Phase::Ready { head: Some("abc".to_string()) }, since: 5, by: "report".to_string() });
+        save(&state, "billing@app", &Record { phase: Phase::Ready { head: Some("abc".to_string()) }, since: 5, by: "report".to_string(), from: None });
         assert_eq!(record(&state, "billing@app", "turn", &Event::TurnBegan { by_user: true }), None);
         assert_eq!(load(&state, "billing@app").map(|record| (record.since, record.by)), Some((5, "report".to_string())), "a turn on a ready task writes nothing");
         record(&state, "billing@app", "report", &Event::Reported { state: "ready", head: Some("abc"), committed: true, pushing: false });
@@ -404,7 +429,7 @@ mod tests {
     fn a_refused_push_puts_back_the_phase_only_while_nothing_moved_it_since() {
         let state = crate::sh::test_dir("phase-put-back");
         let ci = Phase::CiRunning { sha: "abc".to_string() };
-        let before = Record { phase: Phase::Ready { head: Some("abc".to_string()) }, since: 3, by: "report".to_string() };
+        let before = Record { phase: Phase::Ready { head: Some("abc".to_string()) }, since: 3, by: "report".to_string(), from: None };
         record(&state, "billing@app", "push", &Event::PushOut { sha: "abc" });
         put_back(&state, "billing@app", &ci, Some(before.clone()));
         assert_eq!(load(&state, "billing@app"), Some(before));
@@ -420,8 +445,8 @@ mod tests {
         let state = crate::sh::test_dir("phase-sweep");
         record(&state, "billing@app", "start", &Event::Started { prompted: true });
         record(&state, "search@app", "start", &Event::Started { prompted: false });
-        save(&state, "search@app", &Record { phase: Phase::Idle, since: 10, by: "start".to_string() });
-        save(&state, "rates@app", &Record { phase: Phase::Starting, since: 20, by: "start".to_string() });
+        save(&state, "search@app", &Record { phase: Phase::Idle, since: 10, by: "start".to_string(), from: None });
+        save(&state, "rates@app", &Record { phase: Phase::Starting, since: 20, by: "start".to_string(), from: None });
         sweep(&state, &["billing@app".to_string()], 20);
         assert_eq!((load(&state, "search@app"), load(&state, "rates@app").map(|record| record.phase)), (None, Some(Phase::Starting)), "a start since the slots were read stays");
         assert!(load(&state, "billing@app").is_some());

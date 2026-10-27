@@ -22,6 +22,7 @@ The status line shows:
 | --- | --- |
 | `⚠N` on Routines | N routine runs wait for you with findings. |
 | Counts | Tasks that need you, are working, are to review, are ready to push and wait for CI, and waiting questions. |
+| `◆ N to accept`, yellow | N commits of tasks working in steps wait for you to accept them. |
 | `! N bugs to send · B` | Bugs in kebbie you ran into wait for you to send them to its maintainers. |
 | Plan usage | How much of the plan is used. |
 | `↻ N stale` | Claude sessions wait to be restarted. |
@@ -62,6 +63,31 @@ A task row shows its commits, uncommitted and untracked files, and how far it is
 | `you:` | Your next step, from the task's last report. |
 | `web` | While its dev server runs: the server's address as a link. |
 | `push waits for tests · you` | A push waits for the task's Claude to test the files the default branch changed under it. `· lead` when the lead pushed. kebbie pushes once the task reports ready with the same commits. |
+
+#### A task in steps
+
+With [`task.steps`](configuration.md) on and steps listed, the task's steps not pushed yet sit under its row, one line each, with the step's number and title:
+
+```
+◐ Switch the payment provider to Stripe        billing · 1 to accept
+    ↑ 1 pushed
+    ● 2 Charge through a PaymentGateway        committed · rules ✓
+    ◐ 3 Add Stripe as the gateway              in progress
+    ○ 4 Remove the old payment client
+   accept 2 · r review
+```
+
+| Line or mark | Means |
+| --- | --- |
+| `N to accept`, yellow | On the row, in place of its commit count: N committed steps wait for you to accept them. |
+| `↑ N pushed`, muted | N steps are on the default branch already. |
+| `○`, muted | Planned. |
+| `◐ … in progress`, blue | Its Claude is at work on it. |
+| `● … committed`, yellow | Committed, waiting for you to accept it. `· rules ✓` when the task's commits passed their rules check, or the row's rules mark while it is checked. |
+| `✓ … accepted`, green | Committed, and you accepted it. |
+| `accept N · r review` | Under the steps: the first step waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
+
+A step to accept leaves the task in the group its phase gives it, under Working while it builds the next step. A narrow board drops the label's `· rules ✓` first, then the label, then shortens the title at a word. Without steps, the row is as above. See [Work in steps](../how-to/work-in-steps.md).
 
 While Claude waits on a prompt of its own, such as a permission or trust question, the `you:` line says `answer Claude's prompt in its Space (g) or through the lead`. `g` takes you there, and the lead has the question and its options in its chat. See [Claude's own prompts in a task](../explanation/lead-and-away-mode.md#claudes-own-prompts-in-a-task).
 
@@ -309,8 +335,10 @@ Opened by `p`. The window is in four parts, each under a header on a rule:
 | --- | --- |
 | `CARD` | The task's sign-off card, marked current at its commit or written before the code changed. Its images are listed by file name; `s` on the board shows them. |
 | `TESTS` | The latest recorded test run, as on the task's row. A run before a clean rebase, a reworded message or a squash still counts as current. |
-| `COMMITS` | The commits that will land, with their count. |
+| `COMMITS` | The commits that will land, with their count. A commit you accepted is marked `✓`, green. With steps, each commit carries its step's mark and number, and the steps not committed yet follow, muted: `in progress, stays` or `planned`. |
 | `MESSAGE` | The selected commit's full message, set off by a bar so it does not read as part of the card. |
+
+With accepted commits, the window opens on the last of the accepted ones from the first commit on, marked `◂ through here`, and `p` reads `p push N accepted, the task keeps working` while it is selected. Without any, it opens on the first commit. While the task's Claude is working, `p` opens the window only once it has accepted commits from the first one on, and the window then pushes only those: `↑` `↓` stop at the last of them, and `y`, `e` and `s` wait until the task reports.
 
 The keys sit under a rule at the bottom and stay there. A window taller than the screen scrolls the parts above them, keeping the selected commit in view.
 

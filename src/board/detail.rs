@@ -595,13 +595,13 @@ mod tests {
         assert_eq!(buffer[(column, at as u16)].fg, GREEN, "a pass on the code as it is is green");
         let commits = vec![tasks::Commit { sha: "1111111aaaa".to_string(), message: "Add refunds".to_string() }];
         let stale = evidence::Shown { mark: evidence::Mark::Stale, text: "cargo test · 493 passed · at a1b2c3d, code changed since".to_string() };
-        let (lines, first) = push_lines(None, Some(&stale), &commits, 0, 88);
+        let (lines, first) = push_lines(None, Some(&stale), &commits, &Default::default(), 0, 88);
         assert!(lines[0].to_string().starts_with("TESTS ─"));
         assert_eq!(lines[1].to_string(), "  ○ cargo test · 493 passed · at a1b2c3d, code changed since");
         assert_eq!(lines[1].spans[2].style.fg, Some(YELLOW));
         assert_eq!(first, 4, "the tests section sits above the commits");
         let failed = evidence::Shown { mark: evidence::Mark::Failed, text: "cargo test failed · 2 failed · at a1b2c3d".to_string() };
-        let (lines, _) = push_lines(None, Some(&failed), &commits, 0, 88);
+        let (lines, _) = push_lines(None, Some(&failed), &commits, &Default::default(), 0, 88);
         assert_eq!(lines[1].spans[2].style.fg, Some(RED));
     }
 

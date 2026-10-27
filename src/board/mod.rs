@@ -21,6 +21,7 @@ mod paste;
 mod push;
 mod space;
 mod status_bar;
+mod steps;
 pub(crate) mod terminal;
 #[cfg(test)]
 mod test_support;
@@ -106,7 +107,7 @@ enum Mode {
     Filter { buffer: String },
     Card { path: PathBuf, name: String, scroll: u16, image: usize },
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
-    ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, tests: Option<evidence::Shown>, scroll: push::Scroll },
+    ConfirmPush { path: PathBuf, commits: Vec<tasks::Commit>, selected: usize, card: Option<(report::Card, bool)>, tests: Option<evidence::Shown>, marks: push::Marks, scroll: push::Scroll },
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
@@ -566,7 +567,7 @@ impl App {
             Mode::Card { path, name, scroll, image } => self.handle_card(path, name, scroll, image, key),
             Mode::Fullscreen { path, name, scroll, index } => self.handle_fullscreen(path, name, scroll, index, key),
             Mode::Filter { buffer } => self.handle_filter(buffer, key),
-            Mode::ConfirmPush { path, commits, selected, card, tests, scroll } => self.handle_push(path, commits, selected, card, tests, scroll, key),
+            Mode::ConfirmPush { path, commits, selected, card, tests, marks, scroll } => self.handle_push(path, commits, selected, (card, tests, marks), scroll, key),
             Mode::EditMessage(editor) => self.handle_editor(editor, key, terminal),
             Mode::Input { purpose, label, buffer } => self.handle_input(purpose, label, buffer, key, terminal),
         }
@@ -771,7 +772,7 @@ impl App {
                             self.in_background(format!("Taking {} off local main…", item.name), move || tasks::unstage(&path, None));
                         }
                     }
-                    Act::Tidy | Act::Push | Act::Stage | Act::Done | Act::SendReview | Act::Rebase if busy(&item) => {
+                    Act::Tidy | Act::Stage | Act::Done | Act::SendReview | Act::Rebase if busy(&item) => {
                         self.about(act_kind(act), &item.name);
                         self.show(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports.").ok());
                     }
@@ -844,8 +845,14 @@ impl App {
                                     self.show(Notice::new(Tone::NotNow, "Nothing to push: it has no commits yet").ok());
                                 }
                                 Ok(commits) => {
+                                    let marks = push::Marks::read(&path, &commits, item.turn_under_way()).while_working(busy(&item));
+                                    if busy(&item) && marks.through().is_none() {
+                                        self.about("push", &item.name);
+                                        self.show(Notice::new(Tone::NotNow, "Not yet: its Claude is still working").next("This opens once it reports, or once you accept its first step.").ok());
+                                        return;
+                                    }
                                     let (card, tests) = (report::card_for(&path), evidence::for_path(&path));
-                                    self.mode = Mode::ConfirmPush { path, commits, selected: 0, card, tests, scroll: push::Scroll::default() };
+                                    self.mode = Mode::ConfirmPush { path, commits, selected: marks.start(), card, tests, marks, scroll: push::Scroll::default() };
                                 }
                                 Err(error) => self.show(Err(error)),
                             },

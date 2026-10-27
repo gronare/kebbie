@@ -628,7 +628,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     tell_lead_pushed(&landed(false, false));
     crate::report::forget_card_in(state, &address);
     let clean = !out.rebased;
-    crate::phase::record(state, &address, "push", &crate::phase::Event::KeptOpen { rest, clean, head: git(&slot.path, &["rev-parse", "HEAD"]).ok().as_deref() });
+    crate::phase::record(state, &address, "push", &crate::phase::Event::KeptOpen { rest, steps_left: super::plan::left_at(state, &slot.path, &address, &sha), clean, head: git(&slot.path, &["rev-parse", "HEAD"]).ok().as_deref() });
     let told = if clean {
         format!(
             "{} pushed {} of this task, through {short}, to {target}; they are on {target} for good. Your branch continues from there with {} on top: reshape only those.",
@@ -1305,6 +1305,53 @@ mod tests {
         deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, watching).unwrap();
         assert_eq!(phase(), Some(Phase::CiRunning { sha: head.clone() }));
         assert_eq!(git(&origin, &["rev-parse", upstream.trim_start_matches("origin/")]).unwrap(), head, "pushed");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_working_task_whose_accepted_steps_are_pushed_keeps_working_and_a_ready_one_stays_ready() {
+        use crate::phase::{Event, Phase};
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        commit(&slot.path, "e", "fifth");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        let phase = || crate::phase::load(&state, &address).map(|record| record.phase);
+        let first = |slot: &Slot| Out { sha: git(&slot.path, &["rev-parse", "HEAD~1"]).unwrap(), rebased: false };
+        crate::phase::record(&state, &address, "report", &Event::Reported { state: "working", head: None, committed: true, pushing: false });
+        crate::phase::record(&state, &address, "user", &Event::PushQueued { ahead: 1 });
+        crate::phase::record(&state, &address, "push", &Event::PushQueued { ahead: 0 });
+        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &first(&slot), "the user", &state, &crate::ci::begin).unwrap();
+        assert_eq!(phase(), Some(Phase::Working), "it goes on with the steps after the pushed one");
+        commit(&slot.path, "f", "sixth");
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        crate::phase::record(&state, &address, "report", &Event::Reported { state: "ready", head: Some(&head), committed: true, pushing: false });
+        crate::phase::record(&state, &address, "user", &Event::PushQueued { ahead: 0 });
+        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 2 }, &first(&slot), "the user", &state, &crate::ci::begin).unwrap();
+        assert_eq!(phase(), Some(Phase::Ready { head: Some(head) }), "a ready task keeps the rest ready to push");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_working_task_whose_every_commit_is_pushed_keeps_working_while_a_listed_step_is_left() {
+        use crate::phase::{Event, Phase};
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        let phase = || crate::phase::load(&state, &address).map(|record| record.phase);
+        let all = |slot: &Slot| Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false };
+        crate::tasks::plan::list_at(&state, &slot.path, &upstream, &address, &["Model", "Command"]).unwrap();
+        crate::phase::record(&state, &address, "report", &Event::Reported { state: "working", head: None, committed: true, pushing: false });
+        crate::phase::record(&state, &address, "user", &Event::PushQueued { ahead: 0 });
+        crate::tasks::plan::listed_at(&state, &slot.path, &upstream, &address);
+        deliver(&dir, &slot, &upstream, Through::First { count: 1, of: 1 }, &all(&slot), "the user", &state, &crate::ci::begin).unwrap();
+        assert_eq!(phase(), Some(Phase::Working), "the second step is still to come");
+        crate::tasks::plan::list_at(&state, &slot.path, &upstream, &address, &["Model"]).unwrap();
+        commit(&slot.path, "e", "fifth");
+        let ahead = git(&slot.path, &["rev-list", "--count", &format!("{upstream}..HEAD")]).unwrap().parse().unwrap();
+        crate::phase::record(&state, &address, "user", &Event::PushQueued { ahead: 0 });
+        crate::tasks::plan::listed_at(&state, &slot.path, &upstream, &address);
+        deliver(&dir, &slot, &upstream, Through::First { count: ahead, of: ahead }, &all(&slot), "the user", &state, &crate::ci::begin).unwrap();
+        assert_eq!(phase(), Some(Phase::Idle), "with no step left it waits for work");
         cleanup(dir, origin, &slot);
     }
 

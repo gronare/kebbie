@@ -113,7 +113,7 @@ impl App {
                         self.mode = Mode::Normal;
                         self.pick_restart(index);
                     }
-                    (Some(Hit::Commit(index)), Mode::ConfirmPush { selected, .. }) => *selected = index,
+                    (Some(Hit::Commit(index)), Mode::ConfirmPush { selected, commits, marks, .. }) => *selected = index.min(marks.last_pushable(commits.len())),
                     (Some(Hit::CardImage(index)), Mode::Card { image, .. }) => *image = index,
                     (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
                     (Some(Hit::Answer(index)), Mode::Questions(window)) => window.click(&self.questions, index),

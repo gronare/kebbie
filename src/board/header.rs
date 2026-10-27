@@ -18,13 +18,14 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
     let (needs, working, review, ready) = (count(Group::NeedsYou), count(Group::Working), count(Group::ToReview), count(Group::ReadyToPush));
     let ci = count(Group::CiRunning);
     let questions = app.questions.len();
+    let accept: usize = app.tasks.iter().map(super::steps::to_accept).sum();
     let mut spans = vec![Span::styled("kebbie", bold(MAUVE)), Span::raw(if compact { "  " } else { "   " })];
     if compact {
         let offers = super::bug_report::indicator(app.offers.len(), true);
         if let Some(pill_text) = app.update_pill() {
             spans.extend(pill(pill_text.split(' ').next().unwrap_or_default().to_string(), MAUVE, true));
         }
-        for (shown, color, lit) in [(format!("● {needs}"), PEACH, needs > 0), (format!("◐ {working}"), BLUE, working > 0), (format!("◇ {review}"), TEAL, review > 0), (format!("✓ {ready}"), GREEN, ready > 0), (format!("⧗ {ci}"), YELLOW, ci > 0), (format!("? {questions}"), YELLOW, questions > 0), (offers.clone().unwrap_or_default(), YELLOW, offers.is_some()), (format!("↻ {}", app.stale.len()), MAUVE, !app.stale.is_empty()), ("☾".to_string(), MAUVE, app.away)] {
+        for (shown, color, lit) in [(format!("● {needs}"), PEACH, needs > 0), (format!("◐ {working}"), BLUE, working > 0), (format!("◇ {review}"), TEAL, review > 0), (format!("✓ {ready}"), GREEN, ready > 0), (format!("◆ {accept}"), YELLOW, accept > 0), (format!("⧗ {ci}"), YELLOW, ci > 0), (format!("? {questions}"), YELLOW, questions > 0), (offers.clone().unwrap_or_default(), YELLOW, offers.is_some()), (format!("↻ {}", app.stale.len()), MAUVE, !app.stale.is_empty()), ("☾".to_string(), MAUVE, app.away)] {
             if lit {
                 spans.extend(pill(shown, color, true));
             }
@@ -37,6 +38,9 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
         spans.extend(pill(format!("◇ {review} to review"), TEAL, true));
     }
     spans.extend(pill(format!("✓ {ready} ready to push"), GREEN, ready > 0));
+    if accept > 0 {
+        spans.extend(pill(format!("◆ {accept} to accept"), YELLOW, true));
+    }
     if ci > 0 {
         spans.extend(pill(format!("⧗ {ci} CI running"), YELLOW, true));
     }

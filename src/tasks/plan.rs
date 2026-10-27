@@ -182,6 +182,12 @@ fn current(state: &Path, task: &Task, plan: &Plan, working: bool) -> Result<(Ste
     current_at(state, task.path, task.address, plan, &tips_of(task)?, working)
 }
 
+// Whether the task's steps name one beyond `pushed`, the tip just pushed to the default branch; false for a task without steps.
+pub fn left_at(state: &Path, path: &Path, address: &str, pushed: &str) -> bool {
+    let Some(plan) = load(state, address) else { return false };
+    tips_of(&Task { path, upstream: pushed, address }).and_then(|tips| current_at(state, path, address, &plan, &tips, false)).is_ok_and(|(steps, _)| !steps.items.is_empty())
+}
+
 // What the board reads for a task on what it already holds, task.steps on; it notes nothing, which the hook, a report, a push and kebbie steps do.
 pub fn read_at(state: &Path, path: &Path, address: &str, tips: &Tips, working: bool) -> Steps {
     let Some(plan) = load(state, address) else { return Steps::default() };

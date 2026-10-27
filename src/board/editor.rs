@@ -30,6 +30,7 @@ pub(super) struct MessageEditor {
     selected: usize,
     card: Option<(report::Card, bool)>,
     tests: Option<evidence::Shown>,
+    marks: super::push::Marks,
     scroll: super::push::Scroll,
     rewrite: Rewrite,
     pub(super) text: TextArea<'static>,
@@ -37,8 +38,8 @@ pub(super) struct MessageEditor {
 }
 
 impl MessageEditor {
-    pub(super) fn new(path: PathBuf, commits: Vec<tasks::Commit>, (selected, scroll): (usize, super::push::Scroll), (card, tests): (Option<(report::Card, bool)>, Option<evidence::Shown>), rewrite: Rewrite, message: &str) -> Self {
-        let mut editor = Self { path, commits, selected, card, tests, scroll, rewrite, text: TextArea::default(), draft: None };
+    pub(super) fn new(path: PathBuf, commits: Vec<tasks::Commit>, (selected, scroll): (usize, super::push::Scroll), (card, tests, marks): (Option<(report::Card, bool)>, Option<evidence::Shown>, super::push::Marks), rewrite: Rewrite, message: &str) -> Self {
+        let mut editor = Self { path, commits, selected, card, tests, marks, scroll, rewrite, text: TextArea::default(), draft: None };
         editor.set_text(message);
         editor
     }
@@ -95,8 +96,8 @@ impl App {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => {
-                let MessageEditor { path, commits, selected, card, tests, scroll, .. } = *editor;
-                self.mode = Mode::ConfirmPush { path, commits, selected, card, tests, scroll };
+                let MessageEditor { path, commits, selected, card, tests, marks, scroll, .. } = *editor;
+                self.mode = Mode::ConfirmPush { path, commits, selected, card, tests, marks, scroll };
             }
             KeyCode::Char('s') if control => {
                 let message = editor.message();
@@ -112,7 +113,9 @@ impl App {
                 match result {
                     Ok(fresh) => {
                         let (selected, scroll) = if matches!(rewrite, Rewrite::Squash) { (0, super::push::Scroll::default()) } else { (selected.min(fresh.len().saturating_sub(1)), scroll) };
-                        self.mode = Mode::ConfirmPush { path, commits: fresh, selected, card, tests, scroll };
+                        let working = self.tasks.iter().any(|item| item.path.as_deref() == Some(path.as_path()) && item.turn_under_way());
+                        let marks = super::push::Marks::read(&path, &fresh, working);
+                        self.mode = Mode::ConfirmPush { path, commits: fresh, selected, card, tests, marks, scroll };
                     }
                     Err(error) => self.show(Err(error)),
                 }

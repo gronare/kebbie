@@ -66,6 +66,8 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
             Some(git) if git.ahead == 0 && git.uncommitted == 0 => choice(Act::Done, "Done", &format!("close it: everything is on {}, and the worktree is freed", trunk(git))),
             _ => choice(Act::Done, "Done", "already pushed elsewhere: close it and free the worktree"),
         });
+    } else if let Some(accepted) = item.map(super::steps::accepted_run).filter(|accepted| *accepted > 0) {
+        choices.push(choice(Act::Push, &format!("Push {}", if accepted == 1 { "the accepted step".to_string() } else { format!("the {accepted} accepted steps") }), "they go out while its Claude keeps working; the rest waits until you accept it"));
     }
     if item.and_then(|item| item.ci.as_ref()).is_some_and(|ci| !ci.running()) {
         choices.push(choice(Act::DismissCi, "Dismiss the red CI", "the failure is not the code's (a deploy window, infra, a flake): kept on record, and the task closes once its commits are on main (asks first)"));
@@ -287,6 +289,22 @@ mod tests {
         assert_eq!(keys(&crate::status::tests::task(Some("working"), None, 1)), "gcrauzx");
         assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 1)), "gcrvtpdauzx");
         assert_eq!(keys(&crate::status::tests::task(Some("idle"), Some("ready"), 0)), "gcrtpdauzx", "no commits, nothing to review");
+    }
+
+    #[test]
+    fn a_working_task_in_steps_offers_to_push_the_accepted_steps_at_the_front() {
+        use crate::board::steps::tests::{committed, stepped, stripe};
+        let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
+        let mut steps = stripe();
+        assert_eq!(keys(&stepped(steps.clone())), "gcrauzx", "nothing accepted, nothing to push");
+        steps.items[0].state = committed("2222222bbbb", true);
+        let item = stepped(steps.clone());
+        assert!(busy(&item));
+        let push = task_choices(Some(&item), None, None).into_iter().find(|choice| choice.act == Some(Act::Push)).expect("push offered while it works");
+        assert_eq!(push.label, "Push the accepted step");
+        assert_eq!(keys(&item), "gcrpauzx", "only push: tidy, done, review and rebase still wait for its turn");
+        steps.items.swap(0, 1);
+        assert!(!task_choices(Some(&stepped(steps)), None, None).iter().any(|choice| choice.act == Some(Act::Push)), "an accepted step behind one that is not cannot go out on its own");
     }
 
     #[test]
