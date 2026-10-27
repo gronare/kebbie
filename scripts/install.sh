@@ -5,8 +5,21 @@ set -eu
 repo=gronare/kebbie
 min_herdr=0.9.0
 
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  bold=$(printf '\033[1m'); dim=$(printf '\033[2m'); green=$(printf '\033[32m'); yellow=$(printf '\033[33m'); red=$(printf '\033[31m'); off=$(printf '\033[0m')
+else
+  bold=""; dim=""; green=""; yellow=""; red=""; off=""
+fi
+
 say() { printf '%s\n' "$*"; }
-fail() { printf 'kebbie install: %s\n' "$*" >&2; exit 1; }
+ok() { printf '  %s✓%s %s\n' "$green" "$off" "$*"; }
+warn() { printf '  %s!%s %s\n' "$yellow" "$off" "$*"; }
+heading() { printf '\n  %s%s%s\n' "$bold" "$*" "$off"; }
+row() { printf '    %s%-9s%s %s\n' "$dim" "$1" "$off" "$2"; }
+fail() { printf '\n  %s✗%s %s\n\n' "$red" "$off" "$*" >&2; exit 1; }
+short() { case "$1" in "$HOME"/*) printf '%s/%s' '~' "${1#"$HOME"/}" ;; *) printf '%s' "$1" ;; esac; }
+
+printf '\n  %skebbie%s %s· install%s\n\n' "$bold" "$off" "$dim" "$off"
 
 missing=""
 for tool in git herdr claude jq curl; do
@@ -17,10 +30,13 @@ done
 herdr_version=$(herdr --version | awk '{print $2}')
 lowest=$(printf '%s\n%s\n' "$min_herdr" "$herdr_version" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)
 [ "$lowest" = "$min_herdr" ] || fail "herdr $herdr_version is too old, kebbie needs $min_herdr or newer."
+ok "git · herdr $herdr_version · Claude Code · jq · curl"
 
 tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest")
 tag=${tag##*/}
 case "$tag" in v[0-9]*) ;; *) fail "could not read the latest release from github.com/$repo." ;; esac
+version=${tag#v}
+commit=$(git ls-remote "https://github.com/$repo" "refs/tags/$tag*" 2>/dev/null | sort -k2 -r | head -n 1 | cut -c1-7)
 
 if (exec </dev/tty) 2>/dev/null; then tty=/dev/tty; else tty=""; fi
 
@@ -32,43 +48,72 @@ herdr_config=${HERDR_CONFIG_PATH:-$config_home/herdr/config.toml}
 
 move_dir() {
   if [ ! -e "$1" ]; then return 0; fi
-  if [ -e "$2" ]; then say "  both $1 and $2 exist; kebbie uses $2, so merge or remove $1 yourself"; return 0; fi
-  mv "$1" "$2" && say "  moved $1 to $2"
+  if [ -e "$2" ]; then warn "both $(short "$1") and $(short "$2") exist; kebbie uses the second, so merge or remove the first"; return 0; fi
+  mv "$1" "$2" && moved=1
 }
 
+old_plugin=$(installed kelpie)
+if [ -n "$old_plugin" ] || [ -e "$config_home/kelpie" ] || [ -e "$state_home/kelpie" ]; then had_kelpie=1; else had_kelpie=""; fi
+
 move_from_kelpie() {
-  old_plugin=$(installed kelpie)
-  [ -n "$old_plugin" ] || [ -e "$config_home/kelpie" ] || [ -e "$state_home/kelpie" ] || return 0
-  say "Found kelpie, kebbie's earlier name. Moving it over to kebbie:"
-  case "$old_plugin" in
-    local\ *) say "  kelpie is linked from ${old_plugin#local }; unlink it with herdr plugin unlink kelpie once you have checked out kebbie there" ;;
-    ?*) herdr plugin uninstall kelpie >/dev/null && say "  removed the kelpie plugin from herdr" ;;
-  esac
+  [ -n "$had_kelpie" ] || return 0
+  heading "Moving kelpie over to kebbie"
+  moved=""; removed=""
   move_dir "$config_home/kelpie" "$config_home/kebbie"
   move_dir "$state_home/kelpie" "$state_home/kebbie"
-  if [ -L "$HOME/.local/bin/kelpie" ]; then rm "$HOME/.local/bin/kelpie" && say "  removed the ~/.local/bin/kelpie link"; fi
-  old_data="${XDG_DATA_HOME:-$HOME/.local/share}/kelpie"
-  if [ -d "$old_data" ]; then rm -r "$old_data" && say "  removed $old_data"; fi
+  [ -z "$moved" ] || ok "settings and state now live under kebbie"
   if [ -f "$herdr_config" ] && grep -q 'command = "kelpie\.' "$herdr_config"; then
     cp "$herdr_config" "$herdr_config.kelpie-backup"
     sed 's/command = "kelpie\./command = "kebbie./' "$herdr_config.kelpie-backup" > "$herdr_config"
-    say "  pointed herdr's kelpie keys at kebbie (the old file is $herdr_config.kelpie-backup)"
+    ok "herdr keys run kebbie   $dim(backup: $(short "$herdr_config").kelpie-backup)$off"
   fi
+  case "$old_plugin" in
+    local\ *) warn "kelpie is linked from $(short "${old_plugin#local }"); run herdr plugin unlink kelpie once kebbie is checked out there" ;;
+    ?*) herdr plugin uninstall kelpie >/dev/null 2>&1 && removed=1 ;;
+  esac
+  if [ -L "$HOME/.local/bin/kelpie" ]; then rm "$HOME/.local/bin/kelpie"; fi
+  old_data="${XDG_DATA_HOME:-$HOME/.local/share}/kelpie"
+  if [ -d "$old_data" ]; then rm -r "$old_data"; fi
   for id in $(claude plugin list --json 2>/dev/null | jq -r '.[]?.id // empty' | grep '^kelpie@' || true); do
-    claude plugin uninstall "$id" >/dev/null 2>&1 && say "  removed the $id plugin from Claude Code"
+    claude plugin uninstall "$id" >/dev/null 2>&1 && removed=1
   done
-  if claude plugin marketplace remove kelpie >/dev/null 2>&1; then say "  removed the kelpie marketplace from Claude Code"; fi
+  if claude plugin marketplace remove kelpie >/dev/null 2>&1; then removed=1; fi
+  [ -z "$removed" ] || ok "old kelpie plugin removed from herdr and Claude Code"
 }
+
+case "$(installed)" in local\ *) linked=1 ;; *) linked="" ;; esac
+
+if [ -z "$linked" ]; then
+  heading "kebbie $version"
+  row from "github.com/$repo, tag $tag${commit:+ ($commit)}"
+  row installs "a herdr plugin with a prebuilt binary"
+  row adds "the board and the lead as panes, key actions, and a"
+  row "" "start hook that brings the lead back when herdr starts"
+  [ -z "$had_kelpie" ] || row replaces "kelpie, moving its settings, state and herdr keys over"
+  row "then" "kebbie setup, which shows everything before it writes"
+  row details "github.com/$repo/blob/$tag/herdr-plugin.toml"
+  say ""
+  if [ -n "$tty" ]; then
+    printf '  Install kebbie %s? [Y/n] ' "$version"
+    read -r answer <"$tty" || answer=n
+    case "$answer" in ""|y|Y|yes|Yes) ;; *) say ""; say "  Nothing installed."; say ""; exit 0 ;; esac
+  fi
+fi
 
 move_from_kelpie
 
-case "$(installed)" in
-  local\ *) say "kebbie is linked from a local checkout, so the install leaves it as it is." ;;
-  *)
-    say "Installing kebbie $tag as a herdr plugin."
-    if [ -n "$tty" ]; then herdr plugin install --ref "$tag" "$repo" <"$tty"; else herdr plugin install --yes --ref "$tag" "$repo"; fi
-    ;;
-esac
+if [ -n "$linked" ]; then
+  heading "kebbie"
+  ok "linked from a local checkout, so the install leaves it as it is"
+else
+  [ -z "$had_kelpie" ] || heading "Installing kebbie $version"
+  log=$(mktemp)
+  if herdr plugin install --yes --ref "$tag" "$repo" >"$log" 2>&1 </dev/null; then
+    rm -f "$log"; ok "kebbie $version installed"
+  else
+    cat "$log" >&2; rm -f "$log"; fail "herdr could not install kebbie $version."
+  fi
+fi
 
 root=$(installed | cut -d' ' -f2-)
 if [ ! -x "$root/target/release/kebbie" ]; then
@@ -80,4 +125,5 @@ fi
 data="${XDG_DATA_HOME:-$HOME/.local/share}/kebbie"
 mkdir -p "$data" && ln -sfn "$root" "$data/current"
 
+printf '\n  %s→ kebbie setup%s\n\n' "$dim" "$off"
 if [ -n "$tty" ]; then "$root/target/release/kebbie" setup <"$tty"; else "$root/target/release/kebbie" setup; fi

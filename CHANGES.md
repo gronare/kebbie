@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- The install command says what it installs, from which tag and commit, and what it changes, then asks once; kelpie is only moved over after that yes, and herdr's own listing shows only when the install fails
 
 ### Fixed
 
