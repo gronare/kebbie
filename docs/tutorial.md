@@ -47,11 +47,10 @@ The script opens the setup guide. Its steps are on the left; `↑` `↓` choose,
 3. **herdr keys.** Keep **Add them**: the three keys below go at the end of herdr's `config.toml`. A key you already use for something else is named, with a free one offered.
 4. **Backlog.** Keep **Local file**: new ideas go to a `backlog.md` beside kebbie's config.
 5. **Vault.** Keep **None**. [Connect the vault](how-to/connect-the-vault.md) later if you keep notes in one.
-6. **Hub.** Pick **Later**. `H` on the board connects your phone any time (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)).
-7. **Error signals.** Read what a signal holds, below, and keep them on or turn them off.
-8. **Review and apply.** Read the list of what it writes and runs, then press `⏎`.
+6. **Error signals.** Read what a signal holds, below, and keep them on or turn them off.
+7. **Review and apply.** Read the list of what it writes and runs, then press `⏎`. The list includes the `kebbie doctor` warnings setup fixes itself, such as starting the keeper.
 
-Each line then turns `done` or `already`, and setup ends with `Setup done.` and, under `Next steps`, what is still yours to do, one command each, such as the fix for a `kebbie doctor` warning. It linked `~/.local/bin/kebbie` to the binary, installed the Claude Code plugin from the same folder, added the keys and reloaded herdr's config so they work. When `~/.local/bin` is not on your `PATH`, its line tells you what to add to your shell profile.
+Each line then turns `done` or `already`, and setup ends with `Setup done` and `kebbie doctor`'s count and, under `Next steps`, what is still yours to do, such as `codex login`. Below them, **Your board on your phone** offers the hub: `h` connects now, any other key closes, and `H` on the board connects later (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)). It linked `~/.local/bin/kebbie` to the binary, installed the Claude Code plugin from the same folder, added the keys and reloaded herdr's config so they work. When `~/.local/bin` is not on your `PATH`, its line tells you what to add to your shell profile.
 
 | Key | What it does |
 | --- | --- |
@@ -67,7 +66,7 @@ You can run `kebbie setup` again at any time: it starts from what this machine h
 
 When kebbie itself crashes or hits some internal errors, it sends its maintainers an error signal, at most once a day. A signal holds only kebbie's version and commit, your OS and CPU architecture, the part of kebbie that failed, the kind of failure and a count. Each send is shown under messages on the board. A bug report with text is shown to you and sent only on your `y`.
 
-Turning them off in step 7 writes this in `~/.config/kebbie/config.toml`:
+Turning them off in step 6 writes this in `~/.config/kebbie/config.toml`:
 
 ```toml
 [report]

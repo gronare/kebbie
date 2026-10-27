@@ -391,7 +391,6 @@ pub fn connect_on(console: &mut dyn Console, run: &Run) -> Result<String> {
     Ok(lines.into_iter().flatten().collect::<Vec<_>>().join("\n"))
 }
 
-// A hub already chosen, as the setup guide's hub step chooses it, skips the picker.
 pub fn cli(state: &Path, config: &Path, given: Option<&str>, hub: Option<&str>, interactive: bool, now: u64) -> Result<String> {
     let run = Run { state, config, given, hub, interactive, opener: opener(), post: super::tick, now };
     if interactive {

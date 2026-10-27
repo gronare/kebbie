@@ -511,7 +511,7 @@ After a ready report the keeper starts the reviewer. It checks the commits again
 | `kebbie docs [<words>]` | Search kebbie's docs on this machine, or list them. See [below](#kebbie-docs). |
 | `kebbie doctor` | Check this machine, with the fix for each gap, the task sandbox's state among them. Exits non-zero on a `fail`. See [Requirements](requirements.md#what-kebbie-doctor-checks). |
 | `kebbie routes [--plain-http]` | Print a Caddy config that serves each worktree's dev server at its own host. See [below](#kebbie-routes). |
-| `kebbie setup [--yes]` | The setup guide: eight steps, from this machine's name to the hub, then everything it writes in one go. `--yes` takes the defaults without asking. See [below](#kebbie-setup). |
+| `kebbie setup [--yes]` | The setup guide: seven steps, from this machine's name to error signals, then everything it writes in one go. `--yes` takes the defaults without asking. See [below](#kebbie-setup). |
 | `kebbie setup vault` | The guide at its Vault step. Without a terminal, it installs the vault plugin, showing each `claude plugin` command and running it only on your `y`. |
 | `kebbie setup codex` | The guide at its Agents step, where Codex is turned on. Without a terminal, it installs kebbie's Codex plugin. See [below](#kebbie-setup-codex). |
 | `kebbie setup codex --uninstall` | Remove kebbie's Codex plugin, on your `y`. |
@@ -550,7 +550,7 @@ Prints a Caddy config with one site per pooled worktree that has a port, in ever
 
 ### `kebbie setup`
 
-Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guide of eight steps, with the steps on the left (`✓` done or in place, `▸` the one you are on, `·` to do):
+Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guide of seven steps, with the steps on the left (`✓` done or in place, `▸` the one you are on, `·` to do):
 
 | Step | Asks | Writes or runs |
 | --- | --- | --- |
@@ -559,9 +559,8 @@ Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guid
 | 3 herdr keys | `prefix+space` (the lead), `prefix+f` (the board and the lead's chat), `prefix+t` (the board). | Those keys at the end of herdr's `config.toml` |
 | 4 Backlog | Local, vault and Linear, in any combination; the first is where the lead files new ideas. | `board.backlog.sources` |
 | 5 Vault | None, a local folder, or an S3 bucket (endpoint, bucket, access key and a masked secret). | `claude plugin marketplace add`, `install` and `configure --values-stdin` |
-| 6 Hub | The hosted hub, your own hub's address, or later. | [`kebbie hub connect`](#the-hub) in your browser |
-| 7 Error signals | Keep them on or turn them off. | `report.signals` |
-| 8 Review and apply | Nothing: it lists each line it will write or run. | Everything, on `⏎` |
+| 6 Error signals | Keep them on or turn them off. | `report.signals` |
+| 7 Review and apply | Nothing: it lists each line it will write or run, with the `kebbie doctor` warnings setup fixes itself. | Everything, on `⏎` |
 
 | Key | Action |
 | --- | --- |
@@ -572,34 +571,40 @@ Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guid
 | `s` | Skip the step, leaving what it sets as it is. |
 | `esc` | Quit without writing anything. |
 
-- Nothing is written or run before `⏎` on step 8. Then each line turns `done`, `already`, `skipped` or `failed` as it runs, followed by `Setup done.` with `kebbie doctor`'s counts and the [next steps](#next-steps-after-setup).
+- Nothing is written or run before `⏎` on step 7. Then each line turns `done`, `already`, `skipped` or `failed` as it runs, followed by `Setup done · doctor: <n> ok`, with `, <m> to look at` when warnings remain, and the [next steps](#next-steps-after-setup).
+- Each line says what it does in a few words, such as `~/.local/bin/kebbie`, `kebbie in Claude Code and Codex` or `prefix+f added, herdr reloaded`; a line that fails or skips says why.
 - A run again starts from this machine's values and marks each step already in place; a line whose value is already there reads `already` and changes nothing.
 - It always links `~/.local/bin/kebbie` to `~/.local/share/kebbie/current/target/release/kebbie`, and installs the Claude Code plugin from that folder or updates it as `kebbie update` does.
 - herdr's keys go only at the end of its `config.toml`, the rest of the file byte for byte, then `herdr server reload-config`, or a restart when it cannot. A key already bound to something else is named, with a free one offered: add the others and leave it, add it on the free key, or skip.
 - The vault's values reach `claude plugin configure` on stdin, and the secret is never shown.
-- The hub step leaves the guide while `kebbie hub connect` shows its card, and comes back. A connected machine is left connected.
+- The review also lists the `kebbie doctor` warnings that setup fixes itself, applied on `⏎` like the rest:
+
+| Line | When | On `⏎` |
+| --- | --- | --- |
+| `usage` | Claude Code's `settings.json` has no `statusLine`. | Adds kebbie's `statusLine`, so the board shows the plan's usage; the rest of the file stays byte for byte. |
+| `keeper` | The [keeper](#kebbie-keeper) is on but not running, or off in `config.toml` but running. | Starts it, or stops it. |
+| `herdr` | kebbie's herdr plugin is disabled. | `herdr plugin enable kebbie` |
+
+- A warning that needs your choice, such as a `statusLine` command of your own or `task.sandbox = false`, stays with `kebbie doctor`.
+- Setup never touches the hub. Once it is done, a machine that is not connected gets a box, **Your board on your phone**: `h` connects it as [`kebbie hub connect`](#the-hub) does, after setup prints its lines, and any other key closes.
 
 herdr's config is `$HERDR_CONFIG_PATH`, else `$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`.
 
 `--yes`, and a run without a terminal, ask nothing. They link the binary, install or update the Claude Code plugin, add the herdr keys that are free, and leave the other steps as they are, one line each:
 
 - Without a terminal the herdr write is skipped unless `--yes`, and `--yes` never writes through a symlinked config.
-- The hub reads `skipped  hub  optional; later: H on the board`, or `already  hub  connected to <host>`.
-- They end the same way, with `Setup done.` and the next steps.
+- They end the same way, with `Setup done · doctor: <n> ok` and the next steps, then, while the machine is not connected, `Your board on your phone: kebbie hub connect, or H on the board` and `kebbie.dev/hub`.
+- They fix no `kebbie doctor` warning: those are rows of the guide's review, shown before they are applied.
 
 #### Next steps after setup
 
-Under `Next steps`, one line for each thing still yours to do, with its command or key:
+Under `Next steps`, what needs you outside setup, a command and why:
 
 | Line | When |
 | --- | --- |
-| `codex login` | You turned Codex on and `codex login status` says it is not logged in; `codex login, if you have not yet` when Codex gives no answer. |
-| `kebbie hub connect, or H on the board` | The hub was left for later, or its connect was stopped or failed. |
-| `kebbie setup vault` | The vault plugin's install or its values failed. |
-| The fix of each `kebbie doctor` warning or failure | Each one, named after its check. |
-| `Press prefix+space in herdr and tell the lead what you want done.` | Always, last. |
-
-With nothing left, only the last line shows, without the heading.
+| `codex login` | You turned Codex on and `codex login status` says it is not logged in, or Codex gives no answer. |
+| `kebbie doctor` | Warnings remain after applying; it says what is left and how to fix it. |
+| `prefix+space` | Always, last: tell the lead what you want done. |
 
 ### `kebbie setup codex`
 
@@ -659,7 +664,7 @@ With [`KEBBIE_HUB_DEV`](environment.md) set, every `kebbie hub` command works on
 
 Connects this machine to a hub through your browser, as OAuth's device flow does: no join code, no shell on the hub. The board's `H` does the same. It is refused when the machine is connected already.
 
-1. It connects to [`hub.url`](configuration.md#keys), or to the hub `kebbie setup`'s hub step chose. Unset, it asks in a terminal which hub, on two rows: the kebbie hub (the first, and the hub without a terminal) or your own. `↑` `↓` move, `⏎` chooses, `k` and `o` choose at once, `esc` cancels.
+1. It connects to [`hub.url`](configuration.md#keys). Unset, it asks in a terminal which hub, on two rows: the kebbie hub (the first, and the hub without a terminal) or your own. `↑` `↓` move, `⏎` chooses, `k` and `o` choose at once, `esc` cancels.
 2. Your own hub's address it tests before it saves it as `[hub] url`: `GET /v1/hub` must answer as a kebbie hub, and a bare host name is tried over `https`. It never saves through a config.toml that is a link.
 3. It names the machine by [`machine.name`](configuration.md#keys) as `join` does. When that is unset, it asks, with the host's short name kept on `⏎`.
 4. While it waits, a card shows the machine, the hub, the code to check on the page, a QR code of the link and how long the code has left.

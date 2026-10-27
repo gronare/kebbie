@@ -45,7 +45,7 @@ The variables kebbie reads, the ones it sets for the commands it runs, and how t
 
 `KEBBIE_HUB_DEV`, set to anything but `0` or `false`:
 
-- Every `kebbie hub` command, the board's `H` window and `kebbie setup`'s hub step use the dev hub, with a separate identity in `hub-dev/` in the state directory. `[hub] url` and `hub/` are neither read nor written.
+- Every `kebbie hub` command and the board's `H` window use the dev hub, with a separate identity in `hub-dev/` in the state directory. `[hub] url` and `hub/` are neither read nor written.
 - `kebbie hub status`, the `H` window and the connect card say `dev hub · localhost:8470`.
 - The keeper posts the board to each hub this machine is connected to, `hub/` and `hub-dev/` alike, whether it was started with the variable or not.
 

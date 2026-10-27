@@ -140,11 +140,13 @@ pub fn install(yes: bool) -> Result<String> {
     }
     let asking = if yes { Asking::Yes } else { Asking::Closed };
     let rows = crate::setup_guide::without_asking(&env, asking);
-    let ending = crate::setup_guide::ending(&rows, None, &crate::doctor::checks(&crate::doctor::Env::current()));
-    Ok(rows.iter().map(|(step, outcome)| outcome.line(step)).chain(ending).collect::<Vec<_>>().join("\n"))
+    let mut lines: Vec<String> = rows.iter().map(|(step, outcome)| outcome.line(step)).collect();
+    lines.extend(crate::setup_guide::ending(None, &crate::doctor::checks(&crate::doctor::Env::current())));
+    if crate::hub::identity::load(&env.state).ok().flatten().is_none() {
+        lines.extend(crate::setup_guide::PHONE.iter().map(|line| line.to_string()));
+    }
+    Ok(lines.join("\n"))
 }
-
-pub const LATER: &str = "later: H on the board";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Outcome {
@@ -162,37 +164,33 @@ impl Outcome {
     }
 }
 
-pub fn hub_connected(result: Result<String>, host: Option<String>) -> Outcome {
-    match result {
-        Ok(said) => {
-            let connected = host.map_or("connected".to_string(), |host| format!("connected to {host}"));
-            let said = said.lines().filter(|line| !line.trim().is_empty()).collect::<Vec<_>>().join("; ");
-            Outcome::new("done", if said.is_empty() { connected } else { format!("{connected}; {said}") })
-        }
-        Err(error) if error == crate::hub::connect::STOPPED => Outcome::new("skipped", format!("stopped; {LATER}")),
-        Err(error) => Outcome::new("failed", error),
-    }
-}
-
 pub fn line(verb: &str, step: &str, detail: impl std::fmt::Display) -> String {
     format!("{verb:<7}  {step:<9}  {detail}")
+}
+
+pub fn tilde(home: &Path, path: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if !home.as_os_str().is_empty() => format!("~/{}", rest.display()),
+        _ => path.display().to_string(),
+    }
 }
 
 pub fn link_binary(home: &Path, path: &[PathBuf]) -> Outcome {
     let binary = home.join(".local/share/kebbie/current/target/release/kebbie");
     let bin_dir = home.join(".local/bin");
     let link = bin_dir.join("kebbie");
-    let on_path = if path.contains(&bin_dir) { String::new() } else { format!("; {} is not on PATH: add export PATH=\"$HOME/.local/bin:$PATH\" to your shell's profile", bin_dir.display()) };
+    let shown = |path: &Path| tilde(home, path);
+    let on_path = if path.contains(&bin_dir) { String::new() } else { format!("; {} is not on PATH: add export PATH=\"$HOME/.local/bin:$PATH\" to your shell's profile", shown(&bin_dir)) };
     if !binary.is_file() {
-        return Outcome::new("skipped", format!("{} is missing: restart herdr so kebbie's startup links {}, then run this again", binary.display(), home.join(".local/share/kebbie/current").display()));
+        return Outcome::new("skipped", format!("{} is missing: restart herdr so kebbie's startup links {}, then run this again", shown(&binary), shown(&home.join(".local/share/kebbie/current"))));
     }
     match std::fs::read_link(&link) {
-        Ok(target) if target == binary => Outcome::new("already", format!("{} → {}{on_path}", link.display(), binary.display())),
-        Ok(target) => Outcome::new("skipped", format!("{} links to {}: remove it and run this again to link {}", link.display(), target.display(), binary.display())),
-        Err(_) if std::fs::symlink_metadata(&link).is_ok() => Outcome::new("skipped", format!("{} is a file kebbie did not put there: remove it and run this again", link.display())),
+        Ok(target) if target == binary => Outcome::new("already", format!("{}{on_path}", shown(&link))),
+        Ok(target) => Outcome::new("skipped", format!("{} links to {}: remove it and run this again to link {}", shown(&link), target.display(), shown(&binary))),
+        Err(_) if std::fs::symlink_metadata(&link).is_ok() => Outcome::new("skipped", format!("{} is a file kebbie did not put there: remove it and run this again", shown(&link))),
         Err(_) => match std::fs::create_dir_all(&bin_dir).and_then(|_| std::os::unix::fs::symlink(&binary, &link)) {
-            Ok(()) => Outcome::new("done", format!("linked {} → {}{on_path}", link.display(), binary.display())),
-            Err(error) => Outcome::new("failed", format!("linking {}: {error}", link.display())),
+            Ok(()) => Outcome::new("done", format!("{}{on_path}", shown(&link))),
+            Err(error) => Outcome::new("failed", format!("linking {}: {error}", shown(&link))),
         },
     }
 }
@@ -348,17 +346,68 @@ pub fn keys_without_asking(plan: &KeyPlan, asking: Asking) -> (Outcome, bool) {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Reload {
+    Done,
+    NoLink(String),
+    Failed,
+}
+
+pub fn reload_herdr(machine: &Machine) -> Reload {
+    let current = crate::doctor::current_link(&machine.home, machine.data_home.as_deref(), None);
+    if current.level != crate::doctor::Level::Ok {
+        return Reload::NoLink(current.fact);
+    }
+    match crate::sh::run(&machine.herdr, &["server", "reload-config"], None) {
+        Ok(_) => Reload::Done,
+        Err(_) => Reload::Failed,
+    }
+}
+
 pub fn herdr_reload(machine: &Machine, wrote: bool) -> String {
     if !wrote {
         return String::new();
     }
-    let current = crate::doctor::current_link(&machine.home, machine.data_home.as_deref(), None);
-    if current.level != crate::doctor::Level::Ok {
-        return format!("; restart herdr: {}, and kebbie's startup in herdr links it", current.fact);
+    match reload_herdr(machine) {
+        Reload::Done => "; herdr reloaded its config, so the keys work now".to_string(),
+        Reload::NoLink(fact) => format!("; restart herdr: {fact}, and kebbie's startup in herdr links it"),
+        Reload::Failed => "; restart herdr so it reads the new keys".to_string(),
     }
-    match crate::sh::run(&machine.herdr, &["server", "reload-config"], None) {
-        Ok(_) => "; herdr reloaded its config, so the keys work now".to_string(),
-        Err(_) => "; restart herdr so it reads the new keys".to_string(),
+}
+
+// Inserted right after the opening brace, so every byte the user wrote stays as it was.
+pub fn add_status_line(settings: &Path) -> Outcome {
+    let failed = |why: String| Outcome::new("failed", format!("{why}; kebbie doctor shows the line to add by hand"));
+    let existing = match std::fs::read_to_string(settings) {
+        Ok(existing) => existing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return failed(format!("reading {}: {error}", settings.display())),
+    };
+    let before: serde_json::Map<String, serde_json::Value> = if existing.trim().is_empty() { serde_json::Map::new() } else {
+        match serde_json::from_str(&existing) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return failed(format!("{} is not a JSON object", settings.display())),
+        }
+    };
+    if before.contains_key("statusLine") {
+        return Outcome::new("skipped", "Claude Code already has a statusLine; kebbie doctor says how to add kebbie to it");
+    }
+    let line = serde_json::json!({ "type": "command", "command": crate::doctor::STATUS_LINE_COMMAND });
+    let text = match existing.find('{') {
+        Some(open) if !before.is_empty() => format!("{}\n  \"statusLine\": {line},{}", &existing[..=open], &existing[open + 1..]),
+        _ => format!("{{\n  \"statusLine\": {line}\n}}\n"),
+    };
+    let mut after: serde_json::Map<String, serde_json::Value> = match serde_json::from_str(&text) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => return failed(format!("{} would not stay valid JSON", settings.display())),
+    };
+    if after.remove("statusLine") != Some(line) || after != before {
+        return failed(format!("{} would not stay as it is", settings.display()));
+    }
+    let written = settings.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(settings, text));
+    match written {
+        Ok(()) => Outcome::new("done", "statusLine added to Claude Code's settings.json"),
+        Err(error) => failed(format!("writing {}: {error}", settings.display())),
     }
 }
 
@@ -562,6 +611,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_status_line_goes_in_after_the_opening_brace_and_nothing_else_of_the_users_changes() {
+        let dir = crate::sh::test_dir("setup-status-line");
+        let settings = dir.join(".claude/settings.json");
+        let line = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap()["statusLine"]["command"].clone();
+        assert_eq!(add_status_line(&settings).verb, "done");
+        assert_eq!(line(&std::fs::read_to_string(&settings).unwrap()), crate::doctor::STATUS_LINE_COMMAND, "a missing file is created");
+        let own = "{\n    \"model\": \"opus\",\n    \"env\": { \"A\": \"1\" }\n}\n";
+        std::fs::write(&settings, own).unwrap();
+        assert_eq!(add_status_line(&settings).verb, "done");
+        let after = std::fs::read_to_string(&settings).unwrap();
+        assert_eq!(after.replacen(&format!("\n  \"statusLine\": {},", serde_json::json!({ "type": "command", "command": crate::doctor::STATUS_LINE_COMMAND })), "", 1), own, "{after}");
+        assert_eq!(add_status_line(&settings).verb, "skipped", "a statusLine already there is never touched");
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), after);
+        std::fs::write(&settings, "{ \"model\": ").unwrap();
+        let broken = add_status_line(&settings);
+        assert!(broken.verb == "failed" && broken.detail.contains("not a JSON object"), "{broken:?}");
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{ \"model\": ");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn setup_leaves_a_kebbie_on_path_it_did_not_link_and_says_when_bin_is_not_on_path() {
         let dir = crate::sh::test_dir("setup-path");
         let (mut machine, log) = machine(&dir);
@@ -579,14 +649,6 @@ pub(crate) mod tests {
         assert_eq!(again.verb, "already");
         assert!(std::fs::read_to_string(&log).unwrap().ends_with("plugin marketplace update kebbie\nplugin update kebbie@kebbie\n"), "a second run updates the plugin as kebbie update does");
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn a_hub_connect_reads_as_done_stopped_or_failed() {
-        assert_eq!(hub_connected(Ok(String::new()), Some("hub.kebbie.dev".to_string())), Outcome::new("done", "connected to hub.kebbie.dev"));
-        assert_eq!(hub_connected(Ok("[machine] name set\n".to_string()), None), Outcome::new("done", "connected; [machine] name set"));
-        assert_eq!(hub_connected(Err(crate::hub::connect::STOPPED.to_string()), None), Outcome::new("skipped", "stopped; later: H on the board"));
-        assert_eq!(hub_connected(Err("Cancelled".to_string()), None).verb, "failed");
     }
 
     fn steps_for(plugin: &Plugin, marketplace: bool) -> Vec<String> {

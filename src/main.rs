@@ -272,9 +272,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie setup [--yes]            the setup guide, one step at a time: this machine's name, the agents (Claude Code,
                                   Codex), herdr's three keys (appended to its config.toml, a taken key named with a
                                   free one offered), the backlog's sources, the vault (a folder or an S3 bucket, its
-                                  plugin installed and configured), the hub and error signals; nothing is written
-                                  before ⏎ on the last step, which lists what it writes and runs; ends with kebbie
-                                  doctor's warnings; safe to run again, from this machine's values (--yes, and a run
+                                  plugin installed and configured) and error signals; nothing is written before ⏎ on
+                                  the last step, which lists what it writes and runs, the doctor warnings setup fixes
+                                  itself among them; ends with the doctor's count, what is left for you, and the hub
+                                  as an offer (h); safe to run again, from this machine's values (--yes, and a run
                                   without a terminal, ask nothing: link kebbie onto PATH, install or update its Claude
                                   Code plugin, add the free herdr keys, never through a link)
   kebbie setup vault              the guide at its Vault step; without a terminal, install the optional vault plugin

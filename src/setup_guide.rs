@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use crate::board::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEXT, bold, style};
 use crate::config::{self, Source};
 use crate::config_edit::{self, Set};
+use crate::doctor::Repair;
 use crate::setup::{self, Asking, KeyPlan, Machine, Outcome};
 use crate::sh::Result;
 use crate::vault_cli::Plugin;
@@ -22,13 +23,12 @@ pub enum Step {
     Keys,
     Backlog,
     Vault,
-    Hub,
     Signals,
     Review,
 }
 
 impl Step {
-    pub const ALL: [Step; 8] = [Step::Name, Step::Agents, Step::Keys, Step::Backlog, Step::Vault, Step::Hub, Step::Signals, Step::Review];
+    pub const ALL: [Step; 7] = [Step::Name, Step::Agents, Step::Keys, Step::Backlog, Step::Vault, Step::Signals, Step::Review];
 
     fn index(self) -> usize {
         Step::ALL.iter().position(|step| *step == self).unwrap_or(0)
@@ -41,7 +41,6 @@ impl Step {
             Step::Keys => "herdr keys",
             Step::Backlog => "Backlog",
             Step::Vault => "Vault",
-            Step::Hub => "Hub",
             Step::Signals => "Error signals",
             Step::Review => "Review and apply",
         }
@@ -54,7 +53,6 @@ impl Step {
             Step::Keys => "Three keys added to the end of herdr's config.toml. The rest of the file stays as it is. Updating is U on the board.",
             Step::Backlog => "Where work waits. Pick any combination; the first one is where the lead files new ideas.",
             Step::Vault => "Optional. A note for every task and a log line for every push, in a folder of Markdown or an S3 bucket.",
-            Step::Hub => "Optional. See this machine's board on your phone, end-to-end encrypted.",
             Step::Signals => "When kebbie itself crashes or hits some internal errors, it sends its maintainers an error signal, at most once a day. A signal holds only kebbie's version and commit, your OS and CPU architecture, the part of kebbie that failed, the kind of failure and a count; never your code, paths or text.",
             Step::Review => "Nothing is written until you press ⏎ here.",
         }
@@ -95,9 +93,9 @@ pub struct Facts {
     pub vault_path: String,
     pub s3: [String; 4],
     pub hub: Option<String>,
-    pub hub_url: Option<String>,
     pub signals: bool,
     pub signals_set: bool,
+    pub repairs: Vec<Repair>,
 }
 
 fn version(program: &str) -> Option<String> {
@@ -117,6 +115,13 @@ impl Facts {
             .find(|(id, _)| id.starts_with("vault@")).map(|(_, config)| config["options"].clone()).unwrap_or_default();
         let option = |name: &str| options[name].as_str().unwrap_or_default().to_string();
         let installed = read_json(&env.machine.claude_dir.join("plugins/installed_plugins.json"));
+        let herdr = crate::sh::run(&env.machine.herdr, &["plugin", "list", "--json", "--plugin", "kebbie"], None).ok();
+        let found = crate::doctor::Found {
+            claude_settings: &read_json(&env.machine.claude_dir.join("settings.json")),
+            keeper_on: machine.keeper.unwrap_or(true),
+            keeper_running: crate::keeper::holder(&env.state).is_some(),
+            herdr_list: herdr.as_deref(),
+        };
         Facts {
             claude_bin: env.machine.claude.clone(),
             gronare: setup::marketplace_known(&env.machine.claude_dir, "gronare"),
@@ -134,9 +139,9 @@ impl Facts {
             vault_path: option("vault_path"),
             s3: S3_FIELDS.map(|(_, name)| option(name)),
             hub: crate::hub::identity::load(&env.state).ok().flatten().map(|identity| crate::hub::host(&identity.url).to_string()),
-            hub_url: machine.hub_url.clone(),
             signals: machine.report.signals(),
             signals_set: machine.report.signals.is_some(),
+            repairs: crate::doctor::repairs(&found),
         }
     }
 
@@ -174,8 +179,6 @@ pub struct Answers {
     pub vault: usize,
     pub vault_path: String,
     pub s3: [String; 4],
-    pub hub: usize,
-    pub hub_url: String,
     pub signals: usize,
 }
 
@@ -191,8 +194,6 @@ impl Answers {
             vault: facts.vault_choice(),
             vault_path: facts.vault_path.clone(),
             s3: facts.s3.clone(),
-            hub: if facts.hub_url.as_deref().is_some_and(|url| url != config::DEFAULT_HUB_URL) { 1 } else { 0 },
-            hub_url: facts.hub_url.clone().filter(|url| url != config::DEFAULT_HUB_URL).unwrap_or_default(),
             signals: usize::from(!facts.signals),
         }
     }
@@ -207,7 +208,6 @@ enum Field {
     Name,
     Path,
     S3(usize),
-    HubUrl,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -225,8 +225,8 @@ pub enum Act {
     Keys(Box<KeyPlan>, Vec<toml::Table>),
     Sources(Vec<Source>),
     Vault(Vec<Vec<String>>, Value, String),
-    Hub(Option<String>),
     Signals(bool),
+    Repair(Repair),
     Nothing,
 }
 
@@ -242,6 +242,7 @@ pub enum Next {
     Stay,
     Quit,
     Apply,
+    Connect,
 }
 
 pub struct Guide {
@@ -249,8 +250,8 @@ pub struct Guide {
     cursor: usize,
     pub answers: Answers,
     facts: Facts,
-    visited: [bool; 8],
-    skipped: [bool; 8],
+    visited: [bool; Step::ALL.len()],
+    skipped: [bool; Step::ALL.len()],
     fresh_name: bool,
     error: Option<String>,
     pub applied: Option<Vec<(String, Outcome)>>,
@@ -285,7 +286,7 @@ fn short(wanted: &setup::Wanted) -> String {
 impl Guide {
     pub fn new(facts: Facts, at: Step) -> Guide {
         let answers = Answers::from(&facts);
-        let mut guide = Guide { step: Step::Name, cursor: 0, answers, facts, visited: [false; 8], skipped: [false; 8], fresh_name: true, error: None, applied: None, ending: Vec::new() };
+        let mut guide = Guide { step: Step::Name, cursor: 0, answers, facts, visited: [false; Step::ALL.len()], skipped: [false; Step::ALL.len()], fresh_name: true, error: None, applied: None, ending: Vec::new() };
         guide.go(at);
         guide
     }
@@ -301,9 +302,6 @@ impl Guide {
                 2 => [Spot::Choice(0), Spot::Choice(1), Spot::Choice(2)].into_iter().chain((0..4).map(|at| Spot::Field(Field::S3(at)))).collect(),
                 _ => (0..3).map(Spot::Choice).collect(),
             },
-            Step::Hub if self.facts.hub.is_some() => Vec::new(),
-            Step::Hub if self.answers.hub == 1 => vec![Spot::Choice(0), Spot::Choice(1), Spot::Field(Field::HubUrl), Spot::Choice(2)],
-            Step::Hub => (0..3).map(Spot::Choice).collect(),
             Step::Signals => vec![Spot::Choice(0), Spot::Choice(1)],
             Step::Review => Vec::new(),
         }
@@ -317,7 +315,6 @@ impl Guide {
         match self.step {
             Step::Keys => self.answers.keys,
             Step::Vault => self.answers.vault,
-            Step::Hub => self.answers.hub,
             Step::Signals => self.answers.signals,
             _ => 0,
         }
@@ -334,7 +331,6 @@ impl Guide {
         match self.step {
             Step::Keys => self.answers.keys = at,
             Step::Vault => self.answers.vault = at,
-            Step::Hub => self.answers.hub = at,
             Step::Signals => self.answers.signals = at,
             _ => {}
         }
@@ -345,7 +341,6 @@ impl Guide {
             Field::Name => &mut self.answers.name,
             Field::Path => &mut self.answers.vault_path,
             Field::S3(at) => &mut self.answers.s3[at],
-            Field::HubUrl => &mut self.answers.hub_url,
         }
     }
 
@@ -372,7 +367,6 @@ impl Guide {
             Step::Keys => self.answers.keys = key_choices(&self.facts.keys).iter().position(|choice| *choice == KeyChoice::Skip).unwrap_or(0),
             Step::Backlog => self.answers.sources = today.sources,
             Step::Vault => (self.answers.vault, self.answers.vault_path, self.answers.s3) = (today.vault, today.vault_path, today.s3),
-            Step::Hub => (self.answers.hub, self.answers.hub_url) = (2, today.hub_url),
             Step::Signals => self.answers.signals = today.signals,
             Step::Review => {}
         }
@@ -387,7 +381,6 @@ impl Guide {
                 Some(((name, _), _)) => Err(format!("Type the bucket's {name}, or pick None.")),
                 None => Ok(()),
             },
-            Step::Hub if self.answers.hub == 1 => crate::hub::hub_url(&self.answers.hub_url).map(|_| ()).map_err(|error| format!("The hub's address: {error}")),
             _ => Ok(()),
         }
     }
@@ -397,7 +390,11 @@ impl Guide {
             return Next::Quit;
         }
         if self.applied.is_some() {
-            return if matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) { Next::Quit } else { Next::Stay };
+            return match key.code {
+                _ if self.ending.is_empty() => Next::Stay,
+                KeyCode::Char('h') if self.offers_hub() => Next::Connect,
+                _ => Next::Quit,
+            };
         }
         let spots = self.spots();
         let field = match self.spot() { Some(Spot::Field(field)) => Some(field), _ => None };
@@ -462,7 +459,6 @@ impl Guide {
             Step::Keys if facts.keys.blocked.is_none() && facts.keys.missing.is_empty() => Some(format!("{} binds kebbie's keys", home(&facts.keys.config))),
             Step::Backlog if facts.sources_set => Some(format!("board.backlog.sources is [{}]", facts.sources.iter().map(|source| format!("{:?}", source.key())).collect::<Vec<_>>().join(", "))),
             Step::Vault if matches!(facts.vault, Plugin::Enabled { .. }) && facts.vault_choice() > 0 => Some(match facts.vault_choice() { 1 => format!("the vault plugin points at {}", facts.vault_path), _ => format!("the vault plugin points at the S3 bucket {}", facts.s3[1]) }),
-            Step::Hub => facts.hub.as_ref().map(|host| format!("connected to {host}; kebbie hub leave, then this step, connects elsewhere")),
             Step::Signals if facts.signals_set => Some(format!("report.signals is {}", facts.signals)),
             _ => None,
         }
@@ -472,18 +468,18 @@ impl Guide {
         let (facts, answers) = (&self.facts, &self.answers);
         let skipped = |step: Step| self.skipped[step.index()];
         let row = |step, verb, detail: String, act| Planned { step, verb, detail, act };
-        let mut rows = vec![row("link", "to do", "~/.local/bin/kebbie → the installed binary".to_string(), Act::Link)];
+        let mut rows = vec![row("link", "to do", "~/.local/bin/kebbie".to_string(), Act::Link)];
         let codex = (answers.codex != facts.codex_plugin || answers.codex).then_some(answers.codex).filter(|_| facts.codex.is_some() && !skipped(Step::Agents));
-        rows.push(row("plugin", "to do", format!("kebbie in Claude Code{}", match codex { Some(true) => ", and in Codex", Some(false) => ", and out of Codex", None => "" }), Act::Plugin(codex)));
+        rows.push(row("plugin", "to do", plugin_shown(codex), Act::Plugin(codex)));
         rows.push(match () {
-            _ if skipped(Step::Name) => row("machine", "skipped", "machine.name stays as it is".to_string(), Act::Nothing),
-            _ if facts.name_set && answers.name.trim() == facts.name => row("machine", "already", format!("machine.name = \"{}\"", facts.name), Act::Nothing),
-            _ => row("machine", "to do", format!("machine.name = \"{}\"", answers.name.trim()), Act::Name(answers.name.trim().to_string())),
+            _ if skipped(Step::Name) => row("machine", "skipped", "stays as it is".to_string(), Act::Nothing),
+            _ if facts.name_set && answers.name.trim() == facts.name => row("machine", "already", format!("\"{}\"", facts.name), Act::Nothing),
+            _ => row("machine", "to do", format!("\"{}\"", answers.name.trim()), Act::Name(answers.name.trim().to_string())),
         });
         let choices = key_choices(&facts.keys);
         rows.push(match (choices.get(answers.keys), &facts.keys.blocked) {
             (_, Some(blocked)) => row("keys", "skipped", blocked.clone(), Act::Nothing),
-            (None, _) => row("keys", "already", format!("{} binds kebbie's keys", home(&facts.keys.config)), Act::Nothing),
+            (None, _) => row("keys", "already", "kebbie's keys are bound in herdr".to_string(), Act::Nothing),
             (Some(KeyChoice::Skip), _) => row("keys", "skipped", "add them by hand from examples/herdr-config.toml".to_string(), Act::Nothing),
             (Some(choice), _) => {
                 let bindings: Vec<toml::Table> = facts.keys.missing.iter().filter_map(|wanted| match (&wanted.taken, choice) {
@@ -497,25 +493,24 @@ impl Guide {
             }
         });
         let sources = answers.chosen_sources();
-        let listed = format!("board.backlog.sources = [{}]", sources.iter().map(|source| format!("{:?}", source.key())).collect::<Vec<_>>().join(", "));
+        let listed = sources.iter().map(|source| source.key()).collect::<Vec<_>>().join(", ");
         rows.push(match () {
-            _ if skipped(Step::Backlog) => row("backlog", "skipped", "board.backlog.sources stays as it is".to_string(), Act::Nothing),
+            _ if skipped(Step::Backlog) => row("backlog", "skipped", "stays as it is".to_string(), Act::Nothing),
             _ if sources == facts.sources => row("backlog", "already", listed, Act::Nothing),
             _ => row("backlog", "to do", listed, Act::Sources(sources)),
         });
         rows.push(self.vault_row());
-        rows.push(match (&facts.hub, answers.hub) {
-            (Some(host), _) => row("hub", "already", format!("connected to {host}"), Act::Nothing),
-            _ if skipped(Step::Hub) || answers.hub == 2 => row("hub", "skipped", format!("optional; {}", setup::LATER), Act::Nothing),
-            (None, 0) => row("hub", "to do", format!("connect to {} in your browser", crate::hub::host(config::DEFAULT_HUB_URL)), Act::Hub(None)),
-            (None, _) => row("hub", "to do", format!("connect to {} in your browser", answers.hub_url.trim()), Act::Hub(Some(answers.hub_url.trim().to_string()))),
-        });
         let on = answers.signals == 0;
+        let said = |on: bool| if on { "on" } else { "off" };
         rows.push(match () {
-            _ if skipped(Step::Signals) => row("signals", "skipped", format!("{} as they are", if facts.signals { "on" } else { "off" }), Act::Nothing),
-            _ if on == facts.signals => row("signals", "already", if on { "on".to_string() } else { "report.signals = false".to_string() }, Act::Nothing),
-            _ => row("signals", "to do", format!("report.signals = {on}"), Act::Signals(on)),
+            _ if skipped(Step::Signals) => row("signals", "skipped", format!("stay {}", said(facts.signals)), Act::Nothing),
+            _ if on == facts.signals => row("signals", "already", said(on).to_string(), Act::Nothing),
+            _ => row("signals", "to do", said(on).to_string(), Act::Signals(on)),
         });
+        rows.extend(facts.repairs.iter().map(|repair| {
+            let (step, detail) = repair_shown(*repair);
+            row(step, "to do", detail.to_string(), Act::Repair(*repair))
+        }));
         rows
     }
 
@@ -523,28 +518,48 @@ impl Guide {
         let (facts, answers) = (&self.facts, &self.answers);
         let row = |verb, detail: String, act| Planned { step: "vault", verb, detail, act };
         if self.skipped[Step::Vault.index()] || answers.vault == 0 {
-            return row("skipped", "not set up; kebbie works the same without it".to_string(), Act::Nothing);
+            return row("skipped", "not set up".to_string(), Act::Nothing);
         }
         let (values, shown) = if answers.vault == 1 {
             let path = expand(&answers.vault_path);
-            (json!({ "vault_path": path }), format!("vault at {}", home(std::path::Path::new(&path))))
+            (json!({ "vault_path": path }), format!("folder {}", home(std::path::Path::new(&path))))
         } else {
             let values: serde_json::Map<String, Value> = S3_FIELDS.iter().zip(&answers.s3).map(|((_, name), value)| (name.to_string(), Value::from(value.trim()))).collect();
-            (Value::Object(values), format!("vault in the S3 bucket {}", answers.s3[1].trim()))
+            (Value::Object(values), format!("S3 bucket {}", answers.s3[1].trim()))
         };
         let same = if answers.vault == 1 { expand(&answers.vault_path) == expand(&facts.vault_path) } else { answers.s3.iter().map(|value| value.trim()).eq(facts.s3.iter().map(|value| value.trim())) };
         if matches!(facts.vault, Plugin::Enabled { .. }) && same {
-            return row("already", format!("the vault plugin is installed, {shown}"), Act::Nothing);
+            return row("already", shown, Act::Nothing);
         }
         let mut steps = setup::steps(&facts.claude_bin, &facts.vault, facts.gronare);
         steps.pop();
-        row("to do", format!("plugin installed, {shown}"), Act::Vault(steps, values, shown))
+        row("to do", format!("{shown}, through the vault plugin"), Act::Vault(steps, values, shown))
+    }
+
+    fn offers_hub(&self) -> bool {
+        self.facts.hub.is_none()
+    }
+}
+
+fn plugin_shown(codex: Option<bool>) -> String {
+    format!("kebbie in Claude Code{}", match codex { Some(true) => " and Codex", Some(false) => ", out of Codex", None => "" })
+}
+
+fn repair_shown(repair: Repair) -> (&'static str, &'static str) {
+    match repair {
+        Repair::StatusLine => ("usage", "kebbie's statusLine in Claude Code's settings.json, for the board's usage bar"),
+        Repair::KeeperStart => ("keeper", "start it, so routines run without an open board"),
+        Repair::KeeperStop => ("keeper", "stop it, as [keeper] enabled = false says"),
+        Repair::HerdrPlugin => ("herdr", "enable kebbie's herdr plugin"),
     }
 }
 
 pub trait Hooks {
     fn progress(&mut self, rows: &[(String, Outcome)]);
-    fn connect(&mut self, url: &str) -> Result<String>;
+}
+
+fn when_done(outcome: Outcome, detail: impl Into<String>) -> Outcome {
+    if outcome.verb == "done" { Outcome::new("done", detail) } else { outcome }
 }
 
 fn write_key(env: &Env, key: &str, set: &Set) -> Outcome {
@@ -556,16 +571,16 @@ fn write_key(env: &Env, key: &str, set: &Set) -> Outcome {
 
 fn plugin(env: &Env, codex: Option<bool>) -> Outcome {
     let claude = setup::claude_plugin(env.machine);
-    let Some(on) = codex else { return claude };
-    let Some(codex_home) = env.codex_home.as_deref() else { return Outcome::new("failed", format!("{}; Codex: neither CODEX_HOME nor HOME is set", claude.detail)) };
-    let codex = if on {
-        crate::agent::codex::install(codex_home, &env.kebbie).map(|written| if written.is_empty() { "kebbie's plugin is current in Codex".to_string() } else { format!("installed kebbie's plugin in Codex at {}", home(&crate::agent::codex::plugin_root(codex_home))) })
-    } else {
-        crate::agent::codex::uninstall(codex_home).map(|_| "removed kebbie's plugin from Codex".to_string())
-    };
-    match codex {
-        Ok(said) => Outcome::new(if claude.verb == "already" && said.ends_with("current in Codex") { "already" } else if claude.verb == "failed" { "failed" } else { "done" }, format!("{}; {said}", claude.detail)),
-        Err(error) => Outcome::new("failed", format!("{}; Codex: {error}", claude.detail)),
+    let shown = plugin_shown(codex);
+    let codex = codex.map(|on| {
+        let codex_home = env.codex_home.as_deref().ok_or("neither CODEX_HOME nor HOME is set")?;
+        if on { crate::agent::codex::install(codex_home, &env.kebbie).map(|written| written.is_empty()) } else { crate::agent::codex::uninstall(codex_home).map(|_| false) }
+    });
+    match (claude.verb, codex) {
+        (_, Some(Err(error))) => Outcome::new("failed", format!("Codex: {error}")),
+        ("failed" | "skipped", _) => claude,
+        ("already", None | Some(Ok(true))) => Outcome::new("already", shown),
+        _ => Outcome::new("done", shown),
     }
 }
 
@@ -577,34 +592,31 @@ fn vault(env: &Env, steps: &[Vec<String>], values: &Value, shown: &str) -> Outco
     }
     let claude = &env.machine.claude;
     match crate::sh::run_with_input(claude, &["plugin", "configure", setup::VAULT_PLUGIN, "--values-stdin"], &values.to_string()) {
-        Ok(_) => Outcome::new("done", format!("the vault plugin is installed, {shown}")),
+        Ok(_) => Outcome::new("done", shown),
         Err(_) => Outcome::new("failed", format!("{claude} plugin configure {} did not take the vault's values; run kebbie setup vault again, or set them in Claude Code's /plugin screen", setup::VAULT_PLUGIN)),
     }
 }
 
-fn hub(env: &Env, own: &Option<String>, hooks: &mut dyn Hooks) -> Outcome {
-    let (url, note) = match own {
-        Some(address) => match crate::hub::connect::probe(address) {
-            Ok(url) => {
-                let chosen = crate::hub::connect::save_own(&env.config, url);
-                (chosen.url, chosen.note)
-            }
-            Err(error) => return Outcome::new("failed", format!("{address} does not answer as a kebbie hub: {error}")),
-        },
-        None => {
-            if crate::hub::connect::configured_hub(&env.config).ok().flatten().is_some_and(|url| url != config::DEFAULT_HUB_URL) {
-                let _ = config_edit::write(&env.config, true, false, |text| config_edit::remove(text, "hub.url"));
-            }
-            (config::DEFAULT_HUB_URL.to_string(), None)
-        }
-    };
-    let result = hooks.connect(&url);
-    let host = crate::hub::identity::load(&env.state).ok().flatten().map(|identity| crate::hub::host(&identity.url).to_string());
-    let mut outcome = setup::hub_connected(result, host);
-    if let Some(note) = note.filter(|_| outcome.verb == "done") {
-        outcome.detail = format!("{}; {note}", outcome.detail);
+fn keys(env: &Env, plan: &KeyPlan, bindings: &[toml::Table], planned: &str) -> Outcome {
+    let (outcome, wrote) = setup::add_keys(plan, bindings);
+    if !wrote {
+        return outcome;
     }
-    outcome
+    let reloaded = if setup::reload_herdr(env.machine) == setup::Reload::Done { "herdr reloaded" } else { "restart herdr to use them" };
+    when_done(outcome, format!("{}, {reloaded}", planned.replacen(" in herdr", " added", 1)))
+}
+
+fn repair(env: &Env, repair: Repair) -> Outcome {
+    let said = |result: Result<String>, done: &str| match result {
+        Ok(_) => Outcome::new("done", done),
+        Err(error) => Outcome::new("failed", error),
+    };
+    match repair {
+        Repair::StatusLine => setup::add_status_line(&env.machine.claude_dir.join("settings.json")),
+        Repair::KeeperStart => said(crate::keeper::start_in(&env.state, std::path::Path::new(&env.kebbie), true), "started"),
+        Repair::KeeperStop => said(crate::keeper::stop_in(&env.state, std::time::Duration::from_secs(10)), "stopped"),
+        Repair::HerdrPlugin => said(crate::sh::run(&env.machine.herdr, &["plugin", "enable", "kebbie"], None), "kebbie's plugin enabled"),
+    }
 }
 
 pub fn apply(planned: &[Planned], env: &Env, hooks: &mut dyn Hooks) -> Vec<(String, Outcome)> {
@@ -614,16 +626,12 @@ pub fn apply(planned: &[Planned], env: &Env, hooks: &mut dyn Hooks) -> Vec<(Stri
             Act::Nothing => Outcome::new(row.verb, row.detail.clone()),
             Act::Link => setup::link_binary(&env.machine.home, &env.machine.path),
             Act::Plugin(codex) => plugin(env, *codex),
-            Act::Name(name) => write_key(env, "machine.name", &Set::Text(name.clone())),
-            Act::Keys(plan, bindings) => {
-                let (mut outcome, wrote) = setup::add_keys(plan, bindings);
-                outcome.detail.push_str(&setup::herdr_reload(env.machine, wrote));
-                outcome
-            }
-            Act::Sources(sources) => write_key(env, "board.backlog.sources", &Set::List(sources.iter().map(|source| source.key().to_string()).collect())),
+            Act::Name(name) => when_done(write_key(env, "machine.name", &Set::Text(name.clone())), row.detail.clone()),
+            Act::Keys(plan, bindings) => keys(env, plan, bindings, &row.detail),
+            Act::Sources(sources) => when_done(write_key(env, "board.backlog.sources", &Set::List(sources.iter().map(|source| source.key().to_string()).collect())), row.detail.clone()),
             Act::Vault(steps, values, shown) => vault(env, steps, values, shown),
-            Act::Hub(own) => hub(env, own, hooks),
-            Act::Signals(on) => write_key(env, "report.signals", &Set::Bool(*on)),
+            Act::Signals(on) => when_done(write_key(env, "report.signals", &Set::Bool(*on)), row.detail.clone()),
+            Act::Repair(fix) => repair(env, *fix),
         };
         done.push((row.step.to_string(), outcome));
         hooks.progress(&done);
@@ -635,16 +643,13 @@ pub fn without_asking(env: &Env, asking: Asking) -> Vec<(String, Outcome)> {
     let facts = Facts::read(env);
     let (mut keys, wrote) = setup::keys_without_asking(&facts.keys, asking);
     keys.detail.push_str(&setup::herdr_reload(env.machine, wrote));
-    let hub = match (&facts.hub, asking) {
-        (Some(host), _) => Outcome::new("already", format!("connected to {host}")),
-        (None, Asking::Closed) => Outcome::new("skipped", format!("optional, and no terminal to ask in; {}", setup::LATER)),
-        (None, Asking::Yes) => Outcome::new("skipped", format!("optional; {}", setup::LATER)),
-    };
-    [("link", setup::link_binary(&env.machine.home, &env.machine.path)), ("plugin", setup::claude_plugin(env.machine)), ("keys", keys), ("hub", hub)].into_iter().map(|(step, outcome)| (step.to_string(), outcome)).collect()
+    [("link", setup::link_binary(&env.machine.home, &env.machine.path)), ("plugin", setup::claude_plugin(env.machine)), ("keys", keys)].into_iter().map(|(step, outcome)| (step.to_string(), outcome)).collect()
 }
 
-const LAST: &str = "Press prefix+space in herdr and tell the lead what you want done.";
+const DONE: &str = "Setup done";
 const NEXT: &str = "Next steps";
+const LEAD: (&str, &str) = ("prefix+space", "tell the lead what you want done");
+pub const PHONE: [&str; 3] = ["", "Your board on your phone: kebbie hub connect, or H on the board", "kebbie.dev/hub"];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CodexLogin {
@@ -662,39 +667,24 @@ pub fn codex_login(codex: Option<&std::path::Path>) -> CodexLogin {
     }
 }
 
-// What is still the user's after setup, one line each with its command or key; the lead is always last.
-pub fn ending(rows: &[(String, Outcome)], codex: Option<CodexLogin>, checks: &[crate::doctor::Check]) -> Vec<String> {
-    let mut left: Vec<String> = Vec::new();
-    let mut add = |line: String| if !left.contains(&line) { left.push(line) };
+fn next_step(command: &str, why: &str) -> String {
+    format!("  {command:<21}{why}")
+}
+
+pub fn ending(codex: Option<CodexLogin>, checks: &[crate::doctor::Check]) -> Vec<String> {
+    let count = |ok: bool| checks.iter().filter(|check| (check.level == crate::doctor::Level::Ok) == ok).count();
+    let open = count(false);
+    let left = if open > 0 { format!(", {open} to look at") } else { String::new() };
+    let mut lines = vec![String::new(), format!("{DONE} · doctor: {} ok{left}", count(true)), String::new(), NEXT.to_string()];
     match codex {
-        Some(CodexLogin::Out) => add("codex login: Codex is not logged in, so a codex task cannot start".to_string()),
-        Some(CodexLogin::Unknown) => add("codex login, if you have not yet".to_string()),
+        Some(CodexLogin::Out) => lines.push(next_step("codex login", "Codex is not logged in, so codex tasks cannot start")),
+        Some(CodexLogin::Unknown) => lines.push(next_step("codex login", "if you have not yet, so codex tasks can start")),
         _ => {}
     }
-    let open = |step: &str| rows.iter().any(|(name, outcome)| name == step && matches!(outcome.verb, "skipped" | "failed"));
-    if open("hub") {
-        add("kebbie hub connect, or H on the board, to see this board on your phone".to_string());
+    if open > 0 {
+        lines.push(next_step("kebbie doctor", "says what is left and how to fix it"));
     }
-    if rows.iter().any(|(name, outcome)| name == "vault" && outcome.verb == "failed") {
-        add("kebbie setup vault to try the vault again, or set its options in Claude Code's /plugin screen".to_string());
-    }
-    for check in checks.iter().filter(|check| check.level != crate::doctor::Level::Ok) {
-        if check.fix.is_empty() {
-            add(format!("{}: {}", check.name, check.fact));
-        }
-        for fix in &check.fix {
-            add(format!("{fix}  · {}", check.name));
-        }
-    }
-    let total = crate::doctor::summary(checks).lines().last().unwrap_or_default().to_string();
-    let mut lines = vec![String::new(), format!("Setup done. {total}"), String::new()];
-    if !left.is_empty() {
-        lines.push(NEXT.to_string());
-        lines.extend(left.into_iter().map(|line| format!("  {line}")));
-        lines.push(format!("  {LAST}"));
-    } else {
-        lines.push(LAST.to_string());
-    }
+    lines.push(next_step(LEAD.0, LEAD.1));
     lines
 }
 
@@ -799,15 +789,6 @@ impl Guide {
                     lines.push(Line::from(vec![Span::styled(format!("      {claude} plugin configure {}", setup::VAULT_PLUGIN), style(SUBTEXT)), Span::styled(format!(" (with the {} above)", if answers.vault == 1 { "path" } else { "bucket" }), style(MUTED))]));
                 }
             }
-            Step::Hub if facts.hub.is_some() => {}
-            Step::Hub => {
-                for (at, (label, about)) in [("The hosted hub", format!("{} · free to read · opens your browser to sign in", crate::hub::host(config::DEFAULT_HUB_URL))), ("My own hub", "the address of a kebbie-hub you run".to_string()), ("Later", "H on the board sets it up any time".to_string())].into_iter().enumerate() {
-                    lines.push(self.option(Spot::Choice(at), Self::radio(answers.hub == at), label.to_string(), about));
-                    if at == 1 && answers.hub == 1 {
-                        lines.push(self.field_line(Field::HubUrl, "address", &answers.hub_url, false));
-                    }
-                }
-            }
             Step::Signals => {
                 let labels = if facts.signals { [("Keep them on", "the default"), ("Turn them off", "writes signals = false under [report]")] } else { [("Turn them on", "writes signals = true under [report]"), ("Keep them off", "signals = false stays under [report]")] };
                 for (at, (label, about)) in labels.into_iter().enumerate() {
@@ -826,12 +807,13 @@ impl Guide {
                     None => self.plan().into_iter().map(|row| (row.step.to_string(), Outcome::new(row.verb, row.detail))).collect(),
                 };
                 for (step, outcome) in rows {
-                    lines.push(Line::from(vec![Span::styled(format!("{:<8}", outcome.verb), style(verb_color(outcome.verb))), Span::styled(format!("{step:<9}"), style(MAUVE)), Span::styled(outcome.detail, style(TEXT))]));
+                    lines.push(Line::from(vec![Span::styled(format!("{:<9}", outcome.verb), style(verb_color(outcome.verb))), Span::styled(format!("{step:<10}"), style(MAUVE)), Span::styled(outcome.detail, style(TEXT))]));
                 }
                 for said in &self.ending {
-                    lines.push(match said.as_str() {
-                        _ if said.starts_with("Setup done.") => Line::from(vec![Span::styled("Setup done.", style(GREEN)), Span::styled(said["Setup done.".len()..].to_string(), style(SUBTEXT))]),
-                        NEXT => Line::from(Span::styled(NEXT, bold(MAUVE))),
+                    lines.push(match (said.as_str(), said.get(..23), said.get(23..)) {
+                        (_, _, _) if said.starts_with(DONE) => Line::from(vec![Span::styled(DONE, style(GREEN)), Span::styled(said[DONE.len()..].to_string(), style(SUBTEXT))]),
+                        (NEXT, _, _) => Line::from(Span::styled(NEXT, bold(MAUVE))),
+                        (_, Some(command), Some(why)) => Line::from(vec![Span::styled(command.to_string(), style(TEXT)), Span::styled(why.to_string(), style(SUBTEXT))]),
                         _ => Line::from(Span::styled(said.clone(), style(TEXT))),
                     });
                 }
@@ -851,7 +833,7 @@ impl Guide {
     fn hint(&self) -> String {
         match self.step {
             _ if self.applied.is_some() && self.ending.is_empty() => "applying…".to_string(),
-            _ if self.applied.is_some() => "esc close".to_string(),
+            _ if self.applied.is_some() => "any key closes".to_string(),
             Step::Name => "type to change · ⏎ next · esc quit".to_string(),
             Step::Review => "⏎ apply · ← back · esc quit without writing".to_string(),
             step => {
@@ -890,20 +872,50 @@ impl Guide {
         let [boxed, hint] = Layout::vertical([Constraint::Min(4), Constraint::Length(2)]).areas(main);
         let mut lines = vec![Line::from(Span::styled(self.step.help(), style(SUBTEXT))), Line::default()];
         lines.extend(self.body());
-        let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(FAINT)).padding(Padding::horizontal(1)).title(Span::styled(format!(" {} ", self.step.title()), bold(MAUVE)));
-        let inner = block.inner(boxed);
-        let height = Paragraph::new(lines.clone()).wrap(Wrap { trim: false }).line_count(inner.width) as u16;
-        let shown = Rect { height: (height + 2).min(boxed.height), ..boxed };
+        let framed = |title: &str| Block::bordered().border_type(BorderType::Rounded).border_style(style(FAINT)).padding(Padding::horizontal(1)).title(Span::styled(format!(" {title} "), bold(MAUVE)));
+        let tall = |block: &Block, lines: &[Line<'static>], width: u16| Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).line_count(block.inner(Rect { width, height: 3, ..boxed }).width) as u16 + 2;
+        let phone = (!self.ending.is_empty() && self.offers_hub()).then(|| {
+            let block = framed("Your board on your phone");
+            let width = boxed.width.min(72);
+            let lines = self.phone();
+            let height = tall(&block, &lines, width);
+            (block, lines, width, height)
+        });
+        let below = phone.as_ref().map_or(0, |(_, _, _, height)| height + 1);
+        let block = framed(self.step.title());
+        let shown = Rect { height: tall(&block, &lines, boxed.width).min(boxed.height.saturating_sub(below)), ..boxed };
         frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), shown);
-        frame.render_widget(Paragraph::new(Line::from(Span::styled(self.hint(), style(MUTED)))), Rect { y: hint.y + 1, height: 1, ..hint });
+        let mut hint_at = hint.y + 1;
+        if let Some((block, lines, width, height)) = phone {
+            let at = Rect { y: shown.y + shown.height + 1, width, height: height.min(boxed.height.saturating_sub(shown.height + 1)), ..boxed };
+            frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), at);
+            hint_at = hint_at.min(at.y + at.height + 1);
+        }
+        frame.render_widget(Paragraph::new(Line::from(Span::styled(self.hint(), style(MUTED)))), Rect { y: hint_at, height: 1, ..hint });
+    }
+
+    fn phone(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from(Span::styled(format!("Follow tasks and answer questions from anywhere, end-to-end encrypted. Free on {}, or run your own.", crate::hub::host(config::DEFAULT_HUB_URL)), style(TEXT))),
+            Line::default(),
+            Line::from(vec![Span::styled("h", bold(MAUVE)), Span::styled("  connect now", style(TEXT)), Span::styled("     later: kebbie hub connect, or H on the board", style(MUTED))]),
+            Line::from(Span::styled(PHONE[2], style(SUBTEXT))),
+        ]
     }
 
     fn text(&self) -> String {
+        self.said(self.offers_hub())
+    }
+
+    fn said(&self, phone: bool) -> String {
         match &self.applied {
             None => "Nothing written: kebbie setup runs the guide again whenever you want.".to_string(),
             Some(rows) => {
                 let mut lines: Vec<String> = rows.iter().map(|(step, outcome)| outcome.line(step)).collect();
                 lines.extend(self.ending.iter().cloned());
+                if phone {
+                    lines.extend(PHONE.iter().map(|line| line.to_string()));
+                }
                 lines.join("\n")
             }
         }
@@ -921,33 +933,26 @@ impl Hooks for Screen<'_> {
         let guide = &*self.guide;
         let _ = self.terminal.draw(|frame| guide.draw(frame));
     }
-
-    // kebbie hub connect draws its own card and reads its own keys, so the guide steps out of the terminal while it runs.
-    fn connect(&mut self, url: &str) -> Result<String> {
-        crate::board::terminal::restore_terminal();
-        let result = crate::hub::connect_to(url);
-        *self.terminal = crate::board::terminal::init_terminal();
-        result
-    }
 }
 
 pub fn run(env: &Env, at: Step) -> Result<String> {
     use ratatui::crossterm::event::{self, Event, KeyEventKind};
     let mut guide = Guide::new(Facts::read(env), at);
     let mut terminal = crate::board::terminal::init_terminal();
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<bool> {
         loop {
             terminal.draw(|frame| guide.draw(frame)).map_err(|error| error.to_string())?;
             match event::read().map_err(|error| error.to_string())? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match guide.key(key) {
-                    Next::Quit => return Ok(()),
+                    Next::Quit => return Ok(false),
+                    Next::Connect => return Ok(true),
                     Next::Stay => {}
                     Next::Apply => {
                         let planned = guide.plan();
                         guide.applied = Some(Vec::new());
                         let rows = apply(&planned, env, &mut Screen { terminal: &mut terminal, guide: &mut guide });
                         let codex = (guide.answers.codex && !guide.skipped[Step::Agents.index()]).then(|| codex_login(guide.facts.codex_bin.as_deref()));
-                        guide.ending = ending(&rows, codex, &crate::doctor::checks(&crate::doctor::Env::current()));
+                        guide.ending = ending(codex, &crate::doctor::checks(&crate::doctor::Env::current()));
                         guide.applied = Some(rows);
                     }
                 },
@@ -957,7 +962,11 @@ pub fn run(env: &Env, at: Step) -> Result<String> {
         }
     })();
     crate::board::terminal::restore_terminal();
-    result.map(|()| guide.text())
+    if !result? {
+        return Ok(guide.text());
+    }
+    println!("{}\n", guide.said(false));
+    crate::hub::cli(Some("connect"), &[], None)
 }
 
 #[cfg(test)]
@@ -1001,20 +1010,12 @@ mod tests {
     }
 
     struct Fake {
-        connects: usize,
         drawn: usize,
-        hubs: Vec<String>,
     }
 
     impl Hooks for Fake {
         fn progress(&mut self, _: &[(String, Outcome)]) {
             self.drawn += 1;
-        }
-
-        fn connect(&mut self, url: &str) -> Result<String> {
-            self.connects += 1;
-            self.hubs.push(url.to_string());
-            Ok(String::new())
         }
     }
 
@@ -1050,11 +1051,11 @@ mod tests {
     }
 
     #[test]
-    fn the_guide_walks_eight_steps_with_their_choices_and_writes_nothing_before_apply() {
+    fn the_guide_walks_seven_steps_with_their_choices_and_writes_nothing_before_apply() {
         let lab = Lab::new("guide-walk");
         let mut guide = fresh(&lab);
         let shown = screen(&guide);
-        assert!(shown.contains("kebbie setup  step 1 of 8") && shown.contains("▸ 1 Machine name") && shown.contains("· 8 Review and apply"), "{shown}");
+        assert!(shown.contains("kebbie setup  step 1 of 7") && shown.contains("▸ 1 Machine name") && shown.contains("· 7 Review and apply") && !shown.contains("Hub"), "{shown}");
         assert!(shown.contains("▸ name     mac▏") && shown.contains("from this computer's name") && shown.contains("type to change · ⏎ next · esc quit"), "{shown}");
         type_text(&mut guide, "devbox");
         press(&mut guide, &[KeyCode::Enter]);
@@ -1082,26 +1083,25 @@ mod tests {
         press(&mut guide, &[KeyCode::Down]);
         type_text(&mut guide, "/notes/vault");
         press(&mut guide, &[KeyCode::Enter]);
-        assert_eq!(guide.step, Step::Hub);
-        assert!(screen(&guide).contains("(•) The hosted hub  · hub.kebbie.dev · free to read · opens your browser to sign in"));
-        press(&mut guide, &[KeyCode::Up, KeyCode::Enter]);
-        assert_eq!((guide.step, guide.answers.hub), (Step::Signals, 2), "up from the first option is Later");
+        assert_eq!(guide.step, Step::Signals, "the vault leads straight to the error signals");
         assert!(screen(&guide).contains("never your code, paths or text") && screen(&guide).contains("A bug report with text is always shown to you first"));
         press(&mut guide, &[KeyCode::Down, KeyCode::Enter]);
         assert_eq!(guide.step, Step::Review);
         assert_eq!(plan(&guide), [
-            "to do link ~/.local/bin/kebbie → the installed binary",
-            "to do plugin kebbie in Claude Code, and in Codex",
-            "to do machine machine.name = \"devbox\"",
+            "to do link ~/.local/bin/kebbie",
+            "to do plugin kebbie in Claude Code and Codex",
+            "to do machine \"devbox\"",
             "to do keys prefix+space, prefix+f, prefix+t in herdr",
-            "to do backlog board.backlog.sources = [\"vault\"]",
-            "to do vault plugin installed, vault at /notes/vault",
-            "skipped hub optional; later: H on the board",
-            "to do signals report.signals = false",
-        ]);
-        assert!(screen(&guide).contains("⏎ apply · ← back · esc quit without writing"));
+            "to do backlog vault",
+            "to do vault folder /notes/vault, through the vault plugin",
+            "to do signals off",
+            "to do usage kebbie's statusLine in Claude Code's settings.json, for the board's usage bar",
+            "to do keeper start it, so routines run without an open board",
+        ], "the doctor's fixes are rows of the plan like every other");
+        let shown = screen(&guide);
+        assert!(shown.contains("to do    usage     kebbie's statusLine in Claude Code's settings.json") && shown.contains("⏎ apply · ← back · esc quit without writing"), "{shown}");
         assert_eq!((lab.config(), lab.herdr(), lab.calls()), (String::new(), String::new(), String::new()), "nothing is written or run before ⏎ on the last step");
-        assert!(!lab.dir.join("codex/plugins").exists() && !lab.machine.home.join(".local/bin/kebbie").exists());
+        assert!(!lab.dir.join("codex/plugins").exists() && !lab.machine.home.join(".local/bin/kebbie").exists() && !lab.machine.claude_dir.join("settings.json").exists());
         assert!(matches!(guide.key(KeyEvent::from(KeyCode::Esc)), Next::Quit));
         assert_eq!(guide.text(), "Nothing written: kebbie setup runs the guide again whenever you want.");
     }
@@ -1110,24 +1110,35 @@ mod tests {
     fn apply_writes_and_runs_each_line_then_a_rerun_starts_from_what_is_in_place() {
         let lab = Lab::new("guide-apply");
         let mut guide = fresh(&lab);
+        guide.facts.repairs.retain(|repair| *repair != Repair::KeeperStart);
         press(&mut guide, &[KeyCode::Enter, KeyCode::Down, KeyCode::Char(' '), KeyCode::Enter, KeyCode::Enter, KeyCode::Down, KeyCode::Char(' '), KeyCode::Enter, KeyCode::Down, KeyCode::Down]);
         type_text(&mut guide, "/notes/vault");
-        press(&mut guide, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Down, KeyCode::Enter]);
+        press(&mut guide, &[KeyCode::Enter, KeyCode::Down, KeyCode::Enter]);
         assert_eq!(guide.step, Step::Review);
         assert!(matches!(guide.key(KeyEvent::from(KeyCode::Enter)), Next::Apply));
-        let mut fake = Fake { connects: 0, drawn: 0, hubs: Vec::new() };
+        let mut fake = Fake { drawn: 0 };
         let rows = apply(&guide.plan(), &lab.env(), &mut fake);
-        let verbs: Vec<String> = rows.iter().map(|(step, outcome)| format!("{} {step}", outcome.verb)).collect();
-        assert_eq!(verbs, ["done link", "done plugin", "done machine", "done keys", "done backlog", "done vault", "done hub", "done signals"], "{rows:?}");
-        assert_eq!((fake.connects, fake.drawn), (1, 8), "the hosted hub connects through the browser, and each line is drawn as it finishes");
-        assert_eq!(fake.hubs, [config::DEFAULT_HUB_URL], "the hub chosen in step 6 goes to the connect, so it shows no picker");
-        assert_eq!(rows[6].1.detail, "connected");
-        assert_eq!(lab.config(), "[machine]\nname = \"mac\"\n\n[board.backlog]\nsources = [\"local\", \"vault\"]\n\n[report]\nsignals = false\n");
+        let lines: Vec<String> = rows.iter().map(|(step, outcome)| format!("{} {step} {}", outcome.verb, outcome.detail)).collect();
+        assert_eq!(lines, [
+            "done link ~/.local/bin/kebbie",
+            "done plugin kebbie in Claude Code and Codex",
+            "done machine \"mac\"",
+            "done keys prefix+space, prefix+f, prefix+t added, restart herdr to use them",
+            "done backlog local, vault",
+            "done vault folder /notes/vault",
+            "done signals off",
+            "done usage statusLine added to Claude Code's settings.json",
+        ], "each line says what it did in a few words");
+        assert_eq!(fake.drawn, 8, "each line is drawn as it finishes");
+        assert_eq!(lab.config(), "[machine]\nname = \"mac\"\n\n[board.backlog]\nsources = [\"local\", \"vault\"]\n\n[report]\nsignals = false\n", "setup never writes [hub]");
         assert_eq!(lab.herdr().matches("[[keys.command]]").count(), 3);
         assert!(lab.dir.join("codex/plugins/cache/kebbie/kebbie/local/hooks/hooks.json").is_file(), "Codex gets kebbie's plugin");
+        let settings: Value = serde_json::from_str(&std::fs::read_to_string(lab.machine.claude_dir.join("settings.json")).unwrap()).unwrap();
+        assert_eq!(settings["statusLine"]["command"], crate::doctor::STATUS_LINE_COMMAND);
         let calls = lab.calls();
         assert!(calls.contains("plugin marketplace add https://github.com/gronare/claude-plugins.git\nplugin install vault@gronare\nplugin configure vault@gronare --values-stdin\n"), "{calls}");
         assert!(std::fs::read_to_string(lab.dir.join("claude.stdin")).unwrap().contains("{\"vault_path\":\"/notes/vault\"}"), "the vault's values go in on stdin");
+        assert!(Facts::read(&lab.env()).repairs.iter().all(|repair| *repair != Repair::StatusLine), "a fix applied is no row the next time");
         let plugins = lab.machine.claude_dir.join("plugins");
         let vault_root = lab.dir.join("vault-plugin");
         std::fs::create_dir_all(vault_root.join("hooks")).unwrap();
@@ -1139,17 +1150,16 @@ mod tests {
         let shown = screen(&signals);
         assert!(shown.contains("( ) Turn them on") && shown.contains("▸ (•) Keep them off"), "signals that are off offer to turn them on: {shown}");
         press(&mut signals, &[KeyCode::Up, KeyCode::Enter]);
-        assert_eq!(plan(&signals)[7], "to do signals report.signals = true");
+        assert_eq!(plan(&signals)[6], "to do signals on");
         assert_eq!(rerun.answers.name, "mac");
         assert_eq!(rerun.answers.chosen_sources(), [Source::Local, Source::Vault]);
         assert_eq!((rerun.answers.signals, rerun.answers.codex, rerun.answers.vault, rerun.answers.vault_path.as_str()), (1, true, 1, "/notes/vault"));
         let shown = screen(&rerun);
-        assert!(shown.contains("✓ in place: machine.name is \"mac\"") && shown.contains("✓ 3 herdr keys") && shown.contains("✓ 7 Error signals"), "the rail marks what is in place: {shown}");
+        assert!(shown.contains("✓ in place: machine.name is \"mac\"") && shown.contains("✓ 3 herdr keys") && shown.contains("✓ 6 Error signals"), "the rail marks what is in place: {shown}");
         let mut rerun = rerun;
-        press(&mut rerun, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter]);
+        press(&mut rerun, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter]);
         assert_eq!(rerun.step, Step::Review);
-        let plan = plan(&rerun);
-        assert!(plan[2].starts_with("already machine") && plan[3].starts_with("already keys") && plan[4].starts_with("already backlog") && plan[5].starts_with("already vault") && plan[7].starts_with("already signals"), "{plan:?}");
+        assert_eq!(plan(&rerun)[2..7], ["already machine \"mac\"", "already keys kebbie's keys are bound in herdr", "already backlog local, vault", "already vault folder /notes/vault", "already signals off"]);
     }
 
     #[test]
@@ -1167,10 +1177,10 @@ mod tests {
         assert_eq!(guide.answers.chosen_sources(), [Source::Local, Source::Vault], "← and ⏎ keep the boxes ticked");
         press(&mut guide, &[KeyCode::Down, KeyCode::Char('s')]);
         assert_eq!(guide.answers.vault, 0, "a skip puts the step back to what the machine has");
-        press(&mut guide, &[KeyCode::Char('s'), KeyCode::Char('s')]);
+        press(&mut guide, &[KeyCode::Char('s')]);
         assert_eq!(guide.step, Step::Review);
         let plan = plan(&guide);
-        assert!(plan[3].starts_with("skipped keys") && plan[5].starts_with("skipped vault") && plan[6].starts_with("skipped hub") && plan[7].starts_with("skipped signals"), "{plan:?}");
+        assert!(plan[3].starts_with("skipped keys") && plan[5].starts_with("skipped vault") && plan[6] == "skipped signals stay on", "{plan:?}");
         assert!(plan[4].starts_with("to do backlog"), "{plan:?}");
         press(&mut guide, &[KeyCode::Left]);
         assert_eq!(guide.step, Step::Signals);
@@ -1193,24 +1203,24 @@ mod tests {
         assert!(shown.contains("(•) Add them, leave prefix+t to new_tab  · bind the rest yourself later") && shown.contains("( ) Add them, the board on prefix+y  · free in your config") && shown.contains("( ) Skip  · add them by hand"), "{shown}");
         press(&mut guide, &[KeyCode::Down]);
         assert!(screen(&guide).contains("+ prefix+y      open the board · moved off prefix+t, which new_tab uses"));
-        press(&mut guide, &[KeyCode::Enter, KeyCode::Char('s'), KeyCode::Char('s'), KeyCode::Char('s'), KeyCode::Char('s')]);
-        assert!(plan(&guide)[3].starts_with("to do keys prefix+space, prefix+f, prefix+y in herdr"), "{:?}", plan(&guide));
-        let rows = apply(&guide.plan()[3..4], &lab.env(), &mut Fake { connects: 0, drawn: 0, hubs: Vec::new() });
-        assert_eq!(rows[0].1.verb, "done");
+        press(&mut guide, &[KeyCode::Enter, KeyCode::Char('s'), KeyCode::Char('s'), KeyCode::Char('s')]);
+        assert_eq!(guide.step, Step::Review);
+        assert_eq!(plan(&guide)[3], "to do keys prefix+space, prefix+f, prefix+y in herdr");
+        let rows = apply(&guide.plan()[3..4], &lab.env(), &mut Fake { drawn: 0 });
+        assert_eq!(format!("{} {}", rows[0].1.verb, rows[0].1.detail), "done prefix+space, prefix+f, prefix+y added, restart herdr to use them");
         let herdr = lab.herdr();
         assert!(herdr.starts_with("[keys]\nnew_tab = \"prefix+t\"\n\n[[keys.command]]") && herdr.contains("key = \"prefix+y\"\ntype = \"plugin_action\"\ncommand = \"kebbie.board\""), "only the end of the file changes: {herdr}");
         let mut leave = fresh(&lab);
         std::fs::write(&lab.machine.herdr_config, "[keys]\nnew_tab = \"prefix+t\"\n").unwrap();
         leave.facts.keys = setup::key_plan(&lab.machine.herdr_config);
         press(&mut leave, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Enter]);
-        assert!(plan(&leave)[3].starts_with("to do keys prefix+space, prefix+f in herdr, the board unbound"), "{:?}", plan(&leave));
+        assert_eq!(plan(&leave)[3], "to do keys prefix+space, prefix+f in herdr, the board unbound");
     }
 
     #[test]
-    fn an_s3_vault_masks_its_secret_and_a_connected_hub_is_left_as_it_is() {
+    fn an_s3_vault_masks_its_secret() {
         let lab = Lab::new("guide-s3");
         let mut guide = fresh(&lab);
-        guide.facts.hub = Some("hub.kebbie.dev".to_string());
         guide.go(Step::Vault);
         press(&mut guide, &[KeyCode::Up]);
         assert_eq!(guide.answers.vault, 2);
@@ -1220,16 +1230,27 @@ mod tests {
         }
         let shown = screen(&guide);
         assert!(shown.contains("secret   •••••••") && !shown.contains("hunter2"), "{shown}");
-        press(&mut guide, &[KeyCode::Enter]);
-        assert_eq!(guide.step, Step::Hub);
-        assert!(screen(&guide).contains("✓ in place: connected to hub.kebbie.dev"));
         press(&mut guide, &[KeyCode::Enter, KeyCode::Enter]);
+        assert_eq!(guide.step, Step::Review);
         let plan = guide.plan();
-        assert_eq!(format!("{} {}", plan[5].verb, plan[5].detail), "to do plugin installed, vault in the S3 bucket notes");
-        assert_eq!(format!("{} {}", plan[6].verb, plan[6].detail), "already connected to hub.kebbie.dev");
-        let rows = apply(&plan[5..7], &lab.env(), &mut Fake { connects: 0, drawn: 0, hubs: Vec::new() });
-        assert!(rows.iter().all(|(_, outcome)| !outcome.detail.contains("hunter2")), "the secret is never shown: {rows:?}");
+        assert_eq!(format!("{} {}", plan[5].verb, plan[5].detail), "to do S3 bucket notes, through the vault plugin");
+        let rows = apply(&plan[5..6], &lab.env(), &mut Fake { drawn: 0 });
+        assert_eq!(format!("{} {}", rows[0].1.verb, rows[0].1.detail), "done S3 bucket notes");
+        assert!(!screen(&guide).contains("hunter2"), "the secret is never shown");
         assert!(std::fs::read_to_string(lab.dir.join("claude.stdin")).unwrap().contains("\"s3_secret_key\":\"hunter2\""));
+    }
+
+    #[test]
+    fn a_doctor_warning_that_needs_the_users_choice_is_no_row() {
+        let lab = Lab::new("guide-repairs");
+        std::fs::create_dir_all(lab.dir.join("kebbie")).unwrap();
+        std::fs::write(lab.dir.join("kebbie/config.toml"), "[task]\nsandbox = false\n").unwrap();
+        std::fs::write(lab.machine.claude_dir.join("settings.json"), "{\"statusLine\": {\"type\": \"command\", \"command\": \"my-line\"}}").unwrap();
+        let mut guide = fresh(&lab);
+        assert_eq!(guide.facts.repairs, [Repair::KeeperStart], "a statusLine of the user's own and a task.sandbox = false they chose stay with kebbie doctor");
+        guide.go(Step::Review);
+        assert_eq!(plan(&guide).last().map(String::as_str), Some("to do keeper start it, so routines run without an open board"));
+        assert!(plan(&guide).iter().all(|row| !row.contains("sandbox")), "{:?}", plan(&guide));
     }
 
     #[test]
@@ -1237,10 +1258,10 @@ mod tests {
         let lab = Lab::new("guide-yes");
         let lines: Vec<String> = without_asking(&lab.env(), Asking::Yes).iter().map(|(step, outcome)| outcome.line(step)).collect();
         let verbs: Vec<&str> = lines.iter().map(|line| line.split_whitespace().next().unwrap_or_default()).collect();
-        assert_eq!(verbs, ["done", "done", "done", "skipped"], "{lines:?}");
+        assert_eq!(verbs, ["done", "done", "done"], "{lines:?}");
         assert!(lines[2].contains("added prefix+space, prefix+f, prefix+t to") && lines[2].contains("restart herdr so it reads the new keys"), "{lines:?}");
-        assert_eq!(lines[3], setup::line("skipped", "hub", "optional; later: H on the board"));
         assert_eq!(lab.config(), "", "--yes leaves the optional steps as they are");
+        assert!(!lab.machine.claude_dir.join("settings.json").exists(), "--yes edits no file of the user's that it did not show");
         let written = lab.herdr();
         let again: Vec<String> = without_asking(&lab.env(), Asking::Yes).iter().map(|(step, outcome)| outcome.line(step)).collect();
         assert!(again[0].starts_with("already") && again[1].starts_with("already") && again[2].starts_with("already"), "{again:?}");
@@ -1248,7 +1269,6 @@ mod tests {
         let closed = Lab::new("guide-closed");
         let lines: Vec<String> = without_asking(&closed.env(), Asking::Closed).iter().map(|(step, outcome)| outcome.line(step)).collect();
         assert!(lines[2].starts_with("skipped") && lines[2].contains("no terminal to ask in") && lines[2].contains("kebbie setup --yes"), "{lines:?}");
-        assert!(lines[3].contains("no terminal to ask in"));
         assert_eq!(closed.herdr(), "");
     }
 
@@ -1257,25 +1277,21 @@ mod tests {
     }
 
     #[test]
-    fn the_end_lists_what_is_left_one_line_each_with_its_command_and_nothing_when_nothing_is() {
+    fn the_end_counts_the_doctor_and_lists_only_what_needs_the_user_in_two_columns() {
         use crate::doctor::Level;
-        let done = |step: &str, verb: &'static str| (step.to_string(), Outcome::new(verb, "x"));
-        let clean = ending(&[done("hub", "done"), done("vault", "done")], Some(CodexLogin::In), &[check(Level::Ok, "git", "/usr/bin/git", &[])]);
-        assert_eq!(clean, ["", "Setup done. kebbie doctor: 0 failed, 0 warnings, 1 ok", "", "Press prefix+space in herdr and tell the lead what you want done."], "no next steps when nothing is left");
-        let checks = [check(Level::Warn, "vault", "no vault is configured", &["kebbie setup vault walks through it"]), check(Level::Fail, "jq", "jq is missing", &["macOS: brew install jq", "Linux: sudo apt install jq"]), check(Level::Warn, "keeper", "the keeper is not running", &[])];
-        let left = ending(&[done("hub", "skipped"), done("vault", "failed")], Some(CodexLogin::Out), &checks);
-        assert_eq!(left[3..], [
+        let clean = ending(Some(CodexLogin::In), &[check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Ok, "jq", "/usr/bin/jq", &[])]);
+        assert_eq!(clean, ["", "Setup done · doctor: 2 ok", "", "Next steps", "  prefix+space         tell the lead what you want done"], "the lead is the one step left when nothing else is");
+        let checks = [check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Fail, "jq", "jq is missing", &["macOS: brew install jq"]), check(Level::Warn, "status line", "statusLine runs \"my-line\"", &["have your statusLine command pipe its stdin to `kebbie statusline`"])];
+        assert_eq!(ending(Some(CodexLogin::Out), &checks), [
+            "",
+            "Setup done · doctor: 1 ok, 2 to look at",
+            "",
             "Next steps",
-            "  codex login: Codex is not logged in, so a codex task cannot start",
-            "  kebbie hub connect, or H on the board, to see this board on your phone",
-            "  kebbie setup vault to try the vault again, or set its options in Claude Code's /plugin screen",
-            "  kebbie setup vault walks through it  · vault",
-            "  macOS: brew install jq  · jq",
-            "  Linux: sudo apt install jq  · jq",
-            "  keeper: the keeper is not running",
-            "  Press prefix+space in herdr and tell the lead what you want done.",
-        ]);
-        assert!(ending(&[done("hub", "failed")], Some(CodexLogin::Unknown), &[]).contains(&"  codex login, if you have not yet".to_string()));
+            "  codex login          Codex is not logged in, so codex tasks cannot start",
+            "  kebbie doctor        says what is left and how to fix it",
+            "  prefix+space         tell the lead what you want done",
+        ], "a fix setup cannot make is one line to kebbie doctor, never its text");
+        assert!(ending(Some(CodexLogin::Unknown), &[]).contains(&"  codex login          if you have not yet, so codex tasks can start".to_string()));
         let dir = crate::sh::test_dir("guide-codex-login");
         let codex = dir.join("codex");
         crate::executable::write(&codex, "#!/bin/sh\necho 'Not logged in'\nexit 1\n").unwrap();
@@ -1294,13 +1310,59 @@ mod tests {
         assert_eq!(guide.step, Step::Vault);
         assert!(screen(&guide).contains("▸ 5 Vault"));
         guide.go(Step::Review);
-        guide.applied = Some(vec![("link".to_string(), Outcome::new("done", "linked"))]);
+        guide.applied = Some(vec![("link".to_string(), Outcome::new("done", "~/.local/bin/kebbie"))]);
         let shown = screen(&guide);
-        assert!(shown.contains("done    link     linked") && shown.contains("to do   plugin") && shown.contains("applying…"), "{shown}");
-        guide.ending = ending(&[("hub".to_string(), Outcome::new("skipped", "optional"))], None, &[]);
+        assert!(shown.contains("done     link      ~/.local/bin/kebbie") && shown.contains("to do    plugin") && shown.contains("applying…") && !shown.contains("Your board on your phone"), "{shown}");
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Stay), "keys wait while it applies");
+    }
+
+    fn finished(lab: &Lab) -> Guide {
+        let mut guide = fresh(lab);
+        guide.facts.repairs.clear();
+        guide.visited = [true; Step::ALL.len()];
+        guide.facts.name = "Hetzner devbox".to_string();
+        guide.facts.name_set = true;
+        guide.answers.name = guide.facts.name.clone();
+        guide.go(Step::Review);
+        guide.applied = Some(vec![
+            ("link".to_string(), Outcome::new("done", "~/.local/bin/kebbie")),
+            ("plugin".to_string(), Outcome::new("done", "kebbie in Claude Code and Codex")),
+            ("machine".to_string(), Outcome::new("done", "\"Hetzner devbox\"")),
+            ("keys".to_string(), Outcome::new("done", "prefix+f added, herdr reloaded")),
+            ("backlog".to_string(), Outcome::new("already", "vault, linear")),
+            ("vault".to_string(), Outcome::new("already", "S3 bucket obsidian-work")),
+            ("signals".to_string(), Outcome::new("already", "on")),
+        ]);
+        let ok: Vec<crate::doctor::Check> = (0..36).map(|at| check(crate::doctor::Level::Ok, &format!("check {at}"), "fine", &[])).collect();
+        guide.ending = ending(Some(CodexLogin::Out), &ok);
+        guide
+    }
+
+    #[test]
+    fn the_finished_guide_offers_the_hub_in_a_box_and_h_connects_while_any_other_key_closes() {
+        let lab = Lab::new("guide-finished");
+        let mut guide = finished(&lab);
         let shown = screen(&guide);
-        assert!(shown.contains("Setup done. kebbie doctor: 0 failed, 0 warnings, 0 ok") && shown.contains("Next steps") && shown.contains("Press prefix+space in herdr and tell the lead what you want done.") && shown.contains("esc close"), "{shown}");
-        assert!(guide.text().ends_with("Next steps\n  kebbie hub connect, or H on the board, to see this board on your phone\n  Press prefix+space in herdr and tell the lead what you want done."), "{}", guide.text());
-        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Esc)), Next::Quit));
+        for line in [
+            "Setup done · doctor: 36 ok",
+            "codex login          Codex is not logged in, so codex tasks cannot start",
+            "prefix+space         tell the lead what you want done",
+            "╭ Your board on your phone ",
+            "│ h  connect now     later: kebbie hub connect, or H on the board",
+            "│ kebbie.dev/hub",
+            "any key closes",
+        ] {
+            assert!(shown.contains(line), "{line:?} missing from:\n{shown}");
+        }
+        assert!(shown.contains("Follow tasks and answer questions from anywhere, end-to-end") && shown.contains("Free on hub.kebbie.dev, or run your own."), "{shown}");
+        assert!(guide.text().ends_with("  prefix+space         tell the lead what you want done\n\nYour board on your phone: kebbie hub connect, or H on the board\nkebbie.dev/hub"), "{}", guide.text());
+        assert!(!guide.said(false).contains("kebbie.dev/hub"), "the connect that h runs follows the summary instead");
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Connect));
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('x'))), Next::Quit), "any other key closes");
+        guide.facts.hub = Some("hub.kebbie.dev".to_string());
+        let shown = screen(&guide);
+        assert!(!shown.contains("Your board on your phone") && shown.contains("any key closes"), "a connected machine is offered nothing: {shown}");
+        assert!(!guide.text().contains("kebbie.dev/hub"));
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Quit), "h is any other key once connected");
     }
 }

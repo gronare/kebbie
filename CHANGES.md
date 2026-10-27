@@ -6,10 +6,13 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### What's new
 - The install command says what it installs, from which tag and commit, and what it changes, then asks once; kelpie is only moved over after that yes, and herdr's own listing shows only when the install fails
+- kebbie setup has no hub step and never touches the hub; once it is done, a machine that is not connected gets a box offering the board on your phone: h connects now, any other key closes, and kebbie hub connect or H on the board connects later
+- kebbie setup fixes the kebbie doctor warnings it can as rows of its review, shown before ⏎ like every other: kebbie's statusLine in Claude Code, the keeper and kebbie's herdr plugin; it ends with the doctor's count and next steps of a command and why each, and a warning that needs your choice is one line to kebbie doctor
+- kebbie setup's review says each line in a few words, such as ~/.local/bin/kebbie or prefix+f added, herdr reloaded
 
 ### Fixed
-
 - The hub's QR code is drawn in half blocks, which every font draws, in terminals other than Ghostty, kitty and WezTerm, and in octant blocks in Ghostty over SSH too; KEBBIE_QR=halfblock or octant picks one
+
 ## 0.28.0
 
 ### What's new

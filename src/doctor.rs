@@ -367,6 +367,7 @@ pub fn notify(command: &Setting<Option<String>>) -> Check {
 }
 
 const STATUS_LINE: &str = r#""statusLine": { "type": "command", "command": "~/.local/share/kebbie/current/target/release/kebbie statusline" }"#;
+pub const STATUS_LINE_COMMAND: &str = "~/.local/share/kebbie/current/target/release/kebbie statusline";
 
 // Claude Code passes the plan's usage only to the statusLine command, so the board's usage bar needs kebbie there.
 pub fn status_line(settings: &Value) -> Check {
@@ -492,6 +493,37 @@ pub fn machine_name(name: &config::Setting<String>, config_file: &Path) -> Check
         config::Layer::Default => warn("machine", format!("machine.name is unset, so your phone and your other machines on the vault see this one as \"{}\", the host's short name", name.value), vec![format!("set [machine] name = \"<a name of your own, such as mac or devbox>\" in {}", config_file.display()), "or run /kebbie:configure, which asks for it first".to_string()]),
         _ => ok("machine", format!("goes by \"{}\" on your phone and in vault claims", name.value)),
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Repair {
+    StatusLine,
+    KeeperStart,
+    KeeperStop,
+    HerdrPlugin,
+}
+
+pub struct Found<'a> {
+    pub claude_settings: &'a Value,
+    pub keeper_on: bool,
+    pub keeper_running: bool,
+    pub herdr_list: Option<&'a str>,
+}
+
+pub fn repairs(found: &Found) -> Vec<Repair> {
+    let mut repairs = Vec::new();
+    if found.claude_settings.get("statusLine").is_none() {
+        repairs.push(Repair::StatusLine);
+    }
+    match (found.keeper_on, found.keeper_running) {
+        (true, false) => repairs.push(Repair::KeeperStart),
+        (false, true) => repairs.push(Repair::KeeperStop),
+        _ => {}
+    }
+    if herdr_plugin(found.herdr_list, config::Channel::default()).1.is_some_and(|plugin| !plugin.enabled) {
+        repairs.push(Repair::HerdrPlugin);
+    }
+    repairs
 }
 
 impl Check {
@@ -681,15 +713,6 @@ pub fn render(checks: &[Check]) -> String {
     lines.push(String::new());
     lines.push(format!("{} failed, {} warnings, {} ok", count(Level::Fail), count(Level::Warn), count(Level::Ok)));
     lines.join("\n")
-}
-
-pub fn summary(checks: &[Check]) -> String {
-    let open: Vec<Check> = checks.iter().filter(|check| check.level != Level::Ok).cloned().collect();
-    let count = |level: Level| checks.iter().filter(|check| check.level == level).count();
-    let rendered = render(&open);
-    let lines: Vec<&str> = rendered.lines().collect();
-    let total = format!("kebbie doctor: {} failed, {} warnings, {} ok", count(Level::Fail), count(Level::Warn), count(Level::Ok));
-    lines[..lines.len().saturating_sub(2)].iter().map(|line| line.to_string()).chain([total]).collect::<Vec<_>>().join("\n")
 }
 
 pub fn failed(checks: &[Check]) -> bool {
@@ -1147,6 +1170,19 @@ mod tests {
         assert_eq!((check.level, check.fix.as_slice()), (Level::Warn, ["kebbie keeper --start (herdr's startup and the board start it too)".to_string()].as_slice()));
         assert_eq!(keeper(false, None, 0).level, Level::Ok);
         assert_eq!(keeper(false, Some(&running), 0).fix, ["kebbie keeper --stop"]);
+    }
+
+    #[test]
+    fn setup_fixes_only_what_needs_no_choice_of_the_users() {
+        let list = |enabled: bool| format!(r#"{{"result":{{"plugins":[{{"plugin_id":"kebbie","enabled":{enabled},"version":"0.28.0","plugin_root":"/x"}}]}}}}"#);
+        let (on, off) = (list(true), list(false));
+        let found = |settings: &Value, keeper: (bool, bool), herdr: Option<&str>| repairs(&Found { claude_settings: settings, keeper_on: keeper.0, keeper_running: keeper.1, herdr_list: herdr });
+        let none = serde_json::json!({});
+        assert_eq!(found(&none, (true, false), Some(&off)), [Repair::StatusLine, Repair::KeeperStart, Repair::HerdrPlugin]);
+        let own = serde_json::json!({ "statusLine": { "type": "command", "command": "my-line" } });
+        assert!(found(&own, (true, true), Some(&on)).is_empty(), "the user's own statusLine is theirs to change, as kebbie doctor says");
+        assert_eq!(found(&own, (false, true), None), [Repair::KeeperStop]);
+        assert!(STATUS_LINE.contains(STATUS_LINE_COMMAND));
     }
 
     #[test]
