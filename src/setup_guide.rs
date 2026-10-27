@@ -243,6 +243,7 @@ pub enum Next {
     Quit,
     Apply,
     Connect,
+    Board,
 }
 
 pub struct Guide {
@@ -393,7 +394,7 @@ impl Guide {
             return match key.code {
                 _ if self.ending.is_empty() => Next::Stay,
                 KeyCode::Char('h') if self.offers_hub() => Next::Connect,
-                _ => Next::Quit,
+                _ => Next::Board,
             };
         }
         let spots = self.spots();
@@ -833,7 +834,7 @@ impl Guide {
     fn hint(&self) -> String {
         match self.step {
             _ if self.applied.is_some() && self.ending.is_empty() => "applying…".to_string(),
-            _ if self.applied.is_some() => "any key closes".to_string(),
+            _ if self.applied.is_some() => "any key opens your board".to_string(),
             Step::Name => "type to change · ⏎ next · esc quit".to_string(),
             Step::Review => "⏎ apply · ← back · esc quit without writing".to_string(),
             step => {
@@ -939,13 +940,11 @@ pub fn run(env: &Env, at: Step) -> Result<String> {
     use ratatui::crossterm::event::{self, Event, KeyEventKind};
     let mut guide = Guide::new(Facts::read(env), at);
     let mut terminal = crate::board::terminal::init_terminal();
-    let result = (|| -> Result<bool> {
+    let result = (|| -> Result<Next> {
         loop {
             terminal.draw(|frame| guide.draw(frame)).map_err(|error| error.to_string())?;
             match event::read().map_err(|error| error.to_string())? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match guide.key(key) {
-                    Next::Quit => return Ok(false),
-                    Next::Connect => return Ok(true),
                     Next::Stay => {}
                     Next::Apply => {
                         let planned = guide.plan();
@@ -955,6 +954,7 @@ pub fn run(env: &Env, at: Step) -> Result<String> {
                         guide.ending = ending(codex, &crate::doctor::checks(&crate::doctor::Env::current()));
                         guide.applied = Some(rows);
                     }
+                    next => return Ok(next),
                 },
                 Event::Paste(text) => guide.paste(&text),
                 _ => {}
@@ -962,11 +962,15 @@ pub fn run(env: &Env, at: Step) -> Result<String> {
         }
     })();
     crate::board::terminal::restore_terminal();
-    if !result? {
-        return Ok(guide.text());
+    match result? {
+        Next::Board => println!("{}\n", guide.text()),
+        Next::Connect => {
+            println!("{}\n", guide.said(false));
+            println!("{}", crate::hub::cli(Some("connect"), &[], None)?);
+        }
+        _ => return Ok(guide.text()),
     }
-    println!("{}\n", guide.said(false));
-    crate::hub::cli(Some("connect"), &[], None)
+    crate::board::run(false)
 }
 
 #[cfg(test)]
@@ -1339,7 +1343,7 @@ mod tests {
     }
 
     #[test]
-    fn the_finished_guide_offers_the_hub_in_a_box_and_h_connects_while_any_other_key_closes() {
+    fn the_finished_guide_offers_the_hub_in_a_box_and_h_connects_while_any_other_key_opens_the_board() {
         let lab = Lab::new("guide-finished");
         let mut guide = finished(&lab);
         let shown = screen(&guide);
@@ -1350,7 +1354,7 @@ mod tests {
             "╭ Your board on your phone ",
             "│ h  connect now     later: kebbie hub connect, or H on the board",
             "│ kebbie.dev/hub",
-            "any key closes",
+            "any key opens your board",
         ] {
             assert!(shown.contains(line), "{line:?} missing from:\n{shown}");
         }
@@ -1358,11 +1362,11 @@ mod tests {
         assert!(guide.text().ends_with("  prefix+space         tell the lead what you want done\n\nYour board on your phone: kebbie hub connect, or H on the board\nkebbie.dev/hub"), "{}", guide.text());
         assert!(!guide.said(false).contains("kebbie.dev/hub"), "the connect that h runs follows the summary instead");
         assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Connect));
-        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('x'))), Next::Quit), "any other key closes");
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('x'))), Next::Board), "any other key opens the board");
         guide.facts.hub = Some("hub.kebbie.dev".to_string());
         let shown = screen(&guide);
-        assert!(!shown.contains("Your board on your phone") && shown.contains("any key closes"), "a connected machine is offered nothing: {shown}");
+        assert!(!shown.contains("Your board on your phone") && shown.contains("any key opens your board"), "a connected machine is offered nothing: {shown}");
         assert!(!guide.text().contains("kebbie.dev/hub"));
-        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Quit), "h is any other key once connected");
+        assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Board), "h is any other key once connected");
     }
 }

@@ -28,7 +28,7 @@ You need macOS or Linux with `git`, `herdr` 0.9.0+, Claude Code, `jq` and `curl`
 curl -fsSL https://kebbie.dev/install.sh | sh
 ```
 
-The script checks those tools, installs the latest release as a herdr plugin with its prebuilt binary (macOS on Apple silicon or Intel, Linux on x86_64 or arm64), and runs `kebbie setup`. Setup is a guide of seven steps: this machine's name, the agents, herdr's keys, where the backlog lives, the vault and error signals, then one look at everything before it writes any of it, the `kebbie doctor` warnings it can fix among them. It ends with what is still yours to do and an offer to see your board on your phone, and is safe to run again.
+The script checks those tools, installs the latest release as a herdr plugin with its prebuilt binary (macOS on Apple silicon or Intel, Linux on x86_64 or arm64), and runs `kebbie setup`. Setup is a guide of seven steps: this machine's name, the agents, herdr's keys, where the backlog lives, the vault and error signals, then one look at everything before it writes any of it, the `kebbie doctor` warnings it can fix among them. It ends with what is still yours to do and an offer to see your board on your phone, then opens your board. It is safe to run again.
 
 Coming from kelpie, kebbie's earlier name? Run the same command: it moves your settings, state and herdr keys over to kebbie and removes the old plugin first.
 
