@@ -56,7 +56,7 @@ Find what is wrong with kebbie, and the fix for each message it shows.
 | Sessions are not restarted, or held messages wait, with the board closed | `kebbie keeper --status`. Not running: `kebbie keeper --start`. A routine that keeps failing shows its error there and in `keeper.log` in the state directory. |
 | The keeper should stop | `kebbie keeper --stop`. The board and herdr's next startup start it again; `[keeper] enabled = false` keeps it off and hands the routines to an open board. |
 | The board shows no plan usage | [Set the status line](show-plan-usage.md). Usage comes only on a Claude.ai plan. |
-| The review split does not open, or its list is empty | It opens only inside herdr. Check that `fzf` is 0.71 or later, `nvim` 0.10 or later, and `jq` is on your `PATH`. |
+| The review split does not open, or its diff stays empty | It opens only inside herdr. Check that `nvim` is 0.10 or later and `jq` is on your `PATH`. |
 | No notifications arrive | Run the command by hand with `KEBBIE_TEXT=test`. Failures are in `notify.log` in the state directory. |
 
 ## Config errors

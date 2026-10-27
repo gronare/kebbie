@@ -558,7 +558,7 @@ impl Item {
 }
 
 // Files the task changed since it left the default branch, and how many of them the review has marked read
-// (marks are "path<TAB>content hash" lines, kept per worktree by scripts/review.sh).
+// (marks are "path<TAB>content hash" lines, kept per worktree by the review split).
 fn review_progress(path: &Path, upstream: &str) -> Option<(usize, usize)> {
     let base = fork_point(path, upstream).ok()?;
     let mut files: Vec<String> = git(path, &["diff", "--name-only", &base]).ok()?.lines().map(str::to_string).collect();

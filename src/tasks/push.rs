@@ -1032,13 +1032,13 @@ mod tests {
         };
         review(&["split"]);
         let d = state.join("reviews/p_claude");
-        let files = |rows: &str| rows.lines().skip(1).map(|line| line.split('\t').next().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(files(&review(&["rows", &d.to_string_lossy()])), ["d"]);
+        let base = || crate::board::review_data::resolve_base(&slot.path, &crate::board::review_data::base_spec(&d));
+        let files = || crate::board::review_data::files(&d, &slot.path, &base(), None).into_iter().map(|file| file.path).collect::<Vec<_>>();
+        assert_eq!(files(), ["d"]);
         land_on_main(&dir, &upstream, |_| {});
         assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Clean);
-        assert_eq!(files(&review(&["rows", &d.to_string_lossy()])), ["d"], "main's commits stay out of a review opened before the rebase");
-        let base = std::fs::read_to_string(d.join("base")).unwrap();
-        assert_eq!(review(&["diff", base.trim(), "elsewhere"]), "", "the open diff compares against the fork point after the rebase too");
+        assert_eq!(files(), ["d"], "main's commits stay out of a review opened before the rebase");
+        assert_eq!(base(), git(&slot.path, &["merge-base", "HEAD", &upstream]).unwrap(), "the diff compares against the fork point after the rebase too");
         cleanup(dir, origin, &slot);
     }
 

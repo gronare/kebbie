@@ -81,11 +81,11 @@ fn busy_tab_pane(workspace: &str, label: &str) -> Option<String> {
         .find(|pane| matches!(herdr::foreground(pane), Ok(Some(_))))
 }
 
-// The review split runs scripts/review.sh list, and nvim or fzf under it while a file is open.
+// The review split's top pane runs kebbie review --view; its nvim pane below is no place to focus first.
 fn runs_review(info: &serde_json::Value) -> bool {
     info["foreground_processes"].as_array().into_iter().flatten().any(|process| {
         let argv: Vec<&str> = process["argv"].as_array().into_iter().flatten().filter_map(|arg| arg.as_str()).collect();
-        argv.iter().any(|arg| arg.ends_with("review.sh")) && argv.contains(&"list")
+        argv.contains(&"review") && argv.contains(&"--view")
     })
 }
 
@@ -213,11 +213,13 @@ mod tests {
         let panes = vec![
             ("p_claude".to_string(), pane(&["claude", "--resume", "x"])),
             ("p_server".to_string(), pane(&["sh", "-c", "bin/dev"])),
-            ("p_review".to_string(), pane(&["sh", "/k/scripts/review.sh", "list", "/state/reviews/p_claude"])),
+            ("p_review".to_string(), pane(&["/k/target/release/kebbie", "review", "--view", "/state/reviews/p_claude"])),
+            ("p_nvim".to_string(), pane(&["nvim", "--listen", "/state/reviews/p_claude/nvim.sock", "-S", "/k/scripts/review.lua"])),
         ];
         assert_eq!(review_pane_in(&panes).as_deref(), Some("p_review"));
         assert_eq!(review_pane_in(&panes[..2]), None, "without a review split one is made");
         assert!(!runs_review(&pane(&["sh", "/k/scripts/review.sh", "split"])), "the split command itself is not the review");
+        assert!(!runs_review(&pane(&["/k/target/release/kebbie", "review", "billing"])), "sending a task to review is not the split");
         let source = include_str!("space.rs");
         let open = &source[source.find("fn open_review(").unwrap()..];
         let open = &open[..open.find("\n    }\n").unwrap()];

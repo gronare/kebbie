@@ -843,25 +843,6 @@ mod tests {
     }
 
     #[test]
-    fn the_review_script_keeps_its_marks_in_kebbie_state_dir() {
-        let base = std::env::temp_dir().join(format!("kebbie-state-dir-{}", std::process::id()));
-        let (repo, state, home) = (base.join("repo"), base.join("state"), base.join("home"));
-        fs::create_dir_all(&repo).unwrap();
-        fs::write(repo.join("a.txt"), "a").unwrap();
-        let git = std::process::Command::new("git").args(["init", "-q"]).current_dir(&repo).status().unwrap();
-        assert!(git.success());
-        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/review.sh");
-        let status = std::process::Command::new("sh").arg(&script).args(["mark-read", "a.txt"]).current_dir(&repo)
-            .env("KEBBIE_STATE_DIR", &state).env("HOME", &home).env_remove("XDG_STATE_HOME").status().unwrap();
-        assert!(status.success());
-        let marks: Vec<PathBuf> = fs::read_dir(&state).unwrap().map(|entry| entry.unwrap().path()).collect();
-        assert_eq!(marks.len(), 1, "{marks:?}");
-        assert!(fs::read_to_string(&marks[0]).unwrap().starts_with("a.txt\t"));
-        assert!(!home.exists());
-        let _ = fs::remove_dir_all(base);
-    }
-
-    #[test]
     fn the_leads_start_line_carries_its_settings_as_a_short_path_to_the_same_json() {
         let dir = std::env::temp_dir().join(format!("kebbie-lead-settings-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();

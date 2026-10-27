@@ -23,7 +23,7 @@ A kebbie is a shepherd's crook, the Scots word for a staff with a hooked head. h
 
 ## Install
 
-You need macOS or Linux with `git`, `herdr` 0.9.0+, Claude Code, `jq` and `curl`; the review split also needs `fzf` 0.71+ and `nvim` 0.10+, and the history split `tig`.
+You need macOS or Linux with `git`, `herdr` 0.9.0+, Claude Code, `jq` and `curl`; the review split also needs `nvim` 0.10+, and the history split `tig`.
 
 ```bash
 curl -fsSL https://kebbie.dev/install.sh | sh

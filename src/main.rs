@@ -599,6 +599,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("review") if arguments.flag("--run") && arguments.flag("--rules") => rules_check::run(&cwd),
         Some("review") if arguments.flag("--run") => review::run(&cwd),
         Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),
+        Some("review") if arguments.flag("--view") => board::review::run(Path::new(name.ok_or("kebbie review --view needs the review's folder")?)),
         Some("review") => review::request(&cwd, name),
         Some("evidence") => evidence::print(&cwd, name, arguments.flag("--json")),
         Some("steps") => arguments.only("steps", &["--json"]).and_then(|_| tasks::steps(&cwd, &arguments.positionals[1..], arguments.flag("--json"))),

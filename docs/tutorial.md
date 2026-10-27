@@ -13,7 +13,7 @@ kebbie runs inside [herdr](https://herdr.dev) and needs these tools on your `PAT
 1. On macOS, install the tools:
 
    ```bash
-   brew install herdr jq fzf neovim curl tig
+   brew install herdr jq neovim curl tig
    ```
 
 2. Install Claude Code:

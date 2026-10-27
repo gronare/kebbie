@@ -9,7 +9,7 @@
   "homepage": "https://github.com/gronare/kebbie",
   "repository": "https://github.com/gronare/kebbie",
   "license": "MIT",
-  "keywords": ["herdr", "review", "worktree", "agents", "nvim", "fzf"],
+  "keywords": ["herdr", "review", "worktree", "agents", "nvim"],
   "userConfig": {
     "auto_open": {
       "type": "boolean",

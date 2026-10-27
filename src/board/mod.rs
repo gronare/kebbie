@@ -19,6 +19,12 @@ mod notices;
 mod options;
 mod paste;
 mod push;
+pub(crate) mod review;
+pub(crate) mod review_data;
+mod review_draw;
+mod review_nvim;
+#[cfg(test)]
+mod review_tests;
 mod space;
 mod status_bar;
 mod steps;

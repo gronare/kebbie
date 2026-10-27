@@ -21,6 +21,7 @@ pub const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
 pub const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
 pub const TEAL: Color = Color::Rgb(0x94, 0xe2, 0xd5);
 pub const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
+pub const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
 
 pub struct Choice {
     pub key: char,

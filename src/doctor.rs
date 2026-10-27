@@ -64,10 +64,9 @@ pub fn tools(min_herdr: &str) -> Vec<Tool> {
         tool("herdr", true, "everything", Some(min_herdr), "brew install herdr", "curl -fsSL https://herdr.dev/install.sh | sh"),
         tool("claude", true, "everything", None, "curl -fsSL https://claude.ai/install.sh | bash", "curl -fsSL https://claude.ai/install.sh | bash"),
         tool("jq", true, "the sidebar sync and the review hook", None, "brew install jq", "sudo apt install jq"),
-        tool("fzf", false, "the review split's file list (needs --id-nth)", Some("0.71.0"), "brew install fzf (brew upgrade fzf when older)", "git clone --depth 1 https://github.com/junegunn/fzf.git ~/.fzf && ~/.fzf/install (distro packages are older than 0.71)"),
         tool("nvim", false, "the review split's diffs", Some("0.10.0"), "brew install neovim", "brew install neovim, or a release from https://github.com/neovim/neovim/releases (distro packages are often older than 0.10)"),
         tool("tig", false, "the history split", None, "brew install tig", "sudo apt install tig"),
-        tool("curl", false, "downloading a release's prebuilt binary, and the review list reloading when files change", None, "brew install curl", "sudo apt install curl"),
+        tool("curl", false, "downloading a release's prebuilt binary", None, "brew install curl", "sudo apt install curl"),
         tool("cargo", false, "building kebbie on the main channel and with kebbie update --from", None, "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
     ]
 }
@@ -759,17 +758,17 @@ mod tests {
     fn tools_are_found_on_an_injected_path_and_checked_for_versions() {
         let dir = scratch("path");
         executable(&dir.join("herdr"));
-        std::fs::write(dir.join("fzf"), "not executable").unwrap();
+        std::fs::write(dir.join("nvim"), "not executable").unwrap();
         let path = vec![dir.clone()];
         assert_eq!(which("herdr", &path), Some(dir.join("herdr")));
-        assert_eq!(which("fzf", &path), None);
+        assert_eq!(which("nvim", &path), None);
         let tools = tools("0.9.0");
         assert_eq!(tool(named(&tools, "herdr"), Some(&dir.join("herdr")), Some("herdr 0.9.5")).level, Level::Ok);
         let old = tool(named(&tools, "herdr"), Some(&dir.join("herdr")), Some("herdr 0.8.2"));
         assert_eq!((old.level, old.fact.as_str()), (Level::Fail, "0.8.2 is older than 0.9.0, needed for everything"));
-        let fzf = tool(named(&tools, "fzf"), Some(&dir.join("fzf")), Some("0.57.0 (brew)"));
-        assert_eq!(fzf.level, Level::Warn);
-        assert!(fzf.fact.contains("review split"));
+        let nvim = tool(named(&tools, "nvim"), Some(&dir.join("nvim")), Some("NVIM v0.9.5"));
+        assert_eq!(nvim.level, Level::Warn);
+        assert!(nvim.fact.contains("review split"));
         let missing = tool(named(&tools, "jq"), None, None);
         assert_eq!((missing.level, missing.fix.len()), (Level::Fail, 2));
         assert!(missing.fix[0].starts_with("macOS: brew") && missing.fix[1].starts_with("Linux: "));

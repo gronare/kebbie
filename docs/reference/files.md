@@ -250,7 +250,8 @@ What happened: …
 | `scripts/sync.sh` | The sidebar sync, run from herdr's tab bar. |
 | `scripts/build.sh` | herdr's build step for the plugin: puts the binary at `target/release/kebbie`, the release's prebuilt one on a release tag, else `cargo build --release`. |
 | `scripts/herdr-startup.sh` | herdr's startup step: links `~/.local/share/kebbie/current` to the install and brings the board back in the lead Space. |
-| `scripts/review.sh` | The review split. |
+| `scripts/review.sh` | Opens the review split next to Claude; the view itself is `kebbie review --view`. |
+| `scripts/review.lua` | The review split's diff pane in nvim. |
 | `scripts/check.sh` | What CI checks, run locally before a push: tests, clippy, `cargo audit`, `cargo deny` and a build on the oldest Rust the crate supports. See [Develop kebbie](../how-to/develop-kebbie.md). |
 | `roles/lead.md`, `roles/task.md` | The lead's and a task's role templates. |
 | `skills/` | The Claude Code plugin's skills. See [Skills](skills.md). |

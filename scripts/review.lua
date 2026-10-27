@@ -1,32 +1,67 @@
-local agent_pane = vim.env.REVIEW_AGENT_PANE
-local path = vim.env.REVIEW_PATH
-local diff_buf = vim.api.nvim_get_current_buf()
-local diff_win = vim.api.nvim_get_current_win()
+if vim.fn.has("nvim-0.10") == 0 then
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "kebbie's review needs nvim 0.10 or newer; this is " .. tostring(vim.version()) .. "." })
+  return
+end
+
+local dir = vim.env.REVIEW_DIR
+local herdr = (vim.env.HERDR_BIN_PATH or "") ~= "" and vim.env.HERDR_BIN_PATH or "herdr"
 local marks = vim.api.nvim_create_namespace("review")
+local shown = { path = "", title = "", sha = "", short = "", index = 0, count = 0, diff = {} }
+local numbers = {}
 local sent = 0
+local stale = false
 local float_win
 -- Only saved buffers count as the user's edits, so files Claude changes on disk aren't reported back to it.
 local baseline = {}
 local saved = {}
 
+local function read_file(name)
+  local file = io.open(dir .. "/" .. name)
+  if not file then return nil end
+  local text = file:read("*a")
+  file:close()
+  return vim.trim(text)
+end
+
+local agent_pane = read_file("agent")
+
+-- herdr hands a pane's OSC 52 to the terminal it runs in, so with no clipboard tool (a devbox over SSH) a copy still reaches the desktop; herdr answers no clipboard read, so paste stays in nvim.
+local function clipboard_fallback()
+  if vim.g.clipboard ~= nil or vim.fn["provider#clipboard#Executable"]() ~= "" then return end
+  local osc52 = require("vim.ui.clipboard.osc52")
+  local function paste() return { vim.split(vim.fn.getreg('"'), "\n"), vim.fn.getregtype('"') } end
+  vim.g.clipboard = { name = "OSC 52", copy = { ["+"] = osc52.copy("+"), ["*"] = osc52.copy("+") }, paste = { ["+"] = paste, ["*"] = paste } }
+  vim.g.loaded_clipboard_provider = nil
+  vim.cmd("runtime autoload/provider/clipboard.vim")
+end
+clipboard_fallback()
+
+vim.cmd.enew()
+local diff_buf = vim.api.nvim_get_current_buf()
+local diff_win = vim.api.nvim_get_current_win()
+
 -- Captured before the diff changes them, so the float shows files with the user's own options.
 local float_options = {}
-for _, option in ipairs({ "number", "relativenumber", "signcolumn", "winbar", "wrap", "breakindent", "showbreak", "linebreak" }) do
+for _, option in ipairs({ "number", "relativenumber", "signcolumn", "statuscolumn", "winbar", "statusline", "wrap", "breakindent", "showbreak", "linebreak" }) do
   float_options[option] = vim.api.nvim_get_option_value(option, { win = diff_win })
 end
 
 vim.bo.buftype = "nofile"
+vim.bo.bufhidden = "hide"
+vim.bo.swapfile = false
 vim.bo.modifiable = false
 vim.bo.filetype = "diff"
+vim.o.mouse = "a"
+if vim.o.laststatus ~= 2 then vim.o.laststatus = 2 end
 vim.wo.number = false
 vim.wo.relativenumber = false
 vim.wo.signcolumn = "yes"
+vim.wo.wrap = true
 vim.wo.breakindent = true
 vim.wo.showbreak = "↪ "
 vim.wo.linebreak = true
 vim.o.sidescroll = 1
 
-local numbers
 local function number_lines()
   numbers = {}
   local old, new
@@ -46,7 +81,14 @@ local function number_lines()
     end
   end
 end
-number_lines()
+
+KebbieReview = {}
+
+function KebbieReview.column()
+  local number = numbers[vim.v.lnum]
+  if vim.v.virtnum ~= 0 or not number then return "%s     " end
+  return "%s%#LineNr#" .. string.format("%4s ", number.new or number.old) .. "%*"
+end
 
 local function span(low, high)
   return low == high and tostring(low) or (low .. "-" .. high)
@@ -61,11 +103,12 @@ local function diff_location(first, last)
     end
     if low then return span(low, high) end
   end
+  local within = shown.sha ~= "" and (" in " .. shown.short) or ""
   local new = side_span("new")
-  if new then return path .. ":" .. new end
+  if new then return shown.path .. ":" .. new .. within end
   local old = side_span("old")
-  if old then return path .. ":" .. old .. " (before)" end
-  return path
+  if old then return shown.path .. ":" .. old .. " (before)" .. within end
+  return shown.path .. within
 end
 
 -- :. leaves the repo root absolute or empty.
@@ -79,24 +122,39 @@ local function is_real_file(buf)
   return vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= ""
 end
 
-local stale = false
-
-local function update_winbar()
+local function update_bars()
+  local where = shown.path == "" and "nothing to show" or (shown.path .. "  %#Comment#· " .. shown.title .. (shown.sha ~= "" and (" · " .. shown.short) or "") .. "%*")
+  local right = stale and "%#DiagnosticWarn#changed on disk · u reloads%*  " or ""
+  local count = shown.count > 0 and (shown.index .. "/" .. shown.count) or ""
+  vim.wo[diff_win].winbar = " " .. where .. "%=" .. right .. "%#Comment#" .. count .. "%* "
   local note = sent > 0 and ("  ·  " .. sent .. " sent to Claude") or ""
-  local keys = stale and "%#DiagnosticWarn#changed on disk  ·  u reloads%* " or "o open  ·  - folder  ·  c comment  ·  w wrap  ·  r read  ·  q back "
-  vim.wo[diff_win].winbar = " " .. path .. note .. "  %=" .. keys
+  vim.wo[diff_win].statusline = " %#Comment#drag selects · c comments · y copies · o edits the file" .. note .. "%*%=%#Comment#" .. (vim.wo[diff_win].wrap and "wrap" or "nowrap") .. "%* "
 end
 
-local function send_to_claude(text)
-  local result = vim.system({ "herdr", "pane", "send-text", agent_pane, text .. "\n" }):wait()
+local function herdr_call(args)
+  local result = vim.system(vim.list_extend({ herdr }, args), { text = true }):wait()
   if result.code ~= 0 then
-    vim.notify("herdr send-text failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+    vim.notify("herdr " .. args[1] .. " " .. args[2] .. " failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
   end
   return result.code == 0
 end
 
+local function send_to_claude(text)
+  if not agent_pane or agent_pane == "" then
+    vim.notify("No Claude pane to send to", vim.log.levels.WARN)
+    return false
+  end
+  return herdr_call({ "pane", "send-text", agent_pane, text .. "\n" })
+end
+
+-- The view moves the focus, since only it knows which side of it nvim sits on.
+local function to_view(key)
+  local view = read_file("pane")
+  if view then herdr_call({ "pane", "send-keys", view, key }) end
+end
+
 local function show_sent(buf, last, text, ok)
-  local label = ok and ("  ✓ sent: " .. text) or ("  ✗ not sent: " .. text)
+  local label = ok and ("  ✓ sent to Claude: " .. text) or ("  ✗ not sent: " .. text)
   vim.api.nvim_buf_set_extmark(buf, marks, last - 1, 0, {
     sign_text = ok and "✓" or "✗",
     sign_hl_group = ok and "DiagnosticOk" or "DiagnosticError",
@@ -139,13 +197,10 @@ local function prompt(title, footer, on_submit)
 end
 
 local function comment(first, last)
-  if not agent_pane or agent_pane == "" then
-    vim.notify("No Claude pane to send to", vim.log.levels.WARN)
-    return
-  end
   local buf = vim.api.nvim_get_current_buf()
   local where
   if buf == diff_buf then
+    if shown.path == "" then return end
     where = diff_location(first, last)
   elseif is_real_file(buf) then
     where = relative(buf) .. ":" .. span(first, last)
@@ -153,12 +208,12 @@ local function comment(first, last)
     vim.notify("Comments work in the diff and in files", vim.log.levels.WARN)
     return
   end
-  prompt(where, "enter: send to Claude  ·  esc: cancel", function(text)
+  prompt("comment on " .. where, "⏎ type it into Claude · esc cancel", function(text)
     local ok = send_to_claude(where .. " — " .. text)
     show_sent(buf, last, text, ok)
     if ok then
       sent = sent + 1
-      update_winbar()
+      update_bars()
     end
   end)
 end
@@ -168,10 +223,11 @@ local function comment_on_line()
   comment(line, line)
 end
 
+-- Visual mode ends here and now: an Esc left in the typeahead would land in the comment box and drop it out of insert mode.
 local function comment_on_selection()
   local first, last = vim.fn.line("v"), vim.fn.line(".")
   if first > last then first, last = last, first end
-  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+  vim.api.nvim_feedkeys(vim.keycode("<Esc>"), "nx", false)
   comment(first, last)
 end
 
@@ -233,7 +289,7 @@ local function report_edits()
         local name = relative(buf)
         if send_to_claude(name .. ":" .. table.concat(ranges, ", ") .. " — edited by me during the review") then
           baseline[buf] = after
-          reviewed_changed = reviewed_changed or name == path
+          reviewed_changed = reviewed_changed or name == shown.path
           vim.notify("Told Claude about your edit to " .. vim.fn.fnamemodify(name, ":t"))
         end
       end
@@ -242,32 +298,66 @@ local function report_edits()
   return reviewed_changed
 end
 
-local function refresh_diff()
-  local result = vim.system({ "sh", vim.env.REVIEW_SCRIPT, "diff", vim.env.REVIEW_BASE, path }, { text = true }):wait()
-  if result.code ~= 0 then return end
-  local lines = vim.split(result.stdout, "\n", { trimempty = true })
+local function diff_lines(stdout)
+  local lines = vim.split(stdout, "\n", { trimempty = true })
+  for index, line in ipairs(lines) do
+    if line:match("^@@") then return vim.list_slice(lines, index) end
+  end
+  return lines
+end
+
+-- A diff that finishes after a newer shown.json was loaded is dropped, so the buffer always holds the file the winbar names.
+local function run_diff(on_done)
+  if #shown.diff == 0 then return on_done({}) end
+  local asked = shown
+  vim.system(asked.diff, { text = true }, vim.schedule_wrap(function(result)
+    if asked ~= shown then return end
+    on_done(diff_lines(result.stdout or ""))
+  end))
+end
+
+local function set_diff(lines)
   vim.bo[diff_buf].modifiable = true
   vim.api.nvim_buf_set_lines(diff_buf, 0, -1, false, lines)
   vim.bo[diff_buf].modifiable = false
   vim.api.nvim_buf_clear_namespace(diff_buf, marks, 0, -1)
   number_lines()
   stale = false
-  update_winbar()
+  update_bars()
 end
 
-local function diff_lines(stdout)
-  return vim.split(stdout, "\n", { trimempty = true })
+function KebbieReview.load()
+  local text = read_file("shown.json")
+  local ok, decoded = pcall(vim.json.decode, text or "")
+  if not ok or type(decoded) ~= "table" then return 0 end
+  shown = decoded
+  run_diff(function(lines)
+    set_diff(lines)
+    if vim.api.nvim_win_is_valid(diff_win) then vim.api.nvim_win_set_cursor(diff_win, { 1, 0 }) end
+  end)
+  return 1
+end
+
+local function refresh_diff()
+  run_diff(set_diff)
+end
+
+local function view_alive()
+  local pid = tonumber(read_file("live") or "")
+  return pid ~= nil and vim.uv.kill(pid, 0) == 0
 end
 
 vim.uv.new_timer():start(3000, 3000, vim.schedule_wrap(function()
-  vim.system({ "sh", vim.env.REVIEW_SCRIPT, "diff", vim.env.REVIEW_BASE, path }, { text = true }, vim.schedule_wrap(function(result)
-    if result.code ~= 0 or not vim.api.nvim_buf_is_valid(diff_buf) then return end
-    local changed = not vim.deep_equal(diff_lines(result.stdout), vim.api.nvim_buf_get_lines(diff_buf, 0, -1, false))
+  if not view_alive() then return vim.cmd("qa!") end
+  if shown.sha ~= "" then return end
+  run_diff(function(lines)
+    if not vim.api.nvim_buf_is_valid(diff_buf) then return end
+    local changed = not vim.deep_equal(lines, vim.api.nvim_buf_get_lines(diff_buf, 0, -1, false))
     if changed ~= stale then
       stale = changed
-      update_winbar()
+      update_bars()
     end
-  end))
+  end)
 end))
 
 local function leader_name()
@@ -332,11 +422,11 @@ local function file_line()
 end
 
 local function open_file()
-  if vim.fn.filereadable(path) == 0 then
-    vim.notify(path .. " no longer exists", vim.log.levels.WARN)
+  if vim.fn.filereadable(shown.path) == 0 then
+    vim.notify(shown.path .. " no longer exists", vim.log.levels.WARN)
     return
   end
-  open_in_float(path, file_line())
+  open_in_float(shown.path, file_line())
 end
 
 -- Configs that lazy-load neo-tree on a key have no :Neotree until lazy loads it.
@@ -348,21 +438,14 @@ local function neo_tree()
 end
 
 local function open_folder()
-  local folder = vim.fn.fnamemodify(path, ":h")
-  if vim.fn.filereadable(path) == 1 and neo_tree() then
+  local folder = vim.fn.fnamemodify(shown.path, ":h")
+  if vim.fn.filereadable(shown.path) == 1 and neo_tree() then
     -- Neo-tree opens no float from inside another float.
     vim.api.nvim_set_current_win(diff_win)
-    vim.cmd("Neotree float reveal_file=" .. vim.fn.fnameescape(vim.fn.fnamemodify(path, ":p")))
+    vim.cmd("Neotree float reveal_file=" .. vim.fn.fnameescape(vim.fn.fnamemodify(shown.path, ":p")))
   else
     open_in_float(folder)
   end
-end
-
-local function leave(after)
-  guard(function()
-    report_edits()
-    after()
-  end)
 end
 
 vim.api.nvim_create_autocmd("BufReadPost", {
@@ -411,27 +494,39 @@ vim.api.nvim_create_autocmd("WinClosed", {
   end,
 })
 
-vim.keymap.set("n", "c", comment_on_line, { buffer = diff_buf, desc = "Comment to Claude" })
-vim.keymap.set("x", "c", comment_on_selection, { buffer = diff_buf, desc = "Comment to Claude" })
-vim.keymap.set("n", "<leader>m", comment_on_line, { desc = "Comment to Claude" })
-vim.keymap.set("x", "<leader>m", comment_on_selection, { desc = "Comment to Claude" })
-vim.keymap.set({ "n", "i", "x", "s" }, "<C-q>", close_float, { desc = "Back to the diff" })
-vim.keymap.set("n", "o", open_file, { buffer = diff_buf, desc = "Open the file over the diff" })
-vim.keymap.set("n", "-", open_folder, { buffer = diff_buf, desc = "Open the file's folder over the diff" })
-for _, lhs in ipairs({ "q", "<Esc>" }) do
-  vim.keymap.set("n", lhs, function() leave(function() vim.cmd("qa!") end) end, { buffer = diff_buf, desc = "Back to the file list" })
+local function map(modes, lhs, rhs, desc, global)
+  vim.keymap.set(modes, lhs, rhs, { buffer = not global and diff_buf or nil, desc = desc })
 end
-vim.keymap.set("n", "r", function()
-  leave(function()
-    local result = vim.system({ "sh", vim.env.REVIEW_SCRIPT, "mark-read", path }):wait()
-    if result.code ~= 0 then
-      vim.notify("Could not mark read: " .. (result.stderr or ""), vim.log.levels.ERROR)
-      return
-    end
-    vim.cmd("qa!")
-  end)
-end, { buffer = diff_buf, desc = "Mark read and go back to the list" })
-vim.keymap.set("n", "w", function() vim.wo.wrap = not vim.wo.wrap end, { buffer = diff_buf, desc = "Toggle line wrap" })
-vim.keymap.set("n", "u", refresh_diff, { buffer = diff_buf, desc = "Reload the diff" })
 
-update_winbar()
+map("n", "c", comment_on_line, "Comment to Claude")
+map("x", "c", comment_on_selection, "Comment to Claude")
+map("n", "<leader>m", comment_on_line, "Comment to Claude", true)
+map("x", "<leader>m", comment_on_selection, "Comment to Claude", true)
+map({ "n", "i", "x", "s" }, "<C-q>", close_float, "Back to the diff", true)
+map("n", "o", open_file, "Edit the file over the diff")
+map("n", "-", open_folder, "Open the file's folder over the diff")
+map("n", "u", refresh_diff, "Reload the diff")
+map("n", "w", function() vim.wo[diff_win].wrap = not vim.wo[diff_win].wrap; update_bars() end, "Toggle line wrap")
+map("n", "<Tab>", function() to_view("tab") end, "Back to the steps")
+map("n", "<S-Tab>", function() to_view("shift+tab") end, "Back to the files")
+map("n", "q", function() guard(function() report_edits(); to_view("q") end) end, "Close the review")
+map("x", "y", '"+y', "Copy to the clipboard")
+map("n", "yy", '"+yy', "Copy the line to the clipboard")
+vim.api.nvim_create_autocmd("TextYankPost", {
+  buffer = diff_buf,
+  callback = function()
+    if vim.v.event.regname == "+" then vim.notify("Copied " .. #vim.v.event.regcontents .. " line(s)") end
+  end,
+})
+
+-- This nvim is the review's alone, and a statusline plugin would draw over its keys.
+local function own_statusline()
+  pcall(function() require("lualine").hide({ place = { "statusline" }, unhide = false }) end)
+  update_bars()
+end
+vim.api.nvim_create_autocmd("User", { pattern = "VeryLazy", callback = own_statusline })
+vim.schedule(own_statusline)
+
+vim.wo[diff_win].statuscolumn = "%{%v:lua.KebbieReview.column()%}"
+update_bars()
+KebbieReview.load()

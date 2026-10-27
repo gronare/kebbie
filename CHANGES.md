@@ -13,8 +13,13 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie push --through, and p in the push window, leave the task's worktree alone: uncommitted work no longer stops it, the commits go out rebased in a worktree of kebbie's own, and the task's Claude rebases onto the new default branch when its work is committed; a commit it makes meanwhile no longer stops the push
 - kebbie accepted <task> [--json] lists which of a task's commits are accepted, and a task may run it
 - kebbie steps refuses a word it would take as an option; titles that start with - go after --
+- The review split is kebbie's own view beside the diff: the task's steps, or its commits, as tabs with their marks, the selected one's commit message and its files on top, and nvim below showing the file you pick at once; ← → pick a step, ↑ ↓ a file, a accepts the step and moves on to the next one waiting, r marks a file read, / filters, m hides the message, and a click picks a step or a file
+- tab moves between the steps, the files and the diff, and back; a review 120 columns wide or more puts the diff beside the view instead of under it
+- The review split needs only nvim, not fzf
 
 ### Fixed
+- y in the review split's diff copies to the clipboard, also over SSH from a machine with no clipboard tool, through the terminal
+- c in the review split's diff comments on lines selected with a drag or V
 - A question answered in your own words that asks the task something gets an answer from the task, as a new question on the board, before it writes code
 - prefix+space in a lead Space whose board is not running starts the board, instead of leaving the lead
 - Moving over from kelpie points herdr's sidebar sync and key descriptions at kebbie too, and reloads herdr, so the sidebar runs and prefix+space works without restarting herdr
