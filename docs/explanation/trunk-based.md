@@ -55,7 +55,7 @@ The gate is the push itself, so nothing waits on a web page.
 
 ## Each commit stands on its own
 
-Without a merge to group them, each commit on the default branch is read on its own. So kebbie leaves commit style to a skill (`task.rules_skill`) that the task follows, the reviewer checks, and `kebbie tidy` and the push window's edit and squash keys help you fix. The default, `kebbie:work-rules`, asks for one logical change per commit with a body that says why. Replace it with your own team's rules.
+Without a merge to group them, each commit on the default branch is read on its own. So kebbie leaves commit style to a skill (`task.rules_skill`) that the task follows, the reviewer checks, and `kebbie tidy` and the push window's edit and squash keys help you fix. The default, `kebbie:work-rules`, asks for one logical change per commit with a body that says why, preparatory commits first and the change itself last, so each commit can go out as soon as you accept it. Replace it with your own team's rules.
 
 ## CI after the push
 
@@ -116,7 +116,7 @@ The second one does not start, and does not go away either, when the first task 
 
 ## A task can land in parts
 
-A task does not have to land all at once. `kebbie push --through <sha>`, or `p` in the push window, pushes the commits up to one and keeps the task open, with the rest of its branch rebased on top. A long task can land its safe first steps while it keeps working. See [Push part of a task](../how-to/push-part-of-a-task.md).
+A task does not have to land all at once. `kebbie push --through <sha>`, or `p` in the push window, pushes the commits up to one and keeps the task open, without touching its worktree: the task's Claude rebases onto the new default branch itself, when its work in progress is committed. A long task can land its safe first steps while it keeps working. See [Push part of a task](../how-to/push-part-of-a-task.md).
 
 ## You can still open a pull request
 

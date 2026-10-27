@@ -21,7 +21,7 @@ The skills the Claude Code plugin `kebbie@kebbie` ships, and the hooks kebbie gi
 
 `kebbie:work-rules`:
 
-- Its rules: a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to you.
+- Its rules: steps in the order they go out, preparatory commits (a migration, an interface, a move, a rename) first and the change itself last, each one finished and pushable on its own; a subject and a body that says why, one logical change per commit, staging by explicit file list, the push left to you.
 - The reviewer runs it in the rules check on a ready report and in `kebbie review`. The lead runs it when that check gives no verdict.
 
 `kebbie:review`: the rules check on a ready report does only its commit, rules and docs steps.
