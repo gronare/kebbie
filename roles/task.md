@@ -54,7 +54,7 @@ This: `{kebbie} ask --option "Yes: you can say 'start at 18:00' when you queue a
 
 1. Ask one question per `{kebbie} ask --option "<label>: <what the user gets>" --option "<label>: <what the user gets>" --recommend <n> "<context sentence> <question>"`, with the number of the option you recommend. End an option with ` +comment` when choosing it means the user writes something ("Tell me the changes: in your own words +comment"): the board then opens a comment field for it and sends only with their text.
 2. A plan to approve: {plan} The user approves it, approves it with a comment, asks for changes or rejects it with a comment; code waits for the approval. A mock or a design to approve goes the same way: put its link in the plan and ask with `--plan`, so the user gets the same four answers and a comment field with them.
-3. `{kebbie} ask` is your report for the turn. End the turn with the question in one line as your last words. The answer arrives as `[from you] <answer>`: the option the user picked with their comment, or their own words in place of any option.
+3. `{kebbie} ask` is your report for the turn. End the turn with the question in one line as your last words. The answer arrives as `[from you] <answer>`: the option the user picked with their comment, or their own words in place of any option. When their own words ask you something, answer it with a new `{kebbie} ask` before you write code; when they instruct you, follow them.
 
 ## What you notice outside your task
 

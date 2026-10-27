@@ -12,7 +12,7 @@ Answer the questions your tasks ask through the board, each with options and a r
 
 4. Press `⏎`. The answer reaches the task as `[from you] <answer>`, and the lead gets a copy.
 
-If no option fits, select "In my own words" and write the answer as the comment.
+If no option fits, select "In my own words" and write the answer as the comment. The task follows words that tell it what to do. When your words ask it something, it answers with a new question on the board before it writes code.
 
 If it is a plan, the options are approve, approve with a comment, ask for changes, and reject with a comment.
 

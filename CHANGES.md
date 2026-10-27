@@ -8,6 +8,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie setup opens your board when it is done: any key once it has applied, or after h has connected the hub
 
 ### Fixed
+- A question answered in your own words that asks the task something gets an answer from the task, as a new question on the board, before it writes code
 - prefix+space in a lead Space whose board is not running starts the board, instead of leaving the lead
 - Moving over from kelpie points herdr's sidebar sync and key descriptions at kebbie too, and reloads herdr, so the sidebar runs and prefix+space works without restarting herdr
 - Running the install command again no longer moves kelpie over a second time because of the log the old keeper leaves as it exits
