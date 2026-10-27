@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- Coming from kelpie: the install command moves your settings, state and herdr keys over to kebbie and removes kelpie's plugins from herdr and Claude Code
 - kebbie setup is a guide of eight steps, one box each with the steps on the left: this machine's name, the agents (Claude Code, and Codex on or off), herdr's keys, the backlog's sources, the vault (a folder or an S3 bucket, configured for you with nothing to paste), the hub (straight to its connect card) and error signals, then a list of everything it will write or run, applied on ⏎ line by line, and next steps: what is still yours to do, each with its command or key, such as codex login, kebbie hub connect or a kebbie doctor fix; nothing is written before that, s skips a step, ← goes back and esc quits
 - Run again, kebbie setup starts from this machine's values and marks what is already in place; kebbie setup --yes takes the defaults without asking, for scripts, and kebbie setup vault and kebbie setup codex open the guide at their step
 - A herdr key you already use for something else is named in the setup guide, with a free key offered for kebbie's
