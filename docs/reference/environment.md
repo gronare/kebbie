@@ -20,7 +20,7 @@ The variables kebbie reads, the ones it sets for the commands it runs, and how t
 | `KEBBIE_CHANNEL` | `update.channel` | Read by `scripts/build.sh`: `release` never builds from source. |
 | `KEBBIE_VAULT_BIN` | none | A vault command that stands in for the vault plugin, for tests. |
 | `KEBBIE_IMAGES` | detected | How the board draws images such as a sign-off card's screenshots: `kitty`, `sixel`, `iterm2`, `halfblocks` or `off`. |
-| `KEBBIE_QR` | detected | How the hub's QR codes are drawn: `octant` or `braille`. |
+| `KEBBIE_QR` | detected | How the hub's QR codes are drawn: `octant` or `halfblock`. |
 | `KEBBIE_HUB_DEV` | unset | Use the dev hub at `KEBBIE_HUB_DEV_URL` instead of [`[hub] url`](configuration.md#keys). |
 | `KEBBIE_HUB_DEV_URL` | `http://localhost:8470` | The dev hub's address while `KEBBIE_HUB_DEV` is set; plain `http` only on this machine. |
 | `HERDR_BIN_PATH` | `herdr` | The herdr binary. `false` makes kebbie reach no herdr at all. |
@@ -37,9 +37,9 @@ The variables kebbie reads, the ones it sets for the commands it runs, and how t
 - `kitty`, `sixel` or `iterm2` use that graphics protocol. `halfblocks` draws a preview in text cells without querying the terminal. `off` shows their paths instead.
 - Detected, it asks the terminal when the first image is about to show. Inside herdr (`TERM_PROGRAM=herdr`) it asks nothing and uses Kitty, and the board not on a terminal shows paths.
 
-`KEBBIE_QR` draws in the terminal's own colours, with the glyphs as the light modules: `octant` in octant blocks, `braille` in braille dots. Detected, it is `octant` in these terminals and `braille` anywhere else:
+`KEBBIE_QR` draws in the terminal's own colours, with the glyphs as the light modules: `octant` in octant blocks, two modules across and four down a character, `halfblock` in half blocks, one across and two down. Detected, it is `octant` in these terminals and `halfblock` anywhere else:
 
-- Ghostty: `GHOSTTY_RESOURCES_DIR` set, as inside herdr in Ghostty, or `TERM_PROGRAM=ghostty`;
+- Ghostty: `GHOSTTY_RESOURCES_DIR` set, as inside herdr in Ghostty, `TERM_PROGRAM=ghostty`, or `TERM=xterm-ghostty`, which SSH carries to the other machine;
 - kitty: `KITTY_WINDOW_ID` set or `TERM=xterm-kitty`;
 - WezTerm: `WEZTERM_PANE` set or `TERM_PROGRAM=WezTerm`.
 

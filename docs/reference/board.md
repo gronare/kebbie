@@ -430,10 +430,10 @@ The window takes the board's whole width and height for the code; a board too sm
 
 The QR code:
 
-- It packs two modules across and four down a character, so on a cell twice as tall as wide every module is square, with four modules of quiet zone around it.
-- In Ghostty (herdr inside Ghostty too), kitty and WezTerm, which draw block characters themselves, it is drawn in octant blocks, in the terminal's own colours without a background. The blocks are the light modules and the quiet zone, and the terminal's background shows through as the dark modules, so on a dark theme the code reads the right way round, dark on light.
-- In any other terminal it is drawn in braille the same way, a raised dot for each light module. A phone camera can read braille next to text as text and flip between the two, so scan it with nothing else in the frame.
-- `KEBBIE_QR=octant` or `KEBBIE_QR=braille` picks one.
+- It is drawn in the terminal's own colours without a background. The blocks are the light modules and the quiet zone of four modules around it, and the terminal's background shows through as the dark modules, so on a dark theme the code reads the right way round, dark on light. Every module is square on a cell twice as tall as wide.
+- In Ghostty (herdr inside Ghostty too, and over SSH from Ghostty), kitty and WezTerm, which draw block characters themselves, it is drawn in octant blocks, two modules across and four down a character.
+- In any other terminal it is drawn in half blocks, one module across and two down a character, which every font draws. The code is then twice as wide and twice as tall; a pane too small for it shows the card without the code.
+- `KEBBIE_QR=octant` or `KEBBIE_QR=halfblock` picks one.
 
 While it waits:
 

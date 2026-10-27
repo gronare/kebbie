@@ -47,14 +47,14 @@ Nothing the hub sends can start anything on the machine. The board carries task 
 
 kebbie waits up to 10 minutes and ends on a card saying the machine is connected to the hub and that you sign in with your passkey on any phone or browser to see its board. Or it ends in one line: cancelled in the browser, or the code expired. `kebbie hub status` shows the account's id and the fingerprints of the two keys the machine pinned.
 
-- If the camera keeps reading the text beside the QR code instead, frame the code alone, or set `KEBBIE_QR=octant` when your terminal draws block characters well.
+- If the QR code does not fit, make the pane larger: in terminals other than Ghostty, kitty and WezTerm it is drawn twice as wide and tall. `KEBBIE_QR=octant` draws it small when your terminal draws octant blocks well.
 - If kebbie runs without a terminal, it prints the whole link and opens nothing.
 - If this machine has no browser, `c` copies the link to paste elsewhere. The link shown under the card stops at its `#`, since what follows is the secret that ties your browser to this machine.
 - If config.toml is a link, say into a dotfiles repo shared by several machines, kebbie never writes it: it says which line to set there or in a config.toml of this machine's own.
 
 ### How the QR code is drawn
 
-It is drawn in the terminal's own colours, the text colour making the light modules and the background the dark ones, so it reads dark on light in a dark theme. In Ghostty, kitty and WezTerm it is in octant blocks; in other terminals it is drawn in braille.
+It is drawn in the terminal's own colours, the text colour making the light modules and the background the dark ones, so it reads dark on light in a dark theme. In Ghostty, kitty and WezTerm it is in octant blocks; in other terminals it is drawn in half blocks, which every font draws.
 
 ### How the key reaches the machine
 

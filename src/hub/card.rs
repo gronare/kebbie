@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn the_code_is_painted_in_the_terminals_own_colours_without_a_paper() {
-        for glyphs in [qr::Glyphs::Octant, qr::Glyphs::Braille] {
+        for glyphs in [qr::Glyphs::Octant, qr::Glyphs::HalfBlock] {
             let code = qr::lines(LINK, glyphs).unwrap();
             let row = vec![piece(code[1].clone(), Tone::Dots)];
             for colour in [Colour::True, Colour::Basic, Colour::None] {

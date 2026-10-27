@@ -816,6 +816,18 @@ mod tests {
     }
 
     #[test]
+    fn half_blocks_make_the_code_twice_as_wide_and_tall_and_the_card_grows_with_it_or_gives_way_to_the_note() {
+        let mut app = test_app(Vec::new());
+        waiting_with(&mut app, Duration::from_secs(530), Paths { glyphs: qr::Glyphs::HalfBlock, ..paths("") });
+        let (code, octants) = (qr::lines(LINK, qr::Glyphs::HalfBlock).unwrap(), qr::lines(LINK, qr::Glyphs::Octant).unwrap());
+        assert!(code[0].chars().count().abs_diff(octants[0].chars().count() * 2) <= 1 && code.len().abs_diff(octants.len() * 2) <= 1, "{} × {}", code[0].chars().count(), code.len());
+        let wide = screen(&mut app, 140, 50);
+        assert!(wide.contains(&format!("{}   Connect mac to kebbie hub", code[0])) && code.iter().all(|line| wide.contains(line.as_str())), "beside the text, every row whole: {wide}");
+        let narrow = screen(&mut app, 44, 60);
+        assert!(!narrow.contains(&code[1]) && narrow.contains("A larger terminal shows a QR code") && narrow.contains("Check the page shows  Z78K-XF53"), "too narrow for the code, the note instead: {narrow}");
+    }
+
+    #[test]
     fn connected_the_window_names_the_machine_on_its_hub_when_the_board_went_out_and_where_to_sign_in() {
         let now = crate::messages::now();
         let mut app = opened(joined(relay::Relay { posted_at: Some(now - 12), rev: 3, ..Default::default() }));

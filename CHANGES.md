@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### Fixed
 
+- The hub's QR code is drawn in half blocks, which every font draws, in terminals other than Ghostty, kitty and WezTerm, and in octant blocks in Ghostty over SSH too; KEBBIE_QR=halfblock or octant picks one
 ## 0.28.0
 
 ### What's new

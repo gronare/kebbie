@@ -5,33 +5,51 @@ const BORDER: i32 = 4;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Glyphs {
     Octant,
-    Braille,
+    HalfBlock,
 }
 
-// Octants only in terminals that draw them themselves (a fallback font draws them uneven); braille elsewhere, though a phone may read its dots as text.
+impl Glyphs {
+    fn across(self) -> u8 {
+        match self {
+            Glyphs::Octant => 2,
+            Glyphs::HalfBlock => 1,
+        }
+    }
+
+    fn down(self) -> u8 {
+        self.across() * 2
+    }
+
+    fn glyph(self, mask: u8) -> char {
+        match self {
+            Glyphs::Octant => octant(mask),
+            Glyphs::HalfBlock => half_block(mask),
+        }
+    }
+}
+
+// Octants only in terminals that draw them themselves (a fallback font draws them uneven); half blocks, which every font draws, elsewhere.
 pub fn glyphs_in(env: impl Fn(&str) -> Option<String>) -> Glyphs {
     let set = |name: &str| env(name).is_some_and(|value| !value.is_empty());
     let is = |name: &str, wanted: &str| env(name).is_some_and(|value| value.eq_ignore_ascii_case(wanted));
     match env("KEBBIE_QR").map(|value| value.trim().to_ascii_lowercase()).as_deref() {
         Some("octant") => return Glyphs::Octant,
-        Some("braille") => return Glyphs::Braille,
+        Some("halfblock") => return Glyphs::HalfBlock,
         _ => {}
     }
-    let ghostty = set("GHOSTTY_RESOURCES_DIR") || is("TERM_PROGRAM", "ghostty");
+    let ghostty = set("GHOSTTY_RESOURCES_DIR") || is("TERM_PROGRAM", "ghostty") || is("TERM", "xterm-ghostty");
     let kitty = set("KITTY_WINDOW_ID") || is("TERM", "xterm-kitty");
     let wezterm = set("WEZTERM_PANE") || is("TERM_PROGRAM", "WezTerm");
-    if ghostty || kitty || wezterm { Glyphs::Octant } else { Glyphs::Braille }
+    if ghostty || kitty || wezterm { Glyphs::Octant } else { Glyphs::HalfBlock }
 }
 
 pub fn glyphs() -> Glyphs {
     glyphs_in(|name| std::env::var(name).ok())
 }
 
-// Braille numbers its dots down the left column then the right, with 7 and 8 added under them; cells here go 1 2 / 3 4 / 5 6 / 7 8, bit n-1 for cell n.
-pub fn braille(mask: u8) -> char {
-    const DOT: [u8; 8] = [0x01, 0x08, 0x02, 0x10, 0x04, 0x20, 0x40, 0x80];
-    let dots = (0..8).filter(|cell| mask & 1 << cell != 0).fold(0u32, |dots, cell| dots | u32::from(DOT[cell]));
-    char::from_u32(0x2800 + dots).unwrap_or(' ')
+// Bit 0 the upper module, bit 1 the lower.
+pub fn half_block(mask: u8) -> char {
+    [' ', '▀', '▄', '█'][usize::from(mask & 3)]
 }
 
 // Indexed by mask, bit n-1 for cell n: generated once from the Unicode 16 names BLOCK OCTANT-n, the patterns that block leaves out filled from the older block and quadrant characters.
@@ -74,17 +92,14 @@ pub fn octant(mask: u8) -> char {
     OCTANTS[usize::from(mask)]
 }
 
-// Two modules across and four down a character, on a cell twice as tall as wide every module square; the glyphs draw the light modules and the quiet zone, so on a dark terminal its background is the dark modules.
+// Octants put two modules across and four down a character, half blocks one and two, on a cell twice as tall as wide every module square; the glyphs draw the light modules and the quiet zone, so on a dark terminal its background is the dark modules.
 pub fn lines(text: &str, glyphs: Glyphs) -> Option<Vec<String>> {
     let code = QrCode::encode_text(text, QrCodeEcc::Low).ok()?;
     let span = -BORDER..code.size() + BORDER;
-    let glyph = match glyphs {
-        Glyphs::Octant => octant,
-        Glyphs::Braille => braille,
-    };
-    Some(span.clone().step_by(4).map(|y| span.clone().step_by(2).map(|x| {
-        let mask = (0..8u8).filter(|cell| !code.get_module(x + i32::from(cell % 2), y + i32::from(cell / 2))).fold(0u8, |mask, cell| mask | 1 << cell);
-        glyph(mask)
+    let (across, down) = (glyphs.across(), glyphs.down());
+    Some(span.clone().step_by(usize::from(down)).map(|y| span.clone().step_by(usize::from(across)).map(|x| {
+        let mask = (0..across * down).filter(|cell| !code.get_module(x + i32::from(cell % across), y + i32::from(cell / across))).fold(0u8, |mask, cell| mask | 1 << cell);
+        glyphs.glyph(mask)
     }).collect()).collect())
 }
 
@@ -102,11 +117,12 @@ mod tests {
         cells.bytes().fold(0, |mask, cell| mask | 1 << (cell - b'1'))
     }
 
-    fn modules(lines: &[String], glyph: fn(u8) -> char) -> Vec<Vec<bool>> {
-        let mask = |cell: char| (0..=255u8).find(|mask| glyph(*mask) == cell).unwrap_or_else(|| panic!("{cell:?} is no glyph of the set"));
+    fn modules(lines: &[String], glyphs: Glyphs) -> Vec<Vec<bool>> {
+        let (across, down) = (glyphs.across(), glyphs.down());
+        let mask = |cell: char| (0..1u16 << (across * down)).map(|mask| mask as u8).find(|mask| glyphs.glyph(*mask) == cell).unwrap_or_else(|| panic!("{cell:?} is no glyph of {glyphs:?}"));
         lines.iter().flat_map(|line| {
             let masks = line.chars().map(mask).collect::<Vec<_>>();
-            (0..4).map(move |row| masks.iter().flat_map(|mask| [mask & 1 << (row * 2) != 0, mask & 1 << (row * 2 + 1) != 0]).collect::<Vec<_>>())
+            (0..down).map(move |row| masks.iter().flat_map(|mask| (0..across).map(move |column| mask & 1 << (row * across + column) != 0)).collect::<Vec<_>>())
         }).collect()
     }
 
@@ -116,14 +132,8 @@ mod tests {
     }
 
     #[test]
-    fn braille_numbers_its_dots_down_each_column() {
-        assert_eq!(braille(0), '\u{2800}');
-        assert_eq!(braille(mask_of("1")), '⠁');
-        assert_eq!(braille(mask_of("2")), '⠈');
-        assert_eq!(braille(mask_of("3")), '⠂');
-        assert_eq!(braille(mask_of("78")), '⣀');
-        assert_eq!(braille(255), '⣿');
-        assert_eq!((0..=255u8).map(braille).collect::<std::collections::HashSet<_>>().len(), 256);
+    fn half_blocks_draw_the_upper_module_the_lower_both_or_neither() {
+        assert_eq!([0, 1, 2, 3].map(half_block), [' ', '▀', '▄', '█']);
     }
 
     #[test]
@@ -142,7 +152,13 @@ mod tests {
     }
 
     #[test]
-    fn octants_where_the_terminal_draws_them_itself_and_braille_everywhere_else_unless_kebbie_qr_says() {
+    #[ignore = "prints a half-block code to eyeball: cargo test print_a_half_block_code -- --ignored --nocapture"]
+    fn print_a_half_block_code() {
+        println!("{}", lines(LINK, Glyphs::HalfBlock).unwrap().join("\n"));
+    }
+
+    #[test]
+    fn octants_where_the_terminal_draws_them_itself_and_half_blocks_everywhere_else_unless_kebbie_qr_says() {
         for (pairs, glyphs) in [
             (&[("TERM_PROGRAM", "ghostty")][..], Glyphs::Octant),
             (&[("TERM_PROGRAM", "herdr"), ("GHOSTTY_RESOURCES_DIR", "/Applications/Ghostty.app/Contents/Resources/ghostty")], Glyphs::Octant),
@@ -150,12 +166,15 @@ mod tests {
             (&[("TERM", "xterm-kitty")], Glyphs::Octant),
             (&[("WEZTERM_PANE", "0")], Glyphs::Octant),
             (&[("TERM_PROGRAM", "WezTerm")], Glyphs::Octant),
-            (&[("TERM_PROGRAM", "Apple_Terminal"), ("TERM", "xterm-256color")], Glyphs::Braille),
-            (&[("TERM_PROGRAM", "iTerm.app")], Glyphs::Braille),
-            (&[("TERM_PROGRAM", "herdr")], Glyphs::Braille),
-            (&[("GHOSTTY_RESOURCES_DIR", "")], Glyphs::Braille),
-            (&[], Glyphs::Braille),
-            (&[("TERM_PROGRAM", "ghostty"), ("KEBBIE_QR", "braille")], Glyphs::Braille),
+            (&[("TERM", "xterm-ghostty")], Glyphs::Octant),
+            (&[("TERM_PROGRAM", "Apple_Terminal"), ("TERM", "xterm-256color")], Glyphs::HalfBlock),
+            (&[("TERM_PROGRAM", "iTerm.app")], Glyphs::HalfBlock),
+            (&[("TERM_PROGRAM", "herdr")], Glyphs::HalfBlock),
+            (&[("TERM", "xterm-256color")], Glyphs::HalfBlock),
+            (&[("GHOSTTY_RESOURCES_DIR", "")], Glyphs::HalfBlock),
+            (&[], Glyphs::HalfBlock),
+            (&[("TERM_PROGRAM", "ghostty"), ("KEBBIE_QR", "halfblock")], Glyphs::HalfBlock),
+            (&[("TERM_PROGRAM", "Apple_Terminal"), ("KEBBIE_QR", "braille")], Glyphs::HalfBlock),
             (&[("TERM_PROGRAM", "Apple_Terminal"), ("KEBBIE_QR", "Octant")], Glyphs::Octant),
             (&[("TERM_PROGRAM", "ghostty"), ("KEBBIE_QR", "squares")], Glyphs::Octant),
         ] {
@@ -164,15 +183,15 @@ mod tests {
     }
 
     #[test]
-    fn a_link_draws_a_glyph_for_each_light_module_two_across_and_four_down_with_four_light_modules_around_and_every_module_in_place() {
+    fn a_link_draws_a_glyph_for_each_light_module_with_four_light_modules_around_and_every_module_in_place() {
         let code = QrCode::encode_text(LINK, QrCodeEcc::Low).unwrap();
         let size = code.size() as usize;
-        for (glyphs, glyph) in [(Glyphs::Octant, octant as fn(u8) -> char), (Glyphs::Braille, braille)] {
+        for (glyphs, across, down) in [(Glyphs::Octant, 2, 4), (Glyphs::HalfBlock, 1, 2)] {
             let drawn = lines(LINK, glyphs).unwrap();
-            assert!(drawn.iter().all(|line| line.chars().count() == (size + 8).div_ceil(2)), "two modules a column");
-            assert_eq!(drawn.len(), (size + 8).div_ceil(4), "four modules a row");
+            assert!(drawn.iter().all(|line| line.chars().count() == (size + 8).div_ceil(across)), "{glyphs:?}: {across} modules a column");
+            assert_eq!(drawn.len(), (size + 8).div_ceil(down), "{glyphs:?}: {down} modules a row");
             assert!(!drawn.concat().contains('\x1b'), "no colour in the glyphs");
-            let grid = modules(&drawn, glyph);
+            let grid = modules(&drawn, glyphs);
             for (y, row) in grid.iter().enumerate() {
                 for (x, drawn) in row.iter().enumerate() {
                     let inside = (4..size + 4).contains(&x) && (4..size + 4).contains(&y);

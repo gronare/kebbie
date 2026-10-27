@@ -673,7 +673,7 @@ On the card:
 - `esc` or `q` stops.
 - The text sits beside the code from the top, or above it in a narrow terminal. One too small for either shows the card without the code.
 
-The QR code is drawn two square modules across and four down a character, with four light modules around it, in the terminal's own colours with no background. The glyphs are the light modules, so a dark theme's background makes the dark ones. It uses octant blocks in Ghostty, kitty and WezTerm and braille elsewhere; `KEBBIE_QR=octant` or `braille` picks one. See [the board's hub window](board.md).
+The QR code is drawn in square modules with four light modules around it, in the terminal's own colours with no background. The glyphs are the light modules, so a dark theme's background makes the dark ones. It uses octant blocks, two modules across and four down a character, in Ghostty, kitty and WezTerm, and half blocks, one across and two down, elsewhere; `KEBBIE_QR=octant` or `halfblock` picks one. See [the board's hub window](board.md).
 
 kebbie asks the hub every few seconds, slower when the hub asks, for up to 10 minutes. The machine pins the account key, without digits, only when the browser's commitment to it matches a secret the link carries past the hub, and refuses otherwise. It keeps the keys, the token and the account key with its two fingerprints in [`hub/`](files.md#the-state-directory).
 
