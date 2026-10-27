@@ -7,6 +7,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- Moving over from kelpie points herdr's sidebar sync and key descriptions at kebbie too, and reloads herdr, so the sidebar runs and prefix+space works without restarting herdr
+- Running the install command again no longer moves kelpie over a second time because of the log the old keeper leaves as it exits
 
 ## 0.28.1
 

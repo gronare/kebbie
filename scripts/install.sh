@@ -46,14 +46,21 @@ state_home=${XDG_STATE_HOME:-$HOME/.local/state}
 config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 herdr_config=${HERDR_CONFIG_PATH:-$config_home/herdr/config.toml}
 
+# The old keeper writes keeper.log as it exits, which recreates its state dir after the move.
+only_logs() { [ -d "$1" ] && [ -z "$(find "$1" -mindepth 1 ! -name '*.log' -print -quit)" ]; }
+leftover() { [ -e "$2" ] && only_logs "$1"; }
+kelpie_lines='command = "kelpie\.|/kelpie/current/|description = "kelpie|# kelpie.s |a kelpie task'
+
 move_dir() {
   if [ ! -e "$1" ]; then return 0; fi
+  if leftover "$1" "$2"; then rm -r "$1"; return 0; fi
   if [ -e "$2" ]; then warn "both $(short "$1") and $(short "$2") exist; kebbie uses the second, so merge or remove the first"; return 0; fi
   mv "$1" "$2" && moved=1
 }
 
 old_plugin=$(installed kelpie)
-if [ -n "$old_plugin" ] || [ -e "$config_home/kelpie" ] || [ -e "$state_home/kelpie" ]; then had_kelpie=1; else had_kelpie=""; fi
+left() { [ -e "$1" ] && ! leftover "$1" "$2"; }
+if [ -n "$old_plugin" ] || left "$config_home/kelpie" "$config_home/kebbie" || left "$state_home/kelpie" "$state_home/kebbie" || { [ -f "$herdr_config" ] && grep -qE "$kelpie_lines" "$herdr_config"; }; then had_kelpie=1; else had_kelpie=""; fi
 
 move_from_kelpie() {
   [ -n "$had_kelpie" ] || return 0
@@ -62,10 +69,11 @@ move_from_kelpie() {
   move_dir "$config_home/kelpie" "$config_home/kebbie"
   move_dir "$state_home/kelpie" "$state_home/kebbie"
   [ -z "$moved" ] || ok "settings and state now live under kebbie"
-  if [ -f "$herdr_config" ] && grep -q 'command = "kelpie\.' "$herdr_config"; then
+  if [ -f "$herdr_config" ] && grep -qE "$kelpie_lines" "$herdr_config"; then
     cp "$herdr_config" "$herdr_config.kelpie-backup"
-    sed 's/command = "kelpie\./command = "kebbie./' "$herdr_config.kelpie-backup" > "$herdr_config"
-    ok "herdr keys run kebbie   $dim(backup: $(short "$herdr_config").kelpie-backup)$off"
+    sed -e 's/command = "kelpie\./command = "kebbie./' -e 's#/kelpie/current/#/kebbie/current/#' -e 's/description = "kelpie/description = "kebbie/' -e "s/# kelpie's /# kebbie's /" -e 's/a kelpie task/a kebbie task/' "$herdr_config.kelpie-backup" > "$herdr_config"
+    herdr server reload-config >/dev/null 2>&1 || true
+    ok "herdr keys and sidebar run kebbie   $dim(backup: $(short "$herdr_config").kelpie-backup)$off"
   fi
   case "$old_plugin" in
     local\ *) warn "kelpie is linked from $(short "${old_plugin#local }"); run herdr plugin unlink kelpie once kebbie is checked out there" ;;
