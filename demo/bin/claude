@@ -68,6 +68,20 @@ if session:
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+# A pooled worktree that comes back with another task starts that task's session on a clean screen.
+def fresh_screen():
+    mark = os.path.join(demo, "screens", f".{here}.branch")
+    try:
+        before = open(mark).read().strip()
+    except OSError:
+        before = None
+    if before is not None and before != branch:
+        open(script_file, "w").close()
+        open(mode_file, "w").close()
+    with open(mark, "w") as out:
+        out.write(branch)
+
+
 def read_script():
     try:
         return open(script_file).read()
@@ -150,6 +164,7 @@ def submit(text):
 
 
 def main():
+    fresh_screen()
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     tty.setraw(fd)

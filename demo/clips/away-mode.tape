@@ -1,10 +1,10 @@
 Output docs/assets/clips/away-mode.gif
 
 Set Shell "bash"
-Set FontSize 14
-Set Width 1280
-Set Height 720
-Set Padding 10
+Set FontSize 20
+Set Width 1200
+Set Height 750
+Set Padding 12
 Set Framerate 12
 Set TypingSpeed 45ms
 Set CursorBlink false
@@ -32,4 +32,4 @@ Sleep 6.5s
 Type "A"
 Sleep 2s
 Escape
-Sleep 6s
+Sleep 7s

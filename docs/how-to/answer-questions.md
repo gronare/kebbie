@@ -2,7 +2,7 @@
 
 Answer the questions your tasks ask through the board, each with options and a recommendation, all in one window.
 
-![Answering a task's question in the inbox, with a comment](../assets/clips/answer-questions.gif)
+![Answering a task's question in the inbox; the task builds it and the reviewer passes it](../assets/clips/answer-questions.gif)
 
 1. Press `i` on the board. The inbox opens with the waiting questions on the left and the selected question's detail or plan in the middle.
 

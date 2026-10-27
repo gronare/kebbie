@@ -1,10 +1,10 @@
 Output docs/assets/demo.gif
 
 Set Shell "bash"
-Set FontSize 14
-Set Width 1280
-Set Height 720
-Set Padding 10
+Set FontSize 18
+Set Width 1440
+Set Height 810
+Set Padding 12
 Set Framerate 12
 Set TypingSpeed 45ms
 Set CursorBlink false
@@ -21,59 +21,39 @@ Type "h"
 Sleep 500ms
 Show
 
-# 1. A sentence to the lead, which starts saved-carts.
+# 1. A sentence to the lead, which starts saved-carts; its question lands on the board.
 Sleep 2s
 Tab
 Sleep 700ms
 Type "Add saved carts to the shop"
 Sleep 600ms
 Enter
-Sleep 9s
+Wait+Screen@40s /2 options/
+Sleep 1.5s
 
-# 2. Down the board, one row at a time, to saved-carts.
+# 2. The board: every task grouped by what it needs from you.
 Ctrl+B
 Type "h"
-Sleep 600ms
-Type "j"
-Sleep 1.2s
-Type "j"
-Sleep 1.2s
-Type "j"
-Sleep 1.5s
+Sleep 2s
 Screenshot docs/assets/board.png
 Sleep 1s
 
-# 3. Its options.
-Enter
-Sleep 1.2s
-Down
-Sleep 2.5s
-Screenshot docs/assets/options.png
-Sleep 500ms
-Escape
-Sleep 2.5s
-
-# 4. Its question, answered in the inbox.
-Type "i"
-Sleep 1.5s
-Shift+Tab
-Sleep 150ms
-Shift+Tab
+# 3. saved-carts' question, answered with the recommended option.
+Type "/saved"
 Sleep 400ms
-Type "j"
-Sleep 1.2s
-Tab
-Sleep 150ms
-Tab
-Sleep 1.5s
+Enter
+Sleep 800ms
+Type "s"
+Sleep 2s
 Screenshot docs/assets/question.png
 Sleep 1s
 Enter
-Sleep 2s
+Sleep 1.5s
 Escape
-Sleep 3s
+Wait+Screen@40s /READY TO PUSH/
+Sleep 1.5s
 
-# 5. The review split: a change asked for on the line.
+# 4. The review split: a change asked for on the line.
 Type "r"
 Sleep 2.5s
 Enter
@@ -94,27 +74,22 @@ Type "h"
 Sleep 900ms
 Enter
 
-# 6. Claude reads the comment and changes the code.
+# 5. Claude reads the comment and changes the code.
 Sleep 5s
 
-# 7. Back on the board: working, then ready to push.
+# 6. Back on the board: working, then ready, and the reviewer checks its rules.
 Ctrl+B
 Type " "
-Sleep 6.5s
+Wait+Screen@40s /2 commits/
+Sleep 3s
 
-# 8. The diff again, then the card.
-Type "r"
-Sleep 2s
-Type "u"
-Sleep 2.5s
-Hide
-Ctrl+B
-Type " "
-Sleep 700ms
+# 7. Its options, then the card with its screenshot.
+Enter
+Sleep 1.5s
+Screenshot docs/assets/options.png
+Sleep 1s
 Escape
-Sleep 300ms
-Show
-Sleep 700ms
+Sleep 500ms
 Type "s"
 Sleep 3.5s
 Screenshot docs/assets/card.png
@@ -124,16 +99,14 @@ Sleep 3s
 Escape
 Sleep 500ms
 
-# 9. Push: the card above the commits, then y.
+# 8. Push: the card above the commits, then y.
 Type "p"
-Sleep 4s
+Sleep 3.5s
 Screenshot docs/assets/push.png
 Sleep 500ms
 Type "y"
 
-# 10. Pushed: gone from the board, the messages say so.
-Sleep 3s
+# 9. Rebased onto main and pushed; kebbie watches its CI.
+Sleep 5s
 Screenshot docs/assets/pushed.png
-Sleep 500ms
-Escape
-Sleep 3.5s
+Sleep 3s

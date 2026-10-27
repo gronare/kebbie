@@ -2,6 +2,8 @@
 
 Give the board's Backlog column work to start from: a local file, the vault, Linear, or any mix.
 
+![The Backlog column by priority; g starts an item as a task, which puts its plan to you](../assets/clips/backlog.gif)
+
 ## Pick the sources
 
 1. List the sources in `~/.config/kebbie/config.toml`. The first one is where the lead files new ideas.

@@ -8,14 +8,36 @@ case "$text" in
     sleep 0.8
     mode working
     say "● Reading the cart code in src/cart/."
-    sleep 3
+    sleep 2
     say "● Read(src/cart/cart.ts)"
     more "  ⎿  Read 19 lines"
-    sleep 5
+    sleep 3
     say "● Carts can live in the database or in the browser, and that choice is yours. I put the question on the board."
     kebbie ask --option "Database: the cart follows the shopper to every device" \
       --option "Browser storage: the cart stays on the device it was filled on" \
       --recommend 1 "Where should saved carts be kept?" >/dev/null
+    mode idle
+    ;;
+  *"30 days"*)
+    mode working
+    kebbie report --state working --next "nothing yet" "Keeping carts for 30 days, from your review comment" >/dev/null
+    sleep 1
+    say "● Your comment on src/cart/store.ts:3 asks to keep the cart for 30 days, not 7. Changing it."
+    sleep 2.5
+    perl -pi -e 's/KEEP_DAYS = 7;/KEEP_DAYS = 30;/' src/cart/store.ts
+    say "● Update(src/cart/store.ts)" "  ⎿  - export const KEEP_DAYS = 7;" "     + export const KEEP_DAYS = 30;"
+    commit "Keep saved carts for 30 days" "Seven days dropped carts shoppers meant to come back to after payday. Saved carts now expire 30 days after the last visit."
+    sleep 2.5
+    say "● Bash(git commit -m \"Keep saved carts for 30 days\")"
+    cat > card.md <<CARD
+Saved carts are kept for 30 days after the shopper's last visit, on every device they sign in on.
+
+![the saved cart on a second device]($D/shots/saved-carts.png)
+
+Confirm: sign in on a second device and the same cart is there.
+CARD
+    kebbie report --state ready --card card.md --next "push it" "Carts are kept 30 days; the card shows the saved cart" >/dev/null
+    say "● Done: carts are kept for 30 days. The card shows the saved cart on a second device."
     mode idle
     ;;
   "[from you]"*)
@@ -45,28 +67,6 @@ TS
     say "● Bash(git commit -m \"Keep a signed-in shopper's cart in the database\")"
     kebbie report --state ready --next "review src/cart/store.ts" "Carts are kept in the database for 7 days after the last visit" >/dev/null
     say "● Ready: carts are saved in the database and kept for 7 days."
-    mode idle
-    ;;
-  *"30 days"*)
-    mode working
-    kebbie report --state working --next "nothing yet" "Keeping carts for 30 days, from your review comment" >/dev/null
-    sleep 1
-    say "● Your comment on src/cart/store.ts:3 asks to keep the cart for 30 days, not 7. Changing it."
-    sleep 2.5
-    perl -pi -e 's/KEEP_DAYS = 7;/KEEP_DAYS = 30;/' src/cart/store.ts
-    say "● Update(src/cart/store.ts)" "  ⎿  - export const KEEP_DAYS = 7;" "     + export const KEEP_DAYS = 30;"
-    commit "Keep saved carts for 30 days" "Seven days dropped carts shoppers meant to come back to after payday. Saved carts now expire 30 days after the last visit."
-    sleep 2.5
-    say "● Bash(git commit -m \"Keep saved carts for 30 days\")"
-    cat > card.md <<CARD
-Saved carts are kept for 30 days after the shopper's last visit, on every device they sign in on.
-
-![the saved cart on a second device]($D/shots/saved-carts.png)
-
-Confirm: sign in on a second device and the same cart is there.
-CARD
-    kebbie report --state ready --card card.md --next "push it" "Carts are kept 30 days; the card shows the saved cart" >/dev/null
-    say "● Done: carts are kept for 30 days. The card shows the saved cart on a second device."
     mode idle
     ;;
 esac

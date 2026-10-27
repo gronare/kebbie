@@ -46,7 +46,7 @@ case "$text" in
     say "● Welcome back. While you were away:" \
       "  - Landed: nothing; no task had your push permission." \
       "  - Decided: search-filters' price filter uses fixed ranges, as recommended. It was a how-question." \
-      "  - Waits for you: vat-rounding's preview totals, and checkout-copy to push."
+      "  - Waits for you: vat-rounding's preview totals, and checkout-copy and search-filters to push."
     mode idle
     ;;
 esac

@@ -1,10 +1,10 @@
 Output docs/assets/clips/answer-questions.gif
 
 Set Shell "bash"
-Set FontSize 14
-Set Width 1280
-Set Height 720
-Set Padding 10
+Set FontSize 20
+Set Width 1200
+Set Height 750
+Set Padding 12
 Set Framerate 12
 Set TypingSpeed 45ms
 Set CursorBlink false
@@ -19,19 +19,19 @@ Sleep 300ms
 Ctrl+B
 Type "h"
 Sleep 500ms
+Type "h"
+Sleep 800ms
 Show
 
-# The inbox: the cursor starts on the recommended option.
+# The inbox: the question with its options, the cursor on the recommended one.
 Sleep 1.5s
 Type "i"
 Sleep 2.5s
-Tab
-Sleep 400ms
-Type "Keep the chosen range in the URL so a search can be shared."
-Sleep 900ms
+Down
+Sleep 1.5s
+Up
+Sleep 1.2s
 Enter
-Sleep 2s
-Escape
 
-# The answer reaches the task as a message from you, and it goes on working.
-Sleep 8s
+# The answer reaches the task as a message from you: it works, reports ready, and the reviewer passes it.
+Sleep 14s

@@ -2,7 +2,7 @@
 
 This page explains how one command updates kebbie, its Claude Code plugin and the vault plugin, and how the running Claude sessions move onto the new code without losing their conversations.
 
-![U on the board: kebbie updates and restarts the idle Claude sessions](../assets/clips/update-and-restarts.gif)
+![U on the board: kebbie downloads the release, shows what's new and restarts the idle Claude sessions](../assets/clips/update-and-restarts.gif)
 
 ## Every part moves through one link
 

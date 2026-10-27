@@ -4,6 +4,8 @@ This page explains what the lead holds, where it stops, how away mode keeps work
 
 The lead is the Claude you talk to most. It runs in the lead Space next to the board. Feature work happens in each task's own Space; the lead starts it, steers it and checks it.
 
+![A sentence to the lead starts a task, and the task's question lands on the board](../assets/clips/lead.gif)
+
 ## The lead holds the picture for you
 
 With one Claude, you hold the picture. With five, you cannot: you would spend your time switching Spaces, reading scrollback and copying what one session said into another. The lead holds the tasks, repos, plans and decisions, so you can come back after an hour and ask "what needs me?"

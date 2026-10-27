@@ -1,13 +1,13 @@
 #!/bin/bash
-# search-filters: takes the answer to its price question and builds the ranges.
+# search-filters: takes the answer to its price question, yours or the lead's, and builds the ranges.
 . "$KDEMO_DIR/react/lib.sh"
 text=$1
 case "$text" in
-  "[from you]"*)
+  "[from you]"*|"[from lead]"*)
     sleep 0.5
     mode working
     kebbie report --state working --next "nothing yet" "Building the fixed price ranges" >/dev/null
-    say "● Fixed ranges, then, with your comment taken in. Adding the four ranges."
+    say "● Fixed ranges, then. Adding the four ranges."
     sleep 2
     cat > src/search/price.ts <<'TS'
 export const priceRanges = [

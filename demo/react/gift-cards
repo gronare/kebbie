@@ -1,0 +1,47 @@
+#!/bin/bash
+# gift-cards: started from its backlog item with g; puts its plan to the user, and builds it once approved.
+. "$KDEMO_DIR/react/lib.sh"
+text=$1
+case "$text" in
+  "Work on:"*)
+    sleep 0.6
+    mode working
+    say "● Reading the checkout in src/checkout/ to see where a card would be redeemed."
+    sleep 2.5
+    plan=$(git rev-parse --absolute-git-dir)/kebbie-tmp/plan.md
+    mkdir -p "$(dirname "$plan")"
+    cat > "$plan" <<'PLAN'
+# Gift cards
+
+- A gift card has a code, a fixed value and a balance.
+- The shop sells cards worth 25, 50 and 100.
+- At checkout a card's balance pays as much of the total as it covers; the shopper pays the rest as before.
+- Tests: a card worth less than the total, a spent card, two cards on one order.
+PLAN
+    say "● Write(plan.md)" "  ⎿  Wrote 6 lines"
+    sleep 1
+    kebbie ask --plan "$plan" "Gift cards are sold at a fixed value and pay for checkout. Build it this way?" >/dev/null
+    say "● The plan is on the board for you to approve."
+    mode idle
+    ;;
+  "[from you]"*)
+    sleep 0.6
+    mode working
+    mkdir -p src/giftcards
+    cat > src/giftcards/card.ts <<'TS'
+export type GiftCard = { code: string; value: number; balance: number };
+
+export function redeem(card: GiftCard, total: number): number {
+  const used = Math.min(card.balance, total);
+  card.balance -= used;
+  return total - used;
+}
+TS
+    say "● Write(src/giftcards/card.ts)" "  ⎿  Wrote 7 lines"
+    sleep 2
+    git add src/giftcards/card.ts && git commit -qm "Sell and redeem fixed-value gift cards" -m "Shoppers asked for a gift they could give without picking a product. A gift card holds a fixed value, and at checkout its balance pays for as much of the total as it covers."
+    kebbie report --state ready --next "push it" "Gift cards hold a fixed value; checkout takes their balance off the total" >/dev/null
+    say "● Ready: gift cards are sold at a fixed value and redeemed at checkout."
+    mode idle
+    ;;
+esac

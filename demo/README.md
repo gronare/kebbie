@@ -8,14 +8,33 @@ demo/record.sh review-in-nvim       # one clip, named after its tape in demo/cli
 
 Recorded with [vhs](https://github.com/charmbracelet/vhs) (`brew install vhs`); the card images are rendered with headless Chrome. kebbie is built from the committed HEAD, so uncommitted changes stay out of the recording.
 
-| Tape | Writes |
-| --- | --- |
-| `demo.tape` | `docs/assets/demo.gif`, the README film, and the stills `board.png`, `options.png`, `question.png`, `review.png`, `card.png`, `push.png`, `pushed.png` |
-| `clips/<name>.tape` | `docs/assets/clips/<name>.gif`, shown at the top of its docs page |
+| Tape | Writes | Shows |
+| --- | --- | --- |
+| `demo.tape` | `docs/assets/demo.gif`, the README film, and the stills `board.png`, `options.png`, `question.png`, `review.png`, `card.png`, `push.png`, `pushed.png` | A sentence to the lead, through the question, a review comment and the reviewer's rules check, to the push and its CI |
+| `clips/backlog.tape` | `docs/assets/clips/backlog.gif` | The Backlog column by priority; `g` starts an item, and its task puts a plan to you |
+| `clips/lead.tape` | `docs/assets/clips/lead.gif` | A sentence to the lead starts saved-carts, whose question lands on the board |
+| `clips/getting-started.tape` | `docs/assets/clips/getting-started.gif` | `n` starts a task in its own worktree and Space; it reports ready |
+| `clips/answer-questions.tape` | `docs/assets/clips/answer-questions.gif` | The inbox; the answered task builds, reports ready and the reviewer passes it |
+| `clips/review-in-nvim.tape` | `docs/assets/clips/review-in-nvim.gif` | A line comment in the review split goes to Claude, which changes the code; then the rules check |
+| `clips/push-and-card.tape` | `docs/assets/clips/push-and-card.gif` | The card, the push window, CI watched until green, and the task queued after it starting |
+| `clips/away-mode.tape` | `docs/assets/clips/away-mode.gif` | `A`: the lead settles a how-question, and sums up when you are back |
+| `clips/areas-page.tape` | `docs/assets/clips/areas-page.gif` | The Areas page, an area's actions and its vault log |
+| `clips/routines.tape` | `docs/assets/clips/routines.gif` | A health check added from the Routines page |
+| `clips/hub-connect.tape` | `docs/assets/clips/hub-connect.gif` | `H` connects the machine to a hub: the card with the link's QR code and the code to check |
+| `clips/update-and-restarts.tape` | `docs/assets/clips/update-and-restarts.gif` | `U` downloads the newer release, shows what's new and restarts the idle sessions |
 
-Each tape gets a fresh world from `setup.sh <name>` under `/tmp/kebbie-demo`: its own `HOME` and XDG dirs, its own herdr server on a socket there, two small repos with tasks seeded through `kebbie start`, `report`, `ask`, `tell` and `backlog add`. The `demo` scene and the `areas-page` clip add a vault index as notes-vault-mcp writes it (`vault-index.py`), and the `update-and-restarts` clip installs kebbie as a checkout at its release tag with a newer tag on a local origin, linked into herdr, so `U` really updates and restarts the sessions; that clip's world builds with your own cargo and rustup toolchain. `record.sh` stops the server when it is done; `demo/setup.sh --stop` does it by hand. Nothing reaches your own herdr, Claude or kebbie state.
+Each clip is shown at the top of its docs page.
 
-`bin/claude` is a stand-in for Claude Code that never calls a model. It draws a session from `/tmp/kebbie-demo/screens/<folder>`, writes what it is sent to its transcript as Claude Code does (kebbie checks there that a prompt arrived), and runs `react/<task>` with the prompt: these scripts are what the lead and the tasks do, such as starting saved-carts, asking where carts are kept, or changing the code after a review comment. Asked by kebbie's rules check, it answers as the reviewer: `verdict: ok`, or the verdict in `verdicts/<task>` when the scene wrote one. `card.html` and `checkout.html` are the pages behind the sign-off cards' screenshots.
+Each tape gets a fresh world from `setup.sh <name>` under `/tmp/kebbie-demo`: its own `HOME` and XDG dirs, its own herdr server on a socket there, two small repos with tasks seeded through `kebbie start`, `report`, `ask`, `tell` and `backlog add`. The repos' origins read as `https://github.com/robin-demo/<repo>`, and git sends their pushes to bare repos under `/tmp/kebbie-demo/remotes`, so kebbie watches CI after a push; `bin/gh` stands in for the GitHub CLI and reports one CI run per pushed commit, green 20 seconds after kebbie first asks.
+
+- The `demo` scene and the `areas-page` clip add a vault index as notes-vault-mcp writes it (`vault-index.py`).
+- The `push-and-card` clip queues free-shipping after checkout-copy, so it starts by itself once checkout-copy's CI is green.
+- The `update-and-restarts` clip installs kebbie as a checkout at its release tag, linked into herdr, with a newer tag on a local origin whose release notes `release-notes.py` cuts and whose binary a local server publishes, so `U` really downloads the release and restarts the sessions; that clip's world builds with your own cargo and rustup toolchain.
+- The `hub-connect` clip runs a kebbie hub of its own on `localhost:18471`: put `kebbie-hub` on `PATH` or set `KDEMO_HUB_BIN`.
+
+`record.sh` stops the servers when it is done; `demo/setup.sh --stop` does it by hand. Nothing reaches your own herdr, Claude, GitHub or kebbie state.
+
+`bin/claude` is a stand-in for Claude Code that never calls a model. It draws a session from `/tmp/kebbie-demo/screens/<folder>`, writes what it is sent to its transcript as Claude Code does (kebbie checks there that a prompt arrived), and runs `react/<task>` with the prompt (a pooled worktree that comes back with another task starts on a clean screen): these scripts are what the lead and the tasks do, such as starting saved-carts, asking where carts are kept, or changing the code after a review comment. Asked by kebbie's rules check, it answers as the reviewer: `verdict: ok`, or the verdict in `verdicts/<task>` when the scene wrote one. `card.html` and `checkout.html` are the pages behind the sign-off cards' screenshots.
 
 ## The demo scene
 

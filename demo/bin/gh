@@ -1,0 +1,21 @@
+#!/bin/bash
+# A stand-in for the GitHub CLI in the demo: logged in, and each pushed commit gets one CI run that is green 20 seconds after kebbie first asks for it.
+D=${KDEMO_DIR:-/tmp/kebbie-demo}
+case "$1 $2" in
+  "auth status") exit 0 ;;
+  "run list") ;;
+  *) echo "the demo's gh answers only auth status and run list" >&2; exit 1 ;;
+esac
+slug= sha=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -R) slug=$2; shift ;;
+    --commit) sha=$2; shift ;;
+  esac
+  shift
+done
+mkdir -p "$D/ci"
+[ -f "$D/ci/$sha" ] || date +%s > "$D/ci/$sha"
+id=$(( $(cut -c1-6 <<<"$(cksum <<<"$sha")") + 1000000 ))
+if [ $(( $(date +%s) - $(cat "$D/ci/$sha") )) -lt 20 ]; then status=in_progress conclusion=; else status=completed conclusion=success; fi
+printf '[{"databaseId":%s,"name":"test","status":"%s","conclusion":"%s","workflowName":"CI","url":"https://github.com/%s/actions/runs/%s"}]\n' "$id" "$status" "$conclusion" "$slug" "$id"

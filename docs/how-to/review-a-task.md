@@ -2,7 +2,7 @@
 
 Read a task's diff next to its Claude and send it comments line by line.
 
-![A comment on a line in the review split, sent to Claude](../assets/clips/review-in-nvim.gif)
+![A comment on a line in the review split, sent to Claude, then the reviewer's rules check](../assets/clips/review-in-nvim.gif)
 
 1. Select the task on the board and press `r`. A split opens next to Claude with the task's files in review order.
 2. Press `Enter` on a file to open its diff in nvim.

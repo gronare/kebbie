@@ -1,5 +1,5 @@
 #!/bin/bash
-# vat-rounding: takes a review comment on the preview and shows the difference per invoice.
+# vat-rounding: takes a review comment on the preview, shows the difference per invoice and reports ready.
 . "$KDEMO_DIR/react/lib.sh"
 text=$1
 case "$text" in
@@ -13,8 +13,8 @@ case "$text" in
     say "● Update(app/invoices/preview.py)" "  ⎿  -             yield invoice.number, old, new" "     +             yield invoice.number, old, new, new - old"
     sleep 2
     git add app/invoices/preview.py && git commit -qm "Show the difference per invoice in the VAT preview" -m "Old and new totals side by side still left the reader to subtract. Each changed invoice now carries the difference too, so the largest shifts stand out."
-    kebbie report --state needs-you --next "check the totals in the preview" "The preview shows old, new and the difference per invoice" >/dev/null
-    say "● Done: the preview shows the difference per invoice."
+    kebbie report --state ready --next "push it" "The preview shows old, new and the difference per invoice" >/dev/null
+    say "● Done: the preview shows the difference per invoice. Ready to push."
     mode idle
     ;;
 esac

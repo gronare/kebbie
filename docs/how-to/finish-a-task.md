@@ -2,7 +2,7 @@
 
 Close a task you pushed, drop one you no longer want, or reset one to start over.
 
-![The sign-off card with its screenshot, then the push window](../assets/clips/push-and-card.gif)
+![The sign-off card with its screenshot, the push window, then CI watched until green](../assets/clips/push-and-card.gif)
 
 | You want to | Run | Board |
 | --- | --- | --- |

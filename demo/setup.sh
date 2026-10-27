@@ -15,6 +15,10 @@ stop_demo() {
   if [ "$(demo_socket)" = "$H/.config/herdr/herdr.sock" ]; then "$D/env.sh" herdr server stop >/dev/null 2>&1 || true; fi
   local pid; pid=$(cat "$D/server.pid" 2>/dev/null || true)
   if [ -n "$pid" ] && ps -p "$pid" -o command= | grep -q '^herdr server'; then kill "$pid"; fi
+  pid=$(cat "$D/releases.pid" 2>/dev/null || true)
+  if [ -n "$pid" ] && ps -p "$pid" -o command= | grep -q 'http.server'; then kill "$pid"; fi
+  pid=$(cat "$D/hub.pid" 2>/dev/null || true)
+  if [ -n "$pid" ] && ps -p "$pid" -o command= | grep -q 'kebbie-hub'; then kill "$pid"; fi
 }
 
 stop_demo
@@ -27,6 +31,7 @@ mkdir -p "$D/bin" "$D/remotes" "$D/screens" "$D/modes" "$D/react" "$D/shots" "$D
 install=$H/.local/share/kebbie/current
 target=$(dirname "$D")/kebbie-demo-target
 cargo_env=
+releases_env=
 demo_path=$D/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 if [ "$scene" = update-and-restarts ]; then
   # kebbie installed as herdr installs it, a checkout at a release tag, with a newer release on its own origin to update to.
@@ -34,18 +39,35 @@ if [ "$scene" = update-and-restarts ]; then
   version=$(git -C "$repo_root" show HEAD:Cargo.toml | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
   next=${version%.*}.$((${version##*.} + 1))
   git clone -q --bare --single-branch --no-tags "$repo_root" "$D/remotes/kebbie.git"
-  git -C "$D/remotes/kebbie.git" tag "v$version" HEAD
   git clone -q "$D/remotes/kebbie.git" "$D/kebbie-next"
+  demo_git() { git -C "$D/kebbie-next" -c user.name="Robin Demo" -c user.email=robin@example.com "$@"; }
+  # The release kebbie starts at lacks the notes the newer one adds, so the update has something new to show.
+  python3 "$repo_root/demo/release-notes.py" "$D/kebbie-next/CHANGES.md" --drop
+  demo_git commit -qam "kebbie $version"
+  demo_git tag "v$version"
+  demo_git push -q origin HEAD "v$version"
+  git -C "$repo_root" show HEAD:CHANGES.md > "$D/kebbie-next/CHANGES.md"
   perl -0pi -e "s/^version = \"\Q$version\E\"/version = \"$next\"/m" "$D/kebbie-next/Cargo.toml" "$D/kebbie-next/herdr-plugin.toml"
   perl -0pi -e "s/(name = \"kebbie\"\nversion = \")\Q$version\E/\${1}$next/" "$D/kebbie-next/Cargo.lock"
   perl -pi -e "s/\"version\": \"\Q$version\E\"/\"version\": \"$next\"/" "$D/kebbie-next/.claude-plugin/plugin.json"
-  git -C "$D/kebbie-next" -c user.name="Robin Demo" -c user.email=robin@example.com commit -qam "kebbie $next"
-  git -C "$D/kebbie-next" tag "v$next"
-  git -C "$D/kebbie-next" push -q origin HEAD "v$next"
+  python3 "$repo_root/demo/release-notes.py" "$D/kebbie-next/CHANGES.md" "$next"
+  demo_git commit -qam "kebbie $next"
+  demo_git tag "v$next"
+  demo_git push -q origin HEAD "v$next"
   git clone -q "$D/remotes/kebbie.git" "$install"
   git -C "$install" checkout -q --detach "v$version"
   cp -R "$target" "$install/target"
   cargo build --release --quiet --manifest-path "$install/Cargo.toml"
+  # The newer release's binary is published the way GitHub serves it, from a local server the update downloads it from.
+  cp -R "$target" "$D/kebbie-next/target"
+  cargo build --release --quiet --manifest-path "$D/kebbie-next/Cargo.toml"
+  case "$(uname -s)" in Darwin) os=apple-darwin ;; *) os=unknown-linux-gnu ;; esac
+  asset=kebbie-$next-$(uname -m | sed 's/^arm64$/aarch64/')-$os.tar.gz
+  mkdir -p "$D/releases/v$next"
+  tar -czf "$D/releases/v$next/$asset" -C "$D/kebbie-next/target/release" kebbie
+  (cd "$D/releases/v$next" && { sha256sum "$asset" 2>/dev/null || shasum -a 256 "$asset"; } > SHA256SUMS)
+  ( cd "$D/releases" && exec python3 -m http.server --bind 127.0.0.1 18479 > "$D/releases.log" 2>&1 & echo $! > "$D/releases.pid" )
+  releases_env="KEBBIE_RELEASES_URL=http://127.0.0.1:18479"
   mkdir -p "$H/.local/share/kebbie"
   ln -s "$install" "$H/.local/share/kebbie/current"
   demo_path=$D/bin:$(dirname "$(command -v cargo)"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
@@ -58,6 +80,7 @@ else
 fi
 ln -s "$install/target/release/kebbie" "$D/bin/kebbie"
 cp "$repo_root/demo/bin/claude" "$D/bin/claude.py"
+cp "$repo_root/demo/bin/gh" "$D/bin/gh"
 python=$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')
 app="$(dirname "$(dirname "$python")")/Resources/Python.app/Contents/MacOS/Python"
 [ -x "$app" ] && python=$app
@@ -73,8 +96,8 @@ exec env -i HOME=$H PATH=$demo_path \\
   TERM=\${TERM:-xterm-256color} COLORTERM=truecolor LANG=en_US.UTF-8 SHELL=/bin/zsh USER=demo KDEMO_DIR=$D \\
   XDG_CONFIG_HOME=$H/.config XDG_STATE_HOME=$H/.local/state XDG_DATA_HOME=$H/.local/share XDG_CACHE_HOME=$H/.cache \\
   KEBBIE_STATE_DIR=$H/.local/state/kebbie KEBBIE_CONFIG=$H/.config/kebbie/config.toml KEBBIE_REPOS_DIR=$H/.config/kebbie/repos \\
-  KEBBIE_BIN=$install/target/release/kebbie KEBBIE_CLAUDE_BIN=$D/bin/claude KEBBIE_REPO_DIRS=$H/code KEBBIE_IMAGES=halfblocks \\
-  HERDR_SOCKET_PATH=$H/.config/herdr/herdr.sock $vault_env $cargo_env \\
+  KEBBIE_BIN=$install/target/release/kebbie KEBBIE_CLAUDE_BIN=$D/bin/claude KEBBIE_GH_BIN=$D/bin/gh KEBBIE_REPO_DIRS=$H/code KEBBIE_IMAGES=halfblocks \\
+  HERDR_SOCKET_PATH=$H/.config/herdr/herdr.sock $vault_env $cargo_env $releases_env \\
   "\$@"
 EOF
 chmod +x "$D/env.sh"
@@ -116,6 +139,8 @@ cat > "$H/.gitconfig" <<'EOF'
 [advice]
 	detachedHead = false
 EOF
+# The repos' origins read as GitHub, so kebbie watches CI after a push, and git sends the pushes to the bare repos here.
+printf '[url "%s/remotes/"]\n\tinsteadOf = https://github.com/robin-demo/\n' "$D" >> "$H/.gitconfig"
 printf '{"projects":{"%s":{"hasTrustDialogAccepted":true}}}\n' "$H/code" > "$H/.claude.json"
 cat > "$H/.config/herdr/config.toml" <<'EOF'
 onboarding = false
@@ -145,6 +170,13 @@ cat > "$H/.config/kebbie/config.toml" <<EOF
 [restart]
 auto = $restart_auto
 EOF
+if [ "$scene" = hub-connect ]; then
+  hub=${KDEMO_HUB_BIN:-$(command -v kebbie-hub || true)}
+  [ -x "$hub" ] || { echo "the hub-connect clip runs a hub of its own: put kebbie-hub on PATH or set KDEMO_HUB_BIN" >&2; exit 1; }
+  mkdir -p "$D/hub" && chmod 700 "$D/hub"
+  ( exec "$hub" --dev --signup open --data "$D/hub" --listen 127.0.0.1:18471 --rp-id localhost --origin http://localhost:18471 > "$D/hub.log" 2>&1 & echo $! > "$D/hub.pid" )
+  printf '\n[machine]\nname = "laptop"\n' >> "$H/.config/kebbie/config.toml"
+fi
 if [ "$scene" = demo ]; then
   cat >> "$H/.config/kebbie/config.toml" <<'EOF'
 
@@ -165,7 +197,7 @@ save() { local message=(-m "$2"); [ -z "${3:-}" ] || message+=(-m "$3"); for _ i
 new_repo() {
   run git init -q --bare "$D/remotes/$1.git"
   run git init -q "$H/code/$1"
-  run git -C "$H/code/$1" remote add origin "$D/remotes/$1.git"
+  run git -C "$H/code/$1" remote add origin "https://github.com/robin-demo/$1.git"
 }
 
 new_repo shop
@@ -497,6 +529,9 @@ if [ "$scene" != demo ]; then
   run kebbie backlog add --priority medium "Order export — CSV of orders per month for the accountant (api)" >/dev/null
   run kebbie backlog add --priority medium "Gift cards — sell and redeem fixed-value cards (shop)" >/dev/null
   run kebbie backlog add --priority low "Slow query log — flag queries over 200 ms (api)" >/dev/null
+fi
+if [ "$scene" = push-and-card ]; then
+  as_user "$H/code/shop" kebbie start free-shipping "Show in the checkout how far the basket is from free shipping" --after checkout-copy --why "it adds a line to the copy checkout-copy rewrites" --no-focus
 fi
 
 checked() { for _ in $(seq 1 120); do grep -qs "approved\.\|break the rules" "$H/.local/state/kebbie/rules/$1.log" && return 0; sleep 0.5; done; echo "the rules check of $1 gave no verdict" >&2; exit 1; }
