@@ -1395,15 +1395,17 @@ fn going_to_the_lead_without_a_lead_space_creates_it_with_its_board_and_goes_the
 }
 
 #[test]
-fn going_back_from_the_lead_starts_nothing_there() {
+fn in_a_lead_without_its_board_the_key_brings_the_board_back_before_it_goes_back() {
     let lab = Lab::new("lead-back");
     lead_at_shell(&lab, true);
     let answers = lab.root.join("answers");
     fs::write(answers.join("workspace-list.json"), r#"{"result":{"workspaces":[{"workspace_id":"w_lead","label":"lead","focused":true},{"workspace_id":"w_task","label":"billing","focused":false}]}}"#).unwrap();
     fs::write(lab.state.join("lead-previous"), "w_task\n").unwrap();
-    let back = lab.run(&["lead"]);
-    assert_eq!(stdout(&back), "Back to where you were.", "{}", stderr(&back));
-    assert_eq!(changes(&lab), [["workspace", "focus", "w_task"]], "a quit board in the lead waits for the next visit");
+    let first = lab.run(&["lead"]);
+    assert_eq!(stdout(&first), "The lead's board is back.", "{}", stderr(&first));
+    let calls = changes(&lab);
+    assert!(calls.iter().any(|call| call[..2] == ["pane", "run"] && call.last().is_some_and(|line| line.ends_with(" board"))), "{calls:?}");
+    assert!(!calls.iter().any(|call| call[..2] == ["workspace", "focus"]), "it stays in the lead: {calls:?}");
 }
 
 fn routine_status(lab: &Lab) -> serde_json::Value {

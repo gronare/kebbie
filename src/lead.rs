@@ -88,6 +88,10 @@ fn go() -> Result<String> {
     let lead = workspaces.iter().find(|workspace| workspace["label"] == LEAD_LABEL).and_then(workspace_id);
     let previous_file = state_dir()?.join("lead-previous");
     match lead {
+        Some(lead) if Some(&lead) == focused.as_ref() && !places(&lead).is_ok_and(|places| whole(&places, |pane| herdr::foreground(pane).ok().flatten().is_some())) => {
+            repair(&lead)?;
+            Ok("The lead's board is back.".to_string())
+        }
         Some(lead) if Some(&lead) == focused.as_ref() => {
             let previous = fs::read_to_string(&previous_file).unwrap_or_default().trim().to_string();
             if workspaces.iter().any(|workspace| workspace["workspace_id"] == previous.as_str()) {
@@ -149,6 +153,11 @@ impl Places {
     fn chat_hidden(&self) -> bool {
         self.zoomed && self.chat.is_some() && self.board.is_some() && self.focused == self.board
     }
+}
+
+// A board pane or a chat pane at its shell is what repair restarts, so only then does the lead need one.
+fn whole(places: &Places, running: impl Fn(&str) -> bool) -> bool {
+    places.board.as_deref().is_some_and(&running) && places.chat.as_deref().is_some_and(&running)
 }
 
 fn places(lead: &str) -> Result<Places> {
@@ -821,6 +830,16 @@ mod tests {
         assert_eq!(state_path(env(&all[2..])).unwrap(), PathBuf::from("/h/.local/state/kebbie"));
         assert_eq!(state_path(env(&[("KEBBIE_STATE_DIR", ""), ("HOME", "/h")])).unwrap(), PathBuf::from("/h/.local/state/kebbie"));
         assert!(state_path(env(&[])).is_err());
+    }
+
+    #[test]
+    fn the_lead_is_whole_only_while_its_board_and_its_chat_both_run_something() {
+        let places = |board: Option<&str>, chat: Option<&str>| Places { board: board.map(str::to_string), messages: None, chat: chat.map(str::to_string), zoomed: false, focused: None };
+        let running = |pane: &str| pane != "shell";
+        assert!(whole(&places(Some("board"), Some("chat")), running));
+        assert!(!whole(&places(Some("shell"), Some("chat")), running), "a board pane left at its shell, as after kebbie setup ran in it");
+        assert!(!whole(&places(Some("board"), Some("shell")), running));
+        assert!(!whole(&places(Some("chat"), None), running), "the chat alone, its board pane closed");
     }
 
     #[test]

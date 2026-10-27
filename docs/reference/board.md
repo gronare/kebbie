@@ -2,7 +2,7 @@
 
 What the board shows and every key on it. The board runs in the lead Space, as a popup over any Space with `prefix+t`, or in the current pane with `kebbie board`. `?` on the board lists every key.
 
-A board you quit in the lead Space starts again the next time `prefix+space` takes you there.
+A board you quit in the lead Space starts again the next time you press `prefix+space`, also when you are already in the lead Space; once the board runs, `prefix+space` takes you back to where you were.
 
 ## Layout
 
