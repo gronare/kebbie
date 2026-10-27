@@ -263,6 +263,20 @@ pub fn noticed_section(choice: AlsoNoticed, vault: bool, kebbie: &str) -> String
     }
 }
 
+// The {steps} part of roles/task.md, only with task.steps on.
+pub fn steps_section(on: bool, kebbie: &str) -> String {
+    if !on {
+        return String::new();
+    }
+    format!(
+        "## Steps\n\nBefore your first line of code, list your steps with `{kebbie} steps \"<step>\" \"<step>\" …`: this task's steps in the order they must go out, preparatory ones first and a migration as a step of its own; put `--` before the steps when one starts with `-`. \
+         A step is one commit, finished and pushable on its own. \
+         The user accepts the commits one at a time and pushes the accepted ones while you build the next step, so keep building without waiting for them. \
+         When the user says the split is wrong, run `{kebbie} steps` again with the new split before your next commit: every step not pushed yet is yours to reshape. \
+         Once the user accepts a step it goes out, so they only ever hold the next one in review: make each one finished and pushable on its own.\n"
+    )
+}
+
 // roles/task.md filled in for this task, its profile's section after it, written to the state dir for --append-system-prompt-file; returns the file and the role without its peer list, which changes on its own.
 pub fn role_file(task: &str, place: &Place) -> Result<(PathBuf, String)> {
     let template = fs::read_to_string(install_root()?.join("roles/task.md")).map_err(|error| format!("roles/task.md: {error}"))?;
@@ -288,7 +302,8 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let settings = crate::config::resolve(Some(place.repo))?.settings;
     let noticed = noticed_section(settings.also_noticed.value, crate::vault_cli::detect().is_some(), &kebbie);
     let docs = docs_line(place.agent, settings.docs_required.value);
-    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs)];
+    let steps = steps_section(settings.steps.value, &kebbie);
+    let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("steps", steps), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs)];
     values.extend(worktree_values(place)?);
     Ok(values)
 }
@@ -507,6 +522,19 @@ mod tests {
         assert!(!file.contains("vault"), "{file}");
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
         assert!(role.contains(&format!("2. A plan to approve: {file} The user approves it")) && !role.contains("{plan}"), "{role}");
+    }
+
+    #[test]
+    fn the_steps_section_shows_only_with_task_steps_on() {
+        let off = fill(include_str!("../roles/task.md"), &[("steps", &steps_section(false, "/bin/kebbie"))]);
+        assert!(!off.contains("## Steps") && !off.contains("kebbie steps") && !off.contains("{steps}"), "off, a task commits its own way");
+        let on = fill(include_str!("../roles/task.md"), &[("steps", &steps_section(true, "/bin/kebbie"))]);
+        for needed in ["## Steps\n\nBefore your first line of code, list your steps with `/bin/kebbie steps \"<step>\"", "A step is one commit, finished and pushable on its own.", "every step not pushed yet is yours to reshape", "make each one finished and pushable on its own.\n\n## What you notice outside your task"] {
+            assert!(on.contains(needed), "{needed}: {on}");
+        }
+        let source = include_str!("peers.rs");
+        let values = &source[source.find("\nfn role_values(").unwrap()..];
+        assert!(values[..values.find("\n}\n").unwrap()].contains("steps_section(settings.steps.value,"), "the role follows the repo's setting");
     }
 
     #[test]

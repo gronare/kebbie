@@ -76,6 +76,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | `task.also_noticed` | `"backlog"` | either | What a task's Claude does with what it notices outside its task: `"backlog"`, `"fix"` or `"ask"`. |
 | `task.profile` | none | either | The [profile](#profiles) a task starts with when `kebbie start` names none with `--profile`. |
 | `task.sandbox` | `true` | either | Whether a task's and the reviewer's shell commands run in Claude Code's sandbox. |
+| `task.steps` | `false` | either | Whether tasks work in steps, one commit each, listed with `kebbie steps` before they write code. |
 | `task.permission_mode` | none | either | The [permission mode](https://code.claude.com/docs/en/permission-modes) a task's Claude starts in. |
 | `[[routines]]` | none | either | Checks kebbie runs on a schedule, each as a task that reports, plans or fixes. See [`[[routines]]`](#routines). |
 
@@ -92,12 +93,14 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `task.profile`: unset, tasks start with the built-in `task`. A restarted task keeps the profile it started with. See [Give tasks a profile](../how-to/give-tasks-a-profile.md).
 
+`task.steps`: on, a task's role tells it to list its steps with `kebbie steps` before its first line of code, and you accept and push its commits one at a time while it builds the next. Off, a task commits its own way and `kebbie steps` refuses. New tasks follow it; a running task once it restarts. `kebbie accept` works either way. See [Work in steps](../how-to/work-in-steps.md).
+
 `task.sandbox` is strict: no retry outside it, and no start without it. See [The trust boundary](../explanation/trust-boundary.md#the-sandbox).
 
 - A task's shell writes only in its worktree, its temp folder, the package caches (`~/.cargo/registry`, `~/.cargo/git`, `~/.npm`, `~/.cache`) and the repo's shared `.git` folder, except its hooks, config and the other pooled worktrees' git dirs.
 - It reaches only crates.io, static.crates.io, index.crates.io, registry.npmjs.org, github.com, objects.githubusercontent.com, pypi.org and files.pythonhosted.org, and no Unix socket.
 - On macOS it may listen on local ports for a dev server.
-- kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `routine ok`, `link`, `backlog add`, `config`) run outside it.
+- kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `steps`, `routine ok`, `link`, `backlog add`, `config`) run outside it.
 - On Linux it needs bubblewrap, socat and the seccomp filter (`npm install -g @anthropic-ai/sandbox-runtime`). Without them kebbie refuses to start a task or a review and names what to install.
 - `false` runs them unsandboxed, where a task's shell can pass as you to kebbie's user-only commands. `kebbie doctor`, a task's start and the board's Areas page say so.
 - A profile's `[sandbox] enabled` wins over it.

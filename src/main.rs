@@ -130,6 +130,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   kebbie:work-rules), and the keeper then starts a read-only reviewer that checks the
                                   commits against the rules skill: a pass approves them, a break goes to the task and a
                                   line to the lead, no verdict in 15 minutes leaves the check to the lead
+  kebbie steps \"<step>\" …         run by a task's Claude in its worktree, with task.steps on: its work as
+                                  ordered steps, one commit each; a rewrite keeps the pushed ones first.
+                                  kebbie steps <name> \"<step>\" … writes a task's steps from elsewhere, and
+                                  kebbie steps [name] [--json] shows each step's state
   kebbie ask --option \"<label>: <meaning>\" … --recommend <n> <question>
                                   run by a task's Claude to ask you what you want (scope, behaviour, a trade-off that is
                                   yours); a question of how goes to the lead with kebbie tell lead. The question opens
@@ -184,6 +188,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie approve <name>           yours or the lead's word that a task's commits hold to the rules skill, an override:
                                   the reviewer gives it by itself when a task reports ready; until a commit changes,
                                   the board shows it ready to push
+  kebbie accept <name> <sha>      yours alone: accept one of a task's commits, by its code, so a clean rebase or a
+                                  reworded message keeps it and a changed line takes it back; --withdraw takes it back
+  kebbie accepted [name] [--json] a task's unpushed commits and which are accepted, anyone's to read, a task's too
   kebbie push [name]              put the task in its repo's push line; at the head, fetch, rebase it onto origin's
                                   default branch and push it, then close it as done (once CI is green, when kebbie
                                   watches it; see kebbie ci); one push per repo at a time, in the order they were
@@ -193,8 +200,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   either way it keeps the head while its Claude works, and leaves the line for Needs
                                   you after 30 minutes without a ready report, or new commits nobody checked
                                   (--cancel takes it out of the line, unpushed)
-                                  (--through <sha> pushes its commits up to that one and keeps the task open, the rest
-                                  of its branch on top of what was pushed); the user's step, or the lead's for a task the
+                                  (--through <sha> pushes its commits up to that one, rebased onto the default branch in
+                                  a worktree of kebbie's own, and keeps the task open; its worktree, HEAD and uncommitted
+                                  work stay as they are, and its Claude rebases onto the new default branch itself, told
+                                  so after the push or before it when its tests or a conflict need it); the user's step, or the lead's for a task the
                                   user gave push permission on the board (a), or in a repo they did on the Areas page (a)
                                   once its reviewer passed its current code; the lead is told what landed
   kebbie stage [name]             put a ready task's commits on the main checkout's local default branch, unpushed, to
@@ -363,6 +372,10 @@ impl Arguments {
         let mut arguments = Self { positionals: Vec::new(), flags: Vec::new(), values: Vec::new() };
         let mut input = std::env::args().skip(1);
         while let Some(argument) = input.next() {
+            if argument == "--" {
+                arguments.positionals.extend(input.by_ref());
+                break;
+            }
             if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--profile", "--why", "--name"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
@@ -388,6 +401,15 @@ impl Arguments {
 
     fn positional(&self, index: usize) -> Option<&str> {
         self.positionals.get(index).map(String::as_str)
+    }
+
+    // A command that takes words as text refuses a flag it does not know, so a word that starts with - is never dropped or read as a switch.
+    fn only(&self, command: &str, flags: &[&str]) -> Result<()> {
+        let unknown = self.flags.iter().map(String::as_str).chain(self.values.iter().map(|(flag, _)| flag.as_str()).filter(|flag| *flag != "-C")).find(|flag| !flags.contains(flag));
+        match unknown {
+            Some(flag) => Err(format!("kebbie {command} does not know {flag}; a word that starts with - goes after --: kebbie {command} -- \"{flag} …\"")),
+            None => Ok(()),
+        }
     }
 }
 
@@ -579,6 +601,9 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),
         Some("review") => review::request(&cwd, name),
         Some("evidence") => evidence::print(&cwd, name, arguments.flag("--json")),
+        Some("steps") => arguments.only("steps", &["--json"]).and_then(|_| tasks::steps(&cwd, &arguments.positionals[1..], arguments.flag("--json"))),
+        Some("accepted") => tasks::accepted_shown(&cwd, name, arguments.flag("--json")),
+        Some("accept") => tasks::accept(&cwd, name, arguments.positional(2), !arguments.flag("--withdraw")),
         Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kebbie approve needs a task name")?)),
         Some("ci") if name == Some("tick") => ci::tick_cli(),
         Some("ci") if name == Some("dismiss") => tasks::dismiss_ci(&cwd, arguments.positional(2), arguments.value("--why")),

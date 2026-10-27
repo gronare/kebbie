@@ -11,10 +11,18 @@ use super::pool::{find_task, task_of};
 fn code(path: &Path, upstream: &str, rev: &str) -> Result<String> {
     let base = git(path, &["merge-base", rev, upstream])?;
     let diff = git(path, &["diff", "-U0", "--no-color", "--no-ext-diff", &base, rev])?;
-    let lines: Vec<&str> = diff.lines().filter(|line| !(line.starts_with("index ") || line.starts_with("@@"))).collect();
+    Ok(hashed(changed_lines(&diff).as_bytes()))
+}
+
+// A -U0 diff without its index and hunk lines, so the same change reads alike wherever it sits in the file.
+pub(super) fn changed_lines(diff: &str) -> String {
+    diff.lines().filter(|line| !(line.starts_with("index ") || line.starts_with("@@"))).collect::<Vec<_>>().join("\n")
+}
+
+pub(super) fn hashed(bytes: &[u8]) -> String {
     let mut hasher = Fnv::default();
-    hasher.write(lines.join("\n").as_bytes());
-    Ok(format!("{:016x}", hasher.0))
+    hasher.write(bytes);
+    format!("{:016x}", hasher.0)
 }
 
 pub fn same_code(path: &Path, upstream: &str, one: &str, other: &str) -> bool {
@@ -31,11 +39,10 @@ pub(crate) fn fingerprint_at(path: &Path, upstream: &str, rev: &str) -> Result<S
     let log = git(path, &["log", "--reverse", "-p", "-U0", "--no-color", "--no-ext-diff", "--format=%x00%B%x01", &range])?;
     let commits: Vec<String> = log.split('\0').skip(1).map(|commit| {
         let (message, changes) = commit.split_once('\u{1}').unwrap_or((commit, ""));
-        let lines: Vec<&str> = changes.lines().filter(|line| !(line.starts_with("index ") || line.starts_with("@@"))).collect();
         let mut hasher = Fnv::default();
         hasher.write(message.trim().as_bytes());
         hasher.write(&[0xff]);
-        hasher.write(lines.join("\n").trim().as_bytes());
+        hasher.write(changed_lines(changes).trim().as_bytes());
         format!("{:016x}", hasher.0)
     }).collect();
     Ok(commits.join("\n"))

@@ -34,6 +34,9 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstag
 | [`kebbie review`](#kebbie-review-name) | Send a task to the reviewer. |
 | [`kebbie evidence`](#kebbie-evidence-name---json) | The test runs kebbie recorded for a task. |
 | [`kebbie approve`](#kebbie-approve-name) | Approve a task's commits against the rules. |
+| [`kebbie accept`](#kebbie-accept-name-sha) | Accept one of a task's commits. |
+| [`kebbie accepted`](#kebbie-accepted-name) | Which of a task's commits are accepted. |
+| [`kebbie steps`](#kebbie-steps-name-step-) | A task's steps and the state of each. |
 
 ### `kebbie start <name> [prompt]`
 
@@ -119,7 +122,7 @@ Move work under way in the main checkout into a task: branch `<name>` if it exis
 
 Rebase the task onto the default branch without pushing. `push` rebases by itself, so `land` is never required.
 
-- Uncommitted changes to tracked files stop it; untracked files do not.
+- Uncommitted changes to tracked files stop a push of all its commits; untracked files do not.
 - On a conflict it aborts its own rebase, leaves the worktree as it was, and hands the rebase to the task's Claude.
 - When git refuses to start the rebase, kebbie shows git's reason, and names any files hidden from `git status` by skip-worktree or assume-unchanged that block it.
 
@@ -145,14 +148,14 @@ Put the task in its repo's push line. When its turn comes, kebbie fetches, rebas
 
 - Only you may run it, or the lead for a task you gave push permission. Who may push is checked when you ask and again at the turn.
 - The lead is told what landed.
-- Uncommitted changes to tracked files stop it; untracked files do not.
+- Uncommitted changes to tracked files stop a push of all its commits; untracked files do not.
 
 | Option | What it does |
 | --- | --- |
 | `--through <sha>` | Push the commits up to and including `<sha>` and keep the task open, also when `<sha>` is its last commit. |
 | `--cancel` | Take the task out of the push line before it goes out. Nothing of it is pushed, and it waits under Ready to push. |
 
-With `--through`, the rest of the branch is rebased on top of what was pushed. A task kept open stays open until you close it (`done`, or Done in its options).
+With `--through`, kebbie leaves the task's worktree alone: uncommitted changes do not stop it, and its HEAD stays where its Claude left it. When the default branch moved, kebbie rebases the commits up to `<sha>` onto it in a worktree of its own and pushes them from there, then tells the task's Claude to rebase onto the default branch once its work in progress is committed. When those commits changed the same files as the default branch, or conflict with it, its Claude rebases, runs their tests (or resolves the conflict) and reports ready first. A commit the task makes after `<sha>` meanwhile does not stop the push; a change to the commits up to `<sha>` does. A task kept open stays open until you close it (`done`, or Done in its options).
 
 With `--cancel`:
 
@@ -345,6 +348,50 @@ It keeps the last 20 per task. A command that exits non-zero is a failed run. A 
 
 Your word or the lead's that a task's commits hold to the rules skill. It overrides the reviewer's rules check, which gives the same approval by itself when a task reports ready. Until a commit changes, the board shows the task ready to push. Tasks cannot run it.
 
+### `kebbie accept <name> <sha>`
+
+Your word that one of the task's commits is right. Only you may run it: kebbie refuses it to the lead and to every task, whose settings deny it too. `kebbie steps` shows the commit as accepted (`✓`). It marks the commit and blocks nothing, with `task.steps` on or off.
+
+- It belongs to the commit's code: a clean rebase or a reworded message keeps it, a changed line takes it back. Two commits with the same change, such as two empty commits, are accepted one at a time.
+- `<sha>` is one of the task's commits not yet pushed.
+- `kebbie accepted` reads which commits are accepted.
+
+| Option | What it does |
+| --- | --- |
+| `--withdraw` | Take the acceptance back. |
+
+### `kebbie accepted [name]`
+
+The task's commits not yet pushed, each marked `✓` when you accepted it. It only reads, so anyone may run it, a task's Claude too, with `task.steps` on or off. Without a name, it reads the task whose worktree you are in.
+
+| Option | What it does |
+| --- | --- |
+| `--json` | `task`, `last_accepted` (the last commit of the run of accepted ones from the first unpushed one, or `null`) and `commits`, each with `sha`, `subject` and `accepted`. |
+
+### `kebbie steps [name] ["<step>" ...]`
+
+The task's steps, in the order they go out, one commit each. It needs [`task.steps`](configuration.md#tasks) on for the task's repo, and refuses with how to turn it on otherwise.
+
+- In a task's worktree, every word is a step's title. Elsewhere, the first word names the task.
+- Put `--` before the titles when one starts with `-`: `kebbie steps -- "-v prints the version"`. Without it, kebbie refuses a word it would read as an option, so no title is dropped.
+- With titles, it writes the list, then shows it. A task's Claude runs it before its first line of code; you or the lead may run it too, but a task writes only its own steps.
+- Writing it again changes every step not pushed yet. The pushed ones stay first; a list that starts with them again is taken as the whole list.
+- Without titles, it shows the steps.
+
+The task's commits not yet pushed are its next steps, in order. A commit beyond the list shows as a step of its own, titled by its subject. A step counts as pushed once its commit's change is on the default branch, however it got there: `kebbie push`, a staged task you pushed with main, or a push from elsewhere. A clean rebase or a reworded message keeps it the same step.
+
+| Mark | Means |
+| --- | --- |
+| `↑ 2 pushed` | The steps on the default branch, as a count. |
+| `✓` | Committed, and you accepted it. |
+| `●` | Committed, waiting for you to accept it. |
+| `◐` | In progress: the next one while the task's Claude is at work. |
+| `○` | Planned. |
+
+| Option | What it does |
+| --- | --- |
+| `--json` | The steps as `task`, `listed`, `pushed`, `last_accepted` (the last commit of the run of accepted ones from the first unpushed one, or `null`) and `steps`, each with `index`, `title`, `state` (`planned`, `in-progress` or `committed`), `extra`, and with a commit its `sha`, `subject` and `accepted`. |
+
 ## Seeing what is going on
 
 | Command | Output |
@@ -470,6 +517,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 | Command | What it does |
 | --- | --- |
 | `kebbie report --state <state> --next <step> <summary>` | Where the task stands and what you should do next. See [below](#kebbie-report). |
+| `kebbie steps "<step>" …` | The task's steps before its first line of code, with `task.steps` on. See [`kebbie steps`](#kebbie-steps-name-step-). |
 | `kebbie routine ok <summary>` | A routine's task, when all is well: records the run as ok with the summary and closes the task as `drop` does. |
 | `kebbie ask --option "<label>: <meaning>" … --recommend <n> <question>` | Ask you what you want: scope, behaviour, a trade-off that is yours. |
 | `kebbie answered <task>` | The task's question was settled elsewhere, dropped, or sent back to be asked again. |

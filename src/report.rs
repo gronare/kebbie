@@ -44,6 +44,7 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     let text = card.as_deref().map(read_card).transpose()?;
     messages::log_report(&me, &report, &summary)?;
     let state = state_dir()?;
+    tasks::steps_seen_in(&state, cwd);
     let pushing = tasks::pending_push(&state, &me).is_some();
     crate::phase::record(&state, &me, "report", &crate::phase::Event::Reported { state: &report.state, head: report.head.as_deref(), committed: crate::status::committed_at(cwd), pushing });
     let kept = match (&card, &text) {

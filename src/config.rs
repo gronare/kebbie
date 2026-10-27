@@ -122,6 +122,7 @@ pub struct Worktree {
     pub permission_mode: Option<String>,
     pub profile: Option<String>,
     pub sandbox: Option<bool>,
+    pub steps: Option<bool>,
     pub review_model: Option<String>,
     pub notify_command: Option<String>,
     pub vault_command: Option<String>,
@@ -280,6 +281,7 @@ pub struct Settings {
     pub permission_mode: Setting<Option<String>>,
     pub profile: Setting<Option<String>>,
     pub sandbox: Setting<bool>,
+    pub steps: Setting<bool>,
     pub review_model: Setting<Option<String>>,
     pub notify_command: Setting<Option<String>>,
     pub vault_command: Setting<Option<String>>,
@@ -400,7 +402,7 @@ const SECTION_KEYS: [(&str, &[&str]); 17] = [
     ("machine", &["name"]),
     ("hub", &["url"]),
     ("worktree", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"]),
-    ("task", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox"]),
+    ("task", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox", "steps"]),
     ("review", &["model"]),
     ("notify", &["command"]),
     ("vault", &["command"]),
@@ -697,6 +699,7 @@ fn worktree(table: &Table) -> Result<Worktree> {
         permission_mode: None,
         profile: None,
         sandbox: None,
+        steps: None,
         review_model: None,
         notify_command: None,
         vault_command: None,
@@ -730,6 +733,7 @@ fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
         worktree.profile = text(task, "profile", "task.profile")?
             .map(|profile| crate::profiles::name(&profile).map(str::to_string).map_err(|error| format!("task.profile: {error}"))).transpose()?;
         worktree.sandbox = task.get("sandbox").map(|value| value.as_bool().ok_or("task.sandbox: must be true or false")).transpose()?;
+        worktree.steps = task.get("steps").map(|value| value.as_bool().ok_or("task.steps: must be true or false")).transpose()?;
     }
     Ok(worktree)
 }
@@ -861,6 +865,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         permission_mode: optional(pick(repo.permission_mode.as_ref(), machine.worktree.permission_mode.as_ref())),
         profile: optional(pick(repo.profile.as_ref(), machine.worktree.profile.as_ref())),
         sandbox: or_default(pick(repo.sandbox.as_ref(), machine.worktree.sandbox.as_ref()), true),
+        steps: or_default(pick(repo.steps.as_ref(), machine.worktree.steps.as_ref()), false),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
@@ -956,7 +961,7 @@ fn quoted(items: &[&str]) -> String {
 
 // The one list of keys: kebbie config prints it and the Settings page edits it.
 pub fn entries(loaded: &Loaded) -> Vec<Entry> {
-    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
+    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
     let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
     let (board_keys, _) = crate::keys::Keys::with(&load_machine(&loaded.machine).map(|machine| machine.keys).unwrap_or_default());
     let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
@@ -1005,6 +1010,8 @@ pub fn entries(loaded: &Loaded) -> Vec<Entry> {
         &format!("The profile a task starts with when kebbie start names none with --profile: a file in {}/<name>.toml with the agent, model, extra role, skills, permission mode and rules it adds to kebbie's own; none starts the built-in task. A restarted task keeps the profile it started with; kebbie profiles lists them.", crate::profiles::dir().display()));
     key("task.sandbox", sandbox.value.to_string(), sandbox.layer, Kind::Bool, Scope::Either,
         &format!("Whether a task's and the reviewer's shell commands run in Claude Code's sandbox: writes only in the worktree, the task's temp folder and {}, network only to {} and a profile's own hosts, no Unix sockets; kebbie's own task commands ({}) run outside it, and kebbie refuses its user-only commands to a sandboxed process. On Linux it needs bubblewrap, socat and the seccomp filter, or kebbie refuses to start tasks; false runs them unsandboxed, where a task can pass as you to kebbie's user-only commands. A profile's [sandbox] enabled wins over it.", crate::sandbox::WRITES.join(", "), crate::sandbox::DOMAINS.join(", "), crate::sandbox::TASK_COMMANDS.join(", ")));
+    key("task.steps", steps.value.to_string(), steps.layer, Kind::Bool, Scope::Either,
+        "Tasks work in steps, one commit each, listed with kebbie steps before they write code: you accept and push one step at a time while the task builds the next. Off, a task commits its own way and kebbie steps refuses. New tasks follow it; a running task once it restarts.");
     key("review.model", review_model.value.as_ref().map_or("none".to_string(), |model| format!("{model:?}")), review_model.layer, Kind::Text, Scope::Either,
         "The model kebbie review's independent reviewer runs on, ahead of the reviewer profile's model; none leaves it to that profile, then to Claude's default.");
     key("notify.command", notify_command.value.as_ref().map_or("none".to_string(), |command| format!("{command:?}")), notify_command.layer, Kind::Text, Scope::Machine,
@@ -1642,7 +1649,7 @@ mod tests {
     fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
         let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         let all = entries(&loaded);
-        assert_eq!(all.len(), 35);
+        assert_eq!(all.len(), 36);
         for entry in all {
             let (section, field) = entry.key.rsplit_once('.').unwrap();
             let text = format!("[{section}]\n{field} = {}\n", sample(&entry));
@@ -1858,5 +1865,15 @@ mod tests {
         assert!(parse_repo("[task]\nsandbox = \"off\"\n", "app.toml").unwrap_err().contains("task.sandbox: must be true or false"));
         let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
         assert!(shown.contains("task.sandbox = true  (default)\n  Whether a task's and the reviewer's shell commands run in Claude Code's sandbox"), "{shown}");
+    }
+
+    #[test]
+    fn steps_are_off_until_turned_on_and_a_repo_wins_over_the_machine() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).steps, Setting { value: false, layer: Layer::Default });
+        assert_eq!(settings(&Worktree::default(), &machine("[task]\nsteps = true\n")).steps, Setting { value: true, layer: Layer::Machine });
+        assert_eq!(settings(&repo("[task]\nsteps = false\n"), &machine("[task]\nsteps = true\n")).steps, Setting { value: false, layer: Layer::Repo });
+        assert!(parse_repo("[task]\nsteps = \"yes\"\n", "app.toml").unwrap_err().contains("task.steps: must be true or false"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
+        assert!(shown.contains("task.steps = false  (default)\n  Tasks work in steps, one commit each, listed with kebbie steps"), "{shown}");
     }
 }

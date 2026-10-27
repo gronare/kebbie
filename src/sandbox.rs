@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use crate::sh::Result;
 
 // Every kebbie subcommand a task's Claude is told to run (roles/task.md, the parts kebbie fills in, and `config` in the set-up-worktree skill) that reaches kebbie's state or herdr's socket, so it runs outside the sandbox; `docs` only reads the install's checkout and stays in.
-pub const TASK_COMMANDS: [&str; 8] = ["peers", "tell", "ask", "report", "routine ok", "link", "backlog add", "config"];
+pub const TASK_COMMANDS: [&str; 10] = ["peers", "tell", "ask", "report", "steps", "accepted", "routine ok", "link", "backlog add", "config"];
 pub const DOMAINS: [&str; 8] = ["crates.io", "static.crates.io", "index.crates.io", "registry.npmjs.org", "github.com", "objects.githubusercontent.com", "pypi.org", "files.pythonhosted.org"];
 pub const WRITES: [&str; 4] = ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache"];
 pub const OPS_COMMANDS: [&str; 3] = ["ssh *", "scp *", "rsync *"];

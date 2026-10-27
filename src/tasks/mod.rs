@@ -1,3 +1,4 @@
+mod accept;
 mod after;
 mod approval;
 mod finish;
@@ -7,6 +8,7 @@ mod intent;
 mod landed;
 mod launch;
 mod line;
+mod plan;
 mod pool;
 mod push;
 mod red_ci;
@@ -15,6 +17,7 @@ mod started;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub(crate) use accept::{accept, accepted_in, last_of_run, listing_at as accepted_listing_at, open_commits, rest_base, shown as accepted_shown};
 pub(crate) use after::{EVERY as AFTER_EVERY, Asked as QueueAsked, and_list, after as after_command, at as start_at, drop as drop_wait, now as start_now, queue, refuse_queued_name, Shown as WaitShown, shown as waits_shown, tick as after_tick};
 #[cfg(test)]
 pub(crate) use approval::approval_holds;
@@ -28,6 +31,8 @@ pub(crate) use line::complete as complete_pushes;
 pub(crate) use landed::{EVERY as LANDED_EVERY, Unsure as LandedUnsure, mark as landed_mark, tick as landed_tick, tick_cli as landed_tick_cli};
 pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outside as ci_outside, outside_reason as ci_outside_reason};
 pub(crate) use launch::{Begun, Session, Start, begin, bypasses, latest_transcript, new_session_id, profile_of, record_session, start, task_at, task_role, task_role_now, task_tmp, transcript};
+pub(crate) use plan::{noted_after as steps_noted_after, seen_in as steps_seen_in, steps};
+pub(crate) use plan::{Step, Steps, State as StepState, Tips as StepTips, read_at as steps_read, shown_at as steps_shown_at, for_path as steps_for, mark as step_mark};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of};
 pub(crate) use push::{after_ci, cancel as cancel_push, land, place_in_line, push, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};

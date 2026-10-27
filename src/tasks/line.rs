@@ -8,7 +8,7 @@ use crate::sh::Result;
 use super::approval::{approval_holds, covers, fingerprint};
 use super::intent::{self, Intent, Next, Work};
 use super::pool::{Slot, find_task};
-use super::push::{Sent, rejected};
+use super::push::{Sent, pushed_fingerprint, rejected};
 
 // How long the head of a line waits for its task's Claude before the pushes behind it go on without it.
 pub(crate) const CEILING: u64 = 30 * 60;
@@ -167,8 +167,9 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push
         }
         return Turn::Waits;
     }
-    let current = default_branch(&head.repo).and_then(|upstream| fingerprint(&slot.path, &upstream)).ok();
-    let approved = current.as_deref().is_some_and(|current| approval_holds(state, &head.address, current));
+    let upstream = default_branch(&head.repo);
+    let approved = upstream.as_ref().ok().and_then(|upstream| fingerprint(&slot.path, upstream).ok()).is_some_and(|whole| approval_holds(state, &head.address, &whole));
+    let current = upstream.as_ref().ok().and_then(|upstream| pushed_fingerprint(&slot.path, upstream, head.through).ok());
     if head.work == Work::Turn {
         if !approved && !current.as_deref().is_some_and(|current| covers(&head.fingerprint, current)) {
             return leave(state, head, &format!("its commits changed after {} chose push; push it again once they are checked", head.by.word()));
@@ -197,7 +198,7 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push
         }
         Ok(Sent::Handed(said)) => Turn::Handed(said),
         Err(error) if rejected(&error) => {
-            let checked = default_branch(&head.repo).and_then(|upstream| fingerprint(&slot.path, &upstream)).unwrap_or_else(|_| head.fingerprint.clone());
+            let checked = default_branch(&head.repo).and_then(|upstream| pushed_fingerprint(&slot.path, &upstream, head.through)).unwrap_or_else(|_| head.fingerprint.clone());
             let _ = intent::save(state, &Intent { work: Work::Turn, fingerprint: checked, at: now, ..head.clone() });
             Turn::Retry(format!("the push {} asked for was rejected while the default branch kept moving; it stays at the head of the line and kebbie tries again next round", head.by.word()))
         }
@@ -354,9 +355,8 @@ mod tests {
         (typed, move |intent: &Intent, slot: &Slot| {
             let hand = |_: &Slot, text: &str| { kept.borrow_mut().push(text.to_string()); Ok(()) };
             let upstream = default_branch(&intent.repo)?;
-            super::super::push::push_task_with(state, &intent.by.caller(), &intent.repo, slot, intent.through, intent.queued, &hand, &mut |_| {
-                let head = git(&slot.path, &["rev-parse", "HEAD"])?;
-                super::super::push::push_prefix(&slot.path, &upstream, &head, state).map(|count| format!("pushed {count}"))
+            super::super::push::push_task_with(state, &intent.by.caller(), &intent.repo, slot, intent.through, intent.queued, &hand, &mut |_, out| {
+                super::super::push::push_prefix(&slot.path, &upstream, &out.sha, state).map(|count| format!("pushed {count}"))
             })
         })
     }

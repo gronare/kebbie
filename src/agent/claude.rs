@@ -258,7 +258,7 @@ fn trusted_in(claude: &Value, dir: &Path) -> bool {
 // The deny rules and env rewrite name the rule, the push block holds when they are slipped, and the sandbox keeps the shell from passing as the user; gate is the task's address when kebbie keeps its note, whose Problem its edits then wait for.
 pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Option<&TaskDirs>, sandbox: Option<&Policy>) -> String {
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kebbie)) }] }]);
-    let allow = ["peers", "tell", "report", "ask", "routine ok"].map(|command| format!("Bash({kebbie} {command}:*)"));
+    let allow = ["peers", "tell", "report", "ask", "steps", "accepted", "routine ok"].map(|command| format!("Bash({kebbie} {command}:*)"));
     let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kebbie), crate::sh::quote(address)) }] }]);
     let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PostToolUse": evidence, "PostToolUseFailure": evidence });
     if let Some(address) = gate {
@@ -679,6 +679,20 @@ mod tests {
         let excluded = strings(&task_settings(Some(&ops.sandbox))["sandbox"]["excludedCommands"]);
         assert_eq!(excluded[..crate::sandbox::TASK_COMMANDS.len()], crate::sandbox::TASK_COMMANDS.map(|command| format!("/opt/kebbie/kebbie {command} *")));
         assert_eq!(excluded[crate::sandbox::TASK_COMMANDS.len()..], ["ssh *", "scp *", "rsync *"]);
+    }
+
+    #[test]
+    fn a_task_reads_which_commits_are_accepted_and_never_accepts_one() {
+        let written = task_settings(Some(&Policy::default()));
+        let (deny, allow) = (strings(&written["permissions"]["deny"]), strings(&written["permissions"]["allow"]));
+        let matches = |rule: &str, command: &str| rule.strip_prefix("Bash(").and_then(|rest| rest.strip_suffix(":*)")).is_some_and(|prefix| command == prefix || command.starts_with(&format!("{prefix} ")));
+        for write in ["/opt/kebbie/kebbie accept billing abc1234", "/opt/kebbie/kebbie accept billing abc1234 --withdraw", "/opt/kebbie/kebbie accept billing --json"] {
+            assert!(deny.iter().any(|rule| matches(rule, write)), "{write} is denied: {deny:?}");
+        }
+        for read in ["/opt/kebbie/kebbie accepted billing --json", "/opt/kebbie/kebbie accepted"] {
+            assert!(!deny.iter().any(|rule| matches(rule, read)), "{read} is no write: {deny:?}");
+            assert!(allow.iter().any(|rule| matches(rule, read)), "{read} runs without a prompt: {allow:?}");
+        }
     }
 
     #[test]

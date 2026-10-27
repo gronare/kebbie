@@ -728,6 +728,21 @@ mod tests {
     }
 
     #[test]
+    fn space_turns_steps_on_for_the_machine_and_off_again_for_one_repo() {
+        let mut fixture = fixture("settings-steps", "", None);
+        go_to(&mut fixture.page, "task.steps");
+        assert!(screen(&mut fixture.page).lines().any(|line| line.contains("task.steps") && line.contains("○ off")), "off by default");
+        press(&mut fixture.page, &[KeyCode::Char(' ')]);
+        assert_eq!(file(&fixture, "config.toml"), "[task]\nsteps = true\n");
+        assert!(said(&fixture.page).starts_with("✓ wrote task.steps = true to config.toml"), "{}", said(&fixture.page));
+        press(&mut fixture.page, &[KeyCode::Tab]);
+        go_to(&mut fixture.page, "task.steps");
+        press(&mut fixture.page, &[KeyCode::Char(' ')]);
+        assert_eq!(file(&fixture, "repos/app.toml"), "[task]\nsteps = false\n", "a repo keeps its own way of working");
+        assert_eq!(fixture.page.current().unwrap().layer, Layer::Repo);
+    }
+
+    #[test]
     fn space_toggles_a_boolean_in_the_file_of_the_tab_keeping_its_comments() {
         let mut fixture = fixture("settings-bool", "# mine\n[task]\nsandbox = true # build box\n", None);
         go_to(&mut fixture.page, "task.sandbox");

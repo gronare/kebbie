@@ -1628,3 +1628,41 @@ fn kebbie_hub_dev_points_connect_and_status_at_the_dev_hub_and_its_own_identity_
         assert!(stdout(&status).starts_with(&format!("hub:      {url}")) && !stdout(&status).contains("dev hub"), "{off:?}: {}", stdout(&status));
     }
 }
+
+#[test]
+fn a_task_lists_its_steps_only_with_the_setting_on_and_only_the_user_accepts_a_commit() {
+    let lab = Lab::new("steps");
+    let (app, slot) = lab.task_fixture();
+    let (app, slot) = (app.to_str().unwrap(), slot.to_str().unwrap());
+    let off = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]);
+    assert!(!off.status.success() && stderr(&off).contains("set task.steps = true"), "{}", stderr(&off));
+    assert!(!lab.state.join("steps").exists(), "nothing is written while it is off");
+    fs::write(&lab.config, "[task]\nsteps = true\n").unwrap();
+    let planned = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]);
+    assert!(planned.status.success(), "{}", stderr(&planned));
+    assert!(stdout(&planned).contains("● 1. Add refunds") && stdout(&planned).contains("◐ 2. Document refunds"), "{}", stdout(&planned));
+    let sha = git(Path::new(slot), &["rev-parse", "HEAD"]);
+    let shown = |lab: &Lab| -> serde_json::Value { serde_json::from_str(&stdout(&lab.run(&["-C", app, "steps", "billing", "--json"]))).unwrap() };
+    let before = shown(&lab);
+    assert_eq!((before["steps"][0]["sha"].as_str(), before["steps"][0]["accepted"].as_bool(), before["last_accepted"].as_str()), (Some(sha.as_str()), Some(false), None));
+    for role in ["lead", "billing@app"] {
+        let refused = lab.run_as(role, &["-C", app, "accept", "billing", &sha]);
+        assert!(!refused.status.success() && stderr(&refused).contains("accepting a commit is the user's call"), "{role}: {}", stderr(&refused));
+    }
+    let accepted = run_as_user(&lab, &["-C", app, "accept", "billing", &sha]);
+    assert!(accepted.status.success() && stdout(&accepted).contains("Accepted"), "{}", stderr(&accepted));
+    let after = shown(&lab);
+    assert_eq!((after["steps"][0]["accepted"].as_bool(), after["last_accepted"].as_str()), (Some(true), Some(sha.as_str())));
+    let withdrawn = run_as_user(&lab, &["-C", app, "accept", "billing", &sha, "--withdraw"]);
+    assert!(withdrawn.status.success() && stdout(&withdrawn).contains("Acceptance withdrawn"), "{}", stderr(&withdrawn));
+    assert_eq!(shown(&lab)["last_accepted"], serde_json::Value::Null);
+    run_as_user(&lab, &["-C", app, "accept", "billing", &sha]);
+    let read = lab.run_as("billing@app", &["-C", slot, "accepted", "--json"]);
+    assert!(read.status.success(), "a task reads its acceptances: {}", stderr(&read));
+    let read: serde_json::Value = serde_json::from_str(&stdout(&read)).unwrap();
+    assert_eq!((read["commits"][0]["sha"].as_str(), read["commits"][0]["accepted"].as_bool()), (Some(sha.as_str()), Some(true)));
+    let flagged = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "-1 off by one"]);
+    assert!(!flagged.status.success() && stderr(&flagged).contains("does not know -1 off by one") && stderr(&flagged).contains("kebbie steps --"), "{}", stderr(&flagged));
+    let dashed = lab.run_as("billing@app", &["-C", slot, "steps", "--", "Add refunds", "-1 off by one"]);
+    assert!(dashed.status.success() && stdout(&dashed).contains("2. -1 off by one"), "after -- every word is a step: {}", stdout(&dashed));
+}

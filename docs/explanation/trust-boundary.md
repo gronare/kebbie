@@ -154,7 +154,7 @@ A task's shell commands in the sandbox:
 
 - read no credentials file (`~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, cargo's),
 - reach only the package registries (crates.io, npm, PyPI, GitHub's downloads), and no Unix socket, so neither herdr's socket nor a tmux server,
-- run kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `routine ok`, `link`, `backlog add`, `config`) outside the sandbox, matched on kebbie's absolute path, since those write kebbie's state. No user-only command is ever among them.
+- run kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `steps`, `routine ok`, `link`, `backlog add`, `config`) outside the sandbox, matched on kebbie's absolute path, since those write kebbie's state. No user-only command is ever among them.
 
 ## The guard checks the caller's sandbox too
 

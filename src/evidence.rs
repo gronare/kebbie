@@ -301,7 +301,11 @@ pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String]
 pub fn hook(address: &str, input: &str) -> String {
     let input: Value = serde_json::from_str(input).unwrap_or_default();
     let Some(cwd) = input["cwd"].as_str().map(PathBuf::from) else { return String::new() };
-    let listed = commands(&crate::config::resolve(Some(&cwd)).map(|loaded| loaded.settings.test_commands.value).unwrap_or_default());
+    let settings = crate::config::resolve(Some(&cwd)).map(|loaded| loaded.settings);
+    if settings.as_ref().is_ok_and(|settings| settings.steps.value) && let Ok(state) = state_dir() {
+        tasks::steps_noted_after(&state, address, &input);
+    }
+    let listed = commands(&settings.map(|settings| settings.test_commands.value).unwrap_or_default());
     if outcome(&input, &listed).is_none() {
         return String::new();
     }
