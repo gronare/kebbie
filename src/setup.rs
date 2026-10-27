@@ -250,7 +250,7 @@ fn taken_by(config: &toml::Table, key: &str) -> Option<String> {
 }
 
 // Letters herdr 0.9 leaves unbound by default; its own defaults take b c e g h j k l n o p q r s v w x z.
-const FREE_KEYS: &str = "yfmdaiu";
+const FREE_KEYS: &str = "ymdaiu";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Wanted {
@@ -447,7 +447,7 @@ pub(crate) mod tests {
     #[test]
     fn the_keys_kebbie_adds_are_the_ones_the_example_config_binds() {
         let keys: Vec<String> = kebbie_keys().iter().map(|binding| format!("{} {}", text(binding, "key"), text(binding, "command"))).collect();
-        assert_eq!(keys, ["prefix+space kebbie.lead", "prefix+tab kebbie.focus", "prefix+t kebbie.board"], "updating is U on the board");
+        assert_eq!(keys, ["prefix+space kebbie.lead", "prefix+f kebbie.focus", "prefix+t kebbie.board"], "updating is U on the board");
     }
 
     #[test]
@@ -455,7 +455,7 @@ pub(crate) mod tests {
         let dir = crate::sh::test_dir("setup-keys");
         let config = dir.join("herdr/config.toml");
         let (said, wrote) = keys(&config, Asking::Yes);
-        assert!(wrote && said.starts_with("done") && said.contains("prefix+space, prefix+tab, prefix+t "), "{said}");
+        assert!(wrote && said.starts_with("done") && said.contains("prefix+space, prefix+f, prefix+t "), "{said}");
         assert_eq!(commands(&config).len(), 3, "a missing config is created with the three keys");
         let written = std::fs::read(&config).unwrap();
         let (said, wrote) = keys(&config, Asking::Yes);
@@ -465,10 +465,10 @@ pub(crate) mod tests {
         let own = "onboarding = false # mine\n\n[[keys.command]]\nkey = \"prefix+t\"\ntype = \"plugin_action\"\ncommand = \"kebbie.board\"\n\n[ui]\npane_borders  =  \"auto\"";
         std::fs::write(&config, own).unwrap();
         let (said, wrote) = keys(&config, Asking::Yes);
-        assert!(wrote && said.contains("added prefix+space, prefix+tab to"), "{said}");
+        assert!(wrote && said.contains("added prefix+space, prefix+f to"), "{said}");
         let after = std::fs::read_to_string(&config).unwrap();
         assert!(after.starts_with(own) && after[own.len()..].starts_with("\n\n[[keys.command]]"), "the user's bytes stay a prefix, and a missing last newline is added before kebbie's: {after}");
-        assert_eq!(commands(&config), ["prefix+t kebbie.board", "prefix+space kebbie.lead", "prefix+tab kebbie.focus"]);
+        assert_eq!(commands(&config), ["prefix+t kebbie.board", "prefix+space kebbie.lead", "prefix+f kebbie.focus"]);
         assert!(keys(&config, Asking::Yes).0.starts_with("already"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), after);
         std::fs::remove_dir_all(dir).unwrap();
@@ -478,22 +478,22 @@ pub(crate) mod tests {
     fn a_key_the_user_bound_to_something_else_is_named_with_a_free_one_to_use_instead() {
         let dir = crate::sh::test_dir("setup-taken");
         let config = dir.join("config.toml");
-        let own = "[keys]\ncycle_pane_next = \"prefix+tab\"\n\n[[keys.command]]\nkey = \"prefix+t\"\ntype = \"popup\"\ncommand = \"lazygit\"\n\n[[keys.command]]\nkey = \"prefix+y\"\ntype = \"popup\"\ncommand = \"btop\"\n";
+        let own = "[keys]\ncycle_pane_next = \"prefix+f\"\n\n[[keys.command]]\nkey = \"prefix+t\"\ntype = \"popup\"\ncommand = \"lazygit\"\n\n[[keys.command]]\nkey = \"prefix+y\"\ntype = \"popup\"\ncommand = \"btop\"\n";
         std::fs::write(&config, own).unwrap();
         let plan = key_plan(&config);
         let taken: Vec<(String, Option<String>, Option<String>)> = plan.missing.iter().map(|wanted| (wanted.key().to_string(), wanted.taken.clone(), wanted.free.clone())).collect();
         assert_eq!(taken, [
             ("prefix+space".to_string(), None, None),
-            ("prefix+tab".to_string(), Some("cycle_pane_next".to_string()), Some("prefix+f".to_string())),
-            ("prefix+t".to_string(), Some("lazygit".to_string()), Some("prefix+f".to_string())),
+            ("prefix+f".to_string(), Some("cycle_pane_next".to_string()), Some("prefix+m".to_string())),
+            ("prefix+t".to_string(), Some("lazygit".to_string()), Some("prefix+m".to_string())),
         ], "prefix+y is btop's, so the next free key is offered");
         let (said, wrote) = keys(&config, Asking::Yes);
-        assert!(wrote && said.contains("added prefix+space to") && said.contains("prefix+tab is already cycle_pane_next, so kebbie.focus gets no key") && said.contains("prefix+t is already lazygit"), "{said}");
+        assert!(wrote && said.contains("added prefix+space to") && said.contains("prefix+f is already cycle_pane_next, so kebbie.focus gets no key") && said.contains("prefix+t is already lazygit"), "{said}");
         assert_eq!(commands(&config), ["prefix+t lazygit", "prefix+y btop", "prefix+space kebbie.lead"]);
         let moved = plan.missing[2].moved().unwrap();
         let (outcome, _) = add_keys(&key_plan(&config), &[moved]);
-        assert!(outcome.verb == "done" && outcome.detail.contains("added prefix+f to"), "{outcome:?}");
-        assert_eq!(commands(&config).last().map(String::as_str), Some("prefix+f kebbie.board"));
+        assert!(outcome.verb == "done" && outcome.detail.contains("added prefix+m to"), "{outcome:?}");
+        assert_eq!(commands(&config).last().map(String::as_str), Some("prefix+m kebbie.board"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -56,7 +56,7 @@ Each line then turns `done` or `already`, and setup ends with `Setup done.` and,
 | Key | What it does |
 | --- | --- |
 | `prefix+space` | Goes to the lead. |
-| `prefix+tab` | Moves between the board and the lead's chat. |
+| `prefix+f` | Moves between the board and the lead's chat. |
 | `prefix+t` | Opens the board. |
 
 Updating kebbie is `U` on the board.
@@ -118,7 +118,7 @@ kebbie pushes to a repo's remote, so the practice repo gets a remote of its own 
 
    kebbie creates the lead Space and moves it to the top of herdr's Spaces. On the left is the board, with the Work column, the Backlog column and the status line. On the right is the lead, a Claude that keeps track of your tasks. The Work column is empty.
 
-2. Press `tab` on the board. Focus moves to the lead's chat, and `prefix+tab` from the chat brings it back to the board.
+2. Press `tab` on the board. Focus moves to the lead's chat, and `prefix+f` from the chat brings it back to the board.
 
 3. Press `h` on the board. The chat hides, the board takes the whole width, and the lead keeps running. `h` again, or `tab`, brings the chat back.
 

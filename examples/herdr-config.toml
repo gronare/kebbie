@@ -56,7 +56,7 @@ command = "kebbie.lead"
 description = "kebbie: go to the lead, or back"
 
 [[keys.command]]
-key = "prefix+tab"
+key = "prefix+f"
 type = "plugin_action"
 command = "kebbie.focus"
 description = "kebbie: move between the board and the lead"

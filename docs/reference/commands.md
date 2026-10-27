@@ -556,7 +556,7 @@ Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guid
 | --- | --- | --- |
 | 1 Machine name | How your phone and other machines show this one, from `machine.name` or the host's short name. | `machine.name` |
 | 2 Agents | Claude Code, always on; Codex, on or off, each with the version found or `not found`. | kebbie's plugin in Claude Code, and kebbie's [Codex plugin](#kebbie-setup-codex) |
-| 3 herdr keys | `prefix+space` (the lead), `prefix+tab` (the board and the lead's chat), `prefix+t` (the board). | Those keys at the end of herdr's `config.toml` |
+| 3 herdr keys | `prefix+space` (the lead), `prefix+f` (the board and the lead's chat), `prefix+t` (the board). | Those keys at the end of herdr's `config.toml` |
 | 4 Backlog | Local, vault and Linear, in any combination; the first is where the lead files new ideas. | `board.backlog.sources` |
 | 5 Vault | None, a local folder, or an S3 bucket (endpoint, bucket, access key and a masked secret). | `claude plugin marketplace add`, `install` and `configure --values-stdin` |
 | 6 Hub | The hosted hub, your own hub's address, or later. | [`kebbie hub connect`](#the-hub) in your browser |

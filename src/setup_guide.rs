@@ -1093,7 +1093,7 @@ mod tests {
             "to do link ~/.local/bin/kebbie → the installed binary",
             "to do plugin kebbie in Claude Code, and in Codex",
             "to do machine machine.name = \"devbox\"",
-            "to do keys prefix+space, prefix+tab, prefix+t in herdr",
+            "to do keys prefix+space, prefix+f, prefix+t in herdr",
             "to do backlog board.backlog.sources = [\"vault\"]",
             "to do vault plugin installed, vault at /notes/vault",
             "skipped hub optional; later: H on the board",
@@ -1194,7 +1194,7 @@ mod tests {
         press(&mut guide, &[KeyCode::Down]);
         assert!(screen(&guide).contains("+ prefix+y      open the board · moved off prefix+t, which new_tab uses"));
         press(&mut guide, &[KeyCode::Enter, KeyCode::Char('s'), KeyCode::Char('s'), KeyCode::Char('s'), KeyCode::Char('s')]);
-        assert!(plan(&guide)[3].starts_with("to do keys prefix+space, prefix+tab, prefix+y in herdr"), "{:?}", plan(&guide));
+        assert!(plan(&guide)[3].starts_with("to do keys prefix+space, prefix+f, prefix+y in herdr"), "{:?}", plan(&guide));
         let rows = apply(&guide.plan()[3..4], &lab.env(), &mut Fake { connects: 0, drawn: 0, hubs: Vec::new() });
         assert_eq!(rows[0].1.verb, "done");
         let herdr = lab.herdr();
@@ -1203,7 +1203,7 @@ mod tests {
         std::fs::write(&lab.machine.herdr_config, "[keys]\nnew_tab = \"prefix+t\"\n").unwrap();
         leave.facts.keys = setup::key_plan(&lab.machine.herdr_config);
         press(&mut leave, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Enter]);
-        assert!(plan(&leave)[3].starts_with("to do keys prefix+space, prefix+tab in herdr, the board unbound"), "{:?}", plan(&leave));
+        assert!(plan(&leave)[3].starts_with("to do keys prefix+space, prefix+f in herdr, the board unbound"), "{:?}", plan(&leave));
     }
 
     #[test]
@@ -1238,7 +1238,7 @@ mod tests {
         let lines: Vec<String> = without_asking(&lab.env(), Asking::Yes).iter().map(|(step, outcome)| outcome.line(step)).collect();
         let verbs: Vec<&str> = lines.iter().map(|line| line.split_whitespace().next().unwrap_or_default()).collect();
         assert_eq!(verbs, ["done", "done", "done", "skipped"], "{lines:?}");
-        assert!(lines[2].contains("added prefix+space, prefix+tab, prefix+t to") && lines[2].contains("restart herdr so it reads the new keys"), "{lines:?}");
+        assert!(lines[2].contains("added prefix+space, prefix+f, prefix+t to") && lines[2].contains("restart herdr so it reads the new keys"), "{lines:?}");
         assert_eq!(lines[3], setup::line("skipped", "hub", "optional; later: H on the board"));
         assert_eq!(lab.config(), "", "--yes leaves the optional steps as they are");
         let written = lab.herdr();

@@ -113,7 +113,7 @@ A message without a reset kebbie can read takes the reset of the session or week
 
 - Hiding is herdr's pane zoom on the board: the chat keeps running unseen, at its size, and comes back as it was.
 - The state is herdr's, so it outlives a board restart. The status line says `chat hidden` meanwhile.
-- `tab`, or `prefix+tab` from anywhere, shows the chat again and puts the focus there. Going back to the board leaves it shown.
+- `tab`, or `prefix+f` from anywhere, shows the chat again and puts the focus there. Going back to the board leaves it shown.
 - `kebbie lead --toggle-chat`, or herdr's `kebbie.chat` action on a key, works as `h` from any Space and takes you to the lead.
 - Moving herdr's focus onto the chat by other means while it is hidden zooms the chat instead, as herdr's zoom follows the focus.
 
