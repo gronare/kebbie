@@ -26,6 +26,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Moving over from kelpie points herdr's sidebar sync and key descriptions at kebbie too, and reloads herdr, so the sidebar runs and prefix+space works without restarting herdr
 - Running the install command again no longer moves kelpie over a second time because of the log the old keeper leaves as it exits
 - Moving over from a kelpie linked from a local checkout unlinks it from herdr and leaves the checkout, so the next install no longer moves kelpie over again
+- A CI run that GitHub cancelled, because a deploy window refused it or a newer push superseded it, is no failure: the task stays under CI running, says which workflow waits for the next run on main, and closes once a later run on main that holds the pushed commit passes
 
 ## 0.28.1
 

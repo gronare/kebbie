@@ -264,18 +264,32 @@ pub(super) fn superseded(watch: &crate::ci::Watch, gh: &str) -> bool {
 
 // A later push on the branch whose every named workflow passed, on a commit that holds the watched one.
 pub(crate) fn passed_later(watch: &crate::ci::Watch, failed: &[String], gh: &str) -> bool {
+    passing_later(watch, failed, gh).iter().any(|sha| ancestor(&watch.repo, &watch.sha, sha))
+}
+
+// The later commit must be known here for the ancestry check, so a clone that lacks one fetches first.
+pub(crate) fn passed_after_cancel(watch: &crate::ci::Watch, cancelled: &[String], gh: &str) -> bool {
+    let shas = passing_later(watch, cancelled, gh);
+    if shas.iter().any(|sha| !crate::sh::succeeds("git", &["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(&watch.repo))) {
+        let _ = super::fetch(&watch.repo);
+    }
+    shas.iter().any(|sha| ancestor(&watch.repo, &watch.sha, sha))
+}
+
+// The shas of later pushes on the branch on which every named workflow passed.
+fn passing_later(watch: &crate::ci::Watch, failed: &[String], gh: &str) -> Vec<String> {
     if failed.is_empty() {
-        return false;
+        return Vec::new();
     }
     let target = if watch.pushed.target.is_empty() { default_branch(&watch.repo).map(|upstream| upstream.trim_start_matches("origin/").to_string()).unwrap_or_default() } else { watch.pushed.target.clone() };
-    let Ok(listed) = crate::sh::run(gh, &["run", "list", "-R", &watch.slug, "--branch", &target, "--event", "push", "--limit", "100", "--json", "databaseId,name,status,conclusion,workflowName,url,headSha,event"], Some(&watch.repo)) else { return false };
-    let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(&listed) else { return false };
+    let Ok(listed) = crate::sh::run(gh, &["run", "list", "-R", &watch.slug, "--branch", &target, "--event", "push", "--limit", "100", "--json", "databaseId,name,status,conclusion,workflowName,url,headSha,event"], Some(&watch.repo)) else { return Vec::new() };
+    let Ok(Value::Array(entries)) = serde_json::from_str::<Value>(&listed) else { return Vec::new() };
     let mut passed: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for entry in entries.iter().filter(|entry| entry["event"] == "push" && entry["status"] == "completed" && entry["conclusion"] == "success") {
         let (Some(sha), Some(run)) = (entry["headSha"].as_str(), crate::ci::parse_runs(&Value::Array(vec![entry.clone()]).to_string()).unwrap_or_default().pop()) else { continue };
         passed.entry(sha.to_string()).or_default().push(run.title().to_string());
     }
-    passed.iter().any(|(sha, workflows)| *sha != watch.sha && failed.iter().all(|workflow| workflows.contains(workflow)) && ancestor(&watch.repo, &watch.sha, sha))
+    passed.into_iter().filter(|(sha, workflows)| *sha != watch.sha && failed.iter().all(|workflow| workflows.contains(workflow))).map(|(sha, _)| sha).collect()
 }
 
 fn stale(repo: &Path) -> bool {
@@ -819,6 +833,26 @@ mod tests {
 
     fn run(sha: &str, workflow: &str, conclusion: &str, event: &str) -> String {
         format!(r#"{{"databaseId":1,"name":"{workflow}","workflowName":"{workflow}","status":"completed","conclusion":"{conclusion}","url":"u","headSha":"{sha}","event":"{event}"}}"#)
+    }
+
+    #[test]
+    fn a_pass_after_a_cancel_on_a_commit_the_clone_lacks_is_fetched_even_right_after_a_fetch() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let watched = git(&dir, &["rev-parse", &upstream]).unwrap();
+        let other = dir.with_extension("other");
+        let _ = std::fs::remove_dir_all(&other);
+        git(&dir, &["clone", "--quiet", &origin.to_string_lossy(), &other.to_string_lossy()]).unwrap();
+        commit(&other, "later", "later");
+        git(&other, &["push", "--quiet", "origin", &format!("HEAD:{}", upstream.trim_start_matches("origin/"))]).unwrap();
+        let later = git(&other, &["rev-parse", "HEAD"]).unwrap();
+        assert!(!crate::sh::succeeds("git", &["cat-file", "-e", &format!("{later}^{{commit}}")], Some(&dir)), "the clone does not hold the later commit");
+        std::fs::write(dir.join(".git/FETCH_HEAD"), "").unwrap();
+        assert!(!stale(&dir), "and was fetched just now");
+        let watch = crate::ci::Watch { sha: watched.clone(), state: crate::ci::State::Running, ..red_watch(&dir, "billing@app", &watched, true) };
+        let gh = fake_gh(&dir, &format!("[{}]", run(&later, "deploy", "success", "push")));
+        assert!(passed_after_cancel(&watch, &["deploy".to_string()], &gh), "the passing commit is fetched before its ancestry is read");
+        std::fs::remove_dir_all(other).unwrap();
+        cleanup(dir, origin, &slot);
     }
 
     #[test]

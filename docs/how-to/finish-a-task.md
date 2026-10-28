@@ -18,6 +18,8 @@ Each one frees the worktree for the next task. Run without a name from inside th
 
 When origin is on GitHub and `gh` is logged in, a push does not close the task straight away. The task waits under CI running until every workflow run for the pushed commit is green, then closes as done.
 
+A run that GitHub cancelled, because a deploy window refused it or a newer push superseded it, is no failure: the task stays under CI running until a later run of that workflow on the default branch passes with the pushed commit in it.
+
 If a run fails, the task moves to Needs you with the workflow and job that failed, and its Claude gets the end of the failing log to fix it. Push the fix the usual way, or close the task with `d` if you choose to leave CI red.
 
 `kebbie ci` lists what is watched, and [`ci.watch`](../reference/configuration.md#keys) turns it off. Without `gh`, or with origin elsewhere, the push closes the task right away and says why CI was not watched.

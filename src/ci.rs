@@ -16,6 +16,8 @@ pub const PUSHING_SECONDS: u64 = 300;
 pub const LOG_LINES: usize = 60;
 pub const UNREADABLE_AFTER: u64 = 15 * 60;
 pub const GH_VAR: &str = "KEBBIE_GH_BIN";
+pub const CANCELLED_POLL: u64 = 5 * 60;
+pub const CANCELLED_WAIT: u64 = 7 * 24 * 60 * 60;
 const PASSED: [&str; 3] = ["success", "skipped", "neutral"];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,8 +39,13 @@ impl Run {
         self.status == "completed"
     }
 
+    // GitHub cancels a run when a deploy window refuses it or a newer push supersedes it: that says nothing about the code.
+    fn cancelled(&self) -> bool {
+        self.done() && self.conclusion == "cancelled"
+    }
+
     fn failed(&self) -> bool {
-        self.done() && !PASSED.contains(&self.conclusion.as_str())
+        self.done() && !self.cancelled() && !PASSED.contains(&self.conclusion.as_str())
     }
 
     fn to_json(&self) -> Value {
@@ -100,9 +107,23 @@ impl Watch {
         self.state == State::Running
     }
 
+    // The workflows that were cancelled once every run is done and none failed: the watch then waits on a later run of the branch.
+    pub fn cancelled(&self) -> Vec<String> {
+        if self.runs.is_empty() || !self.runs.iter().all(Run::done) || self.runs.iter().any(Run::failed) {
+            return Vec::new();
+        }
+        cancelled_workflows(&self.runs)
+    }
+
+    fn branch(&self) -> &str {
+        if self.pushed.target.is_empty() { "the default branch" } else { &self.pushed.target }
+    }
+
     pub fn note(&self) -> String {
+        let cancelled = self.cancelled();
         match &self.state {
             State::Failed { what, .. } => format!("CI failed: {what}"),
+            State::Running if !cancelled.is_empty() => format!("CI running: {} cancelled, waits for the next run on {} to pass{}", cancelled.join(", "), self.branch(), self.unread()),
             State::Running if self.runs.is_empty() => format!("CI running: waiting for runs of {}{}", self.short(), self.unread()),
             State::Running => format!("CI running: {}{}", self.runs.iter().map(Run::title).collect::<Vec<_>>().join(", "), self.unread()),
         }
@@ -150,6 +171,7 @@ pub enum Verdict {
     Pending,
     Green,
     NoneRan,
+    Cancelled(Vec<String>),
     Failed(Vec<Run>),
 }
 
@@ -162,7 +184,20 @@ pub fn verdict(runs: &[Run], waited: u64) -> Verdict {
     if runs.is_empty() {
         return if waited >= APPEAR_SECONDS { Verdict::NoneRan } else { Verdict::Pending };
     }
-    if runs.iter().all(Run::done) && waited >= SETTLE_SECONDS { Verdict::Green } else { Verdict::Pending }
+    if !runs.iter().all(Run::done) || waited < SETTLE_SECONDS {
+        return Verdict::Pending;
+    }
+    let cancelled = cancelled_workflows(runs);
+    if cancelled.is_empty() { Verdict::Green } else { Verdict::Cancelled(cancelled) }
+}
+
+// A workflow run again on the same commit that passed is no longer waiting on anything.
+fn cancelled_workflows(runs: &[Run]) -> Vec<String> {
+    let passed = |title: &str| runs.iter().any(|run| run.title() == title && run.done() && PASSED.contains(&run.conclusion.as_str()));
+    let mut cancelled: Vec<String> = runs.iter().filter(|run| run.cancelled() && !passed(run.title())).map(|run| run.title().to_string()).collect();
+    cancelled.sort();
+    cancelled.dedup();
+    cancelled
 }
 
 pub fn parse_runs(text: &str) -> Result<Vec<Run>> {
@@ -406,6 +441,9 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
     let Some(_lock) = Lock::take(state) else { return Vec::new() };
     let mut events = Vec::new();
     for mut watch in all(state).into_iter().filter(|watch| watch.running() && !pushing(state, &watch.address, now)) {
+        if !watch.cancelled().is_empty() && watch.checked_at.is_some_and(|at| now.saturating_sub(at) < CANCELLED_POLL) {
+            continue;
+        }
         if watch.close && crate::tasks::find_task(&watch.repo, Some(&watch.task), &watch.repo).is_err() {
             forget(state, &watch.address);
             continue;
@@ -432,8 +470,18 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
             Verdict::Pending => {
                 let _ = save(state, &watch);
             }
-            Verdict::Green => events.push(green(state, &watch, false)),
-            Verdict::NoneRan => events.push(green(state, &watch, true)),
+            Verdict::Green => events.push(green(state, &watch, format!("CI is green for {}", watch.short()))),
+            Verdict::NoneRan => events.push(green(state, &watch, format!("No CI ran for {}", watch.short()))),
+            Verdict::Cancelled(cancelled) => {
+                let waited = now.saturating_sub(watch.started_at);
+                if crate::tasks::passed_after_cancel(&watch, &cancelled, gh) {
+                    events.push(green(state, &watch, format!("CI is green for {}: {} was cancelled and a later run on {} that holds it passed", watch.short(), cancelled.join(", "), watch.branch())));
+                } else if waited >= CANCELLED_WAIT {
+                    events.push(green(state, &watch, format!("No CI passed for {}: {} was cancelled and no later run on {} passed in {} days", watch.short(), cancelled.join(", "), watch.branch(), CANCELLED_WAIT / 86_400)));
+                } else {
+                    let _ = save(state, &watch);
+                }
+            }
             Verdict::Failed(failed) => events.push(failed_run(state, gh, &mut watch, &failed[0], now)),
         }
     }
@@ -441,8 +489,7 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
 }
 
 // The watch goes only once the task is closed, so the task never shows between CI running and gone.
-fn green(state: &Path, watch: &Watch, none_ran: bool) -> Event {
-    let what = if none_ran { format!("No CI ran for {}", watch.short()) } else { format!("CI is green for {}", watch.short()) };
+fn green(state: &Path, watch: &Watch, what: String) -> Event {
     let text = if watch.close {
         match crate::tasks::after_ci(&watch.repo, &watch.task, &watch.address, &watch.pushed) {
             Ok(said) => format!("{what}. {said}"),
@@ -572,9 +619,59 @@ mod tests {
         assert_eq!(verdict(&[run("completed", "success"), run("queued", "")], 600), Verdict::Pending);
         assert_eq!(verdict(&[run("completed", "success"), run("completed", "skipped"), run("completed", "neutral")], SETTLE_SECONDS), Verdict::Green);
         assert_eq!(verdict(&[run("completed", "success")], SETTLE_SECONDS - 1), Verdict::Pending, "a late workflow still has time to appear");
-        for conclusion in ["failure", "cancelled", "timed_out", "startup_failure", "action_required"] {
+        for conclusion in ["failure", "timed_out", "startup_failure", "action_required"] {
             assert!(matches!(verdict(&[run("completed", "success"), run("completed", conclusion), run("in_progress", "")], 5), Verdict::Failed(failed) if failed.len() == 1), "{conclusion}");
         }
+    }
+
+    fn titled(workflow: &str, conclusion: &str) -> Run {
+        Run { workflow: workflow.to_string(), name: workflow.to_string(), ..run("completed", conclusion) }
+    }
+
+    #[test]
+    fn a_cancelled_run_is_never_red_and_waits_for_a_later_pass() {
+        assert_eq!(verdict(&[titled("test", "success"), titled("deploy", "cancelled"), run("in_progress", "")], 600), Verdict::Pending, "a cancel is no failure, so the rest still runs");
+        assert_eq!(verdict(&[titled("test", "success"), titled("deploy", "cancelled")], SETTLE_SECONDS), Verdict::Cancelled(vec!["deploy".to_string()]));
+        assert_eq!(verdict(&[titled("deploy", "cancelled"), titled("deploy", "success")], SETTLE_SECONDS), Verdict::Green, "the same workflow run again on the commit and passed");
+        assert!(matches!(verdict(&[titled("test", "failure"), titled("deploy", "cancelled")], SETTLE_SECONDS), Verdict::Failed(failed) if failed.len() == 1 && failed[0].workflow == "test"));
+    }
+
+    #[test]
+    fn a_watch_whose_run_was_cancelled_stays_ci_running_until_a_later_run_on_main_that_holds_it_passes() {
+        let dir = crate::tasks::test_support::repo();
+        let state = crate::sh::test_dir("ci-cancelled");
+        let branch = crate::repo::git(&dir, &["branch", "--show-current"]).unwrap();
+        let watched = crate::repo::git(&dir, &["rev-parse", "HEAD~1"]).unwrap();
+        let later = crate::repo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let on_commit = r#"[{"databaseId":1,"name":"test","workflowName":"test","status":"completed","conclusion":"success","url":"u"},{"databaseId":2,"name":"deploy","workflowName":"deploy","status":"completed","conclusion":"cancelled","url":"u"}]"#;
+        let gh = |name: &str, on_branch: &str| {
+            let path = state.join(name);
+            crate::executable::write(&path, format!("#!/bin/sh\ncase \"$*\" in\n*--commit*) cat <<'JSON'\n{on_commit}\nJSON\n;;\n*--branch*) cat <<'JSON'\n[{on_branch}]\nJSON\n;;\nesac\n")).unwrap();
+            path.to_string_lossy().to_string()
+        };
+        let branch_run = |sha: &str, conclusion: &str| format!(r#"{{"databaseId":3,"name":"deploy","workflowName":"deploy","status":"completed","conclusion":"{conclusion}","url":"u","headSha":"{sha}","event":"push"}}"#);
+        let nothing_yet = gh("nothing-yet", &branch_run(&later, "cancelled"));
+        let passed = gh("passed", &branch_run(&later, "success"));
+        let watch = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: watched.clone(), started_at: 0, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed: Pushed { target: branch.clone(), ..Pushed::default() } };
+        save(&state, &watch).unwrap();
+        crate::phase::record(&state, "billing@app", "push", &crate::phase::Event::PushOut { sha: &watched });
+        assert!(tick_with(&state, &nothing_yet, 100).is_empty(), "a cancelled deploy is no red CI and sends the task nothing");
+        let waiting = load(&state, "billing@app").unwrap();
+        assert!(waiting.running());
+        assert_eq!(waiting.note(), format!("CI running: deploy cancelled, waits for the next run on {branch} to pass"));
+        assert_eq!(crate::phase::load(&state, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::CiRunning { sha: watched.clone() }), "never under Needs you");
+        assert!(tick_with(&state, &passed, 100 + CANCELLED_POLL - 1).is_empty(), "a watch waiting on a later run asks gh less often");
+        let events = tick_with(&state, &passed, 100 + CANCELLED_POLL);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, Kind::Green);
+        assert!(events[0].text.starts_with(&format!("CI is green for {}: deploy was cancelled and a later run on {branch} that holds it passed", &watched[..7])), "{}", events[0].text);
+        assert!(load(&state, "billing@app").is_none());
+        save(&state, &Watch { sha: later.clone(), ..watch.clone() }).unwrap();
+        assert!(tick_with(&state, &gh("own", &branch_run(&later, "success")), 100).is_empty(), "the watched commit's own run is not a later one");
+        let events = tick_with(&state, &nothing_yet, CANCELLED_WAIT);
+        assert!(events.len() == 1 && events[0].text.starts_with("No CI passed for "), "{events:?}");
+        fs::remove_dir_all(state).unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

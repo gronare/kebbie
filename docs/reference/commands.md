@@ -238,6 +238,7 @@ Every 30 seconds the keeper (or an open board, with `keeper.enabled = false`) as
 | No runs yet | kebbie waits up to 3 minutes for runs to appear, then treats the commit as green. |
 | Running | The task waits under CI running. |
 | Every run passed, skipped or neutral | After at least a minute since the push, the task closes as `done`: its note is closed when the vault is on, and the lead hears what landed. |
+| Every run done and one cancelled | A cancel is no failure: a deploy window refused the run, or a newer push superseded it. The task stays under CI running with `<workflow> cancelled, waits for the next run on <branch> to pass`, and kebbie asks every 5 minutes. A later run of that workflow on the branch that passes, on a commit holding the pushed one, closes the task as `done`. After 7 days without one, it closes as a commit with no runs does. |
 | A run failed | The watch stops, and the failure is named by workflow, job and step: `CI failed: <workflow> · <job> · <step>`. |
 
 When a run failed:

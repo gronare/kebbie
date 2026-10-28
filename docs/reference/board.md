@@ -109,7 +109,7 @@ The `tests` line shows the last test command the task's Claude ran, as kebbie re
 | Working | Tasks at work since their prompt, their last report or your answer. |
 | To review | Reported ready and sent to the reviewer, waiting for a pass on its current code. |
 | Ready to push | Reported ready with its commits, and pushes under way. |
-| CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. |
+| CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. A cancelled run waits for a later run on the default branch to pass. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
 | Queued | Waiting to start after other tasks or at a time, with no worktree, Space or Claude. |
 

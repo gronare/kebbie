@@ -64,6 +64,7 @@ Without a pull request, the default branch is where CI runs. A task is finished 
 When origin is on GitHub and `gh` is logged in, kebbie watches the workflow runs for the pushed commit and keeps the task open, with its worktree and its Claude, under CI running.
 
 - Once every run is green, it closes the task as done.
+- A cancelled run is no failure: GitHub cancels a run when a deploy window refuses it or a newer push supersedes it. The task stays under CI running, marked `<workflow> cancelled, waits for the next run on main to pass`, and closes as done once a later run of that workflow on the default branch passes on a commit that holds the pushed one. After 7 days without one, it closes the way a commit with no runs does.
 - When a run fails, the task moves to Needs you and its Claude gets the failing job's log, so the session that wrote the change fixes it while it still knows the change. The fix is a new commit and a normal push, and that push is watched in turn.
 
 ## The keeper watches CI
