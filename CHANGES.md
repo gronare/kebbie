@@ -18,6 +18,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The review split needs only nvim, not fzf
 - The board's To review group is In review; board.groups takes "in-review", and "to-review" still works
 - The reviewer reads every test run on the reviewed code, one line per command, and the older ones only when none ran on it
+- The reviewer tells a broken test-run hook from no test run, and hears of commands that look like test runs but are not recorded
 - A task that runs a command that looks like a test run, such as script/test or make test, but is not in task.test_commands names it on its row, with the hint to add it there so its runs are recorded
 - Messages to the lead, kebbie's notices and desktop notifications name a task the way the board does, by its title with its name
 - kebbie doctor lists worktrees and open tasks left from kelpie, and kebbie doctor --fix installs kebbie's push block where kelpie's was

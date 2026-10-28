@@ -468,6 +468,14 @@ pub fn for_path(path: &Path) -> Option<Shown> {
     Some(task.judge(&run))
 }
 
+// Whether the hook that records test runs works in the task, so a missing run reads as no run only when it does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Hook {
+    Works,
+    NeverRan,
+    Broken,
+}
+
 fn with_changes(run: &Run) -> &'static str {
     if run.dirty { " · with uncommitted changes" } else { "" }
 }
@@ -477,7 +485,7 @@ fn plural(count: usize, noun: &str) -> String {
 }
 
 // Every run on the reviewed code, one line per command so a task that ran its tests fifty times still reads short; older runs only when none ran on that code.
-pub fn brief(runs: &[Run], on_reviewed: impl Fn(&Run) -> bool, judge: impl Fn(&Run) -> Shown) -> String {
+pub fn brief(runs: &[Run], on_reviewed: impl Fn(&Run) -> bool, judge: impl Fn(&Run) -> Shown, hook: Hook, unrecorded: &[String]) -> String {
     let mut lines = Vec::new();
     let reviewed: Vec<&Run> = runs.iter().rev().filter(|run| on_reviewed(run)).collect();
     if !reviewed.is_empty() {
@@ -501,15 +509,36 @@ pub fn brief(runs: &[Run], on_reviewed: impl Fn(&Run) -> bool, judge: impl Fn(&R
             lines.push(format!("- {} · `{}`{}", judge(run).line(), run.command, with_changes(run)));
         }
     } else {
-        lines.push("kebbie recorded no test run in this task: say whether the change needed one.".to_string());
+        lines.push(match hook {
+            Hook::Works => "kebbie recorded no test run in this task: say whether the change needed one.".to_string(),
+            Hook::NeverRan => "kebbie's hook that records test runs never ran in this task: either its Claude ran no shell command, or the hook is broken. So no recorded run does not prove that no test ran; ask in the Tests step which tests ran.".to_string(),
+            Hook::Broken => "The task's hooks run a kebbie that is no longer installed, so the hook that records test runs is broken and nothing it ran was recorded. Say so in the Tests step: a missing record here is not a missing test run.".to_string(),
+        });
+    }
+    if !unrecorded.is_empty() {
+        lines.push(format!("It also ran {}, which looks like a test run but is not in task.test_commands, so kebbie did not record its result.", unrecorded.iter().map(|command| format!("`{command}`")).collect::<Vec<_>>().join(", ")));
     }
     lines.join("\n")
 }
 
+fn hook_in(state: &Path, address: &str, seen: &Seen) -> Hook {
+    let settings = state.join("roles").join(format!("{address}.settings.json"));
+    let broken = fs::read_to_string(settings).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()).is_some_and(|settings| !crate::restart::gone_hooks(&settings).is_empty());
+    match (broken, seen.at) {
+        (true, _) => Hook::Broken,
+        (false, None) => Hook::NeverRan,
+        (false, Some(_)) => Hook::Works,
+    }
+}
+
 // The reviewer reads the commits, not the tree, so uncommitted work does not make a run stale here.
 pub fn brief_for(state: &Path, address: &str, worktree: &Path, upstream: &str, sha: &str) -> String {
+    let seen = seen_in(state, address);
+    let configured = crate::config::resolve(Some(worktree)).map(|loaded| loaded.settings.test_commands.value).unwrap_or_default();
+    let listed = commands(&configured);
+    let unrecorded: Vec<String> = seen.unrecorded.iter().filter(|command| recognise(command, &listed).is_none()).cloned().collect();
     let current = |code: &str| tasks::same_code(worktree, upstream, code, sha);
-    brief(&runs_in(state, address), |run| current(&run.code), |run| shown(run, current, true))
+    brief(&runs_in(state, address), |run| current(&run.code), |run| shown(run, current, true), hook_in(state, address, &seen), &unrecorded)
 }
 
 fn duration(ms: u64) -> String {
@@ -705,16 +734,35 @@ mod tests {
         }
         runs.push(run(9, "cargo test", true, "reviewed"));
         let judge = |run: &Run| shown(run, |code| code == "reviewed", true);
-        let text = brief(&runs, |run| run.code == "reviewed", judge);
+        let text = brief(&runs, |run| run.code == "reviewed", judge, Hook::Works, &[]);
         assert!(text.contains("weigh them in the Tests step"), "{text}");
         assert!(text.contains("- `cargo test --lib evidence` · 7 runs (6 passed, 1 failed), the newest: ✓ cargo test · 3 passed · at 8abcdef"), "every run on the reviewed code counts, not the newest five: {text}");
         assert!(text.contains("- `cargo test` ✓ cargo test · 3 passed · at 9abcdef · with uncommitted changes"), "{text}");
         assert!(text.find("`cargo test` ✓").unwrap() < text.find("`cargo test --lib evidence`").unwrap(), "newest command first: {text}");
         assert!(!text.contains("1abcdef"), "an older run is left out while runs on the reviewed code exist: {text}");
         assert_eq!(text.lines().count(), 3, "one line per command keeps it short: {text}");
-        let older = brief(&runs, |_| false, |run| shown(run, |_| false, true));
+        let older = brief(&runs, |_| false, |run| shown(run, |_| false, true), Hook::Works, &[]);
         assert!(older.starts_with("No test run kebbie recorded ran on the code under review") && older.lines().count() == 1 + OLDER_SHOWN, "{older}");
-        assert!(brief(&[], |_| true, judge).contains("recorded no test run"));
+        assert!(brief(&[], |_| true, judge, Hook::Works, &[]).contains("recorded no test run"));
+    }
+
+    #[test]
+    fn the_reviewer_tells_a_broken_test_run_hook_from_no_test_run() {
+        let judge = |run: &Run| shown(run, |_| true, true);
+        let none = brief(&[], |_| true, judge, Hook::Works, &[]);
+        let never = brief(&[], |_| true, judge, Hook::NeverRan, &[]);
+        let broken = brief(&[], |_| true, judge, Hook::Broken, &[]);
+        assert!(none.contains("recorded no test run") && !none.contains("broken"));
+        assert!(never.contains("never ran in this task") && never.contains("does not prove that no test ran"), "{never}");
+        assert!(broken.contains("hook that records test runs is broken") && broken.contains("not a missing test run"), "{broken}");
+        assert!(brief(&[], |_| true, judge, Hook::Works, &["script/test".to_string()]).contains("It also ran `script/test`, which looks like a test run but is not in task.test_commands"));
+        let state = crate::sh::test_dir("evidence-hook-health");
+        assert_eq!(hook_in(&state, "billing@app", &Seen::default()), Hook::NeverRan);
+        assert_eq!(hook_in(&state, "billing@app", &Seen { at: Some(1), unrecorded: Vec::new() }), Hook::Works);
+        fs::create_dir_all(state.join("roles")).unwrap();
+        fs::write(state.join("roles/billing@app.settings.json"), crate::agent::claude::settings("/home/u/.local/share/kelpie/current/target/release/kelpie", "billing@app", None, None, None)).unwrap();
+        assert_eq!(hook_in(&state, "billing@app", &Seen { at: Some(1), unrecorded: Vec::new() }), Hook::Broken, "settings whose hooks run kelpie's removed binary");
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]
