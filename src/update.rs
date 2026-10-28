@@ -186,11 +186,13 @@ fn finish_in(claude_dir: &Path, state: &Path, tracker: &mut Option<Tracker>) -> 
     let plugins = 1 + usize::from(vault_installed);
     step(tracker, progress::PLUGINS, "Claude Code and vault plugins", false);
     count(tracker, "plugins", 0, plugins);
-    let mut lines = vec![claude_plugin(claude_dir, &setup::claude_bin(), root.as_deref(), channel == Channel::Main && running.is_none())];
+    let (claude, updated) = updated_claude_plugin(claude_dir, &setup::claude_bin(), root.as_deref(), channel == Channel::Main && running.is_none());
     count(tracker, "plugins", 1, plugins);
-    lines.extend(vault_plugin(claude_dir, &setup::claude_bin()));
+    let vault = vault_plugin(claude_dir, &setup::claude_bin());
     count(tracker, "plugins", plugins, plugins);
-    step(tracker, progress::PLUGINS, if vault_installed { "Updated the Claude Code and vault plugins" } else { "Updated the Claude Code plugin" }, true);
+    step(tracker, progress::PLUGINS, &plugins_said(&claude, updated, vault_installed, &vault), true);
+    let mut lines = vec![claude];
+    lines.extend(vault);
     lines.extend(crate::push_block::move_from_kelpie(&crate::status::known_repos(&crate::herdr::workspaces().unwrap_or_default(), crate::repo::pooled_checkouts()).into_iter().collect::<Vec<_>>(), state));
     step(tracker, progress::RESTART, "Restarting sessions", false);
     update_check::forget(state);
@@ -210,6 +212,18 @@ fn finish_in(claude_dir: &Path, state: &Path, tracker: &mut Option<Tracker>) -> 
         tracker.save();
     }
     Ok(lines)
+}
+
+// The plugins step names a plugin as updated only when claude updated it, and says what became of one it did not.
+fn plugins_said(claude: &str, updated: bool, vault_installed: bool, vault: &[String]) -> String {
+    match (updated, vault_installed, vault.first()) {
+        (true, true, None) => "Updated the Claude Code and vault plugins".to_string(),
+        (true, false, _) => "Updated the Claude Code plugin".to_string(),
+        (true, true, Some(vault)) => format!("Updated the Claude Code plugin; {vault}"),
+        (false, true, None) => format!("Updated the vault plugin; {claude}"),
+        (false, true, Some(vault)) => format!("{claude}; {vault}"),
+        (false, false, _) => claude.to_string(),
+    }
 }
 
 fn counted(lead: bool, sessions: usize) -> Option<(String, bool)> {
@@ -519,25 +533,30 @@ pub fn same_folder(one: &Path, other: &Path) -> bool {
 }
 
 pub fn claude_plugin(claude_dir: &Path, claude: &str, root: Option<&Path>, follows_github: bool) -> String {
+    updated_claude_plugin(claude_dir, claude, root, follows_github).0
+}
+
+// The line for the plugin, and whether claude updated it.
+fn updated_claude_plugin(claude_dir: &Path, claude: &str, root: Option<&Path>, follows_github: bool) -> (String, bool) {
     let installed: Value = std::fs::read_to_string(claude_dir.join("plugins/installed_plugins.json")).ok()
         .and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
     let Some(id) = installed["plugins"].as_object().and_then(|plugins| plugins.keys().find(|id| id.starts_with("kebbie@")).cloned()) else {
-        return "Claude Code plugin: not installed; kebbie doctor shows how".to_string();
+        return ("Claude Code plugin: not installed; kebbie doctor shows how".to_string(), false);
     };
     match marketplace(claude_dir, &id) {
         Marketplace::InPlace(path) if root.is_some_and(|root| same_folder(&path, root)) => {
             let marketplace = id.split_once('@').map_or("kebbie", |(_, market)| market);
             match sh::run(claude, &["plugin", "marketplace", "update", marketplace], None).and_then(|_| sh::run(claude, &["plugin", "update", &id], None)) {
-                Ok(output) => format!("Claude Code plugin: {}", output.lines().last().unwrap_or("up to date").trim_start_matches(['✔', ' '])),
-                Err(error) => format!("Claude Code plugin: {error}"),
+                Ok(output) => (format!("Claude Code plugin: {}", output.lines().last().unwrap_or("up to date").trim_start_matches(['✔', ' '])), true),
+                Err(error) => (format!("Claude Code plugin: {error}"), false),
             }
         }
-        Marketplace::InPlace(path) => format!("Claude Code plugin: loaded in place from {}, which is not the install root; {IN_PLACE_FIX}", path.display()),
+        Marketplace::InPlace(path) => (format!("Claude Code plugin: loaded in place from {}, which is not the install root; {IN_PLACE_FIX}", path.display()), false),
         Marketplace::Git if follows_github => match sh::run(claude, &["plugin", "update", &id], None) {
-            Ok(output) => format!("Claude Code plugin: {}", output.lines().last().unwrap_or("up to date").trim_start_matches(['✔', ' '])),
-            Err(error) => format!("Claude Code plugin: {error}"),
+            Ok(output) => (format!("Claude Code plugin: {}", output.lines().last().unwrap_or("up to date").trim_start_matches(['✔', ' '])), true),
+            Err(error) => (format!("Claude Code plugin: {error}"), false),
         },
-        Marketplace::Git => format!("Claude Code plugin: left as it is, since its GitHub marketplace follows the default branch and not this channel. Load it from the install root once (the remove forgets its options, such as auto_open): {IN_PLACE_FIX}"),
+        Marketplace::Git => (format!("Claude Code plugin: left as it is, since its GitHub marketplace follows the default branch and not this channel. Load it from the install root once (the remove forgets its options, such as auto_open): {IN_PLACE_FIX}"), false),
     }
 }
 
@@ -552,6 +571,20 @@ mod tests {
         assert!(finish.find("move_from_kelpie(").unwrap() < finish.find("restart::run_counted(").unwrap());
     }
     use serde_json::json;
+
+    #[test]
+    fn the_plugins_step_says_updated_only_for_a_plugin_claude_updated() {
+        let home = scratch("plugins-said");
+        let (claude, _) = fake_claude(&home);
+        let (line, updated) = updated_claude_plugin(&home, &claude, None, true);
+        assert_eq!((line.as_str(), updated), ("Claude Code plugin: not installed; kebbie doctor shows how", false));
+        assert_eq!(plugins_said(&line, updated, false, &[]), "Claude Code plugin: not installed; kebbie doctor shows how");
+        assert_eq!(plugins_said(&line, updated, true, &[]), "Updated the vault plugin; Claude Code plugin: not installed; kebbie doctor shows how");
+        assert_eq!(plugins_said("Claude Code plugin: up to date", true, true, &[]), "Updated the Claude Code and vault plugins");
+        assert_eq!(plugins_said("Claude Code plugin: up to date", true, false, &[]), "Updated the Claude Code plugin");
+        assert_eq!(plugins_said("Claude Code plugin: up to date", true, true, &["vault plugin: offline".to_string()]), "Updated the Claude Code plugin; vault plugin: offline");
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn the_steps_after_the_build_run_on_the_binary_just_built() {
