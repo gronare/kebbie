@@ -24,6 +24,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - prefix+space in a lead Space whose board is not running starts the board, instead of leaving the lead
 - Moving over from kelpie points herdr's sidebar sync and key descriptions at kebbie too, and reloads herdr, so the sidebar runs and prefix+space works without restarting herdr
 - Running the install command again no longer moves kelpie over a second time because of the log the old keeper leaves as it exits
+- Moving over from a kelpie linked from a local checkout unlinks it from herdr and leaves the checkout, so the next install no longer moves kelpie over again
 
 ## 0.28.1
 

@@ -76,7 +76,7 @@ move_from_kelpie() {
     ok "herdr keys and sidebar run kebbie   $dim(backup: $(short "$herdr_config").kelpie-backup)$off"
   fi
   case "$old_plugin" in
-    local\ *) warn "kelpie is linked from $(short "${old_plugin#local }"); run herdr plugin unlink kelpie once kebbie is checked out there" ;;
+    local\ *) herdr plugin unlink kelpie >/dev/null 2>&1 && ok "kelpie unlinked from herdr   $dim(its checkout at $(short "${old_plugin#local }") stays)$off" ;;
     ?*) herdr plugin uninstall kelpie >/dev/null 2>&1 && removed=1 ;;
   esac
   if [ -L "$HOME/.local/bin/kelpie" ]; then rm "$HOME/.local/bin/kelpie"; fi
