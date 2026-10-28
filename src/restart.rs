@@ -114,11 +114,42 @@ pub fn decide(mode: Mode, auto: bool, facts: &Facts, background: impl FnOnce() -
     }
 }
 
+// The settings file a session's command line names with --settings.
+pub fn settings_file(argv: &[String]) -> Option<PathBuf> {
+    argv.windows(2).find(|pair| pair[0] == "--settings").map(|pair| PathBuf::from(&pair[1])).or_else(|| argv.iter().find_map(|arg| arg.strip_prefix("--settings=")).map(PathBuf::from))
+}
+
+fn program(command: &str) -> String {
+    let command = command.trim_start();
+    match command.strip_prefix('\'') {
+        Some(rest) => rest.split('\'').next().unwrap_or_default().to_string(),
+        None => command.split_whitespace().next().unwrap_or_default().to_string(),
+    }
+}
+
+// The kebbie a settings file's hooks run that is no kebbie on this machine, as the kelpie binary the rename removed, so evidence and gate hooks fail without a word.
+pub fn gone_hooks(settings: &Value) -> Vec<String> {
+    let commands = settings["hooks"].as_object().into_iter().flatten().flat_map(|(_, entries)| entries.as_array().into_iter().flatten())
+        .flat_map(|entry| entry["hooks"].as_array().into_iter().flatten()).filter_map(|hook| hook["command"].as_str());
+    let mut gone: Vec<String> = commands.map(program).filter(|program| {
+        let name = base(program);
+        (name == "kelpie" || name == "kebbie") && (name == "kelpie" || !Path::new(program).is_file())
+    }).collect();
+    gone.sort();
+    gone.dedup();
+    gone
+}
+
+pub fn hooks_gone_in(argv: &[String]) -> bool {
+    settings_file(argv).and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| serde_json::from_str::<Value>(&text).ok()).is_some_and(|settings| !gone_hooks(&settings).is_empty())
+}
+
 fn base(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
 pub const NO_ROLE: &str = "it runs without its task role";
+pub const HOOKS_GONE: &str = "its hooks run a kebbie that is gone";
 pub const OUTSIDE_LEAD_DIR: &str = "it runs outside the lead's folder";
 
 // A lead started in another folder than the lead's own works on state kebbie no longer reads.
@@ -455,9 +486,9 @@ fn load_restarted(state: &Path) -> Map<String, Value> {
 
 pub const KEBBIE_UPDATE: &str = "kebbie update";
 
-// The reasons a second restart cannot satisfy when the first left them standing: the pane's PATH starts the same Claude Code, or the restart did not give a task its role.
+// The reasons a second restart cannot satisfy when the first left them standing: the pane's PATH starts the same Claude Code, or the restart did not give a task its role or working hooks.
 fn sticky(entry: &Value) -> Vec<&str> {
-    entry["reasons"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|reason| reason.starts_with("Claude Code ") || *reason == "a newer Claude Code" || *reason == NO_ROLE).collect()
+    entry["reasons"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|reason| reason.starts_with("Claude Code ") || *reason == "a newer Claude Code" || *reason == NO_ROLE || *reason == HOOKS_GONE).collect()
 }
 
 // A session kebbie recorded starting on the installed kebbie already runs it, whatever the update's time says.
@@ -477,8 +508,11 @@ pub fn held_back(last: Option<&Value>, now: &Value, manual: bool) -> Option<Stri
     let same_kebbie = !manual && reasons.contains(&KEBBIE_UPDATE) && !now["kebbie"].is_null() && last["kebbie"] == now["kebbie"] && last["started"] == now["started"];
     let held = |reason: &&str| (same_claude && sticky(now).contains(reason)) || (same_kebbie && *reason == KEBBIE_UPDATE);
     if !reasons.is_empty() && reasons.iter().all(held) {
-        return Some(if same_claude {
+        let left = sticky(now);
+        return Some(if same_claude && left.iter().any(|reason| reason.starts_with("Claude Code ") || *reason == "a newer Claude Code") {
             format!("a restart brought back the same Claude Code ({}), so the pane starts that one; restarting again cannot update it", now["exe"].as_str().unwrap_or("?"))
+        } else if same_claude {
+            format!("{} after a restart already; restarting again would not mend it", left.join(" and "))
         } else {
             format!("a restart onto {} left it on {}; restarting again would not move it", now["kebbie"].as_str().unwrap_or("?"), now["started"].as_str().unwrap_or("an older kebbie"))
         });
@@ -651,6 +685,8 @@ pub struct Line {
     pub label: String,
     pub said: String,
     pub stale: bool,
+    #[serde(default)]
+    pub reasons: Vec<String>,
 }
 
 // The lead is the session the user talks to, so once they are out of its pane it waits a minute, not the idle minutes.
@@ -741,7 +777,7 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
     let total = panes.len();
     for (index, (pane, process)) in panes.into_iter().enumerate() {
         counted(index, total);
-        let line = |verdict: &Verdict| Line { label: pane.label.clone(), said: verdict.words(auto), stale: verdict.stale() };
+        let line = |verdict: &Verdict| Line { label: pane.label.clone(), said: verdict.words(auto), stale: verdict.stale(), reasons: Vec::new() };
         if pane.agent != Agent::Claude {
             lines.push(line(&Verdict::Skip(format!("kebbie restarts Claude sessions; {} is left as it runs", pane.agent.name()))));
             continue;
@@ -766,6 +802,9 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
         if process.argv.as_deref().is_some_and(|argv| pane.agent.lacks_role(argv)) && cwd.as_deref().and_then(tasks::task_at).is_some() {
             reasons.push(NO_ROLE.to_string());
         }
+        if process.argv.as_deref().is_some_and(hooks_gone_in) {
+            reasons.push(HOOKS_GONE.to_string());
+        }
         if lead && lead::lead_dir().is_ok_and(|own| outside_lead_dir(cwd.as_deref(), &own)) {
             reasons.push(OUTSIDE_LEAD_DIR.to_string());
         }
@@ -780,7 +819,7 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
         };
         let record = json!({ "at": at, "exe": exe.as_deref().map(|exe| exe.to_string_lossy().to_string()), "reasons": reasons, "kebbie": kebbie, "started": started_on });
         if !reasons.is_empty() && let Some(why) = held_back(restarted.get(&session), &record, matches!(mode, Mode::Manual { .. })) {
-            lines.push(Line { label: pane.label.clone(), said: format!("stale, held: {why}"), stale: lead });
+            lines.push(Line { label: pane.label.clone(), said: format!("stale, held: {why}"), stale: lead, reasons: Vec::new() });
             continue;
         }
         let args = match process.argv.as_deref().map(|argv| pane.agent.resume_args(argv, &session)) {
@@ -831,15 +870,15 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
                     tell_board(&restarted_said(&pane.label, &reasons, &started));
                 }
                 lines.push(match started.asks() {
-                    None => line(&Verdict::Restart),
-                    Some(asks) => Line { label: pane.label.clone(), said: format!("restarted; Claude there asks {asks}, answer it there"), stale: true },
+                    None => Line { reasons: reasons.clone(), ..line(&Verdict::Restart) },
+                    Some(asks) => Line { label: pane.label.clone(), said: format!("restarted; Claude there asks {asks}, answer it there"), stale: true, reasons: reasons.clone() },
                 });
             }
             Err(error) => {
                 if let Some(text) = told_failure(&pane.label, &error) {
                     tell_board(&text);
                 }
-                lines.push(Line { label: pane.label.clone(), said: failed_said(&error), stale: true });
+                lines.push(Line { label: pane.label.clone(), said: failed_said(&error), stale: true, reasons: Vec::new() });
             }
         }
     }
@@ -868,6 +907,14 @@ pub fn keep_answers(asked: &mut Map<String, Value>, on_disk: &Map<String, Value>
     }
 }
 
+// kebbie restart says what each restart was for; an update's report leaves it out, as the update is the reason.
+pub fn with_reasons(lines: Vec<Line>) -> Vec<Line> {
+    lines.into_iter().map(|line| match line.reasons.is_empty() {
+        true => line,
+        false => Line { said: format!("{}, as {}", line.said, line.reasons.join(", ")), ..line },
+    }).collect()
+}
+
 pub fn report(lines: &[Line]) -> Vec<String> {
     let mut out = vec!["Claude sessions:".to_string()];
     if lines.is_empty() {
@@ -878,7 +925,7 @@ pub fn report(lines: &[Line]) -> Vec<String> {
 }
 
 pub fn now_cli(all: bool) -> Result<String> {
-    Ok(report(&run(Mode::Manual { all }, &mut Memory::default(), None)?).join("\n"))
+    Ok(report(&with_reasons(run(Mode::Manual { all }, &mut Memory::default(), None)?)).join("\n"))
 }
 
 #[cfg(test)]
@@ -898,6 +945,38 @@ mod tests {
 
     fn entry(at: u64, exe: &str, reasons: &[&str], kebbie: Option<&str>, started: Option<&str>) -> Value {
         json!({ "at": at, "exe": exe, "reasons": reasons, "kebbie": kebbie, "started": started })
+    }
+
+    #[test]
+    fn a_session_whose_hooks_run_a_kebbie_that_is_gone_is_stale_until_a_restart_writes_its_settings_again() {
+        let dir = crate::sh::test_dir("restart-hooks-gone");
+        let kebbie = dir.join("kebbie");
+        crate::executable::write(&kebbie, "#!/bin/sh\n").unwrap();
+        let written = |program: &str| serde_json::from_str::<Value>(&crate::agent::claude::settings(program, "billing@app", Some("billing@app"), None, None)).unwrap();
+        assert!(gone_hooks(&written(&kebbie.to_string_lossy())).is_empty());
+        let kelpie = "/home/u/.local/share/kelpie/current/target/release/kelpie";
+        assert_eq!(gone_hooks(&written(kelpie)), [kelpie], "kelpie's binary is gone after the rename, so its evidence and gate hooks fail silently");
+        let missing = dir.join("gone/kebbie");
+        assert_eq!(gone_hooks(&written(&missing.to_string_lossy())), [missing.to_string_lossy().to_string()]);
+        let file = dir.join("billing@app.settings.json");
+        std::fs::write(&file, written(kelpie).to_string()).unwrap();
+        let argv = |words: &[&str]| words.iter().map(|word| word.to_string()).collect::<Vec<_>>();
+        assert!(hooks_gone_in(&argv(&["claude", "--settings", &file.to_string_lossy(), "--resume", "x"])));
+        assert!(hooks_gone_in(&argv(&["claude", &format!("--settings={}", file.display())])));
+        assert!(!hooks_gone_in(&argv(&["claude", "--resume", "x"])));
+        let source = include_str!("restart.rs");
+        let run = &source[source.find("\npub fn run_counted(").unwrap()..];
+        assert!(run.find("hooks_gone_in").unwrap() < run.find("held_back(").unwrap(), "the reason counts like any other, so a busy session restarts once idle");
+        assert!(sticky(&json!({ "reasons": [HOOKS_GONE] })) == [HOOKS_GONE], "a restart that left the hooks broken is not repeated");
+        let exe = "/v/2.1.310";
+        let held = held_back(Some(&entry(1000, exe, &[HOOKS_GONE], None, None)), &entry(99_999, exe, &[HOOKS_GONE], None, None), true).unwrap();
+        assert_eq!(held, "its hooks run a kebbie that is gone after a restart already; restarting again would not mend it", "the held line names its own reason, not Claude Code's version");
+        let held = held_back(Some(&entry(1000, exe, &[NO_ROLE], None, None)), &entry(99_999, exe, &[NO_ROLE], None, None), true).unwrap();
+        assert_eq!(held, "it runs without its task role after a restart already; restarting again would not mend it");
+        let restarted = Line { label: "billing@app".to_string(), said: "restarted".to_string(), stale: false, reasons: vec![HOOKS_GONE.to_string()] };
+        assert_eq!(report(&with_reasons(vec![restarted.clone()]))[1], "  billing@app: restarted, as its hooks run a kebbie that is gone", "kebbie restart says why it restarted a session");
+        assert_eq!(report(&[restarted])[1], "  billing@app: restarted");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

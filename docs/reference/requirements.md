@@ -67,6 +67,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `state dir` | The state directories. |
 | `config`, `repo config` | config.toml and every file in the repos folder parse, with no unknown or misplaced keys and no broken links. |
 | `push block` | Inside a repo: whether its task worktrees get the push block. |
+| `kelpie leftovers` | Worktrees whose push block is still kelpie's, which refuses kebbie's own push (`kebbie doctor --fix` installs kebbie's), and open tasks whose hooks run kelpie's removed binary, so their test runs and edits go unrecorded (`kebbie restart` gives each its settings again, a busy one once it is idle). |
 | `docs` | Inside a repo: whether `docs.required` is on. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
 | `hub` | Whether the machine joined a kebbie hub, and how its board posts go. |

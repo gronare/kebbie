@@ -16,6 +16,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The review split is kebbie's own view beside the diff: the task's steps, or its commits, as tabs with their marks, the selected one's commit message and its files on top, and nvim below showing the file you pick at once; ← → pick a step, ↑ ↓ a file, a accepts the step and moves on to the next one waiting, r marks a file read, / filters, m hides the message, and a click picks a step or a file
 - tab moves between the steps, the files and the diff, and back; a review 120 columns wide or more puts the diff beside the view instead of under it
 - The review split needs only nvim, not fzf
+- kebbie doctor lists worktrees and open tasks left from kelpie, and kebbie doctor --fix installs kebbie's push block where kelpie's was
 
 ### Fixed
 - Messages from kebbie show in Claude Code as one collapsed line from @kebbie that ctrl+o expands, instead of in full with Claude Code's peer warning
@@ -28,6 +29,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Moving over from a kelpie linked from a local checkout unlinks it from herdr and leaves the checkout, so the next install no longer moves kelpie over again
 - A CI run that GitHub cancelled, because a deploy window refused it or a newer push superseded it, is no failure: the task stays under CI running, says which workflow waits for the next run on main, and closes once a later run on main that holds the pushed commit passes
 - A worktree whose push block kelpie installed takes kebbie's own push again: kebbie update and kebbie doctor --fix install kebbie's block there, and a task that starts or restarts in it gets it too
+- A task whose hooks still run kelpie's removed binary restarts once it is idle, with settings that run kebbie, so its test runs and its vault gate work again; kebbie restart says what it restarted each session for
 - A task's git push to a local path or a file:// URL, such as a repo a test makes, goes through; every network URL stays blocked
 - A task's git push to a host:path URL such as git@github.com:acme/app.git fails at once, as every other network URL does, instead of starting ssh to a host named kebbie-blocks-push; kebbie update renews the block in every pooled worktree
 

@@ -257,7 +257,7 @@ mod tests {
 
     fn summary(new: &[&str], fixed: &[&str]) -> Summary {
         let owned = |lines: &[&str]| lines.iter().map(|line| line.to_string()).collect();
-        let line = |label: &str, said: &str| crate::restart::Line { label: label.to_string(), said: said.to_string(), stale: true };
+        let line = |label: &str, said: &str| crate::restart::Line { label: label.to_string(), said: said.to_string(), stale: true, reasons: Vec::new() };
         Summary { version: "main".to_string(), new: owned(new), fixed: owned(fixed), restart: vec!["The lead and 2 sessions restart when they're idle".to_string(), "Open boards restart on the new kebbie when you next open them".to_string()], sessions: vec![line("lead", "restarts when idle"), line("billing@app", "restarts when idle"), line("api@app", "restarts when idle")], restarted_at: 1000, head: "9cbd545".to_string(), from: "02c7fe0".to_string() }
     }
 

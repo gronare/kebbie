@@ -277,8 +277,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie hub leave                leave the hub: remove this machine's keys, token and pinned account key
   kebbie doctor [--fix]           check that this machine has what kebbie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
-                                  (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter);
-                                  --fix first installs kebbie's push block in each worktree that still has kelpie's
+                                  (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter), and
+                                  what is left from kelpie; --fix first installs kebbie's push block in each worktree
+                                  that still has kelpie's
   kebbie setup [--yes]            the setup guide, one step at a time: this machine's name, the agents (Claude Code,
                                   Codex), herdr's three keys (appended to its config.toml, a taken key named with a
                                   free one offered), the backlog's sources, the vault (a folder or an S3 bucket, its

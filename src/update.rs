@@ -660,7 +660,7 @@ mod tests {
 
 
     fn said(lines: &[(&str, &str)]) -> Vec<crate::restart::Line> {
-        lines.iter().map(|(label, said)| crate::restart::Line { label: label.to_string(), said: said.to_string(), stale: true }).collect()
+        lines.iter().map(|(label, said)| crate::restart::Line { label: label.to_string(), said: said.to_string(), stale: true, reasons: Vec::new() }).collect()
     }
 
     #[test]

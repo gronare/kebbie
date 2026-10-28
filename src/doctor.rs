@@ -387,6 +387,39 @@ pub fn push_block(repo: &Path) -> Check {
     }
 }
 
+// What a machine keeps from before kelpie became kebbie: worktrees whose push block refuses kebbie's own push, and task sessions whose hooks run kelpie's removed binary.
+pub fn kelpie_leftovers(worktrees: &[PathBuf], sessions: &[String]) -> Check {
+    if worktrees.is_empty() && sessions.is_empty() {
+        return ok("kelpie leftovers", "no worktree or task settings name kelpie");
+    }
+    let mut facts = Vec::new();
+    let mut fix = Vec::new();
+    if !worktrees.is_empty() {
+        facts.push(format!("{} still {} kelpie's push block, which refuses kebbie's own push ({})", if worktrees.len() == 1 { "1 worktree".to_string() } else { format!("{} worktrees", worktrees.len()) }, if worktrees.len() == 1 { "has" } else { "have" }, worktrees.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(", ")));
+        fix.push("kebbie doctor --fix".to_string());
+    }
+    if !sessions.is_empty() {
+        facts.push(format!("the hooks of {} run a kebbie that is gone, so their test runs and edits go unrecorded", sessions.join(", ")));
+        fix.push("kebbie restart (a busy session restarts once it is idle; the restart writes its settings again)".to_string());
+    }
+    warn("kelpie leftovers", facts.join("; "), fix)
+}
+
+// The open tasks and the lead whose settings file names hooks that no longer run.
+pub fn sessions_with_gone_hooks(roles: &Path, addresses: &[String]) -> Vec<String> {
+    addresses.iter().filter(|address| read_json(&roles.join(format!("{address}.settings.json"))).is_some_and(|settings| !crate::restart::gone_hooks(&settings).is_empty())).cloned().collect()
+}
+
+fn open_addresses(repos: &[PathBuf]) -> Vec<String> {
+    let mut addresses = vec![crate::status::LEAD_LABEL.to_string()];
+    for repo in repos {
+        for slot in crate::tasks::slots(repo).unwrap_or_default() {
+            addresses.extend(slot.task.map(|task| crate::peers::address(&task, &crate::repo::name_of(repo))));
+        }
+    }
+    addresses
+}
+
 fn known_repos() -> Vec<PathBuf> {
     crate::status::known_repos(&crate::herdr::workspaces().unwrap_or_default(), crate::repo::pooled_checkouts()).into_iter().collect()
 }
@@ -677,6 +710,8 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let (repo_checks, own) = repo_files(&env.repos_dir, env.repo_config.as_deref());
     checks.extend(repo_checks);
     checks.extend(env.repo.as_deref().map(push_block));
+    let repos = known_repos();
+    checks.push(kelpie_leftovers(&crate::push_block::kelpie_era_worktrees(&repos), &sessions_with_gone_hooks(&env.kebbie_state.join("roles"), &open_addresses(&repos))));
     let (Some(machine), Some(own)) = (machine, own) else {
         return checks;
     };
@@ -731,6 +766,25 @@ pub fn failed(checks: &[Check]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kelpie_leftovers_name_the_worktrees_and_sessions_and_how_to_mend_them() {
+        assert_eq!(kelpie_leftovers(&[], &[]).level, Level::Ok);
+        let found = kelpie_leftovers(&[PathBuf::from("/src/wt1.app")], &["billing@app".to_string()]);
+        assert_eq!(found.level, Level::Warn);
+        assert!(found.fact.contains("1 worktree still has kelpie's push block") && found.fact.contains("/src/wt1.app") && found.fact.contains("the hooks of billing@app run a kebbie that is gone"), "{}", found.fact);
+        assert_eq!(found.fix[0], "kebbie doctor --fix");
+        assert!(found.fix[1].starts_with("kebbie restart"));
+        let roles = crate::sh::test_dir("doctor-gone-hooks");
+        std::fs::write(roles.join("billing@app.settings.json"), crate::agent::claude::settings("/home/u/.local/share/kelpie/current/target/release/kelpie", "billing@app", None, None, None)).unwrap();
+        let kebbie = roles.join("kebbie");
+        crate::executable::write(&kebbie, "#!/bin/sh\n").unwrap();
+        std::fs::write(roles.join("search@app.settings.json"), crate::agent::claude::settings(&kebbie.to_string_lossy(), "search@app", None, None, None)).unwrap();
+        let addresses = ["billing@app".to_string(), "search@app".to_string(), "lead".to_string()];
+        let gone = sessions_with_gone_hooks(&roles, &addresses);
+        assert_eq!(gone, ["billing@app"], "a kebbie that runs, and a session with no settings file, are fine");
+        std::fs::remove_dir_all(roles).unwrap();
+    }
     use crate::config::Channel;
     use serde_json::json;
     use std::os::unix::fs::PermissionsExt;
