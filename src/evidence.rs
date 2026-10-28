@@ -18,6 +18,7 @@ pub const DEFAULT_COMMANDS: [&str; 16] = [
 const KEPT: usize = 20;
 const COMMAND_LIMIT: usize = 300;
 const UNRECORDED_KEPT: usize = 3;
+const OLDER_SHOWN: usize = 5;
 const RUNNER_WORDS: [&str; 4] = ["test", "tests", "spec", "specs"];
 const TASK_RUNNERS: [&str; 22] = ["make", "just", "rake", "npm", "pnpm", "yarn", "bun", "deno", "dotnet", "mvn", "gradle", "gradlew", "swift", "zig", "flutter", "dart", "mix", "go", "nx", "turbo", "task", "bundle"];
 const TEST_TOOLS: [&str; 8] = ["jest", "vitest", "mocha", "phpunit", "ctest", "tox", "nox", "bats"];
@@ -467,21 +468,48 @@ pub fn for_path(path: &Path) -> Option<Shown> {
     Some(task.judge(&run))
 }
 
-// The reviewer's brief: the newest runs, each judged against the code under review.
-pub fn brief(runs: &[Run], judge: impl Fn(&Run) -> Shown) -> String {
-    if runs.is_empty() {
-        return "kebbie recorded no test run in this task: say whether the change needed one.".to_string();
-    }
-    let mut lines = vec!["The test runs kebbie recorded in this task, newest first (✓ passed on the code under review, ○ passed on older code, ✗ failed); weigh them in the Tests step:".to_string()];
-    for run in runs.iter().rev().take(5) {
-        lines.push(format!("- {} · `{}`{}", judge(run).line(), run.command, if run.dirty { " · with uncommitted changes" } else { "" }));
+fn with_changes(run: &Run) -> &'static str {
+    if run.dirty { " · with uncommitted changes" } else { "" }
+}
+
+fn plural(count: usize, noun: &str) -> String {
+    if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
+
+// Every run on the reviewed code, one line per command so a task that ran its tests fifty times still reads short; older runs only when none ran on that code.
+pub fn brief(runs: &[Run], on_reviewed: impl Fn(&Run) -> bool, judge: impl Fn(&Run) -> Shown) -> String {
+    let mut lines = Vec::new();
+    let reviewed: Vec<&Run> = runs.iter().rev().filter(|run| on_reviewed(run)).collect();
+    if !reviewed.is_empty() {
+        lines.push("The test runs kebbie recorded on the code under review, one line per command, newest first (✓ passed, ✗ failed); weigh them in the Tests step:".to_string());
+        let mut commands: Vec<&str> = Vec::new();
+        for run in &reviewed {
+            if !commands.contains(&run.command.as_str()) {
+                commands.push(&run.command);
+            }
+        }
+        for command in commands {
+            let same: Vec<&&Run> = reviewed.iter().filter(|run| run.command == command).collect();
+            let newest = same[0];
+            let failed = same.iter().filter(|run| !run.ok).count();
+            let tally = if same.len() == 1 { String::new() } else { format!(" · {} ({} passed, {failed} failed), the newest:", plural(same.len(), "run"), same.len() - failed) };
+            lines.push(format!("- `{command}`{tally} {}{}", judge(newest).line(), with_changes(newest)));
+        }
+    } else if !runs.is_empty() {
+        lines.push("No test run kebbie recorded ran on the code under review. The newest older ones (○ passed on older code, ✗ failed), for the Tests step:".to_string());
+        for run in runs.iter().rev().take(OLDER_SHOWN) {
+            lines.push(format!("- {} · `{}`{}", judge(run).line(), run.command, with_changes(run)));
+        }
+    } else {
+        lines.push("kebbie recorded no test run in this task: say whether the change needed one.".to_string());
     }
     lines.join("\n")
 }
 
 // The reviewer reads the commits, not the tree, so uncommitted work does not make a run stale here.
 pub fn brief_for(state: &Path, address: &str, worktree: &Path, upstream: &str, sha: &str) -> String {
-    brief(&runs_in(state, address), |run| shown(run, |code| tasks::same_code(worktree, upstream, code, sha), true))
+    let current = |code: &str| tasks::same_code(worktree, upstream, code, sha);
+    brief(&runs_in(state, address), |run| current(&run.code), |run| shown(run, current, true))
 }
 
 fn duration(ms: u64) -> String {
@@ -669,14 +697,24 @@ mod tests {
     }
 
     #[test]
-    fn the_reviewer_reads_the_newest_runs_judged_against_the_code_under_review() {
-        let run = |at: u64, ok| Run { command: "cargo test --lib".to_string(), runner: "cargo test".to_string(), ok, exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 2, code: at.to_string(), at };
-        let text = brief(&[run(1, false), run(2, true)], |run| shown(run, |code| code == "2", true));
+    fn the_reviewer_reads_every_run_on_the_reviewed_code_one_line_per_command_and_older_ones_only_without_them() {
+        let run = |at: u64, command: &str, ok, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), ok, exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at };
+        let mut runs = vec![run(1, "cargo test", false, "old")];
+        for at in 2..9 {
+            runs.push(run(at, "cargo test --lib evidence", at != 4, "reviewed"));
+        }
+        runs.push(run(9, "cargo test", true, "reviewed"));
+        let judge = |run: &Run| shown(run, |code| code == "reviewed", true);
+        let text = brief(&runs, |run| run.code == "reviewed", judge);
         assert!(text.contains("weigh them in the Tests step"), "{text}");
-        let newest = text.find("✓ cargo test · 3 passed · at 2abcdef · `cargo test --lib` · with uncommitted changes").unwrap();
-        let oldest = text.find("✗ cargo test failed · 3 passed · at 1abcdef · `cargo test --lib`").unwrap();
-        assert!(newest < oldest, "{text}");
-        assert!(brief(&[], |run| shown(run, |_| true, true)).contains("recorded no test run"));
+        assert!(text.contains("- `cargo test --lib evidence` · 7 runs (6 passed, 1 failed), the newest: ✓ cargo test · 3 passed · at 8abcdef"), "every run on the reviewed code counts, not the newest five: {text}");
+        assert!(text.contains("- `cargo test` ✓ cargo test · 3 passed · at 9abcdef · with uncommitted changes"), "{text}");
+        assert!(text.find("`cargo test` ✓").unwrap() < text.find("`cargo test --lib evidence`").unwrap(), "newest command first: {text}");
+        assert!(!text.contains("1abcdef"), "an older run is left out while runs on the reviewed code exist: {text}");
+        assert_eq!(text.lines().count(), 3, "one line per command keeps it short: {text}");
+        let older = brief(&runs, |_| false, |run| shown(run, |_| false, true));
+        assert!(older.starts_with("No test run kebbie recorded ran on the code under review") && older.lines().count() == 1 + OLDER_SHOWN, "{older}");
+        assert!(brief(&[], |_| true, judge).contains("recorded no test run"));
     }
 
     #[test]

@@ -60,7 +60,7 @@ So you can tidy history in the push window without paying for a second review.
 
 A task's Claude runs the tests related to its change before it reports ready; the full suite is CI's job after the push. kebbie records each of those runs from the task's hooks, with its command, its result and the commit it ran on, so nobody has to run them again to know they passed.
 
-The reviewer gets the latest runs in its brief, each marked as run on the code under review or on older code. It treats a failed run, or no passing run on the reviewed code, as a finding.
+The reviewer gets every run on the code under review in its brief, one line per command with how many runs passed and failed and the newest result. Only when none ran on that code does it get the newest older ones instead. It treats a failed run, or no passing run on the reviewed code, as a finding.
 
 ## The row shows the latest run
 
