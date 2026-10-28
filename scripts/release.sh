@@ -53,3 +53,9 @@ for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu 
   case "$code" in 2*) ;; *) fail "kebbie-$version-$target.tar.gz answers $code" ;; esac
 done
 echo "release: kebbie $version is published: https://github.com/$slug/releases/tag/$tag"
+
+if [ "${KEBBIE_KEEP_BUILDS:-}" = 1 ]; then
+  echo "release: kept the build output under target/ (KEBBIE_KEEP_BUILDS=1)"
+else
+  echo "release: $(sh scripts/clean-builds.sh "$root")"
+fi

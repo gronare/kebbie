@@ -18,6 +18,7 @@ The variables kebbie reads, the ones it sets for the commands it runs, and how t
 | `GH_HOST` | none | A GitHub Enterprise host whose remotes kebbie watches CI for, besides github.com. |
 | `KEBBIE_RELEASES_URL` | `https://github.com/<owner>/<repo>/releases/download` for the install's GitHub origin | Where a release's prebuilt binaries are downloaded from. |
 | `KEBBIE_CHANNEL` | `update.channel` | Read by `scripts/build.sh`: `release` never builds from source. |
+| `KEBBIE_KEEP_BUILDS` | unset | Read by `scripts/release.sh`: `1` keeps the build output under `target/` after a release. See [Release kebbie](../how-to/release-kebbie.md#the-build-output). |
 | `KEBBIE_VAULT_BIN` | none | A vault command that stands in for the vault plugin, for tests. |
 | `KEBBIE_IMAGES` | detected | How the board draws images such as a sign-off card's screenshots: `kitty`, `sixel`, `iterm2`, `halfblocks` or `off`. |
 | `KEBBIE_QR` | detected | How the hub's QR codes are drawn: `octant` or `halfblock`. |

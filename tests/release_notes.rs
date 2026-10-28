@@ -66,3 +66,46 @@ fn release_sh_moves_the_notes_before_the_commit_and_the_workflow_publishes_them_
     assert!(WORKFLOW.contains("scripts/release-notes.sh \"${GITHUB_REF_NAME#v}\" > release-notes.md") && WORKFLOW.contains("--notes-file ../release-notes.md"));
     assert!(!WORKFLOW.contains("--generate-notes"), "the release body is the handwritten notes");
 }
+
+const CLEAN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/clean-builds.sh");
+
+fn write(path: &Path, bytes: usize) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, vec![b'x'; bytes]).unwrap();
+}
+
+#[test]
+fn cleaning_builds_keeps_only_the_installed_release_build_and_never_follows_a_link() {
+    let root = std::env::temp_dir().join(format!("kebbie-clean-builds-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let target = root.join("target");
+    write(&target.join("debug/deps/kebbie-1.cgu.o"), 3_000_000);
+    write(&target.join("verify/debug/kebbie"), 10);
+    write(&target.join("x86_64-apple-darwin/release/kebbie"), 10);
+    write(&target.join("release/kebbie"), 10);
+    write(&target.join("release/kebbie.origin"), 1);
+    write(&target.join("CACHEDIR.TAG"), 1);
+    write(&root.join("outside/precious"), 1);
+    std::os::unix::fs::symlink(root.join("outside"), target.join("linked")).unwrap();
+    let cleaned = Command::new("sh").arg(CLEAN).arg(&root).output().unwrap();
+    assert!(cleaned.status.success() && out(&cleaned).starts_with("freed ") && out(&cleaned).contains("target/release stays"), "{}{}", out(&cleaned), err(&cleaned));
+    for gone in ["debug", "verify", "x86_64-apple-darwin", "linked"] {
+        assert!(fs::symlink_metadata(target.join(gone)).is_err(), "{gone} is left");
+    }
+    for kept in ["release/kebbie", "release/kebbie.origin", "CACHEDIR.TAG"] {
+        assert!(target.join(kept).exists(), "{kept} is removed");
+    }
+    assert!(root.join("outside/precious").exists(), "a link's target is never removed");
+    fs::remove_dir_all(&target).unwrap();
+    std::os::unix::fs::symlink(root.join("outside"), &target).unwrap();
+    assert!(Command::new("sh").arg(CLEAN).arg(&root).status().unwrap().success());
+    assert!(root.join("outside/precious").exists(), "a linked target/ is left alone");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn release_sh_cleans_the_build_output_once_the_release_is_published_unless_told_to_keep_it() {
+    let published = RELEASE.find("is published:").expect("release.sh says when the release is published");
+    assert!(RELEASE.find("scripts/clean-builds.sh").is_some_and(|cleaned| cleaned > published), "the build output goes only after the release is out");
+    assert!(RELEASE.contains("\"${KEBBIE_KEEP_BUILDS:-}\" = 1"));
+}
