@@ -32,6 +32,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A bug report or signal the inbox files adds one line under messages on the board, "New bug report: <title>", and leaves the lead alone
 - Once a day kebbie sends its maintainers an install signal, so they can count active installs per version and OS: a random id made for this install, kebbie's version, the OS and architecture and the update channel, and nothing else; [report] signals = false turns it off with the error signals
 - kebbie.dev's docs show a new release's pages within minutes of it being published
+- The board's keys window (?) says how to report a problem with kebbie: B, or ask the lead
 
 ### Fixed
 - Messages from kebbie show in Claude Code as one collapsed line from @kebbie that ctrl+o expands, instead of in full with Claude Code's peer warning
