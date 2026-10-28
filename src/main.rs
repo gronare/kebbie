@@ -275,9 +275,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie hub move <url>           the hub moved: post there once <url> answers as a hub; move only to a hub you run or trust;
                                   a redirect to another host is never followed by itself; yours only
   kebbie hub leave                leave the hub: remove this machine's keys, token and pinned account key
-  kebbie doctor                   check that this machine has what kebbie needs, with the fix for each gap; checks
+  kebbie doctor [--fix]           check that this machine has what kebbie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
-                                  (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter)
+                                  (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter);
+                                  --fix first installs kebbie's push block in each worktree that still has kelpie's
   kebbie setup [--yes]            the setup guide, one step at a time: this machine's name, the agents (Claude Code,
                                   Codex), herdr's three keys (appended to its config.toml, a taken key named with a
                                   free one offered), the backlog's sources, the vault (a folder or an S3 bucket, its
@@ -724,8 +725,14 @@ pub fn shown_kebbie() -> String {
     shown_version(config::channel().unwrap_or_default(), env!("CARGO_PKG_VERSION"))
 }
 
-fn doctor() -> ExitCode {
+fn doctor(fix: bool) -> ExitCode {
     config::report_unknown_keys_quietly();
+    if fix {
+        match lead::state_dir() {
+            Ok(state) => println!("{}\n", doctor::fix(&state).join("\n")),
+            Err(error) => eprintln!("kebbie doctor --fix: {error}"),
+        }
+    }
     let checks = doctor::checks(&doctor::Env::current());
     println!("{}", doctor::render(&checks));
     if doctor::failed(&checks) { ExitCode::FAILURE } else { ExitCode::SUCCESS }
@@ -739,7 +746,7 @@ fn main() -> ExitCode {
     }
     let arguments = Arguments::parse();
     if arguments.positional(0) == Some("doctor") {
-        return doctor();
+        return doctor(arguments.flag("--fix"));
     }
     if arguments.positional(0) == Some("statusline") {
         let mut input = String::new();

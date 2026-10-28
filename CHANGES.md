@@ -27,6 +27,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Running the install command again no longer moves kelpie over a second time because of the log the old keeper leaves as it exits
 - Moving over from a kelpie linked from a local checkout unlinks it from herdr and leaves the checkout, so the next install no longer moves kelpie over again
 - A CI run that GitHub cancelled, because a deploy window refused it or a newer push superseded it, is no failure: the task stays under CI running, says which workflow waits for the next run on main, and closes once a later run on main that holds the pushed commit passes
+- A worktree whose push block kelpie installed takes kebbie's own push again: kebbie update and kebbie doctor --fix install kebbie's block there, and a task that starts or restarts in it gets it too
 - A task's git push to a local path or a file:// URL, such as a repo a test makes, goes through; every network URL stays blocked
 
 ## 0.28.1

@@ -8,6 +8,8 @@ use crate::sh::Result;
 
 pub const TOKEN_VAR: &str = "KEBBIE_PUSH_TOKEN";
 const BLOCKED: &str = "kebbie-blocks-push:";
+const KELPIE_BLOCKED: &str = "kelpie-blocks-push:";
+const KELPIE_HOOKS: &str = "kelpie-hooks";
 // git takes the longest matching pushInsteadOf, so these map a local path or file:// URL onto itself past the block's empty prefix.
 const LOCAL: [&str; 4] = ["/", "./", "../", "file://"];
 const REFUSAL: &str = "kebbie: a task's worktree does not push. The user pushes from the board, or the lead with kebbie push for a task the user gave push permission. The block stops an accidental push, not a determined one.";
@@ -116,6 +118,26 @@ pub fn env_vars() -> Vec<(String, String)> {
     vars
 }
 
+// A worktree whose block kelpie installed before the rename: its pre-push hook asks for kelpie's token, so it refuses kebbie's own push.
+pub fn kelpie_era(worktree: &Path) -> bool {
+    let hooks = git(worktree, &["config", "--worktree", "--get-all", "core.hooksPath"]).unwrap_or_default();
+    hooks.lines().any(|path| path.trim_end_matches('/').ends_with(KELPIE_HOOKS)) || git(worktree, &["config", "--worktree", "--get-all", &format!("url.{KELPIE_BLOCKED}.pushInsteadOf")]).is_ok()
+}
+
+// Every pooled worktree of these repos whose block kelpie installed.
+pub fn kelpie_era_worktrees(repos: &[PathBuf]) -> Vec<PathBuf> {
+    repos.iter().filter_map(|repo| crate::tasks::slots(repo).ok()).flatten().map(|slot| slot.path).filter(|path| kelpie_era(path)).collect()
+}
+
+// kebbie's block installed again where kelpie's was, one line for each worktree.
+pub fn move_from_kelpie(repos: &[PathBuf], state: &Path) -> Vec<String> {
+    kelpie_era_worktrees(repos).into_iter().map(|worktree| match install(&worktree, state) {
+        Ok(Block::On) => format!("{}: push block moved over from kelpie", worktree.display()),
+        Ok(Block::Off(why)) => format!("{}: kelpie's push block stays: {why}", worktree.display()),
+        Err(error) => format!("{}: kelpie's push block could not be moved over: {error}", worktree.display()),
+    }).collect()
+}
+
 // The block lives in the worktree's own config, which the task's env cannot unset: a pre-push hook kebbie answers, and a push URL rewrite for git push --no-verify.
 pub fn install(worktree: &Path, state: &Path) -> Result<Block> {
     if let Some(why) = unsupported(worktree)? {
@@ -131,7 +153,12 @@ pub fn install(worktree: &Path, state: &Path) -> Result<Block> {
         fs::write(&file, &script).and_then(|_| fs::set_permissions(&file, fs::Permissions::from_mode(0o755))).map_err(|error| format!("{}: {error}", file.display()))?;
     }
     git(worktree, &["config", "extensions.worktreeConfig", "true"])?;
+    let _ = git(worktree, &["config", "--worktree", "--unset-all", "core.hooksPath"]);
     git(worktree, &["config", "--worktree", "core.hooksPath", &dir.to_string_lossy()])?;
+    let _ = git(worktree, &["config", "--worktree", "--unset-all", &format!("url.{KELPIE_BLOCKED}.pushInsteadOf")]);
+    if let Some(parent) = dir.parent() {
+        let _ = fs::remove_dir_all(parent.join(KELPIE_HOOKS));
+    }
     for (key, value) in url_rules() {
         git(worktree, &["config", "--worktree", &key, &value])?;
     }
@@ -485,5 +512,36 @@ mod tests {
             assert!(output.status.success(), "{remote}: {}", String::from_utf8_lossy(&output.stderr));
         }
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_worktree_kelpie_blocked_before_the_rename_takes_kebbies_push_once_installed_again() {
+        let fixture = fixture("kelpie-era");
+        let Fixture { origin, slot, state, .. } = &fixture;
+        let git_dir = PathBuf::from(git(slot, &["rev-parse", "--absolute-git-dir"]).unwrap());
+        let old = git_dir.join("kelpie-hooks");
+        fs::create_dir_all(&old).unwrap();
+        crate::executable::write(old.join("pre-push"), "#!/bin/sh
+[ -n \"$KELPIE_PUSH_TOKEN\" ] || exit 1
+").unwrap();
+        git(slot, &["config", "extensions.worktreeConfig", "true"]).unwrap();
+        git(slot, &["config", "--worktree", "core.hooksPath", &old.to_string_lossy()]).unwrap();
+        git(slot, &["config", "--worktree", "url.kelpie-blocks-push:.pushInsteadOf", ""]).unwrap();
+        commit(slot, "b");
+        assert!(kelpie_era(slot));
+        let push = || {
+            let token = Token::new(state).unwrap();
+            let mut args = unblock_args(slot).unwrap();
+            args.extend(["push", "--quiet", "origin", "HEAD:main"].map(str::to_string));
+            run(slot, &args.iter().map(String::as_str).collect::<Vec<_>>(), &[(TOKEN_VAR, &token.value)])
+        };
+        assert!(!push().status.success(), "kelpie's hook refuses kebbie's push");
+        assert_eq!(install(slot, state).unwrap(), Block::On);
+        assert!(!kelpie_era(slot) && !old.exists(), "kelpie's hooks and its rewrite are gone");
+        assert!(git(slot, &["config", "--worktree", "--get-all", "url.kelpie-blocks-push:.pushInsteadOf"]).is_err());
+        let pushed = push();
+        assert!(pushed.status.success(), "{}", String::from_utf8_lossy(&pushed.stderr));
+        assert_eq!(git(origin, &["rev-parse", "main"]).unwrap(), git(slot, &["rev-parse", "HEAD"]).unwrap());
+        fs::remove_dir_all(&fixture.base).unwrap();
     }
 }

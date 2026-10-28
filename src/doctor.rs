@@ -387,6 +387,16 @@ pub fn push_block(repo: &Path) -> Check {
     }
 }
 
+fn known_repos() -> Vec<PathBuf> {
+    crate::status::known_repos(&crate::herdr::workspaces().unwrap_or_default(), crate::repo::pooled_checkouts()).into_iter().collect()
+}
+
+// kebbie doctor --fix: what the doctor can mend by itself before it checks.
+pub fn fix(state: &Path) -> Vec<String> {
+    let moved = crate::push_block::move_from_kelpie(&known_repos(), state);
+    if moved.is_empty() { vec!["Nothing to fix: no worktree has kelpie's push block.".to_string()] } else { moved }
+}
+
 pub const GH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 // No gh, no GitHub remote, no login or a slow network is no answer, never a failure.
