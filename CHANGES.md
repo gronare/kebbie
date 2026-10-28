@@ -41,6 +41,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task's git push to a local path or a file:// URL, such as a repo a test makes, goes through; every network URL stays blocked
 - A task's git push to a host:path URL such as git@github.com:acme/app.git fails at once, as every other network URL does, instead of starting ssh to a host named kebbie-blocks-push; kebbie update renews the block in every pooled worktree
 - A listed test command run as ./script/test is recorded like script/test, and either spelling in task.test_commands matches both
+- A task under CI running shows no review state: the code it was reviewed on is pushed
 - The lead works without narrating its steps and ends each turn in three short parts: done, going on per task, and what needs you last with the exact answer it wants; a turn kebbie's messages started that needs nothing from you ends on one line
 
 ## 0.28.1

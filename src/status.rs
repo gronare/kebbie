@@ -193,7 +193,11 @@ impl Item {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(crate::review::Shown::pending)
     }
 
+    // A pushed task's review is of code already out, so CI running shows none; nothing is left on the branch for it to match.
     pub fn review_note(&self) -> Option<String> {
+        if matches!(self.phase(), Some(Phase::CiRunning { .. })) {
+            return None;
+        }
         let shown = self.verdict.as_ref()?;
         let verdict = shown.verdict.as_ref();
         Some(match verdict {
@@ -1400,6 +1404,10 @@ pub(crate) mod tests {
         assert!(item.group() == Group::CiRunning);
         assert_eq!(item.summary(), "CI running: waiting for runs of abcdef0");
         assert_eq!(item.next_for_you(), None, "the push the old report asked for is done");
+        item.verdict = Some(in_review(true, 0, true, false));
+        assert_eq!(item.summary(), "CI running: waiting for runs of abcdef0", "a review of pushed code is neither current nor stale");
+        assert_eq!(item.review_note(), None);
+        item.verdict = None;
         item.ci = Some(watched(crate::ci::State::Failed { at: 20, what: "CI · test".to_string(), url: String::new() }, true));
         moved(&mut item, &Event::CiRed { sha: "abcdef0", pushing: false });
         assert!(item.group() == Group::NeedsYou && item.urgency() == 1);
