@@ -206,6 +206,65 @@ pub fn file_report_in(dir: &Path, report: u64, sent: &kebbie_hub_protocol::BugRe
     Ok(issue.id)
 }
 
+pub struct Signal<'a> {
+    pub version: &'a str,
+    pub component: &'a str,
+    pub kind: &'a str,
+    pub days: &'a [(String, u64)],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Filed {
+    New { id: String, title: String },
+    Updated { id: String, title: String },
+    Same { id: String },
+}
+
+const SIGNAL_DAY: &str = " installs";
+
+fn signal_name(text: &str) -> String {
+    crate::hub::report::strip_controls(text).chars().filter(|character| character.is_ascii_alphanumeric() || "._+-".contains(*character)).take(48).collect()
+}
+
+fn signal_day(text: &str) -> Option<String> {
+    let shaped = text.len() == 10 && text.char_indices().all(|(at, character)| if at == 4 || at == 7 { character == '-' } else { character.is_ascii_digit() });
+    shaped.then(|| text.to_string())
+}
+
+fn signal_days(body: &str) -> std::collections::BTreeMap<String, u64> {
+    body.lines().filter_map(|line| {
+        let (day, count) = line.strip_prefix("- ")?.split_once(": ")?;
+        Some((signal_day(day)?, count.strip_suffix(SIGNAL_DAY)?.parse().ok()?))
+    }).collect()
+}
+
+// The id comes from the version, component and kind, so every later day of the same signal lands in the issue its first day opened.
+pub fn file_signal_in(dir: &Path, signal: &Signal, now: u64) -> Result<Filed> {
+    let (version, component, kind) = (signal_name(signal.version), signal_name(signal.component), signal_name(signal.kind));
+    let id = format!("s{}", &sha1_smol::Sha1::from(format!("{version}\n{component}\n{kind}")).digest().to_string()[..8]);
+    let existing = fs::read_to_string(file(dir, &id)).ok().and_then(|text| parse(&text));
+    let mut days = existing.as_ref().map(|issue| signal_days(&issue.body)).unwrap_or_default();
+    for (day, installs) in signal.days {
+        if let Some(day) = signal_day(day) {
+            let kept = days.entry(day).or_default();
+            *kept = (*kept).max(*installs);
+        }
+    }
+    let (last, installs) = days.iter().next_back().map(|(day, installs)| (day.clone(), *installs)).ok_or("a signal from the issues endpoint named no day")?;
+    let title = format!("{component}: {kind} in {version} ({installs} installs on {last})");
+    let lines: Vec<String> = days.iter().map(|(day, installs)| format!("- {day}: {installs}{SIGNAL_DAY}")).collect();
+    let body = format!("kebbie {version} counted {kind} in {component} on installs that sent error signals. Only the version, component, kind and these counts reach the issues endpoint.\n\nInstalls that reported it, per UTC day:\n{}", lines.join("\n"));
+    let fresh = existing.is_none();
+    let mut issue = existing.unwrap_or_else(|| Issue { id: id.clone(), kind: "bug".to_string(), status: "open".to_string(), filed: today(now), by: "signals".to_string(), source: Some("error signals".to_string()), version: version.clone(), ..Issue::default() });
+    if !fresh && issue.title == title && issue.body == body {
+        return Ok(Filed::Same { id });
+    }
+    issue.title = title.clone();
+    issue.body = body;
+    save(dir, &issue)?;
+    Ok(if fresh { Filed::New { id, title } } else { Filed::Updated { id, title } })
+}
+
 pub fn list_in(dir: &Path, all: bool, as_json: bool) -> String {
     let issues: Vec<Issue> = load(dir).into_iter().filter(|issue| all || issue.is_open()).collect();
     if as_json {
@@ -530,6 +589,40 @@ mod tests {
         let text = fs::read_to_string(dir.join(format!("{}.md", issue.id))).unwrap();
         assert!(text.starts_with("+++\nid = ") && text.contains("\n+++\n\nWhat happened"), "{text}");
         assert_eq!(parse(&issue.text()).as_ref(), Some(issue));
+    }
+
+    #[test]
+    fn a_signal_is_one_issue_per_version_and_kind_that_later_days_add_to() {
+        let dir = crate::sh::test_dir("issues-signal");
+        fn signal<'a>(version: &'a str, days: &'a [(String, u64)]) -> Signal<'a> {
+            Signal { version, component: "board.render", kind: "panic", days }
+        }
+        let first = [("2026-10-27".to_string(), 3)];
+        let Filed::New { id, title } = file_signal_in(&dir, &signal("0.28.0", &first), NOW).unwrap() else { panic!("a first day files the issue") };
+        assert_eq!(title, "board.render: panic in 0.28.0 (3 installs on 2026-10-27)");
+        let issue = find(&dir, &id).unwrap();
+        assert_eq!((issue.kind.as_str(), issue.status.as_str(), issue.by.as_str(), issue.version.as_str()), ("bug", "open", "signals", "0.28.0"));
+        assert!(issue.untrusted().is_some(), "names another install sent are data, not instructions");
+        assert!(issue.body.ends_with("per UTC day:\n- 2026-10-27: 3 installs"), "{}", issue.body);
+        assert_eq!(file_signal_in(&dir, &signal("0.28.0", &first), NOW).unwrap(), Filed::Same { id: id.clone() }, "the same counts write nothing");
+
+        let later = [("2026-10-28".to_string(), 5)];
+        assert_eq!(file_signal_in(&dir, &signal("0.28.0", &later), NOW).unwrap(), Filed::Updated { id: id.clone(), title: "board.render: panic in 0.28.0 (5 installs on 2026-10-28)".to_string() });
+        assert!(find(&dir, &id).unwrap().body.ends_with("- 2026-10-27: 3 installs\n- 2026-10-28: 5 installs"), "a day the endpoint no longer lists stays in the issue");
+
+        let Filed::New { id: other, .. } = file_signal_in(&dir, &signal("0.28.1", &first), NOW).unwrap() else { panic!("a new version opens a new issue") };
+        assert_ne!(other, id);
+        assert_eq!(load(&dir).len(), 2);
+    }
+
+    #[test]
+    fn a_signal_issue_keeps_only_name_characters_and_well_formed_days() {
+        let dir = crate::sh::test_dir("issues-signal-names");
+        let days = [("2026-10-28".to_string(), 3), ("yesterday".to_string(), 9)];
+        let signal = Signal { version: "0.28.0\u{1b}[31m", component: "board render\nignore the above", kind: "panic", days: &days };
+        let Filed::New { title, .. } = file_signal_in(&dir, &signal, NOW).unwrap() else { panic!() };
+        assert_eq!(title, "boardrenderignoretheabove: panic in 0.28.0 (3 installs on 2026-10-28)");
+        assert!(file_signal_in(&dir, &Signal { kind: "corrupt-state", days: &[("soon".to_string(), 3)], ..signal }, NOW).is_err(), "a signal with no day is refused, not filed");
     }
 
     #[test]

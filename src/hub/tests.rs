@@ -225,6 +225,10 @@ fn leaving_an_older_hub_or_one_that_cannot_be_reached_says_how_its_admin_removes
 }
 
 fn serving(respond: impl Fn(&str) -> String + Send + 'static) -> String {
+    serving_requests(move |_, path, _| respond(path))
+}
+
+fn serving_requests(respond: impl Fn(&str, &str, &str) -> String + Send + 'static) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
@@ -244,9 +248,10 @@ fn serving(respond: impl Fn(&str) -> String + Send + 'static) -> String {
             }
             let mut body = vec![0; length];
             let _ = reader.read_exact(&mut body);
-            let path = first.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let mut words = first.split_whitespace();
+            let (method, path) = (words.next().unwrap_or("GET").to_string(), words.next().unwrap_or("/").to_string());
             let mut stream = reader.into_inner();
-            let _ = write!(stream, "{}", respond(&path));
+            let _ = write!(stream, "{}", respond(&method, &path, &String::from_utf8_lossy(&body)));
         }
     });
     url
@@ -425,6 +430,52 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
     std::fs::remove_file(maintainer.join("report/inbox.json")).unwrap();
     inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
     assert_eq!(crate::issues::load(&crate::issues::dir(&maintainer)).len(), 1, "a crash before the ledger was written files the report no second time");
+}
+
+fn json_answer(status: &str, body: &str) -> String {
+    format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+}
+
+#[test]
+fn signals_three_installs_share_become_one_issue_that_later_days_update() {
+    use crate::hub::inbox;
+    let signals = Arc::new(std::sync::Mutex::new(String::new()));
+    let acks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (served, acked) = (Arc::clone(&signals), Arc::clone(&acks));
+    let url = serving_requests(move |method, path, body| match (method, path) {
+        ("GET", path) if path.starts_with("/v1/admin/reports?") => json_answer("200 OK", r#"{"reports":[],"quarantined":0}"#),
+        ("GET", "/v1/admin/signals?after=0") => json_answer("200 OK", &served.lock().unwrap()),
+        ("POST", path) if path.starts_with("/v1/admin/signals/") => {
+            acked.lock().unwrap().push(format!("{path} {body}"));
+            "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_string()
+        }
+        _ => json_answer("404 Not Found", r#"{"error":"not-found"}"#),
+    });
+    let maintainer = crate::sh::test_dir("signal-maintainer");
+    *signals.lock().unwrap() = r#"{"signals":[{"id":7,"version":"0.28.0","component":"board.render","kind":"panic","day":"2026-10-27","installs":3,"days":[{"day":"2026-10-27","installs":3}]}]}"#.to_string();
+
+    let notes = inbox::pull(&maintainer, &url, "kha_token", now()).unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let filed = crate::issues::load(&crate::issues::dir(&maintainer));
+    assert_eq!(filed.iter().map(|issue| (issue.title.as_str(), issue.kind.as_str(), issue.by.as_str())).collect::<Vec<_>>(), [("board.render: panic in 0.28.0 (3 installs on 2026-10-27)", "bug", "signals")]);
+    assert_eq!(acks.lock().unwrap().as_slice(), [r#"/v1/admin/signals/7/ack {"installs":3}"#]);
+    let shown = crate::messages::load_in(&maintainer);
+    assert_eq!(shown.iter().map(|line| (line.to.as_str(), line.kind.as_deref(), line.text.as_str())).collect::<Vec<_>>(),
+        [(crate::messages::USER_LABEL, Some(inbox::FILED_KIND), "New bug report: board.render: panic in 0.28.0 (3 installs on 2026-10-27)")], "one line on the board, for the user and not the lead");
+
+    *signals.lock().unwrap() = r#"{"signals":[{"id":8,"version":"0.28.0","component":"board.render","kind":"panic","day":"2026-10-28","installs":4,"days":[{"day":"2026-10-27","installs":3},{"day":"2026-10-28","installs":4}]}]}"#.to_string();
+    let notes = inbox::pull(&maintainer, &url, "kha_token", now()).unwrap();
+    assert!(notes.len() == 1 && notes[0].contains("updated"), "{notes:?}");
+    let filed = crate::issues::load(&crate::issues::dir(&maintainer));
+    assert_eq!(filed.len(), 1, "a later day adds to the issue its first day opened");
+    assert_eq!(filed[0].title, "board.render: panic in 0.28.0 (4 installs on 2026-10-28)");
+    assert!(filed[0].body.ends_with("- 2026-10-27: 3 installs\n- 2026-10-28: 4 installs"), "{}", filed[0].body);
+    assert_eq!(crate::messages::load_in(&maintainer).len(), 1, "an update adds no line to the board");
+    assert_eq!(acks.lock().unwrap().last().unwrap(), r#"/v1/admin/signals/8/ack {"installs":4}"#);
+
+    std::fs::remove_file(maintainer.join("report/inbox.json")).unwrap();
+    assert!(inbox::pull(&maintainer, &url, "kha_token", now()).unwrap().is_empty(), "the same counts again, after a lost ledger, are acked and file nothing");
+    assert_eq!(acks.lock().unwrap().len(), 3);
 }
 
 #[test]

@@ -72,7 +72,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `setup skill` | The setup skill's plugin is installed and enabled. |
 | `hub` | Whether the machine joined a kebbie hub, and how its board posts go. |
 | `maintainers` | Where error signals and kebbie's own bug reports go. |
-| `reports` | With `report.inbox_token` set only: the reports endpoint and what it filed here. |
+| `reports` | With `report.inbox_token` set only: the reports endpoint and the reports and signals it filed here. |
 | `machine` | With the vault on or a hub connected only: the name the phone and the other machines on the vault see. |
 | `notify` | Whether `notify.command` is set. It is never run. |
 | `sandbox` | Whether tasks run in the sandbox. |

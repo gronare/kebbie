@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use kebbie_hub_api::ReportInbox;
 use serde::{Deserialize, Serialize};
 
-use super::http::{CALL, Client};
+use super::http::{CALL, Client, HubError};
 use crate::doctor::{Check, Level};
 use crate::issues;
 use crate::sh::Result;
@@ -14,11 +14,34 @@ const PAGE: usize = 100;
 const FILE: &str = "inbox.json";
 pub const FILED_KIND: &str = "report-filed";
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct SignalInbox {
+    pub signals: Vec<ReceivedSignal>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ReceivedSignal {
+    pub id: u64,
+    pub version: String,
+    pub component: String,
+    pub kind: String,
+    pub installs: u64,
+    pub days: Vec<SignalDay>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SignalDay {
+    pub day: String,
+    pub installs: u64,
+}
+
 // Filed is keyed by report id, and the issue's id is derived from it, so neither a lost ack nor a crash files a report twice.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Ledger {
     #[serde(default)]
     pub filed: BTreeMap<u64, String>,
+    #[serde(default)]
+    pub signals: BTreeSet<String>,
     #[serde(default)]
     pub quarantined: u64,
     #[serde(default)]
@@ -68,7 +91,44 @@ fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, now: u64
         }
         match page.reports.last() {
             Some(last) if page.reports.len() >= PAGE => after = last.id,
-            _ => return Ok(notes),
+            _ => break,
+        }
+    }
+    pull_signals(state, ledger, &client, &mut notes, now)?;
+    Ok(notes)
+}
+
+// An endpoint without a signal inbox, such as a kebbie hub, answers 404 and has none to file.
+fn pull_signals(state: &Path, ledger: &mut Ledger, client: &Client, notes: &mut Vec<String>, now: u64) -> Result<()> {
+    let dir = issues::dir(state);
+    let mut after = 0;
+    loop {
+        let page: SignalInbox = match client.get(&format!("/v1/admin/signals?after={after}")) {
+            Err(HubError::Status { status: 404, .. }) => return Ok(()),
+            answer => answer.map_err(|error| error.to_string())?,
+        };
+        for received in &page.signals {
+            let days: Vec<(String, u64)> = received.days.iter().map(|day| (day.day.clone(), day.installs)).collect();
+            let signal = issues::Signal { version: &received.version, component: &received.component, kind: &received.kind, days: &days };
+            match issues::file_signal_in(&dir, &signal, now) {
+                Err(error) => {
+                    notes.push(format!("signals: signal {} not filed: {error}", received.id));
+                    continue;
+                }
+                Ok(issues::Filed::New { id, title }) => {
+                    notes.push(format!("signals: filed kebbie issue {id} from signal {}", received.id));
+                    announce(state, &title);
+                    ledger.signals.insert(id);
+                    save(state, ledger)?;
+                }
+                Ok(issues::Filed::Updated { id, .. }) => notes.push(format!("signals: updated kebbie issue {id} from signal {}", received.id)),
+                Ok(issues::Filed::Same { .. }) => {}
+            }
+            client.post::<_, ()>(&format!("/v1/admin/signals/{}/ack", received.id), &serde_json::json!({ "installs": received.installs })).map_err(|error| error.to_string())?;
+        }
+        match page.signals.last() {
+            Some(last) if page.signals.len() >= PAGE => after = last.id,
+            _ => return Ok(()),
         }
     }
 }
@@ -90,7 +150,7 @@ pub fn doctor(state: &Path, settings: &crate::config::Report, now: u64) -> Optio
     let ledger = load(state);
     let name = "reports".to_string();
     let checked = ledger.checked_at.map_or("not fetched yet".to_string(), |at| format!("fetched {} ago", crate::keeper::span(now.saturating_sub(at))));
-    let fact = format!("{} · {} filed · {checked}", settings.url(), ledger.filed.len());
+    let fact = format!("{} · {} filed · {} from signals · {checked}", settings.url(), ledger.filed.len(), ledger.signals.len());
     Some(if let Some(error) = &ledger.error {
         Check { level: Level::Warn, name, fact: format!("{fact}; last fetch failed: {error}"), fix: vec!["check [report] inbox_token against the token the issues endpoint issued; the keeper retries every 10 minutes".to_string()] }
     } else if ledger.quarantined > 0 {
