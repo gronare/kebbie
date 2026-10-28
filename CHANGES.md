@@ -26,6 +26,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task that runs a command that looks like a test run, such as script/test or make test, but is not in task.test_commands names it on its row, with the hint to add it there so its runs are recorded
 - Messages to the lead, kebbie's notices and desktop notifications name a task the way the board does, by its title with its name
 - kebbie doctor lists worktrees and open tasks left from kelpie, and kebbie doctor --fix installs kebbie's push block where kelpie's was
+- A bug report the inbox files adds one line under messages on the board, "New bug report: <title>", and leaves the lead alone
 - Once a day kebbie sends its maintainers an install signal, so they can count active installs per version and OS: a random id made for this install, kebbie's version, the OS and architecture and the update channel, and nothing else; [report] signals = false turns it off with the error signals
 - kebbie.dev's docs show a new release's pages within minutes of it being published
 

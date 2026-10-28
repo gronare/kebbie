@@ -941,14 +941,14 @@ pub fn report_line(message: &Message) -> String {
     format!("- {} ({state}): {} — you: {}", crate::status::with_titles(&message.from), message.text, message.next_for_you().unwrap_or("nothing"))
 }
 
-// Messages to or from the lead are already in its chat; reports, the board's copies and kebbie's notices to it are not; what kebbie sent its maintainers is the user's alone.
+// Messages to or from the lead are already in its chat; reports, the board's copies and kebbie's notices to it are not; what kebbie sent its maintainers, and the bug reports it filed from them, are the user's alone.
 fn copies_for_lead(messages: &[Message], seen: usize) -> Vec<&Message> {
     messages.iter().skip(seen.min(messages.len()))
-        .filter(|message| message.report.is_some() || is_copy(message) || message.fyi || (message.from != LEAD_LABEL && message.to != LEAD_LABEL && !sent_to_maintainers(message))).collect()
+        .filter(|message| message.report.is_some() || is_copy(message) || message.fyi || (message.from != LEAD_LABEL && message.to != LEAD_LABEL && !users_alone(message))).collect()
 }
 
-fn sent_to_maintainers(message: &Message) -> bool {
-    message.to == USER_LABEL && message.kind.as_deref().is_some_and(|kind| kind == crate::hub::report::SENT_KIND || kind == crate::signals::KIND)
+fn users_alone(message: &Message) -> bool {
+    message.to == USER_LABEL && message.kind.as_deref().is_some_and(|kind| [crate::hub::report::SENT_KIND, crate::signals::KIND, crate::hub::inbox::FILED_KIND].contains(&kind))
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -1845,12 +1845,13 @@ mod tests {
     }
 
     #[test]
-    fn what_kebbie_sent_its_maintainers_shows_on_the_board_and_never_in_the_leads_digest() {
+    fn what_kebbie_sent_its_maintainers_and_the_reports_it_filed_show_on_the_board_and_never_in_the_leads_digest() {
         let dir = state("maintainers");
         log_for_user_in(&dir, "Sent bug a1b2c3 to kebbie's maintainers as report 4", crate::hub::report::SENT_KIND).unwrap();
         log_for_user_in(&dir, "Sent kebbie's maintainers an error signal, a count of kebbie's own failures: keeper.push internal-error (×1)", crate::signals::KIND).unwrap();
-        assert_eq!(shown_in_log(load_in(&dir)).len(), 2, "the board's log shows both");
-        assert_eq!(unread_in(&dir).unwrap(), "", "the lead's digest has neither");
+        log_for_user_in(&dir, "New bug report: push in <repo> hid git's error", crate::hub::inbox::FILED_KIND).unwrap();
+        assert_eq!(shown_in_log(load_in(&dir)).len(), 3, "the board's log shows each");
+        assert_eq!(unread_in(&dir).unwrap(), "", "the lead's digest has none");
         fs::remove_dir_all(&dir).unwrap();
     }
 

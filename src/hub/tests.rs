@@ -402,6 +402,7 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
     hub.hub.store().set_key_status(&key, kebbie_hub::store::KeyStatus::Allowed, now()).unwrap();
     let notes = inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(crate::messages::load_in(&maintainer).iter().map(|line| (line.kind.as_deref(), line.text.as_str())).collect::<Vec<_>>(), [(Some(inbox::FILED_KIND), "New bug report: push in <repo> hid git's error")]);
     let arrived = crate::issues::load(&crate::issues::dir(&maintainer));
     assert_eq!(arrived.len(), 1);
     let issue = &arrived[0];

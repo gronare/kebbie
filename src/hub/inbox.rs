@@ -12,6 +12,7 @@ use crate::sh::Result;
 pub const EVERY: u64 = 600;
 const PAGE: usize = 100;
 const FILE: &str = "inbox.json";
+pub const FILED_KIND: &str = "report-filed";
 
 // Filed is keyed by report id, and the issue's id is derived from it, so neither a lost ack nor a crash files a report twice.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -59,6 +60,7 @@ fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, now: u64
             if let std::collections::btree_map::Entry::Vacant(slot) = ledger.filed.entry(received.id) {
                 let issue = issues::file_report_in(&dir, received.id, &received.report, now)?;
                 notes.push(format!("reports: filed kebbie issue {issue} from report {}", received.id));
+                announce(state, &issues::find(&dir, &issue).map(|filed| filed.title).unwrap_or_default());
                 slot.insert(issue);
                 save(state, ledger)?;
             }
@@ -69,6 +71,10 @@ fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, now: u64
             _ => return Ok(notes),
         }
     }
+}
+
+fn announce(state: &Path, title: &str) {
+    let _ = crate::messages::log_for_user_in(state, &format!("New bug report: {title}"), FILED_KIND);
 }
 
 pub fn tick(state: &Path) -> Result<Vec<String>> {
