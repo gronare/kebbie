@@ -6,6 +6,7 @@ Keep what kebbie got wrong, or could not do, on your machine, and send a bug to 
 - A bug goes to kebbie's issues endpoint, from the board's `B` list or `kebbie issue report`.
 - A GitHub issue is optional, and only ever one you open yourself.
 - Separately, kebbie counts its own crashes and internal errors and sends the maintainers those counts, with no text at all.
+- Once a day, kebbie sends an install signal so the maintainers can count active installs, with no text and nothing about your work.
 
 ## Save it
 
@@ -172,6 +173,19 @@ signals = false   # sends no error signals and drops what was counted
 ```
 
 `kebbie doctor`'s `maintainers` line shows both choices, and `kebbie config` lists `report.signals` and `report.text`. A config with the older `[report] enabled = false` keeps both off.
+
+### The install signal
+
+So the maintainers can count how many installs are active, per version and OS, the keeper sends one install signal a day, at most once per UTC day. It holds exactly:
+
+- a random id made for this install alone, 32 hexadecimal characters, kept in `report/install-id` in the state directory; it is not derived from your machine, your user or anything else,
+- kebbie's version,
+- the OS and CPU architecture, such as `macos aarch64`,
+- the update channel, `release` or `main`.
+
+Nothing else: no repo, task, branch, path or host name, and no count of anything you do. It is not signed with the install key, so it cannot be tied to your reports or error signals. A send that fails is dropped, not tried again that day, and it never holds up anything else. It adds no line under messages; `kebbie doctor`'s `maintainers` line names it.
+
+`[report] signals = false` turns it off along with the error signals and forgets the install id, so turning signals on again makes a new one.
 
 ## Or open a GitHub issue yourself
 

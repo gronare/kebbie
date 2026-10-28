@@ -160,6 +160,7 @@ pub(super) fn spawn_routine_runner(overlay: bool) {
                     crate::tasks::landed_tick(&state);
                     let _ = crate::hub::tick();
                     let _ = crate::signals::tick(&state);
+                    crate::install_signal::tick(&state);
                     let _ = crate::hub::report::send_unasked_tick(&state);
                     for note in crate::issue_recheck::tick(&state) {
                         crate::keeper::log_line(&state, &note);

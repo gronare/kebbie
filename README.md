@@ -19,7 +19,7 @@ A kebbie is a shepherd's crook, the Scots word for a staff with a hooked head. h
 - **Your board on your phone.** Connect a kebbie hub through your browser (`H` on the board): the board goes out sealed to your account, and any phone or browser you sign in on with your passkey reads it. The phone only reads, and notifications through the hub are not available in this version.
 - **Optional vault integration.** With the [notes-vault-mcp](https://github.com/gronare/notes-vault-mcp) plugin, every task gets a note, edits wait until the problem is written down, pushes are logged, an Areas page shows each repo's state, and kebbie on a second machine sharing the vault asks before it starts a note the first one works on.
 - **Update channels and fresh sessions.** Follow tagged releases or the main branch, and the board tells you when a new version is out. One `kebbie update` brings everything along, idle Claude sessions resume on the new code with their conversation intact, and the bugs in kebbie you ran into are rechecked against the new commits.
-- **kebbie's own bugs reach its maintainers on your yes.** You see the redacted text before anything is sent. Error signals carry only counts and versions, never your text, and `[report] signals = false` turns them off.
+- **kebbie's own bugs reach its maintainers on your yes.** You see the redacted text before anything is sent. Error signals carry only counts and versions, never your text. A daily install signal carries only a random install id, the version, OS and update channel, so the maintainers can count active installs. `[report] signals = false` turns both off.
 
 ## Install
 

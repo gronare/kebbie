@@ -55,6 +55,7 @@ pub fn routines() -> Vec<Routine> {
         Routine { name: "hub", every: crate::hub::EVERY, run: |_| crate::hub::tick() },
         Routine { name: "reports", every: crate::hub::inbox::EVERY, run: |ctx| { ctx.notes.extend(crate::hub::inbox::tick(&crate::lead::state_dir()?)?); Ok(()) } },
         Routine { name: "signals", every: crate::signals::EVERY, run: |ctx| { ctx.notes.extend(crate::signals::tick(&crate::lead::state_dir()?)?); Ok(()) } },
+        Routine { name: "install", every: crate::signals::EVERY, run: |_| { crate::install_signal::tick(&crate::lead::state_dir()?); Ok(()) } },
         Routine { name: "outbox", every: crate::hub::report::UNASKED_EVERY, run: |ctx| { ctx.notes.extend(crate::hub::report::send_unasked_tick(&crate::lead::state_dir()?)?); Ok(()) } },
     ]
 }

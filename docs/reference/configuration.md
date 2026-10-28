@@ -181,7 +181,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
-| `report.signals` | `true` | config.toml only | Whether kebbie sends its maintainers error signals when kebbie itself fails. |
+| `report.signals` | `true` | config.toml only | Whether kebbie sends its maintainers error signals when kebbie itself fails, and the daily install signal. |
 | `report.text` | `"ask"` | config.toml only | What happens to a bug in kebbie you ran into, once you or the lead saved it: `"ask"`, `"always"` or `"never"`. |
 | `report.enabled` | none | config.toml only | The older single switch, still read: `false` means `signals = false` and `text = "never"`, unless those keys are set. |
 | `report.inbox_token` | none | config.toml only | For kebbie's maintainers: the `kha_` token the issues endpoint issued. |
@@ -192,7 +192,8 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 - A panic and some internal errors are counted.
 - A signal holds only kebbie's version and commit, the OS and CPU architecture, the component (a fixed name from kebbie's code, such as `keeper.push`), the error kind (`panic`, `internal-error` or `corrupt-state`) and a count. Never an error message, a path, a repo, task or host name.
 - The keeper sends at most one batch a day, and each send is a line under messages on the board.
-- `false` sends none and drops what was counted.
+- The install signal goes at most once a UTC day and holds only a random id made for this install, kebbie's version, the OS and CPU architecture and the update channel. See [The install signal](../how-to/report-a-problem-with-kebbie.md#the-install-signal).
+- `false` sends neither, drops what was counted and forgets the install id.
 
 `report.text`: see [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers).
 

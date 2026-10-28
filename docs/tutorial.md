@@ -64,7 +64,7 @@ You can run `kebbie setup` again at any time: it starts from what this machine h
 
 ### Error signals
 
-When kebbie itself crashes or hits some internal errors, it sends its maintainers an error signal, at most once a day. A signal holds only kebbie's version and commit, your OS and CPU architecture, the part of kebbie that failed, the kind of failure and a count. Each send is shown under messages on the board. A bug report with text is shown to you and sent only on your `y`.
+When kebbie itself crashes or hits some internal errors, it sends its maintainers an error signal, at most once a day. A signal holds only kebbie's version and commit, your OS and CPU architecture, the part of kebbie that failed, the kind of failure and a count. Each send is shown under messages on the board. Once a day it also sends an install signal, a random id made for this install with kebbie's version, your OS and the update channel, so the maintainers can count active installs. A bug report with text is shown to you and sent only on your `y`.
 
 Turning them off in step 6 writes this in `~/.config/kebbie/config.toml`:
 

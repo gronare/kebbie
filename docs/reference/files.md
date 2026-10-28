@@ -144,7 +144,7 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 
 ### Reports to kebbie's maintainers
 
-`report/` holds reports and error signals to kebbie's maintainers. `kebbie hub leave` leaves it.
+`report/` holds reports, error signals and the install signal to kebbie's maintainers. `kebbie hub leave` leaves it.
 
 | Entry | Holds |
 | --- | --- |
@@ -152,6 +152,8 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 | `signals.jsonl` | The failures counted since the last send, one line each with version, commit, component, kind and count. |
 | `signals-batch.jsonl` | The counts a send is under way for. |
 | `signals.json` | The time of the last send and its error. |
+| `install-id` | The install signal's random id, made on its first send. |
+| `install-signal.json` | The day the install signal last went. |
 | `always-armed` | The date you ran `kebbie issue report --always`, while it holds. |
 | `inbox.json` | With `[report] inbox_token` set: the reports filed here by their report id, how many wait in quarantine on the issues endpoint, and the last fetch and its error. |
 

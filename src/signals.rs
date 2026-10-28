@@ -291,12 +291,12 @@ pub fn doctor(state: &Path, settings: &crate::config::Report, now: u64) -> Check
     let unarmed = settings.text() == crate::config::ReportText::Always && !armed;
     let arm = || vec![format!("run {} in your own terminal to send them without asking", crate::hub::report::ARM_COMMAND)];
     if !settings.signals() {
-        let fact = format!("error signals off ([report] signals = false); {text}");
+        let fact = format!("error signals and the install signal off ([report] signals = false); {text}");
         return if unarmed { Check { level: Level::Warn, name, fact, fix: arm() } } else { Check { level: Level::Ok, name, fact, fix: Vec::new() } };
     }
     let ledger = ledger(state);
     let sent = ledger.sent_at.map_or("none sent yet".to_string(), |at| format!("last sent {} ago", crate::keeper::span(now.saturating_sub(at))));
-    let fact = format!("error signals on, at most once a day, holding only {CONTAINS} ({sent}); {text}");
+    let fact = format!("error signals on, at most once a day, holding only {CONTAINS} ({sent}); once a day an install signal holding only {}; {text}", crate::install_signal::CONTAINS);
     match ledger.error {
         Some(error) => Check { level: Level::Warn, name, fact: format!("{fact}; the last send failed: {error}"), fix: vec!["the keeper tries again within the hour; [report] signals = false in config.toml turns them off".to_string()] },
         None if unarmed => Check { level: Level::Warn, name, fact, fix: arm() },
@@ -475,14 +475,14 @@ mod tests {
         assert!(crate::messages::load_in(&state).is_empty());
         let off = crate::config::Report { signals: Some(false), ..Default::default() };
         let check = doctor(&state, &off, NOW);
-        assert!(check.level == Level::Ok && check.fact.starts_with("error signals off ([report] signals = false); each bug you run into in kebbie is shown to you and goes to its maintainers only on your yes"), "{}", check.fact);
+        assert!(check.level == Level::Ok && check.fact.starts_with("error signals and the install signal off ([report] signals = false); each bug you run into in kebbie is shown to you and goes to its maintainers only on your yes"), "{}", check.fact);
     }
 
     #[test]
     fn doctor_says_what_a_signal_holds_and_how_reports_are_sent() {
         let state = crate::sh::test_dir("signals-doctor");
         let check = doctor(&state, &crate::config::Report::default(), NOW);
-        assert!(check.level == Level::Ok && check.fact.contains("error signals on, at most once a day, holding only kebbie's version and commit, the OS and CPU architecture") && check.fact.contains("none sent yet") && check.fact.contains("[report] text = \"ask\""), "{}", check.fact);
+        assert!(check.level == Level::Ok && check.fact.contains("error signals on, at most once a day, holding only kebbie's version and commit, the OS and CPU architecture") && check.fact.contains("none sent yet") && check.fact.contains("once a day an install signal holding only a random id made for this install alone") && check.fact.contains("[report] text = \"ask\""), "{}", check.fact);
         let always = crate::config::Report { text: Some(crate::config::ReportText::Always), ..Default::default() };
         let unarmed = doctor(&state, &always, NOW);
         assert!(unarmed.level == Level::Warn && unarmed.fact.contains("[report] text = \"always\" is set but not armed") && unarmed.fix == ["run kebbie issue report --always in your own terminal to send them without asking"], "{unarmed:?}");

@@ -103,6 +103,7 @@ Some of kebbie's work runs on a clock rather than on a command. The keeper runs 
 | 10 minutes | Reads the update check's cache, and fetches when the last fetch is 6 hours old. |
 | 10 minutes | With `[report] inbox_token` set, on a maintainer's machine, files the reports the issues endpoint let through as kebbie issues. |
 | hour, sent at most once a day | Sends the error signals counted since the last send to kebbie's maintainers. See [Error signals](../how-to/report-a-problem-with-kebbie.md#error-signals). |
+| hour, sent at most once a UTC day | Sends the install signal, so the maintainers can count active installs. See [The install signal](../how-to/report-a-problem-with-kebbie.md#the-install-signal). |
 
 ## One keeper per machine, with no terminal
 

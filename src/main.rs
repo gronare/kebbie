@@ -18,6 +18,7 @@ mod fetch;
 mod herdr;
 mod hub;
 mod inbox;
+mod install_signal;
 mod issue_recheck;
 mod issues;
 mod keeper;

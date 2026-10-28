@@ -98,7 +98,7 @@ Within that boundary kebbie fails closed. It treats the caller as a Claude, and 
 
 ## Only counts and reports you approve reach the maintainers
 
-Two things leave this machine for kebbie's maintainers, both to kebbie's issues endpoint, `https://issues.kebbie.dev`, both signed with this install's key. Each signal batch and each report sent is a line under messages on the board.
+Three things leave this machine for kebbie's maintainers, all to kebbie's issues endpoint, `https://issues.kebbie.dev`. Error signals and reports are signed with this install's key, and each signal batch and each report sent is a line under messages on the board.
 
 **Error signals**, on by default, are counts of kebbie's own failures, at most once a day. A signal holds only:
 
@@ -108,9 +108,11 @@ Two things leave this machine for kebbie's maintainers, both to kebbie's issues 
 - an error kind: `panic`, `internal-error` or `corrupt-state`,
 - a count.
 
+**The install signal**, on with error signals, goes once a day so the maintainers can count active installs. It holds only a random id made for this install alone, kebbie's version, the OS and architecture and the update channel. It is not signed, so it cannot be tied to the install's reports or error signals.
+
 ## A signal cannot carry your work
 
-The format has no text field, every value is limited to lowercase letters, digits and `.` `_` `+` `-`, and the endpoint refuses a field it does not know. So no message, path or name from your work can travel in one. A panic is named after the kebbie module it happened in, never its message; a panic outside kebbie's code is `dependency`, as its location could hold a path. `[report] signals = false` stops them.
+The format has no text field, every value is limited to lowercase letters, digits and `.` `_` `+` `-`, and the endpoint refuses a field it does not know. So no message, path or name from your work can travel in one. A panic is named after the kebbie module it happened in, never its message; a panic outside kebbie's code is `dependency`, as its location could hold a path. The install signal's id is random hexadecimal and its other fields are names of the same shape. `[report] signals = false` stops both kinds.
 
 ## Only you send a bug report
 
