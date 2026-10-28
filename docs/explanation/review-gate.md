@@ -64,6 +64,8 @@ The reviewer gets every run on the code under review in its brief, one line per 
 
 The brief also tells a missing record from a missing run. When the task's hooks run a kebbie that is no longer installed, or the hook that records runs never ran in the task, the reviewer is told the record is missing, so it does not take that as proof that no test ran. A command that looks like a test run but is not in [`task.test_commands`](../reference/configuration.md#keys) is named too.
 
+A review that asked for tests does not wait for a code change. When the task records a passing run on the reviewed code after the verdict, it goes back to the reviewer by itself, and the lead hears the new verdict.
+
 ## The row shows the latest run
 
 The board's task row and the push window show the latest run:

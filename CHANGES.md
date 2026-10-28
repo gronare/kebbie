@@ -16,6 +16,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The review split is kebbie's own view beside the diff: the task's steps, or its commits, as tabs with their marks, the selected one's commit message and its files on top, and nvim below showing the file you pick at once; ← → pick a step, ↑ ↓ a file, a accepts the step and moves on to the next one waiting, r marks a file read, / filters, m hides the message, and a click picks a step or a file
 - tab moves between the steps, the files and the diff, and back; a review 120 columns wide or more puts the diff beside the view instead of under it
 - The review split needs only nvim, not fzf
+- A task whose review asked for tests goes back to the reviewer by itself once it records a passing run on the reviewed code
+- A task in review says on its row who acts next: waits on the reviewer, or withdraw with v to push without a pass when it is yours
 - The board's To review group is In review; board.groups takes "in-review", and "to-review" still works
 - The reviewer reads every test run on the reviewed code, one line per command, and the older ones only when none ran on it
 - The reviewer tells a broken test-run hook from no test run, and hears of commands that look like test runs but are not recorded

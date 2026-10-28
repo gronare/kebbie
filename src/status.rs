@@ -197,10 +197,11 @@ impl Item {
         let shown = self.verdict.as_ref()?;
         let verdict = shown.verdict.as_ref();
         Some(match verdict {
-            _ if shown.running => "review running".to_string(),
+            _ if shown.running => "review running · waits on the reviewer".to_string(),
             Some(_) if shown.stale => "review stale".to_string(),
             Some(verdict) if verdict.ok => "reviewed".to_string(),
-            Some(verdict) => format!("review: {}", verdict.summary()),
+            Some(verdict) if self.turn_under_way() => format!("review: {}", verdict.summary()),
+            Some(verdict) => format!("review: {} · withdraw with v to push without a pass", verdict.summary()),
             None => return None,
         })
     }
@@ -1148,11 +1149,11 @@ pub(crate) mod tests {
         let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.verdict = Some(shown); item };
         let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, file: PathBuf::new() });
         assert!(running.group() == Group::InReview);
-        assert_eq!(running.summary(), "2 commits · review running");
+        assert_eq!(running.summary(), "2 commits · review running · waits on the reviewer");
         assert_eq!(Group::InReview.title(), "IN REVIEW");
         let findings = reviewed(in_review(false, 2, false, false));
         assert!(findings.group() == Group::InReview);
-        assert!(findings.summary().ends_with("review: 2 findings"), "{}", findings.summary());
+        assert!(findings.summary().ends_with("review: 2 findings · withdraw with v to push without a pass"), "{}", findings.summary());
         let stale = reviewed(in_review(true, 0, true, false));
         assert!(stale.group() == Group::InReview, "a pass on older code is not a pass");
         assert!(stale.summary().ends_with("review stale"));

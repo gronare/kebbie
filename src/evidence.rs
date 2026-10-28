@@ -396,8 +396,8 @@ pub fn hook(address: &str, input: &str) -> String {
     if peers::me(Path::new(&top)).as_deref() != Some(address) {
         return String::new();
     }
-    if let Ok(state) = state_dir() {
-        record_in(&state, address, Path::new(&top), &listed, &input, crate::messages::now());
+    if let Ok(state) = state_dir() && record_in(&state, address, Path::new(&top), &listed, &input, crate::messages::now()).is_some_and(|run| run.ok) {
+        crate::review::again_for_tests(Path::new(&top), address, &crate::status::named(&state, address));
     }
     String::new()
 }

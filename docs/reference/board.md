@@ -109,7 +109,7 @@ When the task's Claude runs a command that looks like a test run but is not in t
 | --- | --- |
 | Needs you | Tasks waiting on your answer or action, open questions first. |
 | Working | Tasks at work since their prompt, their last report or your answer. |
-| In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. |
+| In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. The row says who acts next: `review running · waits on the reviewer`, or, with findings and its Claude idle, `withdraw with v to push without a pass`. |
 | Ready to push | Reported ready with its commits, and pushes under way. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. A cancelled run waits for a later run on the default branch to pass. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |

@@ -313,7 +313,10 @@ mod tests {
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         assert_eq!(keys(&item), "gcrvtdauzx");
-        assert_eq!(row_facts(&item), "1 commit · review: 2 findings");
+        assert_eq!(row_facts(&item), "1 commit · review: 2 findings · withdraw with v to push without a pass", "the user is the one who acts next");
+        item.agent.as_mut().unwrap().status = "working".to_string();
+        assert_eq!(row_facts(&item), "1 commit · review: 2 findings", "its Claude is at the findings");
+        item.agent.as_mut().unwrap().status = "idle".to_string();
         item.unrecorded = Some("script/test is not recorded as a test run: add it to task.test_commands".to_string());
         assert!(row_facts(&item).ends_with(" · script/test is not recorded as a test run: add it to task.test_commands"), "{}", row_facts(&item));
         item.unrecorded = None;

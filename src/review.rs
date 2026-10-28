@@ -127,20 +127,55 @@ pub fn gate(shown: Option<&Shown>, covered: impl Fn(&str) -> bool) -> std::resul
     }
 }
 
-// A task in review that reports ready again after its verdict went stale is read again, without anyone asking.
-pub fn review_again(shown: Option<&Shown>) -> bool {
-    shown.is_some_and(|shown| !shown.running && shown.stale)
+// A task in review is read again, without anyone asking, when it reports ready after its verdict went stale, or when it answered a verdict that asked for tests with a passing run.
+pub fn review_again(shown: Option<&Shown>, tests_answered: bool) -> bool {
+    shown.is_some_and(|shown| !shown.running && (shown.stale || (tests_answered && shown.verdict.as_ref().is_some_and(|verdict| !verdict.ok))))
 }
 
-pub fn again_if_stale(cwd: &Path) -> Result<Option<String>> {
+// A finding that names a test or a test run.
+pub fn asks_for_tests(verdict: &str) -> bool {
+    verdict.lines().filter(|line| line.starts_with("- ")).any(|line| line.to_lowercase().contains("test"))
+}
+
+// The verdict asked for tests, and a run on the code it reviewed passed after it was given.
+pub fn tests_answered_in(state: &Path, address: &str, current: impl Fn(&str) -> bool) -> bool {
+    let file = verdict_file(state, address);
+    let Ok(text) = fs::read_to_string(&file) else { return false };
+    let Some(verdict) = parse_verdict(&text) else { return false };
+    let given = fs::metadata(&file).and_then(|meta| meta.modified()).ok().and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok()).map_or(u64::MAX, |at| at.as_secs());
+    !verdict.ok && asks_for_tests(&text) && current(&verdict.sha) && crate::evidence::runs_in(state, address).iter().any(|run| run.ok && run.at > given && current(&run.code))
+}
+
+fn again(cwd: &Path, stale_too: bool) -> Result<Option<String>> {
     let repo = main_checkout(cwd)?;
     let slot = tasks::find_task(&repo, None, cwd)?;
     let upstream = default_branch(&repo)?;
     let address = peers::address(tasks::task_of(&slot), &name_of(&repo));
-    if !review_again(shown(&address, &slot.path, &upstream).as_ref()) {
+    let head = git(&slot.path, &["rev-parse", "HEAD"])?;
+    let current = |sha: &str| tasks::same_code(&slot.path, &upstream, sha, &head);
+    let tests = tests_answered_in(&state_dir()?, &address, current);
+    let shown = shown(&address, &slot.path, &upstream).filter(|shown| stale_too || !shown.stale);
+    if !review_again(shown.as_ref(), tests) {
         return Ok(None);
     }
     request(cwd, None).map(Some)
+}
+
+pub fn again_if_stale(cwd: &Path) -> Result<Option<String>> {
+    again(cwd, true)
+}
+
+// From the evidence hook: a passing run on the reviewed code that a verdict asked for sends the task back to the reviewer.
+pub fn again_for_tests(cwd: &Path, address: &str, shown_name: &str) {
+    match again(cwd, false) {
+        Ok(Some(_)) => {
+            if let Err(error) = messages::notify_lead(&format!("{shown_name} passed its tests on the code its review asked tests for, so the reviewer reads it again; you hear its verdict.")) {
+                eprintln!("Could not tell the lead: {error}");
+            }
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!("kebbie: {address} could not go back to the reviewer: {error}"),
+    }
 }
 
 // A marker whose process is gone, or whose pid now belongs to another program after a reboot, is a review that died.
@@ -744,13 +779,42 @@ mod tests {
     }
 
     #[test]
+    fn a_verdict_that_asked_for_tests_goes_back_to_the_reviewer_once_a_run_passes_on_the_code_it_read() {
+        let state = crate::sh::test_dir("review-tests-answered");
+        fs::create_dir_all(dir(&state)).unwrap();
+        let asked = "verdict: changes\nreviewed: abc\n\n- src/billing.rs:12 — no test covers the retry; none passed on the code under review.\n";
+        fs::write(verdict_file(&state, "billing@app"), asked).unwrap();
+        let given = crate::messages::now();
+        let run = |at: u64, ok: bool, code: &str| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), ok, exit: Some(0), duration_ms: None, summary: String::new(), sha: code.to_string(), dirty: false, code: code.to_string(), at };
+        let current = |sha: &str| sha == "abc";
+        assert!(!tests_answered_in(&state, "billing@app", current), "no run yet");
+        crate::evidence::save(&state, "billing@app", &run(given.saturating_sub(100), true, "abc")).unwrap();
+        assert!(!tests_answered_in(&state, "billing@app", current), "a run the reviewer already saw answers nothing");
+        crate::evidence::save(&state, "billing@app", &run(given + 5, false, "abc")).unwrap();
+        assert!(!tests_answered_in(&state, "billing@app", current), "a failed run answers nothing");
+        crate::evidence::save(&state, "billing@app", &run(given + 6, true, "other")).unwrap();
+        assert!(!tests_answered_in(&state, "billing@app", current), "a pass on other code is not on the reviewed code");
+        crate::evidence::save(&state, "billing@app", &run(given + 7, true, "abc")).unwrap();
+        assert!(tests_answered_in(&state, "billing@app", current));
+        assert!(!tests_answered_in(&state, "billing@app", |_| false), "a verdict on older code goes the stale way");
+        fs::write(verdict_file(&state, "billing@app"), "verdict: changes\nreviewed: abc\n\n- src/billing.rs:41 — the refund is booked twice.\n").unwrap();
+        assert!(!tests_answered_in(&state, "billing@app", current), "a review that asked for no test waits for the code to change");
+        assert!(asks_for_tests(asked) && !asks_for_tests("verdict: changes\nreviewed: abc\n\nThe tests look fine.\n"));
+        let hook = include_str!("evidence.rs");
+        let hook = &hook[hook.find("\npub fn hook(").unwrap()..];
+        assert!(hook.find("record_in(").unwrap() < hook.find("again_for_tests(").unwrap(), "the passing run sends the task back by itself, no report needed");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
     fn a_stale_verdict_is_read_again_when_the_task_reports_ready_and_a_current_one_is_not() {
-        assert!(review_again(Some(&shown_as(Some(false), true, false))));
-        assert!(review_again(Some(&shown_as(Some(true), true, false))));
-        assert!(!review_again(Some(&shown_as(Some(false), false, false))), "findings on the code as it is stand until the code changes");
-        assert!(!review_again(Some(&shown_as(Some(true), false, false))));
-        assert!(!review_again(Some(&shown_as(Some(true), true, true))), "one reviewer at a time");
-        assert!(!review_again(None), "a task never sent to review is not sent by a report");
+        assert!(review_again(Some(&shown_as(Some(false), true, false)), false));
+        assert!(review_again(Some(&shown_as(Some(true), true, false)), false));
+        assert!(!review_again(Some(&shown_as(Some(false), false, false)), false), "findings on the code as it is stand until the code changes");
+        assert!(review_again(Some(&shown_as(Some(false), false, false)), true), "or until a run the review asked for passes on it");
+        assert!(!review_again(Some(&shown_as(Some(true), false, false)), true), "a pass needs no second reading");
+        assert!(!review_again(Some(&shown_as(Some(true), true, true)), true), "one reviewer at a time");
+        assert!(!review_again(None, true), "a task never sent to review is not sent by a report");
         assert!(shown_as(Some(true), false, false).to_json()["reviewed"] == true);
         assert!(shown_as(Some(true), true, false).to_json()["reviewed"] == false);
     }
