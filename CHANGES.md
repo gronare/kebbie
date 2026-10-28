@@ -35,6 +35,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task that follows main is not rebased while it waits on you, with an open question or under Needs you, and follows again once it moves on
 - A task's git push to a local path or a file:// URL, such as a repo a test makes, goes through; every network URL stays blocked
 - A task's git push to a host:path URL such as git@github.com:acme/app.git fails at once, as every other network URL does, instead of starting ssh to a host named kebbie-blocks-push; kebbie update renews the block in every pooled worktree
+- A listed test command run as ./script/test is recorded like script/test, and either spelling in task.test_commands matches both
 
 ## 0.28.1
 

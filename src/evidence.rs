@@ -108,9 +108,9 @@ pub fn core(command: &str) -> &str {
 
 // The longest listed command the given one starts with, whole words only.
 pub fn recognise<'a>(command: &str, listed: &'a [String]) -> Option<&'a str> {
-    let core = core(command);
+    let core = core(command).trim_start_matches("./");
     listed.iter().map(|prefix| prefix.trim()).filter(|prefix| !prefix.is_empty())
-        .filter(|prefix| core == *prefix || core.strip_prefix(prefix).is_some_and(|rest| rest.starts_with(char::is_whitespace)))
+        .filter(|prefix| { let bare = prefix.trim_start_matches("./"); core == bare || core.strip_prefix(bare).is_some_and(|rest| rest.starts_with(char::is_whitespace)) })
         .max_by_key(|prefix| prefix.len())
 }
 
@@ -459,6 +459,9 @@ mod tests {
         assert_eq!(recognise("bin/test unit", &list), None);
         assert_eq!(recognise("bin/test unit", &listed(&["bin/test"])), Some("bin/test"), "a repo's own runner is added to the list");
         assert_eq!(recognise("make check", &listed(&["make check", ""])), Some("make check"));
+        assert_eq!(recognise("./script/test --fast", &listed(&["script/test"])), Some("script/test"), "a leading ./ runs the same script");
+        assert_eq!(recognise("cd app && ./script/test", &listed(&["script/test"])), Some("script/test"));
+        assert_eq!(recognise("script/test", &listed(&["./script/test"])), Some("./script/test"));
     }
 
     #[test]
