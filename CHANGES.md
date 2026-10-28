@@ -18,6 +18,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The review split needs only nvim, not fzf
 
 ### Fixed
+- Messages from kebbie show in Claude Code as one collapsed line from @kebbie that ctrl+o expands, instead of in full with Claude Code's peer warning
 - y in the review split's diff copies to the clipboard, also over SSH from a machine with no clipboard tool, through the terminal
 - c in the review split's diff comments on lines selected with a drag or V
 - A question answered in your own words that asks the task something gets an answer from the task, as a new question on the board, before it writes code

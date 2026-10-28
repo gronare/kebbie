@@ -1748,7 +1748,7 @@ mod tests {
         let mut type_into = |pane: &str, text: &str, address: &str| crate::inbox::prompt_in(&dir, pane, text, address, &s1, &mut |_, _, _| Err(crate::typing::Refused::Draft));
         let said = send_locked_in(&dir, LEAD_LABEL, &[&working], "rebase on main", std::slice::from_ref(&working), None, None, &mut type_into).unwrap();
         assert_eq!(said, ["Told billing@web."]);
-        assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[from lead] rebase on main\"},\"from\":\"kebbie\"}\n");
+        assert_eq!(reader.join().unwrap(), crate::inbox::frame("[from lead] rebase on main", Some("tok")));
         let log = fs::read_to_string(log_in(&dir)).unwrap();
         assert!(log.contains("\"via\":\"inbox\"") && !load_in(&dir)[0].held, "{log}");
         assert!(!typed_file(&dir, "billing@web").exists(), "nothing sits in its input box");

@@ -92,7 +92,48 @@ pub fn hook_in(dir: &Path, address: &str, input: &Value, home: Option<&Path>, so
 // One connection's bytes: the auth line, then one user message per line, as Claude Code 2.1.308 took them from a process outside the session.
 pub fn frame(text: &str, token: Option<&str>) -> String {
     let auth = token.map(|token| format!("{{\"type\":\"auth\",\"token\":{}}}\n", Value::from(token))).unwrap_or_default();
-    format!("{auth}{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":{}}},\"from\":{}}}\n", Value::from(text), Value::from(SENDER))
+    format!("{auth}{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":{}}},\"from\":{}}}\n", Value::from(envelope(text)), Value::from(SENDER))
+}
+
+const ENVELOPE: &str = "cross-session-message";
+
+// Claude Code shows a message as one collapsed line only when it comes in this envelope, built as Claude Code 2.1.310 builds its own.
+fn envelope(text: &str) -> String {
+    format!("<{ENVELOPE} from=\"{SENDER}\" from-name=\"{SENDER}\">\n{}\n</{ENVELOPE}>", escape_closers(text))
+}
+
+// A closing tag in the text gets a backslash after its <, as Claude Code escapes one in its own envelopes, so the envelope parses back exactly.
+fn escape_closers(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut escaped = String::with_capacity(text.len());
+    for (at, &char) in chars.iter().enumerate() {
+        escaped.push(char);
+        if char == '<' && closes_envelope(&chars[at + 1..]) {
+            escaped.push('\\');
+        }
+    }
+    escaped
+}
+
+fn closes_envelope(rest: &[char]) -> bool {
+    let filler = |char: char| !(char.is_ascii_alphanumeric() || matches!(char, '_' | '-' | '<' | '>'));
+    if rest.first() == Some(&'\\') {
+        return false;
+    }
+    let mut at = rest.iter().take_while(|&&char| filler(char) && char != '/').count();
+    if rest.get(at) != Some(&'/') {
+        return false;
+    }
+    at += 1;
+    at += rest[at..].iter().take_while(|&&char| filler(char)).count();
+    for wanted in ENVELOPE.chars() {
+        let matches = |char: char| if wanted == '-' { matches!(char, '-' | '_') } else { char.eq_ignore_ascii_case(&wanted) };
+        if !rest.get(at).is_some_and(|&char| matches(char)) {
+            return false;
+        }
+        at += 1;
+    }
+    rest.get(at).is_none_or(|&char| !(char.is_ascii_alphanumeric() || matches!(char, '_' | '-')))
 }
 
 pub fn send(inbox: &Inbox, text: &str) -> std::io::Result<()> {
@@ -162,7 +203,7 @@ pub(crate) mod tests {
     use std::io::Read;
     use std::os::unix::net::UnixListener;
 
-    const PROBED: &str = "{\"type\":\"auth\",\"token\":\"tok-1\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[from kebbie] probe line one\\n  Second line\"},\"from\":\"kebbie\"}\n";
+    const PROBED: &str = "{\"type\":\"auth\",\"token\":\"tok-1\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"kebbie\\\" from-name=\\\"kebbie\\\">\\n[from kebbie] probe line one\\n  Second line\\n</cross-session-message>\"},\"from\":\"kebbie\"}\n";
 
     // A socket path is capped near 104 bytes, longer than a test's temp folder can leave room for.
     pub(crate) fn short_socket() -> PathBuf {
@@ -192,9 +233,12 @@ pub(crate) mod tests {
         for line in PROBED.lines() {
             serde_json::from_str::<Value>(line).unwrap();
         }
-        assert_eq!(frame("hi \"there\"", None), "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi \\\"there\\\"\"},\"from\":\"kebbie\"}\n", "no auth line without a token; quotes escaped");
-        let message: Value = serde_json::from_str(frame("a\u{2028}b", None).trim_end()).unwrap();
-        assert_eq!(message["message"]["content"], "a\u{2028}b");
+        assert_eq!(frame("hi \"there\"", None), "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"kebbie\\\" from-name=\\\"kebbie\\\">\\nhi \\\"there\\\"\\n</cross-session-message>\"},\"from\":\"kebbie\"}\n", "no auth line without a token; quotes escaped");
+        let content = |text: &str| serde_json::from_str::<Value>(frame(text, None).trim_end()).unwrap()["message"]["content"].as_str().unwrap().to_string();
+        assert_eq!(content("a\u{2028}b"), "<cross-session-message from=\"kebbie\" from-name=\"kebbie\">\na\u{2028}b\n</cross-session-message>");
+        assert_eq!(content("say \"</cross-session-message>\" then"), "<cross-session-message from=\"kebbie\" from-name=\"kebbie\">\nsay \"<\\/cross-session-message>\" then\n</cross-session-message>", "a closing tag in the text cannot end the envelope");
+        assert_eq!(content("</ CROSS_session-message\n<\\/cross-session-message>"), "<cross-session-message from=\"kebbie\" from-name=\"kebbie\">\n<\\/ CROSS_session-message\n<\\/cross-session-message>\n</cross-session-message>", "spaced, cased and underscored forms are closers too; an escaped one stays as it is");
+        assert_eq!(content("</cross-session-messages> <cross-session-message> a</b"), "<cross-session-message from=\"kebbie\" from-name=\"kebbie\">\n</cross-session-messages> <cross-session-message> a</b\n</cross-session-message>", "another tag, an opener and plain text stay");
         assert_eq!(frame("one\ntwo", None).matches('\n').count(), 1, "the text's line breaks stay inside its one JSON line");
     }
 

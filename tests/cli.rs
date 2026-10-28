@@ -514,7 +514,7 @@ fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_even_behin
     });
     let told = lab.run(&["-C", slot.to_str().unwrap(), "tell", "lead", "payload renamed"]);
     assert!(stdout(&told).contains("Told lead."), "{}\n{}", stdout(&told), stderr(&told));
-    assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok-9\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"[from billing@app] payload renamed\"},\"from\":\"kebbie\"}\n");
+    assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok-9\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"kebbie\\\" from-name=\\\"kebbie\\\">\\n[from billing@app] payload renamed\\n</cross-session-message>\"},\"from\":\"kebbie\"}\n");
     let _ = fs::remove_file(&socket);
     assert!(!lab.herdr_calls().iter().any(|call| call[..2] == ["agent", "prompt"]), "nothing is typed, so the user's draft stays as it is");
     assert!(fs::read_to_string(lab.state.join("messages.jsonl")).unwrap().contains("\"via\":\"inbox\""));
