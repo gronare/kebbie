@@ -259,7 +259,11 @@ fn failed_workflows(watch: &crate::ci::Watch) -> Vec<String> {
 }
 
 pub(super) fn superseded(watch: &crate::ci::Watch, gh: &str) -> bool {
-    let failed = failed_workflows(watch);
+    passed_later(watch, &failed_workflows(watch), gh)
+}
+
+// A later push on the branch whose every named workflow passed, on a commit that holds the watched one.
+pub(crate) fn passed_later(watch: &crate::ci::Watch, failed: &[String], gh: &str) -> bool {
     if failed.is_empty() {
         return false;
     }
