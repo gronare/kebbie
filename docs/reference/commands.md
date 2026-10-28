@@ -707,7 +707,7 @@ Show the board on your phone through a kebbie hub. See [See your board on your p
 
 After `kebbie hub leave`, the hub lists the machine, asleep, until you remove it in the web app or its admin runs `kebbie-hub admin remove-machine <id>`.
 
-On a hub with plans, a lapsed subscription stops the hub taking the machine's posts. kebbie says `Your kebbie hub subscription isn't active:` with the hub's link, in `kebbie hub status`, `kebbie doctor`, a line on the board and its `H` window, and everything on the machine keeps working.
+A hub with plans keeps taking the machine's posts while the subscription has lapsed. When a hub refuses one for a lapsed subscription, kebbie says `Your kebbie hub subscription isn't active:` with the hub's link, in `kebbie hub status`, `kebbie doctor`, a line on the board and its `H` window, and everything on the machine keeps working.
 
 With [`KEBBIE_HUB_DEV`](environment.md) set, every `kebbie hub` command works on the dev hub at `KEBBIE_HUB_DEV_URL` (`http://localhost:8470`) and its own identity in `hub-dev/`. It never reads `[hub] url` or touches `hub/`, and `kebbie hub status` starts with `dev hub · localhost:8470`.
 

@@ -102,6 +102,7 @@ pub fn item(item: &status::Item) -> Option<Item> {
         recover: item.recover_note().map(|note| Recover { note }),
         routine: item.routine.clone(),
         card: None,
+        steps: None,
     })
 }
 

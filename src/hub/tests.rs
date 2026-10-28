@@ -789,28 +789,24 @@ fn an_own_hub_is_tested_before_it_is_saved_once_and_never_through_a_linked_confi
 }
 
 #[test]
-fn a_lapsed_plan_is_said_on_status_and_doctor_and_nothing_local_stops() {
-    const BILLING: &str = "https://billing.example.com/start";
+fn a_lapsed_plan_still_posts_the_board_and_status_and_doctor_say_nothing_of_it() {
     let hub = open_hub(|config| {
         config.plans = true;
-        config.billing_url = Some(BILLING.to_string());
+        config.billing_url = Some("https://billing.example.com/start".to_string());
     });
     let mut browser = member(&hub);
     let account = hub.runtime.block_on(browser.account()).unwrap().account;
     hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Active, None).unwrap();
     let state = connected_state(&hub, &mut browser);
     hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Inactive, None).unwrap();
-    let said = format!("Your kebbie hub subscription isn't active: {BILLING}");
-    let failed = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap_err();
-    assert_eq!(failed, said);
-    assert_eq!(relay::load(&state).plan_inactive.as_deref(), Some(said.as_str()));
-    assert!(super::status_text(&state, Some("mac"), now()).unwrap().contains(&said));
+    let rev = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().expect("reading the board is free, so a lapsed plan posts it");
+    assert_eq!(hub.boards(&mut browser)[0].0, rev);
+    let relayed = relay::load(&state);
+    assert_eq!((relayed.plan_inactive, relayed.error), (None, None));
+    let shown = super::status_text(&state, Some("mac"), now()).unwrap();
+    assert!(shown.contains("board:    rev") && !shown.contains("subscription"), "{shown}");
     let check = super::doctor(&state, Some("mac"), now(), |_| Ok(()));
-    assert!(check.level == crate::doctor::Level::Warn && check.fact.contains(&said) && check.fix[0].contains("keeps working"), "{}", check.fact);
-    assert!(identity::load(&state).unwrap().unwrap().account.is_some(), "the pinned account stays");
-    hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Active, None).unwrap();
-    relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now() + HEARTBEAT).unwrap();
-    assert_eq!(relay::load(&state).plan_inactive, None, "a post that goes through clears it");
+    assert!(check.level == crate::doctor::Level::Ok && !check.fact.contains("subscription"), "{}", check.fact);
 }
 
 type Approve<'a> = Box<dyn FnOnce(&str) + 'a>;

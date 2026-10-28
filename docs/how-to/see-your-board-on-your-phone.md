@@ -104,9 +104,9 @@ The keeper posts the board when it changes and once a minute while nothing does,
 
 ## When the subscription lapses
 
-The kebbie hub is free and runs without plans. A hub its operator runs with plans (`kebbie-hub --plans on`) stops taking the machine's board while the account's subscription is not active. kebbie then says `Your kebbie hub subscription isn't active:` with the link to start it: in a line on the board, in the `H` window, in `kebbie hub status` and in `kebbie doctor`.
+The kebbie hub is free and runs without plans. A hub its operator runs with plans (`kebbie-hub --plans on`) keeps taking the machine's board while the account's subscription is not active, so the phone keeps showing it.
 
-Everything on the machine keeps working, and the board goes out again with the next post once the subscription is active.
+A hub that refuses the board for a lapsed subscription answers so, and kebbie then says `Your kebbie hub subscription isn't active:` with the link to start it: in a line on the board, in the `H` window, in `kebbie hub status` and in `kebbie doctor`. Everything on the machine keeps working, and the board goes out again with the next post once the subscription is active.
 
 ## Scripts: join with a code
 
