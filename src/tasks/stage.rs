@@ -508,13 +508,13 @@ pub(super) fn refuse_push(state: &Path, repo: &Path, address: &str, task: &str) 
 
 // The lead's line shows on the board's messages too, so what it says reaches the user there.
 fn tell_user(text: &str) {
-    if let Err(error) = messages::tell_lead(text, Some("push")) {
+    if let Err(error) = messages::to_lead(messages::ToLead::PushFailed, text) {
         eprintln!("Could not tell the lead: {error}");
     }
 }
 
 fn tell_lead(text: &str) {
-    if let Err(error) = messages::log_for_lead(text, Some("push")) {
+    if let Err(error) = messages::to_lead(messages::ToLead::Staged, text) {
         eprintln!("Could not tell the lead: {error}");
     }
 }

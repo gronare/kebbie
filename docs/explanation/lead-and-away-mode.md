@@ -25,7 +25,12 @@ It does not push, except tasks you gave it permission for.
 
 ## It sees everything without being flooded
 
-Every report, message and question passes through kebbie, and the lead gets a copy. The copies do not arrive as chat messages. Each of your prompts to the lead carries the reports and messages it has not seen yet, so its chat stays a conversation with you and its picture stays current.
+Every report, message and question passes through kebbie, and the lead gets a copy. The copies do not arrive as chat messages. Each of your prompts to the lead carries the reports and messages it has not seen yet, grouped by task, so its chat stays a conversation with you and its picture stays current.
+
+kebbie sorts what it says to the lead in two:
+
+- **What only informs** never starts a lead turn: a task started, pushed or closed, a review that passed, a rebase or a red CI its task resolves itself, an update. It comes with your next prompt.
+- **What asks the lead to act** is delivered: findings to pass on, a rules check the reviewer left, a task's question of method, a push that failed, a prompt on a task's screen, a red CI no task took.
 
 ## It writes at the end of a turn
 

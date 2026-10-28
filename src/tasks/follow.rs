@@ -255,14 +255,14 @@ fn pass(state: &Path, workspaces: &[Value], agents: &[Value], hand: HandOver) ->
             }
             Ok(Step::Handed) => {
                 let text = format!("{address} follows main and rebasing it conflicted, so its Claude is resolving the rebase. Its commits change: check them against the rules again when it reports ready.");
-                if let Err(error) = messages::tell_lead(&text, Some("follow")) {
+                if let Err(error) = messages::to_lead(messages::ToLead::RebaseHanded, &text) {
                     eprintln!("Could not tell the lead: {error}");
                 }
                 text
             }
             Ok(Step::Stuck(why)) => {
                 let text = format!("{address} follows main but kebbie could not rebase it: {why}. kebbie tries again once main or the task moves.");
-                if let Err(error) = messages::tell_lead(&text, Some("follow")) {
+                if let Err(error) = messages::to_lead(messages::ToLead::RebaseStuck, &text) {
                     eprintln!("Could not tell the lead: {error}");
                 }
                 text

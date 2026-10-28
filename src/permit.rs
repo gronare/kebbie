@@ -77,7 +77,7 @@ pub fn toggle_task(address: &str) -> Result<String> {
     } else {
         (format!("The user took back push permission for {address}: route it to them again."), crate::notice::Notice::new(crate::notice::Tone::Done, "Only you push it now").detail("task", address).to_string())
     };
-    tell_lead(&told);
+    tell_lead(messages::ToLead::Permission, &told);
     Ok(shown)
 }
 
@@ -91,12 +91,12 @@ pub fn toggle_repo(repo: &str) -> Result<String> {
     } else {
         (format!("The user took back push permission for the repo {repo}; tasks with their own permission keep it."), format!("Only you push {repo}'s tasks now, but those you gave their own permission."))
     };
-    tell_lead(&told);
+    tell_lead(messages::ToLead::Permission, &told);
     Ok(shown)
 }
 
-fn tell_lead(text: &str) {
-    if let Err(error) = messages::tell_lead(text, None) {
+fn tell_lead(what: messages::ToLead, text: &str) {
+    if let Err(error) = messages::to_lead(what, text) {
         eprintln!("Could not tell the lead: {error}");
     }
 }
@@ -154,12 +154,12 @@ pub fn away(word: Option<&str>) -> Result<String> {
         let open: Vec<String> = crate::questions::open_now(&log).into_iter().filter(|question| question.question.as_ref().is_some_and(|question| !question.waits))
             .map(|question| format!("\n- {}", crate::questions::question_copy(question, true))).collect();
         let open = if open.is_empty() { String::new() } else { format!("\nQuestions waiting on the board now:{}", open.concat()) };
-        tell_lead(&format!("The user is away from now on. Work by the away rules in your role: answer how-questions yourself with kebbie decide, keep what-questions for the user with kebbie defer, push only what their permissions allow, and keep what you decide for the summary they get back.{open}"));
+        tell_lead(messages::ToLead::Away, &format!("The user is away from now on. Work by the away rules in your role: answer how-questions yourself with kebbie decide, keep what-questions for the user with kebbie defer, push only what their permissions allow, and keep what you decide for the summary they get back.{open}"));
         return crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is on").next("The lead decides how-questions itself, keeps what-questions for you, and pushes only what you permitted.").ok();
     }
     let log = messages::load();
     let waiting = crate::questions::open_now(&log).into_iter().filter(|question| question.question.as_ref().is_some_and(|question| question.waits)).cloned().collect::<Vec<_>>();
-    tell_lead(&return_brief(&log, since, &waiting));
+    tell_lead(messages::ToLead::Away, &return_brief(&log, since, &waiting));
     crate::notice::Notice::new(crate::notice::Tone::Done, "Away mode is off").next("The lead writes you what landed, what it decided and what waits for you.").ok()
 }
 

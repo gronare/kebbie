@@ -461,7 +461,7 @@ fn tell_for_real(told: Told) {
         Told::Blocked { address, repo, text } => (Some((crate::notify::Event::NeedsYou, address, repo)), text, true),
         Told::Dropped { text } => (None, text, true),
     };
-    let told = if live { messages::tell_lead(&text, Some("after")) } else { messages::log_for_lead(&text, Some("after")) };
+    let told = messages::to_lead(if live { messages::ToLead::ChainBlocked } else { messages::ToLead::TaskStarted }, &text);
     if let Err(error) = told {
         eprintln!("Could not tell the lead: {error}");
     }
@@ -1106,8 +1106,7 @@ mod tests {
         let source = include_str!("after.rs");
         let real = &source[source.find("\nfn tell_for_real(").unwrap()..];
         let real = &real[..real.find("\n}\n").unwrap()];
-        assert!(real.contains("messages::tell_lead(&text, Some(\"after\"))"), "a blocked or dropped chain reaches the lead through the log, held when it has no session");
-        assert!(real.contains("Told::Started { address, repo, text } => (crate::permit::away_since().map(|_| (crate::notify::Event::Summary, address, repo)), text, false)") && real.contains("messages::log_for_lead(&text, Some(\"after\"))"), "a start is a notice for the lead's digest, not a turn");
+        assert!(real.contains("Told::Started { address, repo, text } => (crate::permit::away_since().map(|_| (crate::notify::Event::Summary, address, repo)), text, false)") && real.contains("if live { messages::ToLead::ChainBlocked } else { messages::ToLead::TaskStarted }"), "a blocked or dropped chain asks the lead; a start is a notice for its digest, not a turn");
         fs::remove_dir_all(state).unwrap();
     }
 

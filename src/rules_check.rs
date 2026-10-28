@@ -288,7 +288,7 @@ pub fn run(cwd: &Path) -> Result<String> {
     let reach = |to: To, text: &str| {
         let sent = match to {
             To::Task => tell_task(&address, text),
-            To::Lead => messages::notify_lead(text),
+            To::Lead => messages::to_lead(messages::ToLead::RulesBreak, text),
             To::LeadCheck => ask_lead(&state, &address, &slot.path, Some(text)),
         };
         if let Err(error) = sent {

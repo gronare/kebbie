@@ -228,7 +228,7 @@ pub(super) fn restamp(state: &Path, repo: &Path) {
 }
 
 fn tell_lead(text: &str) {
-    if let Err(error) = messages::tell_lead(text, Some("push")) {
+    if let Err(error) = messages::to_lead(messages::ToLead::PushFailed, text) {
         eprintln!("Could not tell the lead: {error}");
     }
 }

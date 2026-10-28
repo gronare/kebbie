@@ -591,7 +591,7 @@ fn apply(state: &Path, task: &Task, old: Option<&Record>, act: Act) {
             let _ = save(state, &record);
             crate::phase::record(state, &record.address, "recover", &crate::phase::Event::Stopped);
             let line = stuck_line(&record);
-            if let Err(error) = messages::tell_lead(&line, Some("recover")) {
+            if let Err(error) = messages::to_lead(messages::ToLead::TaskStopped, &line) {
                 eprintln!("Could not tell the lead that {} stopped: {error}", record.address);
             }
             notify::send(&task.repo, &Notice::from(NotifyEvent::ApiError, &record.address, format!("{}: {}", record.address, record.note())));

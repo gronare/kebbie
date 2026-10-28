@@ -7,7 +7,7 @@ use crate::sh::Result;
 use crate::typing::is_border;
 
 pub const EVERY: u64 = 5;
-const KIND: &str = "prompt-question";
+pub const KIND: &str = "prompt-question";
 const QUESTION_LINES: usize = 8;
 const TAIL_LINES: usize = 12;
 const BOTTOM_LINES: usize = 20;
@@ -188,7 +188,7 @@ pub fn tick(state: &Path) -> Result<Vec<String>> {
     if blocked.is_empty() && !told_dir(state).exists() {
         return Ok(Vec::new());
     }
-    Ok(pass(state, &blocked, crate::herdr::read_agent, |text| crate::messages::tell_lead(text, Some(KIND))))
+    Ok(pass(state, &blocked, crate::herdr::read_agent, |text| crate::messages::to_lead(crate::messages::ToLead::Prompt, text)))
 }
 
 #[derive(Debug, PartialEq)]

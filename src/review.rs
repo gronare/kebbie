@@ -169,7 +169,7 @@ pub fn again_if_stale(cwd: &Path) -> Result<Option<String>> {
 pub fn again_for_tests(cwd: &Path, address: &str, shown_name: &str) {
     match again(cwd, false) {
         Ok(Some(_)) => {
-            if let Err(error) = messages::notify_lead(&format!("{shown_name} passed its tests on the code its review asked tests for, so the reviewer reads it again; you hear its verdict.")) {
+            if let Err(error) = messages::to_lead(messages::ToLead::ReviewAgain, &format!("{shown_name} passed its tests on the code its review asked tests for, so the reviewer reads it again; you hear its verdict.")) {
                 eprintln!("Could not tell the lead: {error}");
             }
         }
@@ -224,7 +224,7 @@ fn withdraw_as(caller: &crate::permit::Caller, cwd: &Path, name: Option<&str>) -
     if !withdraw_in(&state_dir()?, &address) {
         return crate::notice::Notice::new(crate::notice::Tone::NotNow, "It is not in review").detail("task", &address).err();
     }
-    if let Err(error) = messages::notify_lead(&format!("The user withdrew {address} from review: it pushes without a reviewer's pass now. Drop any findings you have not passed on.")) {
+    if let Err(error) = messages::to_lead(messages::ToLead::ReviewWithdrawn, &format!("The user withdrew {address} from review: it pushes without a reviewer's pass now. Drop any findings you have not passed on.")) {
         eprintln!("Could not tell the lead: {error}");
     }
     crate::notice::Notice::new(crate::notice::Tone::Done, "Withdrawn from review").next("Push is offered again.").detail("task", &address).ok()
@@ -289,17 +289,18 @@ pub fn run(cwd: &Path) -> Result<String> {
     crate::state::write(&marker, std::process::id().to_string())?;
     let result = review(&repo, &slot, &address, &state);
     let _ = fs::remove_file(&marker);
-    let notice = match &result {
-        Ok(text) => text.clone(),
-        Err(error) => format!("The review of {address} failed: {error} (output in {})", log_file(&state, &address).display()),
+    let (what, notice) = match &result {
+        Ok((text, true)) => (messages::ToLead::ReviewPassed, text.clone()),
+        Ok((text, false)) => (messages::ToLead::Findings, text.clone()),
+        Err(error) => (messages::ToLead::Findings, format!("The review of {address} failed: {error} (output in {})", log_file(&state, &address).display())),
     };
-    if let Err(error) = messages::notify_lead(&notice) {
+    if let Err(error) = messages::to_lead(what, &notice) {
         eprintln!("Could not tell the lead: {error}");
     }
-    result
+    result.map(|(text, _)| text)
 }
 
-fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<String> {
+fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<(String, bool)> {
     let upstream = default_branch(repo)?;
     let sha = git(&slot.path, &["rev-parse", "HEAD"])?;
     let settings = config::resolve(Some(repo))?.settings;
@@ -316,7 +317,7 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path) -> Result<Strin
     let answer = ask_reviewer(&Ask { address, worktree: &slot.path, settings: &settings, rules_file: rules_file.as_deref().filter(|_| quoted.is_none()), docs: docs.is_some(), input: &input, timeout: None, role: "review", program: None, group_file: None, prompt: None })?;
     let recorded = record(&answer, &sha).ok_or_else(|| no_verdict(&answer))?;
     let verdict = save(state, address, &recorded, rules_file.is_some(), || tasks::fingerprint_at(&slot.path, &upstream, &sha))?;
-    Ok(format!("{address} reviewed at {}: {} — {}", &sha[..7.min(sha.len())], verdict.summary(), file.display()))
+    Ok((format!("{address} reviewed at {}: {} — {}", &sha[..7.min(sha.len())], verdict.summary(), file.display()), verdict.ok))
 }
 
 // A pass of a review that read the rules skill is the rules check too, kept as the approval's fingerprint, so the task is not checked twice.

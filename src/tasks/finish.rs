@@ -46,7 +46,7 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
         }
     }
     notice.push_str(" Drop any review or recommendation about it.");
-    if let Err(error) = messages::log_for_lead(&notice, None) {
+    if let Err(error) = messages::to_lead(messages::ToLead::TaskEnded, &notice) {
         eprintln!("Could not tell the lead: {error}");
     }
     shown.ok()
@@ -150,15 +150,15 @@ pub(super) fn finish(repo: &Path, slot: &Slot, upstream: &str, state: &Path, vau
             Some(cli) => match crate::task_note::release(cli, state, &item, task) {
                 crate::vault_cli::Released::Held(claim) => {
                     said.push(crate::task_note::held_text(&item, &claim, crate::backlog::today()));
-                    messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but {} on {} has taken over its note {item}, so kebbie left the note open: settle it with the user.", claim.task, claim.machine))
+                    messages::to_lead(messages::ToLead::NoteUnsettled, &format!("{task} is done and its commits are on the default branch, but {} on {} has taken over its note {item}, so kebbie left the note open: settle it with the user.", claim.task, claim.machine))
                 }
                 crate::vault_cli::Released::Gone => {
                     said.push(crate::task_note::gone_text(&item));
-                    messages::log_for_lead(&format!("{task} is done and its commits are on the default branch; its note {item} is gone from the vault, so there was nothing to close."), None)
+                    messages::to_lead(messages::ToLead::TaskEnded, &format!("{task} is done and its commits are on the default branch; its note {item} is gone from the vault, so there was nothing to close."))
                 }
                 crate::vault_cli::Released::Done => close_note(cli, task, &item, &mut said),
             },
-            None => messages::notify_lead(&crate::backlog::done_notice(task, &item)),
+            None => messages::to_lead(messages::ToLead::NoteUnsettled, &crate::backlog::done_notice(task, &item)),
         };
         if let Err(error) = told {
             eprintln!("Could not tell the lead: {error}");
@@ -179,11 +179,11 @@ fn close_note(cli: &crate::vault_cli::Cli, task: &str, item: &str, said: &mut Ve
     match crate::task_note::close(cli, item) {
         Ok(path) => {
             said.push(format!("closed ({path})"));
-            messages::log_for_lead(&format!("{task} is done and its commits are on the default branch; kebbie closed its note {item}."), None)
+            messages::to_lead(messages::ToLead::TaskEnded, &format!("{task} is done and its commits are on the default branch; kebbie closed its note {item}."))
         }
         Err(error) => {
             said.push(format!("{item} could not be closed ({error})"));
-            messages::notify_lead(&format!("{task} is done and its commits are on the default branch, but kebbie could not close its note {item} ({error}): close it with the vault tools."))
+            messages::to_lead(messages::ToLead::NoteUnsettled, &format!("{task} is done and its commits are on the default branch, but kebbie could not close its note {item} ({error}): close it with the vault tools."))
         }
     }
 }

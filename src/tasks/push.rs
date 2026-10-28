@@ -417,7 +417,7 @@ pub(super) fn cancel_as(state: &Path, caller: &Caller, repo: &Path, slot: &Slot)
         return Notice::new(Tone::NotNow, "Not in the push line any more").detail("task", task).err();
     }
     leave_line(state, repo, slot, &address);
-    if let Err(error) = messages::log_for_lead(&format!("{} took {address} out of the push line before it went out; nothing of it was pushed.", capitalized(by.word())), Some("push")) {
+    if let Err(error) = messages::to_lead(messages::ToLead::PushCancelled, &format!("{} took {address} out of the push line before it went out; nothing of it was pushed.", capitalized(by.word()))) {
         eprintln!("Could not tell the lead: {error}");
     }
     Notice::new(Tone::Done, "Taken out of the push line").next("Nothing was pushed; it waits under Ready to push.").detail("task", task).ok()
@@ -519,7 +519,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
                     .you("Push again; if this repeats, rebase it yourself in its worktree.").detail("task", &task).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
             }
             crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushHanded);
-            tell_lead(&format!("{} pushed {address}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kebbie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line meanwhile, for up to {} minutes.", capitalized(pusher), by.word(), super::line::CEILING / 60), Some("push"));
+            tell_lead(&format!("{} pushed {address}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kebbie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line meanwhile, for up to {} minutes.", capitalized(pusher), by.word(), super::line::CEILING / 60));
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: it conflicts with {}", main_of(&upstream)))
                 .next(format!("Its Claude resolves the conflict, the reviewer checks the result against the rules, then kebbie pushes it{}.", for_whom(pusher))).detail("task", &task).to_string()));
         }
@@ -597,7 +597,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged);
     if !keep_open {
         if matches!(watch, crate::ci::Begin::Watching) {
-            if let Err(error) = messages::log_for_lead(&format!("{} pushed {address}: {} to {target}. kebbie watches CI for {short} and closes the task once every run is green; you hear what landed then.", capitalized(pusher), plural(count, "commit")), None) {
+            if let Err(error) = messages::to_lead(messages::ToLead::Pushed, &format!("{} pushed {address}: {} to {target}. kebbie watches CI for {short} and closes the task once every run is green; you hear what landed then.", capitalized(pusher), plural(count, "commit"))) {
                 eprintln!("Could not tell the lead about the push: {error}");
             }
             let notice = Notice::new(Tone::Done, headline(false)).next("CI runs now; kebbie closes the task when it is green.").detail("task", &task).detail("commit", short).detail("log", &logged);
@@ -650,8 +650,8 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     Ok(said(Notice::new(Tone::Done, headline(true)).next(after)).detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string())
 }
 
-fn tell_lead(text: &str, kind: Option<&str>) {
-    if let Err(error) = messages::tell_lead(text, kind) {
+fn tell_lead(text: &str) {
+    if let Err(error) = messages::to_lead(messages::ToLead::PushRebasing, text) {
         eprintln!("Could not tell the lead: {error}");
     }
 }
@@ -748,7 +748,7 @@ fn pushed_notice(landed: &Landed) -> String {
 
 // Only a push kebbie logged itself leaves the lead nothing to do now; without that, the notice asks it to write the log line.
 fn tell_lead_pushed(landed: &Landed) {
-    let told = if landed.logged != Some(true) { messages::tell_lead(&pushed_notice(landed), Some("push")) } else { messages::log_for_lead(&pushed_notice(landed), Some("push")) };
+    let told = messages::to_lead(if landed.logged != Some(true) { messages::ToLead::PushToLog } else { messages::ToLead::Landed }, &pushed_notice(landed));
     if let Err(error) = told {
         eprintln!("Could not tell the lead about the push: {error}");
     }
@@ -846,9 +846,9 @@ mod tests {
         let source = include_str!("push.rs");
         let tell = &source[source.find("fn tell_lead_pushed").unwrap()..];
         let tell = &tell[..tell.find("\n}\n").unwrap()];
-        assert!(tell.contains("landed.logged != Some(true) { messages::tell_lead(") && tell.contains("messages::log_for_lead(&pushed_notice(landed), Some(\"push\"))"), "{tell}");
+        assert!(tell.contains("if landed.logged != Some(true) { messages::ToLead::PushToLog } else { messages::ToLead::Landed }"), "{tell}");
         let deliver = &source[source.find("\nfn deliver(").unwrap()..];
-        assert!(deliver[..deliver.find("\n}\n").unwrap()].contains("messages::log_for_lead(&format!(\"{} pushed {address}: {} to {target}. kebbie watches CI"), "the push under CI watch is a notice for the digest, not a turn of the lead's");
+        assert!(deliver[..deliver.find("\n}\n").unwrap()].contains("messages::to_lead(messages::ToLead::Pushed, &format!(\"{} pushed {address}: {} to {target}. kebbie watches CI"), "the push under CI watch is a notice for the digest, not a turn of the lead's");
     }
 
     #[test]

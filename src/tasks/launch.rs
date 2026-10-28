@@ -437,7 +437,7 @@ pub(crate) fn task_role(cwd: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
     if let Some(why) = fell_back {
         let said = format!("{} restarts as the built-in task: {why}.", peers::address(&task, &name_of(&repo)));
         eprintln!("{said}");
-        if let Err(error) = messages::log_for_lead(&said, None) {
+        if let Err(error) = messages::to_lead(messages::ToLead::TaskRestarted, &said) {
             eprintln!("Could not tell the lead: {error}");
         }
     }
@@ -987,7 +987,7 @@ mod tests {
         assert!(body("launch").contains("profile: Some(profile.name.clone())") && body("launch").contains("record_text(&record)"), "every start records the profile it ran with");
         assert!(body("begin").contains("recorded_session(&task, &repo).profile") && body("begin").find("task_profile(").unwrap() < body("begin").find("fetch(").unwrap(), "a running task keeps its profile, and a missing one is refused before a worktree is claimed");
         assert!(body("task_role").contains("recorded_session(&task, &repo).profile"), "kebbie restart writes the role and settings of the profile the task started with");
-        assert!(body("begin").contains("detail(\"careful\", why)") && body("task_role").contains("messages::log_for_lead(&said, None)"), "a recorded profile that no longer loads is said where the restart reports, and the restart goes on");
+        assert!(body("begin").contains("detail(\"careful\", why)") && body("task_role").contains("messages::to_lead(messages::ToLead::TaskRestarted, &said)"), "a recorded profile that no longer loads is said where the restart reports, and the restart goes on");
     }
 
     #[test]

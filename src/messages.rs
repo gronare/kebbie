@@ -673,12 +673,122 @@ pub fn tell(cwd: &Path, to: &str, text: &str) -> Result<String> {
     Ok(send(&from, &recipients, text.trim(), &sessions)?.join("\n"))
 }
 
-// kebbie's own word to the lead, for a change it would otherwise learn of from stale reports.
-pub fn notify_lead(text: &str) -> Result<()> {
-    let text = &crate::status::with_titles(text);
-    let sessions = peers::sessions()?;
-    let Ok(lead) = peers::resolve(LEAD_LABEL, "kebbie", &sessions) else { return Ok(()) };
-    send("kebbie", &lead, text, &sessions).map(|_| ())
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Class {
+    Informs,
+    Asks,
+}
+
+// Every kind of word that reaches the lead. Informs never start a lead turn: they wait in its digest for the user's next prompt (live only while the user is away). Asks are typed into the lead's chat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ToLead {
+    TaskStarted,
+    TaskRestarted,
+    TaskEnded,
+    Pushed,
+    PushCancelled,
+    PushRebasing,
+    Staged,
+    Landed,
+    CiGreen,
+    CiHanded,
+    CiDismissed,
+    RebaseHanded,
+    RebaseStuck,
+    ReviewPassed,
+    ReviewAgain,
+    ReviewWithdrawn,
+    RulesBreak,
+    Notice,
+    Findings,
+    RulesCheck,
+    Prompt,
+    PushFailed,
+    PushToLog,
+    RedCi,
+    CiOutside,
+    ChainBlocked,
+    NoteUnsettled,
+    TaskStopped,
+    Permission,
+    Away,
+    // A task's own `kebbie tell lead`, typed as any tell is.
+    #[allow(dead_code)]
+    TaskMessage,
+    QuestionCopy,
+}
+
+impl ToLead {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const ALL: [ToLead; 32] = [
+        ToLead::TaskStarted, ToLead::TaskRestarted, ToLead::TaskEnded, ToLead::Pushed, ToLead::PushCancelled, ToLead::PushRebasing, ToLead::Staged, ToLead::Landed,
+        ToLead::CiGreen, ToLead::CiHanded, ToLead::CiDismissed, ToLead::RebaseHanded, ToLead::RebaseStuck, ToLead::ReviewPassed, ToLead::ReviewAgain, ToLead::ReviewWithdrawn,
+        ToLead::RulesBreak, ToLead::Notice, ToLead::Findings, ToLead::RulesCheck, ToLead::Prompt, ToLead::PushFailed, ToLead::PushToLog, ToLead::RedCi,
+        ToLead::CiOutside, ToLead::ChainBlocked, ToLead::NoteUnsettled, ToLead::TaskStopped, ToLead::Permission, ToLead::Away, ToLead::TaskMessage, ToLead::QuestionCopy,
+    ];
+
+    // The one table: whether the lead has something to do, and the kind its log record carries (the away summary reads "push" and "after").
+    pub fn route(self) -> (Class, Option<&'static str>) {
+        use Class::{Asks, Informs};
+        match self {
+            ToLead::TaskStarted => (Informs, Some("after")),
+            ToLead::TaskRestarted => (Informs, None),
+            ToLead::TaskEnded => (Informs, None),
+            ToLead::Pushed => (Informs, None),
+            ToLead::PushCancelled => (Informs, Some("push")),
+            ToLead::PushRebasing => (Informs, Some("push")),
+            ToLead::Staged => (Informs, Some("push")),
+            ToLead::Landed => (Informs, Some("landed")),
+            ToLead::CiGreen => (Informs, Some("ci")),
+            ToLead::CiHanded => (Informs, Some("ci")),
+            ToLead::CiDismissed => (Informs, Some("ci")),
+            ToLead::RebaseHanded => (Informs, Some("follow")),
+            ToLead::RebaseStuck => (Informs, Some("follow")),
+            ToLead::ReviewPassed => (Informs, None),
+            ToLead::ReviewAgain => (Informs, None),
+            ToLead::ReviewWithdrawn => (Informs, None),
+            ToLead::RulesBreak => (Informs, None),
+            ToLead::Notice => (Informs, Some(NOTICE_KIND)),
+            ToLead::Findings => (Asks, None),
+            ToLead::RulesCheck => (Asks, Some(RULES_KIND)),
+            ToLead::Prompt => (Asks, Some(crate::menu::KIND)),
+            ToLead::PushFailed => (Asks, Some("push")),
+            ToLead::PushToLog => (Asks, Some("push")),
+            ToLead::RedCi => (Asks, Some("ci")),
+            ToLead::CiOutside => (Asks, Some("ci")),
+            ToLead::ChainBlocked => (Asks, Some("after")),
+            ToLead::NoteUnsettled => (Asks, None),
+            ToLead::TaskStopped => (Asks, Some("recover")),
+            ToLead::Permission => (Asks, None),
+            ToLead::Away => (Asks, None),
+            ToLead::TaskMessage => (Asks, None),
+            ToLead::QuestionCopy => (Asks, Some("copy")),
+        }
+    }
+
+    pub fn class(self) -> Class {
+        self.route().0
+    }
+
+    pub fn kind(self) -> Option<&'static str> {
+        self.route().1
+    }
+}
+
+// kebbie's word to the lead, routed by its class: an inform to the digest, an ask into the lead's chat (held while it cannot take it, and kept until a lead runs).
+pub fn to_lead(what: ToLead, text: &str) -> Result<()> {
+    let dir = state_dir()?;
+    if what == ToLead::RulesCheck {
+        return ask_lead(text).map(|_| ());
+    }
+    to_lead_in(&dir, what, &crate::status::with_titles_in(&dir, text), &mut tell_lead)
+}
+
+fn to_lead_in(dir: &Path, what: ToLead, text: &str, ask: &mut dyn FnMut(&str, Option<&str>) -> Result<()>) -> Result<()> {
+    match what.class() {
+        Class::Informs => fyi_or_live_in(dir, text, what.kind(), ask),
+        Class::Asks => ask(text, what.kind()),
+    }
 }
 
 // kebbie's own word to a task, typed in as any message is.
@@ -687,7 +797,7 @@ pub fn tell_from_kebbie(recipients: &[&Session], text: &str, sessions: &[Session
 }
 
 // kebbie's word to the lead that must not be lost: with no lead session yet, it waits in the log and reaches the lead once one runs.
-pub fn tell_lead(text: &str, kind: Option<&str>) -> Result<()> {
+fn tell_lead(text: &str, kind: Option<&str>) -> Result<()> {
     let text = &crate::status::with_titles(text);
     let sessions = peers::sessions().unwrap_or_default();
     let _lock = Lock::take(true)?;
@@ -709,12 +819,6 @@ fn notice_locked_in(dir: &Path, session: &Session, text: &str, sessions: &[Sessi
         return Ok(vec![format!("Logged for {LEAD_LABEL}.")]);
     }
     send_locked_in(dir, "kebbie", &[session], text, sessions, None, Some(NOTICE_KIND), type_into)
-}
-
-// kebbie's word to the lead that needs no turn of its own (a push, a close, a start): on the board, and in the lead's digest with the user's next prompt.
-pub fn log_for_lead(text: &str, kind: Option<&str>) -> Result<()> {
-    let dir = state_dir()?;
-    fyi_or_live_in(&dir, &crate::status::with_titles_in(&dir, text), kind, &mut tell_lead)
 }
 
 // While the user is away the lead answers for them and writes their summary, so it hears kebbie's notices live.
@@ -757,11 +861,11 @@ pub fn hold_for(from: &str, to: &str, text: &str, about: Option<&str>, kind: Opt
 pub fn copy_to_lead_locked(text: &str, about: Option<&str>, sessions: &[Session]) -> Result<()> {
     let text = &crate::status::with_titles(text);
     if crate::permit::away_since().is_none() {
-        return append(&json!({ "id": new_id("copy"), "at": now(), "from": "kebbie", "to": LEAD_LABEL, "text": text, "state": "logged", "kind": "copy", "about": about }));
+        return append(&json!({ "id": new_id("copy"), "at": now(), "from": "kebbie", "to": LEAD_LABEL, "text": text, "state": "logged", "kind": ToLead::QuestionCopy.kind(), "about": about }));
     }
     match sessions.iter().find(|session| session.address == LEAD_LABEL) {
-        Some(lead) => send_locked("kebbie", &[lead], text, sessions, about, Some("copy")).map(|_| ()),
-        None => hold_for("kebbie", LEAD_LABEL, text, about, Some("copy")),
+        Some(lead) => send_locked("kebbie", &[lead], text, sessions, about, ToLead::QuestionCopy.kind()).map(|_| ()),
+        None => hold_for("kebbie", LEAD_LABEL, text, about, ToLead::QuestionCopy.kind()),
     }
 }
 
@@ -903,10 +1007,10 @@ fn unread_in(dir: &Path) -> Result<String> {
     let copies = copies_for_lead(&messages, seen);
     let told: Vec<&Message> = copies.iter().copied().filter(|message| is_told(message)).collect();
     let board: Vec<String> = copies.iter().filter(|message| is_copy(message)).map(|message| format!("- {}", indented(&message.text))).collect();
-    let notices: Vec<String> = copies.iter().filter(|message| message.fyi).map(|message| format!("- {}", indented(&message.text))).collect();
+    let notices: Vec<&Message> = copies.iter().copied().filter(|message| message.fyi).collect();
     let mut sections = Vec::new();
     if !notices.is_empty() {
-        sections.push(format!("kebbie's notices since you last looked (pushes, closes, starts, updates; nothing to answer):\n{}", notices.join("\n")));
+        sections.push(format!("kebbie's notices since you last looked, by task (pushes, closes, starts, reviews, updates; nothing to answer):\n{}", by_task(dir, &notices, |message| format!("- {}", indented(&message.text))).join("\n")));
     }
     if !board.is_empty() {
         sections.push(format!("Questions on the board since you last looked (the user answers them there; these are your copies):\n{}", board.join("\n")));
@@ -925,6 +1029,40 @@ fn unread_in(dir: &Path) -> Result<String> {
         sections.push(format!("Task reports since you last looked (each task's latest; kebbie status --json has them all):\n{}", lines.join("\n")));
     }
     Ok(sections.join("\n\n"))
+}
+
+// The first task address a text names, as kebbie writes them: name@repo.
+pub fn address_in(text: &str) -> Option<&str> {
+    let name = |character: char| character.is_ascii_alphanumeric() || matches!(character, '-' | '_');
+    text.match_indices('@').find_map(|(at, _)| {
+        let start = text[..at].char_indices().rev().find(|(_, character)| !name(*character)).map_or(0, |(index, character)| index + character.len_utf8());
+        let end = text[at + 1..].find(|character: char| !(name(character) || character == '.')).map_or(text.len(), |index| at + 1 + index);
+        let address = text[start..end].trim_end_matches('.');
+        (start < at && address.len() > at + 1 - start).then_some(address)
+    })
+}
+
+// The task a message to the lead is about: the task that sent it, or the first one its text names.
+pub fn task_about(message: &Message) -> Option<&str> {
+    if message.from.contains('@') { Some(message.from.as_str()) } else { address_in(&message.text) }
+}
+
+// Lines grouped under each task's "title (name)", in the order the tasks first come up, with what names no task last.
+fn by_task(dir: &Path, messages: &[&Message], line: impl Fn(&Message) -> String) -> Vec<String> {
+    let mut groups: Vec<(Option<&str>, Vec<String>)> = Vec::new();
+    for message in messages {
+        let task = task_about(message);
+        match groups.iter_mut().find(|(named, _)| *named == task) {
+            Some((_, lines)) => lines.push(line(message)),
+            None => groups.push((task, vec![line(message)])),
+        }
+    }
+    groups.sort_by_key(|(task, _)| task.is_none());
+    let several = groups.len() > 1 || groups.iter().any(|(task, _)| task.is_some());
+    groups.into_iter().flat_map(|(task, lines)| {
+        let head = several.then(|| task.map_or("Other".to_string(), |task| crate::status::with_titles_in(dir, task)));
+        head.into_iter().chain(lines)
+    }).collect()
 }
 
 // What sessions said to each other: not a report, a task's end marker, a question, an answer from the board, the lead's copy of one, or a task's own prompt waiting to be typed.
@@ -1904,6 +2042,46 @@ mod tests {
         ask_lead_in(&dir, &check("0a0b0c0"), std::slice::from_ref(&held), &mut type_into, &|_, _| false).unwrap();
         ask_lead_in(&dir, &check("0a0b0c0"), std::slice::from_ref(&held), &mut type_into, &|_, _| false).unwrap();
         assert_eq!(load_in(&dir).iter().filter(|message| message.text.contains("0a0b0c0")).count(), 1, "a check still held is not queued twice");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn every_word_to_the_lead_is_classified_and_only_an_ask_reaches_its_chat() {
+        let source = include_str!("messages.rs");
+        let body = &source[source.find("pub enum ToLead {").unwrap()..];
+        let variants = body[..body.find("\n}").unwrap()].lines().filter(|line| line.trim_end().ends_with(',')).count();
+        assert_eq!(ToLead::ALL.len(), variants, "ALL lists every kind");
+        assert_eq!(ToLead::ALL.iter().collect::<HashSet<_>>().len(), variants);
+        use ToLead::*;
+        let informs = [TaskStarted, TaskRestarted, TaskEnded, Pushed, PushCancelled, PushRebasing, Staged, Landed, CiGreen, CiHanded, CiDismissed, RebaseHanded, RebaseStuck, ReviewPassed, ReviewAgain, ReviewWithdrawn, RulesBreak, Notice];
+        for what in ToLead::ALL {
+            assert_eq!(what.class() == Class::Informs, informs.contains(&what), "{what:?}");
+        }
+        assert_eq!((RulesCheck.kind(), Prompt.kind(), PushFailed.kind(), TaskStarted.kind()), (Some(RULES_KIND), Some(crate::menu::KIND), Some("push"), Some("after")), "the kinds the board, the away summary and the rules check read");
+        let dir = state("to-lead");
+        let asked = RefCell::new(Vec::new());
+        let mut ask = |text: &str, kind: Option<&str>| { asked.borrow_mut().push((text.to_string(), kind.map(str::to_string))); Ok(()) };
+        to_lead_in(&dir, ReviewPassed, "billing@web reviewed at a1b2c3d: ok — /v", &mut ask).unwrap();
+        to_lead_in(&dir, CiHanded, "CI failed for billing@web (a1b2c3d): test. kebbie sent the task the failing log", &mut ask).unwrap();
+        to_lead_in(&dir, Findings, "billing@web reviewed at a1b2c3d: 2 findings — /v", &mut ask).unwrap();
+        assert_eq!(asked.borrow().as_slice(), [("billing@web reviewed at a1b2c3d: 2 findings — /v".to_string(), None)], "only the findings are typed");
+        let logged = load_in(&dir);
+        assert!(logged.len() == 2 && logged.iter().all(|message| message.fyi && !message.held), "informs wait in the digest: {logged:?}");
+        crate::permit::set_away_in(&dir, true, 1).unwrap();
+        to_lead_in(&dir, Landed, "The user pushed billing@web", &mut ask).unwrap();
+        assert_eq!(asked.borrow().len(), 2, "while the user is away the lead hears informs live, as before");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_digest_groups_kebbies_notices_under_each_task() {
+        let dir = state("digest-groups");
+        for text in ["billing@web reviewed at a1b2c3d: ok — /v", "Fix (shop@web) started: its start time came.", "kebbie was updated to 0.30.0", "The user pushed billing@web: 1 commit to main."] {
+            log_for_lead_in(&dir, text, None).unwrap();
+        }
+        let digest = unread_in(&dir).unwrap();
+        assert_eq!(digest, "kebbie's notices since you last looked, by task (pushes, closes, starts, reviews, updates; nothing to answer):\nbilling@web\n- billing@web reviewed at a1b2c3d: ok — /v\n- The user pushed billing@web: 1 commit to main.\nshop@web\n- Fix (shop@web) started: its start time came.\nOther\n- kebbie was updated to 0.30.0");
+        assert_eq!((address_in("“Fix” (fix-it@kebbie.app). Then"), address_in("mail me@ nothing"), address_in("@web")), (Some("fix-it@kebbie.app"), None, None));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

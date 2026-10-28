@@ -54,7 +54,7 @@ pub(crate) fn outside_as(state: &Path, caller: &Caller, reason: &str) -> Result<
     record["outside"] = json!({ "reason": reason.trim(), "sha": watch.sha, "at": messages::now() });
     crate::state::write(&file(state, address), record.to_string())?;
     let text = format!("{address} says the red CI on {} is outside the code: {}. Only the user can dismiss it (kebbie ci dismiss).", watch.short(), reason.trim());
-    if let Err(error) = messages::tell_lead(&text, Some("ci")) {
+    if let Err(error) = messages::to_lead(messages::ToLead::CiOutside, &text) {
         eprintln!("Could not tell the lead: {error}");
     }
     Notice::new(Tone::Done, "Recorded: the red CI is outside the code").next("The board says so on its row; the user decides whether to dismiss it.").detail("task", address).ok()
@@ -93,7 +93,7 @@ pub(crate) fn dismiss_as(state: &Path, caller: &Caller, cwd: &Path, name: Option
     crate::phase::record(state, &address, "dismiss", &crate::phase::Event::Dismissed { kept_open: super::landed::kept_open(state, &address) });
     let then = if super::landed::kept_open(state, &address) { "It stays open, as the user chose when pushing it." } else { "kebbie closes the task once its commits are on the default branch." };
     let text = format!("The user dismissed the red CI of {address} on {}: {why}. {then}", watch.short());
-    if let Err(error) = messages::tell_lead(&text, Some("ci")) {
+    if let Err(error) = messages::to_lead(messages::ToLead::CiDismissed, &text) {
         eprintln!("Could not tell the lead: {error}");
     }
     Notice::new(Tone::Done, "Dismissed the red CI").next(then).detail("task", task).detail("why", why).ok()

@@ -498,7 +498,7 @@ fn green(state: &Path, watch: &Watch, what: String) -> Event {
         }
     } else {
         let text = format!("{what}, the commits pushed from {}.", watch.address);
-        if let Err(error) = messages::log_for_lead(&text, Some("ci")) {
+        if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &text) {
             eprintln!("Could not tell the lead: {error}");
         }
         text
@@ -567,7 +567,8 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
         ),
         None => format!("CI failed for {} ({}): {what}. kebbie sent the task the failing log; it stays open under Needs you. {}", watch.address, watch.short(), run.url),
     };
-    if let Err(error) = messages::tell_lead(&text, Some("ci")) {
+    let kind = if open && handed { messages::ToLead::CiHanded } else { messages::ToLead::RedCi };
+    if let Err(error) = messages::to_lead(kind, &text) {
         eprintln!("Could not tell the lead that CI failed: {error}");
     }
     notify::send(&watch.repo, &Notice::from(NotifyEvent::CiFailed, &watch.address, format!("{}: CI failed: {what}", watch.address)));

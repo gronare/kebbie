@@ -198,7 +198,7 @@ fn save_in(dir: &Path, address: &str, record: &Record) -> Result<()> {
 // kebbie started or resumed a session with this role; a resumed one is told, once it is free, what its new role brings.
 pub fn began(address: &str, role: &str, resumed: bool) {
     let done = crate::lead::roles_dir().and_then(|dir| began_in(&dir, address, &snapshot(role), resumed, &mut |text| {
-        if address == LEAD_LABEL { messages::log_for_lead(text, Some(messages::NOTICE_KIND)) } else { messages::hold_for(FROM, address, text, None, Some(messages::NOTICE_KIND)) }
+        if address == LEAD_LABEL { messages::to_lead(messages::ToLead::Notice, text) } else { messages::hold_for(FROM, address, text, None, Some(messages::NOTICE_KIND)) }
     }));
     if let Err(error) = done {
         eprintln!("Could not record which kebbie {address} runs: {error}");

@@ -420,7 +420,7 @@ pub fn tick(state: &Path) -> Vec<String> {
     };
     let world = World { repos: &repos, workspaces: &workspaces, agents: &agents, log: &log, gh: &crate::ci::gh(), began: messages::now(), fresh: Some(&fresh) };
     pass(state, &world, &mut close_for_real, &mut |text| {
-        if let Err(error) = messages::log_for_lead(text, Some("landed")) {
+        if let Err(error) = messages::to_lead(messages::ToLead::Landed, text) {
             eprintln!("Could not tell the lead: {error}");
         }
     })

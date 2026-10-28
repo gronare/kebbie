@@ -947,7 +947,9 @@ fn a_failed_run_sends_the_task_the_failing_job_and_its_log_and_keeps_it_under_th
     let failure = told.iter().find(|text| text.contains("CI failed for")).unwrap_or_else(|| panic!("the task hears it: {told:?}"));
     assert!(failure.contains("CI · test") && failure.contains("line 41") && failure.contains("line 100") && !failure.contains("line 40"), "{failure}");
     assert!(failure.contains("kebbie pushes it for the user once the lead has checked it"), "the fix is part of the user's push: {failure}");
-    assert!(prompts_to(&lab, "p_lead").iter().any(|text| text.contains("CI failed for billing@app") && text.contains("the reviewer checks the fix")), "{:?}", prompts_to(&lab, "p_lead"));
+    assert!(!prompts_to(&lab, "p_lead").iter().any(|text| text.contains("CI failed for billing@app")), "its task has the log, so the lead's turn is not started: {:?}", prompts_to(&lab, "p_lead"));
+    let digest = stdout(&lab.run(&["messages", "--unread"]));
+    assert!(digest.contains("CI failed for billing@app") && digest.contains("the reviewer checks the fix"), "the lead reads it with the user's next prompt: {digest}");
     let task = task_json(&lab);
     assert_eq!((task["group"].as_str(), task["push_waits"].as_str()), (Some("READY TO PUSH"), Some("user")), "the push is under way, not the user's to act on: {task}");
     assert_eq!(task["summary"], "pushing for you · its Claude fixes the red CI", "{task}");
