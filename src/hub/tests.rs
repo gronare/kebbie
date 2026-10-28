@@ -181,15 +181,47 @@ fn an_account_key_the_browser_did_not_commit_to_with_the_machines_secret_is_refu
 }
 
 #[test]
-fn leaving_forgets_the_keys_and_says_how_the_hub_drops_the_machine() {
+fn leaving_removes_the_machine_from_the_hub_and_forgets_the_keys() {
     let hub = open_hub(|_| {});
     let mut browser = member(&hub);
     let state = connected_state(&hub, &mut browser);
+    let token = identity::load(&state).unwrap().unwrap().token().to_string();
     relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
     assert_eq!(hub.boards(&mut browser).len(), 1);
     let left = super::leave(&state).unwrap();
-    assert!(left.contains("This machine left") && left.contains("remove-machine"), "{left}");
+    assert!(left.contains("This machine left") && left.contains("The hub removed the machine") && !left.contains("remove-machine"), "{left}");
     assert!(identity::load(&state).unwrap().is_none() && !state.join("hub").exists());
+    assert!(hub.boards(&mut browser).is_empty(), "the hub dropped the machine's board");
+    let refused = super::http::Client::new(&hub.url, Some(&token), super::http::CALL).post::<_, ()>("/v1/m/leave", &serde_json::json!({})).unwrap_err();
+    assert_eq!(refused.status(), Some(401), "the token is gone from the hub");
+}
+
+#[test]
+fn leaving_a_hub_that_knows_the_token_no_more_says_the_machine_is_gone() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
+    let (url, calls) = answering("401 Unauthorized", r#"{"error":"unauthorized"}"#);
+    pointed_at(&state, &url);
+    let left = super::leave(&state).unwrap();
+    assert!(left.contains("The hub removed the machine") && !left.contains("remove-machine"), "{left}");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(identity::load(&state).unwrap().is_none());
+}
+
+#[test]
+fn leaving_an_older_hub_or_one_that_cannot_be_reached_says_how_its_admin_removes_the_machine() {
+    let hub = open_hub(|_| {});
+    for (status, said) in [("404 Not Found", "This hub cannot remove a machine that leaves"), ("503 Service Unavailable", "The hub could not be told (the hub answered 503")] {
+        let mut browser = member(&hub);
+        let state = connected_state(&hub, &mut browser);
+        let machine = identity::load(&state).unwrap().unwrap().machine;
+        let (url, _) = answering(status, r#"{"error":"nope"}"#);
+        pointed_at(&state, &url);
+        let left = super::leave(&state).unwrap();
+        assert!(left.contains("This machine left") && left.contains(said) && left.contains(&format!("kebbie-hub admin remove-machine {machine}")), "{left}");
+        assert!(identity::load(&state).unwrap().is_none(), "leaving forgets the keys whatever the hub answered");
+    }
 }
 
 fn serving(respond: impl Fn(&str) -> String + Send + 'static) -> String {

@@ -334,10 +334,35 @@ pub fn move_to(state: &Path, url: &str) -> Result<String> {
     crate::notice::Notice::new(crate::notice::Tone::Done, format!("Moved from {before} to {}", identity.url)).next("The keeper posts the board there from now on.").ok()
 }
 
+#[derive(Debug, PartialEq)]
+enum Left {
+    Removed,
+    Kept,
+    Unsent(String),
+}
+
+// A 401 means the hub knows the token no more, which is the outcome leaving asks for.
+fn tell_hub(identity: &Identity) -> Left {
+    match Client::new(&identity.url, Some(identity.token()), CALL).post::<_, ()>("/v1/m/leave", &serde_json::json!({})) {
+        Ok(()) => Left::Removed,
+        Err(error) if error.status() == Some(401) => Left::Removed,
+        Err(error) if error.status() == Some(404) => Left::Kept,
+        Err(error) => Left::Unsent(error.to_string()),
+    }
+}
+
+// The hub is told before the token is forgotten, since the token is what lets the machine remove itself.
 pub fn leave(state: &Path) -> Result<String> {
     let Some(identity) = identity::load(state)? else { return Ok("Not connected to a hub; nothing to leave.".to_string()) };
+    let left = tell_hub(&identity);
     identity::forget(state)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, format!("This machine left {}", identity.url)).next(format!("The hub still lists machine {}; its admin removes it with kebbie-hub admin remove-machine {}.", identity.machine, identity.machine)).ok()
+    let notice = crate::notice::Notice::new(crate::notice::Tone::Done, format!("This machine left {}", identity.url));
+    let admin = format!("its admin removes it with kebbie-hub admin remove-machine {}", identity.machine);
+    match left {
+        Left::Removed => notice.next("The hub removed the machine and its board, and your phone no longer lists it."),
+        Left::Kept => notice.next(format!("This hub cannot remove a machine that leaves, so it still lists machine {}; {admin}.", identity.machine)),
+        Left::Unsent(error) => notice.next(format!("The hub could not be told ({error}), so it still lists machine {}; {admin}.", identity.machine)),
+    }.ok()
 }
 
 pub fn tick() -> Result<()> {

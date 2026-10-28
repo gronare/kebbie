@@ -141,6 +141,8 @@ kebbie checks only that the address answers as a hub, then sends the machine's t
 kebbie hub leave
 ```
 
-Or press `l` in the board's `H` window, then `y`. It forgets the keys, the token and the account key, and posts no more boards. The hub keeps a row for the machine, shown as asleep, until you remove it in the web app or the hub's admin removes it.
+Or press `l` in the board's `H` window, then `y`. It tells the hub, which removes the machine and its board, so your phone no longer lists it. Then it forgets the keys, the token and the account key, and posts no more boards.
+
+A hub too old to remove a machine that leaves, or one kebbie can't reach, keeps a row for the machine, shown as asleep. kebbie says so, and the hub's admin removes it with `kebbie-hub admin remove-machine <id>`.
 
 Every command: [The hub](../reference/commands.md#the-hub).

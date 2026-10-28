@@ -495,7 +495,7 @@ Connected, it looks like this:
 | Key | Action |
 | --- | --- |
 | `n` | Rename this machine: the field holds `[machine] name`, and `⏎` writes it to `config.toml`. |
-| `l` | Leave the hub, after `y`: the machine stops posting its board, and the keys, the token and the account key go. The command is `kebbie hub leave`. |
+| `l` | Leave the hub, after `y`: the hub removes the machine and its board, and the keys, the token and the account key go. The command is `kebbie hub leave`. |
 | `esc`, `q` | Close the window. |
 
 A new name is checked as [`machine.name`](configuration.md#keys) is. A `config.toml` that is a link is not written through; the window says where to set it. The keeper sends the new name to the hub on its next post.

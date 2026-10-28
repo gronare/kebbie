@@ -687,7 +687,7 @@ Show the board on your phone through a kebbie hub. See [See your board on your p
 | `kebbie hub connect [--name <name>]` | Connect this machine to a hub through your browser. See [below](#kebbie-hub-connect). |
 | `kebbie hub join <url> <code> [--name <name>]` | For scripts: join the hub at `<url>` with a code from `kebbie-hub admin join-code`. |
 | `kebbie hub move <url>` | The hub moved to `<url>`: post there from now on with the machine's token. |
-| `kebbie hub leave` | Leave the hub: forget the hub, the keys, the account key and the token. |
+| `kebbie hub leave` | Leave the hub: remove the machine from it, then forget the hub, the keys, the account key and the token. |
 
 `kebbie hub status`:
 
@@ -705,7 +705,7 @@ Show the board on your phone through a kebbie hub. See [See your board on your p
 
 `kebbie hub move` checks only that the new address answers `/healthz`, without sending the token. That check proves nothing about who runs it, so the address is yours to check: move only to a hub you run or trust.
 
-After `kebbie hub leave`, the hub lists the machine, asleep, until you remove it in the web app or its admin runs `kebbie-hub admin remove-machine <id>`.
+`kebbie hub leave` sends `POST /v1/m/leave` with the machine's token before it forgets anything, and the hub removes the machine, its board and its token. A hub that knows the token no more counts as left. A hub without the call, or one that does not answer, lists the machine, asleep, until its admin runs `kebbie-hub admin remove-machine <id>`; kebbie says which, and forgets the keys either way.
 
 A hub with plans keeps taking the machine's posts while the subscription has lapsed. When a hub refuses one for a lapsed subscription, kebbie says `Your kebbie hub subscription isn't active:` with the hub's link, in `kebbie hub status`, `kebbie doctor`, a line on the board and its `H` window, and everything on the machine keeps working.
 
