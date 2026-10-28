@@ -7,7 +7,9 @@ use crate::repo::{git, main_checkout};
 use crate::sh::Result;
 
 pub const TOKEN_VAR: &str = "KEBBIE_PUSH_TOKEN";
-const BLOCKED: &str = "kebbie-blocks-push:";
+// A scheme git hands to a remote helper, and protocol.<scheme>.allow = never refuses it before any helper, ssh or lookup runs; a bare host: prefix would read as an ssh host.
+const BLOCKED_SCHEME: &str = "kebbie-blocks-push";
+const OLD_BLOCKED: &str = "kebbie-blocks-push:";
 const KELPIE_BLOCKED: &str = "kelpie-blocks-push:";
 const KELPIE_HOOKS: &str = "kelpie-hooks";
 // git takes the longest matching pushInsteadOf, so these map a local path or file:// URL onto itself past the block's empty prefix.
@@ -104,7 +106,8 @@ pub fn unsupported(worktree: &Path) -> Result<Option<String>> {
 
 // Every network URL becomes one git cannot push to; a local path or file:// URL stays itself, so a temp repo a test makes takes its push.
 pub fn url_rules() -> Vec<(String, String)> {
-    std::iter::once((format!("url.{BLOCKED}.pushInsteadOf"), String::new())).chain(LOCAL.iter().map(|local| (format!("url.{local}.pushInsteadOf"), local.to_string()))).collect()
+    [(format!("url.{BLOCKED_SCHEME}://.pushInsteadOf"), String::new()), (format!("protocol.{BLOCKED_SCHEME}.allow"), "never".to_string())].into_iter()
+        .chain(LOCAL.iter().map(|local| (format!("url.{local}.pushInsteadOf"), local.to_string()))).collect()
 }
 
 // The same rules as GIT_CONFIG_* variables, for every git a task's shell runs.
@@ -124,17 +127,30 @@ pub fn kelpie_era(worktree: &Path) -> bool {
     hooks.lines().any(|path| path.trim_end_matches('/').ends_with(KELPIE_HOOKS)) || git(worktree, &["config", "--worktree", "--get-all", &format!("url.{KELPIE_BLOCKED}.pushInsteadOf")]).is_ok()
 }
 
-// Every pooled worktree of these repos whose block kelpie installed.
-pub fn kelpie_era_worktrees(repos: &[PathBuf]) -> Vec<PathBuf> {
-    repos.iter().filter_map(|repo| crate::tasks::slots(repo).ok()).flatten().map(|slot| slot.path).filter(|path| kelpie_era(path)).collect()
+// A worktree whose block an earlier kebbie installed with the host: rewrite, under which git push git@host:path starts ssh.
+pub fn old_rule(worktree: &Path) -> bool {
+    git(worktree, &["config", "--worktree", "--get-all", &format!("url.{OLD_BLOCKED}.pushInsteadOf")]).is_ok()
 }
 
-// kebbie's block installed again where kelpie's was, one line for each worktree.
+fn pooled(repos: &[PathBuf]) -> impl Iterator<Item = PathBuf> + '_ {
+    repos.iter().filter_map(|repo| crate::tasks::slots(repo).ok()).flatten().map(|slot| slot.path)
+}
+
+// Every pooled worktree of these repos whose block kelpie installed.
+pub fn kelpie_era_worktrees(repos: &[PathBuf]) -> Vec<PathBuf> {
+    pooled(repos).filter(|path| kelpie_era(path)).collect()
+}
+
+// kebbie's block installed again where kelpie's was, or where an earlier kebbie's rewrite is, one line for each worktree.
 pub fn move_from_kelpie(repos: &[PathBuf], state: &Path) -> Vec<String> {
-    kelpie_era_worktrees(repos).into_iter().map(|worktree| match install(&worktree, state) {
-        Ok(Block::On) => format!("{}: push block moved over from kelpie", worktree.display()),
-        Ok(Block::Off(why)) => format!("{}: kelpie's push block stays: {why}", worktree.display()),
-        Err(error) => format!("{}: kelpie's push block could not be moved over: {error}", worktree.display()),
+    pooled(repos).filter_map(|worktree| {
+        let from = if kelpie_era(&worktree) { "kelpie's" } else if old_rule(&worktree) { "the earlier" } else { return None };
+        Some(match install(&worktree, state) {
+            Ok(Block::On) if from == "kelpie's" => format!("{}: push block moved over from kelpie", worktree.display()),
+            Ok(Block::On) => format!("{}: push block renewed", worktree.display()),
+            Ok(Block::Off(why)) => format!("{}: {from} push block stays: {why}", worktree.display()),
+            Err(error) => format!("{}: {from} push block could not be replaced: {error}", worktree.display()),
+        })
     }).collect()
 }
 
@@ -155,7 +171,9 @@ pub fn install(worktree: &Path, state: &Path) -> Result<Block> {
     git(worktree, &["config", "extensions.worktreeConfig", "true"])?;
     let _ = git(worktree, &["config", "--worktree", "--unset-all", "core.hooksPath"]);
     git(worktree, &["config", "--worktree", "core.hooksPath", &dir.to_string_lossy()])?;
-    let _ = git(worktree, &["config", "--worktree", "--unset-all", &format!("url.{KELPIE_BLOCKED}.pushInsteadOf")]);
+    for old in [KELPIE_BLOCKED, OLD_BLOCKED] {
+        let _ = git(worktree, &["config", "--worktree", "--unset-all", &format!("url.{old}.pushInsteadOf")]);
+    }
     if let Some(parent) = dir.parent() {
         let _ = fs::remove_dir_all(parent.join(KELPIE_HOOKS));
     }
@@ -467,7 +485,26 @@ mod tests {
         fs::remove_dir_all(&fixture.base).unwrap();
     }
 
-    const NETWORK: [&str; 5] = ["https://github.com/acme/app.git", "http://git.example/acme/app.git", "git@github.com:acme/app.git", "ssh://git@github.com/acme/app.git", "git://git.example/acme/app.git"];
+    const NETWORK: [&str; 6] = ["https://github.com/acme/app.git", "http://git.example/acme/app.git", "git@github.com:acme/app.git", "github.com:acme/app.git", "ssh://git@github.com/acme/app.git", "git://git.example/acme/app.git"];
+
+    // An ssh and a remote helper that each leave a mark, so a test sees whether git started either.
+    fn tripwires(base: &Path) -> (Vec<(String, String)>, PathBuf) {
+        let (bin, mark) = (base.join("tripwire-bin"), base.join("tripwire-ran"));
+        fs::create_dir_all(&bin).unwrap();
+        let script = format!("#!/bin/sh\necho \"$0 $*\" >> {}\nexit 1\n", quoted(&mark.to_string_lossy()));
+        for name in ["ssh", "git-remote-kebbie-blocks-push", "git-remote-https", "git-remote-http"] {
+            crate::executable::write(bin.join(name), &script).unwrap();
+        }
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        (vec![("PATH".to_string(), path), ("GIT_SSH_COMMAND".to_string(), bin.join("ssh").to_string_lossy().to_string()), ("GIT_TRACE".to_string(), "1".to_string())], mark)
+    }
+
+    fn started_nothing(output: &std::process::Output, mark: &Path, what: &str) {
+        let said = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success() && said.contains("transport 'kebbie-blocks-push' not allowed"), "{what} got past the rewrite: {said}");
+        assert!(!said.contains("run_command"), "{what} started a process: {said}");
+        assert!(!mark.exists(), "{what} ran {}", fs::read_to_string(mark).unwrap_or_default());
+    }
 
     #[test]
     fn the_pushurl_rewrite_catches_every_network_url_a_task_could_push_to_and_lets_a_local_one_through() {
@@ -475,11 +512,11 @@ mod tests {
         let Fixture { base, slot, state, .. } = &fixture;
         install(slot, state).unwrap();
         commit(slot, "b");
+        let (wires, mark) = tripwires(base);
+        let wires: Vec<(&str, &str)> = wires.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
         for remote in NETWORK {
             for args in [&["push", "--no-verify", remote, "HEAD:refs/heads/elsewhere"][..], &["-c", "core.hooksPath=/dev/null", "push", remote, "HEAD:refs/heads/elsewhere"], &["push", "--no-verify", "--mirror", remote]] {
-                let output = run(slot, args, &[]);
-                let said = String::from_utf8_lossy(&output.stderr);
-                assert!(!output.status.success() && said.contains("kebbie-blocks-push"), "git {args:?} got past the rewrite: {said}");
+                started_nothing(&run(slot, args, &wires), &mark, &format!("git {args:?}"));
             }
         }
         let local = base.join("scratch.git");
@@ -501,11 +538,12 @@ mod tests {
         git(&work, &["init", "--quiet", "--initial-branch=main"]).unwrap();
         commit(&work, "a");
         git(&base, &["init", "--quiet", "--bare", &local.to_string_lossy()]).unwrap();
-        let vars = env_vars();
+        let (wires, mark) = tripwires(&base);
+        let mut vars = env_vars();
+        vars.extend(wires);
         let env: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
         for remote in NETWORK {
-            let output = run(&work, &["push", remote, "HEAD:main"], &env);
-            assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("kebbie-blocks-push"), "{remote}: {}", String::from_utf8_lossy(&output.stderr));
+            started_nothing(&run(&work, &["push", remote, "HEAD:main"], &env), &mark, remote);
         }
         for remote in [local.to_string_lossy().to_string(), format!("file://{}", local.display()), "../local.git".to_string()] {
             let output = run(&work, &["push", "--quiet", &remote, "HEAD:refs/heads/main"], &env);
@@ -543,5 +581,29 @@ mod tests {
         assert!(pushed.status.success(), "{}", String::from_utf8_lossy(&pushed.stderr));
         assert_eq!(git(origin, &["rev-parse", "main"]).unwrap(), git(slot, &["rev-parse", "HEAD"]).unwrap());
         fs::remove_dir_all(&fixture.base).unwrap();
+    }
+
+    #[test]
+    fn installing_over_an_earlier_kebbies_host_rewrite_replaces_it_so_an_scp_style_url_starts_no_ssh() {
+        let fixture = fixture("old-rule");
+        let Fixture { base, slot, state, .. } = &fixture;
+        install(slot, state).unwrap();
+        git(slot, &["config", "--worktree", "--unset-all", &format!("url.{BLOCKED_SCHEME}://.pushInsteadOf")]).unwrap();
+        git(slot, &["config", "--worktree", "--unset-all", &format!("protocol.{BLOCKED_SCHEME}.allow")]).unwrap();
+        git(slot, &["config", "--worktree", "url.kebbie-blocks-push:.pushInsteadOf", ""]).unwrap();
+        commit(slot, "b");
+        let (wires, mark) = tripwires(base);
+        let wires: Vec<(&str, &str)> = wires.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
+        let _ = run(slot, &["push", "--no-verify", "git@github.com:acme/app.git", "HEAD:main"], &wires);
+        assert!(fs::read_to_string(&mark).unwrap_or_default().contains("kebbie-blocks-push"), "the earlier rewrite reads kebbie-blocks-push as an ssh host");
+        fs::remove_file(&mark).unwrap();
+        assert!(old_rule(slot));
+        let repos = [fixture.main.clone()];
+        let lines = move_from_kelpie(&repos, state);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].ends_with("push block renewed"), "{lines:?}");
+        assert!(!old_rule(slot), "the earlier rewrite is gone");
+        started_nothing(&run(slot, &["push", "--no-verify", "git@github.com:acme/app.git", "HEAD:main"], &wires), &mark, "git push git@github.com:acme/app.git");
+        fs::remove_dir_all(base).unwrap();
     }
 }
