@@ -8,7 +8,7 @@ Hold a risky task's push until an independent, read-only Claude has passed its c
    kebbie review billing
    ```
 
-   The task moves to To review. Its push waits.
+   The task moves to In review. Its push waits.
 
 2. Wait for the verdict. The row shows `reviewed` on a pass or `review: N findings`.
 

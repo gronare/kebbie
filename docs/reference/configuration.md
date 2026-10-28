@@ -41,7 +41,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 - `board.backlog.sources`: the first source is where the lead files new ideas. `[]` turns the backlog off.
 - `board.backlog.ongoing`: above the backlog items, below them, or not at all. Hidden, a note another machine claims still asks before it starts here.
-- `board.groups`: a list of `"needs-you"`, `"working"`, `"to-review"`, `"ready-to-push"`, `"ci-running"`, `"waiting-for-work"`, `"queued"`, by default in that order. Groups the list leaves out follow in the default order, so `["ready-to-push"]` moves only Ready to push to the top. A name not in the list is an error that names the valid ones.
+- `board.groups`: a list of `"needs-you"`, `"working"`, `"in-review"`, `"ready-to-push"`, `"ci-running"`, `"waiting-for-work"`, `"queued"`, by default in that order. Groups the list leaves out follow in the default order, so `["ready-to-push"]` moves only Ready to push to the top. A name not in the list is an error that names the valid ones.
 - `[keys]`: [Board](board.md#keys-in-configtoml) has the actions and the rules. `kebbie config` shows each key in effect and why an entry was ignored.
 
 ### Worktrees

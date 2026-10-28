@@ -569,6 +569,7 @@ fn backlog_sources(backlog: &Table) -> Result<Option<Vec<Source>>> {
 fn groups(value: &Value) -> Result<Vec<Group>> {
     let mut found = Vec::new();
     for name in strings(value, "board.groups")? {
+        let name = if name == "to-review" { "in-review".to_string() } else { name };
         let group = Group::ALL.into_iter().find(|group| group.key() == name)
             .ok_or(format!("board.groups: \"{name}\" is not a group; use {}", Group::ALL.map(|group| format!("\"{}\"", group.key())).join(", ")))?;
         if found.contains(&group) {
@@ -1453,13 +1454,13 @@ mod tests {
     fn board_groups_take_the_listed_order_and_the_rest_follow_by_default() {
         let error = |text: &str| parse_machine(text, "/home/u/.config/kebbie/config.toml").unwrap_err();
         let set = settings(&Worktree::default(), &machine("[board]\ngroups = [\"ready-to-push\", \"waiting-for-work\"]\n"));
-        assert_eq!(set.groups.value, [Group::ReadyToPush, Group::Idle, Group::NeedsYou, Group::Working, Group::ToReview, Group::CiRunning, Group::Queued]);
+        assert_eq!(set.groups.value, [Group::ReadyToPush, Group::Idle, Group::NeedsYou, Group::Working, Group::InReview, Group::CiRunning, Group::Queued]);
         assert_eq!(settings(&Worktree::default(), &Machine::default()).groups.value, Group::ALL, "no list keeps today's order");
-        assert_eq!(error("[board]\ngroups = [\"needs-me\"]\n"), "/home/u/.config/kebbie/config.toml: board.groups: \"needs-me\" is not a group; use \"needs-you\", \"working\", \"to-review\", \"ready-to-push\", \"ci-running\", \"waiting-for-work\", \"queued\"");
+        assert_eq!(error("[board]\ngroups = [\"needs-me\"]\n"), "/home/u/.config/kebbie/config.toml: board.groups: \"needs-me\" is not a group; use \"needs-you\", \"working\", \"in-review\", \"ready-to-push\", \"ci-running\", \"waiting-for-work\", \"queued\"");
         assert!(error("[board]\ngroups = [\"queued\", \"queued\"]\n").contains("board.groups: \"queued\" is listed twice"));
         assert!(unknown_machine("[board]\ncolumns = []\n").contains("board.columns: unknown key; known keys here: groups, backlog"));
         let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: set });
-        assert!(shown.contains("board.groups = [\"ready-to-push\", \"waiting-for-work\", \"needs-you\", \"working\", \"to-review\", \"ci-running\", \"queued\"]  (machine config)\n  The order of the Work column's groups"), "{shown}");
+        assert!(shown.contains("board.groups = [\"ready-to-push\", \"waiting-for-work\", \"needs-you\", \"working\", \"in-review\", \"ci-running\", \"queued\"]  (machine config)\n  The order of the Work column's groups"), "{shown}");
     }
 
     #[test]

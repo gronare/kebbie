@@ -20,7 +20,7 @@ Each code is checked once. A ready report on code the reviewer found breaks in g
 
 ## The reviewer gate holds the push until the code is right
 
-A task you send to review (`v` on the board, or `kebbie review`) waits under To review until a separate Claude has read it and given `verdict: ok` on the code its HEAD makes. Until then the board offers no push for it.
+A task you send to review (`v` on the board, or `kebbie review`) waits under In review until a separate Claude has read it and given `verdict: ok` on the code its HEAD makes. Until then the board offers no push for it.
 
 A full review reads the rules too, so its pass is the task's rules approval, and no separate rules check runs while a task is in review. A task in review shows under Ready to push once the reviewer has passed its current code.
 

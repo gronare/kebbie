@@ -12,7 +12,7 @@ fn group(group: status::Group) -> Option<Group> {
     Some(match group {
         status::Group::NeedsYou => Group::NeedsYou,
         status::Group::Working => Group::Working,
-        status::Group::ToReview => Group::ToReview,
+        status::Group::InReview => Group::ToReview,
         status::Group::ReadyToPush => Group::ReadyToPush,
         status::Group::CiRunning => Group::CiRunning,
         status::Group::Idle => Group::Idle,

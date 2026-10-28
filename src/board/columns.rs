@@ -17,7 +17,7 @@ pub(super) fn group_color(group: Group) -> Color {
     match group {
         Group::NeedsYou => PEACH,
         Group::Working => BLUE,
-        Group::ToReview => TEAL,
+        Group::InReview => TEAL,
         Group::ReadyToPush => GREEN,
         Group::CiRunning => YELLOW,
         Group::Idle => MUTED,

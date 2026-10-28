@@ -176,7 +176,7 @@ pub fn forget_in(state: &Path, address: &str) {
     }
 }
 
-// The user's way out of review: the reviewer stops, its verdict goes, and the task leaves To review with push offered again.
+// The user's way out of review: the reviewer stops, its verdict goes, and the task leaves In review with push offered again.
 pub fn withdraw(cwd: &Path, name: Option<&str>) -> Result<String> {
     withdraw_as(&crate::permit::caller(), cwd, name)
 }
@@ -691,7 +691,7 @@ mod tests {
         assert!(gate(shown.as_ref(), |_| true).is_err());
         assert!(withdraw_in(&state, "billing@app"));
         let shown = shown_in(&state, "billing@app", |sha| sha == "aaa");
-        assert_eq!(shown, None, "the task leaves To review");
+        assert_eq!(shown, None, "the task leaves In review");
         assert_eq!(gate(shown.as_ref(), |_| false), Ok(()), "and pushes like a task never sent");
         assert!(!withdraw_in(&state, "billing@app"), "a task not in review has nothing to withdraw");
         let mut reviewer = fake_reviewer(&state);

@@ -9,7 +9,7 @@ A kebbie is a shepherd's crook, the Scots word for a staff with a hooked head. h
 ## What you get
 
 - **A task is a worktree, a Space and a Claude.** `kebbie start billing "Fix the rounding in invoices"` takes a free worktree from a reusable pool, puts it on a new branch, opens it as a herdr Space and starts Claude there. Your main checkout stays untouched.
-- **A board that sorts work by what it needs from you.** Needs you, working, to review, ready to push, in the order you set. Questions from tasks wait there with their options and a recommendation, and you answer them in one window.
+- **A board that sorts work by what it needs from you.** Needs you, working, in review, ready to push, in the order you set. Questions from tasks wait there with their options and a recommendation, and you answer them in one window.
 - **A lead Claude that holds the picture.** It finds work in your backlog, writes informed task prompts, relays what one task needs to know from another, and settles questions of method itself, leaving you the ones about what you want.
 - **A read-only reviewer on every ready task.** A separate Claude, limited to reading the code, checks a task's commits against your rules before it can be pushed. Send a risky task to a full review and it waits until that reviewer passes its current commits.
 - **Review next to Claude.** A split shows the task's changes as diffs in nvim. Comment on a line and the comment is typed into Claude's input box.

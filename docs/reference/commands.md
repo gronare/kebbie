@@ -322,7 +322,7 @@ Ask the task's Claude to reshape its commits by the rules skill (`task.rules_ski
 
 ### `kebbie review [name]`
 
-Send the task to the reviewer: a separate, read-only Claude reviews its commits in the background. The task waits under To review, and its push with it, until a `verdict: ok` on its current code. The reviewer reads the rules skill too, so that pass is also the task's rules approval and no separate rules check runs.
+Send the task to the reviewer: a separate, read-only Claude reviews its commits in the background. The task waits under In review, and its push with it, until a `verdict: ok` on its current code. The reviewer reads the rules skill too, so that pass is also the task's rules approval and no separate rules check runs.
 
 | Option | What it does |
 | --- | --- |

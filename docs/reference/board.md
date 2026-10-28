@@ -21,7 +21,7 @@ The status line shows:
 | Marker | Means |
 | --- | --- |
 | `⚠N` on Routines | N routine runs wait for you with findings. |
-| Counts | Tasks that need you, are working, are to review, are ready to push and wait for CI, and waiting questions. |
+| Counts | Tasks that need you, are working, are in review, are ready to push and wait for CI, and waiting questions. |
 | `◆ N to accept`, yellow | N commits of tasks working in steps wait for you to accept them. |
 | `! N bugs to send · B` | Bugs in kebbie you ran into wait for you to send them to its maintainers. |
 | Plan usage | How much of the plan is used. |
@@ -107,7 +107,7 @@ The `tests` line shows the last test command the task's Claude ran, as kebbie re
 | --- | --- |
 | Needs you | Tasks waiting on your answer or action, open questions first. |
 | Working | Tasks at work since their prompt, their last report or your answer. |
-| To review | Reported ready and sent to the reviewer, waiting for a pass on its current code. |
+| In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. |
 | Ready to push | Reported ready with its commits, and pushes under way. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. A cancelled run waits for a later run on the default branch to pass. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |

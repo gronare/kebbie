@@ -49,7 +49,7 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
             choices.push(if item.is_some_and(Item::awaiting_review) {
                 choice(Act::SendReview, "Withdraw from review", "stop its reviewer and forget its verdict: push is offered again, and the lead is told")
             } else {
-                choice(Act::SendReview, "Send to review", "a separate, read-only Claude reviews its commits; the task waits under To review until it passes them")
+                choice(Act::SendReview, "Send to review", "a separate, read-only Claude reviews its commits; the task waits under In review until it passes them")
             });
         }
         if let Some(git) = item.filter(|item| item.push_waits.is_none()).and_then(|item| item.git.as_ref()).filter(|git| git.behind > 0) {

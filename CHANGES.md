@@ -16,6 +16,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The review split is kebbie's own view beside the diff: the task's steps, or its commits, as tabs with their marks, the selected one's commit message and its files on top, and nvim below showing the file you pick at once; ← → pick a step, ↑ ↓ a file, a accepts the step and moves on to the next one waiting, r marks a file read, / filters, m hides the message, and a click picks a step or a file
 - tab moves between the steps, the files and the diff, and back; a review 120 columns wide or more puts the diff beside the view instead of under it
 - The review split needs only nvim, not fzf
+- The board's To review group is In review; board.groups takes "in-review", and "to-review" still works
 - kebbie doctor lists worktrees and open tasks left from kelpie, and kebbie doctor --fix installs kebbie's push block where kelpie's was
 
 ### Fixed

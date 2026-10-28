@@ -1236,7 +1236,7 @@ mod tests {
         untouched(&state, &wait);
         let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 1);
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
-        assert_eq!(label(&DepState::Open, Some(&item)), "to review");
+        assert_eq!(label(&DepState::Open, Some(&item)), "in review");
         assert_eq!(ticked(&state, &[end(&address, 200, "done", None)], 500).0.len(), 1, "it is the end line that starts it, not the review");
         cleanup(dir, origin, &slot);
     }

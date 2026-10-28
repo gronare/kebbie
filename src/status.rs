@@ -22,7 +22,7 @@ pub const STAGED: &str = "on local main · waiting for your push";
 pub enum Group {
     NeedsYou,
     Working,
-    ToReview,
+    InReview,
     ReadyToPush,
     CiRunning,
     Idle,
@@ -30,13 +30,13 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Group; 7] = [Group::NeedsYou, Group::Working, Group::ToReview, Group::ReadyToPush, Group::CiRunning, Group::Idle, Group::Queued];
+    pub const ALL: [Group; 7] = [Group::NeedsYou, Group::Working, Group::InReview, Group::ReadyToPush, Group::CiRunning, Group::Idle, Group::Queued];
 
     pub fn key(self) -> &'static str {
         match self {
             Group::NeedsYou => "needs-you",
             Group::Working => "working",
-            Group::ToReview => "to-review",
+            Group::InReview => "in-review",
             Group::ReadyToPush => "ready-to-push",
             Group::CiRunning => "ci-running",
             Group::Idle => "waiting-for-work",
@@ -48,7 +48,7 @@ impl Group {
         match self {
             Group::NeedsYou => "NEEDS YOU",
             Group::Working => "WORKING",
-            Group::ToReview => "TO REVIEW",
+            Group::InReview => "IN REVIEW",
             Group::ReadyToPush => "READY TO PUSH",
             Group::CiRunning => "CI RUNNING",
             Group::Idle => "WAITING FOR WORK",
@@ -187,7 +187,7 @@ impl Item {
         })
     }
 
-    // Sent to review and not passed yet: it waits under To review, and push waits with it.
+    // Sent to review and not passed yet: it waits under In review, and push waits with it.
     pub fn awaiting_review(&self) -> bool {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(crate::review::Shown::pending)
     }
@@ -304,7 +304,7 @@ impl Item {
             Phase::Starting | Phase::Working | Phase::Closing => Group::Working,
             Phase::Idle => Group::Idle,
             Phase::NeedsYou(_) | Phase::CiRed { .. } => Group::NeedsYou,
-            Phase::Ready { .. } if self.awaiting_review() => Group::ToReview,
+            Phase::Ready { .. } if self.awaiting_review() => Group::InReview,
             Phase::Ready { .. } | Phase::Staged { .. } | Phase::Pushing { .. } => Group::ReadyToPush,
             Phase::CiRunning { .. } => Group::CiRunning,
         }
@@ -1037,16 +1037,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_task_sent_to_review_waits_under_to_review_until_its_reviewer_passes_its_code() {
+    fn a_task_sent_to_review_waits_under_in_review_until_its_reviewer_passes_its_code() {
         let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.verdict = Some(shown); item };
         let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, file: PathBuf::new() });
-        assert!(running.group() == Group::ToReview);
+        assert!(running.group() == Group::InReview);
         assert_eq!(running.summary(), "2 commits · review running");
+        assert_eq!(Group::InReview.title(), "IN REVIEW");
         let findings = reviewed(in_review(false, 2, false, false));
-        assert!(findings.group() == Group::ToReview);
+        assert!(findings.group() == Group::InReview);
         assert!(findings.summary().ends_with("review: 2 findings"), "{}", findings.summary());
         let stale = reviewed(in_review(true, 0, true, false));
-        assert!(stale.group() == Group::ToReview, "a pass on older code is not a pass");
+        assert!(stale.group() == Group::InReview, "a pass on older code is not a pass");
         assert!(stale.summary().ends_with("review stale"));
         let passed = reviewed(in_review(true, 0, false, false));
         assert!(passed.group() == Group::ReadyToPush);
@@ -1062,7 +1063,7 @@ pub(crate) mod tests {
         assert_eq!(item.summary(), "2 commits · ready to push · reviewed", "the pass recorded the approval, so no rules check waits");
         let mut working = task(Some("working"), Some("ready"), 2);
         working.verdict = Some(in_review(false, 1, false, false));
-        assert!(working.group() == Group::ToReview, "a turn is the row's icon, not its group");
+        assert!(working.group() == Group::InReview, "a turn is the row's icon, not its group");
         let mut asks = task(Some("idle"), Some("needs-you"), 2);
         asks.verdict = Some(in_review(false, 1, false, false));
         assert!(asks.group() == Group::NeedsYou);

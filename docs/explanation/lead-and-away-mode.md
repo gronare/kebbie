@@ -14,7 +14,7 @@ With one Claude, you hold the picture. With five, you cannot: you would spend yo
 
 The lead:
 
-- **briefs you** when you arrive: what needs you first, then what is working, to review and ready to push, each with a recommendation,
+- **briefs you** when you arrive: what needs you first, then what is working, in review and ready to push, each with a recommendation,
 - **finds work** in your backlog sources and offers two or three candidates,
 - **starts tasks** with informed prompts: the ticket, the notes and decisions that bear on it, what other tasks touch, and what done looks like,
 - **holds tasks to your rules** when the reviewer's rules check gives no verdict: it checks a ready task's commits against the rules skill, and approves them or sends back what to fix,
