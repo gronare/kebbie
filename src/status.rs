@@ -121,6 +121,7 @@ pub struct Item {
     pub landed: Option<tasks::LandedUnsure>,
     pub ci_outside: Option<String>,
     pub ci_dismissed: Vec<Value>,
+    pub unrecorded: Option<String>,
     pub push_left: Option<String>,
     pub staged: bool,
     pub steps: tasks::Steps,
@@ -159,7 +160,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), push_left: None, staged: false, steps: tasks::Steps::default(),
+            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, steps: tasks::Steps::default(),
         }
     }
 
@@ -477,7 +478,7 @@ impl Item {
             return format!("{} · {STAGED}", plural(git.ahead, "commit"));
         }
         if self.group() == Group::ReadyToPush {
-            let review: String = self.rules_note().into_iter().chain(self.review_note()).map(|note| format!(" · {note}")).collect();
+            let review: String = self.rules_note().into_iter().chain(self.review_note()).chain(self.unrecorded.clone()).map(|note| format!(" · {note}")).collect();
             let behind = if git.behind > 0 { format!(" · {} behind {}", git.behind, git.upstream.trim_start_matches("origin/")) } else { String::new() };
             let turn = if self.turn_under_way() { " · its Claude is taking a turn" } else { "" };
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
@@ -498,6 +499,7 @@ impl Item {
         }
         parts.extend(self.rules_note());
         parts.extend(self.review_note());
+        parts.extend(self.unrecorded.clone());
         if parts.is_empty() { "nothing yet".to_string() } else { parts.join(" · ") }
     }
 
@@ -872,6 +874,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 landed: state.as_deref().and_then(|state| tasks::landed_mark(state, &address, &slot.path)),
                 ci_outside: state.as_deref().and_then(|state| tasks::ci_outside_reason(state, &address)),
                 ci_dismissed: state.as_deref().map(|state| tasks::ci_dismissed(state, &address)).unwrap_or_default(),
+                unrecorded: state.as_deref().and_then(|state| crate::evidence::unrecorded_for(state, &address, repo)),
                 push_left: state.as_deref().and_then(|state| tasks::push_left(state, &address)),
                 staged: state.as_deref().is_some_and(|state| tasks::staged(state, repo, &address)),
                 steps,
@@ -933,6 +936,7 @@ pub fn gather() -> Result<Vec<Item>> {
             landed: None,
             ci_outside: None,
             ci_dismissed: Vec::new(),
+            unrecorded: None,
             push_left: None,
             staged: false,
             steps: tasks::Steps::default(),
@@ -1000,6 +1004,7 @@ pub(crate) mod tests {
             landed: None,
             ci_outside: None,
             ci_dismissed: Vec::new(),
+            unrecorded: None,
             push_left: None,
             staged: false,
             steps: tasks::Steps::default(),

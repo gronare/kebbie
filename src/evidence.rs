@@ -17,6 +17,10 @@ pub const DEFAULT_COMMANDS: [&str; 16] = [
 
 const KEPT: usize = 20;
 const COMMAND_LIMIT: usize = 300;
+const UNRECORDED_KEPT: usize = 3;
+const RUNNER_WORDS: [&str; 4] = ["test", "tests", "spec", "specs"];
+const TASK_RUNNERS: [&str; 22] = ["make", "just", "rake", "npm", "pnpm", "yarn", "bun", "deno", "dotnet", "mvn", "gradle", "gradlew", "swift", "zig", "flutter", "dart", "mix", "go", "nx", "turbo", "task", "bundle"];
+const TEST_TOOLS: [&str; 8] = ["jest", "vitest", "mocha", "phpunit", "ctest", "tox", "nox", "bats"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
@@ -112,6 +116,39 @@ pub fn recognise<'a>(command: &str, listed: &'a [String]) -> Option<&'a str> {
     listed.iter().map(|prefix| prefix.trim()).filter(|prefix| !prefix.is_empty())
         .filter(|prefix| { let bare = prefix.trim_start_matches("./"); core == bare || core.strip_prefix(bare).is_some_and(|rest| rest.starts_with(char::is_whitespace)) })
         .max_by_key(|prefix| prefix.len())
+}
+
+// The words of a command up to the first pipe, list or redirection.
+fn words(command: &str) -> Vec<&str> {
+    core(command).split_whitespace().take_while(|word| !["|", "||", "&&", ";", "&"].contains(word) && !word.starts_with(['>', '<']) && !word.contains(">&")).collect()
+}
+
+fn runner_word(word: &str) -> bool {
+    RUNNER_WORDS.contains(&word) || word.starts_with("test:") || word.starts_with("spec:")
+}
+
+// The start of a command that looks like a test run, kept conservative: a test script by path (script/test, bin/spec), a test tool, or a task runner given a test word (make test, npm run test).
+pub fn looks_like_test(command: &str) -> Option<String> {
+    let words = words(command);
+    let first = words.first()?.trim_start_matches("./");
+    let name = first.rsplit('/').next().unwrap_or(first);
+    if first.contains('/') && (RUNNER_WORDS.contains(&name) || name == "run-tests" || name == "run_tests") {
+        return Some(words[0].to_string());
+    }
+    if TEST_TOOLS.contains(&name) || TEST_TOOLS.iter().any(|tool| first == format!("node_modules/.bin/{tool}")) {
+        return Some(words[0].to_string());
+    }
+    if !TASK_RUNNERS.contains(&name) {
+        return None;
+    }
+    let mut taken = 1;
+    if words.get(1).is_some_and(|word| ["run", "exec", "run-script"].contains(word)) {
+        taken = 2;
+    }
+    if name == "bundle" && words.get(2).is_some_and(|word| *word == "rake") {
+        taken = 3;
+    }
+    words.get(taken).filter(|word| runner_word(word)).map(|_| words[..=taken].join(" "))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -211,6 +248,45 @@ pub fn file(state: &Path, address: &str) -> PathBuf {
     state.join("evidence").join(format!("{address}.jsonl"))
 }
 
+fn hook_file(state: &Path, address: &str) -> PathBuf {
+    state.join("evidence").join(format!("{address}.hook.json"))
+}
+
+// What the hook saw besides test runs: when it last ran, and commands that looked like test runs but are not in the list.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Seen {
+    pub at: Option<u64>,
+    pub unrecorded: Vec<String>,
+}
+
+pub fn seen_in(state: &Path, address: &str) -> Seen {
+    let value: Value = fs::read_to_string(hook_file(state, address)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    Seen { at: value["at"].as_u64(), unrecorded: value["unrecorded"].as_array().into_iter().flatten().filter_map(|command| command.as_str().map(str::to_string)).collect() }
+}
+
+fn note_seen(state: &Path, address: &str, unrecorded: Option<String>, at: u64) {
+    let mut seen = seen_in(state, address);
+    seen.at = Some(at);
+    if let Some(command) = unrecorded.map(|command| command.trim_start_matches("./").to_string()) {
+        seen.unrecorded.retain(|known| *known != command);
+        seen.unrecorded.push(command);
+        let start = seen.unrecorded.len().saturating_sub(UNRECORDED_KEPT);
+        seen.unrecorded.drain(..start);
+    }
+    let _ = crate::state::write(&hook_file(state, address), json!({ "at": seen.at, "unrecorded": seen.unrecorded }).to_string());
+}
+
+// The newest test-like command a task ran that the list still leaves out, as the board says it.
+pub fn unrecorded_note(seen: &Seen, listed: &[String]) -> Option<String> {
+    let command = seen.unrecorded.iter().rev().find(|command| recognise(command, listed).is_none())?;
+    Some(format!("{command} is not recorded as a test run: add it to task.test_commands"))
+}
+
+pub fn unrecorded_for(state: &Path, address: &str, repo: &Path) -> Option<String> {
+    let configured = crate::config::resolve(Some(repo)).map(|loaded| loaded.settings.test_commands.value).unwrap_or_default();
+    unrecorded_note(&seen_in(state, address), &commands(&configured))
+}
+
 pub fn runs_in(state: &Path, address: &str) -> Vec<Run> {
     fs::read_to_string(file(state, address)).unwrap_or_default().lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter_map(|value| Run::from_json(&value)).collect()
@@ -226,7 +302,9 @@ pub fn save(state: &Path, address: &str, run: &Run) -> Result<()> {
 
 pub fn forget(task: &str, repo: &Path) {
     if let Ok(state) = state_dir() {
-        let _ = fs::remove_file(file(&state, &peers::address(task, &name_of(repo))));
+        let address = peers::address(task, &name_of(repo));
+        let _ = fs::remove_file(file(&state, &address));
+        let _ = fs::remove_file(hook_file(&state, &address));
     }
 }
 
@@ -306,6 +384,10 @@ pub fn hook(address: &str, input: &str) -> String {
         tasks::steps_noted_after(&state, address, &input);
     }
     let listed = commands(&settings.map(|settings| settings.test_commands.value).unwrap_or_default());
+    if input["tool_name"] == "Bash" && let Ok(state) = state_dir() {
+        let command = input["tool_input"]["command"].as_str().unwrap_or_default();
+        note_seen(&state, address, looks_like_test(command).filter(|_| recognise(command, &listed).is_none()), crate::messages::now());
+    }
     if outcome(&input, &listed).is_none() {
         return String::new();
     }
@@ -595,5 +677,42 @@ mod tests {
         let oldest = text.find("✗ cargo test failed · 3 passed · at 1abcdef · `cargo test --lib`").unwrap();
         assert!(newest < oldest, "{text}");
         assert!(brief(&[], |run| shown(run, |_| true, true)).contains("recorded no test run"));
+    }
+
+    #[test]
+    fn a_command_that_looks_like_a_test_run_is_told_apart_conservatively() {
+        for (command, prefix) in [
+            ("script/test", "script/test"), ("./script/test --fast spec/models", "./script/test"), ("bin/test unit", "bin/test"), ("cd /src/wt1.app && CI=1 bin/spec", "bin/spec"),
+            ("make test", "make test"), ("just test-all", ""), ("npm run test:unit", "npm run test:unit"), ("yarn spec", "yarn spec"), ("bundle exec rake spec", "bundle exec rake spec"),
+            ("deno test -A", "deno test"), ("npx vitest run", ""), ("vitest run", "vitest"), ("tox -e py312", "tox"), ("make test 2>&1 | tail", "make test"),
+        ] {
+            assert_eq!(looks_like_test(command).unwrap_or_default(), prefix, "{command}");
+        }
+        for command in ["test -f Cargo.toml", "rg test src", "grep -r spec .", "git commit -m 'add test'", "ls tests", "cat spec/a_spec.rb", "echo make test", "make build", "vim test/x.rb", "npm install", "cargo build"] {
+            assert_eq!(looks_like_test(command), None, "{command}");
+        }
+    }
+
+    #[test]
+    fn the_hook_notes_that_it_ran_and_which_test_like_commands_the_list_leaves_out() {
+        let state = crate::sh::test_dir("evidence-seen");
+        assert_eq!(seen_in(&state, "billing@app"), Seen::default());
+        note_seen(&state, "billing@app", None, 10);
+        assert_eq!(seen_in(&state, "billing@app").at, Some(10));
+        for (at, command) in [(11, "script/test"), (12, "bin/test"), (13, "./script/test"), (14, "make test"), (15, "tox")] {
+            note_seen(&state, "billing@app", Some(command.to_string()), at);
+        }
+        let seen = seen_in(&state, "billing@app");
+        assert_eq!((seen.at, seen.unrecorded.clone()), (Some(15), vec!["script/test".to_string(), "make test".to_string(), "tox".to_string()]), "./script/test and script/test are one entry");
+        assert_eq!(unrecorded_note(&seen, &listed(&[])).as_deref(), Some("tox is not recorded as a test run: add it to task.test_commands"));
+        assert_eq!(unrecorded_note(&seen, &listed(&["tox", "make test"])).as_deref(), Some("script/test is not recorded as a test run: add it to task.test_commands"), "once listed, the note moves on");
+        assert_eq!(unrecorded_note(&seen, &listed(&["tox", "make test", "script/test"])), None);
+        let dotted = Seen { at: Some(16), unrecorded: vec!["./script/test".to_string()] };
+        assert_eq!(unrecorded_note(&dotted, &listed(&["script/test"])), None, "./script/test runs the listed script/test, so the row never asks to add it");
+        let source = include_str!("evidence.rs");
+        let hook = &source[source.find("\npub fn hook(").unwrap()..];
+        assert!(hook.find("note_seen(").unwrap() < hook.find("if outcome(&input, &listed).is_none()").unwrap(), "every Bash call counts as the hook running, test run or not");
+        assert!(!DEFAULT_COMMANDS.contains(&"script/test") && !DEFAULT_COMMANDS.contains(&"bin/test"), "a repo's own runner stays its own config");
+        fs::remove_dir_all(state).unwrap();
     }
 }

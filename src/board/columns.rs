@@ -92,6 +92,7 @@ pub(super) fn row_facts(item: &Item) -> String {
     }
     parts.extend(item.rules_note());
     parts.extend(item.review_note());
+    parts.extend(item.unrecorded.clone());
     if item.permit == Some(Permit::Task) {
         parts.push("lead may push".to_string());
     }

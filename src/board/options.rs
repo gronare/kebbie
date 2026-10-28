@@ -314,6 +314,9 @@ mod tests {
         item.verdict = Some(crate::status::tests::in_review(false, 2, false, false));
         assert_eq!(keys(&item), "gcrvtdauzx");
         assert_eq!(row_facts(&item), "1 commit · review: 2 findings");
+        item.unrecorded = Some("script/test is not recorded as a test run: add it to task.test_commands".to_string());
+        assert!(row_facts(&item).ends_with(" · script/test is not recorded as a test run: add it to task.test_commands"), "{}", row_facts(&item));
+        item.unrecorded = None;
         let withdraw = task_choices(Some(&item), None, None).into_iter().find(|choice| choice.key == 'v').unwrap();
         assert_eq!(withdraw.label, "Withdraw from review", "the push stays the user's: a task in review can always be taken out");
         item.verdict = None;

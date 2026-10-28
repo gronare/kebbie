@@ -95,6 +95,8 @@ The selected task opens in place with its review progress, its question and opti
 
 The `tests` line shows the last test command the task's Claude ran, as kebbie recorded it (see [`kebbie evidence`](commands.md#kebbie-evidence-name---json)). The wide panel shows the same line. No line means no test run is recorded.
 
+When the task's Claude runs a command that looks like a test run but is not in the list kebbie records, such as `script/test` or `make test`, the row says `script/test is not recorded as a test run: add it to task.test_commands`. Once you add it to [`task.test_commands`](configuration.md#keys), the next run is recorded and the note goes.
+
 | Line | Means |
 | --- | --- |
 | `✓ cargo test · 493 passed · at a1b2c3d`, green | It passed on the code the branch holds now, and the worktree has no uncommitted changes. |
