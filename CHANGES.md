@@ -53,6 +53,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task under CI running shows no review state: the code it was reviewed on is pushed
 - The lead works without narrating its steps and ends each turn in three short parts: done, going on per task, and what needs you last with the exact answer it wants; a turn kebbie's messages started that needs nothing from you ends on one line
 - kebbie update says Updated only for a plugin it updated, and names what became of one it did not, such as a Claude Code plugin that is not installed
+- A task in review shows the review's state without rules not checked: the reviewer checks the rules, so a review under way or of the current code covers them
 
 ## 0.28.1
 

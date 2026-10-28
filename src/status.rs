@@ -184,8 +184,14 @@ impl Item {
             Some(crate::rules_check::Shown::Broken(1)) => "rules: 1 break".to_string(),
             Some(crate::rules_check::Shown::Broken(count)) => format!("rules: {count} breaks"),
             Some(crate::rules_check::Shown::Lead) => CHECKING.to_string(),
+            None if self.reviewed_now() => return None,
             None => UNCHECKED.to_string(),
         })
+    }
+
+    // The reviewer checks the rules too, so a review under way or one of this code covers them.
+    fn reviewed_now(&self) -> bool {
+        self.verdict.as_ref().is_some_and(|shown| shown.running || (!shown.stale && shown.verdict.is_some()))
     }
 
     // Sent to review and not passed yet: it waits under In review, and push waits with it.
@@ -1165,6 +1171,15 @@ pub(crate) mod tests {
         assert!(passed.group() == Group::ReadyToPush);
         assert_eq!(passed.summary(), "2 commits · ready to push · reviewed");
         assert!(!task(Some("idle"), Some("ready"), 2).awaiting_review(), "a task never sent to review goes straight to push");
+    }
+
+    #[test]
+    fn a_review_under_way_or_of_this_code_covers_the_rules_and_a_stale_one_does_not() {
+        let reviewed = |shown: crate::review::Shown| { let mut item = task(Some("idle"), Some("ready"), 2); item.git.as_mut().unwrap().approved = false; item.verdict = Some(shown); item };
+        let running = reviewed(crate::review::Shown { verdict: None, stale: false, running: true, file: PathBuf::new() });
+        assert_eq!(running.summary(), "2 commits · review running · waits on the reviewer", "the reviewer is the rules check");
+        assert!(!reviewed(in_review(false, 2, false, false)).summary().contains(UNCHECKED));
+        assert!(reviewed(in_review(true, 0, true, false)).summary().contains(UNCHECKED), "a review of older code checked none of this");
     }
 
     #[test]
