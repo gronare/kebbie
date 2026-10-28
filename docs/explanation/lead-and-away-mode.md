@@ -27,6 +27,16 @@ It does not push, except tasks you gave it permission for.
 
 Every report, message and question passes through kebbie, and the lead gets a copy. The copies do not arrive as chat messages. Each of your prompts to the lead carries the reports and messages it has not seen yet, so its chat stays a conversation with you and its picture stays current.
 
+## It writes at the end of a turn
+
+The lead works without narrating its steps: Claude Code folds its tool calls, and ctrl+o shows all of it. It writes once, when the turn ends, in three short parts, leaving out an empty one:
+
+- **Done**: what landed.
+- **Going on**: one line per task.
+- **Needs you**: last, each with the exact answer or action it wants from you.
+
+A turn that kebbie's messages started and that needs nothing from you ends on one line, such as "Noted: 3 updates, nothing for you."
+
 ## Questions about what are yours, questions about how are not
 
 Questions about what you want go to you: scope, behaviour, a trade-off that is yours, a plan for wide or risky work. A task asks with `kebbie ask`, one question at a time. It opens with a plain sentence on what it is doing, gives options that each say what you get, and the question waits on the board until you answer it there.
@@ -75,7 +85,7 @@ Away mode lets the lead keep tasks moving while you are gone, without deciding t
 
 ## You come back to a summary
 
-When you switch away mode off, kebbie hands the lead what was pushed, what it decided and the questions it kept. The lead writes you a summary with the kept questions first. With a `notify.command`, you hear about landings and kept questions while you are away.
+When you switch away mode off, kebbie hands the lead what was pushed, what it decided and the questions it kept. The lead writes you a summary in its three parts: what landed and what it decided under Done, the kept questions under Needs you. With a `notify.command`, you hear about landings and kept questions while you are away.
 
 Only you can switch away mode. A task or a message cannot turn it on for you. See [The trust boundary](trust-boundary.md).
 

@@ -22,7 +22,7 @@ Let the lead keep tasks moving while you are gone, and get a summary when you ar
    kebbie away off
    ```
 
-   The lead writes you a summary: what landed, what it decided and why, and what waits for you, the kept questions first. Answer those with `i` on the board.
+   The lead writes you a summary: what landed and what it decided and why, then what waits for you, the kept questions under Needs you. Answer those with `i` on the board.
 
 - If a task should run unattended, start it with a permission mode that does not stop for prompts, for example `kebbie start <name> "<prompt>" --mode auto`.
 

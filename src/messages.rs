@@ -254,7 +254,22 @@ pub fn indented(text: &str) -> String {
 }
 
 pub(crate) fn typed_form(message: &Message) -> String {
-    if message.kind.as_deref() == Some(PROMPT_KIND) { message.text.clone() } else { delivered(&message.from, &message.text) }
+    if message.kind.as_deref() == Some(PROMPT_KIND) { message.text.clone() } else { typed_text(&message.from, &message.to, &message.text) }
+}
+
+pub const LEAD_CUE: &str = "(kebbie: work silently; end in Done / Going on / Needs you, or one line if nothing needs the user)";
+
+// A message that starts a lead turn carries the cue for how that turn ends; the user's own word does not.
+fn typed_text(from: &str, to: &str, text: &str) -> String {
+    let typed = delivered(from, text);
+    if !cued(from, to) {
+        return typed;
+    }
+    format!("{typed}\n  {LEAD_CUE}")
+}
+
+fn cued(from: &str, to: &str) -> bool {
+    to == LEAD_LABEL && from != USER_LABEL && from != LEAD_LABEL
 }
 
 pub const DRAFT_HOLD: &str = "has a draft in its input box";
@@ -547,7 +562,7 @@ fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], text: &str, s
         let outcome = match question_hold(about, question.map(|question| question.id.as_str())) {
             Some(reason) => Err(reason),
             None if earlier_held && !answering => Err("still has earlier messages held"),
-            None => match deliver(session, &delivered(from, text), type_into) {
+            None => match deliver(session, &typed_text(from, &session.address, text), type_into) {
                 Err(DRAFT_HOLD) if typed_into.contains(&session.address) => Err(EARLIER_TYPING),
                 Ok(via) => {
                     if via != Via::Inbox {
@@ -1792,8 +1807,8 @@ mod tests {
         reader.join().unwrap();
         let file = fs::read_dir(dir.join("typed")).unwrap().flatten().map(|entry| entry.path()).find(|path| path.extension().is_some_and(|extension| extension == "json")).unwrap();
         let typed = crate::typing::Typed::from_json_text(&fs::read_to_string(&file).unwrap()).unwrap();
-        assert!(typed.inbox && typed.label == LEAD_LABEL && typed.text == format!("[from kebbie] {check}"));
-        let wrapped = json!({ "type": "user", "isMeta": true, "origin": { "kind": "peer" }, "timestamp": "2099-01-01T00:00:00.000Z", "message": { "role": "user", "content": format!("<cross-session-message from=\"kebbie\">[from kebbie] {check}</cross-session-message>") } }).to_string();
+        assert!(typed.inbox && typed.label == LEAD_LABEL && typed.text == format!("[from kebbie] {check}\n  {LEAD_CUE}"), "{}", typed.text);
+        let wrapped = json!({ "type": "user", "isMeta": true, "origin": { "kind": "peer" }, "timestamp": "2099-01-01T00:00:00.000Z", "message": { "role": "user", "content": format!("<cross-session-message from=\"kebbie\">[from kebbie] {check}\n  {LEAD_CUE}</cross-session-message>") } }).to_string();
         assert_eq!(crate::typing::advance_inbox(&typed, Some(&wrapped), typed.at_ms + 1000), crate::typing::Outcome::Taken, "Claude Code records a peer message wrapped in <cross-session-message>; its body counts");
         assert!(crate::agent::Agent::Claude.user_messages(&wrapped).is_empty(), "and it is never the user's own words");
         assert_eq!(crate::typing::advance_inbox(&typed, Some(""), typed.at_ms + 60_000), crate::typing::Outcome::Waiting, "a long tool run is waited out");
@@ -1840,6 +1855,21 @@ mod tests {
     }
 
     #[test]
+    fn a_message_that_starts_a_lead_turn_asks_it_to_work_silently_and_end_in_the_roles_three_parts() {
+        let cued = |from: &str, to: &str| typed_text(from, to, "text").ends_with(&format!("\n  {LEAD_CUE}"));
+        assert!(cued("kebbie", LEAD_LABEL), "kebbie's message, whether it needs the user or not: a turn that needs the user ends in Needs you, one that does not on one line");
+        assert!(cued("billing@app", LEAD_LABEL), "a task's message to the lead");
+        assert_eq!(typed_text("billing@app", LEAD_LABEL, "two\nlines"), format!("[from billing@app] two\n  lines\n  {LEAD_CUE}"), "the cue follows the message, indented like its lines, so it reads as kebbie's and never as a sender line");
+        let role = include_str!("../roles/lead.md");
+        assert!(role.contains("(kebbie: work silently; …)") && role.contains("**Work silently**") && "Done / Going on / Needs you".split(" / ").all(|part| role.contains(&format!("**{part}**"))), "the cue names the role's own words");
+        assert!(!cued(USER_LABEL, LEAD_LABEL), "the user's own word gets an answer");
+        assert!(!cued("kebbie", "billing@app") && !cued(LEAD_LABEL, "billing@app"), "only the lead's turns");
+        let held = fold(&json!({ "id": "m1", "at": 1, "from": "kebbie", "to": LEAD_LABEL, "text": "text", "state": "held", "kind": RULES_KIND }).to_string());
+        assert_eq!(typed_form(&held[0]), typed_text("kebbie", LEAD_LABEL, "text"), "a held message is typed as it would have been at once, so a check finds what was typed");
+        assert!(LEAD_CUE.len() < 100);
+    }
+
+    #[test]
     fn while_the_user_is_away_the_lead_hears_kebbies_notices_live() {
         let dir = state("fyi-away");
         crate::permit::set_away_in(&dir, true, 100).unwrap();
@@ -1849,7 +1879,7 @@ mod tests {
         let lead = Session { address: LEAD_LABEL.to_string(), task: None, pane: Some("w0:p1".to_string()), status: Some("idle".to_string()) };
         let typed = std::cell::RefCell::new(Vec::new());
         notice_locked_in(&dir, &lead, "kebbie was updated", std::slice::from_ref(&lead), &mut |_, text, _| { typed.borrow_mut().push(text.to_string()); Ok(Via::Inbox) }).unwrap();
-        assert_eq!(typed.borrow().as_slice(), ["[from kebbie] kebbie was updated"]);
+        assert_eq!(typed.borrow().as_slice(), [format!("[from kebbie] kebbie was updated\n  {LEAD_CUE}")]);
         assert!(!load_in(&dir).iter().any(|message| message.fyi));
         fs::remove_dir_all(&dir).unwrap();
     }

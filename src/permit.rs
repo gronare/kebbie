@@ -172,7 +172,7 @@ pub fn return_brief(log: &[Message], since: u64, waiting: &[Message]) -> String 
     let section = |title: &str, lines: Vec<String>| if lines.is_empty() { format!("{title}: none.") } else { format!("{title}:\n{}", lines.join("\n")) };
     let kept: Vec<String> = waiting.iter().map(|question| format!("- {} asks: {}", question.from, question.text)).collect();
     format!(
-        "The user is back. Write them the summary now, a screen at most: what landed, what you decided for them and why, and what waits for them, the kept questions first.\n{}\n{}\n{}",
+        "The user is back. Write them the summary now, a screen at most, in your three parts: what landed and what you decided for them and why under Done, the kept questions under Needs you.\n{}\n{}\n{}",
         section("Pushed while they were away", since_left("push")), section("Your calls", since_left("decision")), section("Questions kept for them", kept),
     )
 }
