@@ -885,6 +885,7 @@ mod tests {
         assert!(!allow.iter().any(|rule| rule.contains("push") || rule.contains("approve") || rule.contains("decide") || rule.contains("away")), "{allow:?}");
         assert_eq!(on["env"]["GIT_CONFIG_KEY_0"], "url.kebbie-blocks-push:.pushInsteadOf");
         assert_eq!(on["env"]["GIT_CONFIG_VALUE_0"], "");
+        assert_eq!((on["env"]["GIT_CONFIG_COUNT"].as_str(), on["env"]["GIT_CONFIG_KEY_1"].as_str(), on["env"]["GIT_CONFIG_VALUE_1"].as_str()), (Some("5"), Some("url./.pushInsteadOf"), Some("/")), "a push to a local path, as a test's temp repo, goes through");
         assert_eq!(on["env"]["VAULT_STOP_HOOK"], "off", "the vault plugin's Stop hook never asks a task for the repo log kebbie writes");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 40);
     }

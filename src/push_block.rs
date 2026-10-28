@@ -8,6 +8,8 @@ use crate::sh::Result;
 
 pub const TOKEN_VAR: &str = "KEBBIE_PUSH_TOKEN";
 const BLOCKED: &str = "kebbie-blocks-push:";
+// git takes the longest matching pushInsteadOf, so these map a local path or file:// URL onto itself past the block's empty prefix.
+const LOCAL: [&str; 4] = ["/", "./", "../", "file://"];
 const REFUSAL: &str = "kebbie: a task's worktree does not push. The user pushes from the board, or the lead with kebbie push for a task the user gave push permission. The block stops an accidental push, not a determined one.";
 const FOR_A_PR: &str = "To push this branch for a pull request, run in your own terminal: git -C %s push origin %s\\n";
 
@@ -98,6 +100,22 @@ pub fn unsupported(worktree: &Path) -> Result<Option<String>> {
     )))
 }
 
+// Every network URL becomes one git cannot push to; a local path or file:// URL stays itself, so a temp repo a test makes takes its push.
+pub fn url_rules() -> Vec<(String, String)> {
+    std::iter::once((format!("url.{BLOCKED}.pushInsteadOf"), String::new())).chain(LOCAL.iter().map(|local| (format!("url.{local}.pushInsteadOf"), local.to_string()))).collect()
+}
+
+// The same rules as GIT_CONFIG_* variables, for every git a task's shell runs.
+pub fn env_vars() -> Vec<(String, String)> {
+    let rules = url_rules();
+    let mut vars = vec![("GIT_CONFIG_COUNT".to_string(), rules.len().to_string())];
+    for (index, (key, value)) in rules.into_iter().enumerate() {
+        vars.push((format!("GIT_CONFIG_KEY_{index}"), key));
+        vars.push((format!("GIT_CONFIG_VALUE_{index}"), value));
+    }
+    vars
+}
+
 // The block lives in the worktree's own config, which the task's env cannot unset: a pre-push hook kebbie answers, and a push URL rewrite for git push --no-verify.
 pub fn install(worktree: &Path, state: &Path) -> Result<Block> {
     if let Some(why) = unsupported(worktree)? {
@@ -114,7 +132,9 @@ pub fn install(worktree: &Path, state: &Path) -> Result<Block> {
     }
     git(worktree, &["config", "extensions.worktreeConfig", "true"])?;
     git(worktree, &["config", "--worktree", "core.hooksPath", &dir.to_string_lossy()])?;
-    git(worktree, &["config", "--worktree", &format!("url.{BLOCKED}.pushInsteadOf"), ""])?;
+    for (key, value) in url_rules() {
+        git(worktree, &["config", "--worktree", &key, &value])?;
+    }
     Ok(Block::On)
 }
 
@@ -182,12 +202,7 @@ mod tests {
         commit(slot, "b");
         assert!(fixture.base.join("pre-commit-ran").exists(), "the repo's own hooks still run in the task's worktree");
         let before = git(origin, &["rev-parse", "main"]).unwrap();
-        for args in [
-            &["push", "origin", "HEAD:main"][..],
-            &["-C", ".", "push", "origin", "HEAD:main"],
-            &["push", "--no-verify", "origin", "HEAD:main"],
-            &["-c", "core.hooksPath=/dev/null", "push", "origin", "HEAD:main"],
-        ] {
+        for args in [&["push", "origin", "HEAD:main"][..], &["-C", ".", "push", "origin", "HEAD:main"]] {
             let output = run(slot, args, &[]);
             assert!(!output.status.success(), "git {args:?} pushed from the task's worktree");
         }
@@ -425,20 +440,50 @@ mod tests {
         fs::remove_dir_all(&fixture.base).unwrap();
     }
 
+    const NETWORK: [&str; 5] = ["https://github.com/acme/app.git", "http://git.example/acme/app.git", "git@github.com:acme/app.git", "ssh://git@github.com/acme/app.git", "git://git.example/acme/app.git"];
+
     #[test]
-    fn the_pushurl_rewrite_catches_every_url_a_task_could_push_to() {
+    fn the_pushurl_rewrite_catches_every_network_url_a_task_could_push_to_and_lets_a_local_one_through() {
         let fixture = fixture("rewrite");
-        let Fixture { slot, state, .. } = &fixture;
+        let Fixture { base, slot, state, .. } = &fixture;
         install(slot, state).unwrap();
         commit(slot, "b");
-        for remote in ["https://github.com/gronare/kebbie.git", "git@github.com:gronare/kebbie.git", "ssh://git@github.com/gronare/kebbie.git", fixture.origin.to_str().unwrap()] {
-            let output = run(slot, &["push", "--no-verify", remote, "HEAD:refs/heads/elsewhere"], &[]);
-            assert!(!output.status.success(), "a push to {remote} by url got through");
-            let said = String::from_utf8_lossy(&output.stderr);
-            assert!(said.contains("kebbie-blocks-push") || said.contains("kebbie"), "{said}");
+        for remote in NETWORK {
+            for args in [&["push", "--no-verify", remote, "HEAD:refs/heads/elsewhere"][..], &["-c", "core.hooksPath=/dev/null", "push", remote, "HEAD:refs/heads/elsewhere"], &["push", "--no-verify", "--mirror", remote]] {
+                let output = run(slot, args, &[]);
+                let said = String::from_utf8_lossy(&output.stderr);
+                assert!(!output.status.success() && said.contains("kebbie-blocks-push"), "git {args:?} got past the rewrite: {said}");
+            }
         }
-        assert!(!run(slot, &["push", "--no-verify", "--force", "origin", "HEAD:main"], &[]).status.success());
-        assert!(!run(slot, &["push", "--no-verify", "--mirror", "origin"], &[]).status.success());
-        fs::remove_dir_all(&fixture.base).unwrap();
+        let local = base.join("scratch.git");
+        git(base, &["init", "--quiet", "--bare", &local.to_string_lossy()]).unwrap();
+        for remote in [local.to_string_lossy().to_string(), format!("file://{}", local.display()), "../scratch.git".to_string()] {
+            let output = run(slot, &["push", "--no-verify", "--quiet", &remote, "HEAD:refs/heads/scratch"], &[]);
+            assert!(output.status.success(), "a push to the local {remote} is no push to the network: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        let refused = run(slot, &["push", local.to_str().unwrap(), "HEAD:refs/heads/hooked"], &[]);
+        assert!(!refused.status.success(), "the pre-push hook still asks for kebbie's token on a local push");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn the_env_form_a_tasks_shell_gets_blocks_the_network_but_not_a_temp_repo_a_test_makes() {
+        let base = crate::sh::test_dir("push-block-env");
+        let (work, local) = (base.join("work"), base.join("local.git"));
+        fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        commit(&work, "a");
+        git(&base, &["init", "--quiet", "--bare", &local.to_string_lossy()]).unwrap();
+        let vars = env_vars();
+        let env: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
+        for remote in NETWORK {
+            let output = run(&work, &["push", remote, "HEAD:main"], &env);
+            assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("kebbie-blocks-push"), "{remote}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        for remote in [local.to_string_lossy().to_string(), format!("file://{}", local.display()), "../local.git".to_string()] {
+            let output = run(&work, &["push", "--quiet", &remote, "HEAD:refs/heads/main"], &env);
+            assert!(output.status.success(), "{remote}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        fs::remove_dir_all(base).unwrap();
     }
 }

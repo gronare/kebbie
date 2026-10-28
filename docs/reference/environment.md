@@ -69,7 +69,7 @@ For every command a Codex task runs:
 | Variable | Value |
 | --- | --- |
 | `KEBBIE_ADDRESS` | The task's address, `<task>@<repo>` |
-| `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0`, `GIT_CONFIG_VALUE_0` | The push block's `url.kebbie-blocks-push:.pushInsteadOf` |
+| `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` | The push block: `url.kebbie-blocks-push:.pushInsteadOf` for every URL, and rules that keep a local path (`/`, `./`, `../`) or a `file://` URL as it is, so a push to a repo on the disk, such as one a test makes, goes through |
 | `TMPDIR` | The task's temp folder, in its worktree's git dir |
 
 For `worktree.dev_server` and `worktree.dev_worker`:

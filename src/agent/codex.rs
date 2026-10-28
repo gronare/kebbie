@@ -198,9 +198,10 @@ fn access(mode: Option<&str>, sandboxed: bool) -> Vec<String> {
 
 // The commands Codex runs get the push block and the task's address, which also names the task to kebbie's caller check.
 fn env_override(address: &str, tmp: Option<&Path>) -> String {
-    let mut set = vec![("GIT_CONFIG_COUNT", "1".to_string()), ("GIT_CONFIG_KEY_0", "url.kebbie-blocks-push:.pushInsteadOf".to_string()), ("GIT_CONFIG_VALUE_0", String::new()), (TASK_VAR, address.to_string())];
+    let mut set = crate::push_block::env_vars();
+    set.push((TASK_VAR.to_string(), address.to_string()));
     if let Some(tmp) = tmp {
-        set.push(("TMPDIR", tmp.to_string_lossy().to_string()));
+        set.push(("TMPDIR".to_string(), tmp.to_string_lossy().to_string()));
     }
     format!("shell_environment_policy.set={{{}}}", set.iter().map(|(name, value)| format!("{name}={}", toml_string(value))).collect::<Vec<_>>().join(","))
 }
@@ -509,7 +510,7 @@ mod tests {
         assert_eq!(after(&args, "--model"), ["gpt-5.5"]);
         let config = after(&args, "-c");
         assert!(config.contains(&"model_reasoning_effort=\"high\""), "{config:?}");
-        assert!(config.contains(&"shell_environment_policy.set={GIT_CONFIG_COUNT=\"1\",GIT_CONFIG_KEY_0=\"url.kebbie-blocks-push:.pushInsteadOf\",GIT_CONFIG_VALUE_0=\"\",KEBBIE_ADDRESS=\"billing@app\",TMPDIR=\"/src/app/.git/worktrees/1/kebbie-tmp\"}"), "the push block reaches every command it runs: {config:?}");
+        assert!(config.contains(&"shell_environment_policy.set={GIT_CONFIG_COUNT=\"5\",GIT_CONFIG_KEY_0=\"url.kebbie-blocks-push:.pushInsteadOf\",GIT_CONFIG_VALUE_0=\"\",GIT_CONFIG_KEY_1=\"url./.pushInsteadOf\",GIT_CONFIG_VALUE_1=\"/\",GIT_CONFIG_KEY_2=\"url../.pushInsteadOf\",GIT_CONFIG_VALUE_2=\"./\",GIT_CONFIG_KEY_3=\"url.../.pushInsteadOf\",GIT_CONFIG_VALUE_3=\"../\",GIT_CONFIG_KEY_4=\"url.file://.pushInsteadOf\",GIT_CONFIG_VALUE_4=\"file://\",KEBBIE_ADDRESS=\"billing@app\",TMPDIR=\"/src/app/.git/worktrees/1/kebbie-tmp\"}"), "the push block reaches every command it runs, local paths let through: {config:?}");
         assert!(config.contains(&"plugins.kebbie@kebbie.enabled=true") && config.iter().any(|value| value.starts_with("hooks.state={\"kebbie@kebbie:hooks/hooks.json:session_start:0:0\"={trusted_hash=\"sha256:")), "{config:?}");
         assert!(!args.iter().any(|word| word.contains("ignored")), "Codex picks a new session's id itself");
         assert!(!args.iter().any(|word| word.starts_with("--dangerously")), "{args:?}");

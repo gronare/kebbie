@@ -273,7 +273,10 @@ pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Op
         }
     }
     // VAULT_STOP_HOOK=off silences the vault plugin's Stop hook: kebbie writes a task's log lines, and hooks inherit the session's env.
-    let mut env = json!({ "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.kebbie-blocks-push:.pushInsteadOf", "GIT_CONFIG_VALUE_0": "", "VAULT_STOP_HOOK": "off" });
+    let mut env = json!({ "VAULT_STOP_HOOK": "off" });
+    for (name, value) in crate::push_block::env_vars() {
+        env[name] = json!(value);
+    }
     if let Some(dirs) = dirs {
         for name in TMP_VARS {
             env[name] = json!(dirs.tmp.to_string_lossy());
