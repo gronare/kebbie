@@ -1,6 +1,6 @@
 # See your board on your phone
 
-Follow your tasks from your phone through a [kebbie hub](https://github.com/gronare/kebbie-hub): every task grouped as on the board, and the questions waiting for you with their options.
+Follow your tasks from your phone through a [kebbie hub](https://github.com/gronare/kebbie-hub): every task grouped as on the board, a task's steps under its row, and the questions waiting for you with their options.
 
 It works on any phone or browser you sign in on with your passkey. The phone reads; you still answer and push on the machine.
 
@@ -77,6 +77,8 @@ Change `[machine] name`, or press `n` in the board's `H` window. The keeper rena
 2. Sign in with your passkey.
 
 The phone shows the board of every machine your account connected. Nothing is added on the machine: any phone or browser you sign in on reads the boards.
+
+A task that works in [steps](work-in-steps.md) lists them under its row as on the board: the pushed ones as a count, then each step with its number, title and state, planned, in progress, committed or accepted. The row says how many commits wait for your accept and which one is next, and the top of the board counts them across tasks as `◆ N to accept`. You accept on the machine, with `kebbie accept` or in the review split; the phone only shows it.
 
 Reading needs a passkey that can unlock the account's key, such as one in iCloud Keychain, Google Password Manager or 1Password. A passkey that cannot signs in, and the page says it can't unlock the boards.
 

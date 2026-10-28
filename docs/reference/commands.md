@@ -743,7 +743,7 @@ Once the machine has pinned an account key, the keeper posts the board every 15 
 - The revision is at least the current Unix time, so it keeps rising when `hub/relay.json` is lost.
 - Nothing is pushed to a phone: notifications through the hub are not available in this version, and [`notify.command`](configuration.md#notify-command) is how the machine tells you a task needs you.
 
-The board carries tasks with their group, summary, your next step, report, question and options, git counts, head, review verdict, CI, the checkouts' free and busy worktrees, the routines and away mode. It never carries a path, a pane, a Space, a host name or a dev server address.
+The board carries tasks with their group, summary, your next step, report, question and options, git counts, head, review verdict, CI, a task's steps with their number, title, state and commit, the checkouts' free and busy worktrees, the routines and away mode. It never carries a path, a pane, a Space, a host name, a dev server address or a commit's message.
 
 - A queued task waiting for its time is left out; a blocked one shows under Needs you.
 - A plan to approve shows as its question, without the plan.
