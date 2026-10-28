@@ -874,7 +874,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 workspace,
                 agent,
                 git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, head }),
-                report: reports.get(&address).cloned(),
+                report: reports.get(&address).map(|report| messages::shown_report(&log, report)),
                 question: questions.iter().find(|question| question.from == address).map(|question| (*question).clone()),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
                 recover: state.as_deref().and_then(|state| crate::recover::load(state, &address)),

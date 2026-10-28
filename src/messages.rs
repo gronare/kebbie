@@ -1055,6 +1055,19 @@ pub fn log_report(from: &str, report: &Report, text: &str) -> Result<()> {
     append(&json!({ "id": id, "at": now(), "from": from, "to": LEAD_LABEL, "text": text, "state": "logged", "report": { "state": report.state, "next": report.next, "head": report.head } }))
 }
 
+// What the board shows as a task's latest report: an ask the user or the lead answered since shows as that answer, the task working on it, until the task reports again.
+pub fn shown_report(messages: &[Message], report: &Message) -> Message {
+    if report.report.as_ref().is_none_or(|said| said.state != "needs-you") {
+        return report.clone();
+    }
+    let answer = messages.iter().skip_while(|message| message.id != report.id).skip(1)
+        .filter(|message| message.to == report.from && matches!(message.kind.as_deref(), Some("answer" | "decision"))).last();
+    match answer {
+        Some(answer) => Message { id: answer.id.clone(), at: answer.at, text: answer.text.clone(), report: Some(Report { state: "working".to_string(), next: String::new(), head: None }), ..report.clone() },
+        None => report.clone(),
+    }
+}
+
 // The end of a task's life, so a later task by the same name does not inherit its reports; landed is the "sha subject" lines a done task put on the default branch.
 pub fn log_end(task: &str, repo: &str, how: &str, landed: Option<&str>, kind: Option<&str>) -> Result<()> {
     let id = new_id("end");
@@ -1497,6 +1510,20 @@ mod tests {
         let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false }];
         assert_eq!(copies_for_lead(&messages, 0).len(), 1);
         assert_eq!(report_line(&messages[0]), "- a@x (ready): done — you: push and close");
+    }
+
+    #[test]
+    fn an_answered_ask_shows_as_the_answer_under_working_until_the_task_reports_again() {
+        let asked = r#"{"id":"r1","at":10,"from":"billing@web","to":"lead","text":"asked the user: keep the field?","state":"logged","report":{"state":"needs-you","next":"answer: keep the field?"}}"#;
+        let answer = r#"{"id":"a1","at":12,"from":"you","to":"billing@web","text":"The user's answer to \"keep the field?\": Keep (as it is).","state":"delivered","kind":"answer"}"#;
+        let later = r#"{"id":"r2","at":14,"from":"billing@web","to":"lead","text":"kept it","state":"logged","report":{"state":"ready","next":"push"}}"#;
+        let before = fold(asked);
+        assert_eq!(shown_report(&before, &before[0]), before[0], "an ask nobody answered stays the latest");
+        let answered = fold(&[asked, answer].join("\n"));
+        let shown = shown_report(&answered, &latest_reports(&answered)["billing@web"]);
+        assert_eq!((shown.text.as_str(), shown.at, shown.report.as_ref().map(|report| report.state.as_str()), shown.next_for_you()), ("The user's answer to \"keep the field?\": Keep (as it is).", 12, Some("working"), None));
+        let reported = fold(&[asked, answer, later].join("\n"));
+        assert_eq!(shown_report(&reported, &latest_reports(&reported)["billing@web"]).text, "kept it", "the task's own report after the answer is the latest");
     }
 
     #[test]
