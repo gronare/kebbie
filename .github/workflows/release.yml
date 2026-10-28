@@ -117,3 +117,17 @@ jobs:
           expected=$(ls kebbie-*.tar.gz SHA256SUMS | sort)
           [ "$attached" = "$expected" ] || { echo "::error::attached $attached, expected $expected"; exit 1; }
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+  site:
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebuild kebbie.dev, whose /docs are built from the latest release and main
+        env:
+          GH_TOKEN: ${{ secrets.KEBBIE_SITE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::KEBBIE_SITE_DISPATCH_TOKEN is not set, so kebbie.dev shows these docs from its next deploy"
+            exit 0
+          fi
+          gh workflow run deploy.yml --repo gronare/kebbie-site --ref main || echo "::warning::kebbie.dev's deploy did not start; run it from gronare/kebbie-site's Actions tab"

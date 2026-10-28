@@ -27,7 +27,7 @@ These lines are what the board shows after an update (on the `main` channel as s
 
 ## Check the docs
 
-kebbie.dev publishes `docs/` as it stands at the release tag, so the docs ship with the release.
+kebbie.dev publishes `docs/` as it stands at the release tag, so the docs ship with the release. The release workflow starts kebbie.dev's deploy once the release is published, so its docs follow within minutes.
 
 1. Ask Claude to check them:
 
@@ -59,7 +59,7 @@ Then it:
 1. Moves the entries under `## Unreleased` in `CHANGES.md` under a new `## 1.4.0` heading, and leaves `## Unreleased` empty for the next. It refuses when `## Unreleased` holds no entry; write the notes first.
 2. Sets the version in `Cargo.toml`, `herdr-plugin.toml` and `.claude-plugin/plugin.json`, and lets `cargo check` update `Cargo.lock`.
 3. Commits `kebbie 1.4.0: what the release brings`, with `CHANGES.md`, tags it `v1.4.0`, and pushes `main` and the tag together.
-4. Waits for `.github/workflows/release.yml`. The workflow fails when the tag and the three manifests disagree, runs the tests, builds `kebbie-<version>-<target>.tar.gz` for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, and writes `SHA256SUMS`. It publishes the GitHub Release once every file is attached, with the version's section of `CHANGES.md` as its notes (`scripts/release-notes.sh 1.4.0` prints them).
+4. Waits for `.github/workflows/release.yml`. The workflow fails when the tag and the three manifests disagree, runs the tests, builds `kebbie-<version>-<target>.tar.gz` for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, and writes `SHA256SUMS`. It publishes the GitHub Release once every file is attached, with the version's section of `CHANGES.md` as its notes (`scripts/release-notes.sh 1.4.0` prints them). Then it starts the deploy workflow of `gronare/kebbie-site`, which builds kebbie.dev's `/docs` from the latest release and main. That needs the repository secret `KEBBIE_SITE_DISPATCH_TOKEN`: a fine-grained token for `gronare/kebbie-site` with Actions read and write. Without it, or when GitHub refuses the dispatch, the run shows a warning and the release still counts as done.
 5. Checks that each binary downloads and prints the release's address.
 6. Removes the build output under `target/`, everything but `target/release`, and says how much it freed.
 

@@ -109,3 +109,12 @@ fn release_sh_cleans_the_build_output_once_the_release_is_published_unless_told_
     assert!(RELEASE.find("scripts/clean-builds.sh").is_some_and(|cleaned| cleaned > published), "the build output goes only after the release is out");
     assert!(RELEASE.contains("\"${KEBBIE_KEEP_BUILDS:-}\" = 1"));
 }
+
+#[test]
+fn a_published_release_starts_kebbie_dev_s_deploy_with_a_token_from_a_secret_and_never_fails_the_release_for_it() {
+    let site = WORKFLOW.find("\n  site:\n").expect("the release workflow has a site job");
+    let job = &WORKFLOW[site..];
+    assert!(job.contains("needs: [release]"), "the docs rebuild once the release is published");
+    assert!(job.contains("GH_TOKEN: ${{ secrets.KEBBIE_SITE_DISPATCH_TOKEN }}") && job.contains("gh workflow run deploy.yml --repo gronare/kebbie-site --ref main"));
+    assert!(job.contains("exit 0") && job.contains("|| echo \"::warning::"), "a missing token or a refused dispatch is a warning, not a failed release");
+}

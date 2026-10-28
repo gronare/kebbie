@@ -25,6 +25,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Messages to the lead, kebbie's notices and desktop notifications name a task the way the board does, by its title with its name
 - kebbie doctor lists worktrees and open tasks left from kelpie, and kebbie doctor --fix installs kebbie's push block where kelpie's was
 - Once a day kebbie sends its maintainers an install signal, so they can count active installs per version and OS: a random id made for this install, kebbie's version, the OS and architecture and the update channel, and nothing else; [report] signals = false turns it off with the error signals
+- kebbie.dev's docs show a new release's pages within minutes of it being published
 
 ### Fixed
 - Messages from kebbie show in Claude Code as one collapsed line from @kebbie that ctrl+o expands, instead of in full with Claude Code's peer warning
