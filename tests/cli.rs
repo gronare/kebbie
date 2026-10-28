@@ -484,7 +484,7 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
 }
 
 #[test]
-fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_even_behind_a_draft() {
+fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_once_the_users_draft_is_gone() {
     use std::io::{Read, Write};
     let lab = Lab::new("inbox");
     let (_, slot) = lab.task_fixture();
@@ -513,7 +513,9 @@ fn a_lead_whose_session_start_recorded_its_inbox_gets_a_message_there_even_behin
         got
     });
     let told = lab.run(&["-C", slot.to_str().unwrap(), "tell", "lead", "payload renamed"]);
-    assert!(stdout(&told).contains("Told lead."), "{}\n{}", stdout(&told), stderr(&told));
+    assert!(stdout(&told).contains("lead has a draft in its input box; held"), "the user's text in the lead's box holds it: {}\n{}", stdout(&told), stderr(&told));
+    lab.screen("❯ ");
+    lab.run(&["messages", "--unread"]);
     assert_eq!(reader.join().unwrap(), "{\"type\":\"auth\",\"token\":\"tok-9\"}\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<cross-session-message from=\\\"kebbie\\\" from-name=\\\"kebbie\\\">\\n[from billing@app] payload renamed\\n  (kebbie: work silently; end in Done / Going on / Needs you, or one line if nothing needs the user)\\n</cross-session-message>\"},\"from\":\"kebbie\"}\n");
     let _ = fs::remove_file(&socket);
     assert!(!lab.herdr_calls().iter().any(|call| call[..2] == ["agent", "prompt"]), "nothing is typed, so the user's draft stays as it is");

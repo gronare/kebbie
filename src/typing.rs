@@ -363,12 +363,18 @@ pub fn watch_inbox_in(dir: &Path, target: &str, text: &str, label: &str, at_ms: 
     crate::state::write(&dir.join("typed").join(format!("{}.json", crate::messages::new_id("inbox"))), typed.to_json().to_string())
 }
 
-// Whether the board still waits to see this text taken by the session at this label.
-pub fn watching_in(dir: &Path, label: &str, text: &str) -> bool {
+// Whether a typed text carries this part, whitespace aside, as a batch of messages carries each of them.
+pub fn holds_part(typed: &str, part: &str) -> bool {
+    let part = normalized(part);
+    !part.is_empty() && normalized(typed).contains(&part)
+}
+
+// Whether the board still waits to see a text that carries this part taken by the session at this label.
+pub fn watching_part_in(dir: &Path, label: &str, part: &str) -> bool {
     std::fs::read_dir(dir.join("typed")).into_iter().flatten().flatten()
         .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "json"))
         .filter_map(|entry| std::fs::read_to_string(entry.path()).ok().and_then(|text| Typed::from_json_text(&text)))
-        .any(|typed| typed.label == label && typed.text == text)
+        .any(|typed| typed.label == label && holds_part(&typed.text, part))
 }
 
 // Types into a running conversation only when its input box is empty, so the user's draft is never typed over; the board then checks that Claude took it.

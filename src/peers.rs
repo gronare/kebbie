@@ -13,6 +13,7 @@ use crate::status::LEAD_LABEL;
 use crate::tasks::slots;
 
 // A Claude that can be told things: a task in a repo (task@repo) or the lead.
+#[derive(Clone)]
 pub struct Session {
     pub address: String,
     pub task: Option<String>,

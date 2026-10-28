@@ -585,6 +585,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("messages") if arguments.flag("--print") => Ok(messages::print(30)),
         Some("messages") if arguments.flag("--unread") => {
+            messages::note_lead_prompt_from_stdin();
             let _ = messages::flush();
             messages::unread_for_lead()
         }

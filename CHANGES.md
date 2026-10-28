@@ -26,6 +26,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task that runs a command that looks like a test run, such as script/test or make test, but is not in task.test_commands names it on its row, with the hint to add it there so its runs are recorded
 - Messages to the lead, kebbie's notices and desktop notifications name a task the way the board does, by its title with its name
 - kebbie tells the lead live only what asks it to act; a passed review, a task started, pushed or closed, and a rebase or red CI the task resolves itself come with your next prompt to the lead, grouped by task
+- While you talk with the lead, what asks it to act waits, and goes as one message grouped by task once you have been quiet for 3 minutes and the lead is idle; a prompt on a task's screen comes first, and in away mode nothing waits
 - kebbie doctor lists worktrees and open tasks left from kelpie, and kebbie doctor --fix installs kebbie's push block where kelpie's was
 - With [report] inbox_token set, an error signal at least three installs report for the same version, component and kind on one UTC day becomes one kebbie bug, such as "board.render: panic in 0.28.0 (4 installs on 2026-10-28)"; later days update that bug, and a new version opens its own
 - A bug report or signal the inbox files adds one line under messages on the board, "New bug report: <title>", and leaves the lead alone

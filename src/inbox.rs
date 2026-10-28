@@ -254,7 +254,7 @@ pub(crate) mod tests {
         let via = prompt_in(&dir, "w1:p1", "[from kebbie] probe line one\n  Second line", "billing@app", &same("s-1"), &mut |_, _, _| panic!("nothing is typed when the inbox takes it"));
         assert_eq!(via, Ok(Via::Inbox));
         assert_eq!(reader.join().unwrap(), PROBED);
-        assert!(crate::typing::watching_in(&dir, "billing@app", "[from kebbie] probe line one\n  Second line"), "a message the inbox took is checked against the transcript, as a typed one is");
+        assert!(crate::typing::watching_part_in(&dir, "billing@app", "[from kebbie] probe line one\n  Second line"), "a message the inbox took is checked against the transcript, as a typed one is");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

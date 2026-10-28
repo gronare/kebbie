@@ -96,6 +96,8 @@ A `ci/` file holds the pushed sha, the GitHub repo, the runs as last seen, when 
 | `lead-previous` | The Space you were in before `kebbie lead`, to go back to. |
 | `lead/` | The lead's working directory, where kebbie starts its Claude every time. |
 | `lead.log` | What herdr's startup did to bring the board back in the lead Space: a line when it started the board, and any error. |
+| `lead-prompted` | When the lead's latest prompt came and whether it was yours or kebbie's, from the lead's prompt hook and kebbie's own deliveries. While you prompted it in the last 3 minutes, what asks the lead waits. |
+| `lead-talked` | When a message for the lead last came while the lead was mid-turn on your prompt; the 3 quiet minutes count from it too. |
 | `restart/` | The restarts, below. |
 | `away` | Present while away mode is on. |
 
