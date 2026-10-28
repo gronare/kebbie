@@ -121,9 +121,17 @@ pub(super) enum Step {
     Stuck(String),
 }
 
-pub(super) fn step(state: &Path, slot: &Slot, address: &str, waiting: Option<bool>, hand: HandOver, tell: &dyn Fn(&str)) -> Result<Step> {
+// A task the user owes an answer is left as it is, so a rebase never changes the code under a question; it follows again once the task moves on.
+fn waits_on_user(state: &Path, address: &str, asks: bool) -> bool {
+    asks || crate::phase::load(state, address).is_some_and(|record| matches!(record.phase, crate::phase::Phase::NeedsYou(_) | crate::phase::Phase::CiRed { .. }))
+}
+
+pub(super) fn step(state: &Path, slot: &Slot, address: &str, waiting: Option<bool>, asks: bool, hand: HandOver, tell: &dyn Fn(&str)) -> Result<Step> {
     if waiting == Some(false) {
         return Ok(Step::Waits("its Claude is mid-turn"));
+    }
+    if waits_on_user(state, address, asks) {
+        return Ok(Step::Waits("it waits on the user"));
     }
     if rebase_in_progress(&slot.path) {
         return Ok(Step::Waits("a rebase is in progress"));
@@ -218,6 +226,8 @@ impl Drop for Lock {
 
 fn pass(state: &Path, workspaces: &[Value], agents: &[Value], hand: HandOver) -> Vec<String> {
     let flagged = flagged(state);
+    let log = messages::load();
+    let asking: BTreeSet<&str> = crate::questions::open_now(&log).iter().map(|question| question.from.as_str()).collect();
     let mut fetched = BTreeSet::new();
     let mut notes = Vec::new();
     for (address, repo) in flagged {
@@ -235,7 +245,7 @@ fn pass(state: &Path, workspaces: &[Value], agents: &[Value], hand: HandOver) ->
                 eprintln!("Could not tell {address} about the rebase: {error}");
             }
         };
-        let said = match step(state, &slot, &address, waiting_of(&slot.path, workspaces, agents), hand, &tell) {
+        let said = match step(state, &slot, &address, waiting_of(&slot.path, workspaces, agents), asking.contains(address.as_str()), hand, &tell) {
             Ok(Step::Rebased(touched)) => {
                 let upstream = default_branch(&repo).unwrap_or_default();
                 let ahead = ahead_behind(&slot.path, &upstream).map(|counts| counts.0).unwrap_or_default();
@@ -298,6 +308,25 @@ mod tests {
     }
 
     #[test]
+    fn a_task_with_an_open_question_or_under_needs_you_is_not_rebased_until_it_moves_on() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        let (_, hand) = handed();
+        let tell = |_: &str| {};
+        assert_eq!(step(&state, &slot, "billing@app", Some(true), true, &hand, &tell).unwrap(), Step::Waits("it waits on the user"), "an open question");
+        for event in [crate::phase::Event::Asked, crate::phase::Event::Reported { state: "needs-you", head: None, committed: true, pushing: false }, crate::phase::Event::CiRed { sha: "abc", pushing: false }] {
+            crate::phase::record(&state, "billing@app", "test", &event);
+            assert_eq!(step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap(), Step::Waits("it waits on the user"), "{event:?}");
+        }
+        assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 1), "nothing moved under the question");
+        crate::phase::record(&state, "billing@app", "test", &crate::phase::Event::TurnBegan { by_user: true });
+        crate::phase::record(&state, "billing@app", "test", &crate::phase::Event::Reported { state: "ready", head: None, committed: true, pushing: false });
+        assert_eq!(step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap(), Step::Rebased(Vec::new()), "once the task moves on, it follows again");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
     fn an_idle_committed_task_behind_main_is_rebased_and_one_mid_turn_or_with_uncommitted_files_is_not() {
         let (dir, origin, slot, upstream) = task_with_a_commit("billing");
         let state = state_of(&dir);
@@ -305,15 +334,15 @@ mod tests {
         let (typed, hand) = handed();
         let told = RefCell::new(Vec::new());
         let tell = |text: &str| told.borrow_mut().push(text.to_string());
-        assert_eq!(step(&state, &slot, "billing@app", Some(false), &hand, &tell).unwrap(), Step::Waits("its Claude is mid-turn"));
+        assert_eq!(step(&state, &slot, "billing@app", Some(false), false, &hand, &tell).unwrap(), Step::Waits("its Claude is mid-turn"));
         std::fs::write(slot.path.join("d"), "half done").unwrap();
-        assert_eq!(step(&state, &slot, "billing@app", Some(true), &hand, &tell).unwrap(), Step::Waits("it has uncommitted files"));
+        assert_eq!(step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap(), Step::Waits("it has uncommitted files"));
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 1), "nothing moved under the work in progress");
         git(&slot.path, &["checkout", "--", "d"]).unwrap();
         std::fs::write(slot.path.join("scratch.txt"), "untracked").unwrap();
-        assert_eq!(step(&state, &slot, "billing@app", Some(true), &hand, &tell).unwrap(), Step::Rebased(Vec::new()));
+        assert_eq!(step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap(), Step::Rebased(Vec::new()));
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0));
-        assert_eq!(step(&state, &slot, "billing@app", None, &hand, &tell).unwrap(), Step::Current);
+        assert_eq!(step(&state, &slot, "billing@app", None, false, &hand, &tell).unwrap(), Step::Current);
         assert!(typed.borrow().is_empty() && told.borrow().is_empty(), "a clean rebase types nothing");
         assert_eq!(git(&origin, &["rev-list", "--count", "HEAD"]).unwrap(), "4", "never pushed");
         cleanup(dir, origin, &slot);
@@ -357,21 +386,21 @@ mod tests {
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         let (typed, hand) = handed();
         let tell = |_: &str| {};
-        assert_eq!(step(&state, &slot, "billing@app", Some(true), &hand, &tell).unwrap(), Step::Handed);
+        assert_eq!(step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap(), Step::Handed);
         assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), head, "the conflict is aborted for its Claude to redo");
         assert!(!rebase_in_progress(&slot.path));
         assert_eq!(typed.borrow().len(), 1);
         assert!(typed.borrow()[0].contains("follows main") && typed.borrow()[0].contains("Do not push"), "{}", typed.borrow()[0]);
-        assert_eq!(step(&state, &slot, "billing@app", Some(true), &hand, &tell).unwrap(), Step::Waits("its conflict with this upstream is handed over"));
+        assert_eq!(step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap(), Step::Waits("its conflict with this upstream is handed over"));
         assert_eq!(typed.borrow().len(), 1, "the next pass with the same upstream types nothing");
         upstream_commit(&dir, "e", "more", "e on main");
-        assert_eq!(step(&state, &slot, "billing@app", Some(true), &hand, &tell).unwrap(), Step::Handed, "main moved again, so it is tried again");
+        assert_eq!(step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap(), Step::Handed, "main moved again, so it is tried again");
         assert_eq!(typed.borrow().len(), 2);
         let refused = |_: &Slot, _: &str| Err("it has no Claude running to take it over".to_string());
         upstream_commit(&dir, "f", "more", "f on main");
-        let Step::Stuck(why) = step(&state, &slot, "billing@app", None, &refused, &tell).unwrap() else { panic!("no Claude to hand it to") };
+        let Step::Stuck(why) = step(&state, &slot, "billing@app", None, false, &refused, &tell).unwrap() else { panic!("no Claude to hand it to") };
         assert!(why.contains("conflicts") && why.contains("no Claude"), "{why}");
-        assert_eq!(step(&state, &slot, "billing@app", None, &refused, &tell).unwrap(), Step::Waits("its conflict with this upstream is handed over"), "nor is a conflict without a Claude retried every pass");
+        assert_eq!(step(&state, &slot, "billing@app", None, false, &refused, &tell).unwrap(), Step::Waits("its conflict with this upstream is handed over"), "nor is a conflict without a Claude retried every pass");
         cleanup(dir, origin, &slot);
     }
 
@@ -387,7 +416,7 @@ mod tests {
         let (_, hand) = handed();
         let told = RefCell::new(Vec::new());
         let tell = |text: &str| told.borrow_mut().push(text.to_string());
-        let Step::Rebased(touched) = step(&state, &slot, "billing@app", Some(true), &hand, &tell).unwrap() else { panic!("main changed m too") };
+        let Step::Rebased(touched) = step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap() else { panic!("main changed m too") };
         assert_eq!(touched.len(), 1);
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (2, 0));
         assert!(told.borrow()[0].contains("- m: ") && told.borrow()[0].contains("Do not push"), "{:?}", told.borrow());
@@ -404,9 +433,9 @@ mod tests {
         git(&slot.path, &["update-index", "--skip-worktree", "a"]).unwrap();
         std::fs::write(slot.path.join("a"), "local only").unwrap();
         upstream_commit(&dir, "a", "theirs", "a on main");
-        let Step::Stuck(refused) = step(&state, &slot, "billing@app", Some(true), &hand, &tell).unwrap() else { panic!("git refuses to start") };
+        let Step::Stuck(refused) = step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap() else { panic!("git refuses to start") };
         assert!(refused.contains("skip-worktree"), "{refused}");
-        assert_eq!(step(&state, &slot, "billing@app", Some(true), &hand, &tell).unwrap(), Step::Waits("its conflict with this upstream is handed over"));
+        assert_eq!(step(&state, &slot, "billing@app", Some(true), false, &hand, &tell).unwrap(), Step::Waits("its conflict with this upstream is handed over"));
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap().1, 2);
         cleanup(dir, origin, &slot);
     }

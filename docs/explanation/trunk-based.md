@@ -31,7 +31,7 @@ Only the head is fetched and rebased, onto origin's default branch, never the lo
 
 ## A long task can follow main
 
-A task that lives longer, such as a refactor under way while others land, can follow main instead of waiting for its push. Switch it on with `u` on the board or `kebbie follow <name> on`. The keeper then rebases it each time main moves, whenever its Claude sits idle with its work committed.
+A task that lives longer, such as a refactor under way while others land, can follow main instead of waiting for its push. Switch it on with `u` on the board or `kebbie follow <name> on`. The keeper then rebases it each time main moves, whenever its Claude sits idle with its work committed. While the task waits on you, with an open question or under Needs you, it is left as it is, so the code under your answer does not move; it follows main again once the task moves on.
 
 - Clean rebases happen quietly.
 - When main's new commits touch the task's own files, its Claude runs their tests.

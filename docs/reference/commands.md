@@ -137,6 +137,7 @@ While it is on, the keeper checks the task every minute, fetching the repo when 
 | Its Claude is mid-turn or asking for something | Waits for it to finish. |
 | Has uncommitted changes to tracked files, or a rebase in progress | Waits. Untracked files do not count. |
 | Is in review, or a push waits for its tests | Waits. |
+| Has an open question, or sits under Needs you | Waits, so the code does not move under your answer. It follows again once the task moves on. |
 | Rebases cleanly | Rebases it and logs a line in the messages. When the new commits changed files the task changes too, its Claude is asked to run their tests. |
 | Conflicts | Aborts the rebase, hands it to the task's Claude as `land` does, and tells the lead. It tries again only once main or the task moves. |
 
