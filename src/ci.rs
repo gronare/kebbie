@@ -490,6 +490,7 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
 
 // The watch goes only once the task is closed, so the task never shows between CI running and gone.
 fn green(state: &Path, watch: &Watch, what: String) -> Event {
+    let named = crate::status::with_titles(&watch.address);
     let text = if watch.close {
         match crate::tasks::after_ci(&watch.repo, &watch.task, &watch.address, &watch.pushed) {
             Ok(said) => format!("{what}. {said}"),
@@ -503,7 +504,7 @@ fn green(state: &Path, watch: &Watch, what: String) -> Event {
         text
     };
     forget(state, &watch.address);
-    notify::send(&watch.repo, &Notice::from(NotifyEvent::CiGreen, &watch.address, format!("{}: {text}", watch.address)));
+    notify::send(&watch.repo, &Notice::from(NotifyEvent::CiGreen, &watch.address, format!("{named}: {text}")));
     Event { address: watch.address.clone(), kind: Kind::Green, text }
 }
 

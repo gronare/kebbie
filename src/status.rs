@@ -584,6 +584,77 @@ pub(crate) fn kept_title(state: &Path, address: &str) -> Option<String> {
     fs::read_to_string(state.join(TITLES).join(address)).ok().map(|kept| kept.trim().to_string()).filter(|kept| !kept.is_empty())
 }
 
+// A task as the board shows it, with the name or address kebbie knows it by: "Title (name)", or the name alone while it has no title.
+pub fn named(state: &Path, id: &str) -> String {
+    let task = id.split('@').next().unwrap_or(id);
+    let address = if id.contains('@') { Some(id.to_string()) } else { None };
+    let title = address.as_deref().and_then(|address| kept_title(state, address)).or_else(|| title_by_task(state, task));
+    match title {
+        Some(title) if !title.eq_ignore_ascii_case(task) => format!("{title} ({id})"),
+        _ => id.to_string(),
+    }
+}
+
+const COMMAND_WORDS: [&str; 33] = [
+    "tell", "choose", "approve", "push", "land", "review", "follow", "done", "drop", "ci", "dismiss", "outside", "restart", "after", "stage", "unstage",
+    "accept", "accepted", "steps", "report", "ask", "evidence", "move", "reset", "rebase", "tidy", "start", "decide", "defer", "answered", "hold", "retry", "reopen",
+];
+
+// An address right after `kebbie <subcommand>` is the command's argument, which a title in front of it would break.
+fn in_command(before: &str) -> bool {
+    let line = before.rsplit('\n').next().unwrap_or(before);
+    let Some(at) = line.rfind("kebbie ") else { return false };
+    line[at + "kebbie ".len()..].split_whitespace().all(|word| COMMAND_WORDS.contains(&word) || word.starts_with('-') || word.contains('/') || word.starts_with('<') || word.starts_with('"'))
+}
+
+// Each task address in a text kebbie writes for the lead or the user, as "Title (address)" when the board shows a title for it; inside backticks or as a command's argument it stays as it is.
+pub fn with_titles_in(state: &Path, text: &str) -> String {
+    let address_char = |character: char| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.');
+    let mut out = String::new();
+    let mut copied = 0;
+    for (at, _) in text.match_indices('@') {
+        if at < copied {
+            continue;
+        }
+        let start = text[..at].rfind(|character: char| !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))).map_or(0, |index| index + 1);
+        let end = text[at + 1..].find(|character: char| !address_char(character)).map_or(text.len(), |index| at + 1 + index);
+        let end = start.max(at + 1 + text[at + 1..end].trim_end_matches('.').len());
+        if start == at || end == at + 1 || start < copied {
+            continue;
+        }
+        let address = &text[start..end];
+        let task = &text[start..at];
+        let Some(title) = kept_title(state, address).filter(|title| !title.eq_ignore_ascii_case(task)) else { continue };
+        let before = &text[..start];
+        if before.matches('`').count() % 2 == 1 || in_command(before) || before.ends_with(&format!("{title} (")) || before.ends_with("[from ") {
+            continue;
+        }
+        out.push_str(&text[copied..start]);
+        out.push_str(&format!("{title} ({address})"));
+        copied = end;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+pub fn with_titles(text: &str) -> String {
+    match crate::lead::state_location() {
+        Ok(state) => with_titles_in(&state, text),
+        Err(_) => text.to_string(),
+    }
+}
+
+// A bare task name finds its title when exactly one kept title belongs to a task of that name.
+fn title_by_task(state: &Path, task: &str) -> Option<String> {
+    let prefix = format!("{task}@");
+    let mut found = fs::read_dir(state.join(TITLES)).ok()?.flatten().filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix));
+    let first = found.next()?;
+    if found.next().is_some() {
+        return None;
+    }
+    kept_title(state, &first.file_name().to_string_lossy())
+}
+
 pub(crate) fn keep_title(state: &Path, address: &str, title: &str) {
     if !title.trim().is_empty() {
         let _ = fs::create_dir_all(state.join(TITLES)).and_then(|_| fs::write(state.join(TITLES).join(address), title.trim()));
@@ -877,6 +948,37 @@ pub(crate) mod tests {
     use super::*;
     use crate::messages::Report;
     use crate::phase::Event;
+
+    #[test]
+    fn messages_name_a_task_by_its_title_with_the_name_kebbie_knows_it_by() {
+        let state = crate::sh::test_dir("status-titles");
+        keep_title(&state, "analytics-session-id@app", "Session ids in analytics");
+        keep_title(&state, "same@app", "same");
+        let titled = |text: &str| with_titles_in(&state, text);
+        assert_eq!(titled("CI failed for analytics-session-id@app (abc1234): CI · test."), "CI failed for Session ids in analytics (analytics-session-id@app) (abc1234): CI · test.");
+        assert_eq!(titled("analytics-session-id@app landed on main."), "Session ids in analytics (analytics-session-id@app) landed on main.", "a sentence's final dot is not the address's");
+        assert_eq!(titled("kebbie rebased analytics-session-id@app onto origin/main"), "kebbie rebased Session ids in analytics (analytics-session-id@app) onto origin/main");
+        for kept in ["answer with kebbie choose analytics-session-id@app 2", "kebbie tell analytics-session-id@app which commit", "run `kebbie review analytics-session-id@app`", "billing@app has no title", "mail ada@example.com", "same@app is its own title", "[from analytics-session-id@app] ready"] {
+            assert_eq!(titled(kept), kept, "a command's argument, a quote, an untitled task or an address that is no task stays as it is");
+        }
+        let once = titled("analytics-session-id@app is ready");
+        assert_eq!(titled(&once), once, "a text already titled is not titled twice");
+        assert_eq!(named(&state, "analytics-session-id@app"), "Session ids in analytics (analytics-session-id@app)");
+        assert_eq!(named(&state, "analytics-session-id"), "Session ids in analytics (analytics-session-id)", "a bare name finds the one task of that name");
+        assert_eq!(named(&state, "billing"), "billing");
+        keep_title(&state, "analytics-session-id@web", "Another half");
+        assert_eq!(named(&state, "analytics-session-id"), "analytics-session-id", "a name two repos share stays a name");
+        std::fs::remove_dir_all(state).unwrap();
+        let global = crate::lead::state_location().unwrap();
+        keep_title(&global, "zz-titled@app", "Titled one");
+        let reported = crate::messages::fold(r#"{"id":"1","at":1,"from":"zz-titled@app","to":"lead","text":"done","state":"logged","report":{"state":"ready","next":"nothing"}}"#);
+        assert_eq!(crate::messages::report_line(&reported[0]), "- Titled one (zz-titled@app) (ready): done — you: nothing", "the lead's report digest");
+        assert_eq!(crate::notice::Notice::new(crate::notice::Tone::Done, "Pushed").detail("task", "zz-titled@app").details[0].1, "Titled one (zz-titled@app)");
+        let _ = std::fs::remove_file(global.join(TITLES).join("zz-titled@app"));
+        for source in [include_str!("messages.rs"), include_str!("notify.rs"), include_str!("notice.rs")] {
+            assert!(source.contains("with_titles"), "lead messages, desktop notices and kebbie's notices all name tasks the board's way");
+        }
+    }
 
     pub(crate) fn task(status: Option<&str>, report: Option<&str>, ahead: usize) -> Item {
         let mut item = Item {

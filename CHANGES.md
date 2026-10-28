@@ -17,6 +17,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - tab moves between the steps, the files and the diff, and back; a review 120 columns wide or more puts the diff beside the view instead of under it
 - The review split needs only nvim, not fzf
 - The board's To review group is In review; board.groups takes "in-review", and "to-review" still works
+- Messages to the lead, kebbie's notices and desktop notifications name a task the way the board does, by its title with its name
 - kebbie doctor lists worktrees and open tasks left from kelpie, and kebbie doctor --fix installs kebbie's push block where kelpie's was
 
 ### Fixed

@@ -70,7 +70,7 @@ impl Notice {
             Some((task, repo)) => (Some(task.to_string()), Some(repo.to_string())),
             None => (None, None),
         };
-        Notice { event, task, repo, text }
+        Notice { event, task, repo, text: crate::status::with_titles(&text) }
     }
 
     // A question is also reported as needs-you in the same turn, so both share one minute and the user hears it once.

@@ -538,6 +538,22 @@ mod tests {
     }
 
     #[test]
+    fn the_leads_copies_of_a_question_and_its_answer_name_the_task_by_its_title() {
+        let state = crate::sh::test_dir("questions-titled");
+        crate::status::keep_title(&state, "billing@web", "Retry failed charges");
+        let messages = log(&[record("q1", 10, "billing@web", &asked(), None, None)]);
+        let asked = crate::status::with_titles_in(&state, &question_copy(&messages[0], true));
+        assert!(asked.starts_with("Retry failed charges (billing@web) asks the user:"), "{asked}");
+        assert!(asked.contains("kebbie decide billing@web \"<answer>\"") && asked.contains("kebbie defer billing@web"), "a command's argument stays as it runs: {asked}");
+        let answered = crate::status::with_titles_in(&state, &answer_copy(&messages[0], Some(0), ""));
+        assert!(answered.starts_with("Retry failed charges (billing@web) asked"), "{answered}");
+        let source = include_str!("messages.rs");
+        let copy = &source[source.find("\npub fn copy_to_lead_locked(").unwrap()..];
+        assert!(copy[..copy.find("\n}\n").unwrap()].contains("with_titles(text)"), "every copy to the lead goes through with_titles");
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
     fn the_lead_settles_a_question_of_method_while_the_user_is_here_and_keeps_one_only_while_they_are_away() {
         use crate::permit::Caller;
         assert!(lead_settles(&Caller::Lead, false, false).is_ok(), "the lead decides a how-question with the user present");

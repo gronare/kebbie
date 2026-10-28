@@ -582,7 +582,8 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     if let Some(cli) = vault.as_ref() {
         crate::task_note::heartbeat(cli, state, &address);
     }
-    let landed = |closed: bool, waits: bool| Landed { pusher, address: &address, target: &target, commits: &pushed, closed, note: note.as_deref(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), waits };
+    let named = crate::status::with_titles_in(state, &address);
+    let landed = |closed: bool, waits: bool| Landed { pusher, address: &named, target: &target, commits: &pushed, closed, note: note.as_deref(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), waits };
     let short = &sha[..7.min(sha.len())];
     if matches!(watch, crate::ci::Begin::Watching) {
         crate::ci::arm(state, &address, log.as_ref().map(|log| matches!(log, Ok(Some(_)))));
@@ -658,7 +659,8 @@ fn tell_lead(text: &str, kind: Option<&str>) {
 pub fn after_ci(repo: &Path, task: &str, address: &str, told: &crate::ci::Pushed) -> Result<String> {
     let state = state_dir()?;
     let vault = crate::vault_cli::detect();
-    let landed = |closed: bool, waits: bool| Landed { pusher: &told.pusher, address, target: &told.target, commits: &told.commits, closed, note: told.note.as_deref(), logged: told.logged, waits };
+    let named = crate::status::with_titles_in(&state, address);
+    let landed = |closed: bool, waits: bool| Landed { pusher: &told.pusher, address: &named, target: &told.target, commits: &told.commits, closed, note: told.note.as_deref(), logged: told.logged, waits };
     let ready = note_ready(vault.as_ref(), &state, address, task);
     if let Err(waits) = &ready {
         crate::phase::record(&state, address, "ci", &crate::phase::Event::Closing);
@@ -719,7 +721,7 @@ struct Landed<'a> {
     waits: bool,
 }
 
-// logged is None without the vault, else whether kebbie wrote the repo's log line itself; with the vault kebbie settles the note.
+// logged is None without the vault, else whether kebbie wrote the repo's log line itself; with the vault kebbie settles the note. address is named with its title before the close forgets it.
 fn pushed_notice(landed: &Landed) -> String {
     let Landed { pusher, address, target, commits, closed, note, logged, waits } = *landed;
     let count = commits.lines().count();
@@ -814,6 +816,25 @@ mod tests {
         assert!(waits.contains("stays open until its note has its solution and decisions"), "{waits}");
         let failed = pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: Some("Projects/billing.md"), logged: Some(false), waits: false });
         assert!(failed.contains("kebbie could not write the repo's log line: write it in the vault with what landed and these shas") && !failed.contains("kebbie wrote"), "a log append that failed leaves the line to the lead: {failed}");
+    }
+
+    #[test]
+    fn the_lead_hears_of_a_closed_task_by_the_title_the_close_forgets() {
+        let state = crate::sh::test_dir("push-named");
+        crate::status::keep_title(&state, "billing@app", "Refunds on invoices");
+        let named = crate::status::with_titles_in(&state, "billing@app");
+        crate::status::forget_title(&state, "billing@app");
+        let done = pushed_notice(&Landed { pusher: "the user", address: &named, target: "main", commits: "a1b2c3d Add refunds", closed: true, note: None, logged: Some(true), waits: false });
+        assert!(done.starts_with("The user pushed Refunds on invoices (billing@app): 1 commit"), "{done}");
+        crate::status::keep_title(&state, "billing@app", "Refunds on invoices");
+        assert_eq!(crate::status::with_titles_in(&state, &done), done, "a title still kept is not added twice");
+        let source = include_str!("push.rs");
+        for start in ["\npub fn after_ci(", "\nfn deliver("] {
+            let body = &source[source.find(start).unwrap()..];
+            let body = &body[..body.find("\n}\n").unwrap()];
+            assert!(body.find("with_titles_in(").unwrap() < body.find("close_task(").unwrap(), "{start}: the close forgets the title, so the notice is named before it");
+        }
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     fn failed_text(commits: &str) -> String {

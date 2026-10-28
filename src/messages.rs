@@ -660,6 +660,7 @@ pub fn tell(cwd: &Path, to: &str, text: &str) -> Result<String> {
 
 // kebbie's own word to the lead, for a change it would otherwise learn of from stale reports.
 pub fn notify_lead(text: &str) -> Result<()> {
+    let text = &crate::status::with_titles(text);
     let sessions = peers::sessions()?;
     let Ok(lead) = peers::resolve(LEAD_LABEL, "kebbie", &sessions) else { return Ok(()) };
     send("kebbie", &lead, text, &sessions).map(|_| ())
@@ -672,6 +673,7 @@ pub fn tell_from_kebbie(recipients: &[&Session], text: &str, sessions: &[Session
 
 // kebbie's word to the lead that must not be lost: with no lead session yet, it waits in the log and reaches the lead once one runs.
 pub fn tell_lead(text: &str, kind: Option<&str>) -> Result<()> {
+    let text = &crate::status::with_titles(text);
     let sessions = peers::sessions().unwrap_or_default();
     let _lock = Lock::take(true)?;
     let Some(lead) = sessions.iter().find(|session| session.address == LEAD_LABEL) else {
@@ -696,7 +698,8 @@ fn notice_locked_in(dir: &Path, session: &Session, text: &str, sessions: &[Sessi
 
 // kebbie's word to the lead that needs no turn of its own (a push, a close, a start): on the board, and in the lead's digest with the user's next prompt.
 pub fn log_for_lead(text: &str, kind: Option<&str>) -> Result<()> {
-    fyi_or_live_in(&state_dir()?, text, kind, &mut tell_lead)
+    let dir = state_dir()?;
+    fyi_or_live_in(&dir, &crate::status::with_titles_in(&dir, text), kind, &mut tell_lead)
 }
 
 // While the user is away the lead answers for them and writes their summary, so it hears kebbie's notices live.
@@ -737,6 +740,7 @@ pub fn hold_for(from: &str, to: &str, text: &str, about: Option<&str>, kind: Opt
 
 // The caller holds the lock. The lead's copy of what the user is asked (about that question, so a copy still held when it is answered is dropped) and answers on the board: typed into its chat while the user is away, so it can settle a question of method; otherwise given with the user's next prompt to it.
 pub fn copy_to_lead_locked(text: &str, about: Option<&str>, sessions: &[Session]) -> Result<()> {
+    let text = &crate::status::with_titles(text);
     if crate::permit::away_since().is_none() {
         return append(&json!({ "id": new_id("copy"), "at": now(), "from": "kebbie", "to": LEAD_LABEL, "text": text, "state": "logged", "kind": "copy", "about": about }));
     }
@@ -895,7 +899,7 @@ fn unread_in(dir: &Path) -> Result<String> {
     if !told.is_empty() {
         let lines: Vec<String> = told.iter().map(|message| {
             let held = held_note(message).map(|note| format!(" ({note})")).unwrap_or_default();
-            format!("- {} → {}{held}: {}", message.from, message.to, indented(&message.text))
+            format!("- {} → {}{held}: {}", crate::status::with_titles_in(dir, &message.from), crate::status::with_titles_in(dir, &message.to), indented(&message.text))
         }).collect();
         sections.push(format!("Messages between sessions since you last looked (kebbie messages --print for more):\n{}", lines.join("\n")));
     }
@@ -919,7 +923,7 @@ fn is_copy(message: &Message) -> bool {
 
 pub fn report_line(message: &Message) -> String {
     let state = message.report.as_ref().map(|report| report.state.as_str()).unwrap_or_default();
-    format!("- {} ({state}): {} — you: {}", message.from, message.text, message.next_for_you().unwrap_or("nothing"))
+    format!("- {} ({state}): {} — you: {}", crate::status::with_titles(&message.from), message.text, message.next_for_you().unwrap_or("nothing"))
 }
 
 // Messages to or from the lead are already in its chat; reports, the board's copies and kebbie's notices to it are not; what kebbie sent its maintainers is the user's alone.

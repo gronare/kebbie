@@ -46,23 +46,28 @@ fn one_line(text: &str) -> String {
 
 impl Notice {
     pub fn new(tone: Tone, headline: impl AsRef<str>) -> Notice {
-        Notice { tone, headline: one_line(headline.as_ref()), next: None, you: None, details: Vec::new() }
+        Notice { tone, headline: crate::status::with_titles(&one_line(headline.as_ref())), next: None, you: None, details: Vec::new() }
     }
 
     pub fn next(mut self, text: impl AsRef<str>) -> Notice {
-        self.next = Some(one_line(text.as_ref())).filter(|text| !text.is_empty());
+        self.next = Some(crate::status::with_titles(&one_line(text.as_ref()))).filter(|text| !text.is_empty());
         self
     }
 
     pub fn you(mut self, text: impl AsRef<str>) -> Notice {
-        self.you = Some(one_line(text.as_ref())).filter(|text| !text.is_empty());
+        self.you = Some(crate::status::with_titles(&one_line(text.as_ref()))).filter(|text| !text.is_empty());
         self
     }
 
+    // The task detail names the task as the board shows it, its title with the name kebbie knows it by.
     pub fn detail(mut self, label: &str, value: impl AsRef<str>) -> Notice {
         let value = value.as_ref().trim();
         if !value.is_empty() {
-            self.details.push((label.to_string(), value.to_string()));
+            let value = match (label, crate::lead::state_location()) {
+                ("task", Ok(state)) => crate::status::named(&state, value),
+                _ => value.to_string(),
+            };
+            self.details.push((label.to_string(), value));
         }
         self
     }
