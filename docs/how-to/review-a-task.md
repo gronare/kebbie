@@ -2,7 +2,7 @@
 
 Read a task's diff next to its Claude, step by step, and send it comments line by line.
 
-![A comment on a line in the review split, sent to Claude, then the reviewer's rules check](../assets/clips/review-in-nvim.gif)
+![The review view beside Claude: step 1 accepted with a, a line comment on step 2 sent to Claude, then the reviewer's rules check](../assets/clips/review-in-nvim.gif)
 
 1. Select the task on the board and press `r`. A split opens next to Claude: kebbie's view with the task's steps and files on top, the diff in nvim below. It opens on the first step waiting for your accept.
 2. Read the step's commit message, then pick a file with `↑` `↓` or a click. nvim shows its diff at once.

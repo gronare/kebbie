@@ -4,7 +4,7 @@ Follow your tasks from your phone through a [kebbie hub](https://github.com/gron
 
 It works on any phone or browser you sign in on with your passkey. The phone reads; you still answer and push on the machine.
 
-![H connects this machine to a hub: a QR code of the link and the code to check on the page](../assets/clips/hub-connect.gif)
+![H connects this machine to a hub: the card with the code to check on the page and the link to open](../assets/clips/hub-connect.gif)
 
 ## What the hub sees
 
