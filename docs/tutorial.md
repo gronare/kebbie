@@ -50,7 +50,7 @@ The script opens the setup guide. Its steps are on the left; `↑` `↓` choose,
 6. **Error signals.** Read what a signal holds, below, and keep them on or turn them off.
 7. **Review and apply.** Read the list of what it writes and runs, then press `⏎`. The list includes the `kebbie doctor` warnings setup fixes itself, such as starting the keeper.
 
-Each line then turns `done` or `already`, and setup ends with `Setup done` and `kebbie doctor`'s count and, under `Next steps`, what is still yours to do, such as `codex login`. Below them, **Your board on your phone** offers the hub: `h` connects now and then opens your board, any other key opens the board straight away, and `H` on the board connects later (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)). It linked `~/.local/bin/kebbie` to the binary, installed the Claude Code plugin from the same folder, added the keys and reloaded herdr's config so they work. When `~/.local/bin` is not on your `PATH`, its line tells you what to add to your shell profile.
+Each line then turns `done` or `already`, and setup ends with `Setup done` and `kebbie doctor`'s count and, under `Next steps`, what is still yours to do, such as `codex login`. Below them, **Your board on your phone** offers the hub: `h` connects now and then opens your board, any other key takes you to the lead Space with the board and the lead, and `H` on the board connects later (see [See your board on your phone](how-to/see-your-board-on-your-phone.md)). It linked `~/.local/bin/kebbie` to the binary, installed the Claude Code plugin from the same folder, added the keys and reloaded herdr's config so they work. When `~/.local/bin` is not on your `PATH`, its line tells you what to add to your shell profile.
 
 | Key | What it does |
 | --- | --- |
@@ -113,9 +113,9 @@ kebbie pushes to a repo's remote, so the practice repo gets a remote of its own 
 
 ## 6. Open the lead
 
-1. In herdr, press `prefix+space`.
+1. In herdr, press `prefix+space`, unless setup has taken you there already.
 
-   kebbie creates the lead Space and moves it to the top of herdr's Spaces. On the left is the board, with the Work column, the Backlog column and the status line. On the right is the lead, a Claude that keeps track of your tasks. The Work column is empty.
+   kebbie creates the lead Space when there is none and moves it to the top of herdr's Spaces. On the left is the board, with the Work column, the Backlog column and the status line. On the right is the lead, a Claude that keeps track of your tasks. The Work column is empty.
 
 2. Press `tab` on the board. Focus moves to the lead's chat, and `prefix+f` from the chat brings it back to the board.
 

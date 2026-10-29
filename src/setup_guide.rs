@@ -963,6 +963,10 @@ pub fn run(env: &Env, at: Step) -> Result<String> {
     })();
     crate::board::terminal::restore_terminal();
     match result? {
+        Next::Board if std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty()) => {
+            println!("{}\n", guide.text());
+            return crate::lead::show();
+        }
         Next::Board => println!("{}\n", guide.text()),
         Next::Connect => {
             println!("{}\n", guide.said(false));

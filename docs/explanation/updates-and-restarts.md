@@ -169,6 +169,8 @@ With `restart.auto` on, the default:
 - the keeper restarts each other stale session once it has been idle and out of focus for `restart.idle_minutes`; the lead waits one minute instead,
 - with `[keeper] enabled = false`, the full board does this every minute; the `prefix+t` popup does not.
 
+`kebbie setup` inside herdr ends in the lead Space: it restarts an idle lead on the new kebbie and a board there on an older one, whatever `restart.auto` says.
+
 The status line shows `↻ N stale` while sessions wait. With `restart.auto = false`, nothing restarts on its own: `kebbie restart`, `kebbie lead --restart` and the board's `L` do it when you choose.
 
 ## A restart on its own never interrupts work

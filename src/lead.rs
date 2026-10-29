@@ -76,6 +76,24 @@ pub fn keep_first() -> Result<String> {
     }
 }
 
+// Setup ends in the lead Space with its board and an idle lead on the new kebbie, resuming its conversation; a busy lead keeps running and L restarts it later.
+pub fn show() -> Result<String> {
+    let answer = match lead_workspace(&herdr::workspaces()?) {
+        None => create()?,
+        Some(lead) => {
+            herdr::focus_workspace(&lead)?;
+            repair(&lead)?;
+            let chat = match restart(false, false) {
+                Ok(said) => said,
+                Err(why) => why.strip_prefix(REFUSED).map_or(why.clone(), |why| format!("The lead keeps running for now: {}.", why.trim_end_matches('.'))),
+            };
+            format!("In the lead. {} {chat}", renew_board()?)
+        }
+    };
+    keep_first()?;
+    Ok(answer)
+}
+
 pub fn toggle() -> Result<String> {
     let answer = go()?;
     keep_first()?;
