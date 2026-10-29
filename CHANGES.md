@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- A task the lead starts no longer pulls you into its Space; only a task you start takes focus
 
 ## 0.29.0
 

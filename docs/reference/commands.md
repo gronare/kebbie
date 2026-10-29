@@ -53,10 +53,13 @@ Start a task in a pooled worktree, in its own herdr Space, with Claude.
 | `--anyway` | Start from a vault note that kebbie on another machine works on. Without it, `--backlog` refuses such a note and names the machine and task that hold it. |
 | `--mode <mode>` | Claude's permission mode, one of Claude Code's: `default`, `acceptEdits`, `plan`, `auto`, `dontAsk` or `bypassPermissions`. |
 | `--profile <name>` | Start with this [profile](configuration.md#profiles) instead of `task.profile`, or the built-in `task`. |
-| `--no-focus` | Stay where you are. |
+| `--focus` | Go to the task's Space, also when the lead or a task starts it. |
+| `--no-focus` | Stay where you are, also when you start it yourself. |
 | `--after <task[@repo]>` | Queue the task until that task has ended as done. Repeat it to wait for several. See [`kebbie after`](#kebbie-after-name). |
 | `--at <time>` | Queue the task to start at that local time. |
 | `--why <reason>` | With `--after`: why the task waits, in a few words for the user, shown on the board's Queued row. |
+
+A task you start takes you to its Space. One the lead or another task starts leaves you where you are, unless it passes `--focus`.
 
 Without `--mode`, the task starts in its profile's `permission_mode`, then [`task.permission_mode`](configuration.md#keys), and without those in Claude Code's own default.
 
