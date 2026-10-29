@@ -1,8 +1,8 @@
 #!/bin/bash
-# saved-carts: asks where carts are kept, writes the store on the answer, and changes how long carts are kept on a review comment.
+# saved-carts: asks where carts are kept, builds the answer in two steps, and folds a review comment into the step it belongs to.
 . "$KDEMO_DIR/react/lib.sh"
 text=$1
-commit() { git add src/cart/store.ts && git commit -qm "$1" -m "$2"; }
+commit() { git add "$1" && git commit -qm "$2" -m "$3"; }
 case "$text" in
   "Saved carts:"*)
     sleep 0.8
@@ -22,13 +22,15 @@ case "$text" in
     mode working
     kebbie report --state working --next "nothing yet" "Keeping carts for 30 days, from your review comment" >/dev/null
     sleep 1
-    say "● Your comment on src/cart/store.ts:3 asks to keep the cart for 30 days, not 7. Changing it."
+    say "● Your comment on src/cart/store.ts:3 asks to keep the cart for 30 days, not 7. That line is step 1's, so the fix goes into step 1."
     sleep 2.5
     perl -pi -e 's/KEEP_DAYS = 7;/KEEP_DAYS = 30;/' src/cart/store.ts
     say "● Update(src/cart/store.ts)" "  ⎿  - export const KEEP_DAYS = 7;" "     + export const KEEP_DAYS = 30;"
-    commit "Keep saved carts for 30 days" "Seven days dropped carts shoppers meant to come back to after payday. Saved carts now expire 30 days after the last visit."
-    sleep 2.5
-    say "● Bash(git commit -m \"Keep saved carts for 30 days\")"
+    first=$(git rev-list --reverse "$(git merge-base HEAD origin/main)..HEAD" | head -1)
+    git add src/cart/store.ts && git commit -q --fixup="$first"
+    GIT_SEQUENCE_EDITOR=: git rebase -q -i --autosquash "$(git merge-base HEAD origin/main)" 2>/dev/null
+    sleep 2
+    say "● Bash(git commit --fixup && git rebase --autosquash)" "  ⎿  step 1 keeps carts 30 days"
     cat > card.md <<CARD
 Saved carts are kept for 30 days after the shopper's last visit, on every device they sign in on.
 
@@ -36,14 +38,17 @@ Saved carts are kept for 30 days after the shopper's last visit, on every device
 
 Confirm: sign in on a second device and the same cart is there.
 CARD
-    kebbie report --state ready --card card.md --next "push it" "Carts are kept 30 days; the card shows the saved cart" >/dev/null
-    say "● Done: carts are kept for 30 days. The card shows the saved cart on a second device."
+    kebbie report --state ready --card card.md --next "accept both steps, then push" "Carts are kept 30 days; the card shows the saved cart" >/dev/null
+    say "● Done: step 1 keeps carts for 30 days. Both steps are ready for your accept."
     mode idle
     ;;
   "[from you]"*)
     mode working
     kebbie report --state working --next "nothing yet" "Saving carts in the database" >/dev/null
-    say "● Keeping carts in the database, for 7 days after the shopper's last visit."
+    say "● Keeping carts in the database. Two steps: the store, then loading it at sign-in."
+    sleep 1
+    kebbie steps "Keep a signed-in shopper's cart in the database" "Load the saved cart when the shopper signs in" >/dev/null
+    say "● Bash(kebbie steps \"Keep a signed-in shopper's cart in the database\" \"Load the saved cart when the shopper signs in\")" "  ⎿  2 steps listed"
     sleep 1.5
     mkdir -p src/cart
     cat > src/cart/store.ts <<'TS'
@@ -62,11 +67,21 @@ export async function loadCart(shopperId: string): Promise<CartItem[]> {
 }
 TS
     say "● Write(src/cart/store.ts)" "  ⎿  Wrote 14 lines"
-    commit "Keep a signed-in shopper's cart in the database" "A cart lived only in the session, so it was gone on another device or after a restart. A signed-in shopper's cart is now saved in the database and loaded again until it expires."
+    commit src/cart/store.ts "Keep a signed-in shopper's cart in the database" "A cart lived only in the session, so it was gone on another device or after a restart. A signed-in shopper's cart is now saved in the database until it expires."
+    sleep 2
+    cat > src/cart/signin.ts <<'TS'
+import { Cart } from "./cart";
+import { loadCart } from "./store";
+
+export async function restoreCart(shopperId: string, cart: Cart) {
+  for (const item of await loadCart(shopperId)) cart.add(item);
+}
+TS
+    say "● Write(src/cart/signin.ts)" "  ⎿  Wrote 6 lines"
+    commit src/cart/signin.ts "Load the saved cart when the shopper signs in" "A saved cart is only worth something if it comes back. Signing in now adds the saved items to the cart, merged with what the shopper already picked."
     sleep 1
-    say "● Bash(git commit -m \"Keep a signed-in shopper's cart in the database\")"
-    kebbie report --state ready --next "review src/cart/store.ts" "Carts are kept in the database for 7 days after the last visit" >/dev/null
-    say "● Ready: carts are saved in the database and kept for 7 days."
+    kebbie report --state ready --next "review the steps" "Carts are kept in the database for 7 days and come back at sign-in" >/dev/null
+    say "● Ready: two steps, the store and loading it at sign-in. Carts are kept 7 days."
     mode idle
     ;;
 esac

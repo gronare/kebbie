@@ -1,5 +1,5 @@
 #!/bin/bash
-# vat-rounding: takes a review comment on the preview, shows the difference per invoice and reports ready.
+# vat-rounding: takes a review comment on the preview, folds the difference per invoice into step 2 and reports ready.
 . "$KDEMO_DIR/react/lib.sh"
 text=$1
 case "$text" in
@@ -7,14 +7,15 @@ case "$text" in
     sleep 0.6
     mode working
     kebbie report --state working --next "nothing yet" "Showing the difference per invoice in the preview" >/dev/null
-    say "● Your comment on app/invoices/preview.py asks for the difference next to old and new. Adding it."
+    say "● Your comment on app/invoices/preview.py asks for the difference next to old and new. It is step 2's line, so it goes into step 2."
     sleep 2.5
     perl -pi -e 's/yield invoice.number, old, new$/yield invoice.number, old, new, new - old/' app/invoices/preview.py
     say "● Update(app/invoices/preview.py)" "  ⎿  -             yield invoice.number, old, new" "     +             yield invoice.number, old, new, new - old"
     sleep 2
-    git add app/invoices/preview.py && git commit -qm "Show the difference per invoice in the VAT preview" -m "Old and new totals side by side still left the reader to subtract. Each changed invoice now carries the difference too, so the largest shifts stand out."
-    kebbie report --state ready --next "push it" "The preview shows old, new and the difference per invoice" >/dev/null
-    say "● Done: the preview shows the difference per invoice. Ready to push."
+    git add app/invoices/preview.py && git commit -q --amend --no-edit
+    say "● Bash(git commit --amend --no-edit)" "  ⎿  step 2 shows the difference"
+    kebbie report --state ready --next "accept step 2, then push" "The preview shows old, new and the difference per invoice" >/dev/null
+    say "● Done: step 2's preview shows the difference per invoice. Ready for your accept."
     mode idle
     ;;
 esac

@@ -16,10 +16,14 @@ import tty
 demo = os.environ.get("KDEMO_DIR", "/tmp/kebbie-demo")
 
 
-# kebbie's rules check asks a reviewer for a verdict on stdin; the demo's is $KDEMO_DIR/verdicts/<branch>, or a pass.
+# kebbie's rules check asks a reviewer for a verdict on stdin; the demo's is $KDEMO_DIR/verdicts/<branch>, or a pass. A review station's reviewer keeps reading, so its task stays In review.
 def rules_verdict():
     brief = "" if sys.stdin.isatty() else sys.stdin.read()
+    if not brief:
+        return
     if "this is a rules check" not in brief:
+        time.sleep(1200)
+        sys.stdout.write("verdict: ok\n")
         return
     branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
     short = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -113,6 +117,9 @@ def wrapped(text, width):
 def colored(line):
     if line.startswith("> "):
         return f"{DIM}>{RESET} {line[2:]}"
+    part = re.match(r"^(● )?(Done|Going on|Needs you|Noted):", line)
+    if part:
+        return f"{BOLD}{line[:part.end()]}{RESET}{line[part.end():]}"
     if line.startswith("● "):
         return f"{BOLD}●{RESET} {line[2:]}"
     if re.match(r"^\s+⎿\s+- ", line):

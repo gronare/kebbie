@@ -19,6 +19,10 @@ stop_demo() {
   if [ -n "$pid" ] && ps -p "$pid" -o command= | grep -q 'http.server'; then kill "$pid"; fi
   pid=$(cat "$D/hub.pid" 2>/dev/null || true)
   if [ -n "$pid" ] && ps -p "$pid" -o command= | grep -q 'kebbie-hub'; then kill "$pid"; fi
+  pkill -f "$D/bin/kebbie -C .* review --run" 2>/dev/null && sleep 0.5
+  pkill -f "$D/bin/claude.py" 2>/dev/null || true
+  pkill -f "$D/home/.local/share/.* keeper" 2>/dev/null && sleep 0.5
+  return 0
 }
 
 stop_demo
@@ -169,7 +173,12 @@ restart_auto=false
 cat > "$H/.config/kebbie/config.toml" <<EOF
 [restart]
 auto = $restart_auto
+
+[task]
+steps = true
 EOF
+# The board's message log starts folded to one line, so the film shows every task.
+mkdir -p "$H/.local/state/kebbie" && printf 'line\t0\n' > "$H/.local/state/kebbie/board-messages"
 if [ "$scene" = hub-connect ]; then
   hub=${KDEMO_HUB_BIN:-$(command -v kebbie-hub || true)}
   [ -x "$hub" ] || { echo "the hub-connect clip runs a hub of its own: put kebbie-hub on PATH or set KDEMO_HUB_BIN" >&2; exit 1; }
@@ -306,7 +315,12 @@ screen() { mkdir -p "$D/screens"; cat > "$D/screens/$1"; }
 tee "$D/lead.screen" <<'EOF' | screen lead
 > what needs me?
 
-● Two tasks need you. search-filters asks how the price filter should work; I recommend fixed ranges. vat-rounding has a preview of the new totals for you to check. checkout-copy is approved and ready to push, rate-limit is still working.
+● Going on:
+  - rate-limit: counting requests per key; the limiter is next.
+  - checkout-copy: rules ✓, ready; I'd push it.
+Needs you:
+  - search-filters: how should the price filter work? Answer 1, fixed ranges.
+  - vat-rounding: check the totals in its preview.
 
 EOF
 screen wt1.shop <<'EOF'
@@ -354,7 +368,14 @@ EOF
 ● The gallery loads each image as it scrolls into view; the first one loads at once.
 
 EOF
+  screen wt4.api <<'EOF'
+> Refund an invoice in part or in full
+
+● Steps listed: the refunds table, the refund, then a credit note per refund. All three are committed.
+
+EOF
   run kebbie start request-ids "Tag every request with an ID in the log" --no-focus >/dev/null
+  run kebbie start refunds "Refund an invoice in part or in full" --no-focus >/dev/null
   cd "$H/code/shop"
   run kebbie start product-images "Lazy-load the product page's images" --no-focus >/dev/null
 fi
@@ -412,6 +433,7 @@ def over_limit(key, limit):
 EOF
 save "$H/code/wt1.api" "Count requests per API key" "The public API has no limit, so one key can starve the others. Each key now keeps its request times for the last minute, the count the limiter middleware will check."
 
+cd "$H/code/wt2.api" && run kebbie steps "Round VAT once per invoice and rate" "Preview old and new VAT per invoice" >/dev/null
 put "$H/code/wt2.api" app/invoices/vat.py <<'EOF'
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
@@ -502,6 +524,31 @@ verdict: changes
 EOF
   cd "$H/code/wt3.shop" && run kebbie report --state ready --next "push it" "Product images load as they scroll into view" >/dev/null
 
+  cd "$H/code/wt4.api" && run kebbie steps "Add the refunds table" "Refund an invoice in part or in full" "Write a credit note for each refund" >/dev/null
+  put "$H/code/wt4.api" app/db/migrations/0007_refunds.py <<'EOF'
+def up(db):
+    db.create_table("refunds", invoice_id="int", amount="decimal", reason="text", created_at="timestamp")
+EOF
+  save "$H/code/wt4.api" "Add the refunds table" "Refunds need a home before an invoice can carry one. The table keeps each refund's invoice, amount, reason and time, and nothing reads it yet."
+  put "$H/code/wt4.api" app/invoices/refund.py <<'EOF'
+from decimal import Decimal
+
+
+def refund(invoice, amount: Decimal, reason: str):
+    if amount <= 0 or amount > invoice.total - invoice.refunded:
+        raise ValueError("a refund is more than nothing and at most what is left on the invoice")
+    return invoice.refunds.create(amount=amount, reason=reason)
+EOF
+  save "$H/code/wt4.api" "Refund an invoice in part or in full" "Support refunded by hand in the payment provider, so the books never saw it. An invoice now takes a refund of any amount up to what is left on it, with a reason."
+  put "$H/code/wt4.api" app/invoices/credit_note.py <<'EOF'
+def credit_note(refund):
+    return {"invoice": refund.invoice.number, "amount": -refund.amount, "reason": refund.reason}
+EOF
+  save "$H/code/wt4.api" "Write a credit note for each refund" "The accountant books a refund from its credit note. Each refund now gets one, a negative line against the invoice it refunds."
+  as_user "$H/code/api" kebbie accept refunds "$(git -C "$H/code/wt4.api" rev-parse --short HEAD~2)"
+  cd "$H/code/wt4.api" && run kebbie report --state ready --next "nothing" "Refunds in part or in full, each with a credit note" >/dev/null
+  cd "$H/code/api" && run kebbie review refunds >/dev/null
+
   as_user "$H/code/shop" kebbie start price-alerts "Email a shopper when a saved product drops in price" --after search-filters --why "it reuses the price ranges search-filters adds" --no-focus
   as_user "$H/code/api" kebbie start invoice-archive "Move invoices older than seven years to cold storage" --at "tomorrow 06:00" --why "it locks the invoices table, so it runs before the shop opens" --no-focus
 
@@ -536,6 +583,7 @@ fi
 
 checked() { for _ in $(seq 1 120); do grep -qs "approved\.\|break the rules" "$H/.local/state/kebbie/rules/$1.log" && return 0; sleep 0.5; done; echo "the rules check of $1 gave no verdict" >&2; exit 1; }
 checked checkout-copy@shop
+for commit in HEAD~1 HEAD; do as_user "$H/code/shop" kebbie accept checkout-copy "$(git -C "$H/code/wt2.shop" rev-parse --short "$commit")"; done
 if [ "$scene" = demo ]; then
   checked request-ids@api
   as_user "$H/code/api" kebbie stage request-ids
@@ -545,7 +593,16 @@ if [ "$scene" = demo ]; then
   cat > "$D/lead.screen" <<'EOF'
 > what needs me?
 
-● Two tasks need you. search-filters asks how the price filter should work; I recommend fixed ranges. vat-rounding has a preview of the new totals for you to check. checkout-copy passed the rules check and is ready to push, and request-ids is on local main for you to try before you push it. product-images broke rule 2, so its Claude splits the commit. rate-limit is still working; devbox has the order export.
+● Going on:
+  - rate-limit: counting requests per key; the limiter is next.
+  - refunds: in review, as it moves money; push it once the reviewer passes it.
+  - checkout-copy: rules ✓, ready; I'd push it.
+  - request-ids: on local main to try before you push it.
+  - product-images: broke rule 2; its Claude splits the commit.
+  - devbox has the order export.
+Needs you:
+  - search-filters: how should the price filter work? Answer 1, fixed ranges.
+  - vat-rounding: check the totals in its preview.
 
 EOF
 fi

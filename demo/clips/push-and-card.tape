@@ -48,6 +48,6 @@ Sleep 4s
 
 # Green: the task closes, and the task queued after it starts by itself.
 Hide
-Wait+Screen@240s /free-shipping@shop started/
+Wait+Screen@240s /Show in the checkout how far/
 Show
 Sleep 6s

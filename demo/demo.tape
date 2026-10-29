@@ -38,7 +38,7 @@ Sleep 2s
 Screenshot docs/assets/board.png
 Sleep 1s
 
-# 3. saved-carts' question, answered with the recommended option.
+# 3. saved-carts' question, answered with the recommended option; the task lists its steps and commits them one by one.
 Type "/saved"
 Sleep 400ms
 Enter
@@ -50,12 +50,11 @@ Sleep 1s
 Enter
 Sleep 1.5s
 Escape
-Wait+Screen@40s /READY TO PUSH/
-Sleep 1.5s
+Sleep 8s
 
-# 4. The review split: a change asked for on the line.
+# 4. The review: the steps as tabs, the first one waiting for you open in nvim, and a change asked for on the line.
 Type "r"
-Sleep 2.5s
+Sleep 3s
 Enter
 Sleep 1.5s
 Type "/KEEP_DAYS ="
@@ -74,16 +73,26 @@ Type "h"
 Sleep 900ms
 Enter
 
-# 5. Claude reads the comment and changes the code.
-Sleep 5s
+# 5. Claude folds the change into the step it belongs to.
+Sleep 7s
 
-# 6. Back on the board: working, then ready, and the reviewer checks its rules.
+# 6. Each step accepted in the review, one at a time.
 Ctrl+B
 Type " "
-Wait+Screen@40s /2 commits/
-Sleep 3s
+Sleep 1.5s
+Type "r"
+Sleep 2s
+Type "l"
+Sleep 1.2s
+Type "a"
+Sleep 1.5s
+Type "a"
+Sleep 2s
 
-# 7. Its options, then the card with its screenshot.
+# 7. Back on the board: both steps accepted; its options, then the card with its screenshot.
+Ctrl+B
+Type " "
+Sleep 3s
 Enter
 Sleep 1.5s
 Screenshot docs/assets/options.png
@@ -99,7 +108,7 @@ Sleep 3s
 Escape
 Sleep 500ms
 
-# 8. Push: the card above the commits, then y.
+# 8. Push: the card above the commits, both accepted, then y.
 Type "p"
 Sleep 3.5s
 Screenshot docs/assets/push.png

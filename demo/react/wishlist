@@ -1,5 +1,5 @@
 #!/bin/bash
-# wishlist: started from the board with n; writes the button and reports ready.
+# wishlist: started from the board with n; lists two steps, commits each and reports ready.
 . "$KDEMO_DIR/react/lib.sh"
 text=$1
 case "$text" in
@@ -8,7 +8,10 @@ esac
 sleep 0.6
 mode working
 say "● Reading the product page in src/product/."
-sleep 2.5
+sleep 2
+kebbie steps "Keep a wishlist per shopper" "Save products for later from the product page" >/dev/null
+say "● Bash(kebbie steps \"Keep a wishlist per shopper\" \"Save products for later from the product page\")" "  ⎿  2 steps listed"
+sleep 1.5
 mkdir -p src/product
 cat > src/product/wishlist.ts <<'TS'
 export function saveForLater(shopperId: string, productId: string) {
@@ -17,10 +20,20 @@ export function saveForLater(shopperId: string, productId: string) {
 TS
 say "● Write(src/product/wishlist.ts)"
 more "  ⎿  Wrote 3 lines"
-sleep 2.5
-git add src/product/wishlist.ts && git commit -qm "Save products for later from the product page" -m "Shoppers who were not ready to buy had to find a product again from search. A Save for later button now keeps it on the shopper's wishlist, one entry per product."
+git add src/product/wishlist.ts && git commit -qm "Keep a wishlist per shopper" -m "Shoppers who were not ready to buy had to find a product again from search. Each shopper now has a wishlist, one entry per product, for the button to fill."
+sleep 2
+cat > src/product/save-button.ts <<'TS'
+import { saveForLater } from "./wishlist";
+
+export function saveButton(shopperId: string, productId: string) {
+  return { label: "Save for later", onClick: () => saveForLater(shopperId, productId) };
+}
+TS
+say "● Write(src/product/save-button.ts)"
+more "  ⎿  Wrote 5 lines"
+git add src/product/save-button.ts && git commit -qm "Save products for later from the product page" -m "The wishlist had no way in. A Save for later button on the product page now puts the product on the shopper's wishlist."
 say "● Bash(git commit -m \"Save products for later from the product page\")"
 sleep 1
 kebbie report --state ready --next "try Save for later on a product page" "A Save for later button on the product page; saved products are kept per shopper" >/dev/null
-say "● Ready: a Save for later button on the product page."
+say "● Ready: a wishlist per shopper and a Save for later button, in two steps."
 mode idle

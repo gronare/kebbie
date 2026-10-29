@@ -1,17 +1,22 @@
 #!/bin/bash
-# The lead: starts saved-carts when asked, and approves a task's commits when kebbie says it is ready.
+# The lead: starts saved-carts when asked, and approves a task's commits when kebbie says it is ready; it works silently and ends each turn in Done / Going on / Needs you.
 . "$KDEMO_DIR/react/lib.sh"
 text=$1
 case "$text" in
   "Add saved carts"*)
     sleep 0.5
     mode working
-    say "● I'll start it as a task in shop. Where carts are kept is your call, so it will ask you."
-    sleep 1
+    sleep 1.5
     prompt="Saved carts: keep a signed-in shopper's cart across devices. Ask the user where carts are kept."
     say "● Bash(kebbie start saved-carts --repo shop --no-focus \"$prompt\")"
     out=$(kebbie start saved-carts --repo shop --no-focus "$prompt" 2>&1 | head -1)
     more "  ⎿  ${out/$HOME/~}"
+    sleep 1
+    say "● Done: started saved-carts in shop." \
+      "Going on:" \
+      "  - saved-carts: reading the cart code; where carts are kept is yours, so it asks you on the board." \
+      "Needs you:" \
+      "  - search-filters: answer 1, fixed ranges."
     mode idle
     ;;
   *"is ready at"*" approve "*)
@@ -23,30 +28,35 @@ case "$text" in
     count=$(git -C "$repo" rev-list --count "main..$task")
     [ "$count" = 1 ] && commits="1 commit" || commits="$count commits"
     say "● Bash(git -C ${repo/$HOME/~} log -p origin/main..$task)"
-    more "  ⎿  $commits; each holds to the rules"
+    more "  ⎿  $commits"
     out=$(kebbie -C "$repo" approve "$task" 2>&1)
     say "● Bash(kebbie approve $task)"
     more "  ⎿  $out"
+    say "● Noted: $task holds to the rules, approved; nothing for you."
     mode idle
     ;;
   "[from kebbie] The user is away from now on"*)
     sleep 0.6
     mode working
-    say "● You are away. search-filters asks how the price filter should work: that is how, not what, so I settle it as recommended."
     sleep 2
     out=$(kebbie decide search-filters "Fixed ranges: under 25, 25 to 50, 50 to 100, over 100" 2>&1)
     say "● Bash(kebbie decide search-filters \"Fixed ranges\")"
     more "  ⎿  $out"
+    say "● Noted: away. search-filters asked how, not what, so I settled it as recommended; nothing for you."
     mode idle
     ;;
   "[from kebbie] The user is back"*)
     sleep 0.6
     mode working
     sleep 1.5
-    say "● Welcome back. While you were away:" \
+    say "● Done:" \
       "  - Landed: nothing; no task had your push permission." \
-      "  - Decided: search-filters' price filter uses fixed ranges, as recommended. It was a how-question." \
-      "  - Waits for you: vat-rounding's preview totals, and checkout-copy and search-filters to push."
+      "  - Decided: search-filters' price filter uses fixed ranges, as recommended; it asked how, not what." \
+      "Going on:" \
+      "  - search-filters: built the fixed ranges, ready to push." \
+      "Needs you:" \
+      "  - vat-rounding: check the totals in its preview." \
+      "  - checkout-copy: push it; rules ✓."
     mode idle
     ;;
 esac

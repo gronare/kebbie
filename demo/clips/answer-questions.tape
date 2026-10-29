@@ -33,5 +33,7 @@ Up
 Sleep 1.2s
 Enter
 
-# The answer reaches the task as a message from you: it works, reports ready, and the reviewer passes it.
-Sleep 14s
+# The answer reaches the task as a message from you: it lists its steps, commits them, reports ready, and the reviewer passes them.
+Sleep 8s
+Wait+Screen@60s /rules ✓/
+Sleep 3s

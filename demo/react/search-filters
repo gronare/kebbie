@@ -7,7 +7,9 @@ case "$text" in
     sleep 0.5
     mode working
     kebbie report --state working --next "nothing yet" "Building the fixed price ranges" >/dev/null
-    say "● Fixed ranges, then. Adding the four ranges."
+    kebbie steps "Filter search results by size" "Filter search results by fixed price ranges" >/dev/null
+    say "● Fixed ranges, then. Size is step 1, the four price ranges step 2."
+    more "  ⎿  2 steps listed"
     sleep 2
     cat > src/search/price.ts <<'TS'
 export const priceRanges = [
