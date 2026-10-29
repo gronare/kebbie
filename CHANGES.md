@@ -5,6 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+
+### Fixed
+
+## 0.29.0
+
+### What's new
 - kebbie setup opens your board when it is done: any key once it has applied, or after h has connected the hub
 - kebbie:work-rules cuts a branch into steps in the order they go out: preparatory commits such as a migration, an interface, a move or a rename first, the change itself last and small, each one finished and pushable on its own
 - With task.steps = true, off by default, a task lists its steps with kebbie steps before its first line of code, one commit each, keeps building the next one while you accept and push the last, and lists them again when you say the split is wrong; kebbie steps shows each one as planned, in progress, committed or accepted, with the pushed ones as a count
