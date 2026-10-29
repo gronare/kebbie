@@ -43,7 +43,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::text::Text;
 use ratatui::DefaultTerminal;
@@ -1021,6 +1021,8 @@ pub fn run(overlay: bool) -> Result<String> {
     let mut rebuild = Rebuild::new();
     let mut fetcher = Fetcher::new();
     let mut resize = Settle::default();
+    // A size the board never drew at (a detached ssh client, a pane briefly resized) leaves the screen out of step with ratatui's last frame, so after any change the next frame writes every cell in place; clearing first would blink.
+    let (mut seen, mut repaint) = (None, false);
     let renewed = std::env::var_os(RESTART_STATE).is_some() && std::env::var_os(SCREEN_KEPT).is_some();
     let mut terminal = if renewed { terminal::continue_terminal() } else { init_terminal() };
     let mut hold = renewed.then(|| Instant::now() + RENEW_HOLD);
@@ -1112,11 +1114,18 @@ pub fn run(overlay: bool) -> Result<String> {
                 app.images.clear();
             }
             let size = ratatui::crossterm::terminal::size().unwrap_or_default();
+            repaint |= seen.replace(size).is_some_and(|before| before != size);
             if hold.is_some_and(|until| app.loaded || Instant::now() >= until) {
                 hold = None;
             }
             if hold.is_none() && resize.draw_now(size, Instant::now()) {
-                terminal.draw(|frame| draw(frame, &mut app)).map_err(|error| error.to_string())?;
+                let every_cell = std::mem::take(&mut repaint);
+                terminal.draw(|frame| {
+                    draw(frame, &mut app);
+                    if every_cell {
+                        terminal::write_every_cell(frame.buffer_mut());
+                    }
+                }).map_err(|error| error.to_string())?;
             }
             if app.may_restart() && ((std::mem::take(&mut app.restart_after_update) && rebuild.changed()) || rebuild.ready()) {
                 let error = rebuild.restart(&app);
@@ -1124,6 +1133,8 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             if event::poll(Duration::from_millis(250)).map_err(|error| error.to_string())? {
                 match event::read().map_err(|error| error.to_string())? {
+                    Event::Resize(..) => repaint = true,
+                    Event::Key(key) if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) => repaint = true,
                     Event::Key(key) if key.kind == KeyEventKind::Press => app.handle(key, &mut terminal),
                     Event::Mouse(mouse) => app.mouse(mouse, &mut terminal),
                     Event::Paste(text) => app.paste(text),

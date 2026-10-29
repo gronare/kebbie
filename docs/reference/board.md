@@ -208,6 +208,7 @@ The row, marked `⧗`, carries a title from its backlog item or the first senten
 | `esc` | One step back: close a window, a menu or the filter. At the top, close the board when it is a popup; on the full board it does nothing. |
 | `q` | Close the current view, like `esc`. At the top, close the popup; on the full board it says that `ctrl+c` twice quits. |
 | `ctrl+c` | Twice within 2 seconds quits the board. The first press says so. |
+| `ctrl+l` | Redraw every cell of the board, over any old text the terminal still shows, on every page and in every window. The board does this by itself after its pane changes size. |
 
 `B`: the list is hidden at first. While any bug waits, the header counts them, such as `! 2 bugs to send · B`. The board remembers whether it shows. See [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers).
 

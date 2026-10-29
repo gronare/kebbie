@@ -10,6 +10,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task the lead starts no longer pulls you into its Space; only a task you start takes focus
 - Setup inside herdr ends in the lead's Space with the lead on the new kebbie, instead of
   opening a second board where setup ran
+- The board no longer shows old text after its pane changes size while an ssh client is
+  detached, and ctrl+l redraws every cell
 
 ## 0.29.0
 

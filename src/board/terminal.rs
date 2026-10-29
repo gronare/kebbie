@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use ratatui::crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture};
+use ratatui::crossterm::event::{DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{Clear, ClearType, EnterAlternateScreen};
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -11,11 +11,11 @@ use crate::sh::Result;
 
 // Bracketed paste makes a paste, and so a dropped file's path, arrive as one paste rather than as keys the board would act on.
 fn modes_on(out: &mut impl Write) {
-    let _ = execute!(out, EnableMouseCapture, EnableBracketedPaste);
+    let _ = execute!(out, EnableMouseCapture, EnableBracketedPaste, EnableFocusChange);
 }
 
 fn modes_off(out: &mut impl Write) {
-    let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste);
+    let _ = execute!(out, DisableMouseCapture, DisableBracketedPaste, DisableFocusChange);
 }
 
 pub fn init_terminal() -> DefaultTerminal {
@@ -66,6 +66,15 @@ fn repaint_all<B: Backend>(mut terminal: Terminal<B>) -> Terminal<B> {
     terminal
 }
 
+// Every cell of this frame is written, blank ones too, over whatever the screen holds; no clear, so nothing blinks. Cells an image owns keep their skip.
+pub fn write_every_cell(buffer: &mut ratatui::buffer::Buffer) {
+    for cell in &mut buffer.content {
+        if cell.diff_option == CellDiffOption::None {
+            cell.set_diff_option(CellDiffOption::AlwaysUpdate);
+        }
+    }
+}
+
 pub fn restore_terminal() {
     modes_off(&mut std::io::stdout());
     ratatui::restore();
@@ -81,6 +90,24 @@ pub fn outside<T>(terminal: &mut DefaultTerminal, step: impl FnOnce() -> Result<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_frame_that_writes_every_cell_wipes_text_the_screen_kept_without_a_clear() {
+        use ratatui::backend::TestBackend;
+        use ratatui::widgets::Paragraph;
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(12, 1)).unwrap();
+        terminal.draw(|frame| frame.render_widget(Paragraph::new("board"), frame.area())).unwrap();
+        let stale = ratatui::buffer::Buffer::with_lines(["stale stale!"]);
+        ratatui::backend::Backend::draw(terminal.backend_mut(), stale.content.iter().enumerate().map(|(x, cell)| (x as u16, 0, cell))).unwrap();
+        terminal.draw(|frame| frame.render_widget(Paragraph::new("board"), frame.area())).unwrap();
+        terminal.backend().assert_buffer_lines(["stale stale!"]);
+        terminal.draw(|frame| {
+            frame.render_widget(Paragraph::new("board"), frame.area());
+            super::write_every_cell(frame.buffer_mut());
+        }).unwrap();
+        let shown: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+        assert_eq!(shown, "board       ");
+    }
+
     use super::*;
 
     #[test]
