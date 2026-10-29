@@ -76,8 +76,14 @@ fn updates(_: &mut Ctx) -> Result<()> {
     Ok(())
 }
 
+// The board words the lead's line by its reasons, which ride after this mark, joined by "; ".
+pub const REASONS: &str = " · as ";
+
 pub fn stale_lines(lines: &[crate::restart::Line]) -> Vec<String> {
-    lines.iter().filter(|line| line.stale).map(|line| format!("{}: {}", line.label, line.said)).collect()
+    lines.iter().filter(|line| line.stale).map(|line| match line.reasons.is_empty() {
+        true => format!("{}: {}", line.label, line.said),
+        false => format!("{}: {}{REASONS}{}", line.label, line.said, line.reasons.join("; ")),
+    }).collect()
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

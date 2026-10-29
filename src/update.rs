@@ -290,7 +290,7 @@ pub fn live_sessions(update: &[crate::restart::Line], stale: Option<&[String]>) 
     update.iter().map(|line| {
         let Some(stale) = stale.filter(|_| !line.said.starts_with("skipped")) else { return line.clone() };
         let prefix = format!("{}: ", line.label);
-        let said = stale.iter().find_map(|entry| entry.strip_prefix(&prefix)).unwrap_or("up to date");
+        let said = stale.iter().find_map(|entry| entry.strip_prefix(&prefix)).map_or("up to date", |said| said.split(crate::keeper::REASONS).next().unwrap_or(said));
         crate::restart::Line { said: said.to_string(), ..line.clone() }
     }).collect()
 }

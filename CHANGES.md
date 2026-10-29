@@ -12,6 +12,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
   opening a second board where setup ran
 - The board no longer shows old text after its pane changes size while an ssh client is
   detached, and ctrl+l redraws every cell
+- A stale lead says why it is stale, and a lead a restart cannot mend no longer offers L
 
 ## 0.29.0
 

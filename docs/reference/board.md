@@ -34,13 +34,31 @@ The status line shows:
 
 In a narrow pane the two columns stack, and the status line keeps only the counts that are not zero, without their words, so the page tabs still fit.
 
-The lead line reads:
+The lead line shows while the lead is stale, and says what happens next:
 
-- `↻ The lead restarts on the new kebbie when it's idle · L restarts it now`;
-- `↻ The lead runs the old kebbie until you restart it · L restarts it` with `restart.auto` off;
-- `↻ The lead's restart on the new kebbie failed · L tries again`.
+| Line | When |
+| --- | --- |
+| `↻ The lead restarts on the new kebbie when it's idle · L restarts it now` | The keeper restarts it once it is idle; `when you leave it` while you are in its pane. |
+| `↻ The lead runs the old kebbie until you restart it · L restarts it` | `restart.auto` is off. |
+| `↻ The lead's restart on the new kebbie failed · L tries again` | A restart failed; the keeper tries again in 30 minutes. |
+| `↻ A restart left the lead on the old kebbie · L tries again` | A restart onto the new kebbie left the lead on the old one. |
+| `↻ The lead's shell starts the same older Claude Code, so a restart cannot update it · put the new one first on that shell's PATH` | A restart brought back the same older Claude Code. No `L`: fix the `PATH`. |
+| `↻ The lead's hooks still run a kebbie that is gone after a restart · kebbie doctor shows the fix` | A restart left its hooks broken. No `L`: run `kebbie doctor`. |
+| `↻ The lead stays stale after a restart and another would not mend it · kebbie restart says why` | Another reason a restart did not mend. No `L`. |
 
-A narrow board takes a shorter wording, never a cut one. See [Restarting the lead after an update](../explanation/updates-and-restarts.md#restarting-the-lead-after-an-update).
+The line names why the lead is stale. `on the new kebbie` and `the old kebbie` mean a kebbie update; with several reasons, a kebbie update is named first:
+
+| Reason | `The lead runs …` | `The lead restarts …`, `restart … failed` |
+| --- | --- | --- |
+| `kebbie update` ran | `the old kebbie` | `on the new kebbie` |
+| A newer Claude Code | `an older Claude Code` | `on the new Claude Code` |
+| A plugin was updated | `the old plugin vault` | `with the updated plugin vault` |
+| The MCP servers changed | `MCP servers from before they changed` | `with the changed MCP servers` |
+| It runs outside its folder | `outside its own folder` | `in its own folder` |
+| Its hooks run a kebbie that is gone | `hooks of a kebbie that is gone` | `with working hooks` |
+| Any other | `older code` | `on the new code` |
+
+A narrow board takes a shorter wording, such as `↻ Lead on old MCP servers · L restarts`, never a cut one. See [Restarting the lead after an update](../explanation/updates-and-restarts.md#restarting-the-lead-after-an-update).
 
 The context line reads `Lead context N% · L` on a narrow board. A click on it asks as `L` does. No line shows while the share is unknown. See [Starting the lead fresh](../explanation/lead-and-away-mode.md#starting-the-lead-fresh).
 

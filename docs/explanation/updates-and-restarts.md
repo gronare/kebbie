@@ -74,7 +74,7 @@ A marketplace added from GitHub follows GitHub's default branch instead. `kebbie
 
 A running Claude session keeps the code it started with. kebbie calls it stale when it runs older code than it would load if it started now:
 
-- the `claude` binary on `PATH` changed after it started,
+- a newer `claude` binary is on `PATH` than the one it started with,
 - a plugin was updated after it started,
 - your MCP server config changed after it started,
 - `kebbie update` ran after it started, or
@@ -207,6 +207,14 @@ Which kebbie the lead runs and which is installed, with their commits and dates,
 With `restart.auto` on, the keeper restarts the lead the same way it restarts any session, but a minute after it is idle and you are out of its pane, such as on the board beside it, rather than after `restart.idle_minutes`. The restart is `kebbie lead --restart`, so the conversation is resumed under the new role, and the lead says in one line that it will be restarted; you never need another pane for it.
 
 With `restart.auto = false` the line says `↻ The lead runs the old kebbie until you restart it · L restarts it`, and the lead says so too.
+
+## The line names why the lead is stale
+
+A lead goes stale for more than a kebbie update: a newer Claude Code, an updated plugin, changed MCP servers. The line names the reason, such as `↻ The lead runs MCP servers from before they changed until you restart it · L restarts it`, and says `the old kebbie` only when kebbie itself was updated. With several reasons, a kebbie update comes first. Every wording is in the [board reference](../reference/board.md#layout).
+
+## A restart that cannot mend it offers no L
+
+Some staleness survives a restart. When the lead's shell starts the same older Claude Code again, or its hooks still run a kebbie that is gone, the keeper holds the lead rather than restart it in a loop. The line then says what mends it instead of offering `L`, such as `↻ The lead's shell starts the same older Claude Code, so a restart cannot update it · put the new one first on that shell's PATH`.
 
 ## L restarts the lead now
 

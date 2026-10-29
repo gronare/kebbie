@@ -148,6 +148,7 @@ fn base(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+pub const HELD: &str = "stale, held: ";
 pub const NO_ROLE: &str = "it runs without its task role";
 pub const HOOKS_GONE: &str = "its hooks run a kebbie that is gone";
 pub const OUTSIDE_LEAD_DIR: &str = "it runs outside the lead's folder";
@@ -303,8 +304,10 @@ impl Changes {
     pub fn reasons(&self, exe: Option<&Path>, started: u64, cwd: Option<&Path>) -> Vec<String> {
         let mut reasons = Vec::new();
         let same_install = |exe: &Path, now: &Path| exe.parent() == now.parent() || exe.file_name() == now.file_name();
+        // The keeper's PATH is the one it started with, so a Claude on it older than the session's own is the keeper's stale view, not the session's.
+        let older = |now: &Path, exe: &Path| mtime(now).zip(mtime(exe)).is_some_and(|(now, exe)| now < exe);
         match (exe.map(|exe| exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf())), &self.claude) {
-            (Some(exe), Some(now)) if same_install(&exe, now) && &exe != now => {
+            (Some(exe), Some(now)) if same_install(&exe, now) && &exe != now && !older(now, &exe) => {
                 let name = |path: &Path| path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
                 if exe.parent() == now.parent() { reasons.push(format!("Claude Code {} → {}", name(&exe), name(now))) } else { reasons.push("a newer Claude Code".to_string()) }
             }
@@ -819,7 +822,7 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
         };
         let record = json!({ "at": at, "exe": exe.as_deref().map(|exe| exe.to_string_lossy().to_string()), "reasons": reasons, "kebbie": kebbie, "started": started_on });
         if !reasons.is_empty() && let Some(why) = held_back(restarted.get(&session), &record, matches!(mode, Mode::Manual { .. })) {
-            lines.push(Line { label: pane.label.clone(), said: format!("stale, held: {why}"), stale: lead, reasons: Vec::new() });
+            lines.push(Line { label: pane.label.clone(), said: format!("{HELD}{why}"), stale: lead, reasons: reasons.clone() });
             continue;
         }
         let args = match process.argv.as_deref().map(|argv| pane.agent.resume_args(argv, &session)) {
@@ -855,7 +858,7 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
             other => other,
         };
         if verdict != Verdict::Restart {
-            lines.push(line(&verdict));
+            lines.push(Line { reasons: if verdict.stale() { reasons.clone() } else { Vec::new() }, ..line(&verdict) });
             continue;
         }
         let done = SessionLock::take(&state, &session).and_then(|_lock| perform(&pane, process.cwd.as_deref(), args.as_deref().unwrap_or_default(), lead));
@@ -878,7 +881,7 @@ pub fn run_counted(mode: Mode, memory: &mut Memory, only: Option<&str>, counted:
                 if let Some(text) = told_failure(&pane.label, &error) {
                     tell_board(&text);
                 }
-                lines.push(Line { label: pane.label.clone(), said: failed_said(&error), stale: true, reasons: Vec::new() });
+                lines.push(Line { label: pane.label.clone(), said: failed_said(&error), stale: true, reasons: reasons.clone() });
             }
         }
     }
@@ -907,9 +910,9 @@ pub fn keep_answers(asked: &mut Map<String, Value>, on_disk: &Map<String, Value>
     }
 }
 
-// kebbie restart says what each restart was for; an update's report leaves it out, as the update is the reason.
+// kebbie restart says what each restart was for; an update's report leaves it out, as the update is the reason; a held line names its own.
 pub fn with_reasons(lines: Vec<Line>) -> Vec<Line> {
-    lines.into_iter().map(|line| match line.reasons.is_empty() {
+    lines.into_iter().map(|line| match line.reasons.is_empty() || line.said.starts_with(HELD) {
         true => line,
         false => Line { said: format!("{}, as {}", line.said, line.reasons.join(", ")), ..line },
     }).collect()
@@ -1212,6 +1215,45 @@ mod tests {
 
     fn changes() -> Changes {
         Changes { claude: Some(PathBuf::from("/v/2.1.304")), ..Changes::default() }
+    }
+
+    #[test]
+    fn a_claude_on_the_keepers_path_older_than_the_sessions_own_never_makes_it_stale() {
+        let dir = crate::sh::test_dir("restart-older-path");
+        let (old, new) = (dir.join("claude-2.1.296/bin/claude"), dir.join("claude-2.1.304/bin/claude"));
+        for (file, at) in [(&old, 1_000), (&new, 2_000)] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "").unwrap();
+            std::fs::File::options().write(true).open(file).unwrap().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(at)).unwrap();
+        }
+        let path_has = |claude: &Path| Changes { claude: Some(claude.canonicalize().unwrap()), ..Changes::default() };
+        assert!(path_has(&old).reasons(Some(&new), 3_000, None).is_empty(), "a keeper started before the devbox moved Claude keeps the old PATH, and the lead it restarted runs the newer one");
+        assert_eq!(path_has(&new).reasons(Some(&old), 3_000, None), ["a newer Claude Code"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn every_stale_line_carries_its_reasons_to_the_board_and_a_held_line_names_its_own_once() {
+        let source = include_str!("restart.rs");
+        let run = &source[source.find("\npub fn run_counted(").unwrap()..];
+        let run = &run[run.find("held_back(").unwrap()..run.find("\n    counted(total, total)").unwrap()];
+        assert!(!run.contains("reasons: Vec::new()"), "a line written once the reasons are known drops none of them");
+        let held = Line { label: "lead".to_string(), said: format!("{HELD}a restart brought back the same Claude Code (/c), so the pane starts that one; restarting again cannot update it"), stale: true, reasons: vec!["a newer Claude Code".to_string()] };
+        let manual = Line { label: "lead".to_string(), said: Verdict::Manual.words(false), stale: true, reasons: vec![OUTSIDE_LEAD_DIR.to_string()] };
+        assert_eq!(crate::keeper::stale_lines(&[held.clone(), manual.clone()]), [format!("lead: {}{}a newer Claude Code", held.said, crate::keeper::REASONS), format!("lead: stale: run kebbie restart when you want it{}{OUTSIDE_LEAD_DIR}", crate::keeper::REASONS)]);
+        assert_eq!(report(&with_reasons(vec![held.clone(), manual]))[1..], [format!("  lead: {}", held.said), format!("  lead: stale: run kebbie restart when you want it, as {OUTSIDE_LEAD_DIR}")]);
+        let update = [Line { label: "lead".to_string(), said: "stale: run kebbie restart when you want it".to_string(), stale: true, reasons: Vec::new() }];
+        assert_eq!(crate::update::live_sessions(&update, Some(&crate::keeper::stale_lines(&[held.clone()])))[0].said, held.said, "the update window reads the said without the reasons");
+    }
+
+    #[test]
+    fn a_lead_restart_starts_its_claude_in_the_leads_own_folder() {
+        let source = include_str!("lead.rs");
+        let start = &source[source.find("\nfn start_chat(").unwrap()..];
+        let start = &start[..start.find("\n}\n").unwrap()];
+        let cd = start.find("cd_line(&lead_dir()?)").expect("the pane's shell goes to the lead's folder");
+        assert!(cd < start.find("Agent::Claude.start(").unwrap(), "herdr starts Claude where the shell is, so a lead started from a renamed or other folder would stay outside its own");
+        assert!(source[source.find("\nfn restart_locked(").unwrap()..].split("\n}\n").next().unwrap().contains("start_chat(&pane, session)"), "L goes through start_chat");
     }
 
     #[test]
