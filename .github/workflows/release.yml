@@ -45,8 +45,8 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { target: aarch64-apple-darwin, runner: macos-14, runs: true }
-          - { target: x86_64-apple-darwin, runner: macos-14, runs: false }
+          - { target: aarch64-apple-darwin, runner: macos-15, runs: true }
+          - { target: x86_64-apple-darwin, runner: macos-15, runs: false }
           - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, runs: true }
           - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, runs: true }
     runs-on: ${{ matrix.runner }}
