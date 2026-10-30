@@ -1100,6 +1100,16 @@ fn eventually(mut done: impl FnMut() -> bool) -> bool {
 }
 
 #[test]
+fn a_kebbie_a_test_runs_sends_its_signals_and_reports_to_this_machine_and_never_to_the_issues_endpoint() {
+    let lab = Lab::new("report-url");
+    fs::write(&lab.config, "[report]\ninbox_token = \"kha_lab-token-1234\"\n").unwrap();
+    let doctor = stdout(&lab.run(&["doctor"]));
+    let reports = doctor.lines().find(|line| line.split_whitespace().nth(1) == Some("reports")).unwrap_or_else(|| panic!("the reports check names the endpoint: {doctor}"));
+    assert!(reports.contains("http://127.0.0.1:9 · "), "{reports}");
+    assert!(!doctor.contains("issues.kebbie.dev"), "{doctor}");
+}
+
+#[test]
 fn one_keeper_starts_detached_shows_its_routines_and_stops() {
     let lab = Lab::new("keeper");
     assert!(stdout(&lab.run(&["keeper", "--status"])).starts_with("keeper: not running; kebbie keeper --start starts it"));

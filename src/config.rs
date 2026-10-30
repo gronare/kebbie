@@ -151,7 +151,8 @@ pub struct Machine {
 }
 
 pub const DEFAULT_HUB_URL: &str = "https://hub.kebbie.dev";
-pub const REPORT_URL: &str = "https://issues.kebbie.dev";
+const REPORT_URL: &str = "https://issues.kebbie.dev";
+const UNSENT_REPORT_URL: &str = "http://127.0.0.1:9";
 pub const INBOX_TOKEN_PREFIX: &str = "kha_";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -191,8 +192,9 @@ impl std::fmt::Debug for Report {
 
 // enabled = false, from before signals and text were two keys, still turns both off.
 impl Report {
+    // Every cargo test, unit and spawned binary alike, runs a debug build, so only a release build can reach the production endpoint.
     pub fn url(&self) -> &str {
-        REPORT_URL
+        if cfg!(debug_assertions) { UNSENT_REPORT_URL } else { REPORT_URL }
     }
 
     pub fn signals(&self) -> bool {
@@ -1571,7 +1573,7 @@ mod tests {
         let defaults = settings(&Worktree::default(), &Machine::default());
         assert_eq!((defaults.report_signals.value, defaults.report_text.value, defaults.report_inbox.value), (true, ReportText::Ask, false));
         let config = machine("[report]\nsignals = false\ntext = \"always\"\ninbox_token = \"kha_secret-token-1234\"\n");
-        assert_eq!((config.report.url(), config.report.signals(), config.report.text(), config.report.inbox_token.as_deref()), (REPORT_URL, false, ReportText::Always, Some("kha_secret-token-1234")));
+        assert_eq!((config.report.url(), config.report.signals(), config.report.text(), config.report.inbox_token.as_deref()), (UNSENT_REPORT_URL, false, ReportText::Always, Some("kha_secret-token-1234")));
         assert!(!format!("{config:?}").contains("kha_secret"), "Debug hides the token");
         let dir = crate::sh::test_dir("config-report");
         let file = dir.join("config.toml");
@@ -1586,6 +1588,13 @@ mod tests {
         assert!(parse_machine("[report]\ninbox_token = \"khm_machine\"\n", "config.toml").unwrap_err().contains("report.inbox_token"));
         assert!(unknown_machine("[report]\nsecret = 1\n").contains("report.secret: unknown key"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_debug_build_never_addresses_the_production_issues_endpoint() {
+        assert_eq!(Report::default().url(), UNSENT_REPORT_URL);
+        assert_eq!(crate::hub::hub_url(UNSENT_REPORT_URL).as_deref(), Ok(UNSENT_REPORT_URL), "a loopback address every sender accepts and none can reach beyond this machine");
+        assert_ne!(Report::default().url(), REPORT_URL);
     }
 
     #[test]
