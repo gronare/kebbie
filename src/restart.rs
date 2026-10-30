@@ -1243,7 +1243,7 @@ mod tests {
         assert_eq!(crate::keeper::stale_lines(&[held.clone(), manual.clone()]), [format!("lead: {}{}a newer Claude Code", held.said, crate::keeper::REASONS), format!("lead: stale: run kebbie restart when you want it{}{OUTSIDE_LEAD_DIR}", crate::keeper::REASONS)]);
         assert_eq!(report(&with_reasons(vec![held.clone(), manual]))[1..], [format!("  lead: {}", held.said), format!("  lead: stale: run kebbie restart when you want it, as {OUTSIDE_LEAD_DIR}")]);
         let update = [Line { label: "lead".to_string(), said: "stale: run kebbie restart when you want it".to_string(), stale: true, reasons: Vec::new() }];
-        assert_eq!(crate::update::live_sessions(&update, Some(&crate::keeper::stale_lines(&[held.clone()])))[0].said, held.said, "the update window reads the said without the reasons");
+        assert_eq!(crate::update::live_sessions(&update, Some(&crate::keeper::stale_lines(std::slice::from_ref(&held))))[0].said, held.said, "the update window reads the said without the reasons");
     }
 
     #[test]
