@@ -56,6 +56,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | --- | --- |
 | `git`, `herdr`, `claude`, `jq`, `nvim`, `tig`, `curl`, `cargo` | Present on `PATH`, at the versions above. A missing `cargo` is fine on the release channel with a downloaded binary. |
 | `herdr plugin` | kebbie installed and enabled in herdr. |
+| `herdr link` | The folder herdr links kebbie from, for a local link, still holds a kebbie checkout. One that is gone fails, with `kebbie doctor --fix` as the fix. |
 | `plugin binary` | The plugin's binary is in place, and whether it was downloaded for a release tag or built from source. |
 | `claude plugin` | The Claude Code plugin is installed, and the copy Claude Code runs matches the checkout. |
 | `claude plugin source` | The plugin's marketplace matches the update channel. |

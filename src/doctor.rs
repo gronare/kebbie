@@ -126,6 +126,20 @@ pub fn herdr_plugin(list: Option<&str>, channel: config::Channel) -> (Check, Opt
     (check, Some(plugin))
 }
 
+pub fn herdr_link(link: &crate::herdr_link::Link) -> Option<Check> {
+    use crate::herdr_link::Link;
+    match link {
+        Link::Unregistered => None,
+        Link::Installed => Some(ok("herdr link", "installed with herdr plugin install, not linked from a checkout")),
+        Link::Linked(root) => Some(ok("herdr link", format!("linked from {}", root.display()))),
+        Link::Gone { linked, target: Some(target) } => Some(fail("herdr link", format!("herdr links kebbie from {}, which is gone, so its startup starts neither the board nor the keeper", linked.display()), vec![
+            format!("kebbie doctor --fix links it again from {} and starts both; a running keeper does it within the hour", target.display()),
+            format!("or herdr plugin unlink kebbie && herdr plugin link {}", target.display()),
+        ])),
+        Link::Gone { linked, target: None } => Some(fail("herdr link", format!("herdr links kebbie from {}, which is gone, and no kebbie checkout is found to link instead", linked.display()), one("herdr plugin unlink kebbie && herdr plugin link <a kebbie checkout> (or herdr plugin install gronare/kebbie)"))),
+    }
+}
+
 pub fn updates(state: &Path, channel: crate::config::Channel, installed: &[crate::update_check::Component]) -> Check {
     let (latest, fact) = crate::update_check::doctor_line(state, channel, installed);
     let check = ok("updates", fact);
@@ -426,8 +440,10 @@ fn known_repos() -> Vec<PathBuf> {
 
 // kebbie doctor --fix: what the doctor can mend by itself before it checks.
 pub fn fix(state: &Path) -> Vec<String> {
+    let mut lines = crate::herdr_link::heal().unwrap_or_else(|error| vec![error]);
     let moved = crate::push_block::move_from_kelpie(&known_repos(), state);
-    if moved.is_empty() { vec!["Nothing to fix: no worktree has kelpie's push block.".to_string()] } else { moved }
+    lines.extend(moved);
+    if lines.is_empty() { vec!["Nothing to fix: herdr's kebbie folder is there and no worktree has kelpie's push block.".to_string()] } else { lines }
 }
 
 pub const GH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -670,7 +686,10 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let channel = config::channel_in(&env.config).unwrap_or_default();
     let (check, plugin) = herdr_plugin(list.as_deref(), channel);
     checks.push(check);
-    if let Some(plugin) = &plugin {
+    let link = list.as_deref().and_then(|list| serde_json::from_str(list).ok()).map_or(crate::herdr_link::Link::Unregistered, |list| crate::herdr_link::read(&list, crate::herdr_link::target(&env.home, crate::peers::own_exe().ok().as_deref()).as_deref()));
+    let gone = matches!(link, crate::herdr_link::Link::Gone { .. });
+    checks.extend(herdr_link(&link));
+    if let Some(plugin) = plugin.as_ref().filter(|_| !gone) {
         checks.push(plugin_binary(&plugin.root));
     }
     if let Some((tool, found)) = &cargo {
@@ -686,7 +705,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
         checks.push(plugin_source(&crate::update::marketplace(&env.claude_dir, &id), channel));
     }
     checks.push(status_line(&claude_settings));
-    checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().map(|plugin| plugin.root.as_path())));
+    checks.push(current_link(&env.home, env.data_home.as_deref(), plugin.as_ref().filter(|_| !gone).map(|plugin| plugin.root.as_path())));
     checks.push(kebbie_on_path(&env.home, &env.path));
     let needed = crate::profiles::list_in(&env.profiles_dir).0.iter().any(|profile| profile.agent == crate::agent::Agent::Codex);
     let kebbie = crate::peers::kebbie_command().unwrap_or_default();
@@ -924,6 +943,19 @@ mod tests {
         assert_eq!(current_link(&home, None, Some(&home)).level, Level::Warn);
         assert_eq!(current_link(&home, Some(&home.join("data")), Some(&root)).level, Level::Warn);
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_herdr_link_to_a_missing_folder_fails_with_the_relink_and_a_healthy_one_is_ok() {
+        use crate::herdr_link::Link;
+        let gone = herdr_link(&Link::Gone { linked: PathBuf::from("/home/me/projects/kelpie"), target: Some(PathBuf::from("/home/me/projects/kebbie")) }).unwrap();
+        assert_eq!((gone.level, gone.name.as_str(), gone.fact.as_str()), (Level::Fail, "herdr link", "herdr links kebbie from /home/me/projects/kelpie, which is gone, so its startup starts neither the board nor the keeper"));
+        assert_eq!(gone.fix, ["kebbie doctor --fix links it again from /home/me/projects/kebbie and starts both; a running keeper does it within the hour", "or herdr plugin unlink kebbie && herdr plugin link /home/me/projects/kebbie"]);
+        let nowhere = herdr_link(&Link::Gone { linked: PathBuf::from("/k"), target: None }).unwrap();
+        assert!(nowhere.level == Level::Fail && nowhere.fact.contains("no kebbie checkout is found"), "{}", nowhere.fact);
+        assert_eq!(herdr_link(&Link::Linked(PathBuf::from("/src/kebbie"))).map(|check| (check.level, check.fact)), Some((Level::Ok, "linked from /src/kebbie".to_string())));
+        assert_eq!(herdr_link(&Link::Installed).map(|check| check.level), Some(Level::Ok), "a GitHub install is never a link to fix");
+        assert_eq!(herdr_link(&Link::Unregistered), None, "the herdr plugin line names an unregistered kebbie");
     }
 
     #[test]

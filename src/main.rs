@@ -16,6 +16,7 @@ mod evidence;
 mod executable;
 mod fetch;
 mod herdr;
+mod herdr_link;
 mod hub;
 mod inbox;
 mod install_signal;
@@ -287,8 +288,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie doctor [--fix]           check that this machine has what kebbie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox
                                   (task.sandbox; on Linux it needs bubblewrap, socat and the seccomp filter), and
-                                  what is left from kelpie; --fix first installs kebbie's push block in each worktree
-                                  that still has kelpie's
+                                  what is left from kelpie; --fix first links kebbie in herdr again when herdr links
+                                  it from a folder that is gone (then starts the board and the keeper), and installs
+                                  kebbie's push block in each worktree that still has kelpie's
   kebbie setup [--yes]            the setup guide, one step at a time: this machine's name, the agents (Claude Code,
                                   Codex), herdr's three keys (appended to its config.toml, a taken key named with a
                                   free one offered), the backlog's sources, the vault (a folder or an S3 bucket, its

@@ -249,8 +249,19 @@ Each of these starts it, only when none runs:
 - herdr's startup hook, when the herdr server starts,
 - each board, when it opens and every minute after,
 - `kebbie update`, at its end.
+- `kebbie doctor --fix`, after it links kebbie in herdr again.
 
 `kebbie keeper --status` shows whether one runs, its pid, binary and uptime, and each routine's last run. `kebbie keeper --stop` stops it after the routine under way.
+
+## The keeper links kebbie in herdr again
+
+herdr runs kebbie's startup from the folder it linked kebbie from with `herdr plugin link`. When that folder is renamed or removed, herdr's next start runs nothing there, so neither the board nor the keeper starts.
+
+The keeper runs from the `current` link, so it checks herdr's link when it starts and once an hour. When the linked folder is gone and `current` holds a kebbie checkout, it runs `herdr plugin unlink kebbie` and `herdr plugin link` on that checkout, revives the board and adds a line under messages on the board, such as `herdr linked kebbie from ~/code/kelpie, which is gone; linked it again from ~/code/kebbie`.
+
+- It skips a round while herdr's server does not answer, and tries again later.
+- A kebbie installed from GitHub, or linked from another checkout that exists, is left as it is.
+- After a restart with the link already gone, no keeper runs, so `kebbie doctor --fix` does the same.
 
 ## The keeper moves to new code by itself
 

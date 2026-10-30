@@ -11,6 +11,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Tasks work in steps by default: a task lists its steps with kebbie steps before its first line of code, one commit each, and you accept and push them one at a time; task.steps = false in config.toml or a repo's own file, or space on task.steps on the board's Settings page, turns it off
 
 ### Fixed
+- A kebbie checkout you renamed or moved no longer leaves herdr starting nothing after a restart: the keeper links kebbie in herdr again from the current checkout and says so under messages, and kebbie doctor --fix does it when no keeper runs
 - An install of kebbie's default branch from herdr's plugin list moves to the latest release on its next update, where the release channel refused it as a checkout you develop in
 - Installing kebbie's default branch without Rust names the latest release and the install script as the way out, where it said vX.Y.Z
 - An update of kebbie linked from your own checkout says it builds that checkout and how many commits it holds ahead of its upstream

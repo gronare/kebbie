@@ -166,6 +166,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 `keeper.enabled`: the keeper's routines then go on with the board closed. `false` runs them in an open board instead, and the board then posts the hub's board once a minute. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). The routines are:
 
 - held messages and delivery checks of typed prompts, stale-session restarts and the update check;
+- once an hour, linking kebbie in herdr again when herdr links it from a folder that is gone;
 - the push lines and local-main staging, CI watches, closing landed tasks and rebasing the tasks that follow main;
 - relaying a task's Claude's own prompts to the lead, resuming tasks an API error stopped, and the rules check on a ready report;
 - rechecking kebbie issues after an update, the scheduled `[[routines]]`, and starting the queued tasks whose wait is over;

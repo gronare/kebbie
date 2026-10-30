@@ -589,7 +589,7 @@ After a ready report the keeper starts the reviewer. It checks the commits again
 | `kebbie config edit [--repo <path>]` | The board's [Settings page](board.md#settings-page) on its own, for config.toml and the repo's config. Needs a terminal, and is yours only: the lead and tasks cannot run it. |
 | `kebbie docs [<words>]` | Search kebbie's docs on this machine, or list them. See [below](#kebbie-docs). |
 | `kebbie doctor` | Check this machine, with the fix for each gap, the task sandbox's state among them. Exits non-zero on a `fail`. See [Requirements](requirements.md#what-kebbie-doctor-checks). |
-| `kebbie doctor --fix` | Install kebbie's push block in each worktree that still has kelpie's, then check. |
+| `kebbie doctor --fix` | Link kebbie in herdr again when herdr links it from a folder that is gone, then start the board and the keeper; install kebbie's push block in each worktree that still has kelpie's; then check. |
 | `kebbie routes [--plain-http]` | Print a Caddy config that serves each worktree's dev server at its own host. See [below](#kebbie-routes). |
 | `kebbie setup [--yes]` | The setup guide: seven steps, from this machine's name to error signals, then everything it writes in one go. `--yes` takes the defaults without asking. See [below](#kebbie-setup). |
 | `kebbie setup vault` | The guide at its Vault step. Without a terminal, it installs the vault plugin, showing each `claude plugin` command and running it only on your `y`. |
