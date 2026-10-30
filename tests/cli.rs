@@ -1634,14 +1634,15 @@ fn kebbie_hub_dev_points_connect_and_status_at_the_dev_hub_and_its_own_identity_
 }
 
 #[test]
-fn a_task_lists_its_steps_only_with_the_setting_on_and_only_the_user_accepts_a_commit() {
+fn a_task_lists_its_steps_unless_the_setting_is_off_and_only_the_user_accepts_a_commit() {
     let lab = Lab::new("steps");
     let (app, slot) = lab.task_fixture();
     let (app, slot) = (app.to_str().unwrap(), slot.to_str().unwrap());
+    fs::write(&lab.config, "[task]\nsteps = false\n").unwrap();
     let off = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]);
     assert!(!off.status.success() && stderr(&off).contains("set task.steps = true"), "{}", stderr(&off));
     assert!(!lab.state.join("steps").exists(), "nothing is written while it is off");
-    fs::write(&lab.config, "[task]\nsteps = true\n").unwrap();
+    fs::write(&lab.config, "").unwrap();
     let planned = lab.run_as("billing@app", &["-C", slot, "steps", "Add refunds", "Document refunds"]);
     assert!(planned.status.success(), "{}", stderr(&planned));
     assert!(stdout(&planned).contains("● 1. Add refunds") && stdout(&planned).contains("◐ 2. Document refunds"), "{}", stdout(&planned));

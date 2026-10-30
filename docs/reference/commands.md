@@ -400,7 +400,7 @@ The task's commits not yet pushed, each marked `✓` when you accepted it. It on
 
 ### `kebbie steps [name] ["<step>" ...]`
 
-The task's steps, in the order they go out, one commit each. It needs [`task.steps`](configuration.md#tasks) on for the task's repo, and refuses with how to turn it on otherwise.
+The task's steps, in the order they go out, one commit each. It needs [`task.steps`](configuration.md#tasks) on for the task's repo, the default, and refuses with how to turn it on when it is off.
 
 - In a task's worktree, every word is a step's title. Elsewhere, the first word names the task.
 - Put `--` before the titles when one starts with `-`: `kebbie steps -- "-v prints the version"`. Without it, kebbie refuses a word it would read as an option, so no title is dropped.

@@ -2,21 +2,7 @@
 
 Have a task list its work as steps, one commit each, accept the commits one at a time, and push the accepted ones while the task builds the next.
 
-It is off unless you turn it on. Without it, a task commits its own way and you push it as a whole or in part (see [Push part of a task](push-part-of-a-task.md)).
-
-## Turn it on
-
-1. Set `task.steps` in the machine config for every repo, or in one repo's config:
-
-   ```toml
-   # ~/.config/kebbie/config.toml
-   [task]
-   steps = true
-   ```
-
-   Or press space on `task.steps` on the board's Settings page.
-
-2. Start a task. New tasks follow the setting; a running task follows it once it restarts.
+Tasks work in steps by default. Turned off, a task commits its own way and you push it as a whole or in part (see [Push part of a task](push-part-of-a-task.md)).
 
 ## Let the task list its steps
 
@@ -57,6 +43,22 @@ It is off unless you turn it on. Without it, a task commits its own way and you 
    ```
 
    The task stays open and keeps building the next step: kebbie pushes the accepted commits without touching its worktree, rebased onto the default branch in a worktree of its own when the default branch moved, and tells its Claude to rebase onto the default branch once its work in progress is committed. The pushed steps drop out of the list and show as a count. See [Push part of a task](push-part-of-a-task.md).
+
+## Turn it off
+
+1. Set `task.steps = false` in the machine config for every repo, or in one repo's own file for that repo alone:
+
+   ```toml
+   # ~/.config/kebbie/config.toml, or ~/.config/kebbie/repos/app.toml
+   [task]
+   steps = false
+   ```
+
+   Or press space on `task.steps` on the board's [Settings page](../reference/board.md#settings-page); `tab` switches between This machine and the repo.
+
+2. Start a task. New tasks follow the setting; a running task follows it once it restarts. `kebbie config` shows `task.steps = false` and the layer it comes from.
+
+- If the machine has it off, `steps = true` in a repo's own file turns it on for that repo.
 
 ## Related
 

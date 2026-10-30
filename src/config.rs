@@ -866,7 +866,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         permission_mode: optional(pick(repo.permission_mode.as_ref(), machine.worktree.permission_mode.as_ref())),
         profile: optional(pick(repo.profile.as_ref(), machine.worktree.profile.as_ref())),
         sandbox: or_default(pick(repo.sandbox.as_ref(), machine.worktree.sandbox.as_ref()), true),
-        steps: or_default(pick(repo.steps.as_ref(), machine.worktree.steps.as_ref()), false),
+        steps: or_default(pick(repo.steps.as_ref(), machine.worktree.steps.as_ref()), true),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),
@@ -1869,12 +1869,13 @@ mod tests {
     }
 
     #[test]
-    fn steps_are_off_until_turned_on_and_a_repo_wins_over_the_machine() {
-        assert_eq!(settings(&Worktree::default(), &Machine::default()).steps, Setting { value: false, layer: Layer::Default });
-        assert_eq!(settings(&Worktree::default(), &machine("[task]\nsteps = true\n")).steps, Setting { value: true, layer: Layer::Machine });
-        assert_eq!(settings(&repo("[task]\nsteps = false\n"), &machine("[task]\nsteps = true\n")).steps, Setting { value: false, layer: Layer::Repo });
+    fn steps_are_on_until_turned_off_and_a_repo_wins_over_the_machine() {
+        assert_eq!(settings(&Worktree::default(), &Machine::default()).steps, Setting { value: true, layer: Layer::Default });
+        assert_eq!(settings(&Worktree::default(), &machine("[task]\nsteps = false\n")).steps, Setting { value: false, layer: Layer::Machine });
+        assert_eq!(settings(&repo("[task]\nsteps = false\n"), &Machine::default()).steps, Setting { value: false, layer: Layer::Repo });
+        assert_eq!(settings(&repo("[task]\nsteps = true\n"), &machine("[task]\nsteps = false\n")).steps, Setting { value: true, layer: Layer::Repo });
         assert!(parse_repo("[task]\nsteps = \"yes\"\n", "app.toml").unwrap_err().contains("task.steps: must be true or false"));
         let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
-        assert!(shown.contains("task.steps = false  (default)\n  Tasks work in steps, one commit each, listed with kebbie steps"), "{shown}");
+        assert!(shown.contains("task.steps = true  (default)\n  Tasks work in steps, one commit each, listed with kebbie steps"), "{shown}");
     }
 }

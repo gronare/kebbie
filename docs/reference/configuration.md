@@ -76,7 +76,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | `task.also_noticed` | `"backlog"` | either | What a task's Claude does with what it notices outside its task: `"backlog"`, `"fix"` or `"ask"`. |
 | `task.profile` | none | either | The [profile](#profiles) a task starts with when `kebbie start` names none with `--profile`. |
 | `task.sandbox` | `true` | either | Whether a task's and the reviewer's shell commands run in Claude Code's sandbox. |
-| `task.steps` | `false` | either | Whether tasks work in steps, one commit each, listed with `kebbie steps` before they write code. |
+| `task.steps` | `true` | either | Whether tasks work in steps, one commit each, listed with `kebbie steps` before they write code. |
 | `task.permission_mode` | none | either | The [permission mode](https://code.claude.com/docs/en/permission-modes) a task's Claude starts in. |
 | `[[routines]]` | none | either | Checks kebbie runs on a schedule, each as a task that reports, plans or fixes. See [`[[routines]]`](#routines). |
 
@@ -93,7 +93,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `task.profile`: unset, tasks start with the built-in `task`. A restarted task keeps the profile it started with. See [Give tasks a profile](../how-to/give-tasks-a-profile.md).
 
-`task.steps`: on, a task's role tells it to list its steps with `kebbie steps` before its first line of code, and you accept and push its commits one at a time while it builds the next. Off, a task commits its own way and `kebbie steps` refuses. New tasks follow it; a running task once it restarts. `kebbie accept` works either way. See [Work in steps](../how-to/work-in-steps.md).
+`task.steps`: on, the default, a task's role tells it to list its steps with `kebbie steps` before its first line of code, and you accept and push its commits one at a time while it builds the next. `false`, in the machine config or in a repo's own file, turns it off: a task commits its own way and `kebbie steps` refuses. New tasks follow it; a running task once it restarts. `kebbie accept` works either way. See [Work in steps](../how-to/work-in-steps.md).
 
 `task.sandbox` is strict: no retry outside it, and no start without it. See [The trust boundary](../explanation/trust-boundary.md#the-sandbox).
 
