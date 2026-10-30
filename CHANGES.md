@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- An update of kebbie linked from your own checkout says it builds that checkout and how many commits it holds ahead of its upstream
 
 ## 0.29.1
 

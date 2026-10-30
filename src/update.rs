@@ -336,19 +336,31 @@ fn capitalized(text: &str) -> String {
     characters.next().map_or_else(String::new, |first| first.to_uppercase().chain(characters).collect())
 }
 
-fn fetched(root: &Path, old_head: Option<&str>, line: Option<&str>, pulled: bool) -> String {
+fn fetched(root: &Path, old_head: Option<&str>, line: Option<&str>, pulled: bool, local: bool) -> String {
     let said = line.map(|line| capitalized(line.split(';').next().unwrap_or(line).trim()));
     if !pulled {
         return said.unwrap_or_else(|| "Fetched".to_string());
     }
     let branch = update_check::git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).ok().filter(|branch| branch != "HEAD").unwrap_or_else(|| "main".to_string());
     let count = old_head.and_then(|old| update_check::git(root, &["rev-list", "--count", &format!("{old}..HEAD")]).ok()).and_then(|count| count.parse::<u64>().ok());
-    match count {
-        Some(0) if line.is_some_and(|line| line.contains("not pulled")) => said.unwrap_or_default(),
-        Some(0) => format!("Fetched {branch} (no new commits)"),
-        Some(1) => format!("Fetched {branch} (1 new commit)"),
-        Some(count) => format!("Fetched {branch} ({count} new commits)"),
-        None => format!("Fetched {branch}"),
+    let not_pulled = said.filter(|_| line.is_some_and(|line| line.contains("not pulled")));
+    let ahead = local.then(|| update_check::git(root, &["rev-list", "--count", "@{upstream}..HEAD"]).ok().and_then(|count| count.parse::<u64>().ok()).unwrap_or(0));
+    fetch_label(&branch, count, not_pulled, ahead)
+}
+
+fn fetch_label(branch: &str, count: Option<u64>, not_pulled: Option<String>, local_ahead: Option<u64>) -> String {
+    let fetched = match (count, not_pulled) {
+        (Some(0), Some(said)) => said,
+        (Some(0), None) => format!("Fetched {branch} (no new commits)"),
+        (Some(1), _) => format!("Fetched {branch} (1 new commit)"),
+        (Some(count), _) => format!("Fetched {branch} ({count} new commits)"),
+        (None, _) => format!("Fetched {branch}"),
+    };
+    match local_ahead {
+        None => fetched,
+        Some(0) => format!("{fetched}; building your local checkout"),
+        Some(1) => format!("{fetched}; building your local checkout, 1 commit ahead"),
+        Some(ahead) => format!("{fetched}; building your local checkout, {ahead} commits ahead"),
     }
 }
 
@@ -375,7 +387,8 @@ fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Reques
     let binary = modified(&root.join("target/release/kebbie"));
     let release_build = build_mode(channel, release::read_override(state).is_some()) == Channel::Release;
     let building = if release_build { "Downloading kebbie" } else { "Building kebbie" };
-    let plan = release::install(&root, state, channel, request, plugin["source"]["kind"] != "local", &release::Binaries::of(&root));
+    let local = plugin["source"]["kind"] == "local";
+    let plan = release::install(&root, state, channel, request, !local, &release::Binaries::of(&root));
     match plan {
         Err(error) => {
             tracker.fail_current();
@@ -387,7 +400,7 @@ fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Reques
             let ran = sh::run("env", &["KEBBIE_CHANNEL=main", &progress_env, &herdr::bin(), "plugin", "update", "--yes", "kebbie"], None);
             let mut tracker = watch.stop();
             if tracker.state(progress::BUILD) == Some(progress::State::Pending) && ran.is_ok() {
-                tracker.done(progress::FETCH, &fetched(&root, old_head, None, true));
+                tracker.done(progress::FETCH, &fetched(&root, old_head, None, true, false));
                 tracker.begin(progress::BUILD, building, now());
             }
             match ran {
@@ -402,7 +415,7 @@ fn herdr_plugin(plugin: &Value, state: &Path, channel: Channel, request: &Reques
             }
         }
         Ok(Plan::Done(line)) => {
-            tracker.done(progress::FETCH, &fetched(&root, old_head, Some(&line), channel == Channel::Main && *request == Request::Channel && release::read_override(state).is_none()));
+            tracker.done(progress::FETCH, &fetched(&root, old_head, Some(&line), channel == Channel::Main && *request == Request::Channel && release::read_override(state).is_none(), local));
             let label = match crate::issue_recheck::version_at(&root).filter(|_| release_build) {
                 Some(version) => format!("Downloading kebbie {version}"),
                 None => building.to_string(),
@@ -742,6 +755,38 @@ mod tests {
         assert_eq!(text(&outcome, &["update stopped on a newer config key".to_string()]), "✓ Updated kebbie 0.28.0\n\nWhat's new\n  • Name a device\nFixed\n  • A bug you ran into: update stopped on a newer config key\n\nRestarting\n  The lead restarts when it's idle\n  Open boards restart on the new kebbie when you next open them\n\nDetails\nkebbie 0.27.0 → 0.28.0");
         let bare = Outcome { summary: Summary::default(), details: Vec::new(), started: 0 };
         assert!(text(&bare, &[]).contains("No notes for this update"), "never the commit subjects");
+    }
+
+    #[test]
+    fn the_fetch_step_says_a_local_checkout_is_built_with_the_commits_it_holds_ahead() {
+        assert_eq!(fetch_label("main", Some(0), None, None), "Fetched main (no new commits)");
+        assert_eq!(fetch_label("main", Some(0), None, Some(38)), "Fetched main (no new commits); building your local checkout, 38 commits ahead");
+        assert_eq!(fetch_label("main", Some(3), None, Some(1)), "Fetched main (3 new commits); building your local checkout, 1 commit ahead");
+        assert_eq!(fetch_label("main", Some(0), None, Some(0)), "Fetched main (no new commits); building your local checkout", "nothing about ahead at 0");
+        assert_eq!(fetch_label("main", Some(0), Some("Uncommitted changes in the linked checkout, not pulled".to_string()), Some(2)), "Uncommitted changes in the linked checkout, not pulled; building your local checkout, 2 commits ahead");
+    }
+
+    #[test]
+    fn a_linked_checkout_counts_its_commits_ahead_of_its_upstream() {
+        let dir = scratch("ahead");
+        let git = |cwd: &Path, args: &[&str]| {
+            let output = std::process::Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "init.defaultBranch=main"]).args(args).current_dir(cwd).output().unwrap();
+            assert!(output.status.success(), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        git(&dir, &["init", "--quiet", "--bare", "origin.git"]);
+        git(&dir, &["clone", "--quiet", "origin.git", "checkout"]);
+        let checkout = dir.join("checkout");
+        git(&checkout, &["commit", "--quiet", "--allow-empty", "-m", "first"]);
+        git(&checkout, &["push", "--quiet", "origin", "HEAD:main"]);
+        git(&checkout, &["branch", "--quiet", "--set-upstream-to=origin/main"]);
+        let head = git(&checkout, &["rev-parse", "HEAD"]);
+        assert_eq!(fetched(&checkout, Some(&head), Some("pulled to abc1234"), true, true), "Fetched main (no new commits); building your local checkout");
+        git(&checkout, &["commit", "--quiet", "--allow-empty", "-m", "second"]);
+        git(&checkout, &["commit", "--quiet", "--allow-empty", "-m", "third"]);
+        let head = git(&checkout, &["rev-parse", "HEAD"]);
+        assert_eq!(fetched(&checkout, Some(&head), Some("pulled to abc1234"), true, true), "Fetched main (no new commits); building your local checkout, 2 commits ahead");
+        assert_eq!(fetched(&checkout, Some(&head), None, true, false), "Fetched main (no new commits)", "herdr's own clone says nothing about a local checkout");
     }
 
 }
