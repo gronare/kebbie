@@ -14,6 +14,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - herdr's tabs carry fixed names: kebbie in the lead Space and the task's name on a task's tab, set when kebbie creates or next starts them, instead of words from Claude's own title; a tab you renamed yourself keeps your name
 
 ### Fixed
+- A step with a long title keeps its state in view on the board: the title is shortened with … instead, and the rules part reads in short, as committed · rules ?, rules ✓ or rules: 1 break
 - A kebbie checkout you renamed or moved no longer leaves herdr starting nothing after a restart: the keeper links kebbie in herdr again from the current checkout and says so under messages, and kebbie doctor --fix does it when no keeper runs
 - An install of kebbie's default branch from herdr's plugin list moves to the latest release on its next update, where the release channel refused it as a checkout you develop in
 - Installing kebbie's default branch without Rust names the latest release and the install script as the way out, where it said vX.Y.Z

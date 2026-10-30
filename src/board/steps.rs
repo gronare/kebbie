@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use crate::keys::{self, Act};
 use crate::status::Item;
 use crate::tasks::{self, Step, StepState};
-use super::widgets::{BLUE, GREEN, MUTED, SURFACE, TEXT, YELLOW, style, text_width};
+use super::widgets::{BLUE, GREEN, MUTED, SURFACE, TEXT, YELLOW, cut, plural, style, text_width};
 
 const INDENT: &str = "    ";
 
@@ -40,18 +40,32 @@ pub(super) fn mark_color(state: &StepState) -> Color {
     }
 }
 
-// The right side of a step's line, longest first; a narrow board takes the next one before it cuts the title.
-fn labels(item: &Item, state: &StepState) -> Vec<String> {
+const TITLE_FLOOR: usize = 12;
+
+fn state_word(state: &StepState) -> &'static str {
     match state {
-        StepState::Planned => vec![String::new()],
-        StepState::InProgress => vec!["in progress".to_string(), String::new()],
-        StepState::Committed { accepted: true, .. } => vec!["accepted".to_string(), String::new()],
-        StepState::Committed { accepted: false, .. } => {
-            let rules = if item.git.as_ref().is_some_and(|git| git.approved) { Some("rules ✓".to_string()) } else { item.rules_note() };
-            let mut labels: Vec<String> = rules.map(|rules| format!("committed · {rules}")).into_iter().collect();
-            labels.extend(["committed".to_string(), String::new()]);
-            labels
-        }
+        StepState::Planned => "",
+        StepState::InProgress => "in progress",
+        StepState::Committed { accepted: true, .. } => "accepted",
+        StepState::Committed { accepted: false, .. } => "committed",
+    }
+}
+
+// The rules part of a committed step's label, longest first; the task's row above says it in full.
+fn rules_forms(item: &Item, state: &StepState) -> Vec<String> {
+    if !matches!(state, StepState::Committed { accepted: false, .. }) {
+        return Vec::new();
+    }
+    if item.git.as_ref().is_some_and(|git| git.approved) {
+        return vec!["rules ✓".to_string()];
+    }
+    if item.rules_note().is_none() {
+        return Vec::new();
+    }
+    match &item.rules {
+        Some(crate::rules_check::Shown::Broken(count)) => vec![format!("rules: {}", plural(*count, "break")), plural(*count, "break")],
+        Some(crate::rules_check::Shown::Checking | crate::rules_check::Shown::Lead) => vec!["checking rules".to_string(), "checking".to_string()],
+        None => vec!["rules ?".to_string()],
     }
 }
 
@@ -71,21 +85,26 @@ pub(super) fn whole_words(text: &str, room: usize) -> Option<String> {
     (!kept.is_empty()).then(|| format!("{kept}…"))
 }
 
-// Each label is tried with the title whole before the title is cut; a cut title stands alone, its mark tells the state.
-fn fitted(title: &str, labels: &[String], room: usize) -> (String, String) {
-    for label in labels {
-        let title_room = if label.is_empty() { room } else { room.saturating_sub(text_width(label) + 2) };
-        if text_width(title) <= title_room {
-            return (title.to_string(), label.clone());
-        }
+fn shortened(title: &str, room: usize) -> String {
+    whole_words(title, room).unwrap_or_else(|| cut(title, room.max(1)))
+}
+
+// The state word always stands; the rules part shortens, then goes, before the title is cut below TITLE_FLOOR.
+fn fitted(title: &str, state: &str, rules: &[String], room: usize) -> (String, String) {
+    if state.is_empty() || room < text_width(state) + 3 {
+        return (shortened(title, room), String::new());
     }
-    (whole_words(title, room).unwrap_or_else(|| "…".to_string()), String::new())
+    let labels: Vec<String> = rules.iter().map(|rules| format!("{state} · {rules}")).chain([state.to_string()]).collect();
+    let title_room = |label: &String| room.saturating_sub(text_width(label) + 2);
+    let floor = text_width(title).min(TITLE_FLOOR);
+    let label = labels.iter().find(|label| title_room(label) >= floor).unwrap_or(&labels[labels.len() - 1]);
+    (shortened(title, title_room(label)), label.clone())
 }
 
 fn step_line(item: &Item, step: &Step, width: usize) -> Line<'static> {
     let number = format!("{} ", step.index + 1);
     let room = width.saturating_sub(INDENT.len() + 2 + number.len());
-    let (title, label) = fitted(&step.title, &labels(item, &step.state), room);
+    let (title, label) = fitted(&step.title, state_word(&step.state), &rules_forms(item, &step.state), room);
     let color = mark_color(&step.state);
     let planned = step.state == StepState::Planned;
     let gap = room.saturating_sub(text_width(&title) + text_width(&label));
@@ -229,34 +248,80 @@ pub(crate) mod tests {
         assert!(after[at].contains("2 commits") && !screen.contains("pushed") && !screen.contains("accept") && !after[at + 1].contains('○'), "{screen}");
     }
 
+    const LONG: &str = "Round VAT once per invoice and rate instead of on every line";
+
+    fn long_steps() -> Steps {
+        Steps { pushed: 0, items: vec![
+            step(0, LONG, committed("2222222bbbb", false)),
+            step(1, LONG, StepState::InProgress),
+            step(2, LONG, StepState::Planned),
+        ] }
+    }
+
+    fn step_rows(rows: &[String]) -> Vec<String> {
+        rows.iter().filter(|row| row.starts_with("    ") && ['●', '◐', '○', '✓'].iter().any(|mark| row.trim_start().starts_with(&format!("{mark} ")))).map(|row| row.trim().to_string()).collect()
+    }
+
     #[test]
-    fn a_narrow_board_drops_the_rules_then_the_label_and_cuts_titles_only_between_words() {
-        let mut app = test_app(vec![stepped(stripe())]);
+    fn a_long_step_title_gives_way_so_its_state_always_shows() {
+        let mut app = test_app(vec![stepped(long_steps())]);
         app.work_selected = 9;
-        for width in [40u16, 34, 28, 22] {
+        let (rows, _) = render(&mut app, 100, 30);
+        let lines = step_rows(&rows);
+        assert_eq!(lines, ["● 1 Round VAT once per…      committed · rules ✓", "◐ 2 Round VAT once per invoice and…  in progress", "○ 3 Round VAT once per invoice and rate instead…"], "{}", rows.join("\n"));
+        let (rows, _) = render(&mut app, 60, 30);
+        assert_eq!(step_rows(&rows), ["● 1 Round VAT once per invoice…  committed · rules ✓", "◐ 2 Round VAT once per invoice and…      in progress", "○ 3 Round VAT once per invoice and rate instead of…"], "{}", rows.join("\n"));
+        for width in [100u16, 80, 60, 45] {
             let (rows, _) = render(&mut app, width, 30);
             let screen = rows.join("\n");
-            let lines: Vec<&String> = rows.iter().filter(|row| ['●', '◐', '○'].iter().any(|mark| row.trim_start().starts_with(&format!("{mark} ")) && row.starts_with("    "))).collect();
+            let lines = step_rows(&rows);
             assert_eq!(lines.len(), 3, "{width}: {screen}");
-            for line in lines {
-                let title: String = line.trim().chars().skip(4).collect();
-                let shown = title.split("  ").next().unwrap_or_default().trim_end_matches('…').trim();
-                let whole = ["Charge through a PaymentGateway", "Add Stripe as the gateway", "Remove the old payment client"].iter().any(|full| full.split(' ').collect::<Vec<_>>().starts_with(&shown.split(' ').collect::<Vec<_>>()));
-                assert!(whole, "{width}: {shown:?} is cut mid-word in:\n{screen}");
+            assert!(lines[0].ends_with("committed · rules ✓") || lines[0].ends_with(" committed"), "{width}: the state word stands: {screen}");
+            assert!(lines[1].ends_with(" in progress"), "{width}: {screen}");
+            for line in &lines {
+                let title = line.chars().skip(4).collect::<String>().split("  ").next().unwrap_or_default().to_string();
+                assert!(title == LONG || title.ends_with('…') && LONG.starts_with(title.trim_end_matches('…')), "{width}: a title is whole or cut with …: {screen}");
             }
+            assert!(lines[0].contains('…'), "{width}: {screen}");
+            assert!(lines.iter().all(|line| text_width(line) <= usize::from(width)), "{width}: {screen}");
         }
-        let item = stepped(stripe());
-        let labels = labels(&item, &item.steps.items[0].state);
-        assert_eq!(fitted("Charge through a PaymentGateway", &labels, 60), ("Charge through a PaymentGateway".to_string(), "committed · rules ✓".to_string()));
-        assert_eq!(fitted("Charge through a PaymentGateway", &labels, 45), ("Charge through a PaymentGateway".to_string(), "committed".to_string()), "the rules part goes first");
-        assert_eq!(fitted("Charge through a PaymentGateway", &labels, 34), ("Charge through a PaymentGateway".to_string(), String::new()), "then the label, while the title fits whole");
-        assert_eq!(fitted("Charge through a PaymentGateway", &labels, 30), ("Charge through a…".to_string(), String::new()), "a title that does not fit alone is cut between words");
-        assert_eq!(fitted("Charge through a PaymentGateway", &labels, 5), ("…".to_string(), String::new()));
-        let (rows, _) = render(&mut app, 46, 30);
-        let screen = rows.join("\n");
-        assert!(screen.contains("● 2 Charge through a PaymentGateway") && !screen.contains("committed"), "{screen}");
+    }
+
+    #[test]
+    fn the_title_is_cut_before_the_state_and_the_rules_part_shortens_first() {
+        let breaks = vec!["rules: 2 breaks".to_string(), "2 breaks".to_string()];
+        let fit = |room| fitted("Charge through a PaymentGateway", "committed", &breaks, room);
+        assert_eq!(fit(60), ("Charge through a PaymentGateway".to_string(), "committed · rules: 2 breaks".to_string()), "room for both, nothing cut");
+        assert_eq!(fit(52), ("Charge through a…".to_string(), "committed · rules: 2 breaks".to_string()), "the title is cut before the label changes");
+        assert_eq!(fit(40), ("Charge through a…".to_string(), "committed · 2 breaks".to_string()), "the rules part shortens before the title goes below its floor");
+        assert_eq!(fit(30), ("Charge through a…".to_string(), "committed".to_string()), "then it goes, the state word stays");
+        assert_eq!(fit(20), ("Charge…".to_string(), "committed".to_string()));
+        assert_eq!(fit(13), ("C…".to_string(), "committed".to_string()), "a word too long for the room is cut inside it");
+        assert_eq!(fit(11), ("Charge…".to_string(), String::new()), "only a row too narrow for the state word drops it");
+        assert_eq!(fitted("Charge through a PaymentGateway", "", &[], 20), ("Charge through a…".to_string(), String::new()), "a planned step has no label");
         assert_eq!(whole_words("Charge through a PaymentGateway", 4), None);
         assert_eq!(whole_words("Charge through a PaymentGateway", 9), Some("Charge…".to_string()));
+    }
+
+    #[test]
+    fn a_committed_step_says_its_rules_in_the_task_rows_words_shortened() {
+        let mut item = crate::status::tests::task(Some("idle"), Some("ready"), 2);
+        let state = committed("2222222bbbb", false);
+        assert_eq!(rules_forms(&item, &state), vec!["rules ✓"], "approved");
+        item.git.as_mut().unwrap().approved = false;
+        assert_eq!(rules_forms(&item, &state), vec!["rules ?"], "not checked yet");
+        item.rules = Some(crate::rules_check::Shown::Broken(1));
+        assert_eq!(rules_forms(&item, &state), vec!["rules: 1 break", "1 break"]);
+        item.rules = Some(crate::rules_check::Shown::Broken(3));
+        assert_eq!(rules_forms(&item, &state), vec!["rules: 3 breaks", "3 breaks"]);
+        item.rules = Some(crate::rules_check::Shown::Checking);
+        assert_eq!(rules_forms(&item, &state), vec!["checking rules", "checking"]);
+        item.rules = Some(crate::rules_check::Shown::Lead);
+        assert_eq!(rules_forms(&item, &state), vec!["checking rules", "checking"]);
+        assert!(rules_forms(&item, &committed("2222222bbbb", true)).is_empty() && rules_forms(&item, &StepState::InProgress).is_empty());
+        let mut working = stepped(stripe());
+        working.git.as_mut().unwrap().approved = false;
+        assert!(rules_forms(&working, &state).is_empty(), "under Working nothing was checked yet, the step says only committed");
     }
 
     #[test]

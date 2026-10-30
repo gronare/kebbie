@@ -104,11 +104,11 @@ With [`task.steps`](configuration.md) on and steps listed, the task's steps not 
 | `↑ N pushed`, muted | N steps are on the default branch already. |
 | `○`, muted | Planned. |
 | `◐ … in progress`, blue | Its Claude is at work on it. |
-| `● … committed`, yellow | Committed, waiting for you to accept it. `· rules ✓` when the task's commits passed their rules check, or the row's rules mark while it is checked. |
+| `● … committed`, yellow | Committed, waiting for you to accept it, followed by the task's rules check in short: `· rules ✓` passed, `· rules ?` not checked yet, `· checking rules` while the reviewer or the lead checks, `· rules: N breaks` when it found some. |
 | `✓ … accepted`, green | Committed, and you accepted it. |
 | `accept N · r review` | Under the steps: the first step waiting for you. `r` opens the review, and [`kebbie accept`](commands.md#kebbie-accept-name-sha) accepts it. |
 
-A step to accept leaves the task in the group its phase gives it, under Working while it builds the next step. A narrow board drops the label's `· rules ✓` first, then the label, then shortens the title at a word. Without steps, the row is as above. See [Work in steps](../how-to/work-in-steps.md).
+A step to accept leaves the task in the group its phase gives it, under Working while it builds the next step. The state word always shows: a long title is shortened at a word with `…` to make room, and only when the title would drop below 12 columns does the rules part shorten (`· 2 breaks`, `· checking`) and then go. Without steps, the row is as above. See [Work in steps](../how-to/work-in-steps.md).
 
 While Claude waits on a prompt of its own, such as a permission or trust question, the `you:` line says `answer Claude's prompt in its Space (g) or through the lead`. `g` takes you there, and the lead has the question and its options in its chat. See [Claude's own prompts in a task](../explanation/lead-and-away-mode.md#claudes-own-prompts-in-a-task).
 
