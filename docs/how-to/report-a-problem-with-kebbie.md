@@ -8,6 +8,23 @@ Keep what kebbie got wrong, or could not do, on your machine, and send a bug to 
 - Separately, kebbie counts its own crashes and internal errors and sends the maintainers those counts, with no text at all.
 - Once a day, kebbie sends an install signal so the maintainers can count active installs, with no text and nothing about your work.
 
+## The commands
+
+| Command | What it does |
+| --- | --- |
+| `kebbie issue add --kind bug\|wish --title <title> [<text>\|-]` | Saves a bug or a wish on this machine. |
+| `kebbie issues [--all]` | Lists the open ones, or every status. |
+| `kebbie issue show <id>` | Prints one. |
+| `kebbie issue report <id>` | Shows a bug as it would go to kebbie's maintainers and sends it on your `y`. |
+| `kebbie issue report --always` \| `--ask` | Sends each saved bug without asking, or asks again. |
+| `kebbie issue reopen <id>` | Opens a closed one again, noted as come back on this build. |
+| `kebbie issue retry <id>` | Marks one worth trying again. |
+| `kebbie issue close <id> fixed\|wontfix\|duplicate` | Closes one. |
+| `kebbie issue send <id>` | Opens a prefilled GitHub issue in your browser. |
+| `kebbie issue link <id> <number\|url>` | Ties a saved issue to its GitHub issue. |
+
+On the board, the bugs to send wait under Work in one row; `⏎` on it shows them. See [`kebbie issues`](../reference/commands.md#kebbie-issues) for every option.
+
 ## Save it
 
 When kebbie costs something in a session (an error, a workaround, a missing capability), the lead notes it in one line with `kebbie issue hold` and carries on with your work.
