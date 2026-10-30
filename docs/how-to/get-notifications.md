@@ -24,4 +24,4 @@ Hear about a task that needs you, a task that is ready, a question, or the lead'
 
 If nothing arrives, run the command by hand with `KEBBIE_TEXT=test`, and read `notify.log` in the state directory.
 
-The command runs detached and is stopped after 10 seconds. A task sends at most one notification per event a minute. Every event and variable: [Notify command](../reference/configuration.md#notify-command).
+The command runs detached and is stopped after 10 seconds. A task sends at most one notification per event a minute, and none while it is [parked](park-a-task.md). Every event and variable: [Notify command](../reference/configuration.md#notify-command).

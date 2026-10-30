@@ -66,6 +66,20 @@ pub fn shown(at: u64, now: u64, offset: &dyn Fn(i64) -> i64) -> String {
     format!("{} {date} {}{year} {time}", WEEKDAYS[weekday(day) as usize], MONTHS[month as usize - 1])
 }
 
+// "sat 09:00", or dated as "thu 5 nov 09:00", with the year when it is not this one's.
+pub fn brief(at: u64, now: u64, offset: &dyn Fn(i64) -> i64, dated: bool) -> String {
+    let local = at as i64 + offset(at as i64);
+    let (day, seconds) = (local.div_euclid(DAY), local.rem_euclid(DAY));
+    let time = format!("{:02}:{:02}", seconds / 3600, seconds % 3600 / 60);
+    let weekday = WEEKDAYS[weekday(day) as usize].to_lowercase();
+    if !dated {
+        return format!("{weekday} {time}");
+    }
+    let (year, month, date) = civil(day);
+    let year = if year == year_of((now as i64 + offset(now as i64)).div_euclid(DAY)) { String::new() } else { format!(" {year}") };
+    format!("{weekday} {date} {}{year} {time}", MONTHS[month as usize - 1].to_lowercase())
+}
+
 pub(crate) fn civil(day: i64) -> (i64, u32, u32) {
     let year = year_of(day);
     let mut month = 1;
@@ -101,6 +115,14 @@ mod tests {
         assert_eq!(at("today 09:00").unwrap_err(), "\"today 09:00\" is 09:00 today, which has passed");
         assert!(at("soonish").unwrap_err().contains("is not a time"));
         assert!(at("today fri 09:00").is_err());
+    }
+
+    #[test]
+    fn a_brief_time_names_the_weekday_and_the_date_when_asked() {
+        let at = |text: &str| parse(text, NOON, &UTC).unwrap();
+        assert_eq!(brief(at("sat 9am"), NOON, &UTC, false), "sat 09:00");
+        assert_eq!(brief(at("2026-11-05 09:00"), NOON, &UTC, true), "thu 5 nov 09:00");
+        assert_eq!(brief(at("2027-01-04 08:30"), NOON, &UTC, true), "mon 4 jan 2027 08:30");
     }
 
     #[test]

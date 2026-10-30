@@ -17,6 +17,7 @@ mod mouse;
 mod note_card;
 mod notices;
 mod options;
+mod park;
 mod paste;
 mod push;
 pub(crate) mod review;
@@ -110,6 +111,7 @@ enum Mode {
     ConfirmQueued { name: String, about: String, now: bool, nudged: bool },
     ConfirmClaimed { entry: Entry, about: String, machine: String, nudged: bool },
     RestartLead(usize),
+    Park { address: String, name: String, index: usize, date: Option<String> },
     Filter { buffer: String },
     Card { path: PathBuf, name: String, scroll: u16, image: usize },
     Fullscreen { path: PathBuf, name: String, scroll: u16, index: usize },
@@ -180,6 +182,7 @@ struct App {
     ongoing: Vec<Ongoing>,
     groups: Vec<Group>,
     ongoing_at: OngoingAt,
+    parked_open: bool,
     details: HashMap<PathBuf, std::rc::Rc<Detail>>,
     detail_requests: Option<Sender<DetailRequest>>,
     detail_results: Option<Receiver<(PathBuf, Detail)>>,
@@ -292,6 +295,10 @@ impl App {
     }
 
     fn shown(&self, column: Column, index: usize) -> bool {
+        self.filtered(column, index) && !(column == Column::Work && self.parked_hidden(index))
+    }
+
+    fn filtered(&self, column: Column, index: usize) -> bool {
         let Some(filter) = self.filter_of(column) else { return true };
         let wanted = filter.to_lowercase();
         let has = |text: &str| text.to_lowercase().contains(&wanted);
@@ -570,6 +577,7 @@ impl App {
             Mode::ConfirmClaimed { entry, about, machine, .. } => self.confirm_claimed(entry, about, machine, key, cancels),
             Mode::ConfirmDrop { path, name, force, .. } => self.confirm_drop(path, name, force, key, cancels),
             Mode::RestartLead(index) => self.choose_restart(index, act, key),
+            Mode::Park { address, name, index, date } => self.choose_park(address, name, index, date, act, key),
             Mode::Card { path, name, scroll, image } => self.handle_card(path, name, scroll, image, key),
             Mode::Fullscreen { path, name, scroll, index } => self.handle_fullscreen(path, name, scroll, index, key),
             Mode::Filter { buffer } => self.handle_filter(buffer, key),
@@ -606,6 +614,7 @@ impl App {
     fn at_top(&mut self, act: Option<Act>) {
         match act {
             Some(Act::Back) if self.filter.is_some() && self.page == Page::Work => self.filter = None,
+            Some(Act::Back) if self.page == Page::Work && self.column == Column::Work && self.parked_open && self.selected_task().is_some_and(|item| item.parked.is_some()) => self.show_parked(false),
             Some(Act::Back | Act::Close) if self.overlay => self.quit = true,
             Some(Act::Close) => {
                 let quit = keys::map().label(Act::Quit);
@@ -639,6 +648,7 @@ impl App {
             Act::Back | Act::Close => self.at_top(Some(act)),
             Act::Help => self.mode = Mode::Help(Default::default()),
             Act::Inbox => self.open_questions(None),
+            Act::Options if self.on_parked_line() => self.show_parked(true),
             Act::Options => {
                 let has_selection = match self.column {
                     Column::Work => self.selected_task().is_some(),
@@ -723,6 +733,13 @@ impl App {
             },
             Column::Work => {
                 let Some(item) = self.selected_task() else { return };
+                if act == Act::Park {
+                    return self.press_park(item);
+                }
+                if self.on_parked_line() {
+                    self.subject = Some(notices::Subject::plain("park"));
+                    return self.show(park::not_on_the_line());
+                }
                 if let Some(note) = item.queued_note() {
                     let (go, drop) = (keys::key(Act::Go), keys::key(Act::Drop));
                     let note = if note.ends_with('.') { note } else { format!("{note}.") };
@@ -978,7 +995,7 @@ impl App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), settings: settings_page::Page::new(settings_page::Paths::current(), None), sources, fetch_failures: Vec::new(), away: false,
-            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), answering: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(),
+            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), answering: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), parked_open: false,
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
@@ -1059,6 +1076,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         let position = previous.and_then(|(name, place)| app.tasks.iter().position(|item| item.name == name && item.place == place))
                             .or_else(|| wanted.and_then(|name| app.tasks.iter().position(|item| item.name == name)));
                         app.work_selected = position.unwrap_or(app.work_selected.min(app.tasks.len().saturating_sub(1)));
+                        app.settle_selection();
                         if let Ok(sources) = config::sources() {
                             app.sources = sources;
                         }

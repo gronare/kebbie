@@ -19,6 +19,7 @@ Tasks
 - [Work in steps](how-to/work-in-steps.md): a task lists its steps, you accept and push them one at a time.
 - [Try a task before pushing](how-to/try-a-task-before-pushing.md): put its commits on local main, push main when it is right.
 - [Finish or throw away a task](how-to/finish-a-task.md): done, drop and reset.
+- [Park a task until later](how-to/park-a-task.md): out of its group, the lead's summaries and your notifications until it comes back.
 - [Work across several repos](how-to/work-across-repos.md): one task with a half in each repo.
 - [Move work into a task](how-to/move-work-into-a-task.md): take work out of the main checkout.
 

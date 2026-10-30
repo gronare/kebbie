@@ -93,6 +93,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Messages], "messages", "messages"),
             bind(&[Act::Reports], "bugs to send to kebbie's maintainers", "bug reports"),
             bind(&[Act::Away], "away mode", "away mode"),
+            bind(&[Act::Park], "park a task, or bring it back", "park"),
         ]),
         group("THE BOARD", &[
             bind(&[Act::New], "new task", "new task"),

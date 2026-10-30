@@ -36,7 +36,7 @@ impl App {
                 self.set_filter(buffer);
                 None
             }
-            Mode::Input { buffer, .. } => {
+            Mode::Input { buffer, .. } | Mode::Park { date: Some(buffer), .. } => {
                 buffer.push_str(&text);
                 None
             }

@@ -178,6 +178,13 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   main moves, the keeper rebases it while its Claude is idle, its tracked files are
                                   committed and no rebase, review or waiting push is under way; a conflict goes to its
                                   Claude once per new main; never pushes; without on or off, says whether it follows
+  kebbie park [name] [--until <when>]
+                                  set a task aside until later (also z on the board): it leaves its group, the lead's
+                                  summaries and your notifications, keeps working, and comes back by itself at <when>
+                                  (as start --at takes it: tomorrow 08:00, fri, 24 oct, in 3d; a day alone is its
+                                  09:00), by default tomorrow at 09:00; --until unparked keeps it until you unpark it; yours, or
+                                  the lead's on your word
+  kebbie unpark [name]            bring a parked task back to its group now
   kebbie tidy <name> [note]       ask the task's Claude to reshape its commits by the rules skill (task.rules_skill)
   kebbie review [name]            send the task to review: a separate, read-only Claude reviews its commits in the
                                   background, by the skill kebbie:review and the rules skill; the task waits under To
@@ -361,7 +368,7 @@ With the vault plugin installed, enabled and configured, the vault holds each ta
 the repo's log line from the commit subjects, done waits for the note's solution and decisions and then closes
 it, and reset puts it back in the backlog. Without the plugin none of this runs.
 
-Without a name, land, follow, review, evidence, push, stage, unstage, done, drop and reset act on the task whose worktree you are in.
+Without a name, land, follow, park, unpark, review, evidence, push, stage, unstage, done, drop and reset act on the task whose worktree you are in.
 -C <dir> runs as if started in <dir>. kebbie --version (or kebbie version) prints kebbie main on the main channel
 and the version, such as kebbie 0.27.0, on the release channel.";
 
@@ -380,7 +387,7 @@ impl Arguments {
                 arguments.positionals.extend(input.by_ref());
                 break;
             }
-            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--profile", "--why", "--name"].contains(&argument.as_str()) {
+            if ["--pane", "-C", "--repo", "--from", "--mode", "--state", "--next", "--backlog", "--option", "--recommend", "--plan", "--card", "--through", "--priority", "--get", "--title", "--id", "--at", "--every", "--kind", "--prompt", "--after", "--profile", "--why", "--name", "--until"].contains(&argument.as_str()) {
                 arguments.values.push((argument, input.next().unwrap_or_default()));
             } else if argument.starts_with('-') {
                 arguments.flags.push(argument);
@@ -601,6 +608,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("backlog") => backlog::show(),
         Some("land") => tasks::land(&cwd, name),
         Some("follow") => tasks::follow(&cwd, &arguments.positionals[1..]),
+        Some("park") => tasks::park(&cwd, name, arguments.value("--until")),
+        Some("unpark") => tasks::unpark(&cwd, name),
         Some("push") if arguments.flag("--cancel") => tasks::cancel_push(&cwd, name),
         Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
         Some("stage") => tasks::stage(&cwd, name, true),

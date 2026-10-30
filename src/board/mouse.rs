@@ -70,7 +70,9 @@ impl App {
                     (Some(Hit::Task(index)), Mode::Normal) => {
                         let again = self.column == Column::Work && self.work_selected == index && !self.in_messages && !self.offer_panel.focused;
                         (self.column, self.work_selected, self.in_messages, self.offer_panel.focused) = (Column::Work, index, false, false);
-                        if again {
+                        if again && self.on_parked_line() {
+                            self.show_parked(true);
+                        } else if again {
                             self.mode = Mode::Options(0);
                         }
                     }
@@ -109,6 +111,11 @@ impl App {
                             self.run_choice(chosen);
                         }
                     }
+                    (Some(Hit::Choice(index)), Mode::Park { address, name, .. }) => {
+                        let (address, name) = (address.clone(), name.clone());
+                        self.mode = Mode::Normal;
+                        self.pick_park(address, name, index);
+                    }
                     (Some(Hit::Choice(index)), Mode::RestartLead(_)) => {
                         self.mode = Mode::Normal;
                         self.pick_restart(index);
@@ -117,7 +124,7 @@ impl App {
                     (Some(Hit::CardImage(index)), Mode::Card { image, .. }) => *image = index,
                     (Some(Hit::Question(index)), Mode::Questions(window)) => window.select(&self.questions, index),
                     (Some(Hit::Answer(index)), Mode::Questions(window)) => window.click(&self.questions, index),
-                    (None, Mode::Options(_) | Mode::RestartLead(_) | Mode::Message(_) | Mode::Help(_)) => self.mode = Mode::Normal,
+                    (None, Mode::Options(_) | Mode::RestartLead(_) | Mode::Park { .. } | Mode::Message(_) | Mode::Help(_)) => self.mode = Mode::Normal,
                     _ => {}
                 }
                 None

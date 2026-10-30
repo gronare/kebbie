@@ -140,8 +140,14 @@ pub fn log_error(state: &Path, text: &str) {
 pub enum Sent {
     Off,
     Held,
+    Parked,
     Started,
     Failed,
+}
+
+fn quiet_while_parked(state: &Path, notice: &Notice, now: u64) -> bool {
+    let (Some(task), Some(repo)) = (&notice.task, &notice.repo) else { return false };
+    crate::tasks::park_of(state, &crate::peers::address(task, repo), now).is_some()
 }
 
 // Never fails its caller: no command means no notification, and every error lands in the log.
@@ -155,6 +161,9 @@ pub fn send(cwd: &Path, notice: &Notice) -> Sent {
         }
     };
     let Some(command) = command else { return Sent::Off };
+    if quiet_while_parked(&state, notice, messages::now()) {
+        return Sent::Parked;
+    }
     if !claim(&state, notice, messages::now()) {
         return Sent::Held;
     }
@@ -246,6 +255,7 @@ fn notify_as(caller: &crate::permit::Caller, cwd: &Path, text: &str) -> Result<S
     match send(cwd, &Notice { event: Event::Summary, task: None, repo: None, text }) {
         Sent::Off => Ok("No notify.command is set, so nothing was sent; kebbie config shows the key.".to_string()),
         Sent::Held => Ok(format!("Not sent: a notification like it went out less than {DEBOUNCE_SECONDS} seconds ago.")),
+        Sent::Parked => Ok("Not sent: the task it is about is parked.".to_string()),
         Sent::Started => Ok(format!("Handed to notify.command; if it fails, the error is in {}.", log.display())),
         Sent::Failed => Err(format!("notify.command could not be started; the error is in {}", log.display())),
     }
@@ -304,6 +314,22 @@ mod tests {
         assert!(status.success());
         assert_eq!(fs::read_to_string(&out).unwrap(), "it's \"done\"; $(rm -rf /)|ready|it's \"done\"; $(rm -rf /)");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_parked_task_sends_no_notification_until_it_is_back() {
+        let state = temp("parked");
+        crate::tasks::park_address(&state, "billing@app", Some(2_000), 1_000, &|_| 0).unwrap();
+        for event in [Event::NeedsYou, Event::Ready, Event::Question, Event::CiFailed, Event::ApiError] {
+            assert!(quiet_while_parked(&state, &notice(event, "billing@app", "billing@app needs you"), 1_500), "{event:?}");
+        }
+        assert!(!quiet_while_parked(&state, &notice(Event::Ready, "billing@web", "ready"), 1_500), "the same name in another repo is another task");
+        assert!(!quiet_while_parked(&state, &Notice { event: Event::Summary, task: None, repo: None, text: "3 ready".to_string() }, 1_500), "the lead's word names no task");
+        assert!(!quiet_while_parked(&state, &notice(Event::Ready, "billing@app", "ready"), 2_000), "back at its time, it notifies again");
+        let source = include_str!("notify.rs");
+        let send = &source[source.find("pub fn send(").unwrap()..];
+        assert!(send[..send.find("claim(&state").unwrap()].contains("quiet_while_parked("), "every task notification passes the park first");
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

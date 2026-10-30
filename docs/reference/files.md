@@ -41,6 +41,7 @@ The folder is `0700` and its files `0600`. Each file is replaced whole on write.
 | `vault-gate/` | Per task, the mark that its note's Problem is written, so its edits go through. |
 | `halves/` | Per task, every worktree it has across repos, so each half's file tools take the others' worktrees as the task's own. |
 | `landed/` | Per task: why the keeper leaves a landed task open, at which head and since when, and the mark of a task pushed to keep open. |
+| `parked/` | Per task, `<task>@<repo>`: when the parked task comes back, kept until it does or the task ends. |
 | `follow-main/` | Per task, the flag that it follows main; `follow-main/handed/` the conflicts already handed to its Claude, once per new main. |
 | `closing/`, `fetch/` | Locks: one per task while it closes, one per repo while it fetches. |
 

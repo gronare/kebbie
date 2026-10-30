@@ -24,6 +24,7 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstag
 | [`kebbie move`](#kebbie-move-name-file-) | Move work from the main checkout into a task. |
 | [`kebbie land`](#kebbie-land-name) | Rebase a task onto the default branch without pushing. |
 | [`kebbie follow`](#kebbie-follow-name-onoff) | Keep a task rebased on the default branch. |
+| [`kebbie park`](#kebbie-park-name---until-when), [`unpark`](#kebbie-unpark-name) | Set a task aside until later, or bring it back now. |
 | [`kebbie push`](#kebbie-push-name) | Put a task in its repo's push line. |
 | [`kebbie stage`](#kebbie-stage-name), [`unstage`](#kebbie-unstage-name) | Put a ready task's commits on local main to try them, or take them off. |
 | [`kebbie ci`](#kebbie-ci---json) | The CI watches of pushed tasks. |
@@ -145,6 +146,30 @@ While it is on, the keeper checks the task every minute, fetching the repo when 
 | Conflicts | Aborts the rebase, hands it to the task's Claude as `land` does, and tells the lead. It tries again only once main or the task moves. |
 
 Nothing is ever pushed. You or the lead switch it; a task's own Claude cannot. `done`, `drop` and `reset` switch it off.
+
+### `kebbie park [name] [--until <when>]`
+
+Set the task aside until later, as `Z` on the board does. It keeps working, and while it is parked:
+
+| What | While parked |
+| --- | --- |
+| The board | It leaves its group for the [parked line](board.md#parked), which counts its open question or red CI. |
+| The lead | Leaves it out of its summaries: Done, Going on and Needs you. Its reports, notices and question copies stay on the board. |
+| Notifications | None is sent for it. |
+| [`kebbie status --json`](#kebbie-status---json) | `parked_until` says when it comes back, and its `group` is `PARKED`. |
+
+| `--until` | Comes back |
+| --- | --- |
+| left out | Tomorrow at 09:00. |
+| `tomorrow 13:00`, `fri 09:00`, `24 oct 09:00`, `2026-11-02 08:30`, `in 3d` | Then, read as [`kebbie start --at`](#kebbie-start-name-prompt) reads a time. |
+| `fri`, `24 oct`, `2026-11-02`, `tomorrow` | That day at 09:00. |
+| `unparked` | When you unpark it. |
+
+It comes back to its group by itself at that time. Yours to run, or the lead's on your word; a task's own Claude cannot. `done`, `drop` and `reset` end the park.
+
+### `kebbie unpark [name]`
+
+Bring a parked task back to its group now, as `Z` on its row does.
 
 ### `kebbie push [name]`
 
@@ -424,6 +449,7 @@ The task's commits not yet pushed are its next steps, in order. A commit beyond 
 | `push_waits` | `user` or `lead` while a push it asked for waits in its repo's push line or for the task's Claude. |
 | `push_ahead` | How many pushes of its repo go before it while it waits its turn. |
 | `profile` | The profile it started with: `task` for the built-in one, `null` for a session that is no task. |
+| `parked_until` | While it is parked: the Unix time it comes back, or `"unparked"` until you bring it back; `null` otherwise. |
 | `phase` | Where it stands as kebbie keeps it, below. |
 
 `phase` holds:

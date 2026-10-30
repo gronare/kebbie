@@ -65,6 +65,7 @@ The context line reads `Lead context N% · L` on a narrow board. A click on it a
 Work:
 
 - A task's halves in other repos sit next to each other.
+- Under the groups: the [parked line](#parked) while you have parked tasks.
 - Under the tasks: the bugs to send while `B` shows them, and the main checkouts with files changed outside any task.
 - After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles. `i` shows the list and clears the line.
 
@@ -132,6 +133,7 @@ When the task's Claude runs a command that looks like a test run but is not in t
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. A cancelled run waits for a later run on the default branch to pass. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
 | Queued | Waiting to start after other tasks or at a time, with no worktree, Space or Claude. |
+| Parked | Tasks you set aside until later, folded into one line under the other groups. See [Parked](#parked). |
 
 kebbie keeps one phase per task, and only what changes it writes it: its start, the first prompt it takes up, its report, its question and your answer, a push and its hand-over, a CI verdict, an API error it will not resume. The group follows that phase.
 
@@ -197,6 +199,20 @@ The row, marked `⧗`, carries a title from its backlog item or the first senten
 - It starts by itself once each task it waits for has ended as done.
 - A task queued with `--at` waits for that time as well, or only for it, and the row says when: `Starts 15:00 today.`, `Starts Fri 24 Oct 09:00.`
 - When a task it waits for is dropped, reset or gone, the row moves to Needs you with the reason instead.
+
+### Parked
+
+A task you park with `Z` leaves its group, whatever its phase, and keeps working. The other groups and the status line's counts leave it out, the lead leaves it out of its summaries, and its notifications are not sent. See [Park a task until later](../how-to/park-a-task.md).
+
+| Line or mark | Means |
+| --- | --- |
+| `◌ 3 parked · Z shows them` | The parked line, under the other groups: how many tasks are parked. Select it and press `Z` or `⏎`, or click it twice, to show them. |
+| `· 1 question`, `· 1 red CI` | On the parked line, peach: a parked task has an open question or a failed CI run. It stays parked; the line counts it so you see something waits. |
+| `PARKED  3 · 1 question  esc hides them` | The header while the parked tasks show, each on its own row. `esc` folds them back into the line. |
+| `back 09:00 tomorrow` | On a parked row: when it returns to its group by itself. |
+| `back when you unpark it` | On a parked row: parked until you bring it back. |
+
+Task keys on the parked line act on the line only: `Z` or `⏎` shows the parked tasks first. A parked task comes back when its time comes, with `Z` on its row, or with [`kebbie unpark`](commands.md#kebbie-unpark-name). `done`, `drop` and `reset` end its park with the task. The phone's board leaves parked tasks out.
 
 ## Keys
 
@@ -275,6 +291,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `d` | Done: close a task you already pushed elsewhere and free its worktree. Asks first. | Claude is not mid-turn. |
 | `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task. |
 | `u` | Keep it rebased on main, or switch that off; `●` marks it on. | It is a task. |
+| `Z` | Park it until later; on a parked task, bring it back now. | It is a task. |
 | `z` | Reset: its work goes, its backlog item returns. Asks first. | Always. |
 | `x` | Drop. Asks first; on uncommitted work or unpushed commits, asks again to force. | Always. |
 
@@ -284,6 +301,7 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 - `M` puts its commits on the main checkout's local default branch, unpushed, after the tasks staged before it, and the row says `on local main · waiting for your push`. Taking them off leaves the other staged tasks. To put on, the repo sets `worktree.stage_on_main`, it has commits, Claude is not mid-turn, it is not waiting for the reviewer and has no CI watch. To take off: always. See [`kebbie stage`](commands.md#kebbie-stage-name).
 - `C` keeps the failure on record with the reason its Claude gave, and the task closes once its commits are on main.
 - `d` also closes one under CI running or with failed CI you choose to leave. The keeper closes a landed task by itself; `d` is for the ones it leaves to you.
+- `Z` opens `Park <task> until` with four rows, each with the time it means on the right: `Tomorrow`, selected (`sat 09:00`), so `Z` then `⏎` parks it until tomorrow at 09:00; `Monday` (`mon 09:00`), the coming Monday at 09:00, which on a Monday before 09:00 is that morning; `A date…` turns the window into a field for a day as [`kebbie start --at`](commands.md#kebbie-start-name-prompt) takes it (`fri`, `24 nov`, `2026-12-01`, `tomorrow 13:00`), a day alone at 09:00, showing the time it reads as you type (`thu 5 nov 09:00`, or `?`), where `⏎` parks and `esc` goes back to the choices; `I bring it back` keeps it until you press `Z` on it. `1` to `4` pick directly, `esc` cancels. See [Parked](#parked).
 - `u`: when main moves, the keeper rebases it, never pushes it. Off by default; `done`, `drop` and `reset` switch it off. See [`kebbie follow`](commands.md#kebbie-follow-name-onoff).
 
 ### How messages reach a Claude
@@ -635,7 +653,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `reports`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `reports`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

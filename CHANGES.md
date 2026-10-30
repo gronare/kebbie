@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- Z parks a task until tomorrow, Monday, a date or until you bring it back: it keeps working, leaves its group for one parked line that counts its questions and red CI, and stays out of the lead's summaries and your notifications until it comes back by itself; kebbie park and kebbie unpark do the same from a terminal
 
 ### Fixed
 - An update of kebbie linked from your own checkout says it builds that checkout and how many commits it holds ahead of its upstream

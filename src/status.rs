@@ -27,6 +27,7 @@ pub enum Group {
     CiRunning,
     Idle,
     Queued,
+    Parked,
 }
 
 impl Group {
@@ -41,6 +42,7 @@ impl Group {
             Group::CiRunning => "ci-running",
             Group::Idle => "waiting-for-work",
             Group::Queued => "queued",
+            Group::Parked => "parked",
         }
     }
 
@@ -53,6 +55,7 @@ impl Group {
             Group::CiRunning => "CI RUNNING",
             Group::Idle => "WAITING FOR WORK",
             Group::Queued => "QUEUED",
+            Group::Parked => "PARKED",
         }
     }
 }
@@ -125,6 +128,7 @@ pub struct Item {
     pub push_left: Option<String>,
     pub staged: bool,
     pub steps: tasks::Steps,
+    pub parked: Option<tasks::Parked>,
 }
 
 impl Item {
@@ -160,7 +164,7 @@ impl Item {
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
-            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, steps: tasks::Steps::default(),
+            held_by_draft: None, phase: None, landed: None, ci_outside: None, ci_dismissed: Vec::new(), unrecorded: None, push_left: None, staged: false, steps: tasks::Steps::default(), parked: None,
         }
     }
 
@@ -299,6 +303,9 @@ impl Item {
 
     // A task's group is its kept phase, which only the actors that move it write; herdr's working or idle is the row's icon, never its group.
     pub fn group(&self) -> Group {
+        if self.parked.is_some() {
+            return Group::Parked;
+        }
         if let Some(queued) = &self.queued {
             return if queued.blocked.is_some() { Group::NeedsYou } else { Group::Queued };
         }
@@ -517,6 +524,7 @@ impl Item {
     pub fn to_json(&self) -> Value {
         let mut shown = self.shown_json();
         shown["staged"] = json!(self.staged);
+        shown["parked_until"] = self.parked.map_or(Value::Null, |parked| parked.until.map_or(json!(tasks::UNPARKED), |at| json!(at)));
         shown
     }
 
@@ -889,6 +897,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 push_left: state.as_deref().and_then(|state| tasks::push_left(state, &address)),
                 staged: state.as_deref().is_some_and(|state| tasks::staged(state, repo, &address)),
                 steps,
+                parked: state.as_deref().and_then(|state| tasks::park_of(state, &address, began)),
                 phase: None,
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
@@ -951,6 +960,7 @@ pub fn gather() -> Result<Vec<Item>> {
             push_left: None,
             staged: false,
             steps: tasks::Steps::default(),
+            parked: None,
         });
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
@@ -1019,9 +1029,24 @@ pub(crate) mod tests {
             push_left: None,
             staged: false,
             steps: tasks::Steps::default(),
+            parked: None,
         };
         rederive(&mut item);
         item
+    }
+
+    #[test]
+    fn a_parked_task_leaves_every_group_and_says_when_it_comes_back() {
+        let mut item = task(Some("blocked"), Some("needs-you"), 1);
+        assert_eq!(item.group(), Group::NeedsYou);
+        item.parked = Some(tasks::Parked { until: Some(1_900_000_000) });
+        assert_eq!((item.group(), item.wanted("g"), item.urgency()), (Group::Parked, None, 0), "a prompt on its screen keeps it parked and asks nothing");
+        assert!(!Group::ALL.contains(&Group::Parked) && Group::Parked.title() == "PARKED", "it is no group board.groups orders");
+        assert_eq!(item.to_json()["parked_until"], json!(1_900_000_000));
+        item.parked = Some(tasks::Parked { until: None });
+        assert_eq!((item.to_json()["parked_until"].clone(), item.to_json()["group"].clone()), (json!("unparked"), json!("PARKED")));
+        item.parked = None;
+        assert_eq!((item.to_json()["parked_until"].clone(), item.group()), (Value::Null, Group::NeedsYou));
     }
 
     pub(crate) fn in_phase(item: &mut Item, phase: Phase) {

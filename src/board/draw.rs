@@ -170,6 +170,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::ConfirmClaimed { entry, about, machine, nudged } => draw_claimed(frame, &entry.title, about, machine, *nudged),
         Mode::ConfirmDrop { name, force, nudged, .. } => draw_drop(frame, name, *force, *nudged),
         Mode::RestartLead(index) => modal_hits = draw_restart_lead(frame, *index),
+        Mode::Park { name, index, date, .. } => modal_hits = super::park::draw_park(frame, name, *index, date.as_deref()),
         Mode::Filter { buffer } => draw_filter(frame, app, buffer),
         Mode::ConfirmPush { .. } => modal_hits = draw_push(frame, app),
         Mode::Working { label, .. } => {

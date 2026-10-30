@@ -110,6 +110,7 @@ pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::v
     super::accept::forget(task_of(&slot), &repo);
     crate::permit::forget(&peers::address(task_of(&slot), &name_of(&repo)));
     super::follow::forget(&peers::address(task_of(&slot), &name_of(&repo)));
+    super::park::forget(&peers::address(task_of(&slot), &name_of(&repo)));
     crate::review::forget(task_of(&slot), &repo);
     crate::rules_check::forget(task_of(&slot), &repo);
     crate::report::forget_card(task_of(&slot), &repo);
@@ -276,6 +277,7 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
     super::accept::forget(task, &repo);
     crate::permit::forget(&peers::address(task, &name_of(&repo)));
     super::follow::forget(&peers::address(task, &name_of(&repo)));
+    super::park::forget(&peers::address(task, &name_of(&repo)));
     crate::review::forget(task, &repo);
     crate::rules_check::forget(task, &repo);
     crate::report::forget_card(task, &repo);
@@ -364,6 +366,7 @@ mod tests {
         assert!(body("close_task").contains("evidence::forget(") && body("discard").contains("evidence::forget("), "a later task by the same name must not show this one's test runs");
         assert!(body("close_task").contains("permit::forget(") && body("discard").contains("permit::forget("), "done, drop and reset take the push permission back");
         assert!(body("close_task").contains("follow::forget(") && body("discard").contains("follow::forget("), "a later task by the same name must not follow main unasked");
+        assert!(body("close_task").contains("park::forget(") && body("discard").contains("park::forget("), "a later task by the same name must not start out parked");
         assert!(body("finish").contains("forget_address(") && body("discard").contains("forget_address("), "a later task by the same name must not inherit this one's Problem pass or title");
         assert!(body("close_task").contains("forget_held_prompt(") && body("discard").contains("forget_held_prompt("), "a prompt still held for the task is never typed into a later task by the same name");
         assert!(source.contains("\npub fn drop(cwd: &Path, name: Option<&str>, force: bool) -> Result<String> {\n    discard(cwd, name, force, \"dropped\", None)"));

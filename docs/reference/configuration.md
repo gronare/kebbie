@@ -226,7 +226,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 ## Notify command
 
-kebbie runs `notify.command` through `sh -c`, detached, and stops it after 10 seconds. Failures go to `notify.log` in the state directory and never fail the step that sent them. A task sends at most one notification per event a minute.
+kebbie runs `notify.command` through `sh -c`, detached, and stops it after 10 seconds. Failures go to `notify.log` in the state directory and never fail the step that sent them. A task sends at most one notification per event a minute, and none while it is [parked](board.md#parked).
 
 The command gets:
 

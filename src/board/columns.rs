@@ -22,6 +22,7 @@ pub(super) fn group_color(group: Group) -> Color {
         Group::CiRunning => YELLOW,
         Group::Idle => MUTED,
         Group::Queued => MAUVE,
+        Group::Parked => MUTED,
     }
 }
 
@@ -179,6 +180,23 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         if !app.shown(Column::Work, index) {
             continue;
         }
+        if item.parked.is_some() && current != Some(Group::Parked) {
+            if current.is_some() {
+                lines.push(Line::default());
+            }
+            current = Some(Group::Parked);
+            let parked = app.parked_items();
+            if !app.parked_open {
+                let selected = index == app.work_selected;
+                if selected {
+                    selected_line = lines.len();
+                }
+                rows.push((lines.len(), lines.len() + 1, Hit::Task(index)));
+                lines.push(super::park::collapsed_line(&parked, selected, focused));
+                continue;
+            }
+            lines.push(super::park::open_header(&parked));
+        }
         if current != Some(item.group()) {
             if current.is_some() {
                 lines.push(Line::default());
@@ -195,7 +213,11 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         let start = lines.len();
         let dot = running_dot(item);
         let marker = if item.routine.is_some() { ROUTINE_MARKER } else { "" };
-        let mut line = row(selected, focused, status_icon(item), &item.titled(), place, &row_facts(item), width.saturating_sub(if dot { 2 } else { 0 } + marker.chars().count()));
+        let facts = match item.parked {
+            Some(parked) => format!("{} · {}", parked.back_now(), row_facts(item)),
+            None => row_facts(item),
+        };
+        let mut line = row(selected, focused, status_icon(item), &item.titled(), place, &facts, width.saturating_sub(if dot { 2 } else { 0 } + marker.chars().count()));
         if let Some(to_accept) = to_accept_note(item) {
             tint(&mut line, &to_accept, YELLOW);
         }

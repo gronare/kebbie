@@ -1163,7 +1163,8 @@ fn unread_in(dir: &Path) -> Result<String> {
     let messages = load_in(dir);
     let seen = seen_count(&messages, fs::read_to_string(&mark).ok().as_deref().map(str::trim));
     crate::state::write(&mark, messages.last().map(|message| message.id.as_str()).unwrap_or_default())?;
-    let copies = copies_for_lead(&messages, seen);
+    let parked = crate::tasks::parked_all(dir, now());
+    let copies: Vec<&Message> = copies_for_lead(&messages, seen).into_iter().filter(|message| !task_about(message).is_some_and(|task| parked.iter().any(|(address, _)| address == task))).collect();
     let told: Vec<&Message> = copies.iter().copied().filter(|message| is_told(message)).collect();
     let board: Vec<String> = copies.iter().filter(|message| is_copy(message)).map(|message| format!("- {}", indented(&message.text))).collect();
     let notices: Vec<&Message> = copies.iter().copied().filter(|message| message.fyi).collect();
@@ -1186,6 +1187,10 @@ fn unread_in(dir: &Path) -> Result<String> {
         let mut lines: Vec<String> = latest.values().map(report_line).collect();
         lines.sort();
         sections.push(format!("Task reports since you last looked (each task's latest; kebbie status --json has them all):\n{}", lines.join("\n")));
+    }
+    if !parked.is_empty() {
+        let lines: Vec<String> = parked.iter().map(|(address, parked)| format!("- {} ({})", crate::status::with_titles_in(dir, address), parked.back_now())).collect();
+        sections.push(format!("Parked by the user (leave them out of Done, Going on and Needs you until they are back; what they said meanwhile waits on the board):\n{}", lines.join("\n")));
     }
     Ok(sections.join("\n\n"))
 }
@@ -1574,6 +1579,24 @@ mod tests {
         assert!(!unread.contains("Messages between sessions"), "the question and the answer are not told again: {unread}");
         assert_eq!(unread_in(&dir).unwrap(), "");
         assert_eq!(ids(&shown_in_log(load_in(&dir))), ["q1", "a1"], "the board's log shows the question and the answer, not the lead's copies");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_leads_digest_leaves_a_parked_task_out_and_names_it_parked() {
+        let dir = state("parked");
+        let report = |id: &str, from: &str, text: &str| json!({ "id": id, "at": 1, "from": from, "to": LEAD_LABEL, "text": text, "state": "logged", "report": { "state": "ready", "next": "push it" } });
+        write_log(&dir, &[
+            report("r1", "billing@web", "refunds done"),
+            report("r2", "search@web", "filters done"),
+            question("q1", 2, "billing@web"),
+            json!({ "id": "c1", "at": 3, "from": "kebbie", "to": LEAD_LABEL, "text": "billing@web asks the user: question q1", "state": "logged", "kind": "copy" }),
+            json!({ "id": "n1", "at": 4, "from": "kebbie", "to": LEAD_LABEL, "text": "CI failed for billing@web (abc1234)", "state": "logged", "fyi": true }),
+        ]);
+        crate::tasks::park_address(&dir, "billing@web", None, now(), &|_| 0).unwrap();
+        let unread = unread_in(&dir).unwrap();
+        assert!(unread.contains("filters done") && !unread.contains("refunds done") && !unread.contains("question q1") && !unread.contains("CI failed"), "its report, its question's copy and its notices stay out: {unread}");
+        assert!(unread.contains("Parked by the user (leave them out of Done, Going on and Needs you until they are back") && unread.contains("- billing@web (back when you unpark it)"), "{unread}");
         fs::remove_dir_all(&dir).unwrap();
     }
 
