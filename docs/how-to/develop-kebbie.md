@@ -66,7 +66,7 @@ The gate tests your working tree, and says so when that differs from the last co
 
    A task that changes a command, a key or a notice then updates its page under `docs/`, and the reviewer holds one that does not. See [Keep docs in step with changes](keep-docs-in-step.md).
 
-2. Add a line to `CHANGES.md` under `## Unreleased` for each change a user would notice, in the commit that makes it. Machines on the `main` channel show it after their next update, and the release takes it along. See [Write the notes as you go](release-kebbie.md#write-the-notes-as-you-go).
+2. Add a line to `CHANGES.md` under `## Unreleased` for each change a user would notice, in the commit that makes it. Machines on the `main` channel show it after their next update, and the release takes it along. Write what got better or what was fixed, as you would tell someone who uses kebbie, with no commit ids, file names or backticks.
 
 ## Work against a dev hub
 

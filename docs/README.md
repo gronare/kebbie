@@ -64,8 +64,6 @@ Your machine
 Working on kebbie
 
 - [Develop kebbie](how-to/develop-kebbie.md): run kebbie from your own checkout.
-- [Receive bug reports as a maintainer](how-to/receive-bug-reports-as-a-maintainer.md): the reports users send and the error signals three installs share, filed as kebbie issues.
-- [Release kebbie](how-to/release-kebbie.md): bump, tag and publish.
 
 ## Reference
 
