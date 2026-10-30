@@ -70,6 +70,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `push block` | Inside a repo: whether its task worktrees get the push block. |
 | `kelpie leftovers` | Worktrees whose push block is still kelpie's, which refuses kebbie's own push (`kebbie doctor --fix` installs kebbie's), and open tasks whose hooks run kelpie's removed binary, so their test runs and edits go unrecorded (`kebbie restart` gives each its settings again, a busy one once it is idle). |
 | `docs` | Inside a repo: whether `docs.required` is on. |
+| `comments` | Inside a repo: whether kebbie reads comments on the commits it pushes there, and for how many days, or why not. |
 | `setup skill` | The setup skill's plugin is installed and enabled. |
 | `hub` | Whether the machine joined a kebbie hub, and how its board posts go. |
 | `maintainers` | Where error signals and kebbie's own bug reports go. |
@@ -85,6 +86,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 - `hub`: when the machine has joined, it shows the hub's address and the machine's name, whether it pinned an account key and when the board last went out. It warns when the hub does not answer, the machine holds no account key (so no browser can read its board) or the last post failed.
 - `maintainers`: whether error signals go to kebbie's maintainers (`report.signals`), when they last went and whether that failed, and what happens to kebbie's own bug reports (`report.text`). It warns while `"always"` is set but not armed.
 - `reports`: how many reports were filed here, the last fetch and its error, and how many reports wait in quarantine on the issues endpoint.
+- `comments` warns when `comments.watch` is on but origin is not on GitHub or `gh` is missing or logged out, with the same reason `kebbie ci` gives. With `comments.watch = false` it says it is off.
 - `machine` warns while `machine.name` is unset.
 - `sandbox` is on and ready; on with what is missing on Linux, a `fail` since tasks then do not start; or off with `task.sandbox = false`, a `warn` that says a task's shell can pass as you.
 - `codex` looks for Codex on `PATH`, kebbie's plugin in its cache and current, and nothing in Codex's `config.toml` that turns kebbie's hooks off (`[features] hooks = false`, or one of them turned off in `/hooks`). Only `codex` shows until a profile runs Codex or Codex is on `PATH`. A gap is a `warn` until a profile runs Codex, and a `fail` after.

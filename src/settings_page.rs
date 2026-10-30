@@ -28,7 +28,7 @@ const SECTIONS: [(&str, &[&str]); 7] = [
     ("Tasks", &["task"]),
     ("Board", &["board"]),
     ("Worktrees", &["worktree"]),
-    ("Review & docs", &["review", "ci", "docs"]),
+    ("Review & docs", &["review", "ci", "comments", "docs"]),
     ("Updates", &["update", "restart", "keeper", "recover"]),
     ("This machine", &["machine", "hub", "notify", "vault"]),
     ("Reports", &["report", "issues"]),

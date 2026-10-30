@@ -986,7 +986,7 @@ fn with_ci_watch_off_the_push_closes_the_task_as_before_and_never_asks_gh() {
     let (app, _) = lab.task_fixture();
     on_github(&lab, &app);
     fake_gh(&lab, "[]");
-    fs::write(&lab.config, "[ci]\nwatch = false\n").unwrap();
+    fs::write(&lab.config, "[ci]\nwatch = false\n[comments]\nwatch = false\n").unwrap();
     let pushed = landed_and_pushed(&lab, &app);
     assert!(stdout(&pushed).contains("and closed the task") && !stdout(&pushed).contains("ci:"), "{}", stdout(&pushed));
     assert!(gh_calls(&lab).is_empty());

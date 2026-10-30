@@ -153,6 +153,8 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
 | `ci.watch` | `true` | either | Whether kebbie watches CI after a push and closes the task only once every workflow run for the pushed commit is green. |
+| `comments.watch` | `true` | either | Whether kebbie reads the comments colleagues leave on the commits it pushed and shows each under COMMENTS on the board. |
+| `comments.watch_days` | `7` | either | How many days after a push kebbie checks its commits for new comments, a whole number from 1 to 90. |
 | `update.channel` | `"release"` | config.toml only | What `kebbie update` installs: `"release"`, the highest `vX.Y.Z` tag on origin, or `"main"`, origin's default branch. |
 | `restart.auto` | `true` | config.toml only | Whether kebbie restarts the Claude sessions that run older code than is installed, after an update or a new Claude Code; no other session restarts. |
 | `restart.idle_minutes` | `10` | config.toml only | How long, an integer from 1 to 1440 minutes, a session on older code waits to be idle and out of focus before that restart. |
@@ -161,13 +163,15 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `ci.watch` needs origin on GitHub and `gh` logged in. `false` closes the task right after the push, as for a repo without useful CI. See [Watch CI after a push](../explanation/trunk-based.md#ci-after-the-push).
 
+`comments.watch` needs what `ci.watch` needs, origin on GitHub and `gh` logged in, and [`kebbie doctor`](requirements.md#what-kebbie-doctor-checks) says when a repo misses either. Your own comments are skipped, and so are a bot's. kebbie asks `gh` for a repo's new commit comments every 12 minutes while any of its pushed commits is watched, in one call however many are, and less often while `gh` fails. A comment already on the board stays there after the days run out.
+
 `restart.auto`: each restarted session resumes its conversation, and `kebbie update` restarts the idle ones at once. A session mid-turn, the pane you are in and one with background work running are never restarted on their own. `false` restarts nothing on its own; the board still marks the sessions on older code.
 
 `keeper.enabled`: the keeper's routines then go on with the board closed. `false` runs them in an open board instead, and the board then posts the hub's board once a minute. See [The keeper](../explanation/updates-and-restarts.md#the-keeper). The routines are:
 
 - held messages and delivery checks of typed prompts, stale-session restarts and the update check;
 - once an hour, linking kebbie in herdr again when herdr links it from a folder that is gone;
-- the push lines and local-main staging, CI watches, closing landed tasks and rebasing the tasks that follow main;
+- the push lines and local-main staging, CI watches, comments on pushed commits, closing landed tasks and rebasing the tasks that follow main;
 - relaying a task's Claude's own prompts to the lead, resuming tasks an API error stopped, and the rules check on a ready report;
 - rechecking kebbie issues after an update, the scheduled `[[routines]]`, and starting the queued tasks whose wait is over;
 - posting the board to a [kebbie hub](../how-to/see-your-board-on-your-phone.md), sending error signals and bug reports to kebbie's maintainers, and with `report.inbox_token` fetching the reports inbox.

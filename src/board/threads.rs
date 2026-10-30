@@ -162,7 +162,7 @@ pub(super) fn spawn_routine_runner(overlay: bool) {
                     let _ = crate::signals::tick(&state);
                     crate::install_signal::tick(&state);
                     let _ = crate::hub::report::send_unasked_tick(&state);
-                    for note in crate::issue_recheck::tick(&state) {
+                    for note in crate::issue_recheck::tick(&state).into_iter().chain(crate::comments::tick(&state)) {
                         crate::keeper::log_line(&state, &note);
                     }
                 }

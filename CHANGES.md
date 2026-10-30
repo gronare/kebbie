@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie reads the comments colleagues leave on the commits it pushed, for seven days after each push: a read-only Claude judges each one as holds, opinion, praise or a question for you, and kebbie comments and kebbie comment show list them with a reply to send; comments.watch and comments.watch_days set it, and kebbie doctor says when a repo is not watched
 - Z parks a task until tomorrow, Monday, a date or until you bring it back: it keeps working, leaves its group for one parked line that counts its questions and red CI, and stays out of the lead's summaries and your notifications until it comes back by itself; kebbie park and kebbie unpark do the same from a terminal
 - The bugs to send fold into one row under Work that you select like a task, as the parked line does: ⏎ opens it and esc folds it back, and B is no longer a key
 - Installed from herdr's plugin list, the board opens the setup guide each time it starts until kebbie's Claude Code plugin is installed, then restarts the lead on it

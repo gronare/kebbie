@@ -1157,7 +1157,7 @@ fn seen_count(messages: &[Message], mark: Option<&str>) -> usize {
     }
 }
 
-fn unread_in(dir: &Path) -> Result<String> {
+pub(crate) fn unread_in(dir: &Path) -> Result<String> {
     let _lock = if holds(dir) { None } else { Lock::take_in(dir, true)? };
     let mark = dir.join(LEAD_MARK);
     let messages = load_in(dir);
@@ -1243,14 +1243,14 @@ pub fn report_line(message: &Message) -> String {
     format!("- {} ({state}): {} — you: {}", crate::status::with_titles(&message.from), message.text, message.next_for_you().unwrap_or("nothing"))
 }
 
-// Messages to or from the lead are already in its chat; reports, the board's copies and kebbie's notices to it are not; what kebbie sent its maintainers, and the bug reports it filed from them, are the user's alone.
+// Messages to or from the lead are already in its chat; reports, the board's copies and kebbie's notices to it are not; what kebbie sent its maintainers, the bug reports it filed from them and the comments it read are the user's alone.
 fn copies_for_lead(messages: &[Message], seen: usize) -> Vec<&Message> {
     messages.iter().skip(seen.min(messages.len()))
         .filter(|message| message.report.is_some() || is_copy(message) || message.fyi || (message.from != LEAD_LABEL && message.to != LEAD_LABEL && !users_alone(message))).collect()
 }
 
 fn users_alone(message: &Message) -> bool {
-    message.to == USER_LABEL && message.kind.as_deref().is_some_and(|kind| [crate::hub::report::SENT_KIND, crate::signals::KIND, crate::hub::inbox::FILED_KIND].contains(&kind))
+    message.to == USER_LABEL && message.kind.as_deref().is_some_and(|kind| [crate::hub::report::SENT_KIND, crate::signals::KIND, crate::hub::inbox::FILED_KIND, crate::comments::KIND].contains(&kind))
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {

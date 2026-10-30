@@ -129,6 +129,8 @@ pub struct Worktree {
     pub server_name: Option<String>,
     pub worker_name: Option<String>,
     pub ci_watch: Option<bool>,
+    pub comments_watch: Option<bool>,
+    pub comments_days: Option<u64>,
     pub clean_on_release: Option<Vec<String>>,
     pub docs_required: Option<bool>,
 }
@@ -293,6 +295,8 @@ pub struct Settings {
     pub idle_minutes: Setting<u64>,
     pub auto_restart: Setting<bool>,
     pub ci_watch: Setting<bool>,
+    pub comments_watch: Setting<bool>,
+    pub comments_days: Setting<u64>,
     pub clean_on_release: Setting<Vec<String>>,
     pub docs_required: Setting<bool>,
     pub keeper: Setting<bool>,
@@ -390,9 +394,9 @@ fn warn_once<T>(value: T, unknown: &[String]) -> T {
     value
 }
 
-const MACHINE_KEYS: [&str; 17] = ["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "hub", "keys", "ci", "routines", "report", "issues"];
-const REPO_KEYS: [&str; 7] = ["actions", "worktree", "task", "review", "ci", "docs", "routines"];
-const SECTION_KEYS: [(&str, &[&str]); 17] = [
+const MACHINE_KEYS: [&str; 18] = ["board", "worktree", "task", "review", "notify", "vault", "update", "restart", "keeper", "recover", "machine", "hub", "keys", "ci", "comments", "routines", "report", "issues"];
+const REPO_KEYS: [&str; 8] = ["actions", "worktree", "task", "review", "ci", "comments", "docs", "routines"];
+const SECTION_KEYS: [(&str, &[&str]); 18] = [
     ("board", &["groups", "backlog"]),
     ("board.backlog", &["sources", "ongoing"]),
     ("update", &["channel"]),
@@ -409,6 +413,7 @@ const SECTION_KEYS: [(&str, &[&str]); 17] = [
     ("notify", &["command"]),
     ("vault", &["command"]),
     ("ci", &["watch"]),
+    ("comments", &["watch", "watch_days"]),
     ("docs", &["required"]),
 ];
 
@@ -709,6 +714,8 @@ fn worktree(table: &Table) -> Result<Worktree> {
         server_name: text(worktree, "server_name", "worktree.server_name")?,
         worker_name: text(worktree, "worker_name", "worktree.worker_name")?,
         ci_watch: None,
+        comments_watch: None,
+        comments_days: None,
         clean_on_release: worktree.get("clean_on_release").map(clean_on_release).transpose()?,
         docs_required: None,
     })
@@ -783,6 +790,14 @@ fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     Ok(worktree)
 }
 
+fn with_comments(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
+    if let Some(comments) = subtable(table, "comments", "comments")? {
+        worktree.comments_watch = comments.get("watch").map(|value| value.as_bool().ok_or("comments.watch: must be true or false")).transpose()?;
+        worktree.comments_days = comments.get("watch_days").map(|value| value.as_integer().filter(|days| (1..=90).contains(days)).map(|days| days as u64).ok_or("comments.watch_days: must be a whole number of days, 1 to 90")).transpose()?;
+    }
+    Ok(worktree)
+}
+
 fn with_docs(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(docs) = subtable(table, "docs", "docs")? {
         worktree.docs_required = docs.get("required").map(|value| value.as_bool().ok_or("docs.required: must be true or false")).transpose()?;
@@ -791,7 +806,7 @@ fn with_docs(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 }
 
 fn layers(table: &Table) -> Result<Worktree> {
-    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree)).and_then(|worktree| with_vault(table, worktree)).and_then(|worktree| with_ci(table, worktree)).and_then(|worktree| with_docs(table, worktree))
+    worktree(table).and_then(|worktree| with_task(table, worktree)).and_then(|worktree| with_review(table, worktree)).and_then(|worktree| with_notify(table, worktree)).and_then(|worktree| with_vault(table, worktree)).and_then(|worktree| with_ci(table, worktree)).and_then(|worktree| with_comments(table, worktree)).and_then(|worktree| with_docs(table, worktree))
 }
 
 fn table(text: &str, source: &str) -> Result<Table> {
@@ -878,6 +893,8 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         idle_minutes: or_default(pick(None, machine.restart.idle_minutes.as_ref()), DEFAULT_IDLE_MINUTES),
         auto_restart: or_default(pick(None, machine.restart.auto.as_ref()), true),
         ci_watch: or_default(pick(repo.ci_watch.as_ref(), machine.worktree.ci_watch.as_ref()), true),
+        comments_watch: or_default(pick(repo.comments_watch.as_ref(), machine.worktree.comments_watch.as_ref()), true),
+        comments_days: or_default(pick(repo.comments_days.as_ref(), machine.worktree.comments_days.as_ref()), crate::comments::DEFAULT_DAYS),
         clean_on_release: or_default(pick(repo.clean_on_release.as_ref(), machine.worktree.clean_on_release.as_ref()), vec!["target".to_string()]),
         docs_required: or_default(pick(repo.docs_required.as_ref(), None), false),
         keeper: or_default(pick(None, machine.keeper.as_ref()), true),
@@ -964,7 +981,7 @@ fn quoted(items: &[&str]) -> String {
 
 // The one list of keys: kebbie config prints it and the Settings page edits it.
 pub fn entries(loaded: &Loaded) -> Vec<Entry> {
-    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
+    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, review_model, notify_command, vault_command, server_name, worker_name, channel, idle_minutes, auto_restart, ci_watch, comments_watch, comments_days, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
     let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
     let (board_keys, _) = crate::keys::Keys::with(&load_machine(&loaded.machine).map(|machine| machine.keys).unwrap_or_default());
     let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
@@ -1023,6 +1040,10 @@ pub fn entries(loaded: &Loaded) -> Vec<Entry> {
         "The notes-vault-mcp command kebbie writes task notes and log lines with, before its own arguments (task open, log append, ...); none runs the vault plugin's own pinned command from its hooks. Used only while the vault plugin is installed and enabled; config.toml only.");
     key("ci.watch", ci_watch.value.to_string(), ci_watch.layer, Kind::Bool, Scope::Either,
         "Whether kebbie watches GitHub Actions after a push and keeps the task open under CI running until every run for the pushed commit is green; a failed run moves the task to Needs you and its Claude gets the failing job's log. Needs origin on GitHub and gh logged in; false closes the task right after the push. A repo config can turn it off for one repo.");
+    key("comments.watch", comments_watch.value.to_string(), comments_watch.layer, Kind::Bool, Scope::Either,
+        "Whether kebbie watches the GitHub comments colleagues leave on the commits it pushed, reads each one independently with a read-only Claude, and shows it under COMMENTS on the board with a recommendation and a reply to send; kebbie never posts a reply. Needs origin on GitHub and gh logged in, as ci.watch does; your own comments are skipped. A repo config can turn it off for one repo.");
+    key("comments.watch_days", comments_days.value.to_string(), comments_days.layer, Kind::Number, Scope::Either,
+        "How many days after a push kebbie keeps checking its commits for new comments, asking gh once per repo every 12 minutes, or less often while gh fails; 1 to 90. A comment already on the board stays there until you mark its reply sent or dismiss it.");
     key("docs.required", docs_required.value.to_string(), docs_required.layer, Kind::Bool, Scope::Repo,
         "Whether this repo's docs must keep in step with its code: a task's Claude updates the README and docs/ when its change alters what a user sees or does, by the skill kebbie:keep-docs, and the reviewer fails a branch that changes such behaviour and leaves it undescribed in the README or docs/. Off unless the repo turns it on; repo config only. kebbie doctor suggests it for a public GitHub repo.");
     key("update.channel", format!("{:?}", channel.value.key()), channel.layer, Kind::Choice(vec![Channel::Release.key(), Channel::Main.key()]), Scope::Machine,
@@ -1206,6 +1227,18 @@ mod tests {
     }
 
     #[test]
+    fn comments_are_watched_for_a_week_by_default_and_a_repo_can_change_either() {
+        let default = settings(&Worktree::default(), &Machine::default());
+        assert_eq!((default.comments_watch.value, default.comments_days.value), (true, 7));
+        let set = settings(&repo("[comments]\nwatch = false\nwatch_days = 14\n"), &machine("[comments]\nwatch_days = 3\n"));
+        assert_eq!((set.comments_watch.clone(), set.comments_days.clone()), (Setting { value: false, layer: Layer::Repo }, Setting { value: 14, layer: Layer::Repo }));
+        assert!(parse_machine("[comments]\nwatch_days = 0\n", "config.toml").unwrap_err().contains("comments.watch_days: must be a whole number of days, 1 to 90"));
+        assert!(unknown_repo("[comments]\npoll = 10\n").contains("comments.poll: unknown key; known keys here: watch, watch_days"));
+        let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: set });
+        assert!(shown.contains("comments.watch = false  (repo config)") && shown.contains("comments.watch_days = 14  (repo config)"), "{shown}");
+    }
+
+    #[test]
     fn the_permission_mode_is_claudes_own_default_until_set_and_a_repo_wins_over_the_machine() {
         assert_eq!(settings(&Worktree::default(), &Machine::default()).permission_mode, Setting { value: None, layer: Layer::Default });
         let machine_wide = settings(&Worktree::default(), &machine("[task]\npermission_mode = \"bypassPermissions\"\n"));
@@ -1362,7 +1395,7 @@ mod tests {
     #[test]
     fn unknown_keys_are_named_with_the_file_and_ignored_while_bad_values_still_fail() {
         let warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/config.toml", &MACHINE_KEYS);
-        let all = "board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, routines, report, issues";
+        let all = "board, worktree, task, review, notify, vault, update, restart, keeper, recover, machine, hub, keys, ci, comments, routines, report, issues";
         assert_eq!(warned("colour = 1
 "), [format!("/home/u/.config/kebbie/config.toml: colour: unknown key; known keys here: {all}")]);
         assert_eq!(warned("[backlog]\nsources = []\n"), [format!("/home/u/.config/kebbie/config.toml: backlog: unknown key; known keys here: {all}")]);
@@ -1381,7 +1414,7 @@ mod tests {
         assert!(repo_error("[board.backlog]\nsources = []\n").starts_with("/home/u/.config/kebbie/repos/app.toml: board: applies to every repo, so it lives in config.toml; set [board] groups and [board.backlog] sources and ongoing in "));
         assert!(repo_error("colour = 1\n[ci]\nwatch = \"yes\"\n").contains("ci.watch: must be true or false"), "a known key with the wrong type still fails in a repo config");
         let repo_warned = |text: &str| unknown_in_file(text, "/home/u/.config/kebbie/repos/app.toml", &REPO_KEYS);
-        assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kebbie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, docs, routines"]);
+        assert_eq!(repo_warned("colour = 1\n"), ["/home/u/.config/kebbie/repos/app.toml: colour: unknown key; known keys here: actions, worktree, task, review, ci, comments, docs, routines"]);
         assert_eq!(repo_warned("[worktree]\nport = 3000\n"), ["/home/u/.config/kebbie/repos/app.toml: worktree.port: unknown key; known keys here: setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, server_name, worker_name, clean_on_release"]);
         assert_eq!(repo("colour = 1\n[lint]\nstrict = true\n[worktree]\nport = 3000\ndev_server = \"bin/dev\"\n").dev_server, Some("bin/dev".to_string()), "a repo config reads its known keys past unknown ones");
     }
@@ -1659,7 +1692,7 @@ mod tests {
     fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
         let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
         let all = entries(&loaded);
-        assert_eq!(all.len(), 36);
+        assert_eq!(all.len(), 38);
         for entry in all {
             let (section, field) = entry.key.rsplit_once('.').unwrap();
             let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

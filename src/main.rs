@@ -7,6 +7,7 @@ mod backlog_file;
 mod changes;
 mod board;
 mod ci;
+mod comments;
 mod config;
 mod config_edit;
 mod doctor;
@@ -234,6 +235,13 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie ci dismiss <task> [--why <reason>]
                                   yours alone (C on the board): keep the failed run on record with the reason, drop the
                                   watch and the push waiting for a fix; the task closes once its commits are on main
+  kebbie comments [--json]        colleagues' comments on commits kebbie pushed that wait for you, each read by a
+                                  read-only Claude as holds, opinion, praise or unclear, with a reply to send; the
+                                  keeper asks each such repo every 12 minutes for [comments] watch_days (7) days
+                                  ([comments] watch = false turns it off); kebbie never posts a reply
+  kebbie comment show <id>        one comment, its reading, the fix's commit message and the reply to send
+  kebbie comment dismiss <id>     yours alone: take it off the board without a reply
+  kebbie comment sent <id>        yours alone: mark its reply posted, which takes it off the board
   kebbie routines [--json]        the scheduled routines from config.toml and the repo configs ([[routines]]), each with
                                   its schedule, repo, mode, next run and last outcome (ok, findings, failed, running);
                                   the keeper starts each due one as a task (--no-focus), never while its last run's
@@ -534,7 +542,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("status") if arguments.flag("--json") => {
             let items: Vec<serde_json::Value> = status::gather()?.iter().map(status::Item::to_json).collect();
             let checkouts: Vec<serde_json::Value> = status::checkouts()?.iter().map(status::Checkout::to_json).collect();
-            serde_json::to_string_pretty(&serde_json::json!({ "away_since": permit::away_since(), "items": items, "checkouts": checkouts })).map_err(|error| error.to_string())
+            let comments: Vec<serde_json::Value> = comments::board().iter().map(comments::Comment::to_json).collect();
+            serde_json::to_string_pretty(&serde_json::json!({ "away_since": permit::away_since(), "items": items, "checkouts": checkouts, "comments": comments })).map_err(|error| error.to_string())
         }
         Some("status") => status_text(),
         Some("board") => setup_guide::board(arguments.flag("--overlay")),
@@ -632,6 +641,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("ci") if name == Some("outside") => tasks::ci_outside(&arguments.positionals[2..].join(" ")),
         Some("ci") if name.is_some() => Err("kebbie ci knows tick, outside and dismiss: kebbie ci [--json], kebbie ci tick, kebbie ci outside \"<reason>\" or kebbie ci dismiss <task> [--why <reason>]".to_string()),
         Some("ci") => Ok(ci::list(&lead::state_dir()?, arguments.flag("--json"))),
+        Some("comments") => Ok(comments::list(&lead::state_dir()?, arguments.flag("--json"))),
+        Some("comment") => comment(arguments, name),
         Some("routines") if name == Some("tick") => routines::tick_cli(),
         Some("routines") if name.is_some() => Err("kebbie routines knows tick: kebbie routines [--json] or kebbie routines tick".to_string()),
         Some("routines") => routines::list(arguments.flag("--json")),
@@ -689,6 +700,21 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         None | Some("help") => Ok(USAGE.to_string()),
         Some(other) => Err(format!("Unknown command \"{other}\"\n\n{USAGE}")),
+    }
+}
+
+fn comment(arguments: &Arguments, action: Option<&str>) -> Result<String> {
+    let state = lead::state_dir()?;
+    let id = || arguments.positional(2).ok_or_else(|| format!("kebbie comment {} needs the comment's id; kebbie comments lists them", action.unwrap_or_default()));
+    if matches!(action, Some("dismiss" | "sent")) && matches!(permit::caller(), permit::Caller::Task(_) | permit::Caller::Sandboxed | permit::Caller::LeadSandboxed) {
+        return Err("A task may not settle a comment on a pushed commit; the user does, on the board or with kebbie comment".to_string());
+    }
+    match action {
+        Some("show") => comments::show(&state, id()?),
+        Some("dismiss") => comments::dismiss_cli(&state, id()?),
+        Some("sent") => comments::sent_cli(&state, id()?),
+        Some("read") if arguments.flag("--run") => comments::read_run(id()?),
+        _ => Err("kebbie comment knows show <id>, dismiss <id> and sent <id>; kebbie comments lists them".to_string()),
     }
 }
 

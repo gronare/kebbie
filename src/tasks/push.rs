@@ -556,6 +556,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     let keep_open = matches!(through, Through::First { .. });
     let rest = if keep_open { git(&slot.path, &["rev-list", "--count", &format!("{}..HEAD", through_sha(&slot.path, upstream, through)?)])?.parse::<usize>().unwrap_or(0) } else { 0 };
     let pushed = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
+    let shas: Vec<String> = git(&slot.path, &["rev-list", "--reverse", &format!("{upstream}..{sha}")])?.lines().map(str::to_string).collect();
     let note = started_file(&task, repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| crate::task_note::items(&text).into_iter().next());
     let target = upstream.trim_start_matches("origin/").to_string();
     let main = main_of(upstream);
@@ -576,6 +577,8 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
         }
     };
     super::landed::keep_open(state, &address, keep_open);
+    crate::comments::begin(state, repo, &address, &shas, messages::now());
+    crate::comments::after_push(state);
     let vault = crate::vault_cli::detect();
     let log = vault.as_ref().map(|cli| crate::task_note::log_push(cli, &slot.path, &task, &pushed));
     let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();

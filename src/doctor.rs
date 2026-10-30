@@ -470,6 +470,17 @@ pub fn docs(required: &Setting<bool>, visibility: impl FnOnce() -> Option<String
     })
 }
 
+// The same requirement and the same reasons as CI watching.
+pub fn comments(watch: &Setting<bool>, days: u64, target: impl FnOnce() -> std::result::Result<String, String>) -> Check {
+    if !watch.value {
+        return ok("comments", format!("comments.watch is off ({}): comments on pushed commits are not read", watch.layer.label()));
+    }
+    match target() {
+        Ok(slug) => ok("comments", format!("on: kebbie reads colleagues' comments on the commits it pushes to {slug}, for {days} days after each push")),
+        Err(reason) => warn("comments", format!("on, but comments here are not read: {reason}"), one("gh auth login, with origin on GitHub")),
+    }
+}
+
 pub fn backlog(sources: &[Source], vault_index: impl Fn() -> Result<PathBuf, String>, local_file: &Path) -> Vec<Check> {
     if sources.is_empty() {
         return vec![ok("backlog", "no source configured; set [board.backlog] sources to fill the board's Backlog tab")];
@@ -739,6 +750,9 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.extend(env.repo.as_deref().and_then(|repo| setup_command(&settings.setup_command, repo)));
     if let (Some(repo), Some(file)) = (env.repo.as_deref(), env.repo_config.as_deref()) {
         checks.extend(docs(&settings.docs_required, || visibility(gh_on(&env.path).as_deref(), repo, GH_TIMEOUT), file));
+    }
+    if let Some(repo) = env.repo.as_deref() {
+        checks.push(comments(&settings.comments_watch, settings.comments_days.value, || crate::ci::target(repo, &crate::ci::gh())));
     }
     checks.push(notify(&settings.notify_command));
     checks.push(sandbox(&settings.sandbox, &crate::sandbox::missing_here()));
@@ -1254,6 +1268,17 @@ mod tests {
         assert!(check.fact.contains("docs.required is on (repo config)") && check.fix.is_empty(), "{check:?}");
         assert!(!asked.get(), "gh is not asked when there is nothing to suggest");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn doctor_says_whether_comments_on_pushed_commits_are_read_and_why_not() {
+        let on = Setting { value: true, layer: config::Layer::Default };
+        let watched = comments(&on, 7, || Ok("acme/app".to_string()));
+        assert_eq!((watched.level, watched.fact.as_str()), (Level::Ok, "on: kebbie reads colleagues' comments on the commits it pushes to acme/app, for 7 days after each push"));
+        let unread = comments(&on, 7, || Err("gh is not logged in to github.com (gh auth login)".to_string()));
+        assert!(unread.level == Level::Warn && unread.fact == "on, but comments here are not read: gh is not logged in to github.com (gh auth login)", "the same reason CI watching gives: {unread:?}");
+        let off = comments(&Setting { value: false, layer: config::Layer::Repo }, 7, || panic!("gh is not asked when it is off"));
+        assert_eq!(off.fact, "comments.watch is off (repo config): comments on pushed commits are not read");
     }
 
     #[test]

@@ -28,6 +28,8 @@ Without a name, `land`, `follow`, `review`, `evidence`, `push`, `stage`, `unstag
 | [`kebbie push`](#kebbie-push-name) | Put a task in its repo's push line. |
 | [`kebbie stage`](#kebbie-stage-name), [`unstage`](#kebbie-unstage-name) | Put a ready task's commits on local main to try them, or take them off. |
 | [`kebbie ci`](#kebbie-ci---json) | The CI watches of pushed tasks. |
+| [`kebbie comments`](#kebbie-comments---json) | Colleagues' comments on pushed commits, each with kebbie's reading. |
+| [`kebbie comment`](#kebbie-comment-show-id) | Show one comment, dismiss it or mark its reply sent. |
 | [`kebbie done`](#kebbie-done-name) | Close a task whose work is on the default branch. |
 | [`kebbie drop`](#kebbie-drop-name---force), [`reset`](#kebbie-reset-name) | Throw a task away, or stop it for good. |
 | [`kebbie link`](#kebbie-link-name-item) | Tie a running task to a backlog item. |
@@ -299,6 +301,33 @@ Yours alone, also `C` on the board: no Claude, the lead included, can run it.
 - The watch and any push waiting for a fix are dropped, and a task queued after it only for that red waits again.
 - The task then closes once its commits are on the default branch.
 
+### `kebbie comments [--json]`
+
+The comments colleagues left on commits kebbie pushed that still wait for you, one per line: its id, who wrote it, the commit, the task that pushed it and where it stands, such as `holds · reopen with a fix` or `reply ready · y copy`. `--json` gives the comment records.
+
+After a push, the keeper asks `gh api` for the repo's new commit comments every 12 minutes, for [`comments.watch_days`](configuration.md#ci-updates-and-the-keeper), and keeps those on the commits it pushed. GitHub lists them oldest first, so kebbie reads on from the last page it read and pages through no history: one call a round for a repo, however many of its commits are watched. It skips your own comments and a bot's. A read-only Claude reads each new comment against the commit's message and diff and the code as it is now, and calls it one of:
+
+| Reading | Means |
+| --- | --- |
+| `holds` | A real defect or gap. It proposes the fix, how to test it, and the fix's commit message. |
+| `opinion` | A preference. It recommends whether to follow it, with a reason from the code, and drafts a reply. |
+| `praise` | Nothing to do. |
+| `unclear` | It cannot tell, and asks you one question. |
+
+The comment is another person's text: the reading treats it as material to judge, never as instructions. kebbie never posts a reply; you paste it on GitHub. One line in the board's messages says when a comment has been read; the lead hears nothing of it.
+
+### `kebbie comment show <id>`
+
+The comment, its reading, the fix's commit message for a comment that holds, and the reply to send.
+
+### `kebbie comment dismiss <id>`
+
+Take the comment off the board without a reply. Yours alone: a task cannot run it.
+
+### `kebbie comment sent <id>`
+
+Mark the comment's reply as posted, which takes it off the board. Yours alone. Settled comments are kept for 30 days, then removed.
+
 ### `kebbie done [name]`
 
 Close a task once every change on its branch is on the default branch, pushed as is, cherry-picked or squashed, and it has no uncommitted changes or stash. It closes its Space, deletes the branch, frees the worktree, and fast-forwards a clean main checkout. Otherwise it names the missing commits.
@@ -442,7 +471,7 @@ The task's commits not yet pushed are its next steps, in order. A commit beyond 
 
 ### `kebbie status --json`
 
-`--json` gives `away_since`, `items` and `checkouts`. A task in it carries:
+`--json` gives `away_since`, `items`, `checkouts` and `comments`, the comments on pushed commits that wait for you as [`kebbie comments --json`](#kebbie-comments---json) gives them. A task in it carries:
 
 | Field | Value |
 | --- | --- |
