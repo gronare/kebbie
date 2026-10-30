@@ -7,7 +7,7 @@ description: Hold a line on what kebbie itself cost in this session (an error, a
 
 `kebbie` is `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`.
 
-kebbie issues are problems and wishes about kebbie itself, kept on this machine so they survive the session that found them: after `kebbie update` the keeper rechecks each open one against the new commits on its own and closes the ones they plainly fix. Logging one with `kebbie issue add` is the whole job. A bug reaches kebbie's maintainers only through the hub report the user approves, on the board's `B` list or with `kebbie issue report <id>`: never run or suggest it, and never create a GitHub issue for kebbie, not with `kebbie issue send`, not with `gh issue create`, not by suggesting one. A proposal costs the user a moment, so it has to be worth one, and a saved issue is the keeper's to look after: kebbie issues stay out of briefings, summaries and the lists of what the user is to decide or answer.
+kebbie issues are problems and wishes about kebbie itself, kept on this machine so they survive the session that found them: after `kebbie update` the keeper rechecks each open one against the new commits on its own and closes the ones they plainly fix. Logging one with `kebbie issue add` is the whole job. A bug reaches kebbie's maintainers only through the hub report the user approves, in the board's bugs to send or with `kebbie issue report <id>`: never run or suggest it, and never create a GitHub issue for kebbie, not with `kebbie issue send`, not with `gh issue create`, not by suggesting one. A proposal costs the user a moment, so it has to be worth one, and a saved issue is the keeper's to look after: kebbie issues stay out of briefings, summaries and the lists of what the user is to decide or answer.
 
 Your role says whether you propose. When it says proposing kebbie issues is off (`[issues] propose = false`), skip **When to propose**, **Hold** and **Propose at a calm moment**: hold nothing, and save, reopen or list a kebbie issue only when the user asks you to, by the steps below.
 
@@ -72,7 +72,7 @@ Done when `kebbie issues` lists it. Tell the user its id in one line, such as "S
 
 ## Send on the user's ask
 
-Sending is the user's step: kebbie refuses `kebbie issue report`, `kebbie issue send` and `kebbie issue link` to the lead and tasks. When the user asks how to send a bug, point them at the board's `B` list or `kebbie issue report <id>` in their own terminal: kebbie shows them the text and sends it only on their yes.
+Sending is the user's step: kebbie refuses `kebbie issue report`, `kebbie issue send` and `kebbie issue link` to the lead and tasks. When the user asks how to send a bug, point them at the board's bugs to send, under Work, or `kebbie issue report <id>` in their own terminal: kebbie shows them the text and sends it only on their yes.
 
 Only when the user asks for a GitHub issue in so many words, tell them to run `kebbie issue send <id>` themselves. It prints the text and opens a prefilled GitHub issue in the browser; the user reads it and presses Submit. Point them at the text first, so they check it for anything about their project.
 

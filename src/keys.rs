@@ -25,7 +25,6 @@ pub enum Act {
     Lead,
     HideChat,
     Messages,
-    Reports,
     Hub,
     Help,
     Inbox,
@@ -95,8 +94,8 @@ const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 49] = [
-        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Reports, Act::Hub, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 48] = [
+        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
@@ -113,7 +112,6 @@ impl Act {
             Act::Lead => "lead",
             Act::HideChat => "hide_chat",
             Act::Messages => "messages",
-            Act::Reports => "reports",
             Act::Hub => "hub",
             Act::Help => "help",
             Act::Inbox => "inbox",
@@ -171,7 +169,6 @@ impl Act {
             Act::SettingsPage => Default::Char(','),
             Act::HideChat => Default::Char('h'),
             Act::Messages => Default::Char('m'),
-            Act::Reports => Default::Char('B'),
             Act::Hub => Default::Char('H'),
             Act::Help => Default::Char('?'),
             Act::Inbox => Default::Char('i'),
@@ -231,7 +228,6 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::HideChat, on: BOARD, help: "hide or show the lead's chat: hidden, it runs on and the board takes the whole width (on the board in the lead Space)", hint: Hint::Full },
     Binding { act: Act::Inbox, on: ALL, help: "inbox: the questions waiting on you, one at a time with tab to the next; ↑ ↓ j k (and ← → in a plan) pick an answer and ⏎ sends it, pgup pgdn scroll the question or the plan, or its letter (a c r x, 1-9, w) answers directly; an answer with a comment opens the comment box, esc back to the answers; o opens a plan file, g goes to the task's Space", hint: Hint::Both },
     Binding { act: Act::Messages, on: BOARD, help: "messages at the bottom: one line, then open with ↑ ↓ moving through them and ⏎ reading one (esc back to the tasks), then hidden", hint: Hint::Full },
-    Binding { act: Act::Reports, on: BOARD, help: "bugs in kebbie you ran into, to send to kebbie's maintainers: shows or hides the list under Work (hidden at first; the header counts them); in it ↑ ↓ pick one, ⏎ shows the text and asks y / n, n keeps it here only, esc back to the tasks", hint: Hint::No },
     Binding { act: Act::Hub, on: BOARD, help: "the kebbie hub, to see this board on your phone: not connected, choose the kebbie hub or your own and connect through the browser (a link, a code to check and a QR code); connected, this machine on its hub, when the board last went out and where to sign in to see it, n to rename it, l to leave", hint: Hint::No },
     Binding { act: Act::Filter, on: BOARD, help: "filter the selected column: type part of a name, ⏎ keeps it, esc clears it", hint: Hint::No },
     Binding { act: Act::New, on: &[Work], help: "new task", hint: Hint::No },
@@ -251,7 +247,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Stage, on: &[Work], help: "put a ready task's commits on local main, unpushed, to try them from the main checkout (repos with worktree.stage_on_main); on a staged task, take them off again", hint: Hint::No },
     Binding { act: Act::Done, on: &[Work], help: "done: after you pushed elsewhere (asks first)", hint: Hint::No },
     Binding { act: Act::DismissCi, on: &[Work], help: "dismiss the red CI of a pushed task when the failure is not the code's: kept on record, and the task closes once its commits are on main (asks first)", hint: Hint::No },
-    Binding { act: Act::Park, on: &[Work], help: "park the task until later (tomorrow, Monday, a date, or until you bring it back): it leaves its group, the lead's summaries and your notifications and keeps working; on a parked task, bring it back now; on the parked line, show or hide the parked tasks", hint: Hint::No },
+    Binding { act: Act::Park, on: &[Work], help: "park the task until later (tomorrow, Monday, a date, or until you bring it back): it leaves its group, the lead's summaries and your notifications and keeps working; on a parked task, bring it back now", hint: Hint::No },
     Binding { act: Act::Reset, on: &[Work], help: "reset the task: its work goes, its backlog item returns (asks first)", hint: Hint::No },
     Binding { act: Act::Drop, on: &[Work], help: "drop the task (asks first)", hint: Hint::No },
     Binding { act: Act::StartAt, on: BOARD, help: "start later: a queued task or a backlog item starts at the time you type (15:00, tomorrow 09:00, fri 09:00, 24 oct 09:00, in 2h)", hint: Hint::No },
@@ -284,6 +280,9 @@ pub type Hints = Vec<(String, &'static str, KeyCode)>;
 
 pub const LEAD_ONLY: &[Act] = &[Act::HideChat];
 
+// Action ids kebbie no longer has: a config that still names one is read without a word, as if it did not.
+const RETIRED: &[&str] = &["reports"];
+
 pub struct Keys {
     chars: HashMap<Act, char>,
 }
@@ -301,7 +300,7 @@ impl Keys {
         let mut keys = Keys::defaults();
         let mut errors = Vec::new();
         let mut wanted: Vec<(Act, char)> = Vec::new();
-        for (name, value) in entries {
+        for (name, value) in entries.iter().filter(|(name, _)| !RETIRED.contains(&name.as_str())) {
             let Some(act) = Act::EVERY.into_iter().find(|act| act.id() == name) else {
                 errors.push(format!("keys.{name}: not an action; the actions are {}", Act::EVERY.iter().filter(|act| act.remappable()).map(|act| act.id()).collect::<Vec<_>>().join(", ")));
                 continue;
@@ -508,6 +507,17 @@ mod tests {
         assert_eq!(at(Card, KeyCode::Right), Some(Act::Switch));
         assert_eq!((at(Card, KeyCode::Esc), at(Card, KeyCode::Char('q'))), (Some(Act::Back), Some(Act::Close)));
         assert!(!Act::Fullscreen.remappable() && !Act::OpenImage.remappable(), "keys inside a window stay where they are");
+    }
+
+    #[test]
+    fn b_is_no_key_any_more_and_a_config_that_still_moves_reports_is_read_without_a_word() {
+        let (keys, errors) = Keys::with(&entries(&[("reports", "X"), ("inbox", "I")]));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(keys.char(Act::Inbox), 'I', "the entries around it still count");
+        for ctx in [Work, Backlog] {
+            assert_eq!((keys.act(ctx, &KeyEvent::from(KeyCode::Char('B'))), keys.act(ctx, &KeyEvent::from(KeyCode::Char('X')))), (None, None), "{ctx:?}");
+        }
+        assert!(!keys.describe(&errors).iter().any(|line| line.contains("reports")), "kebbie config lists no reports key");
     }
 
     #[test]

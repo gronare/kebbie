@@ -17,9 +17,9 @@ Set aside a task you are not ready to act on, so the board and the lead keep you
    kebbie park billing --until fri
    ```
 
-3. The task leaves its group for one line under the Work column's groups, such as `◌ 1 parked · Z shows them`. It keeps working, the lead leaves it out of its summaries, and kebbie sends no notification for it.
+3. The task leaves its group for one line under the Work column's groups, such as `◌ 1 parked · ⏎ shows them`. It keeps working, the lead leaves it out of its summaries, and kebbie sends no notification for it.
 
-4. Wait: when its time comes, it returns to its group by itself. To bring it back sooner, press `Z` on the parked line to show the parked tasks, then `Z` on the task, or run:
+4. Wait: when its time comes, it returns to its group by itself. To bring it back sooner, select the parked line and press `⏎` to show the parked tasks, then `Z` on the task, or run:
 
    ```
    kebbie unpark billing
@@ -27,7 +27,7 @@ Set aside a task you are not ready to act on, so the board and the lead keep you
 
 You see it worked when the task's row is gone from its group and the parked line counts it.
 
-- If a parked task asks a question or its CI fails, it stays parked: the line says so, as `◌ 1 parked · 1 question · Z shows them`, and `i` still opens the question.
+- If a parked task asks a question or its CI fails, it stays parked: the line says so, as `◌ 1 parked · 1 question · ⏎ shows them`, and `i` still opens the question.
 - If you drop, reset or finish a parked task, its park ends with it.
 
 See also: [Parked](../reference/board.md#parked) and [`kebbie park`](../reference/commands.md#kebbie-park-name---until-when).

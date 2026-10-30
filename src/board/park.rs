@@ -110,7 +110,7 @@ pub(super) fn waiting_counts(parked: &[&Item]) -> Vec<String> {
 pub(super) fn collapsed_text(parked: &[&Item]) -> String {
     let mut parts = vec![format!("{} parked", parked.len())];
     parts.extend(waiting_counts(parked));
-    parts.push(format!("{} shows them", keys::key(Act::Park)));
+    parts.push(format!("{} shows them", keys::map().label(Act::Options)));
     parts.join(" · ")
 }
 
@@ -162,9 +162,6 @@ impl App {
     }
 
     pub(super) fn press_park(&mut self, item: Item) {
-        if self.on_parked_line() {
-            return self.show_parked(true);
-        }
         let address = peers::address(&item.name, &item.place);
         if item.parked.is_some() {
             self.about("park", &item.name);
@@ -244,7 +241,7 @@ impl App {
 }
 
 pub(super) fn not_on_the_line() -> crate::sh::Result<String> {
-    Notice::new(Tone::NotNow, "That is the parked line").next(format!("{} shows the parked tasks first.", keys::key(Act::Park))).ok()
+    Notice::new(Tone::NotNow, "That is the parked line").next(format!("{} shows the parked tasks first.", keys::map().label(Act::Options))).ok()
 }
 
 #[cfg(test)]
@@ -281,18 +278,23 @@ mod tests {
         let (rows, _) = render(&mut app, 110, 30);
         let screen = rows.join("\n");
         let line = find(&rows, "2 parked")[0];
-        assert!(rows[line.1].contains("◌ 2 parked · 1 question · 1 red CI · Z shows them"), "{screen}");
+        assert_eq!(rows[line.1].trim_end(), "  ▌◌ 2 parked · 1 question · 1 red CI · ⏎ shows them".replace('▌', " "), "{screen}");
         assert!(find(&rows, "READY TO PUSH")[0].1 < line.1 && !screen.contains("NEEDS YOU") && !screen.contains("nightly-import") && !screen.contains("refund-mails"), "{screen}");
         press(&mut app, key(KeyCode::Down));
         assert!(app.on_parked_line(), "the line is the last row");
         press(&mut app, key(KeyCode::Down));
         assert!(app.on_parked_line(), "nothing hides below it");
-        press(&mut app, key(KeyCode::Char('g')));
         let (rows, _) = render(&mut app, 110, 30);
-        assert!(rows.join("\n").contains("That is the parked line"), "a task key on the line never reaches a hidden task");
-        app.mode = Mode::Normal;
-        press(&mut app, key(KeyCode::Char('Z')));
-        assert!(app.parked_open && app.selected_task().is_some_and(|item| item.name == "nightly-import"));
+        assert_eq!(rows[find(&rows, "2 parked")[0].1].trim_end(), "  ▌◌ 2 parked · 1 question · 1 red CI · ⏎ shows them", "selected, it is a row like any other");
+        for task_key in ['g', 'Z'] {
+            press(&mut app, key(KeyCode::Char(task_key)));
+            let (rows, _) = render(&mut app, 110, 30);
+            assert!(rows.join("\n").contains("That is the parked line") && !app.parked_open, "{task_key} on the line never reaches a hidden task, and Z only parks or brings back");
+            app.mode = Mode::Normal;
+        }
+        assert_eq!(tasks::park_of(&crate::lead::state_dir().unwrap(), "nightly-import@web", now()), None, "Z on the line brought no task back");
+        press(&mut app, key(KeyCode::Enter));
+        assert!(app.parked_open && matches!(app.mode, Mode::Normal) && app.selected_task().is_some_and(|item| item.name == "nightly-import"), "⏎ on the line shows them");
         let (rows, _) = render(&mut app, 110, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("PARKED  2 · 1 question · 1 red CI  esc hides them"), "{screen}");
@@ -301,9 +303,14 @@ mod tests {
         assert!(!screen.contains("answer a question"), "outside Needs you it asks nothing of you: {screen}");
         press(&mut app, key(KeyCode::Down));
         press(&mut app, key(KeyCode::Esc));
-        assert!(!app.parked_open && app.on_parked_line(), "esc folds them back into the line");
-        press(&mut app, key(KeyCode::Enter));
-        assert!(app.parked_open && matches!(app.mode, Mode::Normal), "⏎ on the line shows them too");
+        assert!(!app.parked_open && app.on_parked_line(), "esc folds them back into the line, with the selection on it");
+        let (rows, _) = render(&mut app, 110, 30);
+        let (x, y) = find(&rows, "2 parked")[0];
+        app.work_selected = 0;
+        click(&mut app, x as u16, y as u16);
+        assert!(!app.parked_open && app.on_parked_line(), "a click selects the line");
+        click(&mut app, x as u16, y as u16);
+        assert!(app.parked_open && matches!(app.mode, Mode::Normal), "a click on the selected line shows them, as ⏎ does");
     }
 
     fn window(rows: &[String], name: &str, height: usize) -> Vec<String> {

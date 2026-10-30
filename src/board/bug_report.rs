@@ -14,7 +14,7 @@ use crate::notice::{Notice, Tone};
 use crate::sh::Result;
 use super::{App, Hit, Mode};
 use super::columns::Rows;
-use super::widgets::{FAINT, GREEN, MUTED, PEACH, SURFACE, TEXT, YELLOW, bold, group_line, modal, style, wrap};
+use super::widgets::{FAINT, GREEN, MAUVE, MUTED, PEACH, SURFACE, TEXT, YELLOW, bold, group_line, modal, style, wrap};
 
 const PAGE: u16 = 10;
 const FRAME_ROWS: u16 = 14;
@@ -88,22 +88,30 @@ fn save_shown(file: Option<&Path>, shown: bool) {
 }
 
 pub(super) fn indicator(offers: usize, compact: bool) -> Option<String> {
-    let key = keys::key(Act::Reports);
-    (offers > 0).then(|| if compact { format!("! {offers}") } else { format!("! {} to send · {key}", super::widgets::plural(offers, "bug")) })
+    (offers > 0).then(|| if compact { format!("! {offers}") } else { format!("! {} to send", super::widgets::plural(offers, "bug")) })
 }
 
 // The lines, each offer's rows, and the line of the selected offer when the list has the focus, all counted from `first`.
 pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'static>>, Rows, Option<usize>) {
-    if !app.offers_visible() {
+    if app.offers.is_empty() {
         return (Vec::new(), Vec::new(), None);
     }
-    let key = keys::key(Act::Reports);
     let panel = &app.offer_panel;
-    let mut lines = vec![Line::default(), group_line("Send to kebbie's maintainers?", app.offers.len(), YELLOW)];
-    let hint = if panel.focused { format!("↑ ↓ pick · ⏎ shows the text and asks · n keeps it here only · esc back · {key} hides") } else { format!("bugs in kebbie you ran into · {key} selects · {key} again hides") };
-    lines.push(Line::from(Span::styled(hint, style(MUTED))));
     let mut rows = Vec::new();
     let mut selected_line = None;
+    if !panel.shown {
+        let marker = if panel.focused { Span::styled("▌", bold(MAUVE)) } else { Span::raw(" ") };
+        let text = format!("{} to send · {} shows them", super::widgets::plural(app.offers.len(), "bug"), keys::map().label(Act::Options));
+        let line = Line::from(vec![marker, Span::styled("! ", style(YELLOW)), Span::styled(text, style(YELLOW))]);
+        if panel.focused {
+            selected_line = Some(first + 1);
+        }
+        rows.push((first + 1, first + 2, Hit::Offer(0)));
+        return (vec![Line::default(), if panel.focused { line.style(Style::new().bg(SURFACE)) } else { line }], rows, selected_line);
+    }
+    let mut lines = vec![Line::default(), group_line("Send to kebbie's maintainers?", app.offers.len(), YELLOW)];
+    let hint = if panel.focused { "⏎ asks to send · n keeps it here · esc hides them" } else { "bugs in kebbie you ran into" };
+    lines.push(Line::from(Span::styled(hint, style(MUTED))));
     for (index, offer) in app.offers.iter().enumerate() {
         let title = wrap(&offer.report.title, width.saturating_sub(12), 1).into_iter().next().unwrap_or_default();
         let line = Line::from(vec![Span::styled("! ", style(YELLOW)), Span::styled(format!("{}  ", offer.id), style(FAINT)), Span::styled(title, style(TEXT))]);
@@ -150,13 +158,9 @@ impl App {
         true
     }
 
-    pub(super) fn offers_visible(&self) -> bool {
-        self.offer_panel.shown && !self.offers.is_empty()
-    }
-
     pub(super) fn offers_changed(&mut self) {
         self.offer_panel.selected = self.offer_panel.selected.min(self.offers.len().saturating_sub(1));
-        self.offer_panel.focused &= self.offers_visible();
+        self.offer_panel.focused &= !self.offers.is_empty();
     }
 
     fn set_shown(&mut self, shown: bool) {
@@ -165,46 +169,36 @@ impl App {
     }
 
     pub(super) fn focus_offers(&mut self, index: usize) {
-        if !self.offer_panel.shown {
-            self.set_shown(true);
-        }
         self.in_messages = false;
         self.column = super::Column::Work;
         self.offer_panel.focused = !self.offers.is_empty();
         self.offer_panel.selected = index.min(self.offers.len().saturating_sub(1));
     }
 
-    pub(super) fn press_reports(&mut self) {
-        match (self.offer_panel.shown, self.offer_panel.focused) {
-            (true, true) => {
-                self.offer_panel.focused = false;
-                self.set_shown(false);
-            }
-            (true, false) if self.offers.is_empty() => self.set_shown(false),
-            (_, false) if self.offers.is_empty() => {
-                self.set_shown(true);
-                self.show(Ok("No bugs wait to be sent to kebbie's maintainers".to_string()));
-            }
-            _ => self.focus_offers(0),
-        }
+    pub(super) fn show_offers(&mut self) {
+        self.set_shown(true);
+        self.offer_panel.selected = 0;
     }
 
+    // Folded, the list is one row that ⏎ opens; open, esc folds it back with the selection on that row.
     pub(super) fn handle_offers(&mut self, key: KeyEvent) {
-        if key.code == KeyCode::Char('n') {
+        let shown = self.offer_panel.shown;
+        if shown && key.code == KeyCode::Char('n') {
             return self.decline_offer();
         }
         match keys::map().act(self.ctx(), &key) {
-            Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => match self.offer_panel.selected.checked_sub(1) {
+            Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => match self.offer_panel.selected.checked_sub(1).filter(|_| shown) {
                 Some(above) => self.offer_panel.selected = above,
                 None => self.offer_panel.focused = self.tasks.is_empty(),
             },
-            Some(Act::Move) => self.offer_panel.selected = (self.offer_panel.selected + 1).min(self.offers.len().saturating_sub(1)),
-            Some(Act::Options) => {
+            Some(Act::Move) if shown => self.offer_panel.selected = (self.offer_panel.selected + 1).min(self.offers.len().saturating_sub(1)),
+            Some(Act::Options) if shown => {
                 self.open_report();
             }
+            Some(Act::Options) => self.show_offers(),
+            Some(Act::Back | Act::Close) if shown => self.set_shown(false),
             Some(Act::Back | Act::Close) => self.offer_panel.focused = false,
             Some(Act::Switch) => (self.offer_panel.focused, self.column) = (false, super::Column::Backlog),
-            Some(Act::Reports) => self.press_reports(),
             Some(Act::Messages) => {
                 self.offer_panel.focused = false;
                 self.press_m();
@@ -316,8 +310,14 @@ mod tests {
         }
     }
 
+    fn row_of(app: &mut App, text: &str) -> String {
+        let (rows, _) = render(app, 120, 40);
+        let (_, y) = find(&rows, text).first().copied().unwrap_or_else(|| panic!("no {text}: {}", rows.join("\n")));
+        rows[y].chars().take(60).collect::<String>().trim_end().to_string()
+    }
+
     #[test]
-    fn the_bugs_to_send_stay_hidden_behind_a_count_in_the_header_until_b_shows_them() {
+    fn the_bugs_to_send_fold_into_one_row_that_enter_opens_and_esc_folds_again() {
         let state = crate::sh::test_dir("board-report");
         filed(&state, "a1b2c3", "bug", "push hid git's error");
         filed(&state, "b2c3d4", "wish", "a dark theme");
@@ -329,21 +329,31 @@ mod tests {
         assert!(!screen(&mut app).contains("to send"), "no bugs, no count");
         app.offers = offers;
         let shown = screen(&mut app);
-        assert!(shown.contains("! 1 bug to send · B") && !shown.contains("Send to kebbie's maintainers?") && !shown.contains("push hid git's error"), "hidden at first: {shown}");
+        assert!(shown.contains(" ! 1 bug to send ") && !shown.contains("Send to kebbie's maintainers?") && !shown.contains("push hid git's error"), "folded at first: {shown}");
+        assert_eq!(row_of(&mut app, "to send · ⏎"), "   ! 1 bug to send · ⏎ shows them", "one row under the tasks, not selected");
 
         press(&mut app, key(KeyCode::Char('B')));
-        let shown = screen(&mut app);
-        assert!(shown.contains("Send to kebbie's maintainers?  1") && shown.contains("! a1b2c3  push hid git's error") && shown.contains("⏎ shows the text and asks"), "{shown}");
-        assert!(app.offer_panel.focused, "B shows the list with its first bug selected");
-        press(&mut app, key(KeyCode::Esc));
-        assert!(!app.offer_panel.focused && app.offer_panel.shown && screen(&mut app).contains("! a1b2c3"), "esc goes back to the tasks and leaves the list shown");
+        assert!(!app.offer_panel.shown && !app.offer_panel.focused, "B is no key any more");
         press(&mut app, key(KeyCode::Down));
-        assert!(app.offer_panel.focused, "↓ from the last task goes on into the list");
-        press(&mut app, key(KeyCode::Char('B')));
-        assert!(!app.offer_panel.shown && !screen(&mut app).contains("! a1b2c3"), "B again hides it");
+        assert!(app.offer_panel.focused && !app.offer_panel.shown, "↓ from the last task selects the folded row");
+        assert_eq!(row_of(&mut app, "to send · ⏎"), "  ▌! 1 bug to send · ⏎ shows them");
+        press(&mut app, key(KeyCode::Enter));
+        let shown = screen(&mut app);
+        assert!(shown.contains("Send to kebbie's maintainers?  1") && shown.contains("! a1b2c3  push hid git's error") && shown.contains("  ⏎ asks to send · n keeps it here · esc hides them "), "{shown}");
+        assert!(app.offer_panel.focused && app.offer_panel.shown && matches!(app.mode, Mode::Normal), "⏎ opens the list with its first bug selected");
+        press(&mut app, key(KeyCode::Esc));
+        assert!(app.offer_panel.focused && !app.offer_panel.shown && !screen(&mut app).contains("! a1b2c3"), "esc folds it with the selection on its row");
+        press(&mut app, key(KeyCode::Esc));
+        assert!(!app.offer_panel.focused, "esc on the row goes back to the tasks");
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Char('n')));
+        assert_eq!(app.offers.len(), 1, "n on the folded row declines no bug it hides");
+        press(&mut app, key(KeyCode::Up));
+        assert!(!app.offer_panel.focused, "↑ from the row goes back to the tasks");
 
         app.questions = crate::messages::fold(QUESTION);
-        press(&mut app, key(KeyCode::Char('B')));
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Enter));
         press(&mut app, key(KeyCode::Enter));
         assert!(matches!(&app.mode, Mode::Report { id, nudged: false, .. } if id == "a1b2c3"), "a question waiting does not stand in the way");
         let shown = screen(&mut app);
@@ -366,9 +376,10 @@ mod tests {
         app.offer_panel.file = Some(file.clone());
         filed(&state, "a1b2c3", "bug", "push hid git's error");
         app.offers = offers_in(&state, true, &scrub);
-        press(&mut app, key(KeyCode::Char('B')));
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Enter));
         assert!(load_shown(Some(&file)));
-        press(&mut app, key(KeyCode::Char('B')));
+        press(&mut app, key(KeyCode::Esc));
         assert!(!load_shown(Some(&file)));
     }
 
@@ -386,7 +397,12 @@ mod tests {
             seen.lock().unwrap().push(id.to_string());
             report::decline_in(&decline_state, &crate::permit::Caller::User, id, crate::messages::now())
         });
-        app.offer_panel.shown = true;
+        let (rows, _) = render(&mut app, 120, 40);
+        let (x, y) = find(&rows, "2 bugs to send · ⏎")[0];
+        click(&mut app, x as u16, y as u16);
+        assert!(app.offer_panel.focused && !app.offer_panel.shown, "a click selects the folded row");
+        click(&mut app, x as u16, y as u16);
+        assert!(app.offer_panel.shown && app.offer_panel.selected == 0, "a click on the selected row opens it, as ⏎ does");
         let (rows, _) = render(&mut app, 120, 40);
         let (x, y) = find(&rows, "b2c3d4")[0];
         click(&mut app, x as u16, y as u16);
@@ -396,8 +412,6 @@ mod tests {
         press(&mut app, key(KeyCode::Char('n')));
         assert_eq!(declined.lock().unwrap().as_slice(), ["b2c3d4"]);
         assert!(!screen(&mut app).contains("the board froze on resize") && offers_in(&state, true, &scrub).len() == 1, "n in the window keeps it here and takes it off the list");
-        press(&mut app, key(KeyCode::Esc));
-        press(&mut app, key(KeyCode::Char('B')));
         press(&mut app, key(KeyCode::Char('n')));
         assert!(app.offers.is_empty() && offers_in(&state, true, &scrub).is_empty() && !app.offer_panel.focused, "n in the list keeps the selected one here");
         assert!(!screen(&mut app).contains("to send"), "and with none left the count goes");
@@ -426,7 +440,8 @@ mod tests {
         app.offers = offers_in(&state, true, &scrub);
         let (send_state, url) = (state.clone(), hub.url.clone());
         app.reporter.send = Arc::new(move |id, digest| report::send_in(&send_state, &crate::permit::Caller::User, id, &url, &scrub(), digest, crate::messages::now()));
-        press(&mut app, key(KeyCode::Char('B')));
+        app.offer_panel.shown = true;
+        app.focus_offers(0);
         press(&mut app, key(KeyCode::Down));
         press(&mut app, key(KeyCode::Enter));
         assert!(matches!(&app.mode, Mode::Report { id, .. } if id == "b2c3d4"), "⏎ opens the selected one");
@@ -453,7 +468,8 @@ mod tests {
         let mut app = test_app(Vec::new());
         app.offers = offers_in(&state, true, &scrub);
         app.reporter.send = Arc::new(|_, _| Ok("sent".to_string()));
-        press(&mut app, key(KeyCode::Char('B')));
+        app.offer_panel.shown = true;
+        app.focus_offers(0);
         press(&mut app, key(KeyCode::Enter));
         let (rows, _) = render(&mut app, 120, 40);
         let screen = rows.join("\n");

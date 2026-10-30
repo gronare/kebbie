@@ -23,7 +23,7 @@ The status line shows:
 | `⚠N` on Routines | N routine runs wait for you with findings. |
 | Counts | Tasks that need you, are working, are in review, are ready to push and wait for CI, and waiting questions. |
 | `◆ N to accept`, yellow | N commits of tasks working in steps wait for you to accept them. |
-| `! N bugs to send · B` | Bugs in kebbie you ran into wait for you to send them to its maintainers. |
+| `! N bugs to send` | Bugs in kebbie you ran into wait for you to send them to its maintainers, on their row under Work. |
 | Plan usage | How much of the plan is used. |
 | `↻ N stale` | Claude sessions wait to be restarted. |
 | `☾ away` | Away mode is on. |
@@ -66,7 +66,8 @@ Work:
 
 - A task's halves in other repos sit next to each other.
 - Under the groups: the [parked line](#parked) while you have parked tasks.
-- Under the tasks: the bugs to send while `B` shows them, and the main checkouts with files changed outside any task.
+- Under the tasks: the [bugs to send](#bugs-to-send), folded into one row until you open them, and the main checkouts with files changed outside any task.
+- A folded row, the parked line or the bugs to send, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
 - After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles. `i` shows the list and clears the line.
 
 Backlog: ONGOING lists vault project notes in progress (status active or draft) when the vault is on. It sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md).
@@ -206,13 +207,13 @@ A task you park with `Z` leaves its group, whatever its phase, and keeps working
 
 | Line or mark | Means |
 | --- | --- |
-| `◌ 3 parked · Z shows them` | The parked line, under the other groups: how many tasks are parked. Select it and press `Z` or `⏎`, or click it twice, to show them. |
+| `◌ 3 parked · ⏎ shows them` | The parked line, under the other groups: how many tasks are parked. Select it and press `⏎`, or click it twice, to show them. |
 | `· 1 question`, `· 1 red CI` | On the parked line, peach: a parked task has an open question or a failed CI run. It stays parked; the line counts it so you see something waits. |
 | `PARKED  3 · 1 question  esc hides them` | The header while the parked tasks show, each on its own row. `esc` folds them back into the line. |
 | `back 09:00 tomorrow` | On a parked row: when it returns to its group by itself. |
 | `back when you unpark it` | On a parked row: parked until you bring it back. |
 
-Task keys on the parked line act on the line only: `Z` or `⏎` shows the parked tasks first. A parked task comes back when its time comes, with `Z` on its row, or with [`kebbie unpark`](commands.md#kebbie-unpark-name). `done`, `drop` and `reset` end its park with the task. The phone's board leaves parked tasks out.
+Task keys on the parked line act on the line only, `Z` among them: `⏎` shows the parked tasks first. A parked task comes back when its time comes, with `Z` on its row, or with [`kebbie unpark`](commands.md#kebbie-unpark-name). `done`, `drop` and `reset` end its park with the task. The phone's board leaves parked tasks out.
 
 ## Keys
 
@@ -230,7 +231,6 @@ Task keys on the parked line act on the line only: `Z` or `⏎` shows the parked
 | `h` | Hide the lead's chat so the board takes the whole width while the chat runs on, or show it again. Only on the board in the lead Space. See [Hiding the chat](../explanation/lead-and-away-mode.md#hiding-the-chat). |
 | `i` | The inbox: the questions waiting on you, opened at the first. Works on the Areas page too. |
 | `m` | Messages: once shows them on one line, again opens them, again hides them. |
-| `B` | Show or hide the [bugs to send](#bugs-to-send) under Work, with the first one selected. |
 | `H` | The [hub](#the-hub-window) window, to see this board on your phone. |
 | `n` | New task: a name, then an optional prompt. Starts in the background. In the Backlog column, a new item. |
 | `/` | Filter the selected column: type part of a name, `⏎` keeps the filter, `esc` clears it. |
@@ -244,7 +244,7 @@ Task keys on the parked line act on the line only: `Z` or `⏎` shows the parked
 | `ctrl+c` | Twice within 2 seconds quits the board. The first press says so. |
 | `ctrl+l` | Redraw every cell of the board, over any old text the terminal still shows, on every page and in every window. The board does this by itself after its pane changes size. |
 
-`B`: the list is hidden at first. While any bug waits, the header counts them, such as `! 2 bugs to send · B`. The board remembers whether it shows. See [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers).
+The [bugs to send](#bugs-to-send) are folded into one row at first. While any bug waits, the header counts them, such as `! 2 bugs to send`. The board remembers whether the list shows. See [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers).
 
 `U` shows a bar while kebbie builds or downloads. `esc` hides the window while the update goes on, and `U` opens it again. Done, it shows what's new and fixed from kebbie's release notes and what restarts; `d` shows the details, any other key closes it. See [What an update shows](../explanation/updates-and-restarts.md#what-an-update-shows).
 
@@ -435,15 +435,15 @@ The answers sit on one row at the bottom under an `ANSWER` header, each as its k
 
 ### Bugs to send
 
-`B` shows the list and selects its first bug; `↓` from the last task also goes into it.
+Folded, the bugs are one row under the tasks, `! 2 bugs to send · ⏎ shows them`; `↓` from the last task selects it.
 
 | Key | Action |
 | --- | --- |
-| `↑` `↓`, `j` `k` | Pick a bug. `↑` on the first goes back to the tasks. |
+| `⏎` on the row | Open the list with its first bug selected. A click on the selected row does the same. |
+| `↑` `↓`, `j` `k` | Pick a bug. `↑` on the first, or on the folded row, goes back to the tasks. |
 | `⏎` | Show the report as it would go out and ask `y / n`. |
 | `n` | Keep the selected bug on this machine only, without opening it. |
-| `esc`, `q` | Back to the tasks; the list stays. |
-| `B` | Hide the list. |
+| `esc`, `q` | Fold the list back into its row, with the selection on it; on the row, back to the tasks. |
 
 In the report window `↓` and `pgdn` scroll, `y` sends once you have read to the end, `n` keeps it on this machine only, and `esc` decides later.
 
@@ -653,12 +653,13 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `reports`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.
 - A key another action already uses where both act is refused, naming that action. Moving two actions onto each other's keys in the same table works.
 - An entry that breaks a rule is ignored; `kebbie config` lists every action with its key and says why an entry was ignored.
+- An entry for `reports`, from an older config, is read without a word and changes nothing: the bugs to send open with `⏎` on their row.
 
 ## Mouse
 
@@ -667,6 +668,7 @@ The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hi
 | Click a row | Select it. Click again for its options. |
 | Click an option, a commit or a key in the status line | Use it. |
 | Click the messages line | Open it. |
+| Click a folded row, the parked line or the bugs to send | Select it. Click again to open it. |
 | Click a bug to send | Select it. Click again to show its report. |
 | Scroll | Move through whatever is under the pointer. |
 | Click outside a window | Close it, except the routine steps, which keep what you typed. |

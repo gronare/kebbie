@@ -35,7 +35,7 @@ The skills the Claude Code plugin `kebbie@kebbie` ships, and the hooks kebbie gi
 - Unless `[issues] propose = false` keeps the lead to your own requests, it holds a line on what kebbie cost with `kebbie issue hold`.
 - It proposes saving it at a calm moment, in a reply of its own once your request is done and nothing waits on you.
 - It saves it on your yes, with a text about kebbie alone, and reopens a closed one that came back instead of filing it again.
-- It never sends one anywhere or opens a GitHub issue for it. A bug reaches kebbie's maintainers through the hub report you approve (`B` on the board, or `kebbie issue report`). `kebbie issue send` is yours to run, suggested only when you ask for a GitHub issue.
+- It never sends one anywhere or opens a GitHub issue for it. A bug reaches kebbie's maintainers through the hub report you approve (the bugs to send on the board, or `kebbie issue report`). `kebbie issue send` is yours to run, suggested only when you ask for a GitHub issue.
 
 `kebbie:expose-dev-servers`:
 

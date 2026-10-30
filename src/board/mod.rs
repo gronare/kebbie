@@ -635,12 +635,11 @@ impl App {
         let Some(act) = keys::map().act(ctx, &key) else { return };
         match act {
             Act::Messages => self.press_m(),
-            Act::Reports => self.press_reports(),
             Act::Hub => self.open_hub(),
             Act::Move => {
                 let (down, before) = (!matches!(key.code, KeyCode::Up | KeyCode::Char('k')), self.work_selected);
                 self.move_selection(if down { 1 } else { -1 });
-                if down && ctx == Ctx::Work && self.work_selected == before && self.offers_visible() {
+                if down && ctx == Ctx::Work && self.work_selected == before && !self.offers.is_empty() {
                     self.focus_offers(0);
                 }
             }
@@ -733,12 +732,12 @@ impl App {
             },
             Column::Work => {
                 let Some(item) = self.selected_task() else { return };
-                if act == Act::Park {
-                    return self.press_park(item);
-                }
                 if self.on_parked_line() {
                     self.subject = Some(notices::Subject::plain("park"));
                     return self.show(park::not_on_the_line());
+                }
+                if act == Act::Park {
+                    return self.press_park(item);
                 }
                 if let Some(note) = item.queued_note() {
                     let (go, drop) = (keys::key(Act::Go), keys::key(Act::Drop));

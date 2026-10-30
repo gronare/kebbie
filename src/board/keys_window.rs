@@ -91,7 +91,6 @@ const WORK: Sheet = Sheet {
         group("WAITING ON YOU", &[
             bind(&[Act::Inbox], "inbox: questions, one at a time", "inbox"),
             bind(&[Act::Messages], "messages", "messages"),
-            bind(&[Act::Reports], "bugs to send to kebbie's maintainers", "bug reports"),
             bind(&[Act::Away], "away mode", "away mode"),
             bind(&[Act::Park], "park a task, or bring it back", "park"),
         ]),
@@ -309,13 +308,8 @@ fn pages_line(keys: &Keys, sheet: &Sheet) -> String {
     format!("{first_name} ({}) and {second_name} ({}) show their own keys here when you are on them", keys.label(first), keys.label(second))
 }
 
-fn report_line(keys: &Keys, sheet: &Sheet, lead: bool) -> Line<'static> {
-    let mut spans = vec![Span::styled("a problem with kebbie? report it with ", style(MUTED)), Span::styled(keys.label(Act::Reports), style(MAUVE))];
-    if !acts_on(Act::Reports, sheet, lead) {
-        spans.push(Span::styled(format!(" on work ({})", keys.label(Act::WorkPage)), style(MUTED)));
-    }
-    spans.push(Span::styled(", or ask the lead", style(MUTED)));
-    Line::from(spans)
+fn report_line() -> Line<'static> {
+    Line::from(Span::styled("a problem with kebbie? ask the lead: the bugs it saves wait under Work to be sent", style(MUTED)))
 }
 
 fn wide_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>, backlog: bool) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
@@ -330,7 +324,7 @@ fn wide_lines(keys: &Keys, sheet: &Sheet, lead: bool, update: Option<&str>, back
         body.push(Line::from(spans));
     }
     body.push(Line::default());
-    let mut footer = vec![report_line(keys, sheet, lead)];
+    let mut footer = vec![report_line()];
     if let Some(card) = sheet.card {
         let mut spans = vec![Span::styled("in the card window", style(MUTED))];
         for (position, item) in shown_items(keys, sheet, &sheet.groups[card], lead, None, false).into_iter().enumerate() {
@@ -408,7 +402,7 @@ pub(crate) fn draw(frame: &mut Frame, keys: &Keys, page: Ctx, lead: bool, update
     let (body, mut footer) = if wide {
         wide_lines(keys, sheet, lead, update, backlog)
     } else {
-        (narrow_lines(keys, sheet, lead, update, backlog, inner), vec![report_line(keys, sheet, lead), Line::from(Span::styled("any key closes", style(MUTED)))])
+        (narrow_lines(keys, sheet, lead, update, backlog, inner), vec![report_line(), Line::from(Span::styled("any key closes", style(MUTED)))])
     };
     let room = (screen.height.saturating_sub(4) as usize).saturating_sub(footer.len() + 1).max(1);
     let visible = body.len().min(room);
@@ -487,9 +481,7 @@ mod tests {
         assert!(screen.contains("in the card window  ← → image · ↑ ↓ j k scroll · f fullscreen · o open the image · p push"), "{screen}");
         assert!(screen.contains("areas (2) and routines (3) show their own keys here when you are on them · any key closes") && !screen.contains("↓ more"), "{screen}");
         assert!(screen.contains(&crate::shown_kebbie()), "the window names the kebbie that runs: {screen}");
-        assert!(screen.contains("a problem with kebbie? report it with B, or ask the lead"), "{screen}");
-        let (x, y) = find(&rows, "report it with B")[0];
-        assert_eq!((buffer[(x as u16, y as u16)].fg, buffer[(x as u16 + 15, y as u16)].fg), (MUTED, MAUVE), "the key stands out as the others do");
+        assert!(screen.contains("a problem with kebbie? ask the lead: the bugs it saves wait under Work to be sent") && !screen.contains("bug reports"), "{screen}");
         assert!(!screen.contains("one at a time with tab") && !screen.contains("worktree.dev_server"), "the long texts stay out: {screen}");
         let (x, y) = find(&rows, "THE SELECTED TASK")[0];
         assert_eq!((buffer[(x as u16, y as u16)].fg, buffer[(x as u16 - 54 , y as u16)].fg), (PEACH, PEACH));
@@ -516,7 +508,7 @@ mod tests {
         assert!(row.contains("v     to review") && row.contains("r    open review"), "{row}");
         assert!(row_with(&rows, "END IT").contains("asks first"));
         assert!(screen.contains("any key closes · ↓ more") && !screen.contains("DEV SERVERS"), "{screen}");
-        assert!(screen.contains("a problem with kebbie? report it with B, or ask the lead"), "the line stays below the scrolled keys: {screen}");
+        assert!(screen.contains("a problem with kebbie? ask the lead"), "the line stays below the scrolled keys: {screen}");
         for _ in 0..20 {
             press(&mut app, key(KeyCode::Down));
         }
@@ -538,7 +530,7 @@ mod tests {
         let screen = rows.join("\n");
         assert!(screen.contains("╭ keys · areas ─") && screen.contains("THE SELECTED AREA") && screen.contains("l         its vault log") && screen.contains("A–Z       the repo's own actions"), "{screen}");
         assert!(screen.contains("work (1) and routines (3) show their own keys here"), "{screen}");
-        assert!(screen.contains("a problem with kebbie? report it with B on work (1), or ask the lead"), "B acts on the work page only: {screen}");
+        assert!(screen.contains("a problem with kebbie? ask the lead"), "{screen}");
         for gone in ["THE SELECTED TASK", "DEV SERVERS", "send to review", "away mode", "in the card window", "filter the column"] {
             assert!(!screen.contains(gone), "{gone}: {screen}");
         }

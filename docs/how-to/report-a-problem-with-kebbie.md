@@ -3,7 +3,7 @@
 Keep what kebbie got wrong, or could not do, on your machine, and send a bug to kebbie's maintainers when you choose.
 
 - What you save stays on your machine. After an update, kebbie shows which of it may be fixed.
-- A bug goes to kebbie's issues endpoint, from the board's `B` list or `kebbie issue report`.
+- A bug goes to kebbie's issues endpoint, from the board's bugs to send or `kebbie issue report`.
 - A GitHub issue is optional, and only ever one you open yourself.
 - Separately, kebbie counts its own crashes and internal errors and sends the maintainers those counts, with no text at all.
 - Once a day, kebbie sends an install signal so the maintainers can count active installs, with no text and nothing about your work.
@@ -94,9 +94,9 @@ With `gh` installed and logged in, the update also finds the issues you sent on 
 
 ## Send it to kebbie's maintainers
 
-When you or the lead saves a bug in kebbie you ran into, the board's header counts it, such as `! 2 bugs to send · B`. The list stays hidden until you open it.
+When you or the lead saves a bug in kebbie you ran into, the board's header counts it, such as `! 2 bugs to send`, and the list waits under Work, below the tasks, folded into one row: `! 2 bugs to send · ⏎ shows them`.
 
-1. Press `B`. The list opens under Work, below the tasks, under **Send to kebbie's maintainers?**, with the first bug selected.
+1. Select the row with `↓` from the last task, or a click, and press `⏎`. The list opens under **Send to kebbie's maintainers?**, with the first bug selected.
 2. Pick a bug with `↑` `↓` or a click.
 3. Press `⏎`, or click it again. kebbie shows the report exactly as it would go out and asks `y / n`.
 4. Read it to its end. A long one scrolls with `↓` and `pgdn`, and `y` counts only once you have read to its end.
@@ -110,7 +110,7 @@ When you or the lead saves a bug in kebbie you ran into, the board's header coun
 
 Every report sent, from the board, from `kebbie issue report` or unasked, adds a line under messages on the board: `Sent bug <id> to kebbie's maintainers as report <report>: "<title>", redacted; kebbie issue report <id> shows the text that went.`
 
-- If you want back to the tasks, press `esc` in the list. The list stays open, and `B` hides it again; the board remembers whether it shows.
+- If you want back to the tasks, press `esc` in the list to fold it into its row, then `esc` or `↑` again. The board remembers whether the list shows.
 - If you work in a terminal, run `kebbie issue report <id>`. It prints the same text and asks `y/N`.
 
 ### What the report holds

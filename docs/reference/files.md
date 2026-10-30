@@ -114,7 +114,7 @@ A `ci/` file holds the pushed sha, the GitHub repo, the runs as last seen, when 
 | `routines/` | One file per routine, `<id>.json`. `lock` keeps two schedulers from starting the same run. |
 | `backlog.json` | The backlog the lead saved on its last refresh. |
 | `board-messages` | The board's memory of whether the messages panel is folded. |
-| `board-reports` | Whether the `B` list shows. |
+| `board-reports` | Whether the bugs to send show as a list or folded into their row. |
 | `cell-size` | The terminal cell size a board in a normal pane last measured, for the popup board's images. |
 | `usage.json` | Plan usage from the status line. |
 | `update-check.json` | The last update check. |

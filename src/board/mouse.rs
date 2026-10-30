@@ -84,10 +84,15 @@ impl App {
                         }
                     }
                     (Some(Hit::Offer(index)), Mode::Normal) => {
-                        let again = self.offer_panel.focused && self.offer_panel.selected == index;
+                        let shown = self.offer_panel.shown;
+                        let again = self.offer_panel.focused && (self.offer_panel.selected == index || !shown);
                         self.focus_offers(index);
-                        if again {
-                            self.open_report();
+                        match (again, shown) {
+                            (true, true) => {
+                                self.open_report();
+                            }
+                            (true, false) => self.show_offers(),
+                            _ => {}
                         }
                     }
                     (Some(Hit::Messages(None)), Mode::Normal) if self.fold == Fold::Open => self.in_messages = true,
@@ -102,7 +107,7 @@ impl App {
                     }
                     (Some(Hit::Key(code)), Mode::Normal) => {
                         self.in_messages &= code == keys::map().code(Act::Messages);
-                        self.offer_panel.focused &= code == keys::map().code(Act::Reports);
+                        self.offer_panel.focused = false;
                         return Some(KeyEvent::from(code));
                     }
                     (Some(Hit::Choice(index)), Mode::Options(_)) => {

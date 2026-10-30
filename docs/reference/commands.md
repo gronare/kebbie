@@ -839,7 +839,7 @@ Prints the text and a prefilled new-issue URL on GitHub, and opens it in the bro
 
 - The body adds the kind, version, commit and OS, and a `kebbie-issue: <id>` line.
 - A text that would make the URL longer than GitHub accepts is shortened, and says so.
-- It is optional: the way a bug reaches kebbie's maintainers is `kebbie issue report` or the board's `B` list.
+- It is optional: the way a bug reaches kebbie's maintainers is `kebbie issue report` or the board's bugs to send.
 - kebbie refuses it to the lead and tasks, nothing in kebbie runs it for you, and the lead suggests it only when you ask for a GitHub issue.
 
 ### Rechecks after an update
