@@ -27,7 +27,7 @@ These lines are what the board shows after an update (on the `main` channel as s
 
 ## Check the docs
 
-kebbie.dev publishes `docs/` as it stands at the release tag, so the docs ship with the release. The release workflow starts kebbie.dev's deploy once the release is published, so its docs follow within minutes.
+kebbie.dev publishes `docs/` as it stands at the release tag under `/docs/`, so the docs ship with the release, and as it stands on main under `/docs/main/`. The release workflow starts kebbie.dev's deploy once the release is published, and CI starts it after a green push to main that changes `docs/` or `README.md`, so both follow within minutes. Both use the secret `KEBBIE_SITE_DISPATCH_TOKEN` described under [Release](#release), and warn without it.
 
 1. Ask Claude to check them:
 

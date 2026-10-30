@@ -35,3 +35,26 @@ jobs:
         run: cargo audit
       - name: cargo deny
         run: cargo deny check bans sources
+
+  docs-site:
+    needs: [test, audit]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebuild kebbie.dev, whose /docs/main is built from main, when this push changed the docs
+        env:
+          GH_TOKEN: ${{ secrets.KEBBIE_SITE_DISPATCH_TOKEN }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if git cat-file -e "$BEFORE^{commit}" 2>/dev/null && [ -z "$(git diff --name-only "$BEFORE" "$GITHUB_SHA" -- docs README.md)" ]; then
+            echo "This push leaves docs/ and README.md as they were"
+            exit 0
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::KEBBIE_SITE_DISPATCH_TOKEN is not set, so kebbie.dev shows main's docs from its next deploy"
+            exit 0
+          fi
+          gh workflow run deploy.yml --repo gronare/kebbie-site --ref main || echo "::warning::kebbie.dev's deploy did not start; run it from gronare/kebbie-site's Actions tab"
