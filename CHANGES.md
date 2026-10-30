@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The bugs to send fold into one row under Work that you select like a task, as the parked line does: ⏎ opens it and esc folds it back, and B is no longer a key
 
 ### Fixed
+- An install of kebbie's default branch from herdr's plugin list moves to the latest release on its next update, where the release channel refused it as a checkout you develop in
 - Installing kebbie's default branch without Rust names the latest release and the install script as the way out, where it said vX.Y.Z
 - An update of kebbie linked from your own checkout says it builds that checkout and how many commits it holds ahead of its upstream
 

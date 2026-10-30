@@ -239,7 +239,8 @@ fn install_override(root: &Path, state: &Path, source: Source, channel: Channel)
     Ok(format!("{}; kebbie update --stable returns to it", found.describe(channel)))
 }
 
-fn release(root: &Path, stable: bool, binaries: &Binaries) -> Result<String> {
+// herdr's GitHub install of the default branch sits detached on a commit past the last tag, and its next update joins the releases.
+fn release(root: &Path, stable: bool, herdr_installed: bool, binaries: &Binaries) -> Result<String> {
     clean(root, "the release channel checks out tags there, so it must not be a checkout you work in")?;
     let latest = latest_published(root, binaries)?;
     let pending = latest.unpublished.as_deref().map(|tag| format!("; {}", not_published(tag))).unwrap_or_default();
@@ -247,7 +248,7 @@ fn release(root: &Path, stable: bool, binaries: &Binaries) -> Result<String> {
     let target = sha_of(root, &tag)?;
     let (place, expected) = match head(root)? {
         Head::Detached(sha) if sha == target => return Ok(format!("at {tag}, the latest release{pending}")),
-        Head::Detached(sha) => (format!("detached at {}", short(&sha)), at_release(root)),
+        Head::Detached(sha) => (format!("detached at {}", short(&sha)), herdr_installed || at_release(root)),
         Head::Branch(branch) => (format!("on branch {branch}"), false),
     };
     if !expected && !stable {
@@ -305,7 +306,7 @@ pub fn install(root: &Path, state: &Path, channel: Channel, request: &Request, h
         (request, _) => {
             let stable = *request == Request::Stable;
             let line = match channel {
-                Channel::Release => release(root, stable, binaries)?,
+                Channel::Release => release(root, stable, herdr_installed, binaries)?,
                 Channel::Main if stable => back_to_main(root)?,
                 Channel::Main if herdr_installed => return Ok(Plan::Herdr),
                 Channel::Main => pull(root),
@@ -494,6 +495,20 @@ mod tests {
         run_git(&fixture.root, &["commit", "--quiet", "-m", "local"]);
         let off_tag = install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, false, &fixture.binaries).err().unwrap();
         assert!(off_tag.contains("is detached at") && off_tag.contains("not on a release tag"), "{off_tag}");
+    }
+
+    #[test]
+    fn a_herdr_install_of_the_default_branch_joins_the_releases_on_its_next_update() {
+        let fixture = fixture("marketplace");
+        release_commit(&fixture.origin, "0.20.9-next");
+        run_git(&fixture.root, &["pull", "--quiet"]);
+        run_git(&fixture.root, &["checkout", "--quiet", "--detach", "HEAD"]);
+        let nine = run_git(&fixture.root, &["rev-parse", "v0.20.9^{commit}"]);
+        assert_eq!(done(install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, true, &fixture.binaries)), "checked out v0.20.9");
+        assert_eq!(run_git(&fixture.root, &["rev-parse", "HEAD"]), nine);
+        run_git(&fixture.root, &["checkout", "--quiet", "main"]);
+        let branch = install(&fixture.root, &fixture.state, Channel::Release, &Request::Channel, true, &fixture.binaries).err().unwrap();
+        assert!(branch.contains("is on branch main, not on a release tag"), "a checkout on a branch is one you develop in, whoever installed it: {branch}");
     }
 
     #[test]

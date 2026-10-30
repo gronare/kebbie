@@ -47,6 +47,8 @@ On the release channel, a tag whose release is still a draft, or whose binary Gi
 
 The release channel checks out tags in the install root, so it refuses to touch an install root with uncommitted changes or one that sits on a branch. Develop in another checkout and try its commits with `kebbie update --from <path>`.
 
+herdr's own install of the default branch, `herdr plugin install gronare/kebbie` without `--ref`, sits detached on a commit past the last tag. Its next `kebbie update` on the release channel checks out the latest release, so it rides main only until the next release is out.
+
 ## The board says when there is something newer
 
 The keeper checks for updates every 6 hours, and the board shows a notice beside `U updates` when the channel has something newer.
