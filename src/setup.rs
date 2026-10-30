@@ -18,6 +18,12 @@ pub fn marketplace_known(claude_home: &Path, name: &str) -> bool {
         .is_some_and(|known| known.get(name).is_some())
 }
 
+pub fn kebbie_plugin_installed(claude_home: &Path) -> bool {
+    std::fs::read_to_string(claude_home.join("plugins/installed_plugins.json")).ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .is_some_and(|installed| installed["plugins"].as_object().is_some_and(|plugins| plugins.keys().any(|id| id.starts_with("kebbie@"))))
+}
+
 pub fn steps(claude: &str, plugin: &Plugin, marketplace: bool) -> Vec<Vec<String>> {
     let command = |args: &[&str]| std::iter::once(claude.to_string()).chain(args.iter().map(|arg| arg.to_string())).collect::<Vec<_>>();
     let mut steps = Vec::new();

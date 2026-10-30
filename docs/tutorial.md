@@ -38,6 +38,8 @@ The script installs the latest release as a herdr plugin with its prebuilt binar
 
 If a tool from step 1 is missing, the script names it and stops.
 
+If you installed from herdr's plugin list with `herdr plugin install gronare/kebbie`, setup has not run yet: the board opens the setup guide the first time it starts, and `esc` skips it until the next start.
+
 ## 3. Setup
 
 The script opens the setup guide. Its steps are on the left; `↑` `↓` choose, `space` ticks a box, `⏎` goes on, `←` goes back, `s` skips a step and `esc` quits without writing anything.

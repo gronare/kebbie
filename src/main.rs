@@ -535,7 +535,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             serde_json::to_string_pretty(&serde_json::json!({ "away_since": permit::away_since(), "items": items, "checkouts": checkouts })).map_err(|error| error.to_string())
         }
         Some("status") => status_text(),
-        Some("board") => board::run(arguments.flag("--overlay")),
+        Some("board") => setup_guide::board(arguments.flag("--overlay")),
         Some("areas") => areas::print(),
         Some("routes") => Ok(routes::print(arguments.flag("--plain-http"))),
         Some("lead") if arguments.flag("--first") => lead::keep_first(),

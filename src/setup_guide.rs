@@ -114,7 +114,6 @@ impl Facts {
         let options = read_json(&env.machine.claude_dir.join("settings.json"))["pluginConfigs"].as_object().into_iter().flatten()
             .find(|(id, _)| id.starts_with("vault@")).map(|(_, config)| config["options"].clone()).unwrap_or_default();
         let option = |name: &str| options[name].as_str().unwrap_or_default().to_string();
-        let installed = read_json(&env.machine.claude_dir.join("plugins/installed_plugins.json"));
         let herdr = crate::sh::run(&env.machine.herdr, &["plugin", "list", "--json", "--plugin", "kebbie"], None).ok();
         let found = crate::doctor::Found {
             claude_settings: &read_json(&env.machine.claude_dir.join("settings.json")),
@@ -128,7 +127,7 @@ impl Facts {
             name: machine.machine_name.clone().unwrap_or_else(config::short_hostname),
             name_set: machine.machine_name.is_some(),
             claude: version(&env.machine.claude),
-            kebbie_plugin: installed["plugins"].as_object().is_some_and(|plugins| plugins.keys().any(|id| id.starts_with("kebbie@"))),
+            kebbie_plugin: setup::kebbie_plugin_installed(&env.machine.claude_dir),
             codex: codex.binary.as_ref().map(|_| codex.version.as_deref().and_then(|text| text.split_whitespace().find(|word| word.starts_with(|character: char| character.is_ascii_digit()))).unwrap_or_default().to_string()),
             codex_bin: codex.binary.clone(),
             codex_plugin: codex.plugin != crate::agent::codex::Installed::Missing,
@@ -936,7 +935,7 @@ impl Hooks for Screen<'_> {
     }
 }
 
-pub fn run(env: &Env, at: Step) -> Result<String> {
+fn ask(env: &Env, at: Step) -> Result<(Next, Guide)> {
     use ratatui::crossterm::event::{self, Event, KeyEventKind};
     let mut guide = Guide::new(Facts::read(env), at);
     let mut terminal = crate::board::terminal::init_terminal();
@@ -962,7 +961,12 @@ pub fn run(env: &Env, at: Step) -> Result<String> {
         }
     })();
     crate::board::terminal::restore_terminal();
-    match result? {
+    Ok((result?, guide))
+}
+
+pub fn run(env: &Env, at: Step) -> Result<String> {
+    let (next, guide) = ask(env, at)?;
+    match next {
         Next::Board if std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty()) => {
             println!("{}\n", guide.text());
             return crate::lead::show();
@@ -975,6 +979,32 @@ pub fn run(env: &Env, at: Step) -> Result<String> {
         _ => return Ok(guide.text()),
     }
     crate::board::run(false)
+}
+
+pub fn first_run(claude_dir: &std::path::Path, terminal: bool) -> bool {
+    terminal && !setup::kebbie_plugin_installed(claude_dir)
+}
+
+// A board opened before kebbie's Claude Code plugin is installed, as after herdr's own install, starts in the guide; quitting it opens the board as it is.
+pub fn board(overlay: bool) -> Result<String> {
+    let claude_dir = crate::agent::claude::home().unwrap_or_default();
+    if first_run(&claude_dir, setup::in_terminal()) && crate::permit::user_only("kebbie setup").is_ok() {
+        let machine = setup::machine()?;
+        let env = Env::current(&machine)?;
+        let (next, guide) = ask(&env, Step::Name)?;
+        match next {
+            Next::Connect => {
+                println!("{}\n", guide.said(false));
+                println!("{}", crate::hub::cli(Some("connect"), &[], None)?);
+            }
+            Next::Quit => {}
+            _ => println!("{}\n", guide.text()),
+        }
+        if !matches!(next, Next::Quit) && std::env::var("HERDR_PANE_ID").is_ok_and(|pane| !pane.is_empty()) {
+            let _ = crate::lead::restart(false, false);
+        }
+    }
+    crate::board::run(overlay)
 }
 
 #[cfg(test)]
@@ -1372,5 +1402,20 @@ mod tests {
         assert!(!shown.contains("Your board on your phone") && shown.contains("any key opens your board"), "a connected machine is offered nothing: {shown}");
         assert!(!guide.text().contains("kebbie.dev/hub"));
         assert!(matches!(guide.key(KeyEvent::from(KeyCode::Char('h'))), Next::Board), "h is any other key once connected");
+    }
+
+    #[test]
+    fn a_board_opened_before_setup_starts_in_the_guide() {
+        let dir = crate::sh::test_dir("first-run");
+        assert!(first_run(&dir, true), "no installed_plugins.json, as after herdr plugin install alone");
+        std::fs::create_dir_all(dir.join("plugins")).unwrap();
+        std::fs::write(dir.join("plugins/installed_plugins.json"), json!({ "plugins": { "vault@gronare": [{ "version": "0.3.0" }] } }).to_string()).unwrap();
+        assert!(first_run(&dir, true), "another plugin is not kebbie's");
+        assert!(!first_run(&dir.join("missing"), false), "without a terminal the board never asks");
+        std::fs::write(dir.join("plugins/installed_plugins.json"), json!({ "plugins": { "kebbie@kebbie": [{ "version": "0.29.1" }] } }).to_string()).unwrap();
+        assert!(!first_run(&dir, true), "set up: the board opens straight away");
+        let main = include_str!("main.rs");
+        assert!(main.contains("Some(\"board\") => setup_guide::board("), "kebbie board, which herdr's startup, the lead Space and the board popup run, goes through the first-run check");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

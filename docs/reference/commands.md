@@ -426,7 +426,7 @@ The task's commits not yet pushed are its next steps, in order. A commit beyond 
 
 | Command | Output |
 | --- | --- |
-| `kebbie board [--overlay]` | The board. `--overlay` is the popup form, which `esc` closes. See [Board](board.md). |
+| `kebbie board [--overlay]` | The board. `--overlay` is the popup form, which `esc` closes. Until kebbie's Claude Code plugin is installed, it opens the setup guide first, and `esc` there opens the board. See [Board](board.md). |
 | `kebbie status [--json]` | Every task and Claude session, grouped by what it needs from you. See [the fields](#kebbie-status---json). |
 | `kebbie profiles [--json]` | The [profiles](configuration.md#profiles) a task can start with: the built-in `task`, `reviewer` and `ops`, then each file in `~/.config/kebbie/profiles`. |
 | `kebbie list [--json]` | The pool's worktrees: each one's task or `free`, uncommitted changes, commits ahead and behind, its port, and the first line of its setup note. |

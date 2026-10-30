@@ -31,6 +31,8 @@ curl -fsSL https://kebbie.dev/install.sh | sh
 
 The script checks those tools, installs the latest release as a herdr plugin with its prebuilt binary (macOS on Apple silicon or Intel, Linux on x86_64 or arm64), and runs `kebbie setup`. Setup is a guide of seven steps: this machine's name, the agents, herdr's keys, where the backlog lives, the vault and error signals, then one look at everything before it writes any of it, the `kebbie doctor` warnings it can fix among them. It ends with what is still yours to do and an offer to see your board on your phone, then opens your board; inside herdr, that is the lead Space with the lead beside it. It is safe to run again.
 
+Installing from herdr's plugin list instead? `herdr plugin install gronare/kebbie` builds the default branch with `cargo`, so it needs Rust, and runs no setup: the first board you open starts the setup guide, and the next `kebbie update` moves you to the latest release.
+
 Coming from kelpie, kebbie's earlier name? Run the same command: it moves your settings, state and herdr keys over to kebbie and removes the old plugin first.
 
 Press `prefix+space` and tell the lead what you want done. [Your first task](docs/tutorial.md) walks through it step by step.
