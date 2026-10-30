@@ -163,7 +163,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `ci.watch` needs origin on GitHub and `gh` logged in. `false` closes the task right after the push, as for a repo without useful CI. See [Watch CI after a push](../explanation/trunk-based.md#ci-after-the-push).
 
-`comments.watch` needs what `ci.watch` needs, origin on GitHub and `gh` logged in, and [`kebbie doctor`](requirements.md#what-kebbie-doctor-checks) says when a repo misses either. Your own comments are skipped, and so are a bot's. kebbie asks `gh` for a repo's new commit comments every 12 minutes while any of its pushed commits is watched, in one call however many are, and less often while `gh` fails. A comment already on the board stays there after the days run out.
+`comments.watch` needs what `ci.watch` needs, origin on GitHub and `gh` logged in, and [`kebbie doctor`](requirements.md#what-kebbie-doctor-checks) says when a repo misses either. Your own comments are skipped, and so are a bot's. kebbie asks `gh` for a repo's new commit comments every 12 minutes while any of its pushed commits is watched, in one call however many are, and less often while `gh` fails. A comment already on the board stays there after the days run out. See [Act on comments on pushed commits](../how-to/act-on-comments-on-pushed-commits.md).
 
 `restart.auto`: each restarted session resumes its conversation, and `kebbie update` restarts the idle ones at once. A session mid-turn, the pane you are in and one with background work running are never restarted on their own. `false` restarts nothing on its own; the board still marks the sessions on older code.
 

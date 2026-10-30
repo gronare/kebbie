@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::sh::Result;
 
-pub use act::{addresses_line, fix_message};
+pub use act::{Reopen, addresses_line, fix_message, mark_reopened, reopen, tell};
 pub use read::run as read_run;
 pub use watch::{after_push, begin, tick};
 
@@ -164,6 +164,15 @@ impl Comment {
         }
     }
 
+    // Whether the owner has a choice to make on the card.
+    pub fn needs_decision(&self) -> bool {
+        match self.status {
+            Status::Read => self.kind() != Some(Kind::Praise),
+            Status::Failed | Status::Reply => true,
+            _ => false,
+        }
+    }
+
     pub fn to_json(&self) -> Value {
         json!({
             "id": self.id, "url": self.url, "author": self.author, "body": self.body, "path": self.path, "line": self.line, "commit": self.commit,
@@ -240,6 +249,29 @@ pub fn update(state: &Path, id: u64, change: impl FnOnce(&mut Comment)) -> Resul
 
 pub fn set_status(state: &Path, id: u64, status: Status) -> Result<Comment> {
     update(state, id, |comment| comment.status = status)
+}
+
+pub fn set_reply(state: &Path, id: u64, text: &str) -> Result<Comment> {
+    update(state, id, |comment| {
+        comment.reply = Some(clean(text, BODY_LIMIT)).filter(|reply| !reply.trim().is_empty());
+        comment.status = Status::Reply;
+    })
+}
+
+// The owner's answer to the reading's question goes to a fresh reading.
+pub fn answer(state: &Path, id: u64, text: &str) -> Result<Comment> {
+    update(state, id, |comment| {
+        comment.answer = Some(clean(text, BODY_LIMIT));
+        comment.status = Status::Unread;
+        comment.error = None;
+    })
+}
+
+pub fn read_again(state: &Path, id: u64) -> Result<Comment> {
+    update(state, id, |comment| {
+        comment.status = Status::Unread;
+        comment.error = None;
+    })
 }
 
 pub(crate) fn prune(state: &Path, now: u64) {

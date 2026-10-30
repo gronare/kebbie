@@ -303,7 +303,7 @@ Yours alone, also `C` on the board: no Claude, the lead included, can run it.
 
 ### `kebbie comments [--json]`
 
-The comments colleagues left on commits kebbie pushed that still wait for you, one per line: its id, who wrote it, the commit, the task that pushed it and where it stands, such as `holds · reopen with a fix` or `reply ready · y copy`. `--json` gives the comment records.
+The comments colleagues left on commits kebbie pushed that still wait for you, one per line: its id, who wrote it, the commit, the task that pushed it and where it stands, such as `holds · reopen with a fix` or `reply ready · y copy`. `--json` gives the comment records. The board shows the same under [COMMENTS](board.md#comments).
 
 After a push, the keeper asks `gh api` for the repo's new commit comments every 12 minutes, for [`comments.watch_days`](configuration.md#ci-updates-and-the-keeper), and keeps those on the commits it pushed. GitHub lists them oldest first, so kebbie reads on from the last page it read and pages through no history: one call a round for a repo, however many of its commits are watched. It skips your own comments and a bot's. A read-only Claude reads each new comment against the commit's message and diff and the code as it is now, and calls it one of:
 

@@ -166,7 +166,23 @@ fn running_dot(item: &Item) -> bool {
 
 pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line<'static>>, usize, Rows) {
     let open = app.column == Column::Work;
-    let focused = open && !app.in_messages && !app.offer_panel.focused;
+    let focused = open && !app.in_messages && !app.offer_panel.focused && !app.comment_panel.focused;
+    let on_task = open && !app.comment_panel.focused;
+    let boundary = app.comment_boundary();
+    let put_comments = |app: &App, lines: &mut Vec<Line<'static>>, rows: &mut Rows, selected_line: &mut usize, after: bool| {
+        let (comments, comment_rows, comment_selected) = super::comments::comment_lines(app, width, lines.len() + usize::from(after), open && !app.in_messages);
+        if comments.is_empty() {
+            return;
+        }
+        if after {
+            lines.push(Line::default());
+        }
+        rows.extend(comment_rows);
+        if let Some(line) = comment_selected {
+            *selected_line = line;
+        }
+        lines.extend(comments);
+    };
     let right = match app.filter_of(Column::Work) {
         Some(filter) => format!("{} / {filter}", plural((0..app.tasks.len()).filter(|index| app.shown(Column::Work, *index)).count(), "task")),
         None => format!("{}{}", plural(app.tasks.len(), "task"), free_worktrees(&app.checkouts)),
@@ -177,6 +193,12 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
     let tasks = app.tasks.clone();
     let mut rows = Vec::new();
     for (index, item) in tasks.iter().enumerate() {
+        if index == boundary {
+            put_comments(app, &mut lines, &mut rows, &mut selected_line, current.is_some());
+            if app.comments_shown() && current.is_none() {
+                lines.push(Line::default());
+            }
+        }
         if !app.shown(Column::Work, index) {
             continue;
         }
@@ -228,13 +250,13 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
             line.spans.extend([Span::raw(" "), Span::styled("●", style(GREEN))]);
         }
         lines.push(line);
-        lines.extend(step_lines(item, selected && open && unfold, width));
+        lines.extend(step_lines(item, selected && on_task && unfold, width));
         if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| accept_wanted(item)) {
-            lines.extend(wanted_lines(&wanted, PEACH, selected && open && unfold, width));
+            lines.extend(wanted_lines(&wanted, PEACH, selected && on_task && unfold, width));
         } else if let Some(waiting) = item.waiting() {
-            lines.extend(wanted_lines(waiting, MUTED, selected && open && unfold, width));
+            lines.extend(wanted_lines(waiting, MUTED, selected && on_task && unfold, width));
         }
-        if selected && open && unfold {
+        if selected && on_task && unfold {
             let (detail, links) = unfolded_lines(app, item, width.saturating_sub(4));
             lines.extend(detail.into_iter().map(|line| {
                 let mut spans = vec![Span::raw("    ")];
@@ -248,6 +270,9 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
     }
     if tasks.is_empty() {
         lines.push(Line::from(Span::styled(format!("No tasks. {} starts one, or pick one from the backlog.", keys::key(Act::New)), style(MUTED))));
+    }
+    if boundary >= tasks.len() {
+        put_comments(app, &mut lines, &mut rows, &mut selected_line, true);
     }
     let (offers, offer_rows, offer_selected) = super::bug_report::offer_lines(app, width, lines.len());
     rows.extend(offer_rows);

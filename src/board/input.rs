@@ -28,6 +28,9 @@ pub(super) enum Purpose {
     BacklogItem,
     BacklogPriority(String),
     Tidy(PathBuf),
+    CommentWords(u64),
+    CommentReply(u64),
+    CommentAnswer(u64),
 }
 
 impl App {
@@ -104,6 +107,8 @@ impl App {
                 self.about_path("tidy", &path);
                 self.show(result);
             }
+            Purpose::CommentWords(_) | Purpose::CommentAnswer(_) if text.is_empty() => {}
+            Purpose::CommentWords(_) | Purpose::CommentReply(_) | Purpose::CommentAnswer(_) => self.submit_comment(purpose, text),
             Purpose::Message(_, _) if text.is_empty() => {}
             Purpose::Message(pane, name) => {
                 let result = crate::typing::prompt(&pane, &text, &name).map(|_| Notice::new(Tone::Done, "Sent").to_string())
@@ -118,7 +123,7 @@ impl App {
 // The board stays where it is while the task's worktree and Claude come up; the task shows under Work once its Space exists.
 pub(super) const START_AT_LABEL: &str = "Start at: 15:00, tomorrow 09:00, fri 09:00, 24 oct 09:00 or in 2h";
 
-fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: Option<&str>, at: Option<&str>, anyway: bool) -> Result<String> {
+pub(super) fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: Option<&str>, at: Option<&str>, anyway: bool) -> Result<String> {
     let dir = crate::lead::state_dir()?.join("starts");
     crate::state::private_dir(&dir)?;
     let log = dir.join(format!("{}.log", name.replace('/', "-")));
@@ -225,7 +230,7 @@ mod tests {
     #[test]
     fn a_task_started_from_the_board_runs_as_its_own_process_with_the_name_prompt_and_item_as_arguments() {
         let source = include_str!("input.rs");
-        let start = &source[source.find("\nfn start_in_background(").unwrap()..];
+        let start = &source[source.find("\npub(super) fn start_in_background(").unwrap()..];
         let body = &start[..start.find("\n}\n").unwrap()];
         assert!(body.contains(".arg(\"-C\").arg(repo)") && body.contains(".arg(prompt)") && body.contains("[\"--backlog\", item]"), "arguments go as argv, never through a shell: {body}");
         assert!(!body.contains("sh") || !body.contains("\"-c\""), "{body}");

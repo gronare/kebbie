@@ -170,6 +170,7 @@ impl App {
 
     pub(super) fn focus_offers(&mut self, index: usize) {
         self.in_messages = false;
+        self.comment_panel.focused = false;
         self.column = super::Column::Work;
         self.offer_panel.focused = !self.offers.is_empty();
         self.offer_panel.selected = index.min(self.offers.len().saturating_sub(1));
@@ -189,6 +190,7 @@ impl App {
         match keys::map().act(self.ctx(), &key) {
             Some(Act::Move) if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) => match self.offer_panel.selected.checked_sub(1).filter(|_| shown) {
                 Some(above) => self.offer_panel.selected = above,
+                None if self.comments_shown() && !(self.comment_boundary()..self.tasks.len()).any(|index| self.shown(super::Column::Work, index)) => self.focus_comments(self.comments.len().saturating_sub(1)),
                 None => self.offer_panel.focused = self.tasks.is_empty(),
             },
             Some(Act::Move) if shown => self.offer_panel.selected = (self.offer_panel.selected + 1).min(self.offers.len().saturating_sub(1)),

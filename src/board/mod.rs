@@ -1,6 +1,7 @@
 mod bug_report;
 mod card;
 mod columns;
+mod comments;
 mod confirm;
 mod detail;
 mod draw;
@@ -121,6 +122,7 @@ enum Mode {
     Questions(Box<QuestionWindow>),
     Report { id: String, scroll: u16, read: bool, nudged: bool },
     NoteCard { key: String, scroll: u16, nudged: bool },
+    Comment { id: u64, scroll: u16, nudged: bool },
     Help(keys_window::Scroll),
     Hub(Box<hub_window::Window>),
     Update,
@@ -138,6 +140,7 @@ enum Hit {
     Answer(usize),
     Messages(Option<usize>),
     Offer(usize),
+    Comment(usize),
     Key(KeyCode),
 }
 
@@ -217,6 +220,11 @@ struct App {
     toast: Option<notices::Toast>,
     hub_paths: Option<hub_window::Paths>,
     hub_banner: Option<String>,
+    comments: Vec<crate::comments::Comment>,
+    comment_panel: comments::CommentPanel,
+    comment_dir: Option<PathBuf>,
+    copier: comments::Copier,
+    reopener: comments::Reopener,
 }
 
 type Updater = std::sync::Arc<dyn Fn() -> Result<String> + Send + Sync>;
@@ -570,6 +578,7 @@ impl App {
             Mode::Update => self.handle_update(key),
             Mode::Report { id, scroll, read, .. } => self.confirm_report(id, scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
+            Mode::Comment { id, scroll, .. } => self.handle_comment_window(id, scroll, key, cancels),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
             Mode::ConfirmDone { path, name, .. } => self.confirm_done(path, name, key, cancels),
             Mode::ConfirmDismiss { path, name, .. } => self.confirm_dismiss(path, name, key, cancels),
@@ -628,6 +637,9 @@ impl App {
         if self.in_messages {
             return self.handle_messages(key);
         }
+        if self.comment_panel.focused {
+            return self.handle_comments(key);
+        }
         if self.offer_panel.focused {
             return self.handle_offers(key);
         }
@@ -638,6 +650,9 @@ impl App {
             Act::Hub => self.open_hub(),
             Act::Move => {
                 let (down, before) = (!matches!(key.code, KeyCode::Up | KeyCode::Char('k')), self.work_selected);
+                if ctx == Ctx::Work && self.enter_comments(down) {
+                    return;
+                }
                 self.move_selection(if down { 1 } else { -1 });
                 if down && ctx == Ctx::Work && self.work_selected == before && !self.offers.is_empty() {
                     self.focus_offers(0);
@@ -999,6 +1014,7 @@ impl App {
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             filter: None, ctrl_c: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_context: None, subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
+            comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(),
         }
     }
 }
@@ -1022,6 +1038,8 @@ pub fn run(overlay: bool) -> Result<String> {
     (app.fold, app.seen) = load_fold(app.fold_file.as_deref(), height);
     app.offer_panel.file = bug_report::panel_file();
     app.offer_panel.shown = bug_report::load_shown(app.offer_panel.file.as_deref());
+    app.comment_panel.file = comments::panel_file();
+    app.comment_panel.folded_at = comments::load_folded(app.comment_panel.file.as_deref());
     if let Ok(state) = std::env::var(RESTART_STATE) {
         let mut parts = state.splitn(3, '\t');
         match parts.next() {
@@ -1089,6 +1107,8 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.questions = snapshot.questions;
                         app.offers = snapshot.offers;
                         app.offers_changed();
+                        app.comments = snapshot.comments;
+                        app.comments_changed();
                         app.fixed = snapshot.fixed.filter(|fixed| fixed.last > app.fixed_seen);
                         app.usage = snapshot.usage;
                         app.ongoing = snapshot.ongoing;

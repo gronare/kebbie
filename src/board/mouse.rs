@@ -57,9 +57,10 @@ impl App {
                     return None;
                 }
                 match hit {
-                    Some(Hit::Task(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused) = (Column::Work, false, false),
-                    Some(Hit::Entry(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused) = (Column::Backlog, false, false),
+                    Some(Hit::Task(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Work, false, false, false),
+                    Some(Hit::Entry(_)) if normal => (self.column, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Backlog, false, false, false),
                     Some(Hit::Offer(_)) if normal && !self.offer_panel.focused => self.focus_offers(self.offer_panel.selected),
+                    Some(Hit::Comment(_)) if normal && !self.comment_panel.focused => self.focus_comments(self.comment_panel.selected),
                     Some(Hit::Messages(_)) if normal && self.fold == Fold::Open => self.in_messages = true,
                     _ => {}
                 }
@@ -68,8 +69,8 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => {
                 match (hit, &mut self.mode) {
                     (Some(Hit::Task(index)), Mode::Normal) => {
-                        let again = self.column == Column::Work && self.work_selected == index && !self.in_messages && !self.offer_panel.focused;
-                        (self.column, self.work_selected, self.in_messages, self.offer_panel.focused) = (Column::Work, index, false, false);
+                        let again = self.column == Column::Work && self.work_selected == index && !self.in_messages && !self.offer_panel.focused && !self.comment_panel.focused;
+                        (self.column, self.work_selected, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Work, index, false, false, false);
                         if again && self.on_parked_line() {
                             self.show_parked(true);
                         } else if again {
@@ -78,7 +79,7 @@ impl App {
                     }
                     (Some(Hit::Entry(index)), Mode::Normal) => {
                         let again = self.column == Column::Backlog && self.backlog_selected == index && !self.in_messages;
-                        (self.column, self.backlog_selected, self.in_messages, self.offer_panel.focused) = (Column::Backlog, index, false, false);
+                        (self.column, self.backlog_selected, self.in_messages, self.offer_panel.focused, self.comment_panel.focused) = (Column::Backlog, index, false, false, false);
                         if again {
                             self.open_options();
                         }
@@ -95,6 +96,16 @@ impl App {
                             _ => {}
                         }
                     }
+                    (Some(Hit::Comment(index)), Mode::Normal) => {
+                        let open = self.comments_open();
+                        let again = self.comment_panel.focused && (self.comment_panel.selected == index || !open);
+                        self.focus_comments(index);
+                        match (again, open) {
+                            (true, true) => self.open_comment(),
+                            (true, false) => self.comment_panel.opened = true,
+                            _ => {}
+                        }
+                    }
                     (Some(Hit::Messages(None)), Mode::Normal) if self.fold == Fold::Open => self.in_messages = true,
                     (Some(Hit::Messages(None)), Mode::Normal) => self.press_m(),
                     (Some(Hit::Messages(Some(index))), Mode::Normal) => {
@@ -108,6 +119,7 @@ impl App {
                     (Some(Hit::Key(code)), Mode::Normal) => {
                         self.in_messages &= code == keys::map().code(Act::Messages);
                         self.offer_panel.focused = false;
+                        self.comment_panel.focused = false;
                         return Some(KeyEvent::from(code));
                     }
                     (Some(Hit::Choice(index)), Mode::Options(_)) => {

@@ -60,6 +60,7 @@ impl App {
     fn enter_messages(&mut self) {
         self.in_messages = true;
         self.offer_panel.focused = false;
+        self.comment_panel.focused = false;
         self.message_back = 0;
     }
 

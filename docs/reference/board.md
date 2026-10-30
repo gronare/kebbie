@@ -65,9 +65,10 @@ The context line reads `Lead context N% · L` on a narrow board. A click on it a
 Work:
 
 - A task's halves in other repos sit next to each other.
+- Under READY TO PUSH: [COMMENTS](#comments), the comments colleagues left on commits kebbie pushed, while any waits for you.
 - Under the groups: the [parked line](#parked) while you have parked tasks.
 - Under the tasks: the [bugs to send](#bugs-to-send), folded into one row until you open them, and the main checkouts with files changed outside any task.
-- A folded row, the parked line or the bugs to send, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
+- A folded row, the parked line, the comments or the bugs to send, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
 - After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles. `i` shows the list and clears the line.
 
 Backlog: ONGOING lists vault project notes in progress (status active or draft) when the vault is on. It sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md).
@@ -214,6 +215,45 @@ A task you park with `Z` leaves its group, whatever its phase, and keeps working
 | `back when you unpark it` | On a parked row: parked until you bring it back. |
 
 Task keys on the parked line act on the line only, `Z` among them: `⏎` shows the parked tasks first. A parked task comes back when its time comes, with `Z` on its row, or with [`kebbie unpark`](commands.md#kebbie-unpark-name). `done`, `drop` and `reset` end its park with the task. The phone's board leaves parked tasks out.
+
+## Comments
+
+The comments colleagues leave on commits kebbie pushed, each read by an independent, read-only Claude, sit in their own section under READY TO PUSH. They are no task: Needs you, the status line's counts, the lead's summaries and your notifications leave them out, and one line in the messages says when a comment has been read. See [Act on comments on pushed commits](../how-to/act-on-comments-on-pushed-commits.md).
+
+The section shows open while a card waits for your choice that you have not folded over, and folded otherwise, as `◇ 3 comments · ⏎ shows them`, peach while one waits. Open, its header reads `COMMENTS  3  esc hides them`, and each comment takes two lines: its row and the first words of the comment, dim.
+
+| Row | Means |
+| --- | --- |
+| `◆ johan on 3f2a9c1 · refunds-in-part   holds · reopen with a fix` | The comment names a real defect; the reading proposes a fix. |
+| `◇ anna on 3f2a9c1 · refunds-in-part   opinion · reply, no change` | A preference; the reading recommends replying, with a reason from the code. |
+| `✓ maria on 3f2a9c1 · refunds-in-part   praise · nothing to do` | Thanks or approval. |
+| `? lena on 3f2a9c1 · refunds-in-part   unclear · answer its question` | The reading cannot tell without you and asks one question. |
+| `· johan on 3f2a9c1 · refunds-in-part   reading…` | The reading is under way. |
+| `! johan on 3f2a9c1 · refunds-in-part   not read · ⏎ reads it again` | The reading gave no answer. |
+| `↻ johan on 3f2a9c1 · refunds-in-part   fixing in refunds-in-part-followup` | A task fixes it. |
+| `↩ johan on 3f2a9c1 · fixed in 7c9e2f1   reply ready · y copy` | The fix is on the default branch, or you chose to reply without one: the reply waits to be posted. |
+
+A narrow column drops the task, then the commit, from the row before it cuts what the row says. A card stays until you mark its reply sent, finish it or dismiss it; it never leaves on its own.
+
+### The comment window
+
+`⏎` on a comment opens its card, titled such as `comment 1/3 · holds · refunds-in-part`: who wrote it on which commit, at which file and line, the comment, the hunk of the diff it is on, and `Independent reading`. Then, by its kind:
+
+| Kind | Shows | Choices |
+| --- | --- | --- |
+| holds | `Proposal` with how to test it, and `The fix's commit message`, whose body ends with `Addresses johan's comment on 3f2a9c1.` | `1 Reopen <task> with the proposal (recommended)`, `2 Reply without a change`, `3 Dismiss`, `w In my own words` |
+| opinion | `Recommendation` and `Reply to send` | `1 Reply without a change (recommended)`, `2 Reopen <task> and change it anyway`, `3 Dismiss`, `w Edit the reply` |
+| praise | | `d Done (recommended)`, `r Reply anyway` |
+| unclear | `Question` | `w Answer the question (recommended)`, `3 Dismiss` |
+| reply ready | `Fixed in 7c9e2f1, on the default branch` and `Reply to send`, as plain lines you can select in the terminal | `y Copy the reply (recommended)`, `d Mark it sent`, `w Edit the reply` |
+
+- Reopen tells the task that pushed the commit, while it runs, what to change and the commit message to use; once it has ended, a new task starts in the same repo, named `<task>-followup`, with that as its brief.
+- `w In my own words` reopens with what you type in place of the proposal, under the same commit message.
+- The answer to a question goes to a fresh reading.
+- Once a commit carrying the `Addresses` line is on the default branch, the card turns to its reply, naming the fix's sha.
+- `y` copies with the clipboard program (`pbcopy`, `wl-copy` or `xclip`), or over ssh through the terminal (OSC 52).
+
+kebbie never posts a reply.
 
 ## Keys
 
@@ -447,6 +487,26 @@ Folded, the bugs are one row under the tasks, `! 2 bugs to send · ⏎ shows the
 
 In the report window `↓` and `pgdn` scroll, `y` sends once you have read to the end, `n` keeps it on this machine only, and `esc` decides later.
 
+### Comments
+
+| Key | Action |
+| --- | --- |
+| `↓` from the last task above the section, `↑` from the first task below it | Select the section: its first card, or the folded row. |
+| `↑` `↓`, `j` `k` | Pick a card; past the first or the last, on to the task above or below. |
+| `⏎` | On the folded row, open the section; on a card, open its window. |
+| `y` | On a card whose reply is ready, copy the reply. |
+| `esc`, `q` | Fold the section into its row, with the selection on it; on the row, back to the tasks. |
+
+No task key acts on a comment: `d`, `p`, `x` and the rest do nothing on its row. In the window:
+
+| Key | Action |
+| --- | --- |
+| `1` `2` `3`, `w`, `d`, `r`, `y` | The card's choices, as it lists them. Any other key keeps the window and says so. |
+| `o` | Open the comment on GitHub, or show its address when there is no browser to open. |
+| `←` `→` | The previous or next comment. |
+| `↑` `↓`, `pgup` `pgdn` | Scroll the card. |
+| `esc` | Close it. |
+
 ### The hub window
 
 `H` opens it. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md).
@@ -670,5 +730,6 @@ The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hi
 | Click the messages line | Open it. |
 | Click a folded row, the parked line or the bugs to send | Select it. Click again to open it. |
 | Click a bug to send | Select it. Click again to show its report. |
+| Click a comment | Select it. Click again to open its window. |
 | Scroll | Move through whatever is under the pointer. |
 | Click outside a window | Close it, except the routine steps, which keep what you typed. |
