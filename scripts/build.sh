@@ -149,8 +149,13 @@ if [ "${KEBBIE_CHANNEL:-}" = release ]; then
   exit 1
 fi
 
+latest_tag() {
+  git -C "$root" ls-remote --tags --refs origin 'refs/tags/v*' 2>/dev/null | awk '{ sub("refs/tags/", "", $2); print $2 }' | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -t . -k 1.2,1n -k 2,2n -k 3,3n | tail -n 1
+}
+
 if ! command -v cargo >/dev/null 2>&1; then
-  say "no prebuilt binary fits ($reason), and cargo is not installed to build one. Install Rust (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh) and run this again, or install a published release: herdr plugin install --ref vX.Y.Z gronare/kebbie"
+  latest=$(latest_tag)
+  say "no prebuilt binary fits ($reason), and cargo is not installed to build one. Install the latest release, which needs no Rust: herdr plugin install --ref ${latest:-vX.Y.Z} gronare/kebbie, or curl -fsSL https://kebbie.dev/install.sh | sh. Or install Rust (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh) and run this again"
   exit 1
 fi
 check_toolchain || exit 1

@@ -21,6 +21,7 @@ Find what is wrong with kebbie, and the fix for each message it shows.
 | --- | --- |
 | `claude plugin ... runs in Claude Code, but kebbie's checkout is ...` | `kebbie update`. Claude Code runs a cached copy of the plugin, and the update refreshes it. |
 | `claude plugin source: GitHub, following the default branch` on a `release` machine | `claude plugin marketplace remove kebbie && claude plugin marketplace add ~/.local/share/kebbie/current && claude plugin install kebbie@kebbie` |
+| `cargo is not installed to build one` from `herdr plugin install gronare/kebbie` | Install the release the message names, which needs no Rust: `herdr plugin install --ref <tag> gronare/kebbie`, or `curl -fsSL https://kebbie.dev/install.sh \| sh`. |
 | `kebbie: command not found` in a task or the lead | `ln -s ~/.local/share/kebbie/current/target/release/kebbie ~/.local/bin/kebbie`, with `~/.local/bin` on your `PATH`. |
 | The `current` link is missing or points elsewhere | Restart herdr. Keep `XDG_DATA_HOME` unset for herdr, or create the link under `~/.local/share/kebbie` yourself. |
 | `kebbie update` refuses on the `release` channel | The install root has uncommitted changes or is not on a release tag. Move your work elsewhere, or run `kebbie update --stable` on a clean checkout. |

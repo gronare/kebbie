@@ -200,6 +200,10 @@ fn a_commit_past_the_tag_or_the_main_channel_builds_from_source() {
     lab.edit_source("fn main() { println!(\"edited\"); }\n");
     let missing = lab.build(None);
     assert!(!missing.status.success() && stderr(&missing).contains("cargo is not installed"), "{}", stderr(&missing));
+    git(&lab.origin, &["tag", "v1.2.10"]);
+    git(&lab.origin, &["tag", "v1.3.0-rc1"]);
+    let named = stderr(&lab.build(None));
+    assert!(named.contains("herdr plugin install --ref v1.2.10 gronare/kebbie") && named.contains("kebbie.dev/install.sh"), "the way out names the latest release, by number: {named}");
 }
 
 #[test]
