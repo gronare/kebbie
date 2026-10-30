@@ -44,3 +44,5 @@ worker_name = "jobs"
 ```
 
 The names are also the Space's tags in herdr's sidebar while each runs.
+
+The task's own tab carries the task's name, and the lead Space's tab is `kebbie`. kebbie names a tab only while it has herdr's number or a name kebbie's sidebar sync gave it, so a tab you renamed in herdr keeps your name.

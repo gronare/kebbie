@@ -332,8 +332,9 @@ fn launch_new(repo: &Path, task: &str, slot: &Slot, address: &str, place: Launch
     let space = open_space(repo, slot, task, false)?;
     let agent_pane = match space.root_pane_id {
         Some(pane) => pane,
-        None => herdr::create_tab(&space.workspace_id, &slot.path, profile.agent.key())?,
+        None => herdr::create_tab(&space.workspace_id, &slot.path, task)?,
     };
+    name_agent_tab(&agent_pane, task);
     let configured = configured_mode(repo)?;
     let configured = profile.permission_mode.clone().or(configured);
     let (agent_name, started) = launch(&Launch { note: note.as_deref(), mode: chosen_mode(mode, None, configured.as_deref()), ..place }, &agent_pane, Session::New(new_session_id()?))?;
@@ -488,8 +489,13 @@ fn launch(place: &Launch, pane: &str, session: Session) -> Result<(String, Resul
     Ok((agent_name, started))
 }
 
-fn agent_in(workspace: &str) -> Result<bool> {
-    Ok(herdr::agents()?.iter().any(|agent| Agent::of(agent).is_some() && agent["workspace_id"].as_str() == Some(workspace)))
+fn agent_in(workspace: &str) -> Result<Option<String>> {
+    Ok(herdr::agents()?.iter().find(|agent| Agent::of(agent).is_some() && agent["workspace_id"].as_str() == Some(workspace)).map(|agent| agent["pane_id"].as_str().unwrap_or_default().to_string()))
+}
+
+// The task's tab carries the task's name; an earlier kebbie named it after the agent.
+pub(super) fn name_agent_tab(pane: &str, task: &str) {
+    herdr::name_tab_of(pane, task, &Agent::ALL.map(Agent::key));
 }
 
 // A task whose Space or Claude is gone gets them back: its last conversation resumed, or a new one given the task's first prompt again.
@@ -497,8 +503,9 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     let task = place.task;
     let open = herdr::workspace_for(&slot.path)?;
     if let Some(workspace) = &open
-        && agent_in(workspace)?
+        && let Some(pane) = agent_in(workspace)?
     {
+        name_agent_tab(&pane, task);
         if focus {
             herdr::focus_workspace(workspace)?;
         }
@@ -507,8 +514,9 @@ fn restart(place: &Launch, slot: &Slot, focus: bool, given: Option<&str>) -> Res
     let space = open_space(place.repo, slot, task, false)?;
     let pane = match (&open, space.root_pane_id) {
         (None, Some(pane)) => pane,
-        _ => herdr::create_tab(&space.workspace_id, &slot.path, place.profile.agent.key())?,
+        _ => herdr::create_tab(&space.workspace_id, &slot.path, task)?,
     };
+    name_agent_tab(&pane, task);
     let Record { session: recorded, mode, .. } = recorded_session(task, place.repo);
     let agent = place.profile.agent;
     let previous = agent.home().and_then(|home| previous_session(agent, place.repo, slot, task, &home, recorded));

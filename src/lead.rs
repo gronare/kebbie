@@ -14,6 +14,7 @@ use crate::tasks::{self, Session};
 use crate::typing::Draft;
 
 pub const STATE_DIR_VAR: &str = "KEBBIE_STATE_DIR";
+pub const LEAD_TAB: &str = "kebbie";
 
 pub fn state_path(var: impl Fn(&str) -> Option<String>) -> Result<PathBuf> {
     if let Some(own) = var(STATE_DIR_VAR).filter(|own| !own.is_empty()) {
@@ -447,6 +448,7 @@ fn previous_session() -> Result<(Session, &'static str)> {
 fn repair(lead: &str) -> Result<()> {
     let places = places(lead)?;
     let board = places.board.ok_or("The lead Space has lost its board pane; close the Space and open the lead again")?;
+    herdr::name_tab_of(&board, LEAD_TAB, &[]);
     if places.chat.is_none() && lead_chat(lead).as_deref() == Some(board.as_str()) {
         return board_beside(&board);
     }
@@ -604,6 +606,7 @@ fn create() -> Result<String> {
     let dir = lead_dir()?;
     let space = herdr::create_workspace(&dir, LEAD_LABEL)?;
     let board = space.root_pane_id.ok_or("herdr created the lead Space without a pane")?;
+    herdr::name_tab_of(&board, LEAD_TAB, &[]);
     herdr::run_in_pane(&board, &board_command()?)?;
     let chat = herdr::split_right(&board, &dir, "0.68")?;
     let started = new_chat(&chat);

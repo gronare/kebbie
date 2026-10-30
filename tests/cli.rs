@@ -1204,7 +1204,7 @@ fn lead_space(lab: &Lab, in_lead: bool, zoomed: bool, focused: &str) {
 }
 
 fn changes(lab: &Lab) -> Vec<Vec<String>> {
-    lab.herdr_calls().into_iter().filter(|call| !matches!((call[0].as_str(), call[1].as_str()), ("workspace", "list") | ("pane", "list" | "layout" | "process-info"))).collect()
+    lab.herdr_calls().into_iter().filter(|call| !matches!((call[0].as_str(), call[1].as_str()), ("workspace", "list") | ("pane", "list" | "layout" | "process-info" | "get") | ("tab", "get"))).collect()
 }
 
 #[test]
@@ -1408,6 +1408,43 @@ fn going_to_the_lead_without_a_lead_space_creates_it_with_its_board_and_goes_the
     position(&calls, &["workspace", "focus", "w_lead"]);
 }
 
+fn tab_named(lab: &Lab, label: &str) {
+    let answers = lab.root.join("answers");
+    fs::write(answers.join("pane-get.json"), r#"{"result":{"pane":{"pane_id":"w_lead:p1","tab_id":"w_lead:t1"}}}"#).unwrap();
+    fs::write(answers.join("tab-get.json"), format!(r#"{{"result":{{"tab":{{"tab_id":"w_lead:t1","label":"{label}","number":1}}}}}}"#)).unwrap();
+    fs::write(answers.join("tab-rename.json"), r#"{"result":{}}"#).unwrap();
+}
+
+fn renames(lab: &Lab) -> Vec<Vec<String>> {
+    changes(lab).into_iter().filter(|call| call[..2] == ["tab", "rename"]).collect()
+}
+
+#[test]
+fn the_lead_spaces_tab_is_named_kebbie_unless_you_named_it() {
+    let lab = Lab::new("lead-tab-name");
+    let (dir, claude) = lead_at_shell(&lab, false);
+    let go = |lab: &Lab| lab.command().env("KEBBIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).args(["lead"]).output().unwrap();
+    tab_named(&lab, "1");
+    assert_eq!(stdout(&go(&lab)), "In the lead.");
+    assert_eq!(renames(&lab), [["tab", "rename", "w_lead:t1", "kebbie"]], "herdr's number is no name of the user's");
+
+    let synced = lab.root.join("xdg-state/herdr-sync");
+    fs::create_dir_all(&synced).unwrap();
+    fs::write(synced.join("w_lead_t1"), "✻ kelpie\n").unwrap();
+    for (label, renamed) in [("✻ kelpie", true), ("kebbie", false), ("my lead", false)] {
+        lead_at_shell(&lab, false);
+        tab_named(&lab, label);
+        let went = lab.command().env("KEBBIE_LEAD_DIR", &dir).env("CLAUDE_CONFIG_DIR", &claude).env("XDG_STATE_HOME", lab.root.join("xdg-state")).args(["lead"]).output().unwrap();
+        assert_eq!(stdout(&went), "In the lead.", "{}", stderr(&went));
+        assert_eq!(!renames(&lab).is_empty(), renamed, "{label}: {:?}", renames(&lab));
+    }
+
+    lead_at_shell(&lab, false);
+    let _ = fs::remove_file(lab.root.join("answers/tab-get.json"));
+    assert_eq!(stdout(&go(&lab)), "In the lead.", "a herdr that cannot say the tab's label leaves it and the lead goes on");
+    assert!(renames(&lab).is_empty());
+}
+
 #[test]
 fn in_a_lead_without_its_board_the_key_brings_the_board_back_before_it_goes_back() {
     let lab = Lab::new("lead-back");
@@ -1441,6 +1478,7 @@ fn a_due_routine_starts_as_a_task_in_the_keeper_round_reports_its_findings_and_c
     fs::write(answers.join("worktree-open.json"), r#"{"result":{"workspace":{"workspace_id":"w_routine"},"root_pane":{"pane_id":"p_routine"}}}"#).unwrap();
     fs::write(answers.join("pane-process-info.json"), r#"{"result":{"process_info":{"shell_pid":1,"foreground_processes":[]}}}"#).unwrap();
     fs::write(answers.join("agent-start.json"), r#"{"result":{}}"#).unwrap();
+    tab_named(&lab, "1");
 
     let listed = stdout(&lab.run(&["routines"]));
     assert!(listed.starts_with("cluster-health  Cluster health\n  every 1h in ") && listed.contains("fix, pushes its fix; next run now") && listed.ends_with("last: not run yet"), "{listed}");
@@ -1456,6 +1494,7 @@ fn a_due_routine_starts_as_a_task_in_the_keeper_round_reports_its_findings_and_c
     let opened = calls.iter().find(|call| call[..2] == ["worktree", "open"]).expect("the run opens a Space through the start path");
     assert!(opened.contains(&task) && opened.contains(&"--no-focus".to_string()), "{opened:?}");
     assert!(!calls.iter().any(|call| call[..2] == ["workspace", "focus"]), "a run never steals focus");
+    assert!(calls.contains(&vec!["tab".to_string(), "rename".to_string(), "w_lead:t1".to_string(), task.clone()]), "the task's tab carries the task's name: {calls:?}");
     assert!(calls.iter().any(|call| call[..2] == ["agent", "prompt"] && call[3].contains("This is the routine \"Cluster health\" (cluster-health)") && call[3].contains("routine ok")), "{calls:?}");
     assert!(lab.state.join("push-permits").join(&address).is_file(), "a fix routine with push = true carries the task's push permission");
 

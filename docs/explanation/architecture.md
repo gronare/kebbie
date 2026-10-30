@@ -36,7 +36,7 @@ kebbie keeps three things together under one task name:
 
 - a branch in a git worktree from the repo's pool,
 - a herdr Space labelled with the task's name,
-- a Claude session running in that Space with the task role.
+- a Claude session running in that Space with the task role, in a tab with the task's name.
 
 The role tells Claude which task and repo it is, which skill to run first, which rules to commit by, who its peers are, and how to report. kebbie also gives the session its own settings: hooks that collect a report at the end of each turn, and rules that keep it from pushing.
 
@@ -44,7 +44,7 @@ Git is the source of truth for the pool, so kebbie needs no database of tasks: a
 
 ## You talk to the lead
 
-The lead is a Claude in the lead Space next to the board, with a role that makes it responsible for the whole picture. It starts tasks, reads their reports, checks their commits when the reviewer's rules check gives no verdict, and relays what one task needs to know from another. See [The lead and away mode](lead-and-away-mode.md).
+The lead is a Claude in the lead Space next to the board, in a tab named `kebbie`, with a role that makes it responsible for the whole picture. It starts tasks, reads their reports, checks their commits when the reviewer's rules check gives no verdict, and relays what one task needs to know from another. See [The lead and away mode](lead-and-away-mode.md).
 
 ## Tasks talk through kebbie
 

@@ -205,7 +205,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
 
     let space = open_space(&repo, &slot, &task, focus)?;
     if let Some(pane) = pane {
-        herdr::move_pane_to_new_tab(pane, &space.workspace_id, "claude", focus)?;
+        herdr::move_pane_to_new_tab(pane, &space.workspace_id, &task, focus)?;
     }
     let main = fast_forward_main(&repo, &upstream)?;
     Ok(format!("Moved {task} to {}. {main}.\nSet it up: {} in {}{prepare}.", slot.path.display(), config::follow(&setup_skill.value), slot.path.display()))

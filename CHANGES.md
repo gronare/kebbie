@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The bugs to send fold into one row under Work that you select like a task, as the parked line does: ⏎ opens it and esc folds it back, and B is no longer a key
 - Installed from herdr's plugin list, the board opens the setup guide each time it starts until kebbie's Claude Code plugin is installed, then restarts the lead on it
 - Tasks work in steps by default: a task lists its steps with kebbie steps before its first line of code, one commit each, and you accept and push them one at a time; task.steps = false in config.toml or a repo's own file, or space on task.steps on the board's Settings page, turns it off
+- herdr's tabs carry fixed names: kebbie in the lead Space and the task's name on a task's tab, set when kebbie creates or next starts them, instead of words from Claude's own title; a tab you renamed yourself keeps your name
 
 ### Fixed
 - A kebbie checkout you renamed or moved no longer leaves herdr starting nothing after a restart: the keeper links kebbie in herdr again from the current checkout and says so under messages, and kebbie doctor --fix does it when no keeper runs

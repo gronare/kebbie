@@ -203,6 +203,29 @@ pub fn tab_of(pane_id: &str) -> Result<Option<String>> {
     Ok(text(&call(&["pane", "get", pane_id])?["pane"]["tab_id"]))
 }
 
+pub fn rename_tab(tab_id: &str, label: &str) -> Result<()> {
+    call(&["tab", "rename", tab_id, label]).map(|_| ())
+}
+
+fn synced_label(tab_id: &str) -> Option<String> {
+    let state = std::env::var_os("XDG_STATE_HOME").filter(|dir| !dir.is_empty()).map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))?;
+    std::fs::read_to_string(state.join("herdr-sync").join(tab_id.replace(':', "_"))).ok().map(|label| label.trim_end_matches('\n').to_string())
+}
+
+// herdr shows an unnamed tab by its number, and scripts/sync.sh records the last name it gave a tab; any other label is the user's.
+pub fn automatic_label(label: &str, synced: Option<&str>, earlier: &[&str]) -> bool {
+    label.chars().all(|character| character.is_ascii_digit()) || synced == Some(label) || earlier.contains(&label)
+}
+
+// Best effort: a tab that keeps its old name never stops what named it.
+pub fn name_tab_of(pane_id: &str, label: &str, earlier: &[&str]) {
+    let Ok(Some(tab)) = tab_of(pane_id) else { return };
+    let Ok(Some(current)) = call(&["tab", "get", &tab]).map(|result| text(&result["tab"]["label"])) else { return };
+    if current != label && automatic_label(&current, synced_label(&tab).as_deref(), earlier) {
+        let _ = rename_tab(&tab, label);
+    }
+}
+
 pub fn focus_tab(tab_id: &str) -> Result<()> {
     call(&["tab", "focus", tab_id]).map(|_| ())
 }
@@ -253,6 +276,15 @@ pub fn agent_ready(name: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_tab_label_herdr_the_sync_or_an_earlier_kebbie_gave_is_renamed() {
+        assert!(automatic_label("2", None, &[]), "herdr's number for an unnamed tab");
+        assert!(automatic_label("✻ kelpie", Some("✻ kelpie"), &[]), "the last name the sidebar sync gave it");
+        assert!(automatic_label("claude", None, &["claude", "codex"]), "the agent's name an earlier kebbie gave a task's tab");
+        assert!(!automatic_label("notes", Some("✻ kelpie"), &["claude"]), "a name the user typed stays");
+        assert!(!automatic_label("✻ kelpie", None, &[]), "without the sync's record a name is the user's");
+    }
 
     #[test]
     fn the_focused_pane_is_the_one_pane_list_marks_focused_not_the_caller() {
