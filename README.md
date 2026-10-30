@@ -1,5 +1,7 @@
 # kebbie
 
+[![Release](https://img.shields.io/github/v/release/gronare/kebbie)](https://github.com/gronare/kebbie/releases/latest) [![CI](https://github.com/gronare/kebbie/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gronare/kebbie/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/github/license/gronare/kebbie)](LICENSE)
+
 Run many Claude Code tasks at once in [herdr](https://herdr.dev), each in its own git worktree, and land them on your default branch after a review you control.
 
 ![kebbie: from a sentence to the lead to a push on main](docs/assets/demo.gif)
