@@ -1,6 +1,6 @@
 id = "kebbie"
 name = "kebbie"
-version = "0.29.1"
+version = "0.30.0"
 min_herdr_version = "0.9.0"
 description = "Tasks in pooled git worktrees with Claude, and a sidebar sync"
 platforms = ["linux", "macos"]
