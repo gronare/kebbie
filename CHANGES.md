@@ -7,6 +7,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+
+## 0.29.1
+
+### What's new
+
+### Fixed
 - A task the lead starts no longer pulls you into its Space; only a task you start takes focus
 - Setup inside herdr ends in the lead's Space with the lead on the new kebbie, instead of
   opening a second board where setup ran
