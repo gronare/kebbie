@@ -661,6 +661,7 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
+ "filedescriptor",
  "mio",
  "parking_lot",
  "rustix 1.1.5",
@@ -1814,6 +1815,7 @@ dependencies = [
 name = "kebbie"
 version = "0.30.0"
 dependencies = [
+ "crossterm",
  "image",
  "kebbie-hub",
  "kebbie-hub-api",
