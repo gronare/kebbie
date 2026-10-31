@@ -134,4 +134,5 @@ data="${XDG_DATA_HOME:-$HOME/.local/share}/kebbie"
 mkdir -p "$data" && ln -sfn "$root" "$data/current"
 
 printf '\n  %s→ kebbie setup%s\n\n' "$dim" "$off"
-if [ -n "$tty" ]; then "$root/target/release/kebbie" setup <"$tty"; else "$root/target/release/kebbie" setup; fi
+kebbie="$data/current/target/release/kebbie"
+if [ -n "$tty" ]; then "$kebbie" setup <"$tty"; else "$kebbie" setup; fi || fail "kebbie setup stopped before it was done. kebbie is installed; run setup again in this terminal: $(short "$kebbie") setup"
