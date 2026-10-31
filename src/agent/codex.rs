@@ -113,7 +113,7 @@ fn plugin_files(kebbie: &str) -> [(&'static str, String, bool); 3] {
     [(MANIFEST, manifest(), false), (HOOKS_FILE, hooks_json(), false), (LAUNCHER, launcher(kebbie), true)]
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Installed {
     Missing,
     Current,
@@ -150,14 +150,14 @@ pub fn ready_to_start(home: Option<&Path>, kebbie: &str) -> Result<()> {
 }
 
 // Only kebbie's own folder in Codex's plugin cache is written; Codex's config.toml and hooks.json stay the user's.
-pub fn install(home: &Path, kebbie: &str) -> Result<Vec<PathBuf>> {
+pub fn install(home: &Path, kebbie: &str) -> Result<Vec<&'static str>> {
     let root = plugin_root(home);
     let mut written = Vec::new();
     for (file, text, executable) in plugin_files(kebbie) {
         let path = root.join(file);
         if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
             write_file(&path, &text, executable)?;
-            written.push(path);
+            written.push(file);
         }
     }
     Ok(written)
@@ -574,14 +574,14 @@ mod tests {
         assert_eq!(installed(&home, "/opt/kebbie"), Installed::Missing);
         let written = install(&home, "/opt/kebbie").unwrap();
         let root = home.join("plugins/cache/kebbie/kebbie/local");
-        assert_eq!(written, [root.join(".codex-plugin/plugin.json"), root.join("hooks/hooks.json"), root.join("bin/kebbie-hook")]);
+        assert_eq!(written, [".codex-plugin/plugin.json", "hooks/hooks.json", "bin/kebbie-hook"]);
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(root.join("bin/kebbie-hook")).unwrap().permissions().mode() & 0o777, 0o755);
         assert_eq!(serde_json::from_str::<Value>(&std::fs::read_to_string(root.join(".codex-plugin/plugin.json")).unwrap()).unwrap()["name"], "kebbie");
         assert_eq!(installed(&home, "/opt/kebbie"), Installed::Current);
         assert!(install(&home, "/opt/kebbie").unwrap().is_empty(), "a second setup writes nothing");
         assert_eq!(installed(&home, "/elsewhere/kebbie"), Installed::Stale(vec![LAUNCHER]), "a kebbie that moved leaves the launcher stale, the hooks file as trusted");
-        assert_eq!(install(&home, "/elsewhere/kebbie").unwrap(), [root.join("bin/kebbie-hook")]);
+        assert_eq!(install(&home, "/elsewhere/kebbie").unwrap(), ["bin/kebbie-hook"]);
         assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), "model = \"gpt-5.5\"\n");
         assert_eq!(std::fs::read_to_string(home.join("hooks.json")).unwrap(), "{\"hooks\":{}}");
         assert!(uninstall(&home).unwrap());

@@ -186,6 +186,26 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
 }
 
 #[test]
+fn setup_codex_rewrites_a_stale_plugin_at_once_and_doctor_then_reports_it_ok() {
+    let lab = Lab::new("setup-codex");
+    crate::executable::write(lab.root.join("bin/codex"), "#!/bin/sh\necho 'codex-cli 0.163.0'\n").unwrap();
+    let codex_home = lab.root.join("codex");
+    let run = |args: &[&str]| lab.command().env("CODEX_HOME", &codex_home).args(args).output().unwrap();
+    let plugin_line = |doctor: &str| doctor.lines().find(|line| line.contains("codex plugin")).unwrap_or_else(|| panic!("doctor has a codex plugin line: {doctor}")).to_string();
+    let installed = run(&["setup", "codex"]);
+    assert!(installed.status.success() && stdout(&installed).starts_with("kebbie's Codex plugin installed at "), "{}{}", stdout(&installed), stderr(&installed));
+    fs::write(codex_home.join("plugins/cache/kebbie/kebbie/local/bin/kebbie-hook"), "#!/bin/sh\n").unwrap();
+    let stale = plugin_line(&stdout(&run(&["doctor"])));
+    assert!(stale.contains("out of date (bin/kebbie-hook)"), "{stale}");
+    let repaired = run(&["setup", "codex"]);
+    assert!(repaired.status.success(), "{}", stderr(&repaired));
+    assert_eq!(stdout(&repaired).trim_end(), "kebbie's Codex plugin updated: bin/kebbie-hook", "one line, no prompt and no guide");
+    let fixed = plugin_line(&stdout(&run(&["doctor"])));
+    assert!(fixed.starts_with("ok") && fixed.contains("kebbie's plugin at "), "{fixed}");
+    assert!(stdout(&run(&["setup", "codex"])).starts_with("kebbie's Codex plugin is up to date at "));
+}
+
+#[test]
 fn docs_finds_the_page_in_the_checkout_the_binary_was_built_in() {
     let lab = Lab::new("docs");
     let found = lab.run(&["docs", "set", "up", "codex"]);

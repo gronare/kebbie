@@ -419,17 +419,17 @@ pub fn add_status_line(settings: &Path) -> Outcome {
 
 pub fn codex(uninstall: bool) -> Result<String> {
     crate::permit::user_only("kebbie setup codex")?;
-    if !uninstall && in_terminal() {
-        let machine = machine()?;
-        return crate::setup_guide::run(&crate::setup_guide::Env::current(&machine)?, crate::setup_guide::Step::Agents);
-    }
     let home = crate::agent::codex::home().ok_or("Neither CODEX_HOME nor HOME is set, so kebbie cannot find Codex's home")?;
+    let path: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+    if !uninstall && crate::doctor::which("codex", &path).is_none() {
+        return Err("Codex is not on PATH: install the Codex CLI first (kebbie doctor names how), then run kebbie setup codex again".to_string());
+    }
     let kebbie = crate::peers::kebbie_command()?;
     let stdin = std::io::stdin();
     codex_in(&home, &kebbie, uninstall, &mut stdin.lock(), &mut std::io::stdout())
 }
 
-// Codex's plugin cache is the one place kebbie writes in Codex's home, and only on the user's y; config.toml and hooks.json stay theirs.
+// Running the command is the yes to writing kebbie's own folder in Codex's plugin cache; config.toml and hooks.json stay the user's.
 pub fn codex_in(home: &Path, kebbie: &str, uninstall: bool, input: &mut impl BufRead, output: &mut impl Write) -> Result<String> {
     use crate::agent::codex::{self, Installed};
     let root = codex::plugin_root(home);
@@ -443,21 +443,15 @@ pub fn codex_in(home: &Path, kebbie: &str, uninstall: bool, input: &mut impl Buf
         codex::uninstall(home)?;
         return Ok(format!("Removed {}. Tasks whose profile runs Codex now start without kebbie's hooks, so they neither report nor get their role.", root.display()));
     }
-    let state = codex::installed(home, kebbie);
-    if state == Installed::Current {
-        return Ok(format!("kebbie's Codex plugin is installed and current at {}; nothing to do.", root.display()));
+    let before = codex::installed(home, kebbie);
+    if before == Installed::Current {
+        return Ok(format!("kebbie's Codex plugin is up to date at {}", root.display()));
     }
-    let verb = if state == Installed::Missing { "install" } else { "update" };
-    let question = format!(
-        "kebbie setup codex: {verb} kebbie's plugin in Codex's plugin cache, {}.\nIts three hooks (SessionStart, UserPromptSubmit, Stop) record the session, give it its role and ask for kebbie report before a turn ends; outside a kebbie task they do nothing.\nkebbie enables the plugin, and trusts those three hooks by their hash, only in the Codex sessions it starts (-c on its command line). It never edits {} or {}.",
-        root.display(), home.join("config.toml").display(), home.join("hooks.json").display(),
-    );
-    if !yes(&question, input, output)? {
-        return Ok("Skipped; nothing was written.".to_string());
-    }
-    let written = codex::install(home, kebbie)?;
-    let files = written.iter().map(|file| format!("  {}", file.display())).collect::<Vec<_>>().join("\n");
-    Ok(format!("Wrote:\n{files}\nkebbie doctor's codex lines say whether Codex and its hooks are ready."))
+    let files = codex::install(home, kebbie)?.join(", ");
+    Ok(match before {
+        Installed::Missing => format!("kebbie's Codex plugin installed at {}: {files}\nkebbie turns it on only in the Codex sessions it starts; Codex's config.toml and hooks.json stay as they are.", root.display()),
+        _ => format!("kebbie's Codex plugin updated: {files}"),
+    })
 }
 
 #[cfg(test)]
@@ -465,27 +459,25 @@ pub(crate) mod tests {
     use super::*;
 
     #[test]
-    fn setup_codex_writes_only_on_a_yes_and_says_what_it_leaves_alone() {
+    fn setup_codex_writes_kebbies_plugin_without_asking_and_leaves_codexs_own_files() {
         let home = crate::sh::test_dir("setup-codex");
         std::fs::write(home.join("config.toml"), "model = \"gpt-5.5\"\n").unwrap();
-        let run = |answers: &str, uninstall: bool| {
+        let run = |answers: &str, kebbie: &str, uninstall: bool| {
             let mut output = Vec::new();
-            let said = codex_in(&home, "/opt/kebbie", uninstall, &mut answers.as_bytes(), &mut output).unwrap();
+            let said = codex_in(&home, kebbie, uninstall, &mut answers.as_bytes(), &mut output).unwrap();
             (said, String::from_utf8(output).unwrap())
         };
-        let (said, asked) = run("", false);
-        assert_eq!(said, "Skipped; nothing was written.");
-        assert!(asked.contains("install kebbie's plugin in Codex's plugin cache") && asked.contains(&format!("It never edits {}", home.join("config.toml").display())), "{asked}");
-        assert!(!home.join("plugins").exists(), "no answer is no");
-        let (said, _) = run("y\n", false);
-        assert!(said.starts_with("Wrote:\n") && said.contains("hooks/hooks.json"), "{said}");
-        let (said, asked) = run("", false);
-        assert!(said.contains("installed and current") && asked.is_empty(), "a second setup asks nothing and writes nothing");
+        let root = crate::agent::codex::plugin_root(&home);
+        let (said, asked) = run("", "/opt/kebbie", false);
+        assert_eq!(said, format!("kebbie's Codex plugin installed at {}: .codex-plugin/plugin.json, hooks/hooks.json, bin/kebbie-hook\nkebbie turns it on only in the Codex sessions it starts; Codex's config.toml and hooks.json stay as they are.", root.display()));
+        assert!(asked.is_empty(), "the command is the yes: {asked}");
+        assert_eq!(run("", "/opt/kebbie", false).0, format!("kebbie's Codex plugin is up to date at {}", root.display()));
+        assert_eq!(run("", "/elsewhere/kebbie", false).0, "kebbie's Codex plugin updated: bin/kebbie-hook", "a kebbie that moved rewrites the launcher");
         assert_eq!(std::fs::read_to_string(home.join("config.toml")).unwrap(), "model = \"gpt-5.5\"\n");
         assert!(!home.join("hooks.json").exists(), "Codex's own hooks file is never written");
-        assert_eq!(run("n\n", true).0, "Skipped; nothing was removed.");
-        assert!(run("y\n", true).0.starts_with("Removed "));
-        assert!(run("", true).0.contains("is not installed"));
+        assert_eq!(run("n\n", "/opt/kebbie", true).0, "Skipped; nothing was removed.");
+        assert!(run("y\n", "/opt/kebbie", true).0.starts_with("Removed "));
+        assert!(run("", "/opt/kebbie", true).0.contains("is not installed"));
         std::fs::remove_dir_all(home).unwrap();
     }
 

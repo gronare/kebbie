@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- kebbie setup codex, the fix kebbie doctor names for kebbie's Codex plugin, now writes the plugin at once and says in one line what it wrote, where it opened the whole setup guide
 
 ## 0.30.0
 

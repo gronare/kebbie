@@ -21,7 +21,15 @@ Codex runs kebbie's hooks from a Codex plugin.
    kebbie setup codex
    ```
 
-   In a terminal it opens the setup guide at Agents: tick Codex, then `⏎` through to the last step and `⏎` again. Without a terminal it says what it writes and asks before writing anything.
+   It writes the plugin and prints one line, such as `kebbie's Codex plugin installed at ~/.codex/plugins/cache/kebbie/kebbie/local: .codex-plugin/plugin.json, hooks/hooks.json, bin/kebbie-hook`. With Codex not on `PATH` it stops and writes nothing.
+
+2. Check it:
+
+   ```bash
+   kebbie doctor
+   ```
+
+   Its `codex plugin` line reads `ok`.
 
 The plugin goes in Codex's plugin cache, `$CODEX_HOME/plugins/cache/kebbie/kebbie/local/` (`CODEX_HOME` defaults to `~/.codex`), and holds three hooks:
 
@@ -39,7 +47,7 @@ Outside a kebbie task's worktree each hook does nothing.
 - A second run that finds nothing to change writes nothing.
 - `kebbie setup codex` is yours to run: a task cannot run it.
 
-If kebbie's binary moves, run `kebbie setup codex` again; `kebbie doctor` then says the plugin is out of date. If you want the plugin gone, run `kebbie setup codex --uninstall`.
+If `kebbie doctor` says the plugin is out of date, run `kebbie setup codex` again: it rewrites the files that changed and prints `kebbie's Codex plugin updated:` with their names. If you want the plugin gone, run `kebbie setup codex --uninstall`.
 
 ## Write a Codex profile
 

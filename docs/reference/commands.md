@@ -622,7 +622,7 @@ After a ready report the keeper starts the reviewer. It checks the commits again
 | `kebbie routes [--plain-http]` | Print a Caddy config that serves each worktree's dev server at its own host. See [below](#kebbie-routes). |
 | `kebbie setup [--yes]` | The setup guide: seven steps, from this machine's name to error signals, then everything it writes in one go. `--yes` takes the defaults without asking. See [below](#kebbie-setup). |
 | `kebbie setup vault` | The guide at its Vault step. Without a terminal, it installs the vault plugin, showing each `claude plugin` command and running it only on your `y`. |
-| `kebbie setup codex` | The guide at its Agents step, where Codex is turned on. Without a terminal, it installs kebbie's Codex plugin. See [below](#kebbie-setup-codex). |
+| `kebbie setup codex` | Install kebbie's Codex plugin, or bring it up to date, and say in one line what it wrote. See [below](#kebbie-setup-codex). |
 | `kebbie setup codex --uninstall` | Remove kebbie's Codex plugin, on your `y`. |
 | `kebbie update` | Update everything to this machine's channel and restart idle Claude sessions. See [below](#kebbie-update). |
 | `kebbie update --check` | Fetch and show the installed versions against the channel's latest. Changes nothing else. |
@@ -718,7 +718,14 @@ Under `Next steps`, what needs you outside setup, a command and why:
 
 ### `kebbie setup codex`
 
-Installs kebbie's Codex plugin in `$CODEX_HOME/plugins/cache/kebbie/kebbie/local/`. In a terminal it opens the setup guide at its Agents step, where Codex is on when the plugin is; without one it says what it writes and writes only on your `y`. Yours alone: a task cannot run it. See [Run a task with Codex](../how-to/run-a-task-with-codex.md).
+Installs kebbie's Codex plugin in `$CODEX_HOME/plugins/cache/kebbie/kebbie/local/`, or rewrites the files of it that are out of date, without asking: running it is the yes. It is the fix `kebbie doctor` names for a missing or out-of-date plugin. Yours alone: a task cannot run it. See [Run a task with Codex](../how-to/run-a-task-with-codex.md).
+
+| It finds | It prints |
+| --- | --- |
+| no plugin | `kebbie's Codex plugin installed at <folder>: <files>`, and that Codex loads it only in the sessions kebbie starts |
+| an out-of-date plugin | `kebbie's Codex plugin updated: <files>`, naming only the files it rewrote |
+| the plugin as this kebbie writes it | `kebbie's Codex plugin is up to date at <folder>` |
+| no `codex` on `PATH` | an error naming the Codex CLI to install first; it writes nothing |
 
 - Its `SessionStart`, `UserPromptSubmit` and `Stop` hooks record a Codex task's session, give it its role and ask for a report before a turn ends.
 - It never edits Codex's `config.toml` or `hooks.json`. kebbie enables the plugin and trusts its hooks only on the command line of the Codex sessions it starts.
