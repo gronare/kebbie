@@ -1,8 +1,20 @@
-# kebbie
+<p align="center"><img src="docs/assets/logo.svg" alt="kebbie" width="120" height="120"></p>
 
-[![Release](https://img.shields.io/github/v/release/gronare/kebbie)](https://github.com/gronare/kebbie/releases/latest) [![CI](https://github.com/gronare/kebbie/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gronare/kebbie/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/github/license/gronare/kebbie)](LICENSE)
+<h1 align="center">kebbie</h1>
 
-Run many Claude Code tasks at once in [herdr](https://herdr.dev), each in its own git worktree, and land them on your default branch after a review you control.
+<p align="center"><strong>Trunk-based development for coding agents.</strong></p>
+
+<p align="center">Tell the lead, a Claude Code session you talk to, what you want done. It plans the work from your backlog and starts the tasks, each with its own agent in its own worktree, side by side in <a href="https://herdr.dev">herdr</a>. One board shows what each one needs from you: a question, a review, a push. Accept the commits one at a time and they go straight onto main while the agent builds the next. No pull requests, no merges, and a red CI run goes back to the agent that wrote it.</p>
+
+<p align="center">
+<a href="https://github.com/gronare/kebbie/releases/latest"><img src="https://img.shields.io/github/v/release/gronare/kebbie" alt="Release"></a>
+<a href="https://github.com/gronare/kebbie/actions/workflows/ci.yml"><img src="https://github.com/gronare/kebbie/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+<a href="LICENSE"><img src="https://img.shields.io/github/license/gronare/kebbie" alt="License: MIT"></a>
+<a href="https://github.com/gronare/kebbie/stargazers"><img src="https://img.shields.io/github/stars/gronare/kebbie?style=social" alt="GitHub stars"></a>
+<a href="https://herdr.dev"><img src="https://img.shields.io/badge/herdr-0.9.0%2B-555" alt="herdr 0.9.0+"></a>
+</p>
+
+<p align="center"><a href="https://kebbie.dev">website</a> · <a href="#install">install</a> · <a href="docs/tutorial.md">quick start</a> · <a href="docs/README.md">docs</a> · <a href="https://kebbie.dev/vault/">vault</a> · <a href="CHANGES.md">changelog</a></p>
 
 ![kebbie: from a sentence to the lead to a push on main](docs/assets/demo.gif)
 
