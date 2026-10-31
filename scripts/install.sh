@@ -133,6 +133,12 @@ fi
 data="${XDG_DATA_HOME:-$HOME/.local/share}/kebbie"
 mkdir -p "$data" && ln -sfn "$root" "$data/current"
 
-printf '\n  %s→ kebbie setup%s\n\n' "$dim" "$off"
 kebbie="$data/current/target/release/kebbie"
+# A kebbie that ran before has a keeper, a board and Claude sessions on the old binary; update --finish moves them over.
+if [ -d "$state_home/kebbie" ]; then
+  heading "Moving running sessions to kebbie $version"
+  "$kebbie" update --finish </dev/null || warn "the running board and sessions stay on the old kebbie until you restart them: kebbie restart, and L on the board for the lead"
+fi
+
+printf '\n  %s→ kebbie setup%s\n\n' "$dim" "$off"
 if [ -n "$tty" ]; then "$kebbie" setup <"$tty"; else "$kebbie" setup; fi || fail "kebbie setup stopped before it was done. kebbie is installed; run setup again in this terminal: $(short "$kebbie") setup"

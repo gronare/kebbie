@@ -36,6 +36,8 @@ If you are on Linux, see [Requirements](reference/requirements.md) for each tool
 
 The script installs the latest release as a herdr plugin with its prebuilt binary, and herdr picks the plugin up without a restart. The script then links `~/.local/share/kebbie/current` to where herdr installed it and runs setup.
 
+Run over a kebbie that is already installed, the script also moves the keeper, the board and the Claude sessions onto the new version, as `kebbie update` does: idle sessions restart at once, busy ones once they are idle.
+
 If a tool from step 1 is missing, the script names it and stops.
 
 If you installed from herdr's plugin list with `herdr plugin install gronare/kebbie`, setup has not run yet: the board opens the setup guide the first time it starts, and `esc` skips it until the next start.
