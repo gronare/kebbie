@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use crate::board::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEXT, bold, style};
 use crate::config::{self, Source};
 use crate::config_edit::{self, Set};
+use crate::agent::codex::Installed;
 use crate::doctor::Repair;
 use crate::setup::{self, Asking, KeyPlan, Machine, Outcome};
 use crate::sh::Result;
@@ -85,7 +86,8 @@ pub struct Facts {
     pub kebbie_plugin: bool,
     pub codex: Option<String>,
     pub codex_bin: Option<PathBuf>,
-    pub codex_plugin: bool,
+    pub claude_stale: Option<String>,
+    pub codex_plugin: Installed,
     pub keys: KeyPlan,
     pub sources: Vec<Source>,
     pub sources_set: bool,
@@ -115,6 +117,10 @@ impl Facts {
             .find(|(id, _)| id.starts_with("vault@")).map(|(_, config)| config["options"].clone()).unwrap_or_default();
         let option = |name: &str| options[name].as_str().unwrap_or_default().to_string();
         let herdr = crate::sh::run(&env.machine.herdr, &["plugin", "list", "--json", "--plugin", "kebbie"], None).ok();
+        let channel = config::channel_in(&env.config).unwrap_or_default();
+        let checkout = crate::doctor::checkout_version(crate::doctor::herdr_plugin(herdr.as_deref(), channel).1.as_ref());
+        let claude_plugin = crate::doctor::claude_plugin(Some(&read_json(&env.machine.claude_dir.join("plugins/installed_plugins.json"))), &read_json(&env.machine.claude_dir.join("settings.json")), checkout.as_deref(), channel);
+        let kebbie_plugin = setup::kebbie_plugin_installed(&env.machine.claude_dir);
         let found = crate::doctor::Found {
             claude_settings: &read_json(&env.machine.claude_dir.join("settings.json")),
             keeper_on: machine.keeper.unwrap_or(true),
@@ -127,10 +133,11 @@ impl Facts {
             name: machine.machine_name.clone().unwrap_or_else(config::short_hostname),
             name_set: machine.machine_name.is_some(),
             claude: version(&env.machine.claude),
-            kebbie_plugin: setup::kebbie_plugin_installed(&env.machine.claude_dir),
+            kebbie_plugin,
+            claude_stale: (kebbie_plugin && claude_plugin.level != crate::doctor::Level::Ok).then_some(claude_plugin.fact),
             codex: codex.binary.as_ref().map(|_| codex.version.as_deref().and_then(|text| text.split_whitespace().find(|word| word.starts_with(|character: char| character.is_ascii_digit()))).unwrap_or_default().to_string()),
             codex_bin: codex.binary.clone(),
-            codex_plugin: codex.plugin != crate::agent::codex::Installed::Missing,
+            codex_plugin: codex.plugin.clone(),
             keys: setup::key_plan(&env.machine.herdr_config),
             sources: machine.sources.clone().unwrap_or_else(|| vec![Source::Local]),
             sources_set: machine.sources.is_some(),
@@ -187,7 +194,7 @@ impl Answers {
         sources.extend(Source::ALL.into_iter().filter(|source| !facts.sources.contains(source)).map(|source| (source, false)));
         Answers {
             name: facts.name.clone(),
-            codex: facts.codex_plugin,
+            codex: facts.codex_plugin != Installed::Missing,
             keys: 0,
             sources,
             vault: facts.vault_choice(),
@@ -455,7 +462,7 @@ impl Guide {
         let facts = &self.facts;
         match step {
             Step::Name if facts.name_set => Some(format!("machine.name is \"{}\"", facts.name)),
-            Step::Agents if facts.kebbie_plugin => Some(format!("kebbie's plugin is in Claude Code{}", if facts.codex_plugin { " and in Codex" } else { "" })),
+            Step::Agents if facts.kebbie_plugin && self.to_update(step).is_none() => Some(format!("kebbie's plugin is in Claude Code{}", if facts.codex_plugin == Installed::Current { " and in Codex" } else { "" })),
             Step::Keys if facts.keys.blocked.is_none() && facts.keys.missing.is_empty() => Some(format!("{} binds kebbie's keys", home(&facts.keys.config))),
             Step::Backlog if facts.sources_set => Some(format!("board.backlog.sources is [{}]", facts.sources.iter().map(|source| format!("{:?}", source.key())).collect::<Vec<_>>().join(", "))),
             Step::Vault if matches!(facts.vault, Plugin::Enabled { .. }) && facts.vault_choice() > 0 => Some(match facts.vault_choice() { 1 => format!("the vault plugin points at {}", facts.vault_path), _ => format!("the vault plugin points at the S3 bucket {}", facts.s3[1]) }),
@@ -464,12 +471,26 @@ impl Guide {
         }
     }
 
+    // The same checks as kebbie doctor's claude plugin and codex plugin lines, so the guide never calls in place what doctor calls out of date.
+    fn to_update(&self, step: Step) -> Option<String> {
+        let facts = &self.facts;
+        if step != Step::Agents {
+            return None;
+        }
+        let codex = match &facts.codex_plugin {
+            Installed::Stale(files) => Some(format!("kebbie's plugin in Codex is out of date ({})", files.join(", "))),
+            _ => None,
+        };
+        let parts: Vec<String> = facts.claude_stale.iter().cloned().chain(codex).collect();
+        (!parts.is_empty()).then(|| parts.join("; "))
+    }
+
     pub fn plan(&self) -> Vec<Planned> {
         let (facts, answers) = (&self.facts, &self.answers);
         let skipped = |step: Step| self.skipped[step.index()];
         let row = |step, verb, detail: String, act| Planned { step, verb, detail, act };
         let mut rows = vec![row("link", "to do", "~/.local/bin/kebbie".to_string(), Act::Link)];
-        let codex = (answers.codex != facts.codex_plugin || answers.codex).then_some(answers.codex).filter(|_| facts.codex.is_some() && !skipped(Step::Agents));
+        let codex = (answers.codex != (facts.codex_plugin != Installed::Missing) || answers.codex).then_some(answers.codex).filter(|_| facts.codex.is_some() && !skipped(Step::Agents));
         rows.push(row("plugin", "to do", plugin_shown(codex), Act::Plugin(codex)));
         rows.push(match () {
             _ if skipped(Step::Name) => row("machine", "skipped", "stays as it is".to_string(), Act::Nothing),
@@ -838,6 +859,10 @@ impl Guide {
         if let Some(place) = self.in_place(self.step) {
             lines.insert(0, Line::default());
             lines.insert(0, Line::from(vec![Span::styled("✓ in place: ", style(GREEN)), Span::styled(place, style(SUBTEXT))]));
+        }
+        if let Some(stale) = self.to_update(self.step) {
+            lines.insert(0, Line::default());
+            lines.insert(0, Line::from(vec![Span::styled("to update: ", style(PEACH)), Span::styled(stale, style(SUBTEXT))]));
         }
         if let Some(error) = &self.error {
             lines.push(Line::default());
@@ -1214,6 +1239,27 @@ mod tests {
         press(&mut rerun, &[KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter, KeyCode::Enter]);
         assert_eq!(rerun.step, Step::Review);
         assert_eq!(plan(&rerun)[2..7], ["already machine \"mac\"", "already keys kebbie's keys are bound in herdr", "already backlog local, vault", "already vault folder /notes/vault", "already signals off"]);
+    }
+
+    #[test]
+    fn a_stale_codex_plugin_shows_as_to_update_and_apply_rewrites_it() {
+        let lab = Lab::new("guide-stale-codex");
+        let plugins = lab.machine.claude_dir.join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        std::fs::write(plugins.join("installed_plugins.json"), json!({ "plugins": { "kebbie@kebbie": [{ "version": "0.27.0" }] } }).to_string()).unwrap();
+        crate::agent::codex::install(&lab.dir.join("codex"), "/elsewhere/kebbie").unwrap();
+        let mut guide = fresh(&lab);
+        press(&mut guide, &[KeyCode::Enter]);
+        assert_eq!(guide.step, Step::Agents);
+        let shown = screen(&guide);
+        assert!(shown.contains("to update: kebbie's plugin in Codex is out of date (bin/kebbie-hook)") && !shown.contains("✓ in place"), "{shown}");
+        assert!(!shown.contains("✓ 2 Agents"), "the rail marks no step with something to update: {shown}");
+        assert!(guide.answers.codex, "an installed plugin keeps Codex on");
+        let rows = apply(&guide.plan(), &lab.env(), &mut Fake { drawn: 0 });
+        assert!(rows.iter().any(|(step, outcome)| step == "plugin" && outcome.verb == "done"), "{rows:?}");
+        assert_eq!(crate::agent::codex::installed(&lab.dir.join("codex"), "/opt/kebbie"), Installed::Current);
+        let rerun = Guide::new(Facts::read(&lab.env()), Step::Agents);
+        assert!(screen(&rerun).contains("✓ in place: kebbie's plugin is in Claude Code and in Codex"));
     }
 
     #[test]

@@ -185,6 +185,10 @@ pub fn cargo(tool: &Tool, found: Option<&Path>, channel: crate::config::Channel,
     }
 }
 
+pub fn checkout_version(plugin: Option<&Plugin>) -> Option<String> {
+    plugin.and_then(|plugin| read_json(&plugin.root.join(".claude-plugin/plugin.json"))).and_then(|manifest| manifest["version"].as_str().map(str::to_string))
+}
+
 pub fn claude_plugin(installed: Option<&Value>, settings: &Value, checkout: Option<&str>, channel: config::Channel) -> Check {
     let install = one("claude plugin marketplace add ~/.local/share/kebbie/current && claude plugin install kebbie@kebbie");
     let Some(installed) = installed else { return warn("claude plugin", "no installed_plugins.json; the review skills and hook are missing", install) };
@@ -711,7 +715,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     }
     let installed = read_json(&env.claude_dir.join("plugins/installed_plugins.json"));
     let claude_settings = read_json(&env.claude_dir.join("settings.json")).unwrap_or_default();
-    let checkout = plugin.as_ref().and_then(|plugin| read_json(&plugin.root.join(".claude-plugin/plugin.json"))).and_then(|manifest| manifest["version"].as_str().map(str::to_string));
+    let checkout = checkout_version(plugin.as_ref());
     checks.push(claude_plugin(installed.as_ref(), &claude_settings, checkout.as_deref(), channel));
     let kebbie_id = installed.as_ref().and_then(|installed| installed["plugins"].as_object()?.keys().find(|id| id.starts_with("kebbie@")).cloned());
     if let Some(id) = kebbie_id {

@@ -8,6 +8,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 
 ### Fixed
 - kebbie setup codex, the fix kebbie doctor names for kebbie's Codex plugin, now writes the plugin at once and says in one line what it wrote, where it opened the whole setup guide
+- The setup guide's Agents step shows an out-of-date or disabled kebbie plugin in Claude Code or Codex as to update, with kebbie doctor's reason, where it called the plugin in place while doctor said it was out of date
 
 ## 0.30.0
 

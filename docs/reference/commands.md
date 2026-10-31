@@ -683,6 +683,7 @@ Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guid
 - Nothing is written or run before `⏎` on step 7. Then each line turns `done`, `already`, `skipped` or `failed` as it runs, followed by `Setup done · doctor: <n> ok`, with `, <m> to look at` when warnings remain, and the [next steps](#next-steps-after-setup).
 - Each line says what it does in a few words, such as `~/.local/bin/kebbie`, `kebbie in Claude Code and Codex` or `prefix+f added, herdr reloaded`; a line that fails or skips says why.
 - A run again starts from this machine's values and marks each step already in place; a line whose value is already there reads `already` and changes nothing.
+- The Agents step judges kebbie's plugins by the same checks as `kebbie doctor`: one that doctor calls out of date or disabled reads `to update:` with doctor's reason, such as `kebbie's plugin in Codex is out of date (bin/kebbie-hook)`, its step gets no `✓`, and applying rewrites it.
 - It always links `~/.local/bin/kebbie` to `~/.local/share/kebbie/current/target/release/kebbie`, and installs the Claude Code plugin from that folder or updates it as `kebbie update` does.
 - herdr's keys go only at the end of its `config.toml`, the rest of the file byte for byte, then `herdr server reload-config`, or a restart when it cannot. A key already bound to something else is named, with a free one offered: add the others and leave it, add it on the free key, or skip.
 - The vault's values reach `claude plugin configure` on stdin, and the secret is never shown.
