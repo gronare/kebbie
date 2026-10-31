@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::agent::login::Login;
 use crate::config::{self, Machine, Setting, Source, Worktree};
 use crate::sh::run;
 
@@ -182,6 +183,15 @@ pub fn cargo(tool: &Tool, found: Option<&Path>, channel: crate::config::Channel,
         None if downloaded && channel == crate::config::Channel::Release => ok("cargo", "not on PATH, not needed: each release installs its prebuilt binary"),
         None => warn("cargo", "not on PATH; needed for the main channel and kebbie update --from", both(tool.mac, tool.linux)),
         Some(found) => self::tool(tool, Some(found), None),
+    }
+}
+
+// No answer from the agent is never read as logged out.
+pub fn login(name: &str, signed: Login, fix: &str, why: &str) -> Check {
+    match signed {
+        Login::In => ok(name, "logged in"),
+        Login::Out => warn(name, format!("not logged in, so {why}"), one(fix)),
+        Login::Unknown => ok(name, "login not checked: no answer to its status command"),
     }
 }
 
@@ -651,7 +661,7 @@ impl Env {
 pub const MIN_CODEX: &str = "0.163.0";
 
 // Codex is optional until a profile runs it; then its binary, kebbie's plugin and nothing in the user's config that turns hooks off are what a Codex task needs to report.
-pub fn codex(found: &crate::agent::codex::Availability, config: Option<&toml::Table>, needed: bool, home: &Path) -> Vec<Check> {
+pub fn codex(found: &crate::agent::codex::Availability, config: Option<&toml::Table>, needed: bool, home: &Path, signed: Option<Login>) -> Vec<Check> {
     use crate::agent::codex::Installed;
     let missing = |name: &str, fact: String, fix: Vec<String>| if needed { fail(name, fact, fix) } else { warn(name, fact, fix) };
     let install = both("curl -fsSL https://chatgpt.com/codex/install.sh | sh (or brew install --cask codex)", "curl -fsSL https://chatgpt.com/codex/install.sh | sh (or npm install -g @openai/codex)");
@@ -676,6 +686,10 @@ pub fn codex(found: &crate::agent::codex::Availability, config: Option<&toml::Ta
     } else {
         missing("codex hooks", format!("{}: {}", home.join("config.toml").display(), blocked.join("; ")), one("turn them back on in Codex's /hooks, or drop [features] hooks = false"))
     });
+    checks.extend(signed.map(|signed| match login("codex login", signed, crate::agent::login::CODEX_FIX, "codex tasks cannot start") {
+        check if check.level == Level::Warn && needed => Check { level: Level::Fail, ..check },
+        check => check,
+    }));
     checks
 }
 
@@ -717,6 +731,9 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let claude_settings = read_json(&env.claude_dir.join("settings.json")).unwrap_or_default();
     let checkout = checkout_version(plugin.as_ref());
     checks.push(claude_plugin(installed.as_ref(), &claude_settings, checkout.as_deref(), channel));
+    if let Some(claude) = which("claude", &env.path) {
+        checks.push(login("claude login", crate::agent::login::claude(Some(&claude), crate::agent::login::TIMEOUT), crate::agent::login::CLAUDE_FIX, "the lead, the reviewer and tasks cannot start"));
+    }
     let kebbie_id = installed.as_ref().and_then(|installed| installed["plugins"].as_object()?.keys().find(|id| id.starts_with("kebbie@")).cloned());
     if let Some(id) = kebbie_id {
         checks.push(plugin_source(&crate::update::marketplace(&env.claude_dir, &id), channel));
@@ -727,7 +744,9 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let needed = crate::profiles::list_in(&env.profiles_dir).0.iter().any(|profile| profile.agent == crate::agent::Agent::Codex);
     let kebbie = crate::peers::kebbie_command().unwrap_or_default();
     let codex_config = std::fs::read_to_string(env.codex_dir.join("config.toml")).ok().and_then(|text| text.parse::<toml::Table>().ok());
-    checks.extend(codex(&crate::agent::codex::availability(&env.path, Some(&env.codex_dir), &kebbie), codex_config.as_ref(), needed, &env.codex_dir));
+    let found = crate::agent::codex::availability(&env.path, Some(&env.codex_dir), &kebbie);
+    let signed = (needed || found.plugin != crate::agent::codex::Installed::Missing).then(|| crate::agent::login::codex(found.binary.as_deref(), crate::agent::login::TIMEOUT)).filter(|_| found.binary.is_some());
+    checks.extend(codex(&found, codex_config.as_ref(), needed, &env.codex_dir, signed));
     let places = crate::update_check::Places::new(plugin.as_ref().map(|plugin| plugin.root.clone()), env.claude_dir.clone(), channel);
     checks.push(updates(&env.kebbie_state, channel, &crate::update_check::installed(&places)));
     let keeper_on = config::check_machine(&env.config).ok().and_then(|(machine, _)| machine.keeper).unwrap_or(true);
@@ -1359,21 +1378,30 @@ mod tests {
         use crate::agent::codex::{Availability, Installed};
         let home = Path::new("/u/.codex");
         let absent = Availability { binary: None, version: None, plugin: Installed::Missing };
-        assert_eq!(codex(&absent, None, false, home).iter().map(|check| (check.level, check.name.as_str())).collect::<Vec<_>>(), [(Level::Ok, "codex")], "no line nags a Claude-only machine");
-        let needed = codex(&absent, None, true, home);
+        assert_eq!(codex(&absent, None, false, home, None).iter().map(|check| (check.level, check.name.as_str())).collect::<Vec<_>>(), [(Level::Ok, "codex")], "no line nags a Claude-only machine");
+        let needed = codex(&absent, None, true, home, None);
         assert_eq!((needed.len(), needed[0].level), (1, Level::Fail));
         assert!(needed[0].fix.iter().any(|fix| fix.contains("https://chatgpt.com/codex/install.sh")));
         let ready = Availability { binary: Some(PathBuf::from("/u/.local/bin/codex")), version: Some("codex-cli 0.163.0".to_string()), plugin: Installed::Current };
-        let lines = codex(&ready, Some(&"model = \"gpt-5.5\"\n".parse().unwrap()), true, home);
+        let lines = codex(&ready, Some(&"model = \"gpt-5.5\"\n".parse().unwrap()), true, home, None);
         assert_eq!(lines.iter().map(|check| (check.level, check.name.as_str())).collect::<Vec<_>>(), [(Level::Ok, "codex"), (Level::Ok, "codex plugin"), (Level::Ok, "codex hooks")]);
         assert_eq!(lines[0].fact, "0.163.0 at /u/.local/bin/codex");
         assert!(lines[1].fact.contains("/u/.codex/plugins/cache/kebbie/kebbie/local") && lines[2].fact.contains("trusts its three hooks by hash"));
         let old = Availability { version: Some("codex-cli 0.120.4".to_string()), plugin: Installed::Missing, ..ready };
         let off: toml::Table = "[features]\nhooks = false\n".parse().unwrap();
-        let lines = codex(&old, Some(&off), true, home);
+        let lines = codex(&old, Some(&off), true, home, None);
         assert!(lines.iter().all(|check| check.level == Level::Fail), "{lines:?}");
         assert!(lines[0].fact.contains("older than 0.163.0") && lines[1].fix == ["kebbie setup codex"] && lines[2].fact.contains("[features] hooks = false"), "{lines:?}");
-        assert_eq!(codex(&old, Some(&off), false, home)[2].level, Level::Warn, "a gap is a warning until a profile runs Codex");
+        assert_eq!(codex(&old, Some(&off), false, home, None)[2].level, Level::Warn, "a gap is a warning until a profile runs Codex");
+        let current = Availability { binary: Some(PathBuf::from("/u/.local/bin/codex")), version: Some("codex-cli 0.163.0".to_string()), plugin: Installed::Current };
+        let signed = |login: Login, needed: bool| codex(&current, None, needed, home, Some(login)).pop().unwrap();
+        assert_eq!((signed(Login::In, true).level, signed(Login::In, true).fact.as_str()), (Level::Ok, "logged in"));
+        let out = signed(Login::Out, false);
+        assert_eq!((out.name.as_str(), out.level, out.fix), ("codex login", Level::Warn, vec!["codex login".to_string()]));
+        assert_eq!(signed(Login::Out, true).level, Level::Fail, "a profile that runs Codex cannot start logged out");
+        let unknown = signed(Login::Unknown, true);
+        assert!(unknown.level == Level::Ok && unknown.fact.starts_with("login not checked"), "no answer is never logged out: {unknown:?}");
+        assert_eq!(login("claude login", Login::Out, "claude auth login", "the lead cannot start").fix, ["claude auth login"]);
     }
 
     #[test]

@@ -59,6 +59,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `herdr link` | The folder herdr links kebbie from, for a local link, still holds a kebbie checkout. One that is gone fails, with `kebbie doctor --fix` as the fix. |
 | `plugin binary` | The plugin's binary is in place, and whether it was downloaded for a release tag or built from source. |
 | `claude plugin` | The Claude Code plugin is installed, and the copy Claude Code runs matches the checkout. |
+| `claude login` | `claude auth status` says Claude Code is logged in. A `warn` names `claude auth login`; no answer reads `login not checked`. |
 | `claude plugin source` | The plugin's marketplace matches the update channel. |
 | `status line` | The status line for plan usage. |
 | `current link` | `~/.local/share/kebbie/current` points at the plugin. |
@@ -79,7 +80,7 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 | `notify` | Whether `notify.command` is set. It is never run. |
 | `sandbox` | Whether tasks run in the sandbox. |
 | `vault` | The vault plugin: on, missing (fine, it is optional) or too old. |
-| `codex`, `codex plugin`, `codex hooks` | Codex at 0.163.0 or later, kebbie's plugin in it, and its hooks on. |
+| `codex`, `codex plugin`, `codex hooks`, `codex login` | Codex at 0.163.0 or later, kebbie's plugin in it, its hooks on, and `codex login status` logged in. |
 | `backlog …` | Each backlog source can be read, and an installed source not in use. |
 
 - `docs` suggests turning `docs.required` on when `gh` says the repo is public on GitHub. Without `gh` or a GitHub remote the line is left out.
@@ -89,7 +90,8 @@ Each line is `ok`, `warn` or `fail`. Every `warn` and `fail` carries a `fix:` li
 - `comments` warns when `comments.watch` is on but origin is not on GitHub or `gh` is missing or logged out, with the same reason `kebbie ci` gives. With `comments.watch = false` it says it is off.
 - `machine` warns while `machine.name` is unset.
 - `sandbox` is on and ready; on with what is missing on Linux, a `fail` since tasks then do not start; or off with `task.sandbox = false`, a `warn` that says a task's shell can pass as you.
-- `codex` looks for Codex on `PATH`, kebbie's plugin in its cache and current, and nothing in Codex's `config.toml` that turns kebbie's hooks off (`[features] hooks = false`, or one of them turned off in `/hooks`). Only `codex` shows until a profile runs Codex or Codex is on `PATH`. A gap is a `warn` until a profile runs Codex, and a `fail` after.
+- `codex` looks for Codex on `PATH`, kebbie's plugin in its cache and current, and nothing in Codex's `config.toml` that turns kebbie's hooks off (`[features] hooks = false`, or one of them turned off in `/hooks`). Only `codex` shows until a profile runs Codex or Codex is on `PATH`. A gap is a `warn` until a profile runs Codex, and a `fail` after. `codex login` shows once kebbie's plugin is installed or a profile runs Codex; its fix is `codex login`.
+- The login checks only read: they run `claude auth status` and `codex login status` for at most five seconds each and never log you in. A CLI too old for the command, or one that does not answer in time, reads as `login not checked`, never as logged out.
 
 ## Repos
 

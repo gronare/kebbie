@@ -8,7 +8,7 @@ Its task role is written for Codex. Codex can't run kebbie's setup and rules ski
 
 ## Before you start
 
-- Codex CLI 0.163.0 or later on `PATH`, logged in (`codex login`). `kebbie doctor` shows its version.
+- Codex CLI 0.163.0 or later on `PATH`, logged in (`codex login`). `kebbie doctor` shows its version, and its `codex login` line says whether `codex login status` reads logged in.
 - herdr starts it in the task's pane as `herdr agent start <task> --kind codex`.
 
 ## Install kebbie's plugin in Codex

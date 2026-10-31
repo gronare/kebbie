@@ -12,6 +12,7 @@ use crate::board::widgets::{FAINT, GREEN, MANTLE, MAUVE, MUTED, PEACH, RED, SUBT
 use crate::config::{self, Source};
 use crate::config_edit::{self, Set};
 use crate::agent::codex::Installed;
+use crate::agent::login::{self, Login};
 use crate::doctor::Repair;
 use crate::setup::{self, Asking, KeyPlan, Machine, Outcome};
 use crate::sh::Result;
@@ -86,6 +87,8 @@ pub struct Facts {
     pub kebbie_plugin: bool,
     pub codex: Option<String>,
     pub codex_bin: Option<PathBuf>,
+    pub claude_login: Login,
+    pub codex_login: Login,
     pub claude_stale: Option<String>,
     pub codex_plugin: Installed,
     pub keys: KeyPlan,
@@ -137,6 +140,8 @@ impl Facts {
             claude_stale: (kebbie_plugin && claude_plugin.level != crate::doctor::Level::Ok).then_some(claude_plugin.fact),
             codex: codex.binary.as_ref().map(|_| codex.version.as_deref().and_then(|text| text.split_whitespace().find(|word| word.starts_with(|character: char| character.is_ascii_digit()))).unwrap_or_default().to_string()),
             codex_bin: codex.binary.clone(),
+            claude_login: login::claude(crate::doctor::which(&env.machine.claude, &env.machine.path).as_deref(), login::TIMEOUT),
+            codex_login: login::codex(codex.binary.as_deref(), login::TIMEOUT),
             codex_plugin: codex.plugin.clone(),
             keys: setup::key_plan(&env.machine.herdr_config),
             sources: machine.sources.clone().unwrap_or_else(|| vec![Source::Local]),
@@ -678,22 +683,6 @@ const NEXT: &str = "Next steps";
 const LEAD: (&str, &str) = ("prefix+space", "tell the lead what you want done");
 pub const PHONE: [&str; 3] = ["", "Your board on your phone: kebbie hub connect, or H on the board", "kebbie.dev/hub"];
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum CodexLogin {
-    In,
-    Out,
-    Unknown,
-}
-
-// codex login status exits 0 when logged in and 1 when not; anything else is no answer.
-pub fn codex_login(codex: Option<&std::path::Path>) -> CodexLogin {
-    match codex.map(|codex| crate::sh::attempt(&codex.to_string_lossy(), &["login", "status"], None)) {
-        Some(Ok(Ok(_))) => CodexLogin::In,
-        Some(Ok(Err(said))) if said.contains("Not logged in") || said.is_empty() => CodexLogin::Out,
-        _ => CodexLogin::Unknown,
-    }
-}
-
 fn next_step(command: &str, why: &str) -> String {
     format!("  {command:<21}{why}")
 }
@@ -711,7 +700,7 @@ fn path_step(shell: &str) -> String {
     next_step("PATH", &format!("add {line} to {file}, then open a new terminal"))
 }
 
-pub fn ending(codex: Option<CodexLogin>, checks: &[crate::doctor::Check], shell: &str) -> Vec<String> {
+pub fn ending(codex: Option<Login>, checks: &[crate::doctor::Check], shell: &str) -> Vec<String> {
     let count = |ok: bool| checks.iter().filter(|check| (check.level == crate::doctor::Level::Ok) == ok).count();
     let open = count(false);
     let left = if open > 0 { format!(", {open} to look at") } else { String::new() };
@@ -720,8 +709,8 @@ pub fn ending(codex: Option<CodexLogin>, checks: &[crate::doctor::Check], shell:
         lines.push(path_step(shell));
     }
     match codex {
-        Some(CodexLogin::Out) => lines.push(next_step("codex login", "Codex is not logged in, so codex tasks cannot start")),
-        Some(CodexLogin::Unknown) => lines.push(next_step("codex login", "if you have not yet, so codex tasks can start")),
+        Some(Login::Out) => lines.push(next_step("codex login", "Codex is not logged in, so codex tasks cannot start")),
+        Some(Login::Unknown) => lines.push(next_step("codex login", "if you have not yet, so codex tasks can start")),
         _ => {}
     }
     if open > 0 {
@@ -774,9 +763,9 @@ impl Guide {
                 }
             }
             Step::Agents => {
-                let claude = facts.claude.as_ref().map_or("not found · curl -fsSL https://claude.ai/install.sh | bash".to_string(), |version| format!("found {version} · runs the lead, the reviewer and tasks · required"));
+                let claude = facts.claude.as_ref().map_or("not found · curl -fsSL https://claude.ai/install.sh | bash".to_string(), |version| format!("found {version} · {} · runs the lead, the reviewer and tasks · required", facts.claude_login.shown(login::CLAUDE_FIX)));
                 lines.push(self.option(Spot::Check(0), Self::check_mark(true), "Claude Code".to_string(), claude));
-                let codex = facts.codex.as_ref().map_or("not found · install Codex CLI first, then run kebbie setup codex".to_string(), |version| format!("found {version} · runs tasks that use a codex profile"));
+                let codex = facts.codex.as_ref().map_or("not found · install Codex CLI first, then run kebbie setup codex".to_string(), |version| format!("found {version} · {} · runs tasks that use a codex profile", facts.codex_login.shown(login::CODEX_FIX)));
                 lines.push(self.option(Spot::Check(1), Self::check_mark(answers.codex), "Codex".to_string(), codex));
             }
             Step::Keys => {
@@ -996,7 +985,7 @@ fn ask(env: &Env, at: Step) -> Result<(Next, Guide)> {
                         let planned = guide.plan();
                         guide.applied = Some(Vec::new());
                         let rows = apply(&planned, env, &mut Screen { terminal: &mut terminal, guide: &mut guide });
-                        let codex = (guide.answers.codex && !guide.skipped[Step::Agents.index()]).then(|| codex_login(guide.facts.codex_bin.as_deref()));
+                        let codex = (guide.answers.codex && !guide.skipped[Step::Agents.index()]).then_some(guide.facts.codex_login);
                         guide.ending = ending(codex, &crate::doctor::checks(&crate::doctor::Env::current()), &std::env::var("SHELL").unwrap_or_default());
                         guide.applied = Some(rows);
                     }
@@ -1146,7 +1135,12 @@ mod tests {
         press(&mut guide, &[KeyCode::Enter]);
         assert_eq!((guide.step, guide.answers.name.as_str()), (Step::Agents, "devbox"), "typing replaces the name it was given");
         let shown = screen(&guide);
-        assert!(shown.contains("✓ 1 Machine name") && shown.contains("[x] Claude Code  · found 2.1.3 · runs the lead, the reviewer and tasks · required") && shown.contains("[ ] Codex  · found 0.163.0"), "{shown}");
+        assert!(shown.contains("✓ 1 Machine name") && shown.contains("[x] Claude Code  · found 2.1.3 · logged in · runs the lead, the reviewer and tasks · required") && shown.contains("[ ] Codex  · found 0.163.0"), "{shown}");
+        assert!(shown.contains("[ ] Codex  · found 0.163.0 · login not checked · runs tasks"), "no answer from codex is no verdict: {shown}");
+        guide.facts.codex_login = Login::Out;
+        guide.facts.claude_login = Login::Out;
+        let shown = screen(&guide);
+        assert!(shown.contains("found 2.1.3 · not logged in: run claude auth login") && shown.contains("found 0.163.0 · not logged in: run codex login"), "{shown}");
         press(&mut guide, &[KeyCode::Char(' ')]);
         assert!(!guide.answers.codex, "space on Claude Code changes nothing: it stays on");
         press(&mut guide, &[KeyCode::Down, KeyCode::Char(' '), KeyCode::Enter]);
@@ -1402,10 +1396,10 @@ mod tests {
     #[test]
     fn the_end_counts_the_doctor_and_lists_only_what_needs_the_user_in_two_columns() {
         use crate::doctor::Level;
-        let clean = ending(Some(CodexLogin::In), &[check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Ok, "jq", "/usr/bin/jq", &[])], "/bin/zsh");
+        let clean = ending(Some(Login::In), &[check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Ok, "jq", "/usr/bin/jq", &[])], "/bin/zsh");
         assert_eq!(clean, ["", "Setup done · doctor: 2 ok", "", "Next steps", "  prefix+space         tell the lead what you want done"], "the lead is the one step left when nothing else is");
         let checks = [check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Fail, "jq", "jq is missing", &["macOS: brew install jq"]), check(Level::Warn, "status line", "statusLine runs \"my-line\"", &["have your statusLine command pipe its stdin to `kebbie statusline`"])];
-        assert_eq!(ending(Some(CodexLogin::Out), &checks, "/bin/zsh"), [
+        assert_eq!(ending(Some(Login::Out), &checks, "/bin/zsh"), [
             "",
             "Setup done · doctor: 1 ok, 2 to look at",
             "",
@@ -1414,16 +1408,7 @@ mod tests {
             "  kebbie doctor        says what is left and how to fix it",
             "  prefix+space         tell the lead what you want done",
         ], "a fix setup cannot make is one line to kebbie doctor, never its text");
-        assert!(ending(Some(CodexLogin::Unknown), &[], "/bin/zsh").contains(&"  codex login          if you have not yet, so codex tasks can start".to_string()));
-        let dir = crate::sh::test_dir("guide-codex-login");
-        let codex = dir.join("codex");
-        crate::executable::write(&codex, "#!/bin/sh\necho 'Not logged in'\nexit 1\n").unwrap();
-        assert_eq!(codex_login(Some(&codex)), CodexLogin::Out);
-        crate::executable::write(&codex, "#!/bin/sh\necho 'Logged in using ChatGPT'\n").unwrap();
-        assert_eq!(codex_login(Some(&codex)), CodexLogin::In);
-        crate::executable::write(&codex, "#!/bin/sh\necho 'unknown command' >&2\nexit 2\n").unwrap();
-        assert_eq!((codex_login(Some(&codex)), codex_login(None)), (CodexLogin::Unknown, CodexLogin::Unknown));
-        std::fs::remove_dir_all(dir).unwrap();
+        assert!(ending(Some(Login::Unknown), &[], "/bin/zsh").contains(&"  codex login          if you have not yet, so codex tasks can start".to_string()));
     }
 
     #[test]
@@ -1457,7 +1442,7 @@ mod tests {
             ("signals".to_string(), Outcome::new("already", "on")),
         ]);
         let ok: Vec<crate::doctor::Check> = (0..36).map(|at| check(crate::doctor::Level::Ok, &format!("check {at}"), "fine", &[])).collect();
-        guide.ending = ending(Some(CodexLogin::Out), &ok, "/bin/zsh");
+        guide.ending = ending(Some(Login::Out), &ok, "/bin/zsh");
         guide
     }
 

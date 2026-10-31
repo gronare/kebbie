@@ -1,5 +1,6 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
+pub(crate) mod login;
 
 use std::path::{Path, PathBuf};
 

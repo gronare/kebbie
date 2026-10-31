@@ -591,7 +591,7 @@ pub(crate) mod tests {
         let log = dir.join("claude.log");
         let plugins = claude_dir.join("plugins");
         let script = format!(
-            "#!/bin/sh\n[ \"$1\" = --version ] && {{ echo '2.1.3 (Claude Code)'; exit 0; }}\necho \"$*\" >> '{log}'\ncase \"$*\" in\n  *--values-stdin) cat > '{stdin}' ;;\n  'plugin marketplace add '*) printf '{{\"kebbie\":{{\"source\":{{\"source\":\"directory\",\"path\":\"%s\"}}}}}}' \"$4\" > '{plugins}/known_marketplaces.json' ;;\n  'plugin install kebbie@kebbie') printf '{{\"plugins\":{{\"kebbie@kebbie\":[{{\"version\":\"0.26.6\"}}]}}}}' > '{plugins}/installed_plugins.json' ;;\nesac\n",
+            "#!/bin/sh\n[ \"$1\" = --version ] && {{ echo '2.1.3 (Claude Code)'; exit 0; }}\n[ \"$1 $2\" = 'auth status' ] && {{ echo '{{\"loggedIn\": true}}'; exit 0; }}\necho \"$*\" >> '{log}'\ncase \"$*\" in\n  *--values-stdin) cat > '{stdin}' ;;\n  'plugin marketplace add '*) printf '{{\"kebbie\":{{\"source\":{{\"source\":\"directory\",\"path\":\"%s\"}}}}}}' \"$4\" > '{plugins}/known_marketplaces.json' ;;\n  'plugin install kebbie@kebbie') printf '{{\"plugins\":{{\"kebbie@kebbie\":[{{\"version\":\"0.26.6\"}}]}}}}' > '{plugins}/installed_plugins.json' ;;\nesac\n",
             log = log.display(), plugins = plugins.display(), stdin = dir.join("claude.stdin").display(),
         );
         crate::executable::write(dir.join("claude"), script).unwrap();

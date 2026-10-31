@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- kebbie doctor and the setup guide's Agents step say whether Claude Code and Codex are logged in, from claude auth status and codex login status, with claude auth login or codex login as the fix; an agent that gives no answer reads as login not checked
 
 ### Fixed
 - kebbie setup codex, the fix kebbie doctor names for kebbie's Codex plugin, now writes the plugin at once and says in one line what it wrote, where it opened the whole setup guide

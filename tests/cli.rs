@@ -33,13 +33,15 @@ impl Lab {
         lab
     }
 
-    // What Claude Code's sandbox needs on Linux, so a start is not refused on a CI machine without it.
+    // What Claude Code's sandbox needs on Linux, so a start is not refused on a CI machine without it, and agents that answer at once so no test runs the machine's own claude or codex.
     fn fake_sandbox_tools(&self) {
         let bin = self.root.join("bin");
         fs::create_dir_all(&bin).unwrap();
         for tool in ["bwrap", "socat"] {
             crate::executable::write(bin.join(tool), "#!/bin/sh\nexit 0\n").unwrap();
         }
+        crate::executable::write(bin.join("claude"), "#!/bin/sh\ncase \"$*\" in\n  --version) echo '2.1.316 (Claude Code)' ;;\n  'auth status') echo '{\"loggedIn\": true}' ;;\nesac\n").unwrap();
+        crate::executable::write(bin.join("codex"), "#!/bin/sh\ncase \"$*\" in\n  --version) echo 'codex-cli 0.163.0' ;;\n  'login status') echo 'Logged in using ChatGPT' ;;\nesac\n").unwrap();
         for arch in ["x64", "arm64"] {
             let filter = self.home.join(".npm-global/lib/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp").join(arch);
             fs::create_dir_all(&filter).unwrap();
@@ -188,7 +190,6 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
 #[test]
 fn setup_codex_rewrites_a_stale_plugin_at_once_and_doctor_then_reports_it_ok() {
     let lab = Lab::new("setup-codex");
-    crate::executable::write(lab.root.join("bin/codex"), "#!/bin/sh\necho 'codex-cli 0.163.0'\n").unwrap();
     let codex_home = lab.root.join("codex");
     let run = |args: &[&str]| lab.command().env("CODEX_HOME", &codex_home).args(args).output().unwrap();
     let plugin_line = |doctor: &str| doctor.lines().find(|line| line.contains("codex plugin")).unwrap_or_else(|| panic!("doctor has a codex plugin line: {doctor}")).to_string();
