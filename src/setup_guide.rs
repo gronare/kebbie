@@ -671,11 +671,27 @@ fn next_step(command: &str, why: &str) -> String {
     format!("  {command:<21}{why}")
 }
 
-pub fn ending(codex: Option<CodexLogin>, checks: &[crate::doctor::Check]) -> Vec<String> {
+// kebbie never writes a shell profile: it names the line and the file for the user's shell.
+fn path_step(shell: &str) -> String {
+    let line = "export PATH=\"$HOME/.local/bin:$PATH\"";
+    let (line, file) = match std::path::Path::new(shell).file_name().and_then(|name| name.to_str()) {
+        Some("zsh") => (line, "~/.zshrc"),
+        Some("bash") if cfg!(target_os = "macos") => (line, "~/.bash_profile"),
+        Some("bash") => (line, "~/.bashrc"),
+        Some("fish") => ("fish_add_path ~/.local/bin", "~/.config/fish/config.fish"),
+        _ => (line, "your shell's profile"),
+    };
+    next_step("PATH", &format!("add {line} to {file}, then open a new terminal"))
+}
+
+pub fn ending(codex: Option<CodexLogin>, checks: &[crate::doctor::Check], shell: &str) -> Vec<String> {
     let count = |ok: bool| checks.iter().filter(|check| (check.level == crate::doctor::Level::Ok) == ok).count();
     let open = count(false);
     let left = if open > 0 { format!(", {open} to look at") } else { String::new() };
     let mut lines = vec![String::new(), format!("{DONE} · doctor: {} ok{left}", count(true)), String::new(), NEXT.to_string()];
+    if checks.iter().any(|check| check.name == crate::doctor::ON_PATH && check.fact == crate::doctor::NOT_ON_PATH) {
+        lines.push(path_step(shell));
+    }
     match codex {
         Some(CodexLogin::Out) => lines.push(next_step("codex login", "Codex is not logged in, so codex tasks cannot start")),
         Some(CodexLogin::Unknown) => lines.push(next_step("codex login", "if you have not yet, so codex tasks can start")),
@@ -950,7 +966,7 @@ fn ask(env: &Env, at: Step) -> Result<(Next, Guide)> {
                         guide.applied = Some(Vec::new());
                         let rows = apply(&planned, env, &mut Screen { terminal: &mut terminal, guide: &mut guide });
                         let codex = (guide.answers.codex && !guide.skipped[Step::Agents.index()]).then(|| codex_login(guide.facts.codex_bin.as_deref()));
-                        guide.ending = ending(codex, &crate::doctor::checks(&crate::doctor::Env::current()));
+                        guide.ending = ending(codex, &crate::doctor::checks(&crate::doctor::Env::current()), &std::env::var("SHELL").unwrap_or_default());
                         guide.applied = Some(rows);
                     }
                     next => return Ok(next),
@@ -1315,12 +1331,24 @@ mod tests {
     }
 
     #[test]
+    fn the_end_names_the_path_line_and_the_file_for_the_users_shell_when_kebbie_is_not_on_path() {
+        use crate::doctor::{Level, NOT_ON_PATH, ON_PATH};
+        let missing = [check(Level::Warn, ON_PATH, NOT_ON_PATH, &[])];
+        let step = |shell: &str| ending(None, &missing, shell)[4].clone();
+        assert_eq!(step("/bin/zsh"), "  PATH                 add export PATH=\"$HOME/.local/bin:$PATH\" to ~/.zshrc, then open a new terminal");
+        assert!(step("/usr/bin/fish").contains("fish_add_path ~/.local/bin to ~/.config/fish/config.fish"));
+        assert!(step("").contains("to your shell's profile"));
+        let found = [check(Level::Ok, ON_PATH, "~/.local/bin/kebbie → kebbie", &[])];
+        assert!(!ending(None, &found, "/bin/zsh").iter().any(|line| line.contains("PATH")), "on PATH, no line");
+    }
+
+    #[test]
     fn the_end_counts_the_doctor_and_lists_only_what_needs_the_user_in_two_columns() {
         use crate::doctor::Level;
-        let clean = ending(Some(CodexLogin::In), &[check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Ok, "jq", "/usr/bin/jq", &[])]);
+        let clean = ending(Some(CodexLogin::In), &[check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Ok, "jq", "/usr/bin/jq", &[])], "/bin/zsh");
         assert_eq!(clean, ["", "Setup done · doctor: 2 ok", "", "Next steps", "  prefix+space         tell the lead what you want done"], "the lead is the one step left when nothing else is");
         let checks = [check(Level::Ok, "git", "/usr/bin/git", &[]), check(Level::Fail, "jq", "jq is missing", &["macOS: brew install jq"]), check(Level::Warn, "status line", "statusLine runs \"my-line\"", &["have your statusLine command pipe its stdin to `kebbie statusline`"])];
-        assert_eq!(ending(Some(CodexLogin::Out), &checks), [
+        assert_eq!(ending(Some(CodexLogin::Out), &checks, "/bin/zsh"), [
             "",
             "Setup done · doctor: 1 ok, 2 to look at",
             "",
@@ -1329,7 +1357,7 @@ mod tests {
             "  kebbie doctor        says what is left and how to fix it",
             "  prefix+space         tell the lead what you want done",
         ], "a fix setup cannot make is one line to kebbie doctor, never its text");
-        assert!(ending(Some(CodexLogin::Unknown), &[]).contains(&"  codex login          if you have not yet, so codex tasks can start".to_string()));
+        assert!(ending(Some(CodexLogin::Unknown), &[], "/bin/zsh").contains(&"  codex login          if you have not yet, so codex tasks can start".to_string()));
         let dir = crate::sh::test_dir("guide-codex-login");
         let codex = dir.join("codex");
         crate::executable::write(&codex, "#!/bin/sh\necho 'Not logged in'\nexit 1\n").unwrap();
@@ -1372,7 +1400,7 @@ mod tests {
             ("signals".to_string(), Outcome::new("already", "on")),
         ]);
         let ok: Vec<crate::doctor::Check> = (0..36).map(|at| check(crate::doctor::Level::Ok, &format!("check {at}"), "fine", &[])).collect();
-        guide.ending = ending(Some(CodexLogin::Out), &ok);
+        guide.ending = ending(Some(CodexLogin::Out), &ok, "/bin/zsh");
         guide
     }
 

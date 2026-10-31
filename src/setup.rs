@@ -147,7 +147,7 @@ pub fn install(yes: bool) -> Result<String> {
     let asking = if yes { Asking::Yes } else { Asking::Closed };
     let rows = crate::setup_guide::without_asking(&env, asking);
     let mut lines: Vec<String> = rows.iter().map(|(step, outcome)| outcome.line(step)).collect();
-    lines.extend(crate::setup_guide::ending(None, &crate::doctor::checks(&crate::doctor::Env::current())));
+    lines.extend(crate::setup_guide::ending(None, &crate::doctor::checks(&crate::doctor::Env::current()), &std::env::var("SHELL").unwrap_or_default()));
     if crate::hub::identity::load(&env.state).ok().flatten().is_none() {
         lines.extend(crate::setup_guide::PHONE.iter().map(|line| line.to_string()));
     }
@@ -186,7 +186,7 @@ pub fn link_binary(home: &Path, path: &[PathBuf]) -> Outcome {
     let bin_dir = home.join(".local/bin");
     let link = bin_dir.join("kebbie");
     let shown = |path: &Path| tilde(home, path);
-    let on_path = if path.contains(&bin_dir) { String::new() } else { format!("; {} is not on PATH: add export PATH=\"$HOME/.local/bin:$PATH\" to your shell's profile", shown(&bin_dir)) };
+    let on_path = if path.contains(&bin_dir) { String::new() } else { format!("; {} is not on PATH yet, the line to add is under Next steps", shown(&bin_dir)) };
     if !binary.is_file() {
         return Outcome::new("skipped", format!("{} is missing: restart herdr so kebbie's startup links {}, then run this again", shown(&binary), shown(&home.join(".local/share/kebbie/current"))));
     }
@@ -643,7 +643,7 @@ pub(crate) mod tests {
         let (mut machine, log) = machine(&dir);
         machine.path = Vec::new();
         let said = link_binary(&machine.home, &machine.path);
-        assert!(said.verb == "done" && said.detail.contains("is not on PATH: add export PATH=\"$HOME/.local/bin:$PATH\""), "{said:?}");
+        assert!(said.verb == "done" && said.detail.contains("is not on PATH yet, the line to add is under Next steps"), "{said:?}");
         std::fs::remove_file(machine.home.join(".local/bin/kebbie")).unwrap();
         std::os::unix::fs::symlink("/opt/old/kebbie", machine.home.join(".local/bin/kebbie")).unwrap();
         assert!(link_binary(&machine.home, &machine.path).detail.contains("links to /opt/old/kebbie: remove it"));

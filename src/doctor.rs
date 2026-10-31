@@ -233,16 +233,18 @@ pub fn current_link(home: &Path, data_home: Option<&Path>, plugin_root: Option<&
 }
 
 const LINK_KEBBIE: &str = "ln -s ~/.local/share/kebbie/current/target/release/kebbie ~/.local/bin/kebbie";
+pub const ON_PATH: &str = "kebbie on PATH";
+pub const NOT_ON_PATH: &str = "not on PATH; the lead, tasks and hooks run kebbie by name";
 
 pub fn kebbie_on_path(home: &Path, path: &[PathBuf]) -> Check {
     let current = home.join(".local/share/kebbie/current/target/release/kebbie");
     let Some(found) = which("kebbie", path) else {
-        return warn("kebbie on PATH", "not on PATH; the lead, tasks and hooks run kebbie by name", vec![LINK_KEBBIE.to_string(), "make sure ~/.local/bin is on PATH".to_string()]);
+        return warn(ON_PATH, NOT_ON_PATH, vec![LINK_KEBBIE.to_string(), "make sure ~/.local/bin is on PATH".to_string()]);
     };
     let resolved = found.canonicalize().unwrap_or_else(|_| found.clone());
     match current.canonicalize() {
-        Ok(binary) if binary == resolved => ok("kebbie on PATH", format!("{} → {}", found.display(), binary.display())),
-        _ => warn("kebbie on PATH", format!("{} resolves to {}, not {}", found.display(), resolved.display(), current.display()), one(format!("remove {} or put ~/.local/bin ahead of it on PATH, then {LINK_KEBBIE}", found.display()))),
+        Ok(binary) if binary == resolved => ok(ON_PATH, format!("{} → {}", found.display(), binary.display())),
+        _ => warn(ON_PATH, format!("{} resolves to {}, not {}", found.display(), resolved.display(), current.display()), one(format!("remove {} or put ~/.local/bin ahead of it on PATH, then {LINK_KEBBIE}", found.display()))),
     }
 }
 
