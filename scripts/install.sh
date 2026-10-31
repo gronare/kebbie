@@ -54,7 +54,7 @@ kelpie_lines='command = "kelpie\.|/kelpie/current/|description = "kelpie|# kelpi
 move_dir() {
   if [ ! -e "$1" ]; then return 0; fi
   if leftover "$1" "$2"; then rm -r "$1"; return 0; fi
-  if [ -e "$2" ]; then warn "both $(short "$1") and $(short "$2") exist; kebbie uses the second, so merge or remove the first"; return 0; fi
+  if [ -e "$2" ]; then rm -r "$1"; ok "removed the old $(short "$1"); kebbie runs on $(short "$2")"; return 0; fi
   mv "$1" "$2" && moved=1
 }
 
