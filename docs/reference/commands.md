@@ -701,7 +701,7 @@ Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guid
 
 herdr's config is `$HERDR_CONFIG_PATH`, else `$XDG_CONFIG_HOME/herdr/config.toml`, else `~/.config/herdr/config.toml`.
 
-`--yes`, and a run without a terminal, ask nothing. They link the binary, install or update the Claude Code plugin, add the herdr keys that are free, and leave the other steps as they are, one line each:
+`--yes`, and a run without a terminal, ask nothing. They link the binary, install or update the Claude Code plugin, bring kebbie's Codex plugin up to date when it is installed (never installing it), add the herdr keys that are free, and leave the other steps as they are, one line each:
 
 - Without a terminal the herdr write is skipped unless `--yes`, and `--yes` never writes through a symlinked config.
 - They end the same way, with `Setup done · doctor: <n> ok` and the next steps, then, while the machine is not connected, `Your board on your phone: kebbie hub connect, or H on the board` and `kebbie.dev/hub`.
@@ -735,6 +735,8 @@ Installs kebbie's Codex plugin in `$CODEX_HOME/plugins/cache/kebbie/kebbie/local
 ### `kebbie update`
 
 It prints each step as it goes (in a terminal the running one is redrawn with its bar and time). Then it prints what's new and fixed from kebbie's `CHANGES.md`, one or two sentences on the restarts, and the details.
+
+When kebbie's [Codex plugin](#kebbie-setup-codex) is installed, it rewrites the files of it this kebbie writes differently, and its details say `Codex plugin: updated <files>` or `Codex plugin: up to date`. A machine without the plugin gets none, and Codex's `config.toml` and `hooks.json` are never touched.
 
 With open [kebbie issues](#kebbie-issues), it looks them up on GitHub through `gh` and leaves each one filed on older code to the keeper to recheck against the new commits.
 

@@ -1,6 +1,6 @@
 # Updates and stale sessions
 
-This page explains how one command updates kebbie, its Claude Code plugin and the vault plugin, and how the running Claude sessions move onto the new code without losing their conversations.
+This page explains how one command updates kebbie, its Claude Code plugin, the vault plugin and its Codex plugin, and how the running Claude sessions move onto the new code without losing their conversations.
 
 ![U on the board: kebbie downloads the release, shows what's new and restarts the idle Claude sessions](../assets/clips/update-and-restarts.gif)
 
@@ -71,6 +71,10 @@ Only commits are installed, so a checkout with uncommitted changes is refused.
 Claude Code runs a cached copy of each plugin. When the kebbie marketplace was added from `~/.local/share/kebbie/current`, `kebbie update` refreshes that copy from whatever it just checked out.
 
 A marketplace added from GitHub follows GitHub's default branch instead. `kebbie update` updates it only on the `main` channel without an override; otherwise it leaves it and prints the commands that move it to the install root. `kebbie doctor` warns about it too.
+
+## The Codex plugin follows kebbie
+
+kebbie starts a Codex task only on a plugin exactly as it writes it, so an update that changes the hooks would otherwise stop every Codex task. `kebbie update` rewrites kebbie's own plugin folder in Codex's cache when the plugin is installed, and installs nothing for a machine that never turned Codex on. See [`kebbie update`](../reference/commands.md#kebbie-update).
 
 ## A stale session runs older code
 

@@ -163,6 +163,24 @@ pub fn install(home: &Path, kebbie: &str) -> Result<Vec<&'static str>> {
     Ok(written)
 }
 
+// An update brings an opted-in plugin along and never installs one: None when there is none to refresh.
+pub fn refresh(home: Option<&Path>, kebbie: &str) -> Option<Result<Vec<&'static str>>> {
+    let home = home?;
+    match installed(home, kebbie) {
+        Installed::Missing => None,
+        Installed::Current => Some(Ok(Vec::new())),
+        Installed::Stale(_) => Some(install(home, kebbie)),
+    }
+}
+
+pub fn refresh_line(home: Option<&Path>, kebbie: &str) -> Option<String> {
+    refresh(home, kebbie).map(|refreshed| match refreshed {
+        Ok(files) if files.is_empty() => "Codex plugin: up to date".to_string(),
+        Ok(files) => format!("Codex plugin: updated {}", files.join(", ")),
+        Err(error) => format!("Codex plugin: {error}"),
+    })
+}
+
 pub fn uninstall(home: &Path) -> Result<bool> {
     let root = plugin_root(home);
     if !root.exists() {
@@ -602,6 +620,20 @@ mod tests {
         let refused = ready_to_start(Some(&home), "/opt/kebbie").unwrap_err();
         assert!(refused.contains("not what this kebbie writes (bin/kebbie-hook)") && refused.contains("kebbie setup codex"), "a launcher changed behind kebbie's back runs pre-trusted, so it is refused: {refused}");
         assert!(ready_to_start(None, "/opt/kebbie").is_err());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn an_update_rewrites_an_installed_stale_plugin_and_installs_none() {
+        let home = crate::sh::test_dir("codex-refresh");
+        assert_eq!(refresh_line(Some(&home), "/opt/kebbie"), None);
+        assert!(!home.join("plugins").exists(), "a machine that never opted in gets no plugin");
+        install(&home, "/old/kebbie").unwrap();
+        std::fs::write(plugin_root(&home).join(MANIFEST), "{}\n").unwrap();
+        assert_eq!(refresh_line(Some(&home), "/opt/kebbie").as_deref(), Some("Codex plugin: updated .codex-plugin/plugin.json, bin/kebbie-hook"));
+        assert_eq!(installed(&home, "/opt/kebbie"), Installed::Current);
+        assert_eq!(refresh_line(Some(&home), "/opt/kebbie").as_deref(), Some("Codex plugin: up to date"));
+        assert_eq!(refresh_line(None, "/opt/kebbie"), None);
         std::fs::remove_dir_all(home).unwrap();
     }
 

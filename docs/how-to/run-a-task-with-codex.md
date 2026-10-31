@@ -47,7 +47,7 @@ Outside a kebbie task's worktree each hook does nothing.
 - A second run that finds nothing to change writes nothing.
 - `kebbie setup codex` is yours to run: a task cannot run it.
 
-If `kebbie doctor` says the plugin is out of date, run `kebbie setup codex` again: it rewrites the files that changed and prints `kebbie's Codex plugin updated:` with their names. If you want the plugin gone, run `kebbie setup codex --uninstall`.
+The plugin follows kebbie's updates: `kebbie update` and `kebbie setup --yes` rewrite what a new kebbie writes differently, and say `Codex plugin: updated` with the files. If `kebbie doctor` still says the plugin is out of date, run `kebbie setup codex` again: it rewrites the files that changed and prints `kebbie's Codex plugin updated:` with their names. If you want the plugin gone, run `kebbie setup codex --uninstall`.
 
 ## Write a Codex profile
 

@@ -664,7 +664,13 @@ pub fn without_asking(env: &Env, asking: Asking) -> Vec<(String, Outcome)> {
     let facts = Facts::read(env);
     let (mut keys, wrote) = setup::keys_without_asking(&facts.keys, asking);
     keys.detail.push_str(&setup::herdr_reload(env.machine, wrote));
-    [("link", setup::link_binary(&env.machine.home, &env.machine.path)), ("plugin", setup::claude_plugin(env.machine)), ("keys", keys)].into_iter().map(|(step, outcome)| (step.to_string(), outcome)).collect()
+    let codex = crate::agent::codex::refresh(env.codex_home.as_deref(), &env.kebbie).map(|refreshed| match refreshed {
+        Ok(files) if files.is_empty() => Outcome::new("already", "kebbie's Codex plugin is up to date"),
+        Ok(files) => Outcome::new("done", format!("kebbie's Codex plugin updated: {}", files.join(", "))),
+        Err(error) => Outcome::new("failed", format!("Codex: {error}")),
+    });
+    let rows = [("link", Some(setup::link_binary(&env.machine.home, &env.machine.path))), ("plugin", Some(setup::claude_plugin(env.machine))), ("codex", codex), ("keys", Some(keys))];
+    rows.into_iter().filter_map(|(step, outcome)| Some((step.to_string(), outcome?))).collect()
 }
 
 const DONE: &str = "Setup done";
@@ -1370,6 +1376,11 @@ mod tests {
         let lines: Vec<String> = without_asking(&closed.env(), Asking::Closed).iter().map(|(step, outcome)| outcome.line(step)).collect();
         assert!(lines[2].starts_with("skipped") && lines[2].contains("no terminal to ask in") && lines[2].contains("kebbie setup --yes"), "{lines:?}");
         assert_eq!(closed.herdr(), "");
+        assert!(!lab.dir.join("codex/plugins").exists(), "a machine without kebbie's Codex plugin gets none");
+        crate::agent::codex::install(&lab.dir.join("codex"), "/old/kebbie").unwrap();
+        let lines: Vec<String> = without_asking(&lab.env(), Asking::Yes).iter().map(|(step, outcome)| outcome.line(step)).collect();
+        assert!(lines.iter().any(|line| line.starts_with("done") && line.contains("kebbie's Codex plugin updated: bin/kebbie-hook")), "an installed plugin follows kebbie: {lines:?}");
+        assert_eq!(crate::agent::codex::installed(&lab.dir.join("codex"), "/opt/kebbie"), Installed::Current);
     }
 
     fn check(level: crate::doctor::Level, name: &str, fact: &str, fix: &[&str]) -> crate::doctor::Check {

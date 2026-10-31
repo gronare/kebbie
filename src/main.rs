@@ -361,7 +361,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie update                   update everything to this machine's channel ([update] channel: release, the
                                   highest vX.Y.Z tag whose release binary is published, or main, origin's default
                                   branch): the herdr plugin (the release's binary; built from source only on main and
-                                  with --from), the Claude Code plugin, the vault plugin when installed; list each
+                                  with --from), the Claude Code plugin, the vault and Codex plugins when installed; list each
                                   version before → after, and restart each Claude session that is idle and not the
                                   pane you are in with claude --resume (the rest follow when idle; [restart] auto =
                                   false restarts none);
