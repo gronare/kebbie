@@ -10,6 +10,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie records a test run after cd x; or a separate VAR=$(…); statement, and through timeout, nice or time.
 - A task hears at once when kebbie leaves a test-like command unrecorded, and why.
 - A test command piped into tail or grep is judged by its result line, and recorded as unknown without one, never as passed.
+- A test run that goes to the background shows as unknown until it ends, then with its real result.
 
 ## 0.35.0
 

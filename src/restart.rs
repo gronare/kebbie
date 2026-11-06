@@ -357,7 +357,7 @@ fn binary_reason(reason: &str) -> bool {
     [CLAUDE_CODE, CODEX].iter().any(|agent| reason.starts_with(&format!("{agent} ")) || reason == format!("a newer {agent}"))
 }
 
-fn blocks<'a>(text: &'a str, tag: &str) -> Vec<&'a str> {
+pub(crate) fn blocks<'a>(text: &'a str, tag: &str) -> Vec<&'a str> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
     text.match_indices(&open).filter_map(|(at, _)| {
@@ -366,7 +366,7 @@ fn blocks<'a>(text: &'a str, tag: &str) -> Vec<&'a str> {
     }).collect()
 }
 
-fn notices(record: &Value) -> Vec<String> {
+pub(crate) fn notices(record: &Value) -> Vec<String> {
     let mut texts: Vec<String> = [&record["content"], &record["attachment"]["prompt"]].into_iter().filter_map(|value| value.as_str().map(str::to_string)).collect();
     if record["type"] == "user" {
         match &record["message"]["content"] {
