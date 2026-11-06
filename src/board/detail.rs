@@ -194,6 +194,7 @@ pub(super) fn tests_spans(tests: &evidence::Shown, width: usize) -> Vec<Span<'st
         evidence::Mark::Covered => GREEN,
         evidence::Mark::Stale => YELLOW,
         evidence::Mark::Failed => RED,
+        evidence::Mark::Unknown => PEACH,
     };
     vec![Span::styled(format!("{} ", tests.symbol()), style(color)), Span::styled(cut(&tests.text, width), style(color))]
 }
@@ -603,6 +604,10 @@ mod tests {
         let failed = evidence::Shown { mark: evidence::Mark::Failed, text: "cargo test failed · 2 failed · at a1b2c3d".to_string() };
         let (lines, _) = push_lines(None, Some(&failed), &commits, &Default::default(), 0, 88);
         assert_eq!(lines[1].spans[2].style.fg, Some(RED));
+        let unknown = evidence::Shown { mark: evidence::Mark::Unknown, text: "cargo test result unknown, piped · at a1b2c3d".to_string() };
+        let (lines, _) = push_lines(None, Some(&unknown), &commits, &Default::default(), 0, 88);
+        assert_eq!(lines[1].to_string(), "  ? cargo test result unknown, piped · at a1b2c3d");
+        assert_eq!(lines[1].spans[2].style.fg, Some(PEACH), "neither the green of a pass nor the red of a fail");
     }
 
     #[test]

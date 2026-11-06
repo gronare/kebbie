@@ -129,6 +129,7 @@ When the task's Claude runs a command that looks like a test run but is not in t
 | `✓ cargo test · 493 passed · at a1b2c3d`, green | It passed on the code the branch holds now, and the worktree has no uncommitted changes. |
 | `○ cargo test · 493 passed · at a1b2c3d, code changed since`, yellow | It passed, but a commit changed the code after it, or the worktree has changes it did not run on. |
 | `✗ cargo test failed · 2 failed · at a1b2c3d`, red | The latest run failed. |
+| `? cargo test result unknown, piped · at a1b2c3d`, peach | kebbie saw the run but not its result, so it counts as neither a pass nor a fail. |
 
 ## Groups
 

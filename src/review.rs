@@ -219,7 +219,7 @@ pub fn tests_answered_in(state: &Path, address: &str, current: impl Fn(&str) -> 
     let Ok(text) = fs::read_to_string(&file) else { return false };
     let Some(verdict) = parse_verdict(&text) else { return false };
     let given = fs::metadata(&file).and_then(|meta| meta.modified()).ok().and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok()).map_or(u64::MAX, |at| at.as_secs());
-    !verdict.ok && asks_for_tests(&text) && current(&verdict.sha) && crate::evidence::runs_in(state, address).iter().any(|run| run.ok && run.at > given && current(&run.code))
+    !verdict.ok && asks_for_tests(&text) && current(&verdict.sha) && crate::evidence::runs_in(state, address).iter().any(|run| run.result == crate::evidence::Outcome::Passed && run.at > given && current(&run.code))
 }
 
 fn again(cwd: &Path, stale_too: bool) -> Result<Option<String>> {
@@ -1259,13 +1259,15 @@ mod tests {
         let asked = "verdict: changes\nreviewed: abc\n\n- src/billing.rs:12 — no test covers the retry; none passed on the code under review.\n";
         fs::write(verdict_file(&state, "billing@app"), asked).unwrap();
         let given = crate::messages::now();
-        let run = |at: u64, ok: bool, code: &str| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), ok, exit: Some(0), duration_ms: None, summary: String::new(), sha: code.to_string(), dirty: false, code: code.to_string(), at };
+        let run = |at: u64, ok: bool, code: &str| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: if ok { crate::evidence::Outcome::Passed } else { crate::evidence::Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: String::new(), sha: code.to_string(), dirty: false, code: code.to_string(), at };
         let current = |sha: &str| sha == "abc";
         assert!(!tests_answered_in(&state, "billing@app", current), "no run yet");
         crate::evidence::save(&state, "billing@app", &run(given.saturating_sub(100), true, "abc")).unwrap();
         assert!(!tests_answered_in(&state, "billing@app", current), "a run the reviewer already saw answers nothing");
         crate::evidence::save(&state, "billing@app", &run(given + 5, false, "abc")).unwrap();
         assert!(!tests_answered_in(&state, "billing@app", current), "a failed run answers nothing");
+        crate::evidence::save(&state, "billing@app", &crate::evidence::Run { result: crate::evidence::Outcome::Unknown, ..run(given + 5, true, "abc") }).unwrap();
+        assert!(!tests_answered_in(&state, "billing@app", current), "a run without a result answers nothing");
         crate::evidence::save(&state, "billing@app", &run(given + 6, true, "other")).unwrap();
         assert!(!tests_answered_in(&state, "billing@app", current), "a pass on other code is not on the reviewed code");
         crate::evidence::save(&state, "billing@app", &run(given + 7, true, "abc")).unwrap();

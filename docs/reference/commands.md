@@ -421,6 +421,7 @@ The test runs kebbie recorded for the task, newest first: each one's result, the
 | `✓` | It passed on the code the branch holds now. |
 | `○` | The code changed since. |
 | `✗` | It failed. |
+| `?` | kebbie saw the run but not its result. |
 
 kebbie records a run from the hooks it gives the task's Claude, after every Bash command that starts with a test command (after any `cd … &&` and `VAR=value`):
 

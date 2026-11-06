@@ -23,11 +23,29 @@ const RUNNER_WORDS: [&str; 4] = ["test", "tests", "spec", "specs"];
 const TASK_RUNNERS: [&str; 22] = ["make", "just", "rake", "npm", "pnpm", "yarn", "bun", "deno", "dotnet", "mvn", "gradle", "gradlew", "swift", "zig", "flutter", "dart", "mix", "go", "nx", "turbo", "task", "bundle"];
 const TEST_TOOLS: [&str; 8] = ["jest", "vitest", "mocha", "phpunit", "ctest", "tox", "nox", "bats"];
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Outcome {
+    Passed,
+    Failed,
+    Unknown,
+}
+
+impl Outcome {
+    fn name(self) -> &'static str {
+        match self {
+            Outcome::Passed => "passed",
+            Outcome::Failed => "failed",
+            Outcome::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
     pub command: String,
     pub runner: String,
-    pub ok: bool,
+    pub result: Outcome,
+    pub why: String,
     pub exit: Option<i64>,
     pub duration_ms: Option<u64>,
     pub summary: String,
@@ -40,16 +58,23 @@ pub struct Run {
 impl Run {
     pub fn to_json(&self) -> Value {
         json!({
-            "command": self.command, "runner": self.runner, "ok": self.ok, "exit": self.exit, "duration_ms": self.duration_ms,
+            "command": self.command, "runner": self.runner, "result": self.result.name(), "ok": self.result == Outcome::Passed, "why": self.why, "exit": self.exit, "duration_ms": self.duration_ms,
             "summary": self.summary, "sha": self.sha, "dirty": self.dirty, "code": self.code, "at": self.at,
         })
     }
 
     fn from_json(value: &Value) -> Option<Run> {
+        let result = match value["result"].as_str() {
+            Some("passed") => Outcome::Passed,
+            Some("failed") => Outcome::Failed,
+            Some(_) => Outcome::Unknown,
+            None => if value["ok"].as_bool()? { Outcome::Passed } else { Outcome::Failed },
+        };
         Some(Run {
             command: value["command"].as_str()?.to_string(),
             runner: value["runner"].as_str()?.to_string(),
-            ok: value["ok"].as_bool()?,
+            result,
+            why: value["why"].as_str().unwrap_or_default().to_string(),
             exit: value["exit"].as_i64(),
             duration_ms: value["duration_ms"].as_u64(),
             summary: value["summary"].as_str().unwrap_or_default().to_string(),
@@ -368,10 +393,10 @@ pub fn outcome(input: &Value, listed: &[String]) -> Option<(String, String, Opti
 pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String], input: &Value, at: u64) -> Option<Run> {
     let (command, runner, exit, finished, output) = outcome(input, listed)?;
     let summary = summary(&output);
-    let ok = finished && !summary.as_ref().is_some_and(|summary| summary.failed);
+    let result = if finished && !summary.as_ref().is_some_and(|summary| summary.failed) { Outcome::Passed } else { Outcome::Failed };
     let (sha, dirty, code) = snapshot(worktree).ok()?;
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
-    let run = Run { command, runner, ok, exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at };
+    let run = Run { command, runner, result, why: String::new(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at };
     save(state, address, &run).ok()?;
     Some(run)
 }
@@ -396,7 +421,7 @@ pub fn hook(address: &str, input: &str) -> String {
     if peers::me(Path::new(&top)).as_deref() != Some(address) {
         return String::new();
     }
-    if let Ok(state) = state_dir() && record_in(&state, address, Path::new(&top), &listed, &input, crate::messages::now()).is_some_and(|run| run.ok) {
+    if let Ok(state) = state_dir() && record_in(&state, address, Path::new(&top), &listed, &input, crate::messages::now()).is_some_and(|run| run.result == Outcome::Passed) {
         crate::review::again_for_tests(Path::new(&top), address, &crate::status::named(&state, address));
     }
     String::new()
@@ -407,6 +432,7 @@ pub enum Mark {
     Covered,
     Stale,
     Failed,
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -421,6 +447,7 @@ impl Shown {
             Mark::Covered => "✓",
             Mark::Stale => "○",
             Mark::Failed => "✗",
+            Mark::Unknown => "?",
         }
     }
 
@@ -429,11 +456,16 @@ impl Shown {
     }
 }
 
-// The latest run against the code now: covered when it passed on the same code with a clean tree, failed whatever the code since.
+// The latest run against the code now: covered when it passed on the same code with a clean tree, failed or unknown whatever the code since.
 pub fn shown(run: &Run, current: impl Fn(&str) -> bool, clean: bool) -> Shown {
     let counts = if run.summary.is_empty() { String::new() } else { format!(" · {}", run.summary) };
-    if !run.ok {
-        return Shown { mark: Mark::Failed, text: format!("{} failed{counts} · at {}", run.runner, run.short()) };
+    match run.result {
+        Outcome::Failed => return Shown { mark: Mark::Failed, text: format!("{} failed{counts} · at {}", run.runner, run.short()) },
+        Outcome::Unknown => {
+            let why = if run.why.is_empty() { String::new() } else { format!(", {}", run.why) };
+            return Shown { mark: Mark::Unknown, text: format!("{} result unknown{why}{counts} · at {}", run.runner, run.short()) };
+        }
+        Outcome::Passed => {}
     }
     if clean && current(&run.code) {
         Shown { mark: Mark::Covered, text: format!("{}{counts} · at {}", run.runner, run.short()) }
@@ -489,7 +521,7 @@ pub fn brief(runs: &[Run], on_reviewed: impl Fn(&Run) -> bool, judge: impl Fn(&R
     let mut lines = Vec::new();
     let reviewed: Vec<&Run> = runs.iter().rev().filter(|run| on_reviewed(run)).collect();
     if !reviewed.is_empty() {
-        lines.push("The test runs kebbie recorded on the code under review, one line per command, newest first (✓ passed, ✗ failed); weigh them in the Tests step:".to_string());
+        lines.push("The test runs kebbie recorded on the code under review, one line per command, newest first (✓ passed, ✗ failed, ? result unknown); weigh them in the Tests step:".to_string());
         let mut commands: Vec<&str> = Vec::new();
         for run in &reviewed {
             if !commands.contains(&run.command.as_str()) {
@@ -499,12 +531,16 @@ pub fn brief(runs: &[Run], on_reviewed: impl Fn(&Run) -> bool, judge: impl Fn(&R
         for command in commands {
             let same: Vec<&&Run> = reviewed.iter().filter(|run| run.command == command).collect();
             let newest = same[0];
-            let failed = same.iter().filter(|run| !run.ok).count();
-            let tally = if same.len() == 1 { String::new() } else { format!(" · {} ({} passed, {failed} failed), the newest:", plural(same.len(), "run"), same.len() - failed) };
+            let tally = |result: Outcome| same.iter().filter(|run| run.result == result).count();
+            let unknown = match tally(Outcome::Unknown) { 0 => String::new(), count => format!(", {count} unknown") };
+            let tally = if same.len() == 1 { String::new() } else { format!(" · {} ({} passed, {} failed{unknown}), the newest:", plural(same.len(), "run"), tally(Outcome::Passed), tally(Outcome::Failed)) };
             lines.push(format!("- `{command}`{tally} {}{}", judge(newest).line(), with_changes(newest)));
         }
+        if reviewed.iter().all(|run| run.result == Outcome::Unknown) {
+            lines.push("kebbie saw none of these runs end with a result it could read, so they prove neither a pass nor a fail: treat them as no recorded run and ask in the Tests step which tests passed.".to_string());
+        }
     } else if !runs.is_empty() {
-        lines.push("No test run kebbie recorded ran on the code under review. The newest older ones (○ passed on older code, ✗ failed), for the Tests step:".to_string());
+        lines.push("No test run kebbie recorded ran on the code under review. The newest older ones (○ passed on older code, ✗ failed, ? result unknown), for the Tests step:".to_string());
         for run in runs.iter().rev().take(OLDER_SHOWN) {
             lines.push(format!("- {} · `{}`{}", judge(run).line(), run.command, with_changes(run)));
         }
@@ -676,10 +712,10 @@ mod tests {
         let list = listed(&[]);
         let run = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 100).unwrap();
         let head = git(&dir, &["rev-parse", "HEAD"]).unwrap();
-        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), ok: true, exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100 });
+        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100 });
         assert_eq!(runs_in(&state, "billing@app"), [run]);
         let broke = record_in(&state, "billing@app", &dir, &list, &failed("npm test"), 200).unwrap();
-        assert!(!broke.ok && broke.exit == Some(1) && broke.runner == "npm test");
+        assert!(broke.result == Outcome::Failed && broke.exit == Some(1) && broke.runner == "npm test");
         assert!(record_in(&state, "billing@app", &dir, &list, &passed("ls -la"), 300).is_none());
         let mut background = passed("cargo test");
         background["tool_input"]["run_in_background"] = json!(true);
@@ -689,7 +725,7 @@ mod tests {
         assert!(record_in(&state, "billing@app", &dir, &list, &interrupted, 300).is_none());
         let mut piped = passed("cargo test 2>&1 | tail -3");
         piped["tool_response"]["stdout"] = json!("test result: FAILED. 1 passed; 1 failed; 0 ignored");
-        assert!(!record_in(&state, "billing@app", &dir, &list, &piped, 400).unwrap().ok, "a pipe hides the exit code, so the result line decides");
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &piped, 400).unwrap().result, Outcome::Failed, "a pipe hides the exit code, so the result line decides");
         let latest = runs_in(&state, "billing@app").pop().unwrap();
         for at in 0..30 {
             save(&state, "billing@app", &Run { at: 1000 + at, ..latest.clone() }).unwrap();
@@ -727,7 +763,7 @@ mod tests {
 
     #[test]
     fn the_reviewer_reads_every_run_on_the_reviewed_code_one_line_per_command_and_older_ones_only_without_them() {
-        let run = |at: u64, command: &str, ok, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), ok, exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at };
+        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at };
         let mut runs = vec![run(1, "cargo test", false, "old")];
         for at in 2..9 {
             runs.push(run(at, "cargo test --lib evidence", at != 4, "reviewed"));
@@ -744,6 +780,22 @@ mod tests {
         let older = brief(&runs, |_| false, |run| shown(run, |_| false, true), Hook::Works, &[]);
         assert!(older.starts_with("No test run kebbie recorded ran on the code under review") && older.lines().count() == 1 + OLDER_SHOWN, "{older}");
         assert!(brief(&[], |_| true, judge, Hook::Works, &[]).contains("recorded no test run"));
+    }
+
+    #[test]
+    fn a_run_without_a_result_reads_as_unknown_and_counts_as_no_run_for_the_reviewer() {
+        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1 };
+        let judge = |run: &Run| shown(run, |code| code == "reviewed", true);
+        assert_eq!(judge(&run).line(), "? cargo test result unknown, piped · at abcdef0", "not a pass even on the code as it is");
+        assert_eq!(Run::from_json(&run.to_json()), Some(run.clone()));
+        assert_eq!(run.to_json()["ok"], false, "an older kebbie reading the file sees no pass");
+        let older = json!({ "command": "cargo test", "runner": "cargo test", "ok": true, "sha": "a", "code": "a" });
+        assert_eq!(Run::from_json(&older).map(|run| run.result), Some(Outcome::Passed), "a run recorded before results could be unknown");
+        let text = brief(std::slice::from_ref(&run), |_| true, judge, Hook::Works, &[]);
+        assert!(text.contains("- `cargo test | tail -3` ? cargo test result unknown, piped") && text.contains("treat them as no recorded run"), "{text}");
+        let passed = Run { result: Outcome::Passed, why: String::new(), at: 2, command: "cargo test".to_string(), ..run.clone() };
+        let both = brief(&[run.clone(), passed, run.clone()], |_| true, judge, Hook::Works, &[]);
+        assert!(both.contains("2 runs (0 passed, 0 failed, 2 unknown)") && !both.contains("treat them as no recorded run"), "{both}");
     }
 
     #[test]
