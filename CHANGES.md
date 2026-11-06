@@ -5,6 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+
+### Fixed
+
+## 0.36.0
+
+### What's new
 - kebbie issue report --all, or a in the board's bugs to send, sends every waiting bug on one yes, paced to the endpoint's 5 per 5 minutes and waiting out a busy answer.
 
 ### Fixed
