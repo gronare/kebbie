@@ -9,7 +9,7 @@ use crate::messages;
 use crate::notice::{Notice, Tone};
 use crate::peers;
 use crate::permit::Caller;
-use crate::repo::{UNHOOKED, ahead_behind, default_branch, git, git_writing, hidden_from_status, main_checkout, name_of, rebase_in_progress, uncommitted};
+use crate::repo::{UNHOOKED, ahead_behind, default_branch, git, git_writing, hidden_from_status, main_checkout, name_of, rebase_in_progress, rebase_writing, uncommitted};
 use crate::sh::Result;
 use super::approval::{approved, fingerprint, fingerprint_at, same_code};
 use super::intent::{self, By, Intent, Through, Work};
@@ -93,7 +93,7 @@ fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) 
         Some(from) => vec!["rebase", "--quiet", "--onto", upstream, from],
         None => vec!["rebase", "--quiet", upstream],
     };
-    match git_writing(path, &[options, &rebase].concat()) {
+    match rebase_writing(path, options, &rebase) {
         Ok(_) if touched.is_empty() => Ok(Updated::Clean),
         Ok(_) => Ok(Updated::Overlap(touched)),
         Err(error) if rebase_in_progress(path) => {

@@ -20,6 +20,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A follow-up started for a comment runs in the permission mode of the task started last, unless a profile or config sets one.
 - A prompt on a task's screen reaches the lead when its turn ends, without waiting out a conversation with you.
 - A task whose work belongs in another repo asks the lead for a half there instead of making a worktree by hand that Push cannot see.
+- A push's rebase that meets another git's index.lock half-way waits and goes on, instead of failing on its own rebase.
 
 ## 0.35.0
 

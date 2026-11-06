@@ -41,6 +41,21 @@ pub fn git_writing(cwd: &Path, args: &[&str]) -> Result<String> {
     index_retrying(|| git(cwd, args), std::thread::sleep, lock)
 }
 
+// A rebase that meets index.lock half-way stops with its pick rescheduled, so a retry continues it; starting it again would fail on its own rebase-merge.
+pub fn rebase_writing(cwd: &Path, options: &[&str], rebase: &[&str]) -> Result<String> {
+    rebase_retrying(cwd, options, rebase, std::thread::sleep)
+}
+
+fn rebase_retrying(cwd: &Path, options: &[&str], rebase: &[&str], mut pause: impl FnMut(std::time::Duration)) -> Result<String> {
+    let lock = || git(cwd, &["rev-parse", "--path-format=absolute", "--git-path", "index.lock"]).unwrap_or_else(|_| "index.lock".to_string());
+    let mut started = false;
+    index_retrying(|| {
+        let args: Vec<&str> = if started && rebase_in_progress(cwd) { [options, &["-c", "core.editor=true", "rebase", "--continue"]].concat() } else { [options, rebase].concat() };
+        started = true;
+        git(cwd, &args)
+    }, &mut pause, lock)
+}
+
 fn index_retrying(mut attempt: impl FnMut() -> Result<String>, mut pause: impl FnMut(std::time::Duration), lock: impl Fn() -> String) -> Result<String> {
     for wait in INDEX_RETRIES {
         match attempt() {
@@ -421,6 +436,38 @@ mod tests {
         std::fs::write(dir.join(".git/index.lock"), "").unwrap();
         let named = git_writing(&dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "--allow-empty", "-m", "one"]).unwrap_err();
         assert!(named.contains(&format!("{} stays", dir.canonicalize().unwrap().join(".git/index.lock").display())), "{named}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_rebase_that_meets_index_lock_half_way_is_continued_and_not_started_again() {
+        let dir = crate::sh::test_dir("rebase-lock");
+        let who = ["-c", "user.name=t", "-c", "user.email=t@t"];
+        let commit = |name: &str| {
+            std::fs::write(dir.join(name), name).unwrap();
+            git(&dir, &["add", name]).unwrap();
+            git(&dir, &[&who[..], &["commit", "--quiet", "-m", name]].concat()).unwrap();
+        };
+        git(&dir, &["init", "--quiet", "-b", "main"]).unwrap();
+        commit("base");
+        git(&dir, &["switch", "--quiet", "-c", "task"]).unwrap();
+        for name in ["one", "two", "three"] {
+            commit(name);
+        }
+        git(&dir, &["switch", "--quiet", "main"]).unwrap();
+        commit("theirs");
+        git(&dir, &["switch", "--quiet", "task"]).unwrap();
+        let once = dir.join(".git/locked-once");
+        let hold = format!("test -e {0} || {{ touch {0}; touch .git/index.lock; }}", once.display());
+        let mut waits = 0;
+        let rebased = rebase_retrying(&dir, &who, &["rebase", "--quiet", "-x", &hold, "main"], |_| {
+            waits += 1;
+            let _ = std::fs::remove_file(dir.join(".git/index.lock"));
+        });
+        assert!(rebased.is_ok(), "{rebased:?}");
+        assert_eq!(waits, 1, "the other git let go of the lock once");
+        assert!(!rebase_in_progress(&dir));
+        assert_eq!(git(&dir, &["log", "--format=%s", "main..HEAD"]).unwrap(), "three\ntwo\none", "every pick landed once");
         let _ = std::fs::remove_dir_all(dir);
     }
 
