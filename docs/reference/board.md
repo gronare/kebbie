@@ -168,6 +168,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - A push or close kebbie could not finish.
 - A pushed task whose CI gh has not been able to read for 15 minutes, its row marked `gh cannot read it: <error>` meanwhile.
 - A task an API error stopped that kebbie will not resume, marked `stopped by <reason>: <Claude Code's words>`.
+- A task whose worktree git cannot read, such as one whose index names a missing object, marked `git cannot read its worktree: <git's error>`. The other tasks show as usual.
 
 `N` puts what needs you in one numbered list, in the order to do it. See [The Next window](#the-next-window).
 

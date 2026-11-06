@@ -74,6 +74,7 @@ pub(super) fn row_facts(item: &Item) -> String {
     }
     let Some(git) = &item.git else { return String::new() };
     let mut parts: Vec<String> = absence(item).map(str::to_string).into_iter().collect();
+    parts.extend(item.git_error().map(|_| crate::status::GIT_UNREAD.to_string()));
     parts.extend(item.ci_note());
     parts.extend(item.recover_note());
     parts.extend(item.push_note());

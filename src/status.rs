@@ -17,6 +17,7 @@ pub const UNCHECKED: &str = "rules not checked";
 pub const CHECKING: &str = "lead checking rules";
 pub const REVIEWER_CHECKING: &str = "reviewer checking rules";
 pub const STAGED: &str = "on local main · waiting for your push";
+pub const GIT_UNREAD: &str = "git cannot read its worktree";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Group {
@@ -79,6 +80,7 @@ pub struct Git {
     pub uncommitted: usize,
     pub approved: bool,
     pub head: Option<String>,
+    pub error: Option<String>,
 }
 
 // How a prompt in the agent's own pane is answered, which the board shows while it waits there.
@@ -361,7 +363,11 @@ impl Item {
 
     // What wants the user now, whatever the phase: Claude's own prompt, a question, a draft holding messages back, or work that landed and waits for them.
     pub(crate) fn wants_you_now(&self) -> bool {
-        self.blocked_on_a_prompt() || self.question.is_some() || self.held_by_draft.is_some() || self.landed.is_some_and(tasks::LandedUnsure::waits_for_you)
+        self.blocked_on_a_prompt() || self.question.is_some() || self.held_by_draft.is_some() || self.landed.is_some_and(tasks::LandedUnsure::waits_for_you) || self.git_error().is_some()
+    }
+
+    pub fn git_error(&self) -> Option<&str> {
+        self.git.as_ref()?.error.as_deref()
     }
 
     // A task's group is its kept phase, which only the actors that move it write; herdr's working or idle is the row's icon, never its group.
@@ -473,6 +479,9 @@ impl Item {
         }
         if self.blocked_on_a_prompt() {
             return self.agent.as_ref().map(|agent| format!("{} · {go} goes there", agent.answer.trim_end_matches(IN_SPACE)));
+        }
+        if let Some(error) = self.git_error() {
+            return Some(format!("git cannot read its worktree: {error}"));
         }
         if let Some(landed) = self.landed_note() {
             return Some(landed);
@@ -587,7 +596,7 @@ impl Item {
             let dirty = if git.uncommitted > 0 { format!(" · {}", plural(git.uncommitted, "uncommitted file")) } else { String::new() };
             return format!("{} · ready to push{dirty}{behind}{review}{turn}", plural(git.ahead, "commit"));
         }
-        let mut parts: Vec<String> = self.staged.then(|| STAGED.to_string()).into_iter().chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
+        let mut parts: Vec<String> = self.git_error().map(|_| GIT_UNREAD.to_string()).into_iter().chain(self.staged.then(|| STAGED.to_string())).chain(self.phase_note()).chain(self.ci_note()).chain(self.recover_note()).chain(self.push_note()).chain(self.landed.filter(|why| !why.waits_for_you()).and(self.landed_note())).collect();
         if git.ahead > 0 {
             parts.push(plural(git.ahead, "commit"));
         }
@@ -801,6 +810,12 @@ pub fn fork_point(path: &Path, upstream: &str) -> Result<String> {
 }
 
 // The task's commits not yet on the default branch, so one pushed rebased elsewhere stops counting before its Claude rebases, from the fork point.
+// Ahead, behind, changed and uncommitted; a worktree git cannot read fails here alone, so its row shows the error and the rest of the board reads on.
+fn git_counts(path: &Path, upstream: &str) -> Result<(usize, usize, usize, usize)> {
+    let (_, behind) = ahead_behind(path, upstream)?;
+    Ok((own_commits(path, upstream)?, behind, changed_count(path)?, uncommitted(path)?.len()))
+}
+
 fn own_commits(path: &Path, upstream: &str) -> Result<usize> {
     let open = tasks::open_commits(path, upstream)?;
     let Ok(base) = fork_point(path, upstream) else { return Ok(open.len()) };
@@ -942,10 +957,10 @@ pub fn gather() -> Result<Vec<Item>> {
                 .map(|agent| agent_from(&crate::agent::codex::read_question(agent, &address)));
             let agent_title = agent.as_ref().map(|agent| agent.title.clone());
             let working = agent.as_ref().is_some_and(|agent| agent.status == "working");
-            let (_, behind) = ahead_behind(&slot.path, &upstream)?;
-            let ahead = own_commits(&slot.path, &upstream)?;
-            let changed = changed_count(&slot.path)?;
-            let uncommitted = uncommitted(&slot.path)?.len();
+            let ((ahead, behind, changed, uncommitted), error) = match git_counts(&slot.path, &upstream) {
+                Ok(counts) => (counts, None),
+                Err(error) => ((0, 0, 0, 0), Some(error)),
+            };
             let approved = ahead > 0 && tasks::approved(&slot.path, &upstream, &address);
             let head = crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).ok();
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
@@ -971,7 +986,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 path: Some(slot.path.clone()),
                 workspace,
                 agent,
-                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, head }),
+                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, head, error }),
                 report: reports.get(&address).map(|report| messages::shown_report(&log, report)),
                 question: questions.iter().find(|question| question.from == address).or_else(|| questions.iter().find(|question| question.about.as_deref() == Some(&crate::review::question_about(&address)))).map(|question| (*question).clone()),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
@@ -1110,7 +1125,7 @@ pub(crate) mod tests {
         let mut item = Item {
             review: None, verdict: None, second: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::TASK.to_string()), server: false, worker: false, url: None, name: "billing".to_string(), title: None, place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None, answer: answer_in_space(crate::agent::Agent::Claude), kind: crate::agent::Agent::Claude }),
-            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, head: None }),
+            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, head: None, error: None }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
@@ -1502,6 +1517,31 @@ pub(crate) mod tests {
         item.drop_settled_confirmation();
         assert!(item.question.is_none(), "a reviewer reading it again settles the question");
         assert_eq!(item.verdict_wanted(), None, "a running reviewer has no verdict yet");
+    }
+
+    #[test]
+    fn a_worktree_git_cannot_read_shows_its_error_on_its_own_row_and_the_rest_reads_on() {
+        let dir = crate::sh::test_dir("git-unread");
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(&dir).output().unwrap().status.success(), "{args:?}");
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("y.rb"), "some content here\n").unwrap();
+        git(&["add", "y.rb"]);
+        git(&["commit", "-q", "-m", "y"]);
+        assert_eq!(git_counts(&dir, "main"), Ok((0, 0, 0, 0)));
+        git(&["rm", "-q", "--cached", "y.rb"]);
+        git(&["update-index", "--add", "--cacheinfo", "100644,1234567890123456789012345678901234567890,x.rb"]);
+        let error = git_counts(&dir, "main").unwrap_err();
+        assert!(error.contains("unable to read"), "{error}");
+        let mut broken = task(Some("idle"), Some("ready"), 0);
+        broken.git.as_mut().unwrap().error = Some(error);
+        in_phase(&mut broken, Phase::Ready { head: None });
+        assert_eq!(broken.group(), Group::NeedsYou);
+        assert!(broken.wanted("enter").unwrap().starts_with("git cannot read its worktree: "), "{:?}", broken.wanted("enter"));
+        assert!(broken.summary().contains(GIT_UNREAD), "{}", broken.summary());
+        let source = include_str!("status.rs");
+        let loop_body = &source[source.find("for slot in pool {").unwrap()..source.find("item.drop_settled_confirmation();").unwrap()];
+        assert!(!loop_body.contains(")?;"), "one worktree's git error must not end the whole board");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
