@@ -433,7 +433,7 @@ It keeps the last 20 per task. A result line that counts failures, such as `2 fa
 
 ### `kebbie approve <name>`
 
-Your word or the lead's that a task's commits hold to the rules skill. It overrides the reviewer's rules check, which gives the same approval by itself when a task reports ready. Until a commit changes, the board shows the task ready to push. Tasks cannot run it.
+Your word or the lead's that a task's commits hold to the rules skill. It overrides the reviewer's rules check, which gives the same approval by itself when a task reports ready. Until a commit changes, the board shows the task ready to push. Files left uncommitted never take the approval back, but they keep the task from Ready to push: approve names them and how to push the commits alone. Tasks cannot run it.
 
 ### `kebbie accept <name> <sha>`
 

@@ -160,6 +160,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 - Messages held behind a draft in its input box.
 - A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question, or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
 - A task that reported needs-you, or ready with nothing committed.
+- A task that reported ready with commits while tracked files are uncommitted, marked `2 uncommitted files hold it: a.md and b.md · p then p pushes the commits and keeps them`. The push window opens on its last commit, so `p` pushes every commit and keeps the task open with the files as they are; its approval is of the commits and stays.
 - With `task.require_accept` on, a ready task with a commit you have not accepted, marked `accept step N`.
 - A task whose turn ended without a report even after kebbie asked for one.
 - A task whose CI failed after a push of only some of its commits, marked `CI failed: <workflow> · <job> · <step>`, and `its Claude says outside the code: <reason>` once its Claude has said so. `C` dismisses it.

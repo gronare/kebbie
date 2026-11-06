@@ -922,7 +922,8 @@ impl App {
                                         return;
                                     }
                                     let (card, tests) = (report::card_for(&path), evidence::for_path(&path));
-                                    self.mode = Mode::ConfirmPush { path, commits, selected: marks.start(), card, tests, marks, scroll: push::Scroll::default() };
+                                    let selected = if item.held_by_uncommitted().is_some() { commits.len() - 1 } else { marks.start() };
+                                    self.mode = Mode::ConfirmPush { path, commits, selected, card, tests, marks, scroll: push::Scroll::default() };
                                 }
                                 Err(error) => self.show(Err(error)),
                             },

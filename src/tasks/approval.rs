@@ -119,7 +119,16 @@ fn approve_as(caller: &crate::permit::Caller, cwd: &Path, name: Option<&str>) ->
     }
     let address = peers::address(task, &name_of(&repo));
     record_approval(&state_dir()?, &address, &fingerprint(&slot.path, &upstream)?)?;
-    Ok(format!("Approved {address}'s commits against the rules; a new or changed commit takes the approval back."))
+    Ok(approved_said(&address, &crate::repo::uncommitted(&slot.path)?))
+}
+
+// The approval is of the commits alone, so files left uncommitted never take it back; they keep a push of everything from going out, which the user hears of here.
+fn approved_said(address: &str, dirty: &[String]) -> String {
+    let approved = format!("Approved {address}'s commits against the rules; a new or changed commit takes the approval back.");
+    if dirty.is_empty() {
+        return approved;
+    }
+    format!("{approved} Its uncommitted {} ({}) still keep it from Ready to push: commit or stash them, or push the commits alone from the board's push window with p, which keeps the files as they are.", if dirty.len() == 1 { "file" } else { "files" }, super::and_list(dirty))
 }
 
 // What the lead is asked when the reviewer gave no rules verdict, or None when there is nothing new for it to check.
@@ -174,6 +183,18 @@ mod tests {
     use crate::tasks::test_support::*;
     use crate::repo::{ahead_behind, git};
     use crate::tasks::history::{reword, squash};
+
+    #[test]
+    fn approving_a_task_with_uncommitted_files_says_they_hold_it_and_how_to_push_the_commits_alone() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let approved = fingerprint(&slot.path, &upstream).unwrap();
+        std::fs::write(slot.path.join("d"), "a draft that waits on someone else").unwrap();
+        assert_eq!(fingerprint(&slot.path, &upstream).unwrap(), approved, "the approval is of the commits, so the draft never takes it back");
+        let said = approved_said("billing@app", &crate::repo::uncommitted(&slot.path).unwrap());
+        assert!(said.starts_with("Approved billing@app's commits") && said.contains("uncommitted file (d) still keep it from Ready to push") && said.contains("push the commits alone"), "{said}");
+        assert!(!approved_said("billing@app", &[]).contains("uncommitted"));
+        cleanup(dir, origin, &slot);
+    }
 
     #[test]
     fn a_clean_rebase_keeps_the_fingerprint_and_a_new_or_changed_commit_loses_it() {

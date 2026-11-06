@@ -81,6 +81,7 @@ pub struct Git {
     pub approved: bool,
     pub head: Option<String>,
     pub error: Option<String>,
+    pub uncommitted_files: Vec<String>,
 }
 
 // How a prompt in the agent's own pane is answered, which the board shows while it waits there.
@@ -233,6 +234,16 @@ impl Item {
         if confirming && !stands {
             self.question = None;
         }
+    }
+
+    // Ready with commits, kept from push only by tracked files left uncommitted: the push window's keep-open push takes the commits and leaves the files.
+    pub fn held_by_uncommitted(&self) -> Option<String> {
+        let git = self.git.as_ref().filter(|git| git.ahead > 0 && git.uncommitted > 0)?;
+        if !matches!(self.phase(), Some(Phase::NeedsYou(Why::NothingToPush))) {
+            return None;
+        }
+        let verb = if git.uncommitted == 1 { "holds" } else { "hold" };
+        Some(format!("{} {verb} it: {} · {} then p pushes the commits and keeps them", plural(git.uncommitted, "uncommitted file"), tasks::and_list(&git.uncommitted_files), crate::keys::key(crate::keys::Act::Push)))
     }
 
     // A changes verdict on the current code with no reviewer running: what it asks, first finding first, for the row's second line.
@@ -503,6 +514,9 @@ impl Item {
         }
         if let Some(verdict) = self.verdict_wanted() {
             return Some(verdict);
+        }
+        if let Some(held) = self.held_by_uncommitted() {
+            return Some(held);
         }
         if let Some(waits) = self.accept_waits() {
             return Some(format!("{} · {} review", waits.next, crate::keys::key(crate::keys::Act::Review)));
@@ -810,10 +824,10 @@ pub fn fork_point(path: &Path, upstream: &str) -> Result<String> {
 }
 
 // The task's commits not yet on the default branch, so one pushed rebased elsewhere stops counting before its Claude rebases, from the fork point.
-// Ahead, behind, changed and uncommitted; a worktree git cannot read fails here alone, so its row shows the error and the rest of the board reads on.
-fn git_counts(path: &Path, upstream: &str) -> Result<(usize, usize, usize, usize)> {
+// Ahead, behind, changed and the uncommitted files; a worktree git cannot read fails here alone, so its row shows the error and the rest of the board reads on.
+fn git_counts(path: &Path, upstream: &str) -> Result<(usize, usize, usize, Vec<String>)> {
     let (_, behind) = ahead_behind(path, upstream)?;
-    Ok((own_commits(path, upstream)?, behind, changed_count(path)?, uncommitted(path)?.len()))
+    Ok((own_commits(path, upstream)?, behind, changed_count(path)?, uncommitted(path)?))
 }
 
 fn own_commits(path: &Path, upstream: &str) -> Result<usize> {
@@ -957,10 +971,11 @@ pub fn gather() -> Result<Vec<Item>> {
                 .map(|agent| agent_from(&crate::agent::codex::read_question(agent, &address)));
             let agent_title = agent.as_ref().map(|agent| agent.title.clone());
             let working = agent.as_ref().is_some_and(|agent| agent.status == "working");
-            let ((ahead, behind, changed, uncommitted), error) = match git_counts(&slot.path, &upstream) {
+            let ((ahead, behind, changed, uncommitted_files), error) = match git_counts(&slot.path, &upstream) {
                 Ok(counts) => (counts, None),
-                Err(error) => ((0, 0, 0, 0), Some(error)),
+                Err(error) => ((0, 0, 0, Vec::new()), Some(error)),
             };
+            let uncommitted = uncommitted_files.len();
             let approved = ahead > 0 && tasks::approved(&slot.path, &upstream, &address);
             let head = crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).ok();
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
@@ -986,7 +1001,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 path: Some(slot.path.clone()),
                 workspace,
                 agent,
-                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, head, error }),
+                git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, head, error, uncommitted_files }),
                 report: reports.get(&address).map(|report| messages::shown_report(&log, report)),
                 question: questions.iter().find(|question| question.from == address).or_else(|| questions.iter().find(|question| question.about.as_deref() == Some(&crate::review::question_about(&address)))).map(|question| (*question).clone()),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
@@ -1125,7 +1140,7 @@ pub(crate) mod tests {
         let mut item = Item {
             review: None, verdict: None, second: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::TASK.to_string()), server: false, worker: false, url: None, name: "billing".to_string(), title: None, place: "web".to_string(), repo: None, path: None, workspace: None,
             agent: status.map(|status| Agent { pane: "w1:p1".to_string(), status: status.to_string(), title: String::new(), context: None, answer: answer_in_space(crate::agent::Agent::Claude), kind: crate::agent::Agent::Claude }),
-            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, head: None, error: None }),
+            git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, head: None, error: None, uncommitted_files: Vec::new() }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
                 report: Some(Report { state: state.to_string(), next: "nothing".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
@@ -1293,6 +1308,20 @@ pub(crate) mod tests {
         rederive(&mut dirty);
         assert!(dirty.group() == Group::NeedsYou);
         assert!(dirty.summary().contains("2 uncommitted files") && !dirty.summary().contains(UNCHECKED), "the approval holds; the row names what keeps it from push: {}", dirty.summary());
+    }
+
+    #[test]
+    fn a_ready_task_held_only_by_uncommitted_files_names_them_and_offers_to_push_its_commits() {
+        let mut dirty = task(Some("idle"), Some("ready"), 2);
+        let git = dirty.git.as_mut().unwrap();
+        (git.changed, git.uncommitted, git.uncommitted_files) = (2, 2, vec!["drafts/a.md".to_string(), "drafts/b.md".to_string()]);
+        rederive(&mut dirty);
+        assert_eq!(dirty.phase(), Some(&Phase::NeedsYou(Why::NothingToPush)));
+        let push = crate::keys::key(crate::keys::Act::Push);
+        assert_eq!(dirty.wanted("enter"), Some(format!("2 uncommitted files hold it: drafts/a.md and drafts/b.md · {push} then p pushes the commits and keeps them")));
+        let mut nothing = task(Some("idle"), Some("ready"), 0);
+        rederive(&mut nothing);
+        assert_eq!(nothing.held_by_uncommitted(), None, "no commits, nothing to push anyway");
     }
 
     pub(crate) fn in_review(ok: bool, findings: usize, stale: bool, running: bool) -> crate::review::Shown {
@@ -1527,7 +1556,7 @@ pub(crate) mod tests {
         std::fs::write(dir.join("y.rb"), "some content here\n").unwrap();
         git(&["add", "y.rb"]);
         git(&["commit", "-q", "-m", "y"]);
-        assert_eq!(git_counts(&dir, "main"), Ok((0, 0, 0, 0)));
+        assert_eq!(git_counts(&dir, "main"), Ok((0, 0, 0, Vec::new())));
         git(&["rm", "-q", "--cached", "y.rb"]);
         git(&["update-index", "--add", "--cacheinfo", "100644,1234567890123456789012345678901234567890,x.rb"]);
         let error = git_counts(&dir, "main").unwrap_err();
