@@ -7,6 +7,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- kebbie records a test run after cd x; or a separate VAR=$(…); statement, and through timeout, nice or time.
+- A task hears at once when kebbie leaves a test-like command unrecorded, and why.
 
 ## 0.35.0
 

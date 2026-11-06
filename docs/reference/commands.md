@@ -423,7 +423,7 @@ The test runs kebbie recorded for the task, newest first: each one's result, the
 | `✗` | It failed. |
 | `?` | kebbie saw the run but not its result. |
 
-kebbie records a run from the hooks it gives the task's Claude, after every Bash command that starts with a test command (after any `cd … &&` and `VAR=value`):
+kebbie records a run from the hooks it gives the task's Claude, after every Bash command that runs a test command as a command of its own: at the start of the line or of any part of a `;`, `&&` or `||` chain, after `cd`, `export`, `VAR=value` and the wrappers `env`, `timeout`, `nice`, `time`, `nohup` and `bash -c`:
 
 - The built-in ones: `cargo test`, `cargo nextest`, `bin/rails test`, `bundle exec rspec`, `rspec`, `pytest`, `uv run pytest`, `npm test`, `pnpm test`, `yarn test`, `go test`, `mix test` and a few spellings of them.
 - The repo's own, in [`task.test_commands`](configuration.md#keys).

@@ -124,6 +124,8 @@ The `tests` line shows the last test command the task's Claude ran, as kebbie re
 
 When the task's Claude runs a command that looks like a test run but is not in the list kebbie records, such as `script/test` or `make test`, the row says `script/test is not recorded as a test run: add it to task.test_commands`. Once you add it to [`task.test_commands`](configuration.md#keys), the next run is recorded and the note goes.
 
+A listed test command inside a loop, a condition or `xargs` is not recorded either, since its result is not the command's: the row says `do script/test is not recorded as a test run: kebbie cannot tell its result inside a loop, a condition or xargs`. The task's Claude hears both notes as it runs the command.
+
 | Line | Means |
 | --- | --- |
 | `✓ cargo test · 493 passed · at a1b2c3d`, green | It passed on the code the branch holds now, and the worktree has no uncommitted changes. |

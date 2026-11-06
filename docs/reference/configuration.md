@@ -83,7 +83,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `task.rules_skill`: a task's Claude follows it, the reviewer checks a ready task against it, and `tidy` reshapes commits by it. It names a skill as `worktree.setup_skill` does, or a Markdown file by an absolute or `~` path, such as `"~/code/team/RULES.md"`: the task gets the file's text in its role and the reviewer in its brief. With the default, kebbie also refuses a ready report while a commit lacks a subject, a blank line and a body.
 
-`task.test_commands`: the built-in ones are `cargo test`, `bin/rails test`, `pytest`, `npm test`, `go test` and others; `kebbie config` lists them. A command counts when it starts with one of these, whole words, after any `cd … &&` and `VAR=value`. See [`kebbie evidence`](commands.md#kebbie-evidence-name---json).
+`task.test_commands`: the built-in ones are `cargo test`, `bin/rails test`, `pytest`, `npm test`, `go test` and others; `kebbie config` lists them. A command counts when one of these, whole words, starts it or any part of its `;`, `&&` or `||` chain, after `cd`, `export`, `VAR=value` and wrappers such as `timeout` or `nice`. See [`kebbie evidence`](commands.md#kebbie-evidence-name---json).
 
 `task.also_noticed` covers things such as a bug nearby, a stale doc or a refactor. See [Decide what a task does with what it notices](../how-to/decide-what-a-task-does-with-what-it-notices.md).
 

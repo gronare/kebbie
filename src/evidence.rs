@@ -10,6 +10,8 @@ use crate::repo::{default_branch, git, is_clean, main_checkout, name_of};
 use crate::sh::Result;
 use crate::tasks;
 
+mod shell;
+
 pub const DEFAULT_COMMANDS: [&str; 16] = [
     "cargo test", "cargo nextest", "bin/rails test", "bundle exec rails test", "bundle exec rspec", "bin/rspec", "rspec",
     "pytest", "python -m pytest", "uv run pytest", "npm test", "npm run test", "pnpm test", "yarn test", "go test", "mix test",
@@ -94,68 +96,35 @@ pub fn commands(configured: &[String]) -> Vec<String> {
     DEFAULT_COMMANDS.iter().map(|command| command.to_string()).chain(configured.iter().cloned()).collect()
 }
 
-fn assignment(word: &str) -> bool {
-    let Some((name, _)) = word.split_once('=') else { return false };
-    let mut chars = name.chars();
-    chars.next().is_some_and(|first| first.is_ascii_alphabetic() || first == '_') && chars.all(|char| char.is_ascii_alphanumeric() || char == '_')
-}
-
-// The end of the leading word, a quoted value counting as part of it.
-fn word_end(text: &str) -> usize {
-    let mut quote = None;
-    for (index, char) in text.char_indices() {
-        match (quote, char) {
-            (Some(open), _) if char == open => quote = None,
-            (Some(_), _) => {}
-            (None, '\'' | '"') => quote = Some(char),
-            (None, char) if char.is_whitespace() => return index,
-            _ => {}
-        }
-    }
-    text.len()
-}
-
-// The command as it runs after any leading `cd … &&` and environment assignments.
-pub fn core(command: &str) -> &str {
-    let mut rest = command.trim();
-    loop {
-        if (rest.starts_with("cd ") || rest.starts_with("cd\t")) && let Some((_, after)) = rest.split_once("&&") {
-            rest = after.trim_start();
-            continue;
-        }
-        if let Some(after) = rest.strip_prefix("env ") {
-            rest = after.trim_start();
-            continue;
-        }
-        let end = word_end(rest);
-        if end < rest.len() && assignment(&rest[..end]) {
-            rest = rest[end..].trim_start();
-            continue;
-        }
-        return rest;
-    }
-}
-
-// The longest listed command the given one starts with, whole words only.
-pub fn recognise<'a>(command: &str, listed: &'a [String]) -> Option<&'a str> {
-    let core = core(command).trim_start_matches("./");
+// The longest listed command a simple command starts with, whole words only.
+fn listed_start<'a>(simple: &str, listed: &'a [String]) -> Option<&'a str> {
+    let core = simple.trim_start_matches("./");
     listed.iter().map(|prefix| prefix.trim()).filter(|prefix| !prefix.is_empty())
         .filter(|prefix| { let bare = prefix.trim_start_matches("./"); core == bare || core.strip_prefix(bare).is_some_and(|rest| rest.starts_with(char::is_whitespace)) })
         .max_by_key(|prefix| prefix.len())
 }
 
-// The words of a command up to the first pipe, list or redirection.
-fn words(command: &str) -> Vec<&str> {
-    core(command).split_whitespace().take_while(|word| !["|", "||", "&&", ";", "&"].contains(word) && !word.starts_with(['>', '<']) && !word.contains(">&")).collect()
+// The first listed command the line runs as a command of its own, after cd, assignments, wrappers and any earlier command of a ; && || chain.
+pub fn recognise<'a>(command: &str, listed: &'a [String]) -> Option<&'a str> {
+    shell::pieces(command).into_iter().find_map(|(text, _)| match shell::piece(text) {
+        shell::Piece::Simple(simple) => listed_start(simple, listed),
+        shell::Piece::Nested(inner) => recognise(&inner, listed),
+        shell::Piece::Setup | shell::Piece::Hidden(..) => None,
+    })
+}
+
+// The words of a simple command up to the first redirection.
+fn words(simple: &str) -> Vec<&str> {
+    simple.split_whitespace().take_while(|word| !word.starts_with(['>', '<']) && !word.contains(">&") && !word.starts_with(|char: char| char.is_ascii_digit() && word.contains('>'))).collect()
 }
 
 fn runner_word(word: &str) -> bool {
     RUNNER_WORDS.contains(&word) || word.starts_with("test:") || word.starts_with("spec:")
 }
 
-// The start of a command that looks like a test run, kept conservative: a test script by path (script/test, bin/spec), a test tool, or a task runner given a test word (make test, npm run test).
-pub fn looks_like_test(command: &str) -> Option<String> {
-    let words = words(command);
+// The start of a simple command that looks like a test run, kept conservative: a test script by path (script/test, bin/spec), a test tool, or a task runner given a test word (make test, npm run test).
+fn test_like(simple: &str) -> Option<String> {
+    let words = words(simple);
     let first = words.first()?.trim_start_matches("./");
     let name = first.rsplit('/').next().unwrap_or(first);
     if first.contains('/') && (RUNNER_WORDS.contains(&name) || name == "run-tests" || name == "run_tests") {
@@ -175,6 +144,23 @@ pub fn looks_like_test(command: &str) -> Option<String> {
         taken = 3;
     }
     words.get(taken).filter(|word| runner_word(word)).map(|_| words[..=taken].join(" "))
+}
+
+// A command in the line that looks like a test run kebbie will not record: one the list leaves out, or a listed one inside a loop, a condition or xargs.
+pub fn unrecorded(command: &str, listed: &[String]) -> Option<String> {
+    shell::pieces(command).into_iter().find_map(|(text, _)| match shell::piece(text) {
+        shell::Piece::Simple(simple) => test_like(simple).filter(|_| listed_start(simple, listed).is_none()),
+        shell::Piece::Nested(inner) => unrecorded(&inner, listed),
+        shell::Piece::Hidden(keyword, simple) => {
+            let simple = shell::unwrap(simple);
+            listed_start(simple, listed).map(str::to_string).or_else(|| test_like(simple)).map(|start| format!("{keyword} {start}"))
+        }
+        shell::Piece::Setup => None,
+    })
+}
+
+fn hidden(entry: &str) -> bool {
+    matches!(shell::piece(entry), shell::Piece::Hidden(..))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -302,10 +288,23 @@ fn note_seen(state: &Path, address: &str, unrecorded: Option<String>, at: u64) {
     let _ = crate::state::write(&hook_file(state, address), json!({ "at": seen.at, "unrecorded": seen.unrecorded }).to_string());
 }
 
-// The newest test-like command a task ran that the list still leaves out, as the board says it.
+// The newest test-like command a task ran that kebbie still leaves out, as the board says it.
 pub fn unrecorded_note(seen: &Seen, listed: &[String]) -> Option<String> {
     let command = seen.unrecorded.iter().rev().find(|command| recognise(command, listed).is_none())?;
-    Some(format!("{command} is not recorded as a test run: add it to task.test_commands"))
+    Some(if hidden(command) {
+        format!("{command} is not recorded as a test run: kebbie cannot tell its result inside a loop, a condition or xargs")
+    } else {
+        format!("{command} is not recorded as a test run: add it to task.test_commands")
+    })
+}
+
+// What the hook tells the task's Claude about a test-like command it did not record.
+fn unrecorded_context(command: &str) -> String {
+    if hidden(command) {
+        format!("kebbie did not record `{command}` as a test run: it cannot tell the result of a test command inside a loop, a condition or xargs. Run the test command as a command of its own to have its result recorded.")
+    } else {
+        format!("kebbie did not record `{command}` as a test run: it is not in task.test_commands. Name it in your report, so the user can add it.")
+    }
 }
 
 pub fn unrecorded_for(state: &Path, address: &str, repo: &Path) -> Option<String> {
@@ -401,7 +400,11 @@ pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String]
     Some(run)
 }
 
-// The PostToolUse and PostToolUseFailure hooks on a task's Bash; it prints nothing, so Claude sees no change.
+fn context(event: &Value, text: &str) -> String {
+    json!({ "hookSpecificOutput": { "hookEventName": event, "additionalContext": text } }).to_string()
+}
+
+// The PostToolUse and PostToolUseFailure hooks on a task's Bash; it prints only what the task must hear about a test run kebbie could not record.
 pub fn hook(address: &str, input: &str) -> String {
     let input: Value = serde_json::from_str(input).unwrap_or_default();
     let Some(cwd) = input["cwd"].as_str().map(PathBuf::from) else { return String::new() };
@@ -410,21 +413,24 @@ pub fn hook(address: &str, input: &str) -> String {
         tasks::steps_noted_after(&state, address, &input);
     }
     let listed = commands(&settings.map(|settings| settings.test_commands.value).unwrap_or_default());
+    let mut said = None;
     if input["tool_name"] == "Bash" && let Ok(state) = state_dir() {
-        let command = input["tool_input"]["command"].as_str().unwrap_or_default();
-        note_seen(&state, address, looks_like_test(command).filter(|_| recognise(command, &listed).is_none()), crate::messages::now());
+        let missed = unrecorded(input["tool_input"]["command"].as_str().unwrap_or_default(), &listed);
+        said = missed.as_deref().map(|command| context(&input["hook_event_name"], &unrecorded_context(command)));
+        note_seen(&state, address, missed, crate::messages::now());
     }
+    let said = said.unwrap_or_default();
     if outcome(&input, &listed).is_none() {
-        return String::new();
+        return said;
     }
-    let Ok(top) = git(&cwd, &["rev-parse", "--show-toplevel"]) else { return String::new() };
+    let Ok(top) = git(&cwd, &["rev-parse", "--show-toplevel"]) else { return said };
     if peers::me(Path::new(&top)).as_deref() != Some(address) {
-        return String::new();
+        return said;
     }
     if let Ok(state) = state_dir() && record_in(&state, address, Path::new(&top), &listed, &input, crate::messages::now()).is_some_and(|run| run.result == Outcome::Passed) {
         crate::review::again_for_tests(Path::new(&top), address, &crate::status::named(&state, address));
     }
-    String::new()
+    said
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -551,8 +557,12 @@ pub fn brief(runs: &[Run], on_reviewed: impl Fn(&Run) -> bool, judge: impl Fn(&R
             Hook::Broken => "The task's hooks run a kebbie that is no longer installed, so the hook that records test runs is broken and nothing it ran was recorded. Say so in the Tests step: a missing record here is not a missing test run.".to_string(),
         });
     }
-    if !unrecorded.is_empty() {
-        lines.push(format!("It also ran {}, which looks like a test run but is not in task.test_commands, so kebbie did not record its result.", unrecorded.iter().map(|command| format!("`{command}`")).collect::<Vec<_>>().join(", ")));
+    let named = |hidden_ones: bool| unrecorded.iter().filter(|command| hidden(command) == hidden_ones).map(|command| format!("`{command}`")).collect::<Vec<_>>().join(", ");
+    if unrecorded.iter().any(|command| !hidden(command)) {
+        lines.push(format!("It also ran {}, which looks like a test run but is not in task.test_commands, so kebbie did not record its result.", named(false)));
+    }
+    if unrecorded.iter().any(|command| hidden(command)) {
+        lines.push(format!("It also ran {} inside a loop, a condition or xargs, where kebbie cannot tell a test run's result, so it did not record it.", named(true)));
     }
     lines.join("\n")
 }
@@ -629,7 +639,7 @@ mod tests {
         assert_eq!(recognise("uv run pytest tests/", &list), Some("uv run pytest"), "the longest listed command wins");
         assert_eq!(recognise("bundle exec rspec spec/models", &list), Some("bundle exec rspec"));
         assert_eq!(recognise("cargo testify", &list), None, "whole words only");
-        assert_eq!(recognise("cargo build && cargo test", &list), None, "only the command's start counts");
+        assert_eq!(recognise("cargo build && cargo test", &list), Some("cargo test"), "any command of the chain counts");
         assert_eq!(recognise("echo cargo test", &list), None);
         assert_eq!(recognise("bin/test unit", &list), None);
         assert_eq!(recognise("bin/test unit", &listed(&["bin/test"])), Some("bin/test"), "a repo's own runner is added to the list");
@@ -637,6 +647,48 @@ mod tests {
         assert_eq!(recognise("./script/test --fast", &listed(&["script/test"])), Some("script/test"), "a leading ./ runs the same script");
         assert_eq!(recognise("cd app && ./script/test", &listed(&["script/test"])), Some("script/test"));
         assert_eq!(recognise("script/test", &listed(&["./script/test"])), Some("./script/test"));
+    }
+
+    #[test]
+    fn a_test_command_after_a_separate_statement_or_a_wrapper_is_recorded() {
+        let list = listed(&["script/test"]);
+        for (command, runner) in [
+            ("cd /src/wt1.app; script/test spec/a_spec.rb spec/b_spec.rb 2>&1 | grep examples", "script/test"),
+            ("T=$(mktemp -d /tmp/kbj.XXXX); TMPDIR=$T script/test spec/javascripts/x_spec.js 2>&1 | tail -6; rm -rf $T", "script/test"),
+            ("TMPDIR=$(mktemp -d); script/test", "script/test"),
+            ("export CI=1; script/test", "script/test"),
+            ("cd x; script/test", "script/test"),
+            ("timeout 600 bin/rails test", "bin/rails test"),
+            ("nice -n 5 cargo test", "cargo test"),
+            ("time cargo test", "cargo test"),
+            ("nohup npm test", "npm test"),
+            ("set -euo pipefail\ncd app\nbin/rails test test/models", "bin/rails test"),
+            ("bash -c 'cd app && script/test'", "script/test"),
+            ("(cd app; cargo test)", "cargo test"),
+        ] {
+            assert_eq!(recognise(command, &list), Some(runner), "{command}");
+        }
+        for command in ["echo 'cd x; script/test'", "git commit -m 'run cargo test; fix'", "for f in a b; do script/test $f; done", "ls | xargs cargo test", "x=$(cargo test)"] {
+            assert_eq!(recognise(command, &list), None, "{command}");
+        }
+    }
+
+    #[test]
+    fn a_listed_test_command_kebbie_cannot_attribute_is_told_to_the_task() {
+        let list = listed(&["script/test"]);
+        assert_eq!(unrecorded("for f in a b; do script/test $f; done", &list).as_deref(), Some("do script/test"));
+        assert_eq!(unrecorded("ls spec | xargs bin/rails test", &list).as_deref(), Some("xargs bin/rails test"));
+        assert_eq!(unrecorded("cd x; script/test", &list), None, "a recorded run needs no note");
+        assert_eq!(unrecorded("cd x; make test", &list).as_deref(), Some("make test"), "after a separate statement too");
+        let seen = Seen { at: Some(1), unrecorded: vec!["do script/test".to_string()] };
+        assert_eq!(unrecorded_note(&seen, &list).as_deref(), Some("do script/test is not recorded as a test run: kebbie cannot tell its result inside a loop, a condition or xargs"));
+        let brief = brief(&[], |_| true, |run: &Run| shown(run, |_| true, true), Hook::Works, &["do script/test".to_string(), "make test".to_string()]);
+        assert!(brief.contains("It also ran `make test`, which looks like a test run but is not in task.test_commands") && brief.contains("It also ran `do script/test` inside a loop"), "{brief}");
+        let input = json!({ "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": { "command": "cd x; make test" }, "cwd": "/nowhere" });
+        let said: Value = serde_json::from_str(&hook("unrecorded-note@app", &input.to_string())).unwrap();
+        assert_eq!(said["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+        assert!(said["hookSpecificOutput"]["additionalContext"].as_str().unwrap().starts_with("kebbie did not record `make test` as a test run"), "{said}");
+        assert_eq!(hook("unrecorded-note@app", &json!({ "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": { "command": "ls" }, "cwd": "/nowhere" }).to_string()), "", "nothing to say, nothing printed");
     }
 
     #[test]
@@ -824,10 +876,10 @@ mod tests {
             ("make test", "make test"), ("just test-all", ""), ("npm run test:unit", "npm run test:unit"), ("yarn spec", "yarn spec"), ("bundle exec rake spec", "bundle exec rake spec"),
             ("deno test -A", "deno test"), ("npx vitest run", ""), ("vitest run", "vitest"), ("tox -e py312", "tox"), ("make test 2>&1 | tail", "make test"),
         ] {
-            assert_eq!(looks_like_test(command).unwrap_or_default(), prefix, "{command}");
+            assert_eq!(unrecorded(command, &[]).unwrap_or_default(), prefix, "{command}");
         }
-        for command in ["test -f Cargo.toml", "rg test src", "grep -r spec .", "git commit -m 'add test'", "ls tests", "cat spec/a_spec.rb", "echo make test", "make build", "vim test/x.rb", "npm install", "cargo build"] {
-            assert_eq!(looks_like_test(command), None, "{command}");
+        for command in ["test -f Cargo.toml", "rg test src", "grep -r spec .", "git commit -m 'add test'", "ls tests", "cat spec/a_spec.rb", "echo make test", "make build", "vim test/x.rb", "npm install", "cargo build", "echo 'a; make test'"] {
+            assert_eq!(unrecorded(command, &[]), None, "{command}");
         }
     }
 

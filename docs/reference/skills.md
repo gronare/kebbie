@@ -59,6 +59,6 @@ Each task's Claude starts with settings kebbie writes:
 | `UserPromptSubmit`, `Stop` | `kebbie hook` | Delivering held messages and collecting the task's report at the end of a turn. |
 | `PreToolUse` on `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash` | `kebbie hook gate <task>` | With the vault only: holding edits until the task's note has its Problem. |
 | `PreToolUse` on `Edit`, `Write`, `MultiEdit`, `NotebookEdit` | `kebbie hook files <task> …` | With the sandbox on only: keeping Claude's file tools to the task's worktrees and temp folder. |
-| `PostToolUse`, `PostToolUseFailure` on `Bash` | `kebbie hook evidence <task>` | Recording the task's test runs for [`kebbie evidence`](commands.md#kebbie-evidence-name---json). It prints nothing. |
+| `PostToolUse`, `PostToolUseFailure` on `Bash` | `kebbie hook evidence <task>` | Recording the task's test runs for [`kebbie evidence`](commands.md#kebbie-evidence-name---json). It speaks to Claude only about a test run it could not record. |
 
 The same settings deny `git push`, every kebbie command that is yours alone or the lead's (such as `kebbie push`, `approve`, `stage`, `away`, `decide` and `issue send`), and herdr's commands that type into another pane.
