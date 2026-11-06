@@ -45,6 +45,7 @@ pub enum Act {
     Stage,
     Done,
     DismissCi,
+    RerunCi,
     Park,
     Reset,
     Drop,
@@ -95,9 +96,9 @@ const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 49] = [
+    pub const EVERY: [Act; 50] = [
         Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
-        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
+        Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
 
@@ -133,6 +134,7 @@ impl Act {
             Act::Stage => "stage",
             Act::Done => "done",
             Act::DismissCi => "dismiss_ci",
+            Act::RerunCi => "rerun_ci",
             Act::Park => "park",
             Act::Reset => "reset",
             Act::Drop => "drop",
@@ -191,6 +193,7 @@ impl Act {
             Act::Stage => Default::Char('M'),
             Act::Done => Default::Char('d'),
             Act::DismissCi => Default::Char('C'),
+            Act::RerunCi => Default::Char('G'),
             Act::Park => Default::Char('Z'),
             Act::Reset => Default::Char('z'),
             Act::Drop => Default::Char('x'),
@@ -251,6 +254,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Stage, on: &[Work], help: "put a ready task's commits on local main, unpushed, to try them from the main checkout (repos with worktree.stage_on_main); on a staged task, take them off again", hint: Hint::No },
     Binding { act: Act::Done, on: &[Work], help: "done: after you pushed elsewhere (asks first)", hint: Hint::No },
     Binding { act: Act::DismissCi, on: &[Work], help: "dismiss the red CI of a pushed task when the failure is not the code's: kept on record, and the task closes once its commits are on main (asks first)", hint: Hint::No },
+    Binding { act: Act::RerunCi, on: &[Work], help: "re-run CI for a pushed task whose run failed or was cancelled: gh runs those runs again, and the task closes once they are green", hint: Hint::No },
     Binding { act: Act::Park, on: &[Work], help: "park the task until later (tomorrow, Monday, a date, or until you bring it back): it leaves its group, the lead's summaries and your notifications and keeps working; on a parked task, bring it back now", hint: Hint::No },
     Binding { act: Act::Reset, on: &[Work], help: "reset the task: its work goes, its backlog item returns (asks first)", hint: Hint::No },
     Binding { act: Act::Drop, on: &[Work], help: "drop the task (asks first)", hint: Hint::No },

@@ -142,7 +142,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Follow], "keep it rebased on main, or stop", "follow main"),
             bind(&[Act::Tidy], "tidy its commits", "tidy commits"),
             bind(&[Act::Stage], "try it on local main, or take it off", "local main"),
-            bind(&[Act::DismissCi], "dismiss its red CI (asks first)", "dismiss red CI"),
+            bind(&[Act::RerunCi, Act::DismissCi], "re-run its CI, or dismiss a red one", "red CI"),
         ]),
         Group { name: "END IT", note: ("each asks first", "asks first"), items: &[
             bind(&[Act::Done], "done", "done"),

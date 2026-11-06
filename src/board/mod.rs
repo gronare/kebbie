@@ -896,6 +896,11 @@ impl App {
                         self.about("review", &item.name);
                         self.open_review_menu(&item);
                     }
+                    Act::RerunCi if crate::board::options::reruns_ci(&item) => {
+                        let address = peers::address(&item.name, &item.place);
+                        self.about("ci", &item.name);
+                        self.in_background(format!("Re-running CI for {}…", item.name), move || crate::ci::rerun(&address));
+                    }
                     Act::DismissCi if item.ci.as_ref().is_some_and(|ci| !ci.running()) => {
                         if let Some(path) = item.path.clone() {
                             self.mode = Mode::ConfirmDismiss { path, name: item.name, nudged: false };

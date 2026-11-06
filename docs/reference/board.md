@@ -341,17 +341,20 @@ A question that asks first, as reset, drop and done do, takes `y` to go ahead an
 | `b` | Start or stop the worker. | `worktree.dev_worker` is set. |
 | `1`–`9` | Open one of its links in the browser, listed under LINKS. | It has that link. |
 | `v` | The review menu: send it to review, or withdraw it while it is in review. See below. | It has commits and Claude is not mid-turn. |
-| `e` | Rebase onto the default branch now, in the background, without pushing. | It is behind the default branch and Claude is not mid-turn. |
-| `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn. |
-| `p` | Push: open the push window. On a task already in the line, take it out again, unpushed. | Claude is not mid-turn and it is not waiting for the reviewer. |
+| `e` | Rebase onto the default branch now, in the background, without pushing. | It is behind the default branch, Claude is not mid-turn, and it is not pushed. |
+| `t` | Ask its Claude to tidy its commits by the rules skill. | Claude is not mid-turn, and it is not pushed. |
+| `p` | Push: open the push window. On a task already in the line, take it out again, unpushed. | Claude is not mid-turn, it is not waiting for the reviewer, and it is not pushed. |
 | `M` | Put on local main to try it; on a staged task, take it off again. | See below. |
 | `C` | Dismiss the red CI of a pushed task whose failure is not the code's. Asks first. Yours alone. | The task's CI failed. |
+| `G` | Re-run CI: gh runs the pushed commit's failed and cancelled runs again, and kebbie watches them as after a push, closing the task once they are green. | Every commit is on the default branch and its CI failed or was cancelled. |
 | `d` | Done: close a task you already pushed elsewhere and free its worktree. Asks first. | Claude is not mid-turn. |
-| `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task. |
-| `u` | Keep it rebased on main, or switch that off; `●` marks it on. | It is a task. |
+| `a` | Let the lead push it, or take that back. `done`, `drop` and `reset` take it back too. | It is a task, not pushed. |
+| `u` | Keep it rebased on main, or switch that off; `●` marks it on. | It is a task, not pushed. |
 | `Z` | Park it until later; on a parked task, bring it back now. | It is a task. |
 | `z` | Reset: its work goes, its backlog item returns. Asks first. | Always. |
 | `x` | Drop. Asks first; on uncommitted work or unpushed commits, asks again to force. | Always. |
+
+A task counts as pushed once every commit is on the default branch and kebbie watches its CI or saw it land.
 
 - `1`–`9`: the links are listed by what each is: the running dev server, each CI run, a mock, a pull request or another address its report or card names, and its vault note, which opens in Obsidian. The highlighted link's whole address shows on the description line. Where the board has no browser, as over ssh, it says the address instead.
 - `e`: the result shows when it is done. A conflict goes to its Claude, as with [`kebbie land`](commands.md#kebbie-land-name).
@@ -832,7 +835,7 @@ inbox = "I"
 new = "N"
 ```
 
-The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
+The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hide_chat`, `messages`, `hub`, `help`, `inbox`, `new`, `go`, `chat`, `review`, `card`, `server`, `worker`, `send_review`, `permit`, `rebase`, `follow`, `tidy`, `push`, `stage`, `done`, `dismiss_ci`, `rerun_ci`, `park`, `reset`, `drop`, `start_at`, `refresh`, `away`, `update`, `restart_lead`, `filter`, `area_refresh` (`b` on the Areas page), `log` (`l` on the Areas page), `edit` (`e`), `pause` (`p`) and `delete` (`D`) on the Routines page, and `close` (`q`).
 
 - The key is one plain character.
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.

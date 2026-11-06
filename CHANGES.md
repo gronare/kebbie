@@ -16,6 +16,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A worktree git cannot read shows its error on its own row under Needs you, and the rest of the board shows as usual.
 - A task that rewords a commit its review asked changes for goes back to the reviewer when it reports ready, instead of keeping the push refused.
 - A ready task held only by uncommitted files names them on its row, and its push window opens ready to push the commits alone; approve says the same.
+- A pushed task's menu no longer offers rebase, tidy, push, let the lead push or keep rebased, and G re-runs its failed or cancelled CI.
 
 ## 0.35.0
 

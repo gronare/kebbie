@@ -433,6 +433,30 @@ impl Lock {
     }
 }
 
+pub fn rerun(address: &str) -> Result<String> {
+    rerun_with(&crate::lead::state_dir()?, address, &gh(), messages::now())
+}
+
+// The user's Re-run CI: gh runs the pushed commit's failed and cancelled runs again, and the watch waits on them as on a new push.
+pub fn rerun_with(state: &Path, address: &str, gh: &str, now: u64) -> Result<String> {
+    let _lock = Lock::take(state).ok_or("kebbie is reading its CI right now; try again in a moment")?;
+    let watch = load(state, address).ok_or("kebbie watches no CI for it")?;
+    let again: Vec<&Run> = watch.runs.iter().filter(|run| run.done() && !PASSED.contains(&run.conclusion.as_str())).collect();
+    if again.is_empty() {
+        return Err("Its CI has no failed or cancelled run to run again".to_string());
+    }
+    for run in &again {
+        crate::sh::run(gh, &["run", "rerun", &run.id.to_string(), "-R", &watch.slug], Some(&watch.repo))?;
+    }
+    let names: Vec<&str> = again.iter().map(|run| run.title()).collect();
+    crate::phase::record(state, address, "ci", &crate::phase::Event::PushOut { sha: &watch.sha });
+    save(state, &Watch { state: State::Running, started_at: now, checked_at: None, runs: Vec::new(), error: None, erring_since: None, ..watch.clone() })?;
+    if let Err(error) = messages::to_lead(messages::ToLead::CiGreen, &format!("The user re-ran CI for {address} ({}): {}. kebbie watches the new runs as after a push.", watch.short(), names.join(", "))) {
+        eprintln!("Could not tell the lead: {error}");
+    }
+    crate::notice::Notice::new(crate::notice::Tone::Moving, format!("Re-running {}", names.join(", "))).next("kebbie watches the new runs and closes the task once they are green.").detail("task", address).ok()
+}
+
 pub fn tick(state: &Path) -> Vec<Event> {
     tick_with(state, &gh(), messages::now())
 }
@@ -823,6 +847,25 @@ mod tests {
         let failed = &source[source.find("\nfn failed_run(").unwrap()..];
         assert!(failed.find("Event::CiRed").unwrap() < failed.find("save(state, watch)").unwrap(), "the phase moves before the watch reads failed, so a round that dies between them never leaves it under CI running");
         crate::tasks::test_support::cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn re_running_ci_reruns_the_failed_and_cancelled_runs_and_watches_them_as_after_a_push() {
+        let dir = crate::sh::test_dir("ci-rerun");
+        let run = |id: u64, conclusion: &str| Run { id, name: format!("job{id}"), workflow: format!("wf{id}"), status: "completed".to_string(), conclusion: conclusion.to_string(), url: String::new() };
+        let watch = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 0, checked_at: Some(5), close: true, runs: vec![run(1, "success"), run(2, "failure"), run(3, "cancelled")], state: State::Failed { at: 5, what: "wf2 · job2".to_string(), url: String::new() }, error: None, erring_since: None, pushed: Pushed::default() };
+        save(&dir, &watch).unwrap();
+        crate::phase::record(&dir, "billing@app", "ci", &crate::phase::Event::CiRed { sha: "abcdef0", pushing: false });
+        let gh = dir.join("gh");
+        crate::executable::write(&gh, format!("#!/bin/sh\necho \"$@\" >> {}\n", dir.join("gh.log").display())).unwrap();
+        let said = rerun_with(&dir, "billing@app", &gh.to_string_lossy(), 100).unwrap();
+        assert!(said.contains("wf2, wf3"), "{said}");
+        assert_eq!(fs::read_to_string(dir.join("gh.log")).unwrap(), "run rerun 2 -R acme/app\nrun rerun 3 -R acme/app\n", "the green run is not run again");
+        let read = load(&dir, "billing@app").unwrap();
+        assert!(read.running() && read.runs.is_empty() && read.started_at == 100, "{read:?}");
+        assert_eq!(crate::phase::load(&dir, "billing@app").map(|record| record.phase), Some(crate::phase::Phase::CiRunning { sha: "abcdef0".to_string() }));
+        assert!(rerun_with(&dir, "billing@app", &gh.to_string_lossy(), 200).unwrap_err().contains("no failed or cancelled run"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

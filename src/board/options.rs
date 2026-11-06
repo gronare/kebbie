@@ -44,6 +44,7 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
             choice(Act::Worker, "Start the worker", &format!("{command} in a tab of its Space"))
         });
     }
+    let out = item.is_some_and(pushed_out);
     if !item.is_some_and(busy) {
         if item.and_then(|item| item.git.as_ref()).is_some_and(|git| git.ahead > 0) {
             choices.push(if item.is_some_and(Item::awaiting_review) {
@@ -52,13 +53,15 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
                 choice(Act::SendReview, "Send to review", "the review menu: the reviewer review.profile names, or a second opinion too; the task waits under In review until its reviewer passes it")
             });
         }
-        if let Some(git) = item.filter(|item| item.push_waits.is_none()).and_then(|item| item.git.as_ref()).filter(|git| git.behind > 0) {
+        if let Some(git) = item.filter(|item| item.push_waits.is_none() && !out).and_then(|item| item.git.as_ref()).filter(|git| git.behind > 0) {
             choices.push(choice(Act::Rebase, &format!("Rebase onto {}", trunk(git)), "fetch and rebase it now, without pushing; a conflict goes to its Claude"));
         }
-        choices.push(choice(Act::Tidy, "Tidy commits", "its Claude reshapes them by the rules skill"));
+        if !out {
+            choices.push(choice(Act::Tidy, "Tidy commits", "its Claude reshapes them by the rules skill"));
+        }
         if item.is_some_and(Item::in_push_line) {
             choices.push(choice(Act::Push, "Take out of the push line", "nothing of it is pushed; it waits under Ready to push until you push it again, at the end of the line"));
-        } else if !item.is_some_and(Item::awaiting_review) {
+        } else if !item.is_some_and(Item::awaiting_review) && !out {
             choices.push(choice(Act::Push, "Push", "its card and commits: push them all and close, or the first few and keep it open; it joins its repo's push line and is rebased when its turn comes"));
         }
         choices.push(match item.and_then(|item| item.git.as_ref()) {
@@ -69,17 +72,20 @@ pub(super) fn task_choices(item: Option<&Item>, dev_server: Option<&str>, dev_wo
     } else if let Some(accepted) = item.map(super::steps::accepted_run).filter(|accepted| *accepted > 0) {
         choices.push(choice(Act::Push, &format!("Push {}", if accepted == 1 { "the accepted step".to_string() } else { format!("the {accepted} accepted steps") }), "they go out while its Claude keeps working; the rest waits until you accept it"));
     }
+    if item.is_some_and(reruns_ci) {
+        choices.push(choice(Act::RerunCi, "Re-run CI", "gh runs its failed or cancelled runs again; kebbie watches them and closes the task once they are green"));
+    }
     if item.and_then(|item| item.ci.as_ref()).is_some_and(|ci| !ci.running()) {
         choices.push(choice(Act::DismissCi, "Dismiss the red CI", "the failure is not the code's (a deploy window, infra, a flake): kept on record, and the task closes once its commits are on main (asks first)"));
     }
-    if item.is_some_and(Item::is_task) {
+    if item.is_some_and(Item::is_task) && !out {
         choices.push(if item.is_some_and(|item| item.permit == Some(Permit::Task)) {
             choice(Act::Permit, "Take back push permission", "the lead no longer pushes it; it waits for you under Ready to push")
         } else {
             choice(Act::Permit, "Let the lead push it", "the lead may push this task itself once its commits are approved; done, drop and reset take it back")
         });
     }
-    if let Some(git) = item.and_then(|item| item.git.as_ref()) {
+    if let Some(git) = item.filter(|_| !out).and_then(|item| item.git.as_ref()) {
         let about = if item.is_some_and(|item| item.follows) {
             "on: the keeper rebases it when main moves, while its Claude is idle and its files are committed; never pushes. Choose it to switch off"
         } else {
@@ -105,6 +111,16 @@ pub(super) fn stage_choice(item: &Item, stages: bool) -> Option<Choice> {
     }
     let ready = item.git.as_ref().is_some_and(|git| git.ahead > 0) && !busy(item) && !item.awaiting_review() && item.ci.is_none();
     (stages && ready).then(|| choice(Act::Stage, "Put on local main to try it", "its commits go on the main checkout's main, unpushed, after any staged before it; it closes once you push main"))
+}
+
+// Every commit is on the default branch and kebbie watches its CI or saw it land: nothing is left to rebase, tidy, push or keep rebased.
+fn pushed_out(item: &Item) -> bool {
+    item.git.as_ref().is_some_and(|git| git.ahead == 0) && (item.ci.is_some() || item.landed.is_some())
+}
+
+// A pushed task whose CI failed or was cancelled, with nothing left on its branch.
+pub(super) fn reruns_ci(item: &Item) -> bool {
+    pushed_out(item) && item.ci.as_ref().is_some_and(|ci| !ci.running() || !ci.cancelled().is_empty())
 }
 
 fn trunk(git: &crate::status::Git) -> &str {
@@ -288,6 +304,29 @@ mod tests {
         let done = |item: &Item| task_choices(Some(item), None, None).into_iter().find(|choice| choice.act == Some(Act::Done)).unwrap().about;
         assert_eq!(done(&crate::status::tests::task(Some("idle"), None, 0)), "close it: everything is on main, and the worktree is freed", "a task kept open after its last push");
         assert_eq!(done(&crate::status::tests::task(Some("idle"), None, 2)), "already pushed elsewhere: close it and free the worktree");
+    }
+
+    fn watched(state: crate::ci::State, conclusion: &str) -> crate::ci::Watch {
+        let run = crate::ci::Run { id: 7, name: "deploy".to_string(), workflow: "deploy".to_string(), status: "completed".to_string(), conclusion: conclusion.to_string(), url: String::new() };
+        crate::ci::Watch {
+            address: "billing@web".to_string(), task: "billing".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: vec![run],
+            state, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
+        }
+    }
+
+    #[test]
+    fn a_pushed_task_offers_no_branch_actions_and_re_runs_a_red_or_cancelled_ci() {
+        let keys = |item: &Item| task_choices(Some(item), None, None).iter().map(|choice| choice.key).collect::<String>();
+        let mut pushed = crate::status::tests::task(Some("idle"), None, 0);
+        pushed.git.as_mut().unwrap().behind = 2;
+        let fresh = keys(&pushed);
+        assert!(fresh.contains('e') && fresh.contains('t') && fresh.contains('u'), "a task with no commits yet still rebases, tidies and follows main: {fresh}");
+        pushed.ci = Some(watched(crate::ci::State::Failed { at: 2, what: "deploy · release".to_string(), url: String::new() }, "failure"));
+        assert_eq!(keys(&pushed), "gcrdGCZzx", "landed: no rebase, tidy, push, lead push or keep rebased; re-run and dismiss its red CI");
+        pushed.ci = Some(watched(crate::ci::State::Running, "cancelled"));
+        assert_eq!(keys(&pushed), "gcrdGZzx", "a cancelled run re-runs too");
+        pushed.ci.as_mut().unwrap().runs[0] = crate::ci::Run { status: "in_progress".to_string(), conclusion: String::new(), ..pushed.ci.as_ref().unwrap().runs[0].clone() };
+        assert_eq!(keys(&pushed), "gcrdZzx", "while CI runs there is nothing to re-run");
     }
 
     #[test]
