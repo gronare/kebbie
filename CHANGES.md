@@ -23,6 +23,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A push's rebase that meets another git's index.lock half-way waits and goes on, instead of failing on its own rebase.
 - kebbie runs one rebase at a time in a task's worktree, and leaves a rebase it did not start running instead of aborting it.
 - A ready task can name a task to push before it with kebbie report --after, and Next's push group puts that one first and shows "after <task>"; a wait counts across repos.
+- Update restarts every board it finds running, in any Space, and kebbie doctor names a board still on an older kebbie.
 
 ## 0.35.0
 

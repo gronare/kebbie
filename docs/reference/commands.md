@@ -979,7 +979,7 @@ These run from hooks, the herdr plugin and kebbie's own processes. You do not ru
 | `kebbie issue recheck --run <id>` | The checker the keeper starts after an update to recheck one kebbie issue. |
 | `kebbie update --finish` | The newly built binary, at the end of `kebbie update`. It stops the keeper first and starts it again on the new binary last. |
 | `kebbie keeper` | The keeper itself, as `kebbie keeper --start` starts it: a loop with no terminal that runs the routines and logs to `keeper.log`. |
-| `kebbie lead --renew-board` | `kebbie update`, to restart the board on the new binary. |
+| `kebbie lead --renew-board` | `kebbie update`, to restart every running board, in any Space, on the new binary. |
 | `kebbie lead --revive-board --wait` | The background half of `kebbie lead --revive-board`, which waits for herdr's restore. |
 
 `kebbie hook` takes `evidence`, `inbox`, `files` or `gate` for the test record, the inbox socket, the sandbox's file check and the vault note's gate, and `--review` for the reviewer's guard.

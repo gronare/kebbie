@@ -6,7 +6,7 @@ const TASKS: &str = "Tasks";
 const GROUP_WIDTH: usize = 14;
 
 pub const GROUPS: [(&str, &[&str]); 9] = [
-    ("kebbie", &["updates", "plugin binary", "keeper", "kebbie on PATH", "current link", "herdr link"]),
+    ("kebbie", &["updates", "plugin binary", "keeper", "board", "kebbie on PATH", "current link", "herdr link"]),
     ("Claude Code", &["claude", "claude login", "claude plugin", "claude plugin source", "status line", "claude model"]),
     ("Codex", &["codex", "codex login", "codex plugin", "codex old plugin", "codex hooks", "codex approvals", "codex model", "codex profile", "codex update", "codex vault"]),
     ("Vault", &["vault", "machine", "backlog vault"]),
@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn every_check_doctor_makes_belongs_to_one_group() {
         let names = [
-            ("plugin binary", "kebbie"), ("current link", "kebbie"), ("kebbie on PATH", "kebbie"), ("updates", "kebbie"), ("keeper", "kebbie"), ("herdr link", "kebbie"),
+            ("plugin binary", "kebbie"), ("current link", "kebbie"), ("kebbie on PATH", "kebbie"), ("updates", "kebbie"), ("keeper", "kebbie"), ("board", "kebbie"), ("herdr link", "kebbie"),
             ("claude", "Claude Code"), ("claude login", "Claude Code"), ("claude plugin", "Claude Code"), ("claude plugin source", "Claude Code"), ("status line", "Claude Code"), ("claude model", "Claude Code"),
             ("unknown check", "Tasks"),
             ("codex", "Codex"), ("codex plugin", "Codex"), ("codex old plugin", "Codex"), ("codex hooks", "Codex"), ("codex model", "Codex"), ("codex login", "Codex"), ("codex update", "Codex"), ("codex profile", "Codex"), ("codex approvals", "Codex"), ("codex vault", "Codex"),

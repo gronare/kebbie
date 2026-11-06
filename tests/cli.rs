@@ -735,6 +735,7 @@ fn sessions(lab: &Lab) -> Sessions {
     ];
     fs::write(answers.join("agent-list.json"), format!("{{\"result\":{{\"agents\":[{}]}}}}", agents.join(","))).unwrap();
     fs::write(answers.join("workspace-list.json"), r#"{"result":{"workspaces":[]}}"#).unwrap();
+    fs::write(answers.join("pane-list.json"), r#"{"result":{"panes":[]}}"#).unwrap();
     let process = |cwd: &Path| format!(r#"{{"result":{{"process_info":{{"foreground_process_group_id":{pid},"shell_pid":1,"foreground_processes":[{{"argv0":"claude","argv":["claude","--model","opus","--resume","old-id","an old prompt"],"cwd":"{}","pid":{pid}}}]}}}}}}"#, cwd.display());
     fs::write(answers.join("process.json"), process(&work)).unwrap();
     fs::write(answers.join("process-p_mine.json"), process(&own)).unwrap();
@@ -790,7 +791,7 @@ fn update_restarts_the_idle_session_at_once_with_its_flags_and_says_what_waits_f
         "  api: restarts when idle",
         "  worker: waiting for your answer: background work running",
         "  ghost: skipped: its session id is unknown",
-        "board: no lead Space",
+        "board: not running; it starts with the new kebbie when you open the lead",
         "keeper: off ([keeper] enabled = false); an open board runs the routines",
     ], "{said}");
     let start = lab.herdr_calls().into_iter().find(|call| call[..2] == ["agent", "start"]).unwrap();

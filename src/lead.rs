@@ -577,31 +577,71 @@ fn settled(mut modified: impl FnMut() -> Option<std::time::SystemTime>, mut paus
     None
 }
 
-pub fn renew_board() -> Result<String> {
-    let Some(lead) = lead_workspace(&herdr::workspaces()?) else { return Ok("board: no lead Space".to_string()) };
-    let Some(board) = places(&lead)?.board else { return Ok("board: the lead Space has no board pane".to_string()) };
-    let info = herdr::process_info(&board)?;
-    let process = &info["foreground_processes"][0];
-    let argv: Vec<&str> = process["argv"].as_array().into_iter().flatten().filter_map(|arg| arg.as_str()).collect();
-    if !(argv.iter().any(|arg| arg.ends_with("kebbie")) && argv.contains(&"board")) || argv.contains(&"--overlay") {
-        return Ok("board: not running; it starts with the new kebbie when you open the lead".to_string());
-    }
+#[derive(Clone, Debug, PartialEq)]
+pub struct Board {
+    pub pane: String,
+    pub space: String,
+    pub pid: u32,
+}
+
+// The board's own process among a pane's foreground ones, where a git or herdr it runs at that moment may be listed first.
+fn board_pid(info: &Value) -> Option<u32> {
+    info["foreground_processes"].as_array()?.iter().find_map(|process| {
+        let argv: Vec<&str> = process["argv"].as_array().into_iter().flatten().filter_map(|arg| arg.as_str()).collect();
+        let board = argv.first().is_some_and(|program| program.ends_with("kebbie")) && argv.contains(&"board") && !argv.contains(&"--overlay");
+        board.then(|| process["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok())).flatten()
+    })
+}
+
+// Every pane in any Space whose foreground runs kebbie's board, with the label of its Space.
+pub fn running_boards() -> Result<Vec<Board>> {
+    let spaces = herdr::workspaces()?;
+    let label = |id: &str| spaces.iter().find(|space| space["workspace_id"] == id).and_then(|space| space["label"].as_str()).unwrap_or(id).to_string();
+    Ok(herdr::all_panes()?.iter().filter_map(|pane| {
+        let id = pane["pane_id"].as_str()?;
+        let pid = board_pid(&herdr::process_info(id).ok()?)?;
+        Some(Board { pane: id.to_string(), space: label(pane["workspace_id"].as_str().unwrap_or_default()), pid })
+    }).collect())
+}
+
+// When the kebbie binary on disk was written, as it stands now.
+pub fn written_at() -> Option<u64> {
+    fs::metadata(executable().ok()?).and_then(|meta| meta.modified()).ok()?.duration_since(std::time::UNIX_EPOCH).ok().map(|elapsed| elapsed.as_secs())
+}
+
+// The time the kebbie binary on disk was written, once a build has finished writing it.
+pub fn built_at() -> Result<Option<u64>> {
     let exe = executable()?;
     let modified = || fs::metadata(&exe).and_then(|meta| meta.modified()).ok();
-    let Some(built) = settled(modified, || std::thread::sleep(std::time::Duration::from_secs(1)), 30) else {
+    Ok(settled(modified, || std::thread::sleep(std::time::Duration::from_secs(1)), 30).map(|built| built.duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0)))
+}
+
+pub fn renew_board() -> Result<String> {
+    let boards = running_boards()?;
+    if boards.is_empty() {
+        return Ok("board: not running; it starts with the new kebbie when you open the lead".to_string());
+    }
+    let Some(built) = built_at()? else {
         return Ok("board: the new kebbie is still being written; renew again once the build is done".to_string());
     };
-    let built = built.duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0);
-    let pid = process["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()).ok_or("board: herdr names no process for it")?;
-    if pid == std::process::id() || pid == std::os::unix::process::parent_id() {
-        return Ok("board: restarts on the new kebbie once the update's window closes".to_string());
+    let named = boards.len() > 1;
+    let lines: Vec<String> = boards.iter().map(|board| {
+        let name = if named { format!("board in {}", board.space) } else { "board".to_string() };
+        format!("{name}: {}", renew_one(board, built).unwrap_or_else(|error| error))
+    }).collect();
+    Ok(lines.join("\n"))
+}
+
+fn renew_one(board: &Board, built: u64) -> Result<String> {
+    if board.pid == std::process::id() || board.pid == std::os::unix::process::parent_id() {
+        return Ok("restarts on the new kebbie once the update's window closes".to_string());
     }
-    let started = crate::restart::started(pid).ok_or("board: cannot read when it started")?;
+    let started = crate::restart::started(board.pid).ok_or("cannot read when it started")?;
     if started > built {
-        return Ok("board: up to date".to_string());
+        return Ok("up to date".to_string());
     }
-    restart_board(&board)?;
-    Ok("board: restarted on the new kebbie".to_string())
+    restart_board(&board.pane).map_err(|error| error.trim_start_matches("board: ").to_string())?;
+    Ok("restarted on the new kebbie".to_string())
 }
 
 // The board shows the messages, so a messages pane under it in a lead Space goes; a pane of the user's own there stays.
@@ -708,6 +748,19 @@ pub fn chat_hidden(board_pane: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_board_is_found_among_its_panes_foreground_processes_whichever_comes_first() {
+        let info = |processes: Value| json!({ "foreground_processes": processes, "shell_pid": 1 });
+        let board = json!({ "argv": ["/home/u/.local/share/kebbie/current/target/release/kebbie", "board"], "pid": 4280 });
+        let git = json!({ "argv": ["git", "status", "--porcelain"], "pid": 4301 });
+        assert_eq!(board_pid(&info(json!([board.clone()]))), Some(4280));
+        assert_eq!(board_pid(&info(json!([git.clone(), board]))), Some(4280), "a git the board runs can be listed first");
+        assert_eq!(board_pid(&info(json!([git]))), None);
+        assert_eq!(board_pid(&info(json!([{ "argv": ["kebbie", "board", "--overlay"], "pid": 5 }]))), None, "the update overlay is no board");
+        assert_eq!(board_pid(&info(json!([{ "argv": ["vim", "kebbie", "board"], "pid": 6 }]))), None);
+        assert_eq!(board_pid(&json!({})), None);
+    }
 
     #[test]
     fn the_board_renews_only_on_a_binary_whose_mtime_held_between_two_looks() {

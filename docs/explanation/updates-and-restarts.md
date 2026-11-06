@@ -128,7 +128,7 @@ Going back to an older kebbie, it reads a task's session record, now JSON, as it
 ╰────────────────────────────────────────────────────────────╯
 ```
 
-The update runs on in the background. `esc` hides the window, the status line shows `⇣ updating kebbie · U` meanwhile, and `U` opens the window again. The board does not restart on a new binary while its update runs. In a terminal the bar and the steps are redrawn in place; piped, each step prints one plain line. The summary shows once the bar is full.
+The update runs on in the background. `esc` hides the window, the status line shows `⇣ updating kebbie · U` meanwhile, and `U` opens the window again. The board does not restart on a new binary while its update runs. Every other board kebbie finds running, in any Space, restarts on the new binary, and `kebbie doctor` names a board that still runs an older one. In a terminal the bar and the steps are redrawn in place; piped, each step prints one plain line. The summary shows once the bar is full.
 
 With kebbie linked from your own checkout through `herdr plugin link`, the update builds that checkout, so the fetch step says so and counts the commits it holds beyond its upstream, such as `Fetched main (no new commits); building your local checkout, 38 commits ahead`. With none ahead it ends on `building your local checkout`.
 

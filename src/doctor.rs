@@ -183,6 +183,16 @@ pub fn keeper(enabled: bool, running: Option<&crate::keeper::Holder>, now: u64) 
     }
 }
 
+// Each running board with when it started; one that started before the binary was written still runs the old code.
+pub fn boards(running: &[(crate::lead::Board, Option<u64>)], built: Option<u64>) -> Option<Check> {
+    let built = built.filter(|_| !running.is_empty())?;
+    let old: Vec<String> = running.iter().filter(|(_, started)| started.is_some_and(|started| started <= built)).map(|(board, _)| format!("the board in {} (pane {}, pid {})", board.space, board.pane, board.pid)).collect();
+    if old.is_empty() {
+        return Some(ok("board", format!("{} on the installed kebbie", if running.len() == 1 { "running".to_string() } else { format!("{} running", running.len()) })));
+    }
+    Some(warn("board", format!("{} {} an older kebbie than the one installed", old.join(", "), if old.len() == 1 { "runs" } else { "run" }), one("kebbie lead --renew-board restarts it on the new one")))
+}
+
 pub fn sandbox(on: &Setting<bool>, missing: &[String]) -> Check {
     match (on.value, missing.is_empty()) {
         (false, _) => warn("sandbox", crate::sandbox::OFF, one(format!("set task.sandbox = true (now from the {})", on.layer.label()))),
@@ -843,6 +853,10 @@ pub fn checks(env: &Env) -> Vec<Check> {
         }
         checks.push(self::tool(&tool, found.as_deref(), output.as_deref()));
     }
+    if herdr.is_some() {
+        let running: Vec<_> = crate::lead::running_boards().unwrap_or_default().into_iter().map(|board| { let started = crate::restart::started(board.pid); (board, started) }).collect();
+        checks.extend(boards(&running, crate::lead::written_at()));
+    }
     let list = herdr.and_then(|herdr| run(&herdr.to_string_lossy(), &["plugin", "list", "--json", "--plugin", "kebbie"], None).ok());
     let channel = config::channel_in(&env.config).unwrap_or_default();
     let (check, plugin) = herdr_plugin(list.as_deref(), channel);
@@ -970,6 +984,18 @@ pub fn failed(checks: &[Check]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_board_started_before_the_installed_kebbie_was_built_is_named_as_running_old_code() {
+        let board = |space: &str, pid: u32| crate::lead::Board { pane: format!("{space}:p1"), space: space.to_string(), pid };
+        assert_eq!(boards(&[], Some(100)), None, "no board, nothing to say");
+        let fresh = boards(&[(board("lead", 7), Some(150))], Some(100)).unwrap();
+        assert_eq!((fresh.level, fresh.fact.as_str()), (Level::Ok, "running on the installed kebbie"));
+        let old = boards(&[(board("lead", 7), Some(150)), (board("work", 9), Some(50))], Some(100)).unwrap();
+        assert_eq!(old.level, Level::Warn);
+        assert_eq!(old.fact, "the board in work (pane work:p1, pid 9) runs an older kebbie than the one installed");
+        assert_eq!(old.fix, ["kebbie lead --renew-board restarts it on the new one"]);
+    }
 
     #[test]
     fn task_hooks_name_the_sessions_whose_kebbie_is_gone_and_how_to_mend_them() {

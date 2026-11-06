@@ -140,6 +140,10 @@ pub fn workspace_tokens(workspace_id: &str) -> Result<Value> {
     Ok(call(&["workspace", "get", workspace_id])?["workspace"]["tokens"].clone())
 }
 
+pub fn all_panes() -> Result<Vec<Value>> {
+    Ok(call(&["pane", "list"])?["panes"].as_array().cloned().unwrap_or_default())
+}
+
 pub fn panes_in(workspace_id: &str) -> Result<Vec<Value>> {
     Ok(call(&["pane", "list", "--workspace", workspace_id])?["panes"].as_array().cloned().unwrap_or_default())
 }

@@ -74,7 +74,7 @@ kebbie doctor                                                       45 ok · 2 t
 
 | Group | Checks |
 | --- | --- |
-| kebbie | `updates`, `plugin binary`, `keeper`, `kebbie on PATH`, `current link`, `herdr link` |
+| kebbie | `updates`, `plugin binary`, `keeper`, `board` (each running board, warned when it started before the installed binary), `kebbie on PATH`, `current link`, `herdr link` |
 | Claude Code | `claude`, `claude login`, `claude plugin`, `claude plugin source`, `status line`, `claude model` |
 | Codex | every `codex …` check |
 | Vault | `vault`, `machine`, `backlog vault` |
