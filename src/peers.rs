@@ -421,6 +421,13 @@ mod tests {
     }
 
     #[test]
+    fn a_task_whose_work_belongs_in_another_repo_asks_for_a_half_there_and_never_makes_a_worktree_by_hand() {
+        let role = fill(include_str!("../roles/task.md"), &[("kebbie", "kebbie")]);
+        assert!(role.contains("ask the lead for one (`kebbie tell lead") && role.contains("never make a worktree or branch there yourself"), "{role}");
+        assert!(include_str!("../roles/lead.md").contains("A running task gets a half in another repo the same way: `kebbie start <its name> \"<prompt>\" --repo <other repo>`"));
+    }
+
+    #[test]
     fn the_setup_skill_reaches_the_role_from_each_layer() {
         use crate::config::{Machine, Worktree, parse_machine, parse_repo, settings};
         let template = include_str!("../roles/task.md");

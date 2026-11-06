@@ -20,6 +20,7 @@ Run one task that changes two repos at once, such as an event one service sends 
 
 3. Push each half on its own with `p`, in the order the change needs: usually the side that accepts the new field first. On the board, the halves sit next to each other.
 
+- A running task gets a half in another repo the same way, such as a comment follow-up whose fix lives elsewhere: `kebbie start payload-v2 "Add the field to the client." --repo client`. A task asks the lead for it rather than making a worktree there by hand, which Push would not see.
 - If you use the vault, both halves share one task note.
 - If your repos live outside kebbie's search folders, set `KEBBIE_REPO_DIRS`. See below.
 

@@ -22,7 +22,7 @@ When the probe ends, the user's machine-wide state is exactly as it was before i
 
 {peers}
 
-That was at your start; `{kebbie} peers` prints the list now. A task with the same name in another repo is the same piece of work, split across repos: an event payload one side sends and the other consumes, a shared schema or name. Keep the other half informed.
+That was at your start; `{kebbie} peers` prints the list now. A task with the same name in another repo is the same piece of work, split across repos: an event payload one side sends and the other consumes, a shared schema or name. Keep the other half informed. When part of your work belongs in a repo this task has no half in, ask the lead for one (`{kebbie} tell lead "<what goes in <repo>, and why>"`) and never make a worktree or branch there yourself: Push, review and done see only the halves kebbie starts.
 
 ## Messages
 
