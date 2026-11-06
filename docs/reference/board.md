@@ -568,9 +568,12 @@ Folded, the bugs are one row under the tasks, `! 2 bugs to send · ⏎ shows the
 | `↑` `↓`, `j` `k` | Pick a bug. `↑` on the first, or on the folded row, goes back to the tasks. |
 | `⏎` | Show the report as it would go out and ask `y / n`. |
 | `n` | Keep the selected bug on this machine only, without opening it. |
+| `a` | Show every bug in the list as it would go out, and ask once whether to send them all. |
 | `esc`, `q` | Fold the list back into its row, with the selection on it; on the row, back to the tasks. |
 
 In the report window `↓` and `pgdn` scroll, `y` sends once you have read to the end, `n` keeps it on this machine only, and `esc` decides later.
+
+After `a`, `y` sends them all once you have read to the end, and `esc` decides later. They go in the background, paced to the endpoint's 5 per 5 minutes, each a line under messages; the board says which went and which failed when the last one has.
 
 ### Comments
 

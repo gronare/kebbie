@@ -909,6 +909,7 @@ Problems and wishes about kebbie itself, saved on this machine, one file each un
 | `kebbie issue retry <id>` | Mark it worth retrying, typically after an update that may have fixed it. |
 | `kebbie issue link <id> <number\|url>` | Tie it to its issue in kebbie's GitHub repo. Yours alone: kebbie refuses it to the lead and tasks. |
 | `kebbie issue report <id>` | Send a bug to kebbie's maintainers, after showing it. Yours alone, like the board's `y`. See [below](#kebbie-issue-report). |
+| `kebbie issue report --all` | Send every bug waiting to go, after showing them, on one `y`. Yours alone. See [below](#kebbie-issue-report). |
 | `kebbie issue report --always` / `--ask` | Arm or disarm sending each bug without asking. Yours alone, in your own terminal. |
 | `kebbie issue send <id>` | Open a prefilled new issue on GitHub. Optional, and yours alone. See [below](#kebbie-issue-send). |
 
@@ -941,6 +942,13 @@ Prints a bug as it would go to kebbie's maintainers, with paths under your home 
 - `n` keeps it here, and the board stops offering it.
 - Without a terminal it prints the text and sends nothing.
 - It is sent once: a second time is refused.
+
+`kebbie issue report --all` prints every bug waiting to go, the same way, and asks once.
+
+- `y` sends them in order: 5 at once, then 5 every 5 minutes, as the endpoint takes 5 per install in 5 minutes. A busy answer (`429`) waits 5 minutes and tries again, up to 3 times; after that the rest are left for another run.
+- It ends with the bugs it sent and their report ids, those already sent, and those that failed with why.
+- It leaves out bugs you kept on this machine with `n` and bugs opened on GitHub, and names them.
+- `n` sends nothing and keeps every bug as it was.
 
 ### `kebbie issue send`
 

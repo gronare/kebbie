@@ -228,7 +228,7 @@ fn serving(respond: impl Fn(&str) -> String + Send + 'static) -> String {
     serving_requests(move |_, path, _| respond(path))
 }
 
-fn serving_requests(respond: impl Fn(&str, &str, &str) -> String + Send + 'static) -> String {
+pub(crate) fn serving_requests(respond: impl Fn(&str, &str, &str) -> String + Send + 'static) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {

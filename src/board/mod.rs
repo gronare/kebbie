@@ -125,6 +125,7 @@ enum Mode {
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
     Report { id: String, scroll: u16, read: bool, nudged: bool },
+    ReportAll { scroll: u16, read: bool, nudged: bool },
     NoteCard { key: String, scroll: u16, nudged: bool },
     Comment { id: u64, scroll: u16, nudged: bool },
     Help(keys_window::Scroll),
@@ -183,6 +184,7 @@ struct App {
     message_back: usize,
     questions: Vec<Message>,
     answering: Option<(String, Receiver<Result<String>>)>,
+    sending: Option<(Vec<String>, Receiver<Result<String>>)>,
     offers: Vec<bug_report::Offer>,
     offer_panel: bug_report::OfferPanel,
     reporter: bug_report::Reporter,
@@ -611,6 +613,7 @@ impl App {
             Mode::Update => self.handle_update(key),
             Mode::AgentUpdates => self.handle_agent_updates(key),
             Mode::Report { id, scroll, read, .. } => self.confirm_report(id, scroll, read, key, cancels),
+            Mode::ReportAll { scroll, read, .. } => self.confirm_report_all(scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
             Mode::Comment { id, scroll, .. } => self.handle_comment_window(id, scroll, key, cancels),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
@@ -1048,7 +1051,7 @@ impl App {
             column: Column::Work, tasks: Vec::new(), checkouts: Vec::new(), backlog, work_selected: 0, backlog_selected: 0,
             mode: Mode::Normal, overlay, loaded: false, error: None, screens: HashMap::new(), refresh, quit: false, wanted_task: None, hits: Vec::new(), links: Vec::new(),
             page: Page::Work, areas: area_page::Page::new(sources.clone()), routines: routine_page::Page::new(config::path(), config::repos_dir()), settings: settings_page::Page::new(settings_page::Paths::current(), None), sources, fetch_failures: Vec::new(), away: false,
-            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), answering: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), parked_open: false,
+            messages: Vec::new(), fold: Fold::Line, seen: 0, fold_file: None, in_messages: false, message_back: 0, questions: Vec::new(), answering: None, sending: None, offers: Vec::new(), offer_panel: Default::default(), reporter: Default::default(), fixed: None, fixed_seen: 0, usage: None, ongoing: Vec::new(), groups: Group::ALL.to_vec(), ongoing_at: OngoingAt::default(), parked_open: false,
             details: HashMap::new(), detail_requests: None, detail_results: None, asked_details: HashMap::new(),
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
@@ -1112,6 +1115,7 @@ pub fn run(overlay: bool) -> Result<String> {
                 editor.poll_draft();
             }
             app.poll_answer();
+            app.poll_sending();
             app.take_working_result();
             app.poll_hub();
             app.poll_update();

@@ -366,21 +366,41 @@ pub fn install_key(state: &Path) -> Result<InstallKey> {
     }
 }
 
-fn refused(error: HubError) -> String {
+const BUSY: &str = "the reports endpoint is busy; try again in a few minutes";
+
+enum Refused {
+    Busy,
+    Other(String),
+}
+
+impl From<String> for Refused {
+    fn from(error: String) -> Refused {
+        Refused::Other(error)
+    }
+}
+
+fn refused(error: HubError) -> Refused {
     match error.status() {
-        Some(429) => "the reports endpoint is busy; try again in a few minutes".to_string(),
-        _ => error.to_string(),
+        Some(429) => Refused::Busy,
+        _ => Refused::Other(error.to_string()),
     }
 }
 
 pub const UNASKED_EVERY: u64 = 60;
 
 fn deliver(state: &Path, issue: &mut Issue, report: BugReport, url: &str, now: u64) -> Result<String> {
+    attempt(state, issue, report, url, now).map_err(|refusal| match refusal {
+        Refused::Busy => BUSY.to_string(),
+        Refused::Other(error) => error,
+    })
+}
+
+fn attempt(state: &Path, issue: &mut Issue, report: BugReport, url: &str, now: u64) -> std::result::Result<String, Refused> {
     let key = install_key(state)?;
     let client = Client::new(&super::hub_url(url)?, None, CALL);
     let challenge: ReportChallenge = client.get("/v1/reports/challenge").map_err(refused)?;
     if challenge.difficulty > MAX_WORK {
-        return Err(format!("the reports endpoint asks for {} bits of work, more than kebbie does ({MAX_WORK}); nothing was sent", challenge.difficulty));
+        return Err(Refused::Other(format!("the reports endpoint asks for {} bits of work, more than kebbie does ({MAX_WORK}); nothing was sent", challenge.difficulty)));
     }
     let counter = solve(&challenge.nonce.0, &report.digest(), challenge.difficulty);
     let title = report.title.clone();
@@ -417,6 +437,130 @@ pub fn send_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub
     }
     let sent = deliver(state, &mut issue, report, url, now)?;
     crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent bug {} to kebbie's maintainers as report {sent}", issue.id)).next("It stays on this machine too; after each update the keeper rechecks it and closes it once a commit plainly fixes it.").ok()
+}
+
+// The endpoint takes 5 signed reports per install key in a fixed 5-minute window; a refused try counts too, so a wait spans a whole window.
+pub const BURST: usize = 5;
+pub const WINDOW: std::time::Duration = std::time::Duration::from_secs(305);
+const WAITS: usize = 3;
+
+pub struct Pace<'a> {
+    pub clock: &'a dyn Fn() -> std::time::Instant,
+    pub wait: &'a dyn Fn(std::time::Duration),
+    pub say: &'a dyn Fn(&str),
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct Batch {
+    pub sent: Vec<(String, String)>,
+    pub already: Vec<(String, String)>,
+    pub failed: Vec<(String, String)>,
+}
+
+fn bugs(count: usize) -> String {
+    if count == 1 { "1 bug".to_string() } else { format!("{count} bugs") }
+}
+
+fn minutes(wait: std::time::Duration) -> String {
+    let minutes = wait.as_secs().div_ceil(60).max(1);
+    if minutes == 1 { "a minute".to_string() } else { format!("{minutes} minutes") }
+}
+
+impl Batch {
+    pub fn notice(&self) -> Result<String> {
+        let headline = match (self.sent.len(), self.failed.len()) {
+            (0, 0) => "Sent nothing: every bug had gone to kebbie's maintainers already".to_string(),
+            (sent, 0) => format!("Sent {} to kebbie's maintainers", bugs(sent)),
+            (0, failed) => format!("Sent none of {} to kebbie's maintainers", bugs(failed)),
+            (sent, failed) => format!("Sent {} to kebbie's maintainers; {failed} did not go", bugs(sent)),
+        };
+        let tone = if self.failed.is_empty() { crate::notice::Tone::Done } else { crate::notice::Tone::Failed };
+        let mut notice = crate::notice::Notice::new(tone, headline);
+        for (issue, report) in &self.sent {
+            notice = notice.detail("sent", format!("{issue} as report {report}"));
+        }
+        for (issue, report) in &self.already {
+            notice = notice.detail("already sent", format!("{issue} as report {report}"));
+        }
+        for (issue, why) in &self.failed {
+            notice = notice.detail("not sent", format!("{issue}: {why}"));
+        }
+        if !self.failed.is_empty() {
+            notice = notice.next("kebbie issue report --all sends the ones left; none goes twice.");
+        }
+        if self.failed.is_empty() { notice.ok() } else { notice.err() }
+    }
+}
+
+pub fn send_all_in(state: &Path, caller: &Caller, read: &[(String, [u8; 32])], url: &str, scrub: &Scrub, pace: &Pace, now: u64) -> Result<Batch> {
+    crate::permit::user_only_as(caller, "Sending reports to kebbie's maintainers")?;
+    let dir = issues::dir(state);
+    let mut batch = Batch::default();
+    let mut recent: std::collections::VecDeque<std::time::Instant> = std::collections::VecDeque::new();
+    let mut stuck = false;
+    for (id, digest) in read {
+        if stuck {
+            batch.failed.push((id.clone(), "not tried, the reports endpoint stayed busy".to_string()));
+            continue;
+        }
+        let mut issue = match issues::find(&dir, id) {
+            Ok(issue) => issue,
+            Err(error) => {
+                batch.failed.push((id.clone(), error));
+                continue;
+            }
+        };
+        if let Some(report) = &issue.report {
+            batch.already.push((issue.id.clone(), report.clone()));
+            continue;
+        }
+        if issue.kind != "bug" || issue.source.is_some() {
+            batch.failed.push((issue.id.clone(), "a wish or another install's report; only a bug you ran into goes".to_string()));
+            continue;
+        }
+        let report = payload(&issue, scrub);
+        if report.digest() != *digest {
+            batch.failed.push((issue.id.clone(), format!("it changed since you read it; kebbie issue report {} shows it again", issue.id)));
+            continue;
+        }
+        let mut waits = 0;
+        loop {
+            if recent.len() >= BURST {
+                let until = recent[0] + WINDOW;
+                let left = until.saturating_duration_since((pace.clock)());
+                if !left.is_zero() {
+                    (pace.say)(&format!("Sent {}; the endpoint takes {BURST} per 5 minutes, so the next goes in {}…", bugs(batch.sent.len()), minutes(left)));
+                    (pace.wait)(left);
+                }
+                recent.pop_front();
+                continue;
+            }
+            match attempt(state, &mut issue, report.clone(), url, now) {
+                Ok(sent) => {
+                    recent.push_back((pace.clock)());
+                    (pace.say)(&format!("Sent bug {} as report {sent}.", issue.id));
+                    batch.sent.push((issue.id.clone(), sent));
+                    break;
+                }
+                Err(Refused::Busy) if waits < WAITS => {
+                    waits += 1;
+                    (pace.say)(&format!("The reports endpoint is busy; waiting {} before bug {} goes…", minutes(WINDOW), issue.id));
+                    (pace.wait)(WINDOW);
+                    recent.clear();
+                }
+                Err(Refused::Busy) => {
+                    batch.failed.push((issue.id.clone(), format!("the reports endpoint stayed busy after {WAITS} waits of 5 minutes")));
+                    stuck = true;
+                    break;
+                }
+                Err(Refused::Other(error)) => {
+                    batch.failed.push((issue.id.clone(), error));
+                    break;
+                }
+            }
+        }
+    }
+    Ok(batch)
 }
 
 const ARMED: &str = "always-armed";
@@ -497,6 +641,10 @@ pub fn decline_in(state: &Path, caller: &Caller, id: &str, now: u64) -> Result<S
 
 fn ask_send() -> bool {
     print!("Send this report to kebbie's maintainers? [y/N] ");
+    answered_yes()
+}
+
+fn answered_yes() -> bool {
     let _ = std::io::stdout().flush();
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim(), "y" | "Y" | "yes")
@@ -520,6 +668,52 @@ pub fn cli(id: &str) -> Result<String> {
     } else {
         decline_in(&state, &caller, id, crate::messages::now())
     }
+}
+
+fn left_out(issue: &Issue) -> bool {
+    issue.is_open() && issue.kind == "bug" && issue.source.is_none() && issue.report.is_none() && !offered(issue)
+}
+
+pub fn all_preview(reports: &[(String, BugReport)]) -> String {
+    reports.iter().map(|(id, report)| format!("── bug {id} ──\n{}", preview(report))).collect::<Vec<_>>().join("\n\n")
+}
+
+pub fn cli_all() -> Result<String> {
+    let caller = crate::permit::caller();
+    crate::permit::user_only_as(&caller, "Sending reports to kebbie's maintainers")?;
+    let state = crate::lead::state_dir()?;
+    let settings = crate::config::report_settings()?;
+    let all = issues::load(&issues::dir(&state));
+    let waiting: Vec<&Issue> = all.iter().filter(|issue| offered(issue)).collect();
+    let already: Vec<String> = all.iter().filter(|issue| issue.is_open() && issue.kind == "bug" && issue.source.is_none()).filter_map(|issue| issue.report.as_ref().map(|report| format!("{} as report {report}", issue.id))).collect();
+    let kept: Vec<&str> = all.iter().filter(|issue| left_out(issue)).map(|issue| issue.id.as_str()).collect();
+    let mut aside = Vec::new();
+    if !already.is_empty() {
+        aside.push(format!("Already sent: {}.", already.join(", ")));
+    }
+    if !kept.is_empty() {
+        aside.push(format!("Left out, kept here or opened on GitHub: {}; kebbie issue report <id> sends one.", kept.join(", ")));
+    }
+    let aside = aside.join("\n");
+    if waiting.is_empty() {
+        return crate::notice::Notice::new(crate::notice::Tone::Done, "No bug waits to go to kebbie's maintainers").next(if aside.is_empty() { "kebbie issues lists the bugs on this machine.".to_string() } else { aside }).ok();
+    }
+    let scrub = Scrub::current();
+    let reports: Vec<(String, BugReport)> = waiting.iter().map(|issue| (issue.id.clone(), payload(issue, &scrub))).collect();
+    let shown = all_preview(&reports);
+    let aside = if aside.is_empty() { String::new() } else { format!("\n\n{aside}") };
+    if !super::interactive() {
+        return Ok(format!("{shown}{aside}\n\nThese are the {} as they would go to kebbie's maintainers at {}. Run kebbie issue report --all in your own terminal to answer y or n.", bugs(reports.len()), settings.url()));
+    }
+    println!("{shown}{aside}\n\nThese {} go to kebbie's maintainers at {}, each signed with this install's key; {BURST} go at once, then {BURST} every 5 minutes.", bugs(reports.len()), settings.url());
+    print!("Send all {}? [y/N] ", reports.len());
+    if !answered_yes() {
+        return crate::notice::Notice::new(crate::notice::Tone::NotNow, "Sent nothing").next("kebbie issue report <id> sends one, n there keeps it here.").ok();
+    }
+    let read: Vec<(String, [u8; 32])> = reports.iter().map(|(id, report)| (id.clone(), report.digest())).collect();
+    let say = |line: &str| println!("{line}");
+    let pace = Pace { clock: &std::time::Instant::now, wait: &std::thread::sleep, say: &say };
+    send_all_in(&state, &caller, &read, settings.url(), &scrub, &pace, crate::messages::now())?.notice()
 }
 
 #[cfg(test)]
@@ -681,6 +875,101 @@ mod tests {
         let refused = send_in(&state, &Caller::User, "a1b2c3", "http://127.0.0.1:9", &scrub(), &read, NOW).unwrap_err();
         assert!(refused.contains("changed since you read it"), "{refused}");
         assert!(!key_file(&state).exists() && issues::find(&dir, "a1b2c3").unwrap().report.is_none(), "refused before any key or network");
+    }
+
+    // A reports endpoint that hands out work-free challenges, takes each upload once, and answers 429 to the post numbered `busy`.
+    type Seen = std::sync::Arc<std::sync::Mutex<(usize, usize, Vec<String>)>>;
+
+    fn counting_endpoint(busy: usize) -> (String, Seen) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new((0, 0, Vec::new())));
+        let counted = seen.clone();
+        let url = crate::hub::tests::serving_requests(move |method, path, body| {
+            let mut seen = counted.lock().unwrap();
+            let (status, answer) = match (method, path) {
+                ("GET", "/v1/reports/challenge") => {
+                    seen.0 += 1;
+                    ("200 OK", serde_json::to_string(&ReportChallenge { nonce: Bytes32([7; 32]), difficulty: 0, expires: u64::MAX, tag: Bytes32([0; 32]) }).unwrap())
+                }
+                ("POST", "/v1/reports") => {
+                    seen.1 += 1;
+                    if seen.1 == busy {
+                        ("429 Too Many Requests", r#"{"error":"rate-limited"}"#.to_string())
+                    } else {
+                        let upload: ReportUpload = serde_json::from_str(body).unwrap();
+                        seen.2.push(upload.report.title);
+                        ("202 Accepted", format!(r#"{{"report":{}}}"#, seen.2.len()))
+                    }
+                }
+                _ => ("404 Not Found", r#"{"error":"not-found"}"#.to_string()),
+            };
+            format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len())
+        });
+        (url, seen)
+    }
+
+    #[test]
+    fn all_bugs_go_once_each_paced_to_the_endpoints_limit_and_a_busy_answer_is_waited_out() {
+        use std::cell::{Cell, RefCell};
+        let state = crate::sh::test_dir("report-all");
+        let dir = issues::dir(&state);
+        let ids: Vec<String> = (0..8).map(|index| format!("b0000{index}")).collect();
+        for (index, id) in ids.iter().enumerate() {
+            issues::save(&dir, &Issue { id: id.clone(), title: format!("bug {index}"), ..bug("t", "it broke") }).unwrap();
+        }
+        issues::save(&dir, &Issue { id: "c00000".to_string(), report: Some("41".to_string()), ..bug("gone", "") }).unwrap();
+        let mut read: Vec<(String, [u8; 32])> = ids.iter().map(|id| (id.clone(), payload(&issues::find(&dir, id).unwrap(), &scrub()).digest())).collect();
+        read.push(("c00000".to_string(), [0; 32]));
+        let (url, seen) = counting_endpoint(3);
+        let start = std::time::Instant::now();
+        let (elapsed, waits, sent_at) = (Cell::new(std::time::Duration::ZERO), RefCell::new(Vec::new()), RefCell::new(Vec::new()));
+        let clock = || start + elapsed.get();
+        let wait = |pause: std::time::Duration| {
+            waits.borrow_mut().push(pause);
+            elapsed.set(elapsed.get() + pause);
+        };
+        let say = |line: &str| if line.starts_with("Sent bug") { sent_at.borrow_mut().push(elapsed.get()) };
+        let pace = Pace { clock: &clock, wait: &wait, say: &say };
+
+        let batch = send_all_in(&state, &Caller::User, &read, &url, &scrub(), &pace, NOW).unwrap();
+        assert_eq!(batch.sent.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(), ids, "{batch:?}");
+        assert_eq!((batch.already, batch.failed), (vec![("c00000".to_string(), "41".to_string())], Vec::new()));
+        let (challenges, posts, titles) = seen.lock().unwrap().clone();
+        assert_eq!((challenges, posts), (9, 9), "one challenge and one post per bug, and one more of each for the try the 429 refused");
+        assert_eq!(titles, (0..8).map(|index| format!("bug {index}")).collect::<Vec<_>>(), "each went once, in order");
+        assert_eq!(*waits.borrow(), [WINDOW, WINDOW], "a whole window after the 429, and one more before a sixth within it");
+        let sent_at = sent_at.borrow();
+        assert!(sent_at.windows(BURST + 1).all(|run| run[BURST] - run[0] >= WINDOW), "never more than {BURST} in a window: {sent_at:?}");
+        assert!(ids.iter().all(|id| issues::find(&dir, id).unwrap().report.is_some()));
+        assert!(batch.sent.len() == 8 && Batch { sent: vec![("b00000".to_string(), "1".to_string())], ..Batch::default() }.notice().unwrap().contains("Sent 1 bug to kebbie's maintainers"));
+
+        let again = send_all_in(&state, &Caller::User, &read, &url, &scrub(), &pace, NOW).unwrap();
+        assert!(again.sent.is_empty() && again.failed.is_empty() && again.already.len() == 9, "{again:?}");
+        assert_eq!(seen.lock().unwrap().1, 9, "nothing is sent twice");
+        for caller in [Caller::Lead, Caller::Task("a@b".to_string()), Caller::Agent, Caller::Sandboxed] {
+            assert!(send_all_in(&state, &caller, &read, &url, &scrub(), &pace, NOW).unwrap_err().contains("is the user's call"));
+        }
+    }
+
+    #[test]
+    fn an_endpoint_that_stays_busy_fails_the_rest_with_why_after_three_waits() {
+        let state = crate::sh::test_dir("report-all-busy");
+        let dir = issues::dir(&state);
+        for id in ["d00000", "d00001"] {
+            issues::save(&dir, &Issue { id: id.to_string(), ..bug("t", "") }).unwrap();
+        }
+        let read: Vec<(String, [u8; 32])> = ["d00000", "d00001"].iter().map(|id| (id.to_string(), payload(&issues::find(&dir, id).unwrap(), &scrub()).digest())).collect();
+        let url = crate::hub::tests::serving_requests(|method, _, _| {
+            let (status, body) = if method == "GET" { ("200 OK", serde_json::to_string(&ReportChallenge { nonce: Bytes32([7; 32]), difficulty: 0, expires: u64::MAX, tag: Bytes32([0; 32]) }).unwrap()) } else { ("429 Too Many Requests", r#"{"error":"rate-limited"}"#.to_string()) };
+            format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+        });
+        let waited = std::cell::Cell::new(0);
+        let pace = Pace { clock: &std::time::Instant::now, wait: &|_| waited.set(waited.get() + 1), say: &|_| {} };
+        let batch = send_all_in(&state, &Caller::User, &read, &url, &scrub(), &pace, NOW).unwrap();
+        assert_eq!(waited.get(), WAITS);
+        assert!(batch.sent.is_empty() && batch.failed.len() == 2 && batch.failed[0].1.contains("stayed busy after 3 waits") && batch.failed[1].1.contains("not tried"), "{batch:?}");
+        let told = batch.notice().unwrap_err();
+        assert!(told.contains("Sent none of 2 bugs") && told.contains("kebbie issue report --all sends the ones left"), "{told}");
+        assert!(issues::find(&dir, "d00000").unwrap().report.is_none());
     }
 
     #[test]

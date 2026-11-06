@@ -16,6 +16,7 @@ Keep what kebbie got wrong, or could not do, on your machine, and send a bug to 
 | `kebbie issues [--all]` | Lists the open ones, or every status. |
 | `kebbie issue show <id>` | Prints one. |
 | `kebbie issue report <id>` | Shows a bug as it would go to kebbie's maintainers and sends it on your `y`. |
+| `kebbie issue report --all` | Shows every bug waiting to go and sends them all on one `y`. |
 | `kebbie issue report --always` \| `--ask` | Sends each saved bug without asking, or asks again. |
 | `kebbie issue reopen <id>` | Opens a closed one again, noted as come back on this build. |
 | `kebbie issue retry <id>` | Marks one worth trying again. |
@@ -129,6 +130,16 @@ Every report sent, from the board, from `kebbie issue report` or unasked, adds a
 
 - If you want back to the tasks, press `esc` in the list to fold it into its row, then `esc` or `↑` again. The board remembers whether the list shows.
 - If you work in a terminal, run `kebbie issue report <id>`. It prints the same text and asks `y/N`.
+
+### Send them all at once
+
+The endpoint takes 5 reports from one install in 5 minutes. kebbie paces a batch to that, so you answer once:
+
+1. Open the list and press `a`, or run `kebbie issue report --all` in your own terminal.
+2. Read the reports to their end. kebbie shows each one exactly as it would go out.
+3. Press `y`. The first 5 go at once, then 5 more every 5 minutes. If the endpoint still answers that it is busy, kebbie waits 5 minutes and carries on.
+
+On the board the batch goes in the background, each send a line under messages. When it ends, kebbie names the bugs it sent, those already sent, and any that failed with why. Run it again for the ones left; no bug goes twice. `--all` leaves out a bug you kept on this machine or opened on GitHub; `kebbie issue report <id>` sends one of those.
 
 ### What the report holds
 

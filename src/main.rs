@@ -387,8 +387,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   the ones they plainly fix)
   kebbie issue report <id>        show a bug in kebbie you ran into as it would go to kebbie's maintainers (paths under
                                   your home as ~, no repo names, remote URLs or tokens) and send it on your y, signed with
-                                  this install's key; the board counts each new one in its header and B lists them ([report]
-                                  text = \"never\" hides the offer); sent once, and the issue keeps the report's id
+                                  this install's key; the board counts each new one in its header and lists them under
+                                  Work ([report] text = \"never\" hides the offer); sent once, and the issue keeps the report's id
+  kebbie issue report --all       show every bug waiting to go and send them all on one y, 5 at once and then 5 every
+                                  5 minutes, waiting out a busy endpoint; says which went, which had gone and which failed
   kebbie issue report --always | --ask
                                   in your own terminal: let kebbie send each bug you run into without asking, redacted,
                                   each send a line under messages (with [report] text = \"always\" in config.toml);
@@ -803,8 +805,9 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
         }
         Some("report") if arguments.flag("--always") => hub::report::arm_cli(true),
         Some("report") if arguments.flag("--ask") => hub::report::arm_cli(false),
+        Some("report") if arguments.flag("--all") => hub::report::cli_all(),
         Some("report") => hub::report::cli(id()?),
-        _ => Err("kebbie issue knows add, hold <line> | --take, list, show <id>, close <id> fixed|wontfix|duplicate, reopen <id>, retry <id>, link <id> <number|url>, send <id>, report <id> and report --always | --ask".to_string()),
+        _ => Err("kebbie issue knows add, hold <line> | --take, list, show <id>, close <id> fixed|wontfix|duplicate, reopen <id>, retry <id>, link <id> <number|url>, send <id>, report <id> | --all and report --always | --ask".to_string()),
     }
 }
 
