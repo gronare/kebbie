@@ -18,9 +18,36 @@ use super::{fetch, slug};
 use super::pool::{Slot, claim_slot, slots};
 use super::started::{read_start, start_entry, started_file};
 
-// A task's temporary files live in its worktree's own git dir, so they go with the task and never land in the repo.
+// Tools put Unix sockets under TMPDIR, Chromium's SingletonSocket among them, and a socket path ends at 104 bytes on macOS, so a task's temp folder sits in a short per-user folder in /tmp, named for its worktree.
 pub(crate) fn task_tmp(worktree: &Path) -> Result<PathBuf> {
-    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kebbie-tmp"))
+    let git_dir = PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?);
+    let tmp = Path::new("/tmp").canonicalize().unwrap_or_else(|_| PathBuf::from("/tmp"));
+    // SAFETY: getuid cannot fail.
+    Ok(tmp_in(&tmp, unsafe { libc::getuid() }, &git_dir))
+}
+
+fn tmp_in(tmp: &Path, uid: u32, git_dir: &Path) -> PathBuf {
+    let named = if git_dir.file_name().is_some_and(|name| name == ".git") { git_dir.parent().unwrap_or(git_dir) } else { git_dir };
+    let name: String = named.file_name().map(|name| name.to_string_lossy().chars().filter(|char| char.is_ascii_alphanumeric() || ['.', '-', '_'].contains(char)).take(12).collect()).unwrap_or_default();
+    let hash = &sha1_smol::Sha1::from(git_dir.to_string_lossy().as_bytes()).digest().to_string()[..6];
+    tmp.join(format!("kebbie-{uid}")).join(format!("{name}-{hash}"))
+}
+
+// The per-user folder is made private, and one that is a link or another user's is refused, since every user can write in /tmp.
+pub(crate) fn make_tmp(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let fail = |error: std::io::Error| format!("{}: {error}", dir.display());
+    let root = dir.parent().ok_or_else(|| format!("{} has no parent", dir.display()))?;
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(root);
+    let meta = std::fs::symlink_metadata(root).map_err(fail)?;
+    // SAFETY: getuid cannot fail.
+    if !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } {
+        return Err(format!("{} is not a folder of yours, so kebbie keeps a task's temp files out of it: remove it and start the task again", root.display()));
+    }
+    if meta.mode() & 0o077 != 0 {
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).map_err(fail)?;
+    }
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(fail)
 }
 
 pub(super) fn clear_tmp(worktree: &Path) {
@@ -482,7 +509,7 @@ fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
     let address = peers::address(task, &name_of(repo));
     let note = note.filter(|_| vault);
     let tmp = task_tmp(worktree)?;
-    std::fs::create_dir_all(&tmp).map_err(|error| format!("{}: {error}", tmp.display()))?;
+    make_tmp(&tmp)?;
     let shell = sandboxed(config::resolve(Some(repo))?.settings.sandbox.value, profile, crate::sandbox::missing_here)?;
     let git_dir = PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?);
     let mut dirs = crate::sandbox::TaskDirs::new(worktree, &git_dir, &tmp);
@@ -806,6 +833,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_tasks_temp_folder_leaves_chromiums_singleton_socket_under_100_characters_on_macos_and_linux() {
+        let deep = Path::new("/Users/ada-lovelace-of-the-analytical-engine/projects/client-work/billing-platform/.git/worktrees/wt12.billing-platform-refunds");
+        for tmp in ["/private/tmp", "/tmp"] {
+            let dir = tmp_in(Path::new(tmp), u32::MAX, deep);
+            let socket = dir.join("org.chromium.Chromium.XXXXXX/SingletonSocket");
+            assert!(socket.as_os_str().len() < 100, "{} is {} characters", socket.display(), socket.as_os_str().len());
+            assert!(dir.starts_with(format!("{tmp}/kebbie-{}", u32::MAX)), "{}", dir.display());
+        }
+        let main = tmp_in(Path::new("/tmp"), 501, Path::new("/src/app/.git"));
+        assert!(main.file_name().unwrap().to_string_lossy().starts_with("app-"), "a main checkout is named for its folder: {}", main.display());
+        assert_ne!(tmp_in(Path::new("/tmp"), 501, Path::new("/a/app/.git/worktrees/wt1.app")), tmp_in(Path::new("/tmp"), 501, Path::new("/b/app/.git/worktrees/wt1.app")), "two repos' slots of one name get their own");
+    }
+
+    #[test]
+    fn a_tasks_temp_folder_is_private_and_never_in_a_folder_someone_else_made() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = crate::sh::test_dir("task-tmp");
+        let dir = base.join("kebbie-501").join("wt1.app-abcdef");
+        make_tmp(&dir).unwrap();
+        for made in [&dir, &base.join("kebbie-501")] {
+            assert_eq!(std::fs::metadata(made).unwrap().permissions().mode() & 0o777, 0o700, "{}", made.display());
+        }
+        std::fs::set_permissions(base.join("kebbie-501"), std::fs::Permissions::from_mode(0o777)).unwrap();
+        make_tmp(&dir).unwrap();
+        assert_eq!(std::fs::metadata(base.join("kebbie-501")).unwrap().permissions().mode() & 0o777, 0o700, "opened up, it is closed again");
+        std::os::unix::fs::symlink(base.join("kebbie-501"), base.join("linked")).unwrap();
+        assert!(make_tmp(&base.join("linked/x")).unwrap_err().contains("is not a folder of yours"), "a link someone planted is refused");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn a_start_from_a_vault_note_claims_it_for_this_machine_and_refuses_another_machines_without_anyway() {
         let fake = crate::vault_cli::fake::Fake::new("start-claim");
         let cli = fake.claiming();
@@ -888,7 +946,7 @@ mod tests {
     fn a_restarted_codex_task_resumes_with_the_args_a_start_of_it_has_now() {
         let coder = Profile { name: "coder".to_string(), agent: Agent::Codex, model: Some("gpt-6.1-sol".to_string()), effort: Some("high".to_string()), ..profiles::built_in(profiles::TASK).unwrap() };
         let place = |profile| Launch { repo: Path::new("/src/app"), task: "hub-leave-message", mode: None, profile, setup_skill: "", setup_command: None, rules_skill: "", worktree: PathBuf::from("/src/wt1.app"), vault: false, note: None };
-        let prepared = Prepared { settings: PathBuf::from("/s/roles/hub-leave-message@app.settings.json"), role: PathBuf::from("/s/roles/hub-leave-message@app.md"), sandboxed: true, git_dir: PathBuf::from("/src/app/.git/worktrees/wt1.app"), tmp: PathBuf::from("/src/app/.git/worktrees/wt1.app/kebbie-tmp") };
+        let prepared = Prepared { settings: PathBuf::from("/s/roles/hub-leave-message@app.settings.json"), role: PathBuf::from("/s/roles/hub-leave-message@app.md"), sandboxed: true, git_dir: PathBuf::from("/src/app/.git/worktrees/wt1.app"), tmp: PathBuf::from("/tmp/kebbie-501/wt1.app-a1b2c3") };
         let codex = crate::agent::codex_setup::Session::default();
         let fresh = task_args(&place(&coder), &prepared, &codex, &[], &Session::New("x".to_string()));
         let resumed = task_args(&place(&coder), &prepared, &codex, &[], &Session::Resume("019b3136".to_string()));

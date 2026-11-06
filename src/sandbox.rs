@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn a_tasks_file_tools_write_in_its_worktree_and_temp_folder_and_nowhere_that_runs_as_the_user() {
         let base = crate::sh::test_dir("file-refusal").canonicalize().unwrap();
-        let (worktree, tmp, claude, home) = (base.join("wt1.app"), base.join("app/.git/worktrees/1/kebbie-tmp"), base.join("home/.claude"), base.join("home"));
+        let (worktree, tmp, claude, home) = (base.join("wt1.app"), base.join("tmp/wt1.app-a1b2c3"), base.join("home/.claude"), base.join("home"));
         for dir in [&worktree, &tmp, &claude.join("projects"), &worktree.join("src")] {
             std::fs::create_dir_all(dir).unwrap();
         }
@@ -682,7 +682,7 @@ mod tests {
         std::fs::create_dir_all(worktree.join(".claude")).unwrap();
         std::os::unix::fs::symlink(worktree.join(".claude"), worktree.join("alias")).unwrap();
         assert!(refused(&worktree.join("alias/settings.json")).is_some(), "a link to the worktree's .claude is its .claude");
-        let (other, other_tmp) = (base.join("wt2.api"), base.join("api/.git/worktrees/2/kebbie-tmp"));
+        let (other, other_tmp) = (base.join("wt2.api"), base.join("tmp/wt2.api-d4e5f6"));
         assert!(file_refusal(&other.join("src/lib.rs"), &dirs, &claude).is_some(), "another repo's worktree is not this task's without a half there");
         dirs.halves.push(TaskDirs::new(&other, &base.join("api/.git/worktrees/2"), &other_tmp));
         assert_eq!(file_refusal(&other.join("src/lib.rs"), &dirs, &claude), None, "the task's half in another repo is its own");
@@ -713,7 +713,7 @@ mod tests {
         for slot in ["1", "2", "3"] {
             std::fs::create_dir_all(base.join("app/.git/worktrees").join(slot)).unwrap();
         }
-        let dirs = TaskDirs::new(&base.join("wt1.app"), &base.join("app/.git/worktrees/1"), &base.join("app/.git/worktrees/1/kebbie-tmp"));
+        let dirs = TaskDirs::new(&base.join("wt1.app"), &base.join("app/.git/worktrees/1"), &base.join("tmp/wt1.app-a1b2c3"));
         let others = [base.join("app/.git/worktrees/2"), base.join("app/.git/worktrees/3")];
         assert_eq!(sibling_git_dirs(&dirs), others);
         let denied: Vec<String> = block("/k", &Policy::default(), Some(&dirs), false)["filesystem"]["denyWrite"].as_array().unwrap().iter().filter_map(|path| path.as_str().map(str::to_string)).collect();
@@ -728,9 +728,9 @@ mod tests {
 
     #[test]
     fn a_linked_worktrees_git_dirs_are_read_from_its_own_git_dir() {
-        let dirs = TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1"), Path::new("/tmp/kebbie-tmp"));
+        let dirs = TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1"), Path::new("/tmp/kebbie-501/wt1.app-a1b2c3"));
         assert_eq!((dirs.git_dir(), dirs.common_dir(), dirs.main_checkout()), (PathBuf::from("/src/app/.git/worktrees/1"), PathBuf::from("/src/app/.git"), Some(PathBuf::from("/src/app"))));
-        let main = TaskDirs::new(Path::new("/src/app"), Path::new("/src/app/.git"), Path::new("/tmp/kebbie-tmp"));
+        let main = TaskDirs::new(Path::new("/src/app"), Path::new("/src/app/.git"), Path::new("/tmp/kebbie-501/wt1.app-a1b2c3"));
         assert_eq!((main.common_dir(), main.main_checkout()), (PathBuf::from("/src/app/.git"), None));
         let base = crate::sh::test_dir("git-dir-of").canonicalize().unwrap();
         std::fs::create_dir_all(base.join("app/.git/worktrees/1")).unwrap();

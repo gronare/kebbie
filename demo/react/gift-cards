@@ -8,7 +8,7 @@ case "$text" in
     mode working
     say "● Reading the checkout in src/checkout/ to see where a card would be redeemed."
     sleep 2.5
-    plan=$(git rev-parse --absolute-git-dir)/kebbie-tmp/plan.md
+    plan=${TMPDIR:-/tmp}/plan.md
     mkdir -p "$(dirname "$plan")"
     cat > "$plan" <<'PLAN'
 # Gift cards

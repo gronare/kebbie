@@ -11,6 +11,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task hears at once when kebbie leaves a test-like command unrecorded, and why.
 - A test command piped into tail or grep is judged by its result line, and recorded as unknown without one, never as passed.
 - A test run that goes to the background shows as unknown until it ends, then with its real result.
+- Headless Chrome and Playwright start in a task, whose temp folder now has a short path in /tmp.
 
 ## 0.35.0
 

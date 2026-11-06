@@ -503,7 +503,7 @@ mod tests {
     fn a_tasks_temp_dir_is_its_own_outside_the_worktree_and_goes_when_the_task_is_done() {
         let (dir, origin, slot, upstream) = task_with_a_commit("scratch");
         let tmp = task_tmp(&slot.path).unwrap();
-        assert!(tmp.starts_with(dir.join(".git/worktrees").canonicalize().unwrap()), "{}", tmp.display());
+        assert!(!tmp.starts_with(&dir) && !tmp.starts_with(&slot.path), "{}", tmp.display());
         std::fs::create_dir_all(tmp.join("deep")).unwrap();
         std::fs::write(tmp.join("deep/file"), "x").unwrap();
         assert!(is_clean(&slot.path).unwrap(), "temp files never show as changes in the worktree");

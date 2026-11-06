@@ -677,7 +677,7 @@ mod tests {
     }
 
     fn dirs() -> TaskDirs {
-        TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1"), Path::new("/src/app/.git/worktrees/1/kebbie-tmp"))
+        TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1"), Path::new("/tmp/kebbie-501/wt1.app-a1b2c3"))
     }
 
     fn strings(value: &Value) -> Vec<String> {
@@ -699,7 +699,7 @@ mod tests {
         assert_eq!((&sandbox["enabled"], &sandbox["allowUnsandboxedCommands"], &sandbox["failIfUnavailable"]), (&json!(true), &json!(false), &json!(true)), "no retry outside the sandbox, and no start without one");
         assert_eq!(strings(&sandbox["excludedCommands"]), crate::sandbox::TASK_COMMANDS.map(|command| format!("/opt/kebbie/kebbie {command} *")).to_vec(), "matched on the absolute path the role names");
         assert_eq!(strings(&sandbox["network"]["allowedDomains"]), crate::sandbox::DOMAINS.map(str::to_string).to_vec());
-        assert_eq!(strings(&sandbox["filesystem"]["allowWrite"]), ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache", "/src/app/.git/worktrees/1/kebbie-tmp"]);
+        assert_eq!(strings(&sandbox["filesystem"]["allowWrite"]), ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache", "/tmp/kebbie-501/wt1.app-a1b2c3"]);
         let denied = strings(&sandbox["filesystem"]["denyWrite"]);
         for path in ["/src/app/.git/worktrees/1/config.worktree", "/src/app/.git/worktrees/1/kebbie-hooks"] {
             assert!(denied.contains(&path.to_string()), "the push block stays out of the shell's reach: {path}");
@@ -789,7 +789,7 @@ mod tests {
         }
         assert!(!deny.iter().any(|rule| (rule.starts_with("Write(") || rule.starts_with("MultiEdit(")) && rule.contains('/')), "Claude Code never consults a Write or MultiEdit path rule: {deny:?}");
         assert!(!deny.iter().any(|rule| rule.starts_with("Edit(/") && !rule.starts_with("Edit(//")), "a single leading slash anchors at the settings file, not at /: {deny:?}");
-        assert!(!deny.contains(&"Edit(//src/wt1.app/**)".to_string()) && !deny.iter().any(|rule| rule.starts_with("Edit(//src/app/.git/worktrees/1/kebbie-tmp")), "the worktree and the temp folder stay the task's to write");
+        assert!(!deny.contains(&"Edit(//src/wt1.app/**)".to_string()) && !deny.iter().any(|rule| rule.starts_with("Edit(//tmp/kebbie-501/wt1.app-a1b2c3")), "the worktree and the temp folder stay the task's to write");
     }
 
     #[test]
@@ -805,7 +805,7 @@ mod tests {
         let written = task_settings(Some(&Policy::default()));
         let entries = written["hooks"]["PreToolUse"].as_array().unwrap();
         let files = entries.iter().find(|entry| entry["matcher"] == "Edit|Write|MultiEdit|NotebookEdit").unwrap();
-        assert_eq!(files["hooks"][0]["command"], "'/opt/kebbie/kebbie' hook files 'billing' '/src/wt1.app' '/src/app/.git/worktrees/1/kebbie-tmp'", "the task's name finds its halves in other repos");
+        assert_eq!(files["hooks"][0]["command"], "'/opt/kebbie/kebbie' hook files 'billing' '/src/wt1.app' '/tmp/kebbie-501/wt1.app-a1b2c3'", "the task's name finds its halves in other repos");
         let gated: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some("billing@app"), Some(&dirs()), Some(&Policy::default()))).unwrap();
         let matchers: Vec<&str> = gated["hooks"]["PreToolUse"].as_array().unwrap().iter().filter_map(|entry| entry["matcher"].as_str()).collect();
         assert_eq!(matchers, ["Edit|Write|MultiEdit|NotebookEdit|Bash", "Edit|Write|MultiEdit|NotebookEdit"], "the vault's gate and the file hook both run");
@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn a_task_across_repos_takes_every_halfs_worktree_as_its_own_in_the_deny_rules() {
         let mut dirs = dirs();
-        dirs.halves.push(TaskDirs::new(Path::new("/src/wt2.api"), Path::new("/src/api/.git/worktrees/2"), Path::new("/src/api/.git/worktrees/2/kebbie-tmp")));
+        dirs.halves.push(TaskDirs::new(Path::new("/src/wt2.api"), Path::new("/src/api/.git/worktrees/2"), Path::new("/tmp/kebbie-501/wt2.api-d4e5f6")));
         let deny = Protected { path: vec![PathBuf::from("/src")], install: Some(PathBuf::from("/src/wt2.api")), ..Protected::here() }.deny_rules("/opt/kebbie/kebbie", Some(&dirs));
         for rule in ["Edit(//src/wt2.api/.claude/settings.json)", "Edit(//src/wt2.api/.mcp.json)", "Edit(//src/api/.git/config)", "Edit(//src/api/.claude/**)"] {
             assert!(deny.contains(&rule.to_string()), "{rule} in {deny:?}");
