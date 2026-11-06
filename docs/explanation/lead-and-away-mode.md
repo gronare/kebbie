@@ -41,7 +41,7 @@ What asks the lead to act waits while you are in a conversation with it:
 - you prompted it within the last 3 minutes, or its turn on your prompt ended less than 3 minutes ago,
 - your own text sits in its input box.
 
-Once you have been quiet for 3 minutes and the lead is idle, what waited goes as one message, grouped by task, so the lead handles it in one turn. A prompt on a task's screen is held too, but it comes first in that message. The message log shows each one as held, with the reason.
+Once you have been quiet for 3 minutes and the lead is idle, what waited goes as one message, grouped by task, so the lead handles it in one turn. A prompt on a task's screen waits only for the lead's turn to end and for your text to leave its box, since the task stands still until someone answers it; with other messages it comes first. The message log shows each one as held, with the reason.
 
 In away mode nothing waits: the lead gets each message as it comes.
 

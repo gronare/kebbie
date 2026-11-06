@@ -18,6 +18,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A ready task held only by uncommitted files names them on its row, and its push window opens ready to push the commits alone; approve says the same.
 - A pushed task's menu no longer offers rebase, tidy, push, let the lead push or keep rebased, and G re-runs its failed or cancelled CI.
 - A follow-up started for a comment runs in the permission mode of the task started last, unless a profile or config sets one.
+- A prompt on a task's screen reaches the lead when its turn ends, without waiting out a conversation with you.
 
 ## 0.35.0
 
