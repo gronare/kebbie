@@ -1278,7 +1278,7 @@ mod tests {
         assert!(asks_for_tests(asked) && !asks_for_tests("verdict: changes\nreviewed: abc\n\nThe tests look fine.\n"));
         let hook = include_str!("evidence.rs");
         let hook = &hook[hook.find("\npub fn hook(").unwrap()..];
-        assert!(hook.find("record_in(").unwrap() < hook.find("again_for_tests(").unwrap(), "the passing run sends the task back by itself, no report needed");
+        assert!(hook.find("recorded(address").unwrap() < hook.find("again_for_tests(").unwrap(), "the passing run sends the task back by itself, no report needed");
         fs::remove_dir_all(state).unwrap();
     }
 

@@ -104,13 +104,88 @@ fn listed_start<'a>(simple: &str, listed: &'a [String]) -> Option<&'a str> {
         .max_by_key(|prefix| prefix.len())
 }
 
-// The first listed command the line runs as a command of its own, after cd, assignments, wrappers and any earlier command of a ; && || chain.
+// What the line's exit says about the test command in it, from least to most.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub enum Exit {
+    Silent(&'static str),
+    ZeroOnly,
+    Speaks,
+}
+
+impl Exit {
+    fn least(self, other: Exit) -> Exit {
+        if other < self { other } else { self }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Found<'a> {
+    pub runner: &'a str,
+    pub exit: Exit,
+}
+
+const PIPED: &str = "piped, so the exit is the pipe's";
+const OTHER: &str = "the exit is another command's";
+
+// What the exit of the line says about the command at `at`: whole when nothing runs after it, only a zero after &&, nothing after a pipe without pipefail or after ; || &.
+fn exit_of(pieces: &[(&str, Option<shell::Op>)], at: usize, errexit: bool, pipefail: bool) -> Exit {
+    use shell::Op;
+    let mut exit = Exit::Speaks;
+    for (text, op) in pieces[..at].iter().rev() {
+        match op {
+            Some(Op::Seq) if !errexit => break,
+            Some(Op::Background) => break,
+            Some(Op::Or) => return Exit::Silent(OTHER),
+            Some(Op::Pipe) if pipefail => exit = exit.least(Exit::ZeroOnly),
+            Some(Op::Seq | Op::And) if shell::piece(text) != shell::Piece::Setup => exit = exit.least(Exit::ZeroOnly),
+            _ => {}
+        }
+    }
+    let mut after = pieces[at..].iter().map(|(_, op)| *op).skip_while(|op| *op == Some(Op::Pipe));
+    if pieces[at].1 == Some(Op::Pipe) {
+        exit = if pipefail { exit.least(Exit::ZeroOnly) } else { return Exit::Silent(PIPED) };
+    }
+    for op in after.by_ref() {
+        match op {
+            None => break,
+            Some(Op::And | Op::Pipe) => exit = exit.least(Exit::ZeroOnly),
+            Some(Op::Seq) if errexit => exit = exit.least(Exit::ZeroOnly),
+            Some(Op::Seq | Op::Or | Op::Background) => return Exit::Silent(OTHER),
+        }
+    }
+    exit
+}
+
+fn sets(text: &str, flag: char, option: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    words.first() == Some(&"set") && (words.contains(&option) || words.iter().any(|word| word.starts_with('-') && !word.starts_with("--") && word.contains(flag)))
+}
+
+// The first listed command the line runs as a command of its own, after cd, assignments, wrappers and any earlier command of a ; && || chain, with what the line's exit says about it.
+pub fn find<'a>(command: &str, listed: &'a [String]) -> Option<Found<'a>> {
+    let pieces = shell::pieces(command);
+    let (mut errexit, mut pipefail) = (false, false);
+    for (at, (text, _)) in pieces.iter().enumerate() {
+        let found = match shell::piece(text) {
+            shell::Piece::Simple(simple) => listed_start(simple, listed).map(|runner| Found { runner, exit: Exit::Speaks }),
+            shell::Piece::Nested(inner) => find(&inner, listed),
+            shell::Piece::Setup => {
+                let text = shell::unwrap(text);
+                errexit |= sets(text, 'e', "errexit");
+                pipefail |= sets(text, 'o', "pipefail") && text.contains("pipefail");
+                None
+            }
+            shell::Piece::Hidden(..) => None,
+        };
+        if let Some(found) = found {
+            return Some(Found { exit: found.exit.least(exit_of(&pieces, at, errexit, pipefail)), ..found });
+        }
+    }
+    None
+}
+
 pub fn recognise<'a>(command: &str, listed: &'a [String]) -> Option<&'a str> {
-    shell::pieces(command).into_iter().find_map(|(text, _)| match shell::piece(text) {
-        shell::Piece::Simple(simple) => listed_start(simple, listed),
-        shell::Piece::Nested(inner) => recognise(&inner, listed),
-        shell::Piece::Setup | shell::Piece::Hidden(..) => None,
-    })
+    find(command, listed).map(|found| found.runner)
 }
 
 // The words of a simple command up to the first redirection.
@@ -233,6 +308,11 @@ pub fn summary(output: &str) -> Option<Summary> {
         let broke = failed > 0 || cargo.iter().any(|line| line.contains("FAILED"));
         let text = if failed > 0 { format!("{passed} passed, {failed} failed") } else { format!("{passed} passed") };
         return Some(Summary { text, failed: broke });
+    }
+    if let Some(failed) = lines.iter().rev().find_map(|line| match line.trim() { "** TEST FAILED **" => Some(true), "** TEST SUCCEEDED **" => Some(false), _ => None }) {
+        let counts = lines.iter().rev().map(|line| line.trim()).find(|line| line.starts_with("Executed ") && count(line, "test").is_some());
+        let text = counts.map_or(if failed { "TEST FAILED" } else { "TEST SUCCEEDED" }, |line| line.split(" in ").next().unwrap_or(line));
+        return Some(Summary { text: text.to_string(), failed });
     }
     if let Some(found) = lines.iter().rev().find_map(|line| generic(line)) {
         return Some(found);
@@ -360,13 +440,23 @@ pub fn snapshot(worktree: &Path) -> Result<(String, bool, String)> {
     Ok((head, true, made?))
 }
 
+pub struct Ended {
+    pub command: String,
+    pub runner: String,
+    pub exit: Option<i64>,
+    pub finished: bool,
+    pub output: String,
+    pub says: Exit,
+}
+
 // From a PostToolUse or PostToolUseFailure payload: the command and how it ended, or None when it is no test run or did not run to its end.
-pub fn outcome(input: &Value, listed: &[String]) -> Option<(String, String, Option<i64>, bool, String)> {
+pub fn outcome(input: &Value, listed: &[String]) -> Option<Ended> {
     if input["tool_name"] != "Bash" || input["tool_input"]["run_in_background"] == true {
         return None;
     }
     let command = input["tool_input"]["command"].as_str()?;
-    let runner = recognise(command, listed)?.to_string();
+    let found = find(command, listed)?;
+    let ended = |exit, finished, output: String| Some(Ended { command: command.to_string(), runner: found.runner.to_string(), exit, finished, output, says: found.exit });
     match input["hook_event_name"].as_str()? {
         "PostToolUse" => {
             let response = &input["tool_response"];
@@ -377,25 +467,37 @@ pub fn outcome(input: &Value, listed: &[String]) -> Option<(String, String, Opti
                 Value::String(text) => text.clone(),
                 _ => format!("{}\n{}", response["stdout"].as_str().unwrap_or_default(), response["stderr"].as_str().unwrap_or_default()),
             };
-            Some((command.to_string(), runner, Some(0), true, output))
+            ended(Some(0), true, output)
         }
         "PostToolUseFailure" if input["is_interrupt"] != true => {
             let error = input["error"].as_str().unwrap_or_default();
             let exit = error.lines().next().and_then(|line| line.strip_prefix("Exit code ")).and_then(|code| code.trim().parse().ok());
-            Some((command.to_string(), runner, exit, false, error.to_string()))
+            ended(exit, false, error.to_string())
         }
         _ => None,
     }
 }
 
+// A result line that counts failures decides; else the exit, as far as it speaks for the test command.
+fn judged(finished: bool, says: Exit, summary: Option<&Summary>) -> (Outcome, &'static str) {
+    match (summary.map(|summary| summary.failed), says) {
+        (Some(true), _) => (Outcome::Failed, ""),
+        (_, Exit::Speaks) => (if finished { Outcome::Passed } else { Outcome::Failed }, ""),
+        (Some(false), _) => (Outcome::Passed, ""),
+        (None, Exit::ZeroOnly) if finished => (Outcome::Passed, ""),
+        (None, Exit::ZeroOnly) => (Outcome::Unknown, "the exit may be another command's"),
+        (None, Exit::Silent(why)) => (Outcome::Unknown, why),
+    }
+}
+
 // The run a hook payload describes, with the worktree's state at that moment.
 pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String], input: &Value, at: u64) -> Option<Run> {
-    let (command, runner, exit, finished, output) = outcome(input, listed)?;
+    let Ended { command, runner, exit, finished, output, says } = outcome(input, listed)?;
     let summary = summary(&output);
-    let result = if finished && !summary.as_ref().is_some_and(|summary| summary.failed) { Outcome::Passed } else { Outcome::Failed };
+    let (result, why) = judged(finished, says, summary.as_ref());
     let (sha, dirty, code) = snapshot(worktree).ok()?;
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
-    let run = Run { command, runner, result, why: String::new(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at };
+    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at };
     save(state, address, &run).ok()?;
     Some(run)
 }
@@ -413,24 +515,35 @@ pub fn hook(address: &str, input: &str) -> String {
         tasks::steps_noted_after(&state, address, &input);
     }
     let listed = commands(&settings.map(|settings| settings.test_commands.value).unwrap_or_default());
-    let mut said = None;
+    let mut said = Vec::new();
     if input["tool_name"] == "Bash" && let Ok(state) = state_dir() {
         let missed = unrecorded(input["tool_input"]["command"].as_str().unwrap_or_default(), &listed);
-        said = missed.as_deref().map(|command| context(&input["hook_event_name"], &unrecorded_context(command)));
+        said.extend(missed.as_deref().map(unrecorded_context));
         note_seen(&state, address, missed, crate::messages::now());
     }
-    let said = said.unwrap_or_default();
-    if outcome(&input, &listed).is_none() {
-        return said;
+    if let Some(run) = recorded(address, &cwd, &listed, &input) {
+        match run.result {
+            Outcome::Passed => if let Ok(state) = state_dir() && let Ok(top) = git(&cwd, &["rev-parse", "--show-toplevel"]) {
+                crate::review::again_for_tests(Path::new(&top), address, &crate::status::named(&state, address));
+            },
+            Outcome::Unknown => said.push(unknown_context(&run)),
+            Outcome::Failed => {}
+        }
     }
-    let Ok(top) = git(&cwd, &["rev-parse", "--show-toplevel"]) else { return said };
+    if said.is_empty() { String::new() } else { context(&input["hook_event_name"], &said.join("\n")) }
+}
+
+fn recorded(address: &str, cwd: &Path, listed: &[String], input: &Value) -> Option<Run> {
+    outcome(input, listed)?;
+    let top = git(cwd, &["rev-parse", "--show-toplevel"]).ok()?;
     if peers::me(Path::new(&top)).as_deref() != Some(address) {
-        return said;
+        return None;
     }
-    if let Ok(state) = state_dir() && record_in(&state, address, Path::new(&top), &listed, &input, crate::messages::now()).is_some_and(|run| run.result == Outcome::Passed) {
-        crate::review::again_for_tests(Path::new(&top), address, &crate::status::named(&state, address));
-    }
-    said
+    record_in(&state_dir().ok()?, address, Path::new(&top), listed, input, crate::messages::now())
+}
+
+fn unknown_context(run: &Run) -> String {
+    format!("kebbie recorded `{}` without a result: {}. Run it again so its own exit ends the command (no pipe after it, or set -o pipefail first, and nothing after it), or say in your report how it ended.", run.runner, run.why)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -711,6 +824,9 @@ mod tests {
             ("ok  \texample.com/a\t0.012s\n?   \texample.com/b\t[no test files]\nok  \texample.com/c\t0.3s", "2 packages ok", false),
             ("--- FAIL: TestX (0.00s)\nFAIL\nFAIL\texample.com/a\t0.01s\nok  \texample.com/c\t0.3s", "1 package failed, 1 ok", true),
             ("Finished in 0.1 seconds\n1 doctest, 12 tests, 0 failures", "1 doctest, 12 tests, 0 failures", false),
+            ("Test Suite 'All tests' failed at 2026-11-06.\n\t Executed 12 tests, with 1 failure (0 unexpected) in 3.012 (3.020) seconds\n\n** TEST FAILED **", "Executed 12 tests, with 1 failure (0 unexpected)", true),
+            ("\t Executed 12 tests, with 0 failures (0 unexpected) in 3.012 (3.020) seconds\n** TEST SUCCEEDED **", "Executed 12 tests, with 0 failures (0 unexpected)", false),
+            ("Testing failed:\n\tUITests-Runner encountered an error\n** TEST FAILED **", "TEST FAILED", true),
         ];
         for (output, text, failed) in cases {
             assert_eq!(summary(output), Some(Summary { text: text.to_string(), failed }), "{output}");
@@ -785,6 +901,47 @@ mod tests {
         let kept = runs_in(&state, "billing@app");
         assert_eq!(kept.len(), KEPT);
         assert_eq!(kept.last().unwrap().at, 1029);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_exit_counts_only_as_far_as_it_is_the_test_commands_own() {
+        let list = listed(&["xcodebuild test"]);
+        for (command, exit) in [
+            ("cargo test", Exit::Speaks), ("cd x && cargo test", Exit::Speaks), ("cd x; T=$(mktemp -d); TMPDIR=$T cargo test 2>&1", Exit::Speaks),
+            ("cargo test 2>&1 | tail -6", Exit::Silent(PIPED)), ("xcodebuild test -scheme App 2>&1 | grep -E 'passed|failed' | tail -6", Exit::Silent(PIPED)),
+            ("set -o pipefail; cargo test | tail -6", Exit::ZeroOnly), ("set -euo pipefail\ncargo test 2>&1 | tail -6", Exit::ZeroOnly),
+            ("cargo build && cargo test", Exit::ZeroOnly), ("cargo test && cargo clippy", Exit::ZeroOnly), ("set -e; cargo test; rm -rf t", Exit::ZeroOnly),
+            ("cargo test; rm -rf $T", Exit::Silent(OTHER)), ("cargo test || true", Exit::Silent(OTHER)), ("false || cargo test", Exit::Silent(OTHER)), ("cargo test &", Exit::Silent(OTHER)),
+            ("bash -c 'cargo test | tail -3'", Exit::Silent(PIPED)), ("(cd app; cargo test) && echo ok", Exit::ZeroOnly), ("cat list | cargo test", Exit::Speaks),
+        ] {
+            assert_eq!(find(command, &list).map(|found| found.exit), Some(exit), "{command}");
+        }
+    }
+
+    #[test]
+    fn a_test_command_piped_into_another_is_judged_by_its_result_line_and_else_unknown() {
+        let dir = repo();
+        let state = dir.join("state");
+        let list = listed(&["xcodebuild test"]);
+        let command = "xcodebuild test -scheme App -destination 'platform=iOS Simulator,name=iPhone 16' 2>&1 | grep -E 'Executed|TEST|error' | tail -6";
+        let mut piped = passed(command);
+        piped["tool_response"]["stdout"] = json!("Test Case '-[AppUITests testCheckout]' failed (4.2 seconds).\n\t Executed 12 tests, with 1 failure (0 unexpected) in 31.2 (31.3) seconds\n** TEST FAILED **");
+        let run = record_in(&state, "billing@app", &dir, &list, &piped, 1).unwrap();
+        assert_eq!((run.result, run.summary.as_str()), (Outcome::Failed, "Executed 12 tests, with 1 failure (0 unexpected)"), "tail's exit 0 is no pass");
+        piped["tool_response"]["stdout"] = json!("Build succeeded");
+        let run = record_in(&state, "billing@app", &dir, &list, &piped, 2).unwrap();
+        assert_eq!((run.result, run.why.as_str()), (Outcome::Unknown, PIPED), "no result line, so the pipe's exit says nothing");
+        let mut rest = passed("cargo test; rm -rf $T");
+        rest["tool_response"]["stdout"] = json!("");
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &rest, 3).unwrap().result, Outcome::Unknown, "the exit is rm's");
+        let mut pipefail = passed("set -o pipefail; cargo test 2>&1 | grep -c ok");
+        pipefail["tool_response"]["stdout"] = json!("2");
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &pipefail, 4).unwrap().result, Outcome::Passed, "with pipefail a zero is the test's too");
+        let mut broke = failed("cd app && cargo test 2>&1");
+        broke["error"] = json!("Exit code 101");
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &broke, 5).unwrap().result, Outcome::Failed, "nothing after it, so its exit is its own");
+        assert_eq!(record_in(&state, "billing@app", &dir, &list, &failed("cargo build && cargo test"), 6).unwrap().result, Outcome::Unknown, "the build may have failed before the tests ran");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -901,7 +1058,7 @@ mod tests {
         assert_eq!(unrecorded_note(&dotted, &listed(&["script/test"])), None, "./script/test runs the listed script/test, so the row never asks to add it");
         let source = include_str!("evidence.rs");
         let hook = &source[source.find("\npub fn hook(").unwrap()..];
-        assert!(hook.find("note_seen(").unwrap() < hook.find("if outcome(&input, &listed).is_none()").unwrap(), "every Bash call counts as the hook running, test run or not");
+        assert!(hook.find("note_seen(").unwrap() < hook.find("recorded(address").unwrap(), "every Bash call counts as the hook running, test run or not");
         assert!(!DEFAULT_COMMANDS.contains(&"script/test") && !DEFAULT_COMMANDS.contains(&"bin/test"), "a repo's own runner stays its own config");
         fs::remove_dir_all(state).unwrap();
     }

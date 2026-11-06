@@ -428,7 +428,7 @@ kebbie records a run from the hooks it gives the task's Claude, after every Bash
 - The built-in ones: `cargo test`, `cargo nextest`, `bin/rails test`, `bundle exec rspec`, `rspec`, `pytest`, `uv run pytest`, `npm test`, `pnpm test`, `yarn test`, `go test`, `mix test` and a few spellings of them.
 - The repo's own, in [`task.test_commands`](configuration.md#keys).
 
-It keeps the last 20 per task. A command that exits non-zero is a failed run. A result line that counts failures makes it failed too, since a pipe such as `| tail` hides the exit code. A run with uncommitted changes counts for the commit that later holds exactly those changes. Background runs and interrupted ones are not recorded.
+It keeps the last 20 per task. A result line that counts failures, such as `2 failed` or `** TEST FAILED **`, makes a run failed. Otherwise the exit decides as far as it is the test command's own: a non-zero exit is a failed run when nothing runs after the test command. When the test command pipes into another, such as `| tail`, without `set -o pipefail`, or another command runs after it, the run is passed only by its result line and is unknown without one. A run with uncommitted changes counts for the commit that later holds exactly those changes. Background runs and interrupted ones are not recorded.
 
 ### `kebbie approve <name>`
 
