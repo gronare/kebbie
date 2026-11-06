@@ -67,7 +67,7 @@ Start a task in a pooled worktree, in its own herdr Space, with Claude.
 
 A task you start takes you to its Space. One the lead or another task starts leaves you where you are, unless it passes `--focus`.
 
-Without `--mode`, the task starts in its profile's `permission_mode`, then [`task.permission_mode`](configuration.md#keys), and without those in Claude Code's own default.
+Without `--mode`, the task starts in its profile's `permission_mode`, then [`task.permission_mode`](configuration.md#keys), and without those in Claude Code's own default. A follow-up the board starts for a comment takes, without those two, the mode of the task started last.
 
 With `--profile`:
 

@@ -81,7 +81,7 @@ impl App {
                 let repo = self.any_repo();
                 let prompt = (!text.is_empty()).then_some(text);
                 self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: name.clone(), task: false });
-                self.show(start_in_background(&repo, &name, prompt.as_deref(), None, None, false, None));
+                self.show(start_in_background(&repo, &name, prompt.as_deref(), &StartWith::default()));
             }
             Purpose::BacklogName(_) | Purpose::ClaimedName(_) | Purpose::BacklogLaterAt(..) => {
                 let (entry, name, at, anyway) = match purpose {
@@ -98,7 +98,7 @@ impl App {
                 };
                 self.subject = Some(super::notices::Subject { kind: "start".to_string(), title: name.clone(), task: false });
                 match known.map_or_else(located, Ok) {
-                    Ok(repo) => self.show(start_in_background(&repo, &name, Some(&prompt), Some(&entry.reference), at.as_deref(), anyway, None)),
+                    Ok(repo) => self.show(start_in_background(&repo, &name, Some(&prompt), &StartWith { backlog: Some(&entry.reference), at: at.as_deref(), anyway, ..StartWith::default() })),
                     Err(error) => self.show(Err(error)),
                 }
             }
@@ -124,33 +124,50 @@ impl App {
 pub(super) const START_AT_LABEL: &str = "Start at: 15:00, tomorrow 09:00, fri 09:00, 24 oct 09:00 or in 2h";
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, backlog: Option<&str>, at: Option<&str>, anyway: bool, recipe: Option<&str>) -> Result<String> {
+#[derive(Default)]
+pub(super) struct StartWith<'a> {
+    pub(super) backlog: Option<&'a str>,
+    pub(super) at: Option<&'a str>,
+    pub(super) anyway: bool,
+    pub(super) recipe: Option<&'a str>,
+    pub(super) mode: Option<&'a str>,
+}
+
+pub(super) fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, with: &StartWith) -> Result<String> {
     let dir = crate::lead::state_dir()?.join("starts");
     crate::state::private_dir(&dir)?;
     let log = dir.join(format!("{}.log", name.replace('/', "-")));
     let output = crate::state::create(&log).map_err(|error| format!("{}: {error}", log.display()))?;
     let errors = output.try_clone().map_err(|error| error.to_string())?;
-    let mut command = Command::new(peers::kebbie_command()?);
-    command.arg("-C").arg(repo).args(["start", name, "--no-focus"]);
-    if let Some(item) = backlog.filter(|item| !item.is_empty()) {
-        command.args(["--backlog", item]);
-    }
-    if let Some(at) = at {
-        command.args(["--at", at]);
-    }
-    if anyway {
-        command.arg("--anyway");
-    }
-    if let Some(recipe) = recipe {
-        command.args(["--recipe", recipe]);
-    }
-    if let Some(prompt) = prompt {
-        command.arg(prompt);
-    }
+    let mut command = start_command(peers::kebbie_command()?, repo, name, prompt, with);
     // Its own process group, so closing the board's popup does not take the start down with it.
     command.stdin(std::process::Stdio::null()).stdout(output).stderr(errors).process_group(0);
     crate::sh::reap(command.spawn().map_err(|error| format!("kebbie start: {error}"))?);
     Notice::new(Tone::Moving, "Starting in the background").next("It shows under Work in a moment.").detail("output", log.display().to_string()).ok()
+}
+
+fn start_command(kebbie: String, repo: &Path, name: &str, prompt: Option<&str>, with: &StartWith) -> Command {
+    let mut command = Command::new(kebbie);
+    command.arg("-C").arg(repo).args(["start", name, "--no-focus"]);
+    if let Some(item) = with.backlog.filter(|item| !item.is_empty()) {
+        command.args(["--backlog", item]);
+    }
+    if let Some(at) = with.at {
+        command.args(["--at", at]);
+    }
+    if with.anyway {
+        command.arg("--anyway");
+    }
+    if let Some(recipe) = with.recipe {
+        command.args(["--recipe", recipe]);
+    }
+    if let Some(mode) = with.mode {
+        command.args(["--mode", mode]);
+    }
+    if let Some(prompt) = prompt {
+        command.arg(prompt);
+    }
+    command
 }
 
 impl App {
@@ -236,8 +253,11 @@ mod tests {
         let source = include_str!("input.rs");
         let start = &source[source.find("\npub(super) fn start_in_background(").unwrap()..];
         let body = &start[..start.find("\n}\n").unwrap()];
-        assert!(body.contains(".arg(\"-C\").arg(repo)") && body.contains(".arg(prompt)") && body.contains("[\"--backlog\", item]"), "arguments go as argv, never through a shell: {body}");
-        assert!(!body.contains("sh") || !body.contains("\"-c\""), "{body}");
+        assert!(body.contains("start_command(") && !body.contains("\"-c\""), "arguments go as argv, never through a shell: {body}");
         assert!(body.contains("process_group(0)"));
+        let with = super::StartWith { backlog: Some("Projects/x"), recipe: Some("follow-up: a"), mode: Some("auto"), ..super::StartWith::default() };
+        let command = super::start_command("kebbie".to_string(), std::path::Path::new("/src/app"), "fix", Some("Do it; rm -rf /"), &with);
+        let args: Vec<_> = command.get_args().map(|arg| arg.to_string_lossy().to_string()).collect();
+        assert_eq!(args, ["-C", "/src/app", "start", "fix", "--no-focus", "--backlog", "Projects/x", "--recipe", "follow-up: a", "--mode", "auto", "Do it; rm -rf /"]);
     }
 }

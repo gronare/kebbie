@@ -24,7 +24,7 @@ Colleagues review after the fact by commenting on commits already on the default
 
 4. Choose:
 
-   - `1` on a comment that holds reopens the task that pushed the commit with the proposal, or starts `refunds-in-part-followup` in the same repo when that task has ended.
+   - `1` on a comment that holds reopens the task that pushed the commit with the proposal, or starts `refunds-in-part-followup` in the same repo when that task has ended. Without a `permission_mode` in its profile or config, the follow-up runs in the mode of the task started last.
    - `w` says what to change in your own words instead.
    - `1` on an opinion replies without a change, with the drafted reply; `2` on a comment that holds asks for the reply you want to give.
    - `d` on praise is done; `3` dismisses any card.

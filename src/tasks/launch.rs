@@ -112,6 +112,23 @@ fn configured_mode(repo: &Path) -> Result<Option<String>> {
     Ok(config::resolve(Some(repo))?.settings.permission_mode.value)
 }
 
+// A task kebbie starts by itself has no one to pass --mode, so without a profile or config mode it takes the mode of the task started last.
+pub fn own_start_mode(repo: &Path) -> Result<Option<String>> {
+    let (profile, _) = task_profile(repo, None, None)?;
+    if profile.permission_mode.is_some() || configured_mode(repo)?.is_some() {
+        return Ok(None);
+    }
+    Ok(latest_mode_in(&crate::lead::state_location()?))
+}
+
+fn latest_mode_in(state: &Path) -> Option<String> {
+    let records = std::fs::read_dir(state.join("sessions")).ok()?.flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().ends_with(".prompt"))
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())));
+    let (_, newest) = records.max_by_key(|(modified, _)| *modified)?;
+    parse_record(&std::fs::read_to_string(newest).ok()?).mode
+}
+
 // Claude Code's sandbox needs its helpers on the machine; Codex brings its own.
 fn sandboxed(configured: bool, profile: &Profile, missing: impl FnOnce() -> Vec<String>) -> Result<bool> {
     let on = profile.sandbox.on(configured);
@@ -1222,6 +1239,22 @@ mod tests {
         assert_eq!(on["env"]["VAULT_STOP_HOOK_COMMITS"], "off", "the vault plugin's Stop hook never asks a task for the repo log kebbie writes");
         assert!(on["env"].get("VAULT_STOP_HOOK").is_none(), "a task is still asked to save what it was told");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 40);
+    }
+
+    #[test]
+    fn a_task_kebbie_starts_by_itself_takes_the_mode_of_the_task_started_last() {
+        let state = std::env::temp_dir().join(format!("kebbie-own-mode-{}", std::process::id()));
+        let sessions = state.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        assert_eq!(latest_mode_in(&state), None, "no task yet: Claude's own default");
+        let record = |mode: Option<&str>| record_text(&Record { session: Some("s".to_string()), mode: mode.map(str::to_string), ..Record::default() });
+        std::fs::write(sessions.join("old@web"), record(Some("plan"))).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(sessions.join("billing@web"), record(Some("auto"))).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(sessions.join("billing@web.prompt"), "Bill the refunds").unwrap();
+        assert_eq!(latest_mode_in(&state).as_deref(), Some("auto"), "the newest record, never its prompt file");
+        std::fs::remove_dir_all(&state).unwrap();
     }
 
     #[test]
