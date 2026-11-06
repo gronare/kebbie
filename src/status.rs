@@ -224,6 +224,27 @@ impl Item {
         self.verdict.as_ref().is_some_and(|shown| shown.running || (!shown.stale && shown.verdict.is_some()))
     }
 
+    // A confirmation question stands only while the verdict it came from does: current, with no reviewer reading again.
+    fn drop_settled_confirmation(&mut self) {
+        let confirming = self.question.as_ref().is_some_and(|question| question.kind.as_deref() == Some(crate::review::QUESTION_KIND));
+        let stands = self.verdict.as_ref().is_some_and(|shown| !shown.running && !shown.stale && shown.verdict.as_ref().is_some_and(crate::review::Verdict::asks_only_confirmation));
+        if confirming && !stands {
+            self.question = None;
+        }
+    }
+
+    // A changes verdict on the current code with no reviewer running: what it asks, first finding first, for the row's second line.
+    pub fn verdict_wanted(&self) -> Option<String> {
+        let shown = self.verdict.as_ref().filter(|shown| shown.held && !shown.running && !shown.stale)?;
+        let verdict = shown.verdict.as_ref().filter(|verdict| !verdict.ok)?;
+        let first = verdict.first.as_deref().map(|first| crate::review::confirmation(first).map_or_else(|| first.to_string(), |asks| format!("confirm: {asks}")));
+        let more = if verdict.findings > 1 { format!(" (+{} more)", verdict.findings - 1) } else { String::new() };
+        Some(match first {
+            Some(first) => format!("review asks for changes: {first}{more}"),
+            None => format!("review asks for changes ({})", verdict.summary()),
+        })
+    }
+
     // Sent to review and not passed yet: it waits under In review, and push waits with it.
     pub fn awaiting_review(&self) -> bool {
         self.git.as_ref().is_some_and(|git| git.ahead > 0) && self.verdict.as_ref().is_some_and(|shown| shown.held && shown.pending())
@@ -465,8 +486,14 @@ impl Item {
         if matches!(self.phase(), Some(Phase::NeedsYou(Why::LeftLine))) && self.question.is_none() {
             return Some(self.left_note());
         }
+        if let Some(message) = self.question.as_ref().filter(|message| message.kind.as_deref() == Some(crate::review::QUESTION_KIND)) {
+            return Some(format!("confirm what its review asks · {}", message.text.split_once(": ").map_or(message.text.as_str(), |(_, asks)| asks)));
+        }
         if let Some(question) = self.question.as_ref().and_then(|message| message.question.as_ref()) {
             return Some(if question.plan.is_some() { "approve the plan".to_string() } else { format!("answer a question · {}", plural(question.options.len(), "option")) });
+        }
+        if let Some(verdict) = self.verdict_wanted() {
+            return Some(verdict);
         }
         if let Some(waits) = self.accept_waits() {
             return Some(format!("{} · {} review", waits.next, crate::keys::key(crate::keys::Act::Review)));
@@ -946,7 +973,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 agent,
                 git: Some(Git { upstream: upstream.clone(), ahead, behind, changed, uncommitted, approved, head }),
                 report: reports.get(&address).map(|report| messages::shown_report(&log, report)),
-                question: questions.iter().find(|question| question.from == address).map(|question| (*question).clone()),
+                question: questions.iter().find(|question| question.from == address).or_else(|| questions.iter().find(|question| question.about.as_deref() == Some(&crate::review::question_about(&address)))).map(|question| (*question).clone()),
                 ci: state.as_deref().and_then(|state| crate::ci::load(state, &address)),
                 recover: state.as_deref().and_then(|state| crate::recover::load(state, &address)),
                 routine: state.as_deref().and_then(|state| crate::routines::run_of(state, &address)).map(|(id, _)| id),
@@ -973,6 +1000,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 Some(state) => crate::phase::current(state, &address, || item.derive_legacy()),
                 None => crate::phase::Record { phase: item.derive_legacy(), since: messages::now(), by: "migration".to_string(), from: None },
             });
+            item.drop_settled_confirmation();
             item.settle_orphaned_push();
             items.push(item);
         }
@@ -1253,7 +1281,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn in_review(ok: bool, findings: usize, stale: bool, running: bool) -> crate::review::Shown {
-        crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md") }
+        crate::review::Shown { verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings, ..Default::default() }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md") }
     }
 
     #[test]
@@ -1453,6 +1481,27 @@ pub(crate) mod tests {
         item.to_accept = None;
         in_phase(&mut item, Phase::Ready { head: Some("abc".to_string()) });
         assert_eq!((item.group(), item.next_for_you().map(str::to_string), item.wanted("enter"), item.summary()), before, "every step accepted, it is ready to push as before");
+    }
+
+    #[test]
+    fn a_changes_verdict_with_no_reviewer_running_shows_its_finding_and_a_confirmation_waits_under_needs_you() {
+        let mut item = task(Some("idle"), Some("ready"), 1);
+        in_phase(&mut item, Phase::Ready { head: Some("abc".to_string()) });
+        item.to_accept = Some(waiting_to_accept(1, 1));
+        let mut shown = in_review(false, 1, false, false);
+        shown.verdict.as_mut().unwrap().first = Some("confirm: src/links.rs:12 — dropping the link is now the intent".to_string());
+        item.verdict = Some(shown.clone());
+        assert_eq!(item.group(), Group::InReview);
+        assert_eq!(item.verdict_wanted().as_deref(), Some("review asks for changes: confirm: src/links.rs:12 — dropping the link is now the intent"), "the verdict, not the step to accept, says why it waits");
+        item.verdict.as_mut().unwrap().verdict.as_mut().unwrap().confirm = 1;
+        item.question = Some(messages::fold(r#"{"id":"r1","at":10,"from":"kebbie","to":"you","text":"billing@web's review asks you to confirm: src/links.rs:12 — dropping the link is now the intent","state":"asked","kind":"review","about":"review:billing@web","question":{"options":[{"label":"Confirm","meaning":"one"},{"label":"Change it","meaning":"two","comment":true}],"recommend":1}}"#).remove(0));
+        item.drop_settled_confirmation();
+        assert_eq!(item.group(), Group::NeedsYou, "only the user can answer it");
+        assert_eq!(item.wanted("enter").as_deref(), Some("confirm what its review asks · src/links.rs:12 — dropping the link is now the intent"));
+        item.verdict.as_mut().unwrap().running = true;
+        item.drop_settled_confirmation();
+        assert!(item.question.is_none(), "a reviewer reading it again settles the question");
+        assert_eq!(item.verdict_wanted(), None, "a running reviewer has no verdict yet");
     }
 
     #[test]

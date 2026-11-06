@@ -103,6 +103,15 @@ Its answer is one line on the task's row, in your terms: `review suggested: chan
 - `"run"` starts the reviewer by itself and lets the push go meanwhile.
 - `"require"` holds the push from the ready report on, through the assessment and the review, until the reviewer passes.
 
+## A finding only you can settle
+
+Sometimes the code is right if you meant it, and the reviewer cannot tell from the conversation whether you did. The reviewer marks such a finding `confirm:`. When every finding of a verdict is one, kebbie asks you under Needs you, with the finding:
+
+- Confirm passes the review on the code it read, with your words kept in the verdict. The task hears them and changes nothing.
+- Change it sends your comment to the task, which reworks it and goes back to the reviewer.
+
+`kebbie review --confirm <task> "<your words>"` does the same as Confirm from your terminal. The lead cannot answer it for you: it can only point you to the question.
+
 ## Only you take a task out of review
 
 You can take a task back out with `v` and then `v`, Withdraw from review, or `kebbie review --withdraw`. Only you can withdraw: neither the lead nor a task can talk its way past the gate. The assessor leaves a task you withdrew out until you send it again.

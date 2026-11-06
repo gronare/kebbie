@@ -253,6 +253,11 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
         drop(_lock);
         return crate::restart::answer(&session, yes);
     }
+    if message.kind.as_deref() == Some(crate::review::QUESTION_KIND) {
+        let message = (*message).clone();
+        drop(_lock);
+        return crate::review::answer_question(&message, choice, comment);
+    }
     let text = answer_text(message, choice, comment)?;
     let told = match sessions.iter().find(|session| session.address == message.from) {
         Some(task) => {
@@ -297,10 +302,10 @@ fn closed_before(closed: &Closed) -> &'static str {
     }
 }
 
-// A task's question nobody has answered yet, though it no longer waits on the board; a restart question's answer means nothing once it has closed.
+// A task's question nobody has answered yet, though it no longer waits on the board; a restart or review question's answer means nothing once it has closed.
 fn closed_unanswered<'a>(messages: &'a [Message], id: &str) -> Option<&'a Message> {
     messages.iter().find(|message| message.id == id && message.question.as_ref().is_some_and(|question| !question.answered))
-        .filter(|message| message.kind.as_deref() != Some(crate::restart::QUESTION_KIND))
+        .filter(|message| ![Some(crate::restart::QUESTION_KIND), Some(crate::review::QUESTION_KIND)].contains(&message.kind.as_deref()))
 }
 
 // The caller holds the lock. A turn that starts in the task's pane, or a newer question, closes a question, so an answer given on the board a moment later is delivered as the user's word rather than lost; a task that ended gets nothing.

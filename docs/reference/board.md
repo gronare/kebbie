@@ -139,7 +139,7 @@ A listed test command inside a loop, a condition or `xargs` is not recorded eith
 | --- | --- |
 | Needs you | Tasks waiting on your answer or action, open questions first. |
 | Working | Tasks at work since their prompt, their last report or your answer. |
-| In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. The row says who acts next: `review running · waits on the reviewer`, or, with findings and its Claude idle, `withdraw with v to push without a pass`. |
+| In review | Reported ready and sent to the reviewer, waiting for a pass on its current code. The row says who acts next: `review running · waits on the reviewer`, or, with findings and its Claude idle, `withdraw with v to push without a pass`. With no reviewer running, the line under it shows the verdict's first finding, as `review asks for changes: <finding> (+N more)`. |
 | Ready to push | Reported ready with its commits, and pushes under way. |
 | CI running | Pushed, with its worktree kept until every workflow run for the pushed commit is green; then it closes as done. A cancelled run waits for a later run on the default branch to pass. |
 | Waiting for work | Started without work, blocked on something outside you, or kept open with nothing left on top. |
@@ -156,6 +156,7 @@ kebbie keeps one phase per task, and only what changes it writes it: its start, 
 
 - A question on screen, such as a permission or trust prompt, whatever else the task is doing.
 - An open question from `kebbie ask`.
+- A review whose findings only ask for your confirmation, marked `confirm what its review asks · <the finding>`: Confirm passes the review, Change it sends your comment to the task.
 - Messages held behind a draft in its input box.
 - A task whose commits are on the default branch that kebbie does not close by itself, marked `landed on main · d closes it` beside a question, or `landed on main, but its worktree has uncommitted changes or a stash` (see [`kebbie done`](commands.md#kebbie-done-name)).
 - A task that reported needs-you, or ready with nothing committed.

@@ -706,7 +706,7 @@ mod tests {
     #[test]
     fn the_card_shows_the_review_verdict_and_marks_it_stale_once_head_moves() {
         let shown = |ok: bool, findings: usize, stale: bool, running: bool| crate::review::Shown {
-            verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md"),
+            verdict: Some(crate::review::Verdict { ok, sha: "abc".to_string(), findings, ..Default::default() }), stale, running, held: true, file: PathBuf::from("/state/verdicts/billing@web.md"),
         };
         assert_eq!(verdict_chip(&shown(true, 0, false, false)), Some(("review ok".to_string(), GREEN)));
         assert_eq!(verdict_chip(&shown(false, 3, false, false)), Some(("review: 3 findings".to_string(), PEACH)));

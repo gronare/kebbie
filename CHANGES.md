@@ -12,6 +12,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A test command piped into tail or grep is judged by its result line, and recorded as unknown without one, never as passed.
 - A test run that goes to the background shows as unknown until it ends, then with its real result.
 - Headless Chrome and Playwright start in a task, whose temp folder now has a short path in /tmp.
+- A review that only asks for your confirmation waits under Needs you with its finding, and your answer there passes it; a task held by a review's findings shows the first one on its row.
 
 ## 0.35.0
 

@@ -212,7 +212,9 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   review, and push with it, until a verdict ok on its current code, which is its
                                   rules approval too, so no separate rules check runs (--withdraw
                                   takes it out of review, yours only: the reviewer stops, its verdict goes, push is
-                                  offered again); the reviewer is the review profile review.profile names; --second
+                                  offered again; --confirm <name> [\"<your words>\"], yours only, passes a review whose
+                                  findings only ask for your confirmation, as Confirm under Needs you does); the
+                                  reviewer is the review profile review.profile names; --second
                                   adds review.second's profile as a second opinion and --second-only runs it alone,
                                   which never holds the push: its points go to the lead
   kebbie evidence [name] [--json] the test runs kebbie recorded for the task, newest first: the command, its result, the
@@ -684,6 +686,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("review") if arguments.flag("--second-opinion") => review::run_second(&cwd),
         Some("review") if arguments.flag("--assess") => assessment::run(&cwd),
         Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),
+        Some("review") if arguments.flag("--confirm") => review::confirm(&cwd, name, &arguments.positionals[2..].join(" ")),
         Some("review") if arguments.flag("--view") => board::review::run(Path::new(name.ok_or("kebbie review --view needs the review's folder")?)),
         Some("review") if arguments.flag("--second-only") => review::request(&cwd, name, review::Request::SecondOnly),
         Some("review") if arguments.flag("--second") => review::request(&cwd, name, review::Request::WithSecond),

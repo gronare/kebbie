@@ -105,14 +105,21 @@ fn marked(state: &Path, address: &str, kind: &str) -> PathBuf {
     dir(state).join(format!("{address}.{kind}"))
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Verdict {
     pub ok: bool,
     pub sha: String,
     pub findings: usize,
+    pub confirm: usize,
+    pub first: Option<String>,
 }
 
 impl Verdict {
+    // Every finding asks only for the user's confirmation, so the user's answer passes the review without rework.
+    pub fn asks_only_confirmation(&self) -> bool {
+        !self.ok && self.findings > 0 && self.confirm == self.findings
+    }
+
     pub fn summary(&self) -> String {
         match (self.ok, self.findings) {
             (true, _) => "ok".to_string(),
@@ -132,7 +139,21 @@ pub fn parse_verdict(text: &str) -> Option<Verdict> {
         _ => return None,
     };
     let sha = lines.next()?.trim().strip_prefix("reviewed: ")?.trim().to_string();
-    Some(Verdict { ok, sha, findings: lines.filter(|line| line.starts_with("- ")).count() })
+    let findings = findings_of(text);
+    Some(Verdict { ok, sha, findings: findings.len(), confirm: findings.iter().filter(|finding| confirmation(finding).is_some()).count(), first: findings.first().cloned() })
+}
+
+pub const CONFIRM: &str = "confirm:";
+
+// Each finding's first line, without its "- ".
+pub fn findings_of(text: &str) -> Vec<String> {
+    text.lines().filter_map(|line| line.strip_prefix("- ")).map(|finding| finding.trim().to_string()).collect()
+}
+
+// A finding the reviewer marked "confirm:", which asks the user to confirm an intent rather than to change code: what is left after the mark.
+pub fn confirmation(finding: &str) -> Option<&str> {
+    let bare = finding.trim_start_matches(['*', '`', ' ']);
+    bare.get(..CONFIRM.len()).filter(|mark| mark.eq_ignore_ascii_case(CONFIRM)).map(|_| bare[CONFIRM.len()..].trim_start_matches(['*', '`', ' ']))
 }
 
 // The reviewer's answer from its last verdict line on, since its last message is the verdict, with the reviewed sha after that line; None when it gave no verdict.
@@ -525,7 +546,130 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which) -
         return Ok((second_said(address, &reviewer.name, short, points, &second_file(state, address)), points == 0));
     }
     let verdict = save(state, address, &recorded, rules_file.is_some(), || tasks::fingerprint_at(&slot.path, &upstream, &sha))?;
-    Ok((format!("{address} reviewed at {short}: {} — {}", verdict.summary(), file.display()), verdict.ok))
+    let asked = ask_confirmation(address, &recorded, &slot.path)?;
+    let waits = if asked { " Its findings only ask for the user's confirmation, so the question waits for them under Needs you, and their answer there passes the review or sends the task to rework." } else { "" };
+    Ok((format!("{address} reviewed at {short}: {} — {}{waits}", verdict.summary(), file.display()), verdict.ok))
+}
+
+pub const QUESTION_KIND: &str = "review";
+const QUESTION_FROM: &str = "kebbie";
+
+// The about of a task's confirmation question, apart from a restart question's session name.
+pub fn question_about(address: &str) -> String {
+    format!("{QUESTION_KIND}:{address}")
+}
+
+pub fn confirmation_question(text: &str) -> String {
+    let asked: Vec<String> = findings_of(text).iter().filter_map(|finding| confirmation(finding).map(str::to_string)).collect();
+    asked.join("; ")
+}
+
+fn confirmation_asked(address: &str, asks: &str) -> crate::questions::Asked {
+    crate::questions::Asked {
+        text: format!("{address}'s review asks you to confirm: {asks}"),
+        options: vec![
+            ("Confirm".to_string(), "it is what you want; the review passes without rework".to_string()),
+            ("Change it".to_string(), "the task gets your comment and reworks it".to_string()),
+        ],
+        recommend: 1,
+        comment: vec![1],
+    }
+}
+
+// The caller holds the lock.
+fn close_confirmations_locked(address: &str) -> Result<()> {
+    let about = question_about(address);
+    for question in crate::questions::open_now(&messages::load()).into_iter().filter(|question| question.kind.as_deref() == Some(QUESTION_KIND) && question.about.as_deref() == Some(&about)) {
+        messages::append(&json!({ "id": question.id, "at": messages::now(), "state": "answered" }))?;
+    }
+    Ok(())
+}
+
+// A new verdict settles the old question; one whose findings only ask for the user's confirmation waits for them under Needs you.
+fn ask_confirmation(address: &str, recorded: &str, worktree: &Path) -> Result<bool> {
+    let _lock = messages::Lock::take(true)?;
+    close_confirmations_locked(address)?;
+    if !parse_verdict(recorded).is_some_and(|verdict| verdict.asks_only_confirmation()) {
+        return Ok(false);
+    }
+    let asked = confirmation_asked(address, &confirmation_question(recorded));
+    let mut record = crate::questions::record(&messages::new_id("review"), messages::now(), QUESTION_FROM, &asked, None, None);
+    record["kind"] = json!(QUESTION_KIND);
+    record["about"] = json!(question_about(address));
+    messages::append(&record)?;
+    drop(_lock);
+    crate::notify::send(worktree, &crate::notify::Notice::from(crate::notify::Event::Question, address, asked.text));
+    Ok(true)
+}
+
+// The user's confirmation turns a verdict that asked only for it into a pass of the same code, with their words kept in it.
+pub fn confirm_in(state: &Path, address: &str, words: &str, read_rules: bool, fingerprint: impl FnOnce(&str) -> Result<String>) -> Result<Verdict> {
+    if running_in(state, address) {
+        return Err(format!("{address}'s reviewer is reading it again; answer its new verdict"));
+    }
+    let text = fs::read_to_string(verdict_file(state, address)).map_err(|_| format!("{address} has no review verdict to confirm"))?;
+    let verdict = parse_verdict(&text).filter(Verdict::asks_only_confirmation).ok_or_else(|| format!("{address}'s review asks for more than your confirmation, so its task reworks it"))?;
+    let findings = text.split_once("\n\n").map_or("", |(_, rest)| rest).trim();
+    let said = words.split_whitespace().collect::<Vec<_>>().join(" ");
+    let said = if said.is_empty() { "confirmed".to_string() } else { said };
+    let confirmed = format!("verdict: ok\nreviewed: {}\nconfirmed by the user: {said}\n\n{findings}\n", verdict.sha);
+    save(state, address, &confirmed, read_rules, || fingerprint(&verdict.sha))
+}
+
+// kebbie review --confirm: the user confirms from their own terminal what the board asks under Needs you.
+pub fn confirm(cwd: &Path, name: Option<&str>, words: &str) -> Result<String> {
+    crate::permit::user_only_as(&crate::permit::caller(), "confirming a review's finding")?;
+    let repo = main_checkout(cwd)?;
+    let slot = tasks::find_task(&repo, name, cwd)?;
+    confirmed(&repo, &slot, words)
+}
+
+fn confirmed(repo: &Path, slot: &Slot, words: &str) -> Result<String> {
+    let address = peers::address(tasks::task_of(slot), &name_of(repo));
+    let state = state_dir()?;
+    let upstream = default_branch(repo)?;
+    let settings = config::resolve(Some(repo))?.settings;
+    let read_rules = rules_file(&settings.rules_skill.value, &slot.path, &install_root()?).is_some();
+    let asks = fs::read_to_string(verdict_file(&state, &address)).map(|text| confirmation_question(&text)).unwrap_or_default();
+    confirm_in(&state, &address, words, read_rules, |sha| tasks::fingerprint_at(&slot.path, &upstream, sha))?;
+    let comment = words.trim();
+    let theirs = if comment.is_empty() { String::new() } else { format!(" Their words: {comment}") };
+    let told = to_task(&address, &format!("The user confirmed what your review asked them to confirm: {asks}. The review passes; change nothing for it.{theirs}"), &format!("The user confirmed {address}'s review finding ({asks}); the review passes."))?;
+    crate::notice::Notice::new(crate::notice::Tone::Done, "Confirmed; the review passes").next(told).detail("task", &address).ok()
+}
+
+// The user's answer, which closes the question and reaches the task as their word, with a copy for the lead.
+fn to_task(address: &str, text: &str, copy: &str) -> Result<String> {
+    let sessions = peers::sessions().unwrap_or_default();
+    let _lock = messages::Lock::take(true)?;
+    close_confirmations_locked(address)?;
+    let told = match sessions.iter().find(|session| session.address == address) {
+        Some(task) => messages::send_locked(messages::USER_LABEL, &[task], text, &sessions, None, Some("answer"))?.join(" "),
+        None => {
+            messages::hold_for(messages::USER_LABEL, address, text, None, Some("answer"))?;
+            format!("{address} has no session now; held, and delivered when it runs.")
+        }
+    };
+    messages::copy_to_lead_locked(copy, None, &sessions)?;
+    Ok(told)
+}
+
+// The board's answer to a confirmation question: Confirm passes the review, Change it sends the user's comment to the task to rework.
+pub fn answer_question(question: &messages::Message, choice: Option<usize>, comment: &str) -> Result<String> {
+    let address = question.about.as_deref().and_then(|about| about.strip_prefix(&format!("{QUESTION_KIND}:"))).ok_or("That review question names no task")?;
+    let (task, place) = address.split_once('@').ok_or("That review question names no task")?;
+    let repo = crate::status::known_repos(&crate::herdr::workspaces().unwrap_or_default(), crate::repo::pooled_checkouts()).into_iter().find(|repo| name_of(repo) == place).ok_or_else(|| format!("No repo {place} is known to kebbie"))?;
+    let slot = tasks::find_task(&repo, Some(task), &repo)?;
+    match choice {
+        Some(0) => confirmed(&repo, &slot, comment),
+        Some(1) if comment.trim().is_empty() => Err("Change it takes your comment; write it before sending".to_string()),
+        Some(1) => {
+            let asks = confirmation_question(&fs::read_to_string(verdict_file(&state_dir()?, address)).unwrap_or_default());
+            let told = to_task(address, &format!("Your review asked the user to confirm: {asks}. They want it changed: {}", comment.trim()), &format!("The user asked {address} to change what its review asked them to confirm: {}", comment.trim()))?;
+            crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", address).ok()
+        }
+        _ => Err("Answer the review's question with Confirm or Change it".to_string()),
+    }
 }
 
 // A pass of a review that read the rules skill is the rules check too, kept as the approval's fingerprint, so the task is not checked twice.
@@ -952,14 +1096,14 @@ mod tests {
         let recorded = record(answer, "0123456789abcdef").unwrap();
         assert!(recorded.starts_with("verdict: changes\nreviewed: 0123456789abcdef\n\n- src/pay.rs:41"), "{recorded}");
         assert!(!recorded.contains("I read every commit"));
-        assert_eq!(parse_verdict(&recorded), Some(Verdict { ok: false, sha: "0123456789abcdef".to_string(), findings: 2 }));
+        assert_eq!(parse_verdict(&recorded), Some(Verdict { ok: false, sha: "0123456789abcdef".to_string(), findings: 2, confirm: 0, first: Some("src/pay.rs:41 — the refund is booked twice on retry; the customer is charged back double.".to_string()) }));
         assert_eq!(parse_verdict(&recorded).unwrap().summary(), "2 findings");
         let ok = record("**verdict: ok**\n", "abc").unwrap();
-        assert_eq!(parse_verdict(&ok), Some(Verdict { ok: true, sha: "abc".to_string(), findings: 0 }));
+        assert_eq!(parse_verdict(&ok), Some(Verdict { ok: true, sha: "abc".to_string(), ..Verdict::default() }));
         assert_eq!(parse_verdict(&ok).unwrap().summary(), "ok");
         assert_eq!(record("Looks fine to me.", "abc"), None, "an answer without a verdict line is not a verdict");
         assert_eq!(parse_verdict("verdict: maybe\nreviewed: abc\n"), None);
-        assert_eq!(Verdict { ok: false, sha: String::new(), findings: 1 }.summary(), "1 finding");
+        assert_eq!(Verdict { findings: 1, ..Verdict::default() }.summary(), "1 finding");
     }
 
     #[test]
@@ -990,7 +1134,7 @@ mod tests {
     }
 
     fn shown_as(ok: Option<bool>, stale: bool, running: bool) -> Shown {
-        Shown { verdict: ok.map(|ok| Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok) * 2 }), stale, running, held: true, file: PathBuf::new() }
+        Shown { verdict: ok.map(|ok| Verdict { ok, sha: "abc".to_string(), findings: usize::from(!ok) * 2, ..Verdict::default() }), stale, running, held: true, file: PathBuf::new() }
     }
 
     #[test]
@@ -1006,6 +1150,38 @@ mod tests {
         assert!(!tasks::approval_holds(&state, "billing@app", "f1\nf2\nf3"), "until a new commit");
         assert!(verdict_file(&state, "billing@app").is_file());
         fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_verdict_that_only_asks_the_users_confirmation_passes_on_their_word_without_rework() {
+        let state = crate::sh::test_dir("review-confirm");
+        let asks = record("verdict: changes\n\n- confirm: src/links.rs:12 — dropping the device-token link is now the intent.\n", "abc").unwrap();
+        let verdict = parse_verdict(&asks).unwrap();
+        assert!(verdict.asks_only_confirmation(), "{verdict:?}");
+        assert_eq!(confirmation_question(&asks), "src/links.rs:12 — dropping the device-token link is now the intent.");
+        assert!(!parse_verdict(&record("verdict: changes\n- confirm: a.rs:1 — the intent\n- a.rs:2 — booked twice\n", "abc").unwrap()).unwrap().asks_only_confirmation(), "a bug beside it still needs rework");
+        assert!(!parse_verdict(&record("verdict: changes\n- a.rs:2 — booked twice\n", "abc").unwrap()).unwrap().asks_only_confirmation());
+        save(&state, "billing@app", &asks, true, || Ok("f1".to_string())).unwrap();
+        let shown = || shown_in(&state, "billing@app", |sha| sha == "abc");
+        assert!(gate(shown().as_ref(), |_| true).unwrap_err().contains("asks for changes"));
+        let passed = confirm_in(&state, "billing@app", "  yes, drop\n it ", true, |sha| Ok(format!("print of {sha}"))).unwrap();
+        assert!(passed.ok);
+        assert_eq!(gate(shown().as_ref(), |sha| sha == "abc"), Ok(()), "the user's confirmation passes the review on the code it read");
+        assert!(tasks::approval_holds(&state, "billing@app", "print of abc"), "the reviewer read the rules, so the pass is the rules check too");
+        assert!(fs::read_to_string(verdict_file(&state, "billing@app")).unwrap().contains("confirmed by the user: yes, drop it\n"));
+        assert!(confirm_in(&state, "billing@app", "yes", true, |_| Ok(String::new())).unwrap_err().contains("more than your confirmation"), "a pass has nothing left to confirm");
+        save(&state, "billing@app", &record("verdict: changes\n- confirm: a.rs:1 — the intent\n- a.rs:2 — booked twice\n", "abc").unwrap(), true, || Ok(String::new())).unwrap();
+        assert!(confirm_in(&state, "billing@app", "yes", true, |_| Ok(String::new())).unwrap_err().contains("more than your confirmation"));
+        assert!(gate(shown().as_ref(), |_| true).is_err(), "the bug still holds the push");
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn the_review_skill_marks_a_finding_that_only_asks_the_users_confirmation() {
+        let skill = include_str!("../skills/review/SKILL.md");
+        assert!(skill.contains(&format!("- {CONFIRM} ")), "the reviewer is told the mark kebbie reads");
+        assert_eq!(confirmation("**confirm:** src/a.rs:1 — the intent"), Some("src/a.rs:1 — the intent"));
+        assert_eq!(confirmation("src/a.rs:1 — confirm: nothing"), None);
     }
 
     #[test]
@@ -1467,7 +1643,7 @@ mod tests {
         assert_eq!(parse_verdict("verdict: ok\nreviewed:\n"), None, "a verdict without a sha is no verdict");
         assert_eq!(parse_verdict("verdict: ok\n"), None);
         assert_eq!(parse_verdict(""), None);
-        assert_eq!(parse_verdict("verdict: changes\nreviewed: a\n\n- one\n  continued\n- two\n-three\n"), Some(Verdict { ok: false, sha: "a".to_string(), findings: 2 }));
+        assert_eq!(parse_verdict("verdict: changes\nreviewed: a\n\n- one\n  continued\n- two\n-three\n"), Some(Verdict { ok: false, sha: "a".to_string(), findings: 2, confirm: 0, first: Some("one".to_string()) }));
     }
 
     #[test]

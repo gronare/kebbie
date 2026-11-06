@@ -39,4 +39,12 @@ verdict: changes
 - src/billing/view.rs:90 — the name `tmp2` says nothing; style.
 ```
 
+A finding that only asks the user to confirm an intent, where the code is right if they meant it and the conversation holds no answer from them, starts with `confirm:`:
+
+```
+- confirm: src/links.rs:12 — drops the device-token link the task started with; the user's own words on dropping it are not in the conversation.
+```
+
+When every finding is one of these, kebbie asks the user under Needs you, and their answer there passes the review or sends the task to rework. A bug or a broken rule never takes the mark.
+
 Each finding names `file:line`, what is wrong, and why it matters. Bugs first, then changes outside the task's scope, then broken rules, then missing tests, then missing docs, style last. Keep it to one screen: when there is more, keep the findings that matter most and end with one line saying how many minor ones you left out. A branch with no findings is `verdict: ok` alone.

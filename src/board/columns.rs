@@ -277,7 +277,7 @@ pub(super) fn work_lines(app: &mut App, width: usize, unfold: bool) -> (Vec<Line
         lines.push(line);
         lines.extend(how_lines(item, selected && on_task && unfold, width));
         lines.extend(step_lines(item, selected && on_task && unfold, width));
-        if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| accept_wanted(item)) {
+        if let Some(wanted) = item.wanted(&keys::key(Act::Go).to_string()).or_else(|| item.verdict_wanted()).or_else(|| accept_wanted(item)) {
             lines.extend(wanted_lines(&wanted, PEACH, selected && on_task && unfold, width));
         } else if let Some(waiting) = item.waiting() {
             lines.extend(wanted_lines(waiting, MUTED, selected && on_task && unfold, width));
