@@ -21,6 +21,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A prompt on a task's screen reaches the lead when its turn ends, without waiting out a conversation with you.
 - A task whose work belongs in another repo asks the lead for a half there instead of making a worktree by hand that Push cannot see.
 - A push's rebase that meets another git's index.lock half-way waits and goes on, instead of failing on its own rebase.
+- kebbie runs one rebase at a time in a task's worktree, and leaves a rebase it did not start running instead of aborting it.
 
 ## 0.35.0
 

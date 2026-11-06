@@ -88,6 +88,10 @@ pub(super) fn update(path: &Path, upstream: &str) -> Result<Updated> {
 
 // With from, only the commits after it go onto upstream, as git rebase --onto takes them.
 fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) -> Result<Updated> {
+    let _alone = RebaseLock::take(path)?;
+    if rebase_in_progress(path) {
+        return Err(Notice::new(Tone::NotNow, "Not rebased: a rebase is under way in its worktree").next("kebbie left it running; try again once it is finished.").detail("folder", path.display().to_string()).to_string());
+    }
     let touched = overlap(path, upstream, from)?;
     let rebase: Vec<&str> = match from {
         Some(from) => vec!["rebase", "--quiet", "--onto", upstream, from],
@@ -102,6 +106,30 @@ fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) 
             if unmerged.is_empty() { Err(refused(path, upstream, &error)) } else { Ok(Updated::Conflict) }
         }
         Err(error) => Err(refused(path, upstream, &error)),
+    }
+}
+
+// Held for the length of one kebbie rebase of a worktree, so a push, land, rebase or follow never starts a second one there.
+struct RebaseLock(std::fs::File);
+
+impl RebaseLock {
+    fn take(path: &Path) -> Result<RebaseLock> {
+        use std::os::fd::AsRawFd;
+        let lock = Path::new(&git(path, &["rev-parse", "--absolute-git-dir"])?).join("kebbie-rebase.lock");
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(&lock).map_err(|error| format!("{}: {error}", lock.display()))?;
+        // SAFETY: flock on a descriptor this File owns.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(Notice::new(Tone::NotNow, "Not rebased: kebbie is rebasing its worktree already").next("Try again once that rebase is done.").detail("folder", path.display().to_string()).to_string());
+        }
+        Ok(RebaseLock(file))
+    }
+}
+
+impl Drop for RebaseLock {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
     }
 }
 
@@ -1051,6 +1079,23 @@ mod tests {
         upstream_commit(&dir, "d", "theirs", "d on main");
         assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Conflict);
         assert!(!rebase_in_progress(&slot.path) && git(&slot.path, &["rev-parse", "HEAD"]).unwrap() == head, "a conflict is aborted and leaves the branch as it was");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_rebase_under_way_in_the_worktree_is_left_running_and_never_met_by_a_second_one() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("twice");
+        upstream_commit(&dir, "d", "theirs", "d on main");
+        assert!(git(&slot.path, &["rebase", "--quiet", &upstream]).is_err(), "the other rebase stops on its conflict");
+        let refused = update(&slot.path, &upstream).unwrap_err();
+        assert!(refused.contains("Not rebased: a rebase is under way in its worktree"), "{refused}");
+        assert!(rebase_in_progress(&slot.path), "kebbie never aborts a rebase it did not start");
+        git(&slot.path, &["rebase", "--abort"]).unwrap();
+        let held = RebaseLock::take(&slot.path).unwrap();
+        let refused = update(&slot.path, &upstream).unwrap_err();
+        assert!(refused.contains("Not rebased: kebbie is rebasing its worktree already"), "{refused}");
+        drop(held);
+        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Conflict, "once the first is done, the next one runs");
         cleanup(dir, origin, &slot);
     }
 
