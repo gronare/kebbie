@@ -448,7 +448,8 @@ mod tests {
         assert_eq!(dropped_notes(Some(&fake.claiming()), &state, "billing", "billing@app", &notes), ["back in the backlog (Projects/billing.md)"]);
         assert!(matches!(note_to_backlog(&fake.claiming(), &state, "billing", "billing@app", &notes[0]), NoteBack::Back(_)), "a reset settles the note the same way");
         assert_eq!(fake.calls(), ["task release Projects/billing.md --machine mac", "task backlog Projects/billing.md", "task release Projects/billing.md --machine mac", "task backlog Projects/billing.md"]);
-        fake.answer("task-release", r#"{"path":"Projects/billing.md","released":false,"claim":{"machine":"devbox","task":"billing-v2","since":"2026-10-22T08:00:00Z"}}"#);
+        let since = crate::keeper::stamp(crate::messages::now()).replace(' ', "T");
+        fake.answer("task-release", &format!(r#"{{"path":"Projects/billing.md","released":false,"claim":{{"machine":"devbox","task":"billing-v2","since":"{since}"}}}}"#));
         let asked = fake.calls().len();
         assert_eq!(dropped_notes(Some(&fake.claiming()), &state, "billing", "billing@app", &notes), ["Projects/billing.md is left as it is: working on devbox · billing-v2"]);
         assert_eq!(fake.calls().len(), asked + 1, "the note another machine works on stays active: {:?}", fake.calls());
