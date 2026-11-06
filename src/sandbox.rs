@@ -38,16 +38,25 @@ pub fn excluded(kebbie: &str, policy: &Policy) -> Vec<String> {
     TASK_COMMANDS.iter().map(|command| format!("{kebbie} {command} *")).chain(policy.excluded.iter().cloned()).collect()
 }
 
-// A task's worktree and its temp folder, which sits in the worktree's own git dir.
+// A task's worktree, the worktree's own git dir and its temp folder.
 pub struct TaskDirs {
     pub worktree: PathBuf,
+    pub git_dir: PathBuf,
     pub tmp: PathBuf,
     pub halves: Vec<TaskDirs>,
 }
 
+// The git dir a worktree's .git names: the folder itself in a main checkout, the gitdir line's target in a linked worktree.
+pub fn git_dir_of(worktree: &Path) -> PathBuf {
+    let dot = worktree.join(".git");
+    let named = std::fs::read_to_string(&dot).ok().and_then(|text| text.strip_prefix("gitdir:").map(|path| worktree.join(path.trim())));
+    let dir = named.unwrap_or(dot);
+    dir.canonicalize().unwrap_or(dir)
+}
+
 impl TaskDirs {
-    pub fn new(worktree: &Path, tmp: &Path) -> TaskDirs {
-        TaskDirs { worktree: worktree.to_path_buf(), tmp: tmp.to_path_buf(), halves: Vec::new() }
+    pub fn new(worktree: &Path, git_dir: &Path, tmp: &Path) -> TaskDirs {
+        TaskDirs { worktree: worktree.to_path_buf(), git_dir: git_dir.to_path_buf(), tmp: tmp.to_path_buf(), halves: Vec::new() }
     }
 
     // This half and the task's halves in its other repos, each the task's own to write.
@@ -56,7 +65,7 @@ impl TaskDirs {
     }
 
     pub fn git_dir(&self) -> PathBuf {
-        self.tmp.parent().map(Path::to_path_buf).unwrap_or_default()
+        self.git_dir.clone()
     }
 
     // A linked worktree's git dir is <common>/worktrees/<name>; the main checkout's is the common dir itself.
@@ -250,7 +259,7 @@ pub fn file_hook(task: Option<&str>, worktree: Option<&str>, tmp: Option<&str>, 
     let claude_home = crate::agent::claude::home().unwrap_or_default();
     let reason = match (target, task, worktree, tmp) {
         (Some(target), Some(task), Some(worktree), Some(tmp)) => {
-            let mut dirs = TaskDirs::new(Path::new(worktree), Path::new(tmp));
+            let mut dirs = TaskDirs::new(Path::new(worktree), &git_dir_of(Path::new(worktree)), Path::new(tmp));
             dirs.halves = crate::lead::state_dir().map(|state| halves(&state, task, &dirs.worktree)).unwrap_or_default();
             file_refusal(Path::new(target), &dirs, &claude_home)
         }
@@ -322,7 +331,7 @@ pub fn record_half(state: &Path, task: &str, dirs: &TaskDirs) -> Result<()> {
 pub fn halves(state: &Path, task: &str, own: &Path) -> Vec<TaskDirs> {
     let on_task = |dirs: &TaskDirs| std::fs::read_to_string(dirs.git_dir().join("HEAD")).is_ok_and(|head| head.trim() == format!("ref: refs/heads/{task}"));
     std::fs::read_to_string(halves_file(state, task)).unwrap_or_default().lines()
-        .filter_map(|line| line.split_once('\t')).map(|(worktree, tmp)| TaskDirs::new(Path::new(worktree), Path::new(tmp)))
+        .filter_map(|line| line.split_once('\t')).map(|(worktree, tmp)| TaskDirs::new(Path::new(worktree), &git_dir_of(Path::new(worktree)), Path::new(tmp)))
         .filter(|dirs| dirs.worktree != own && on_task(dirs)).collect()
 }
 
@@ -525,8 +534,12 @@ mod tests {
         let base = crate::sh::test_dir("halves");
         let state = base.join("state");
         let half = |name: &str, head: &str| {
-            let dirs = TaskDirs::new(&base.join(format!("wt.{name}")), &base.join(name).join(".git/worktrees/1/kebbie-tmp"));
-            std::fs::create_dir_all(&dirs.tmp).unwrap();
+            let (worktree, git_dir, tmp) = (base.join(format!("wt.{name}")), base.join(name).join(".git/worktrees/1"), base.join(format!("tmp/{name}")));
+            for dir in [&worktree, &git_dir, &tmp] {
+                std::fs::create_dir_all(dir).unwrap();
+            }
+            std::fs::write(worktree.join(".git"), format!("gitdir: {}\n", git_dir.display())).unwrap();
+            let dirs = TaskDirs::new(&worktree, &git_dir_of(&worktree), &tmp);
             std::fs::write(dirs.git_dir().join("HEAD"), format!("ref: refs/heads/{head}\n")).unwrap();
             dirs
         };
@@ -653,7 +666,7 @@ mod tests {
         for dir in [&worktree, &tmp, &claude.join("projects"), &worktree.join("src")] {
             std::fs::create_dir_all(dir).unwrap();
         }
-        let mut dirs = TaskDirs::new(&worktree, &tmp);
+        let mut dirs = TaskDirs::new(&worktree, &base.join("app/.git/worktrees/1"), &tmp);
         let refused = |path: &Path| file_refusal(path, &dirs, &claude);
         for kept in [worktree.join("src/main.rs"), worktree.join("new/deep/file.rs"), tmp.join("plan.md"), crate::agent::claude::transcripts_dir(&claude, &worktree).join("memory/MEMORY.md"), crate::agent::claude::transcripts_dir(&claude, &base.join("app")).join("memory/MEMORY.md"), worktree.join(".claude/CLAUDE.md"), worktree.join("CLAUDE.md")] {
             assert_eq!(refused(&kept), None, "{}", kept.display());
@@ -671,7 +684,7 @@ mod tests {
         assert!(refused(&worktree.join("alias/settings.json")).is_some(), "a link to the worktree's .claude is its .claude");
         let (other, other_tmp) = (base.join("wt2.api"), base.join("api/.git/worktrees/2/kebbie-tmp"));
         assert!(file_refusal(&other.join("src/lib.rs"), &dirs, &claude).is_some(), "another repo's worktree is not this task's without a half there");
-        dirs.halves.push(TaskDirs::new(&other, &other_tmp));
+        dirs.halves.push(TaskDirs::new(&other, &base.join("api/.git/worktrees/2"), &other_tmp));
         assert_eq!(file_refusal(&other.join("src/lib.rs"), &dirs, &claude), None, "the task's half in another repo is its own");
         assert_eq!(file_refusal(&other_tmp.join("plan.md"), &dirs, &claude), None);
         assert!(file_refusal(&other.join(".claude/settings.json"), &dirs, &claude).is_some_and(|said| said.contains("Ask the user")), "a half's own configuration stays out of reach");
@@ -700,7 +713,7 @@ mod tests {
         for slot in ["1", "2", "3"] {
             std::fs::create_dir_all(base.join("app/.git/worktrees").join(slot)).unwrap();
         }
-        let dirs = TaskDirs::new(&base.join("wt1.app"), &base.join("app/.git/worktrees/1/kebbie-tmp"));
+        let dirs = TaskDirs::new(&base.join("wt1.app"), &base.join("app/.git/worktrees/1"), &base.join("app/.git/worktrees/1/kebbie-tmp"));
         let others = [base.join("app/.git/worktrees/2"), base.join("app/.git/worktrees/3")];
         assert_eq!(sibling_git_dirs(&dirs), others);
         let denied: Vec<String> = block("/k", &Policy::default(), Some(&dirs), false)["filesystem"]["denyWrite"].as_array().unwrap().iter().filter_map(|path| path.as_str().map(str::to_string)).collect();
@@ -714,11 +727,17 @@ mod tests {
     }
 
     #[test]
-    fn a_linked_worktrees_git_dirs_are_read_from_its_temp_folder() {
-        let dirs = TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1/kebbie-tmp"));
+    fn a_linked_worktrees_git_dirs_are_read_from_its_own_git_dir() {
+        let dirs = TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1"), Path::new("/tmp/kebbie-tmp"));
         assert_eq!((dirs.git_dir(), dirs.common_dir(), dirs.main_checkout()), (PathBuf::from("/src/app/.git/worktrees/1"), PathBuf::from("/src/app/.git"), Some(PathBuf::from("/src/app"))));
-        let main = TaskDirs::new(Path::new("/src/app"), Path::new("/src/app/.git/kebbie-tmp"));
+        let main = TaskDirs::new(Path::new("/src/app"), Path::new("/src/app/.git"), Path::new("/tmp/kebbie-tmp"));
         assert_eq!((main.common_dir(), main.main_checkout()), (PathBuf::from("/src/app/.git"), None));
+        let base = crate::sh::test_dir("git-dir-of").canonicalize().unwrap();
+        std::fs::create_dir_all(base.join("app/.git/worktrees/1")).unwrap();
+        std::fs::create_dir_all(base.join("wt1.app")).unwrap();
+        std::fs::write(base.join("wt1.app/.git"), format!("gitdir: {}\n", base.join("app/.git/worktrees/1").display())).unwrap();
+        assert_eq!((git_dir_of(&base.join("wt1.app")), git_dir_of(&base.join("app"))), (base.join("app/.git/worktrees/1"), base.join("app/.git")));
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

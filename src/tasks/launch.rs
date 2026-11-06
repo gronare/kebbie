@@ -471,6 +471,7 @@ pub(crate) struct Prepared {
     pub settings: PathBuf,
     pub role: PathBuf,
     pub sandboxed: bool,
+    pub git_dir: PathBuf,
     pub tmp: PathBuf,
 }
 
@@ -483,7 +484,8 @@ fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
     let tmp = task_tmp(worktree)?;
     std::fs::create_dir_all(&tmp).map_err(|error| format!("{}: {error}", tmp.display()))?;
     let shell = sandboxed(config::resolve(Some(repo))?.settings.sandbox.value, profile, crate::sandbox::missing_here)?;
-    let mut dirs = crate::sandbox::TaskDirs::new(worktree, &tmp);
+    let git_dir = PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?);
+    let mut dirs = crate::sandbox::TaskDirs::new(worktree, &git_dir, &tmp);
     crate::sandbox::mark(&state_dir()?, worktree, shell)?;
     if shell {
         let state = state_dir()?;
@@ -495,7 +497,7 @@ fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
     let added = profiles::role_section(profile)?;
     let (role, text) = peers::role_file(task, &peers::Place { agent: profile.agent, repo, worktree, setup_skill, setup_command, rules_skill, note, profile: &added, sandboxed: shell })?;
     crate::known::began(&address, &text, resumed);
-    Ok(Prepared { settings, role, sandboxed: shell, tmp })
+    Ok(Prepared { settings, role, sandboxed: shell, git_dir, tmp })
 }
 
 pub(crate) fn task_at(cwd: &Path) -> Option<(PathBuf, Slot)> {
@@ -556,7 +558,7 @@ fn codex_roots(agent: Agent) -> Vec<String> {
 
 fn task_args(place: &Launch, prepared: &Prepared, codex: &crate::agent::codex_setup::Session, codex_roots: &[String], session: &Session) -> Vec<String> {
     let address = peers::address(place.task, &name_of(place.repo));
-    let files = TaskFiles { address: &address, settings: &prepared.settings, role: &prepared.role, sandboxed: prepared.sandboxed, tmp: Some(&prepared.tmp), hidden: &codex.hidden, codex_roots };
+    let files = TaskFiles { address: &address, settings: &prepared.settings, role: &prepared.role, sandboxed: prepared.sandboxed, git_dir: Some(&prepared.git_dir), tmp: Some(&prepared.tmp), hidden: &codex.hidden, codex_roots };
     place.profile.agent.start_args(place.mode, place.profile, &files, session)
 }
 
@@ -869,7 +871,7 @@ mod tests {
         let (started, said) = start_profile(&coder, Some(&models));
         assert_eq!(started.model.as_deref(), Some("gpt-6-astra"), "the hidden model's upgrade");
         assert_eq!(said.as_deref(), Some("coder: gpt-5.1-codex-max is gone; started on gpt-6-astra; pick one with m on the Settings page"));
-        let args = crate::agent::codex::start_args(None, &started, &TaskFiles { address: "billing@app", settings: Path::new("/unused"), role: Path::new("/unused"), sandboxed: true, tmp: None, hidden: &[], codex_roots: &[] }, &Session::New("x".to_string()));
+        let args = crate::agent::codex::start_args(None, &started, &TaskFiles { address: "billing@app", settings: Path::new("/unused"), role: Path::new("/unused"), sandboxed: true, git_dir: None, tmp: None, hidden: &[], codex_roots: &[] }, &Session::New("x".to_string()));
         assert!(args.windows(2).any(|pair| pair == ["--model", "gpt-6-astra"]), "{args:?}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "agent = \"codex\"\nmodel = \"gpt-5.1-codex-max\"\n", "the profile is never rewritten");
         let unknown = Profile { model: Some("gpt-4.1".to_string()), ..coder.clone() };
@@ -886,7 +888,7 @@ mod tests {
     fn a_restarted_codex_task_resumes_with_the_args_a_start_of_it_has_now() {
         let coder = Profile { name: "coder".to_string(), agent: Agent::Codex, model: Some("gpt-6.1-sol".to_string()), effort: Some("high".to_string()), ..profiles::built_in(profiles::TASK).unwrap() };
         let place = |profile| Launch { repo: Path::new("/src/app"), task: "hub-leave-message", mode: None, profile, setup_skill: "", setup_command: None, rules_skill: "", worktree: PathBuf::from("/src/wt1.app"), vault: false, note: None };
-        let prepared = Prepared { settings: PathBuf::from("/s/roles/hub-leave-message@app.settings.json"), role: PathBuf::from("/s/roles/hub-leave-message@app.md"), sandboxed: true, tmp: PathBuf::from("/src/app/.git/worktrees/wt1.app/kebbie-tmp") };
+        let prepared = Prepared { settings: PathBuf::from("/s/roles/hub-leave-message@app.settings.json"), role: PathBuf::from("/s/roles/hub-leave-message@app.md"), sandboxed: true, git_dir: PathBuf::from("/src/app/.git/worktrees/wt1.app"), tmp: PathBuf::from("/src/app/.git/worktrees/wt1.app/kebbie-tmp") };
         let codex = crate::agent::codex_setup::Session::default();
         let fresh = task_args(&place(&coder), &prepared, &codex, &[], &Session::New("x".to_string()));
         let resumed = task_args(&place(&coder), &prepared, &codex, &[], &Session::Resume("019b3136".to_string()));
@@ -1286,7 +1288,7 @@ mod tests {
         assert_eq!(chosen_mode(None, None, configured.as_deref()), Some("acceptEdits"), "the profile's mode goes ahead of task.permission_mode");
         assert_eq!(chosen_mode(Some(BYPASS), None, configured.as_deref()), Some(BYPASS), "--mode goes ahead of the profile's");
         let (file, role) = (Path::new("/state/roles/billing@app.settings.json"), Path::new("/state/roles/billing@app.md"));
-        let files = TaskFiles { address: "billing@app", settings: file, role, sandboxed: true, tmp: None, hidden: &[], codex_roots: &[] };
+        let files = TaskFiles { address: "billing@app", settings: file, role, sandboxed: true, git_dir: None, tmp: None, hidden: &[], codex_roots: &[] };
         let args = Agent::Claude.start_args(chosen_mode(None, None, configured.as_deref()), &designer, &files, &Session::New("1f0c".to_string()));
         assert_eq!(args, ["--permission-mode", "acceptEdits", "--model", "opus", "--effort", "high", "--settings", "/state/roles/billing@app.settings.json", "--append-system-prompt-file", "/state/roles/billing@app.md", "--session-id", "1f0c"]);
         assert_eq!(Agent::Claude.start_args(None, &task, &files, &Session::Resume("1f0c".to_string())), claude_args(None, file, role, &Session::Resume("1f0c".to_string())));

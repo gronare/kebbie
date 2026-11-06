@@ -298,8 +298,8 @@ fn access(mode: Option<&str>, sandboxed: bool) -> Vec<String> {
 
 const PERMISSIONS: &str = "kebbie-task";
 
-fn commit_roots(tmp: Option<&Path>) -> Vec<PathBuf> {
-    let Some(dirs) = tmp.map(|tmp| crate::sandbox::TaskDirs::new(Path::new(""), tmp)) else { return Vec::new() };
+fn commit_roots(git_dir: Option<&Path>) -> Vec<PathBuf> {
+    let Some(dirs) = git_dir.map(|git_dir| crate::sandbox::TaskDirs::new(Path::new(""), git_dir, Path::new(""))) else { return Vec::new() };
     let common = dirs.common_dir();
     let mut roots: Vec<PathBuf> = ["objects", "refs", "logs"].iter().map(|dir| common.join(dir)).collect();
     if dirs.git_dir() != common {
@@ -308,8 +308,8 @@ fn commit_roots(tmp: Option<&Path>) -> Vec<PathBuf> {
     roots
 }
 
-fn git_run_as_user(tmp: Option<&Path>) -> Vec<PathBuf> {
-    let Some(dirs) = tmp.map(|tmp| crate::sandbox::TaskDirs::new(Path::new(""), tmp)) else { return Vec::new() };
+fn git_run_as_user(git_dir: Option<&Path>) -> Vec<PathBuf> {
+    let Some(dirs) = git_dir.map(|git_dir| crate::sandbox::TaskDirs::new(Path::new(""), git_dir, Path::new(""))) else { return Vec::new() };
     let (own, common) = (dirs.git_dir(), dirs.common_dir());
     let mut paths: Vec<PathBuf> = ["config", "config.worktree", "hooks", "modules"].iter().map(|name| common.join(name)).collect();
     if own != common {
@@ -320,9 +320,9 @@ fn git_run_as_user(tmp: Option<&Path>) -> Vec<PathBuf> {
 }
 
 // Codex keeps a worktree's git dir read-only unless it is itself a writable root, and a -c list replaces the user's own roots.
-fn unsandboxed_args(policy: &crate::sandbox::Policy, tmp: Option<&Path>, user_roots: &[String]) -> Vec<String> {
+fn unsandboxed_args(policy: &crate::sandbox::Policy, git_dir: Option<&Path>, user_roots: &[String]) -> Vec<String> {
     let caches = policy.writes().into_iter().filter_map(|path| crate::config::skill_path(&path)).map(|path| path.to_string_lossy().to_string());
-    let roots: Vec<String> = user_roots.iter().cloned().chain(caches).chain(commit_roots(tmp).iter().map(|root| root.to_string_lossy().to_string())).map(|root| toml_string(&root)).collect();
+    let roots: Vec<String> = user_roots.iter().cloned().chain(caches).chain(commit_roots(git_dir).iter().map(|root| root.to_string_lossy().to_string())).map(|root| toml_string(&root)).collect();
     let mut args = Vec::new();
     if !roots.is_empty() {
         args.extend(["-c".to_string(), format!("sandbox_workspace_write.writable_roots=[{}]", roots.join(","))]);
@@ -332,22 +332,22 @@ fn unsandboxed_args(policy: &crate::sandbox::Policy, tmp: Option<&Path>, user_ro
 }
 
 // The domains hold only through Codex's experimental network proxy: without features.network_proxy every host is reachable.
-fn permission_profile(policy: &crate::sandbox::Policy, tmp: Option<&Path>, mac: bool) -> String {
+fn permission_profile(policy: &crate::sandbox::Policy, git_dir: Option<&Path>, mac: bool) -> String {
     let access = |path: String, mode: &str| format!("{}={}", toml_string(&path), toml_string(mode));
     let mut entries = vec![access(":root".to_string(), "read"), access(":tmpdir".to_string(), "write"), access(":slash_tmp".to_string(), "write"), format!("{}={{\".\"=\"write\"}}", toml_string(":workspace_roots"))];
     entries.extend(policy.writes().into_iter().filter(|path| path.starts_with('/') || path.starts_with("~/")).map(|path| access(path, "write")));
-    entries.extend(commit_roots(tmp).iter().map(|root| access(root.to_string_lossy().to_string(), "write")));
-    entries.extend(git_run_as_user(tmp).iter().map(|path| access(path.to_string_lossy().to_string(), "read")));
+    entries.extend(commit_roots(git_dir).iter().map(|root| access(root.to_string_lossy().to_string(), "write")));
+    entries.extend(git_run_as_user(git_dir).iter().map(|path| access(path.to_string_lossy().to_string(), "read")));
     let domains: Vec<String> = policy.domains().iter().map(|domain| access(domain.clone(), "allow")).collect();
     let network = if domains.is_empty() { "{enabled=false}".to_string() } else { format!("{{enabled=true,allow_local_binding={mac},domains={{{}}}}}", domains.join(",")) };
     format!("permissions.{PERMISSIONS}={{filesystem={{{}}},network={network}}}", entries.join(","))
 }
 
-fn sandbox_args(mode: Option<&str>, profile: &Profile, sandboxed: bool, tmp: Option<&Path>, user_roots: &[String]) -> Vec<String> {
+fn sandbox_args(mode: Option<&str>, profile: &Profile, sandboxed: bool, git_dir: Option<&Path>, user_roots: &[String]) -> Vec<String> {
     match (mode, sandboxed) {
         (Some("plan"), _) | (Some("bypassPermissions"), false) => Vec::new(),
-        (_, false) => unsandboxed_args(&profile.sandbox, tmp, user_roots),
-        (_, true) => ["-c".to_string(), format!("default_permissions={}", toml_string(PERMISSIONS)), "-c".to_string(), permission_profile(&profile.sandbox, tmp, cfg!(target_os = "macos")), "-c".to_string(), "features.network_proxy=true".to_string()].to_vec(),
+        (_, false) => unsandboxed_args(&profile.sandbox, git_dir, user_roots),
+        (_, true) => ["-c".to_string(), format!("default_permissions={}", toml_string(PERMISSIONS)), "-c".to_string(), permission_profile(&profile.sandbox, git_dir, cfg!(target_os = "macos")), "-c".to_string(), "features.network_proxy=true".to_string()].to_vec(),
     }
 }
 
@@ -373,7 +373,7 @@ pub(crate) fn start_args(mode: Option<&str>, profile: &Profile, files: &super::T
         args.push("resume".to_string());
     }
     args.extend(access(mode, files.sandboxed));
-    args.extend(sandbox_args(mode, profile, files.sandboxed, files.tmp, files.codex_roots));
+    args.extend(sandbox_args(mode, profile, files.sandboxed, files.git_dir, files.codex_roots));
     if let Some(model) = &profile.model {
         args.extend(["--model".to_string(), model.clone()]);
     }
@@ -941,7 +941,7 @@ mod tests {
     }
 
     fn files<'a>(sandboxed: bool, tmp: Option<&'a Path>, codex_roots: &'a [String]) -> super::super::TaskFiles<'a> {
-        super::super::TaskFiles { address: "billing@app", settings: Path::new("/unused"), role: Path::new("/unused"), sandboxed, tmp, hidden: &[], codex_roots }
+        super::super::TaskFiles { address: "billing@app", settings: Path::new("/unused"), role: Path::new("/unused"), sandboxed, git_dir: tmp.and_then(Path::parent), tmp, hidden: &[], codex_roots }
     }
 
     const TMP: &str = "/src/app/.git/worktrees/1/kebbie-tmp";
@@ -1078,8 +1078,8 @@ mod tests {
         git(&main, &["remote", "add", "origin", "https://example.invalid/app.git"]);
         git(&main, &["worktree", "add", "--quiet", "-b", "billing", &slot.to_string_lossy()]);
         assert_eq!(crate::push_block::install(&slot, &state).unwrap(), crate::push_block::Block::On);
-        let tmp = crate::tasks::task_tmp(&slot).unwrap();
-        let (writes, kept) = (commit_roots(Some(&tmp)), git_run_as_user(Some(&tmp)));
+        let git_dir = PathBuf::from(git(&slot, &["rev-parse", "--absolute-git-dir"]));
+        let (writes, kept) = (commit_roots(Some(&git_dir)), git_run_as_user(Some(&git_dir)));
         let read_only = |path: &Path| kept.iter().any(|entry| path.starts_with(entry));
         let writable = |path: &Path| !read_only(path) && writes.iter().any(|root| path.starts_with(root));
         for written in ["index", "HEAD", "logs/HEAD", "ORIG_HEAD"] {

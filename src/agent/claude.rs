@@ -677,7 +677,7 @@ mod tests {
     }
 
     fn dirs() -> TaskDirs {
-        TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1/kebbie-tmp"))
+        TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1"), Path::new("/src/app/.git/worktrees/1/kebbie-tmp"))
     }
 
     fn strings(value: &Value) -> Vec<String> {
@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn a_task_across_repos_takes_every_halfs_worktree_as_its_own_in_the_deny_rules() {
         let mut dirs = dirs();
-        dirs.halves.push(TaskDirs::new(Path::new("/src/wt2.api"), Path::new("/src/api/.git/worktrees/2/kebbie-tmp")));
+        dirs.halves.push(TaskDirs::new(Path::new("/src/wt2.api"), Path::new("/src/api/.git/worktrees/2"), Path::new("/src/api/.git/worktrees/2/kebbie-tmp")));
         let deny = Protected { path: vec![PathBuf::from("/src")], install: Some(PathBuf::from("/src/wt2.api")), ..Protected::here() }.deny_rules("/opt/kebbie/kebbie", Some(&dirs));
         for rule in ["Edit(//src/wt2.api/.claude/settings.json)", "Edit(//src/wt2.api/.mcp.json)", "Edit(//src/api/.git/config)", "Edit(//src/api/.claude/**)"] {
             assert!(deny.contains(&rule.to_string()), "{rule} in {deny:?}");

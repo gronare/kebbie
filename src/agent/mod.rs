@@ -51,6 +51,7 @@ pub struct TaskFiles<'a> {
     pub settings: &'a Path,
     pub role: &'a Path,
     pub sandboxed: bool,
+    pub git_dir: Option<&'a Path>,
     pub tmp: Option<&'a Path>,
     pub hidden: &'a [String],
     pub codex_roots: &'a [String],
