@@ -706,7 +706,7 @@ mod tests {
         let address = peers::address("billing", &name_of(&dir));
         let report = |state: &str| Message {
             id: "r1".to_string(), at: messages::now(), from: address.clone(), to: crate::status::LEAD_LABEL.to_string(), text: "pick one".to_string(), held: false,
-            report: Some(crate::messages::Report { state: state.to_string(), next: "choose the wording".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
+            report: Some(crate::messages::Report { state: state.to_string(), next: "choose the wording".to_string(), head: None, after: Vec::new() }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
         };
         let repos = [dir.clone()];
         let seen = herdr(&slot, "idle");

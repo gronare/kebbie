@@ -46,6 +46,7 @@ pub struct Row {
     pub said: String,
     pub since: Option<u64>,
     pub waits: Vec<String>,
+    pub after: Vec<String>,
     pub path: Option<PathBuf>,
 }
 
@@ -118,22 +119,35 @@ fn address(item: &Item) -> String {
     peers::address(&item.name, &item.place)
 }
 
-// The queued tasks that wait on this one, through the tasks that wait on those; a wait from another repo does not count yet.
+// The tasks a ready task's report says go out before it.
+fn declared_after(item: &Item) -> &[String] {
+    item.report.as_ref().and_then(|message| message.report.as_ref()).filter(|report| report.state == "ready").map_or(&[], |report| report.after.as_slice())
+}
+
+fn waits_for(item: &Item, dep: &str) -> bool {
+    item.queued.as_ref().is_some_and(|queued| queued.after.iter().any(|(after, state)| after == dep && state != "done")) || declared_after(item).iter().any(|after| after == dep)
+}
+
+// The tasks that wait on this one, queued or ready to push after it, through the tasks that wait on those, in any repo.
 fn waiting_on(items: &[Item], on: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let mut frontier = vec![on.to_string()];
     while let Some(dep) = frontier.pop() {
-        let repo = dep.split_once('@').map_or("", |(_, repo)| repo);
-        for item in items.iter().filter(|item| item.place == repo) {
-            let Some(queued) = &item.queued else { continue };
+        for item in items.iter().filter(|item| item.is_task()) {
             let me = address(item);
-            if me != on && !found.contains(&me) && queued.after.iter().any(|(after, state)| *after == dep && state != "done") {
+            if me != on && !found.contains(&me) && waits_for(item, &dep) {
                 found.push(me.clone());
                 frontier.push(me);
             }
         }
     }
     items.iter().filter(|item| found.contains(&address(item))).map(Item::titled).collect()
+}
+
+// The tasks still open that this one is to be pushed after.
+fn open_before(items: &[Item], item: &Item) -> Vec<String> {
+    let after = declared_after(item);
+    items.iter().filter(|other| other.is_task() && after.contains(&address(other))).map(|other| if other.place == item.place { other.titled() } else { address(other) }).collect()
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -183,6 +197,7 @@ fn stopped(item: &Item) -> (char, String, String, Option<u64>) {
 
 fn row(items: &[Item], item: &Item, part: Part) -> Row {
     let waits = waiting_on(items, &address(item));
+    let after = open_before(items, item);
     let since = item.phase.as_ref().map(|record| record.since);
     let (icon, what, short, said, since) = match part {
         Part::Stopped => {
@@ -192,13 +207,18 @@ fn row(items: &[Item], item: &Item, part: Part) -> Row {
         Part::Push => {
             let commits = plural(item.git.as_ref().map_or(0, |git| git.ahead), "commit");
             let wide = waits_wide(&waits);
-            let what = [Some(commits.clone()), wide.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-            let short = match waits.len() {
-                0 => commits,
-                1 => "1 waits on it".to_string(),
-                count => format!("{count} wait on it"),
+            let before = (!after.is_empty()).then(|| format!("after {}", after.join(", ")));
+            let what = [Some(commits.clone()), before.clone(), wide.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            let short = match (&before, waits.len()) {
+                (Some(before), _) => before.clone(),
+                (None, 0) => commits,
+                (None, 1) => "1 waits on it".to_string(),
+                (None, count) => format!("{count} wait on it"),
             };
-            let said = wide.map_or("push".to_string(), |wide| format!("push · {wide}"));
+            let said = match (before, wide) {
+                (Some(before), _) => format!("push {before}"),
+                (None, wide) => wide.map_or("push".to_string(), |wide| format!("push · {wide}")),
+            };
             ('↑', what, short, said, since)
         }
         Part::Read => {
@@ -207,7 +227,7 @@ fn row(items: &[Item], item: &Item, part: Part) -> Row {
             ('◆', what, "result ready".to_string(), "read the result".to_string(), item.report.as_ref().map(|report| report.at).or(since))
         }
     };
-    Row { part, address: address(item), name: item.titled(), icon, what, short, said, since, waits, path: item.path.clone() }
+    Row { part, address: address(item), name: item.titled(), icon, what, short, said, since, waits, after, path: item.path.clone() }
 }
 
 fn shares_files(one: &Item, other: &Item) -> bool {
@@ -459,10 +479,31 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_wait_from_another_repos_task_does_not_count_yet() {
+    fn a_wait_from_another_repos_task_counts_as_one_in_its_own() {
         let items = [ready("old-fix", "stomme", 180), ready("fix-grid", "stomme", 20), queued_after("bump-pins", "greenhouse", &["fix-grid@stomme"])];
-        assert_eq!(order(&items), ["old-fix", "fix-grid"], "dependencies count within a repo for now");
-        assert!(of(&items).rows[1].waits.is_empty());
+        assert_eq!(order(&items), ["fix-grid", "old-fix"], "the push a task in another repo waits on goes first");
+        assert_eq!(of(&items).rows[0].waits, ["bump-pins"]);
+    }
+
+    fn ready_after(name: &str, place: &str, minutes_ago: u64, after: &[&str]) -> Item {
+        let mut item = ready(name, place, minutes_ago);
+        if let Some(report) = item.report.as_mut().and_then(|message| message.report.as_mut()) {
+            report.after = after.iter().map(|address| address.to_string()).collect();
+        }
+        item
+    }
+
+    #[test]
+    fn the_half_of_a_task_declared_to_go_after_the_other_pushes_after_it_and_says_so() {
+        let items = [ready_after("payload-v2", "web", 300, &["payload-v2@api"]), ready("copy-typo", "web", 200), ready("payload-v2", "api", 10)];
+        let next = of(&items);
+        assert_eq!(next.rows.iter().map(|row| row.address.as_str()).collect::<Vec<_>>(), ["payload-v2@api", "payload-v2@web", "copy-typo@web"], "the api half goes first though it was ready last");
+        let web = &next.rows[1];
+        assert_eq!((web.what.as_str(), web.short.as_str(), web.said.as_str()), ("2 commits · after payload-v2@api", "after payload-v2@api", "push after payload-v2@api"));
+        assert_eq!(next.rows[0].waits, ["payload-v2"], "the api half shows the half that waits on it");
+        let alone = [ready_after("payload-v2", "web", 300, &["payload-v2@api"]), ready("copy-typo", "web", 200)];
+        let next = of(&alone);
+        assert!(next.rows.iter().all(|row| row.after.is_empty()) && next.rows[0].address == "payload-v2@web", "once the api half has gone, the wait is over: {:?}", next.rows);
     }
 
     #[test]

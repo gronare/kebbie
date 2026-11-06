@@ -182,11 +182,11 @@ mod tests {
         assert_eq!(phase(), Some(Phase::NeedsYou(Why::Unreported)), "the inbox's raw content from the lead or kebbie moves nothing");
         prompt("go on");
         assert_eq!(phase(), Some(Phase::Working), "the user's own prompt does");
-        let refused = crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, "refunds done").unwrap_err();
+        let refused = crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, &[], "refunds done").unwrap_err();
         assert!(refused.contains("Not reported ready") && refused.contains("fourth: no body"), "a commit without a body is refused before kebbie hears the report: {refused}");
         assert_eq!(phase(), Some(Phase::Working), "the refused report moves nothing");
         git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "-m", "Add refunds\n\nThe billing page lists refunds now."]).unwrap();
-        crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, "refunds done").unwrap();
+        crate::report::report(&slot.path, Some("ready"), Some("push and close"), None, &[], "refunds done").unwrap();
         assert_eq!(crate::rules_check::shown_in(&state, &address, |_| true), Some(crate::rules_check::Shown::Checking), "the ready report asks for the rules check");
         assert_eq!(crate::assessment::word_in(&state, &address), Some(crate::assessment::Word::Assessing), "and whether the work needs a review");
         assert!(crate::trusted_spawn::SPAWNED.with(|spawned| spawned.borrow().is_empty()), "and starts nothing from the task's own process");
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(phase(), Some(Phase::Ready { head: Some(git(&slot.path, &["rev-parse", "HEAD"]).unwrap()) }));
         prompt(&crate::messages::delivered("kebbie", "kebbie was updated"));
         assert!(matches!(phase(), Some(Phase::Ready { .. })), "an update notice leaves it ready");
-        crate::report::report(&slot.path, Some("working"), Some("nothing"), None, "one more test").unwrap();
+        crate::report::report(&slot.path, Some("working"), Some("nothing"), None, &[], "one more test").unwrap();
         assert_eq!(phase(), Some(Phase::Working));
         crate::questions::ask(&slot.path, &["A: one", "B: two"], Some("1"), None, "Which queue?").unwrap();
         assert_eq!(phase(), Some(Phase::NeedsYou(Why::Question)));

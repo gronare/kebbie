@@ -69,6 +69,7 @@ At the end of every turn, as your last step, run `{kebbie} report --state <state
 - `--next`: one action for the user, in their words, starting with the verb: "try the import on staging", "review the split, then push and close". `nothing` when you are working on your own or waiting on something else.
 - The summary: one line on where the task stands, e.g. "plan written for the payload rename; the web half told". Not a recap of the turn.
 - Before you report `ready`, run the tests related to your change, not the whole suite when it is long (CI runs that after the push). kebbie records each test command you run, with its result and the commit it ran on, and shows the latest to the reviewer and in the push dialog; a commit after the run makes it stale.
+- `--after <task[@repo]>`, with `ready`: a task that must be pushed before this one, such as your other half when this side reads what that side adds. Name it rather than writing "push the other half first" in the summary: the board orders the pushes by it.
 - `--card <file>`, with `ready`: the sign-off card the user reads above your commits when they push. A markdown file of a dozen lines at most, written for the user: the change in their words (what they can do now), where to look to see it (a page, a command, a file), each decision you made that they should confirm, the **Also noticed** list when you noticed anything outside the task, and an image of anything visual as `![what it shows](<absolute path>)`. kebbie takes the file into its own state, so write it fresh each time you report ready.
 
 ## Rules

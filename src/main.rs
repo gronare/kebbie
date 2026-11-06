@@ -141,7 +141,7 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie tell --force <to> <text> yours or the lead's: deliver now, clearing a draft from its input box (logged word
                                   for word; Ctrl+Y in its pane brings it back), with what is held for it first
   kebbie release <to>             yours or the lead's: deliver what is held for a session now, as tell --force does
-  kebbie report --state <state> --next <step> <summary>
+  kebbie report --state <state> --next <step> [--after <task[@repo]>] <summary>
                                   run by a task's Claude at the end of a turn: where it stands (needs-you, ready,
                                   working, blocked) and what you should do next, for the board and the lead;
                                   with ready, --card <file> is the sign-off card the push dialog shows above the commits;
@@ -622,7 +622,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             if forced { messages::tell_forced(to, Some(&text)) } else { messages::tell(&cwd, to, &text) }
         }
         Some("release") => messages::tell_forced(name.ok_or("kebbie release needs the task whose held messages go through")?, None),
-        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.positionals[1..].join(" ")),
+        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.values_of("--after"), &arguments.positionals[1..].join(" ")),
         Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.positionals[1..].join(" ")),
         Some("notify") => {
             let text: Vec<String> = std::env::args().skip_while(|argument| argument != "notify").skip(1).collect();

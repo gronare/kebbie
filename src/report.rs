@@ -14,7 +14,7 @@ use crate::tasks;
 
 pub const STATES: [&str; 4] = ["needs-you", "ready", "working", "blocked"];
 
-const USAGE: &str = "kebbie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] \"<where the task stands>\"";
+const USAGE: &str = "kebbie report --state needs-you|ready|working|blocked --next \"<what the user should do next, or nothing>\" [--card <file>, with ready] [--after <task[@repo]>, with ready] \"<where the task stands>\"";
 
 pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str) -> Result<(Report, String)> {
     let state = state.ok_or(format!("kebbie report needs --state: {USAGE}"))?;
@@ -29,13 +29,14 @@ pub fn parse(state: Option<&str>, next: Option<&str>, card: bool, summary: &str)
     if summary.is_empty() {
         return Err(format!("kebbie report needs a one-line summary: {USAGE}"));
     }
-    Ok((Report { state: state.to_string(), next: next.split_whitespace().collect::<Vec<_>>().join(" "), head: None }, summary))
+    Ok((Report { state: state.to_string(), next: next.split_whitespace().collect::<Vec<_>>().join(" "), head: None, after: Vec::new() }, summary))
 }
 
-pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, summary: &str) -> Result<String> {
+pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<&str>, after: &[&str], summary: &str) -> Result<String> {
     let (mut report, summary) = parse(state, next, card.is_some(), summary)?;
     report.head = crate::repo::git(cwd, &["rev-parse", "HEAD"]).ok();
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kebbie report runs in a task's worktree")?;
+    report.after = push_after(&report.state, &me, after)?;
     card_goes_with(&report.state, card.is_some(), crate::routines::routine_of(&me).is_some())?;
     if report.state == "ready" {
         crate::rules_check::refuse_unformed(cwd)?;
@@ -63,6 +64,26 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     }
     let check = if report.state == "ready" { review_again(cwd) + &crate::assessment::on_ready(cwd) + &rules_check(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
+}
+
+// The tasks a ready task must be pushed after, each as task@repo; a bare name is a task in its own repo.
+pub fn push_after(state: &str, me: &str, after: &[&str]) -> Result<Vec<String>> {
+    if !after.is_empty() && state != "ready" {
+        return Err(format!("--after goes with --state ready: it names a task to push before this one. {USAGE}"));
+    }
+    let repo = me.split_once('@').map_or("", |(_, repo)| repo);
+    after.iter().map(|named| {
+        let named = named.trim();
+        let address = if named.contains('@') { named.to_string() } else { peers::address(named, repo) };
+        let (task, place) = address.split_once('@').unwrap_or((&address, ""));
+        if task.is_empty() || place.is_empty() || address.chars().any(char::is_whitespace) {
+            return Err(format!("--after takes a task as <task> or <task@repo>, not \"{named}\""));
+        }
+        if address == me {
+            return Err("--after names another task, not this one".to_string());
+        }
+        Ok(address)
+    }).collect()
 }
 
 // A routine's task lists its findings on a card while it waits on the user; any other task writes one only when it is ready.
@@ -261,13 +282,24 @@ mod tests {
     #[test]
     fn a_report_needs_a_known_state_a_next_step_and_a_summary() {
         let (report, summary) = parse(Some("needs-you"), Some(" answer:  which queue? "), false, "plan  written,\nwaiting").unwrap();
-        assert_eq!(report, Report { state: "needs-you".to_string(), next: "answer: which queue?".to_string(), head: None });
+        assert_eq!(report, Report { state: "needs-you".to_string(), next: "answer: which queue?".to_string(), head: None, after: Vec::new() });
         assert_eq!(summary, "plan written, waiting");
         assert!(parse(None, Some("nothing"), false, "x").is_err());
         assert!(parse(Some("done"), Some("nothing"), false, "x").is_err());
         assert!(parse(Some("ready"), None, false, "x").is_err());
         assert!(parse(Some("ready"), Some("  "), false, "x").is_err());
         assert!(parse(Some("ready"), Some("push and close"), false, " ").is_err());
+    }
+
+    #[test]
+    fn a_ready_report_names_the_tasks_to_push_before_it_and_keeps_them_in_the_log() {
+        assert_eq!(push_after("ready", "payload-v2@web", &["payload-v2@api", "rounding"]), Ok(vec!["payload-v2@api".to_string(), "rounding@web".to_string()]), "a bare name is a task in its own repo");
+        assert!(push_after("working", "payload-v2@web", &["payload-v2@api"]).unwrap_err().contains("--after goes with --state ready"));
+        assert!(push_after("ready", "payload-v2@web", &["payload-v2"]).unwrap_err().contains("not this one"));
+        assert!(push_after("ready", "payload-v2@web", &["a b@api"]).unwrap_err().contains("--after takes a task"));
+        assert_eq!(push_after("ready", "payload-v2@web", &[]), Ok(Vec::new()));
+        let logged = r#"{"id":"r1","at":10,"from":"payload-v2@web","to":"lead","text":"done","state":"logged","report":{"state":"ready","next":"push","head":null,"after":["payload-v2@api"]}}"#;
+        assert_eq!(messages::fold(logged)[0].report.as_ref().map(|report| report.after.clone()), Some(vec!["payload-v2@api".to_string()]));
     }
 
     #[test]
@@ -333,7 +365,7 @@ mod tests {
 
     #[test]
     fn herdr_shows_the_next_step_and_the_state() {
-        let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string(), head: None };
+        let report = |state: &str, next: &str| Report { state: state.to_string(), next: next.to_string(), head: None, after: Vec::new() };
         assert_eq!(metadata_args(&report("needs-you", "answer: which queue?"), crate::agent::Agent::Codex)[..4], ["--source", "kebbie", "--agent", "codex"], "herdr shows it on the pane of the agent that reported");
         assert_eq!(metadata_args(&report("needs-you", "answer: which queue?"), crate::agent::Agent::Claude)[4..], [
             "--token", "next=answer: which queue?", "--state-label", "idle=needs you", "--state-label", "done=needs you",

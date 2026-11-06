@@ -437,7 +437,7 @@ The note's card shows its whole title, area, status and summary, and who works o
 | Group | What is in it | In what order |
 | --- | --- | --- |
 | Stopped on you | A task that stands still until you act: a question or a plan to approve, Claude's own prompt, a report that asks you something, a crash, a red CI only you can settle, a step to accept with `task.require_accept` on. | The one most tasks wait behind first, then the one that has waited longest. |
-| Push, in this order | What is ready to push and not in the push line yet. | What other tasks of the same repo wait on first, then two tasks that change the same files in the order they were built, then the one that was ready first. |
+| Push, in this order | What is ready to push and not in the push line yet. A task whose ready report names another to push first (`kebbie report --after`) says `after <task>` while that task is open. | What other tasks wait on first, in any repo, queued or ready to push after it, then two tasks that change the same files in the order they were built, then the one that was ready first. |
 | To read | A task that reported ready with nothing to push, such as a research result. | The one a decision waits on first, then the oldest. |
 
 - The time on the right is how long it has waited on you.

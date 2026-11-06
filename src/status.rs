@@ -1143,7 +1143,7 @@ pub(crate) mod tests {
             git: Some(Git { upstream: "origin/main".to_string(), ahead, behind: 0, changed: 0, uncommitted: 0, approved: true, head: None, error: None, uncommitted_files: Vec::new() }),
             report: report.map(|state| Message {
                 id: "1".to_string(), at: 0, from: "billing@web".to_string(), to: LEAD_LABEL.to_string(), text: "plan written".to_string(), held: false,
-                report: Some(Report { state: state.to_string(), next: "nothing".to_string(), head: None }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
+                report: Some(Report { state: state.to_string(), next: "nothing".to_string(), head: None, after: Vec::new() }), ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
             }),
             question: None,
             ci: None,

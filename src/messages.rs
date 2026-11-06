@@ -61,6 +61,7 @@ pub struct Report {
     pub state: String,
     pub next: String,
     pub head: Option<String>,
+    pub after: Vec<String>,
 }
 
 impl Message {
@@ -123,6 +124,7 @@ pub fn fold(log: &str) -> Vec<Message> {
                     state: state.to_string(),
                     next: record["report"]["next"].as_str().unwrap_or_default().to_string(),
                     head: record["report"]["head"].as_str().map(str::to_string),
+                    after: record["report"]["after"].as_array().map(|after| after.iter().filter_map(|address| address.as_str().map(str::to_string)).collect()).unwrap_or_default(),
                 }),
                 question: question_from(&record),
                 about: record["about"].as_str().map(str::to_string),
@@ -1054,7 +1056,7 @@ fn ask_lead_in(dir: &Path, text: &str, sessions: &[Session], type_into: TypeInto
 // A report goes to the lead through the log only: typed into its chat, every turn of every task would start a turn of the lead.
 pub fn log_report(from: &str, report: &Report, text: &str) -> Result<()> {
     let id = new_id("report");
-    append(&json!({ "id": id, "at": now(), "from": from, "to": LEAD_LABEL, "text": text, "state": "logged", "report": { "state": report.state, "next": report.next, "head": report.head } }))
+    append(&json!({ "id": id, "at": now(), "from": from, "to": LEAD_LABEL, "text": text, "state": "logged", "report": { "state": report.state, "next": report.next, "head": report.head, "after": report.after } }))
 }
 
 // What the board shows as a task's latest report: an ask the user or the lead answered since shows as that answer, the task working on it, until the task reports again.
@@ -1065,7 +1067,7 @@ pub fn shown_report(messages: &[Message], report: &Message) -> Message {
     let answer = messages.iter().skip_while(|message| message.id != report.id).skip(1)
         .filter(|message| message.to == report.from && matches!(message.kind.as_deref(), Some("answer" | "decision"))).last();
     match answer {
-        Some(answer) => Message { id: answer.id.clone(), at: answer.at, text: answer.text.clone(), report: Some(Report { state: "working".to_string(), next: String::new(), head: None }), ..report.clone() },
+        Some(answer) => Message { id: answer.id.clone(), at: answer.at, text: answer.text.clone(), report: Some(Report { state: "working".to_string(), next: String::new(), head: None, after: Vec::new() }), ..report.clone() },
         None => report.clone(),
     }
 }
@@ -1499,7 +1501,7 @@ mod tests {
             r#"{"id":"3","at":30,"from":"search@api","to":"lead","text":"rebase on main","state":"delivered"}"#,
         ].join("\n");
         let messages = fold(&log);
-        assert_eq!(messages[1].report, Some(Report { state: "needs-you".to_string(), next: "approve the plan: keep the branch field?".to_string(), head: None }));
+        assert_eq!(messages[1].report, Some(Report { state: "needs-you".to_string(), next: "approve the plan: keep the branch field?".to_string(), head: None, after: Vec::new() }));
         assert!(!messages[1].held);
         assert_eq!(messages[0].next_for_you(), None);
         assert_eq!(messages[1].next_for_you(), Some("approve the plan: keep the branch field?"));
@@ -1513,7 +1515,7 @@ mod tests {
 
     #[test]
     fn the_lead_is_copied_on_reports_to_it() {
-        let report = Some(Report { state: "ready".to_string(), next: "push and close".to_string(), head: None });
+        let report = Some(Report { state: "ready".to_string(), next: "push and close".to_string(), head: None, after: Vec::new() });
         let messages = [Message { id: "1".to_string(), at: 0, from: "a@x".to_string(), to: "lead".to_string(), text: "done".to_string(), held: false, report, ended: false, question: None, about: None, kind: None, landed: None, why: None, forced: false, fyi: false }];
         assert_eq!(copies_for_lead(&messages, 0).len(), 1);
         assert_eq!(report_line(&messages[0]), "- a@x (ready): done — you: push and close");
