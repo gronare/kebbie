@@ -66,6 +66,8 @@ A pass belongs to the code, not to the commits. A clean rebase, a reworded messa
 
 So you can tidy history in the push window without paying for a second review.
 
+Findings belong to the commits instead, since a reworded message can be what they asked for. Any change to the commits, a reword included, makes them stale, and the reviewer reads the branch again when the task next reports ready, also while its CI runs.
+
 ## Test runs are recorded, not repeated
 
 A task's Claude runs the tests related to its change before it reports ready; the full suite is CI's job after the push. kebbie records each of those runs from the task's hooks, with its command, its result and the commit it ran on, so nobody has to run them again to know they passed.

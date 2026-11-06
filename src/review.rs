@@ -193,20 +193,29 @@ impl Shown {
     }
 }
 
-// A verdict holds for HEAD while HEAD makes the change it read, through a clean rebase, a reworded message or a squash.
+// A pass holds for HEAD while HEAD makes the change it read, through a clean rebase, a reworded message or a squash; findings hold only for the same commits, since a reworded message can be their fix.
 pub fn shown(address: &str, path: &Path, upstream: &str) -> Option<Shown> {
     let head = git(path, &["rev-parse", "HEAD"]).ok()?;
-    shown_in(&crate::lead::state_location().ok()?, address, |sha| tasks::same_code(path, upstream, sha, &head))
+    shown_by(&crate::lead::state_location().ok()?, address, |verdict| holds(verdict, path, upstream, &head))
 }
 
+fn holds(verdict: &Verdict, path: &Path, upstream: &str, head: &str) -> bool {
+    if verdict.ok { tasks::same_code(path, upstream, &verdict.sha, head) } else { tasks::same_commits(path, upstream, &verdict.sha, head) }
+}
+
+#[cfg(test)]
 pub fn shown_in(state: &Path, address: &str, current: impl Fn(&str) -> bool) -> Option<Shown> {
+    shown_by(state, address, |verdict| current(&verdict.sha))
+}
+
+fn shown_by(state: &Path, address: &str, current: impl Fn(&Verdict) -> bool) -> Option<Shown> {
     let file = verdict_file(state, address);
     let verdict = fs::read_to_string(&file).ok().and_then(|text| parse_verdict(&text));
     let running = running_in(state, address) || marked(state, address, "wanted").exists();
     if verdict.is_none() && !running && !required_in(state, address) {
         return None;
     }
-    let stale = verdict.as_ref().is_some_and(|verdict| !current(&verdict.sha));
+    let stale = verdict.as_ref().is_some_and(|verdict| !current(verdict));
     Some(Shown { verdict, stale, running, held: !marked(state, address, "advised").exists(), file })
 }
 
@@ -1182,6 +1191,33 @@ mod tests {
         assert!(skill.contains(&format!("- {CONFIRM} ")), "the reviewer is told the mark kebbie reads");
         assert_eq!(confirmation("**confirm:** src/a.rs:1 — the intent"), Some("src/a.rs:1 — the intent"));
         assert_eq!(confirmation("src/a.rs:1 — confirm: nothing"), None);
+    }
+
+    #[test]
+    fn findings_go_stale_on_a_reworded_message_and_a_pass_does_not() {
+        let dir = crate::sh::test_dir("review-reword");
+        let git = |args: &[&str]| {
+            let out = Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(&dir).output().unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "base"]);
+        git(&["checkout", "-q", "-b", "task"]);
+        fs::write(dir.join("a.rs"), "fn a() {}\n").unwrap();
+        git(&["add", "a.rs"]);
+        git(&["commit", "-q", "-m", "Address johan's comment on 3f2a9c1"]);
+        let reviewed = git(&["rev-parse", "HEAD"]);
+        git(&["commit", "-q", "--amend", "-m", "Count partial refunds\n\nThe total counted refunds."]);
+        let head = git(&["rev-parse", "HEAD"]);
+        let changes = Verdict { ok: false, sha: reviewed.clone(), findings: 1, ..Verdict::default() };
+        let pass = Verdict { ok: true, sha: reviewed.clone(), ..Verdict::default() };
+        assert!(!holds(&changes, &dir, "main", &head), "the reword was the fix the findings asked for, so the task goes back to the reviewer");
+        assert!(holds(&pass, &dir, "main", &head), "a pass belongs to the code, which a reword keeps");
+        assert!(holds(&changes, &dir, "main", &reviewed));
+        let shown = Shown { verdict: Some(changes), stale: true, running: false, held: true, file: PathBuf::new() };
+        assert!(review_again(Some(&shown), false), "a ready report on it starts the reviewer again, in any phase");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

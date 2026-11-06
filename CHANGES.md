@@ -14,6 +14,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Headless Chrome and Playwright start in a task, whose temp folder now has a short path in /tmp.
 - A review that only asks for your confirmation waits under Needs you with its finding, and your answer there passes it; a task held by a review's findings shows the first one on its row.
 - A worktree git cannot read shows its error on its own row under Needs you, and the rest of the board shows as usual.
+- A task that rewords a commit its review asked changes for goes back to the reviewer when it reports ready, instead of keeping the push refused.
 
 ## 0.35.0
 
