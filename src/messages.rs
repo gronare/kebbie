@@ -391,7 +391,7 @@ fn typed_file(dir: &Path, address: &str) -> PathBuf {
 }
 
 fn note_typed(dir: &Path, address: &str) {
-    let _ = fs::create_dir_all(dir.join("typed")).and_then(|_| fs::write(typed_file(dir, address), now().to_string()));
+    let _ = crate::state::write(&typed_file(dir, address), now().to_string());
 }
 
 // The box seen as a draft right after kebbie typed into it, in this pass or a recent one, holds kebbie's own text.
@@ -2031,6 +2031,21 @@ mod tests {
         fs::write(typed_file(&dir, "billing@web"), (now() - TYPED_FOR - 1).to_string()).unwrap();
         flush_held_in(&dir, std::slice::from_ref(&task), &mut |_, _, _| Err(crate::typing::Refused::Draft), &|_, _| false, &|_, _| true).unwrap();
         assert_eq!(load_in(&dir)[1].why.as_deref(), Some(DRAFT_HOLD), "later, text in the box is the user's");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_typed_mark_is_private_and_replaced_whole() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = state("typed-private");
+        note_typed(&dir, "billing@web");
+        let mut reading = File::open(typed_file(&dir, "billing@web")).unwrap();
+        note_typed(&dir, "billing@web");
+        let mut old = String::new();
+        reading.read_to_string(&mut old).unwrap();
+        assert!(old.trim().parse::<u64>().is_ok(), "an open reader keeps a whole time: {old:?}");
+        assert_eq!(fs::metadata(typed_file(&dir, "billing@web")).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(fs::metadata(dir.join("typed")).unwrap().permissions().mode() & 0o777, 0o700);
         fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -794,7 +794,7 @@ fn title_by_task(state: &Path, task: &str) -> Option<String> {
 
 pub(crate) fn keep_title(state: &Path, address: &str, title: &str) {
     if !title.trim().is_empty() {
-        let _ = fs::create_dir_all(state.join(TITLES)).and_then(|_| fs::write(state.join(TITLES).join(address), title.trim()));
+        let _ = crate::state::write(&state.join(TITLES).join(address), title.trim());
     }
 }
 
@@ -809,7 +809,7 @@ pub(crate) fn title_of(state: &Path, address: &str, seen: Option<&str>, repo: &s
     let kept = kept_title(state, address);
     if let Some(seen) = seen {
         if kept.as_deref() != Some(seen.as_str()) {
-            let _ = fs::create_dir_all(state.join(TITLES)).and_then(|_| fs::write(&file, &seen));
+            let _ = crate::state::write(&file, &seen);
         }
         return Some(seen);
     }
@@ -2008,6 +2008,23 @@ pub(crate) mod tests {
         let mut waiting = task(Some("idle"), Some("blocked"), 1);
         waiting.report.as_mut().unwrap().report.as_mut().unwrap().next = "nudge the other task".to_string();
         assert_eq!(waiting.wanted(go), None, "blocked on something other than the user");
+    }
+
+    #[test]
+    fn a_kept_title_is_private_and_replaced_whole_so_a_reader_never_sees_it_half_written() {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        let state = crate::sh::test_dir("titles-private");
+        keep_title(&state, "rows@kebbie", "Board task rows");
+        let file = state.join(TITLES).join("rows@kebbie");
+        let mut reading = std::fs::File::open(&file).unwrap();
+        title_of(&state, "rows@kebbie", Some("Refund mails for the shop"), "kebbie", "rows", "wt4.kebbie");
+        let mut old = String::new();
+        reading.read_to_string(&mut old).unwrap();
+        assert_eq!(old, "Board task rows", "the open reader keeps the whole old title");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Refund mails for the shop");
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(state.join(TITLES)).unwrap().permissions().mode() & 0o777, 0o700);
     }
 
     #[test]
