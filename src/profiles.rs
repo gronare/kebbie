@@ -14,7 +14,7 @@ pub const OPS: &str = "ops";
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 pub const CODEX_EFFORTS: [&str; 9] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"];
 pub const KEYS: [&str; 13] = ["about", "for", "agent", "model", "effort", "role", "skills", "permission_mode", "deny", "allow", "claude", "sandbox", "kind"];
-const SANDBOX_KEYS: [&str; 4] = ["enabled", "allowed_domains", "allow_write", "excluded_commands"];
+const SANDBOX_KEYS: [&str; 5] = ["enabled", "allowed_domains", "allow_write", "excluded_commands", "kubeconfig"];
 const REVIEWER_KEYS: [&str; 7] = ["about", "for", "agent", "model", "effort", "role", "kind"];
 pub const REVIEW_KIND: &str = "review";
 const GUARDED: [&str; 8] = ["push", "stage", "unstage", "approve", "choose", "away", "decide", "after"];
@@ -178,7 +178,7 @@ pub fn releases_guard(rule: &str) -> bool {
 // Claude Code's permission rules, plugins and sandbox lists have no Codex counterpart kebbie can set, so a Codex profile is refused them rather than silently running without them.
 fn claude_only(table: &Table) -> Option<String> {
     let keys = ["deny", "allow", "claude"].into_iter().find(|key| table.contains_key(*key)).map(str::to_string);
-    let sandbox = table.get("sandbox").and_then(toml::Value::as_table).and_then(|sandbox| sandbox.keys().find(|key| *key != "enabled").map(|key| format!("sandbox.{key}")));
+    let sandbox = table.get("sandbox").and_then(toml::Value::as_table).and_then(|sandbox| sandbox.keys().find(|key| !["enabled", "kubeconfig"].contains(&key.as_str())).map(|key| format!("sandbox.{key}")));
     keys.or(sandbox)
 }
 
@@ -268,6 +268,9 @@ pub fn parse(contents: &str, name: &str, file: &Path, base: Option<Profile>) -> 
     if let Some(sandbox) = table.get("sandbox") {
         sandbox_policy(sandbox, &source, &mut profile.sandbox)?;
     }
+    if profile.sandbox.kubeconfig.is_some() && file.symlink_metadata().is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(format!("{source}: sandbox.kubeconfig: the profile file is a symlink, so a file shared from elsewhere would pick the cluster login; write the profile itself in the profiles folder"));
+    }
     Ok(profile)
 }
 
@@ -294,6 +297,12 @@ fn sandbox_policy(value: &toml::Value, source: &str, policy: &mut Policy) -> Res
         return Err(format!("{source}: sandbox.excluded_commands: {why}"));
     }
     policy.excluded.extend(excluded.into_iter().filter(|entry| !policy.excluded.contains(entry)).collect::<Vec<_>>());
+    if let Some(kubeconfig) = text(table, "kubeconfig", source).map_err(|error| error.replacen(": kubeconfig:", ": sandbox.kubeconfig:", 1))? {
+        if crate::config::skill_path(&kubeconfig).is_none() {
+            return Err(format!("{source}: sandbox.kubeconfig: \"{kubeconfig}\" is not a path from / or ~/; name the kubeconfig file its tasks' kubectl and helm use"));
+        }
+        policy.kubeconfig = Some(kubeconfig);
+    }
     Ok(())
 }
 
@@ -490,6 +499,7 @@ pub fn made_from(start: &Profile, agent: Agent, model: Option<&str>, effort: Opt
             (Some(items), false) => table.push(format!("{key} = {}", list(items))),
         }
     }
+    table.extend(sandbox.kubeconfig.as_deref().map(|kubeconfig| format!("kubeconfig = {}", text(kubeconfig))));
     if !table.is_empty() {
         lines.push(format!("\n[sandbox]\n{}", table.join("\n")));
     }
@@ -532,7 +542,7 @@ pub fn to_json(profile: &Profile) -> Value {
         "name": profile.name, "about": profile.about, "for": profile.fits, "agent": profile.agent.key(), "model": profile.model, "effort": profile.effort,
         "permission_mode": profile.permission_mode, "skills": profile.skills, "role": profile.role, "deny": profile.deny, "allow": profile.allow,
         "plugins": profile.plugins, "built_in": built_in(&profile.name).is_some(), "file": profile.file, "kind": if profile.review { REVIEW_KIND } else { "task" },
-        "sandbox": { "enabled": profile.sandbox.enabled, "allowed_domains": profile.sandbox.domains, "allow_write": profile.sandbox.writes, "excluded_commands": profile.sandbox.excluded },
+        "sandbox": { "enabled": profile.sandbox.enabled, "allowed_domains": profile.sandbox.domains, "allow_write": profile.sandbox.writes, "excluded_commands": profile.sandbox.excluded, "kubeconfig": profile.sandbox.kubeconfig },
     })
 }
 
@@ -561,6 +571,7 @@ pub fn describe(profiles: &[Profile], errors: &[String], chosen: &[Agent], codex
         runs.extend((!profile.skills.is_empty()).then(|| format!("skills {}", profile.skills.join(", "))));
         runs.extend((profile.sandbox.enabled == Some(false)).then(|| "sandbox off".to_string()));
         runs.extend((!profile.sandbox.excluded.is_empty()).then(|| format!("outside the sandbox: {}", profile.sandbox.excluded.join(", "))));
+        runs.extend(profile.sandbox.kubeconfig.as_deref().map(|kubeconfig| format!("kubectl and helm with {kubeconfig}")));
         lines.push(format!("  runs: {}", runs.join(" · ")));
         if !chosen.contains(&profile.agent) {
             lines.push(format!("  ⚠ {}", profile.agent.not_set_up()));
@@ -898,14 +909,14 @@ mod tests {
         let dir = folder("profile-sandbox", &[
             ("loose.toml", "[sandbox]\nenabled = false\n"),
             ("web.toml", "[sandbox]\nallowed_domains = [\"registry.yarnpkg.com\"]\nallow_write = [\"~/.gradle\"]\nexcluded_commands = [\"docker compose *\"]\n"),
-            ("ops.toml", "model = \"opus\"\n[sandbox]\nexcluded_commands = [\"kubectl *\", \"ssh *\"]\n"),
+            ("ops.toml", "model = \"opus\"\n[sandbox]\nexcluded_commands = [\"ansible-playbook *\", \"ssh *\"]\n"),
         ]);
         assert_eq!(load_in(&dir, "loose").unwrap().sandbox.enabled, Some(false));
         let web = load_in(&dir, "web").unwrap().sandbox;
         assert_eq!((web.enabled, web.domains(), web.writes(), web.excluded), (None, vec!["registry.yarnpkg.com".to_string()], vec!["~/.gradle".to_string()], vec!["docker compose *".to_string()]));
         assert_eq!(built_in(TASK).unwrap().sandbox.domains(), crate::sandbox::DOMAINS.map(str::to_string).to_vec(), "kebbie's list until a profile names its own");
         let ops = load_in(&dir, OPS).unwrap();
-        assert_eq!((ops.model.as_deref(), ops.sandbox.excluded), (Some("opus"), vec!["ssh *".to_string(), "scp *".to_string(), "rsync *".to_string(), "kubectl *".to_string()]), "a file adds to the built-in ops");
+        assert_eq!((ops.model.as_deref(), ops.sandbox.excluded), (Some("opus"), vec!["ssh *".to_string(), "scp *".to_string(), "rsync *".to_string(), "ansible-playbook *".to_string()]), "a file adds to the built-in ops");
         let refused = |text: &str| { std::fs::write(dir.join("x.toml"), text).unwrap(); load_in(&dir, "x").unwrap_err() };
         assert!(refused("[sandbox]\nexcluded_commands = [\"tmux *\"]\n").contains("x.toml: sandbox.excluded_commands: \"tmux *\" would run tmux outside the sandbox"));
         assert!(refused("[sandbox]\nexcluded_commands = [\"kebbie push *\"]\n").contains("would run kebbie outside the sandbox"));
@@ -915,5 +926,34 @@ mod tests {
         std::fs::write(dir.join("reviewer.toml"), "[sandbox]\nenabled = false\n").unwrap();
         assert!(load_in(&dir, REVIEWER).unwrap_err().contains("the reviewer only reads"), "the reviewer's sandbox follows task.sandbox alone");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn only_a_profile_in_the_machines_own_profiles_folder_names_the_kubeconfig_its_tasks_reach_a_cluster_with() {
+        let dir = folder("profile-kubeconfig", &[("ops.toml", "[sandbox]\nkubeconfig = \"~/.kube/kebbie-ops.yaml\"\n"), ("deploy.toml", "agent = \"codex\"\n[sandbox]\nkubeconfig = \"/etc/kebbie/deploy.yaml\"\n")]);
+        for name in [TASK, REVIEWER, OPS] {
+            assert_eq!(built_in(name).unwrap().sandbox.kubeconfig, None, "{name}: no built-in profile reaches a cluster");
+        }
+        let ops = load_in(&dir, OPS).unwrap();
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!((ops.sandbox.kubeconfig.as_deref(), ops.sandbox.kubeconfig_file()), (Some("~/.kube/kebbie-ops.yaml"), Some(Path::new(&home).join(".kube/kebbie-ops.yaml"))));
+        assert_eq!(ops.sandbox.excluded, built_in(OPS).unwrap().sandbox.excluded, "the kubeconfig adds no entry of the profile's own");
+        assert!(describe(std::slice::from_ref(&ops), &[], &Agent::ALL, None, None).contains("kubectl and helm with ~/.kube/kebbie-ops.yaml") && to_json(&ops)["sandbox"]["kubeconfig"] == "~/.kube/kebbie-ops.yaml");
+        assert_eq!(parse(&made_from(&ops, Agent::Claude, None, None, None).text, "made", &dir.join("made.toml"), None).unwrap().sandbox.kubeconfig, ops.sandbox.kubeconfig, "a copy keeps the login");
+        assert_eq!(load_in(&dir, "deploy").unwrap().sandbox.kubeconfig_file(), Some(PathBuf::from("/etc/kebbie/deploy.yaml")), "a Codex profile takes it too");
+        let refused = |text: &str| { std::fs::write(dir.join("x.toml"), text).unwrap(); load_in(&dir, "x").unwrap_err() };
+        assert!(refused("[sandbox]\nkubeconfig = \"kube.yaml\"\n").contains("x.toml: sandbox.kubeconfig: \"kube.yaml\" is not a path from / or ~/"));
+        assert!(refused("[sandbox]\nkubeconfig = 1\n").contains("x.toml: sandbox.kubeconfig: must be a string"));
+        for kube in ["kubectl *", "/usr/local/bin/helm *"] {
+            assert!(refused(&format!("[sandbox]\nexcluded_commands = [\"{kube}\"]\n")).contains("outside the sandbox with your own cluster logins; set sandbox.kubeconfig"), "{kube}");
+        }
+        let team = crate::sh::test_dir("profile-kubeconfig-team");
+        std::fs::write(team.join("cluster.toml"), "[sandbox]\nkubeconfig = \"~/.kube/kebbie-ops.yaml\"\n").unwrap();
+        std::os::unix::fs::symlink(team.join("cluster.toml"), dir.join("cluster.toml")).unwrap();
+        assert!(load_in(&dir, "cluster").unwrap_err().contains("sandbox.kubeconfig: the profile file is a symlink"), "a repo's own file never picks the login");
+        std::fs::write(team.join("cluster.toml"), "model = \"opus\"\n").unwrap();
+        assert!(load_in(&dir, "cluster").is_ok(), "a linked profile without a kubeconfig loads as before");
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(team).unwrap();
     }
 }

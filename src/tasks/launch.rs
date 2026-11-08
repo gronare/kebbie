@@ -164,7 +164,12 @@ fn sandbox_said(on: bool, profile: &Profile) -> Option<String> {
         return Some(crate::sandbox::OFF.to_string());
     }
     let outside = &profile.sandbox.excluded;
-    (!outside.is_empty()).then(|| format!("{} run outside the sandbox in this task: they reach other machines, and this one as you", outside.join(", ")))
+    let ssh = (!outside.is_empty()).then(|| format!("{} run outside the sandbox in this task: they reach other machines, and this one as you", outside.join(", ")));
+    let kube = profile.sandbox.kubeconfig.as_deref().map(|kubeconfig| format!("kubectl and helm run outside the sandbox in this task with {kubeconfig} alone: what it may do in the cluster is what that login's RBAC allows"));
+    match (ssh, kube) {
+        (Some(ssh), Some(kube)) => Some(format!("{ssh}; {kube}")),
+        (ssh, kube) => ssh.or(kube),
+    }
 }
 
 fn task_profile(repo: &Path, given: Option<&str>, recorded: Option<&str>) -> Result<(Profile, Option<String>)> {
@@ -1441,5 +1446,8 @@ mod tests {
         assert!(sandbox_said(false, &task).unwrap().starts_with("off (task.sandbox = false)"));
         let ops = sandbox_said(true, &profiles::built_in(profiles::OPS).unwrap()).unwrap();
         assert_eq!(ops, "ssh *, scp *, rsync * run outside the sandbox in this task: they reach other machines, and this one as you");
+        let mut kube = task.clone();
+        kube.sandbox.kubeconfig = Some("~/.kube/kebbie-ops.yaml".to_string());
+        assert_eq!(sandbox_said(true, &kube).unwrap(), "kubectl and helm run outside the sandbox in this task with ~/.kube/kebbie-ops.yaml alone: what it may do in the cluster is what that login's RBAC allows");
     }
 }

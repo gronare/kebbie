@@ -296,7 +296,7 @@ pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Op
 
 pub(crate) const TMP_VARS: [&str; 4] = ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"];
 
-// A profile's rules go after kebbie's own, so kebbie's deny rules, hooks and env stay whatever the profile says; a profile that runs ssh keeps the user's ssh agent.
+// A profile's rules go after kebbie's own, so kebbie's deny rules, hooks and env stay whatever the profile says; a profile that runs ssh keeps the user's ssh agent, and one with a kubeconfig points kubectl and helm at it while Claude's file tools stay out of it.
 pub(crate) fn with_profile(settings: &str, profile: &Profile) -> String {
     let mut written: Value = serde_json::from_str(settings).expect("kebbie writes its own task settings as JSON");
     for (key, rules) in [("deny", &profile.deny), ("allow", &profile.allow)] {
@@ -306,6 +306,12 @@ pub(crate) fn with_profile(settings: &str, profile: &Profile) -> String {
     }
     if profile.sandbox.runs_ssh() && let Some(env) = written["env"].as_object_mut() {
         env.remove(crate::push_block::SSH_AGENT);
+    }
+    if let Some(kubeconfig) = profile.sandbox.kubeconfig_file() {
+        written["env"][crate::sandbox::KUBECONFIG] = json!(kubeconfig.to_string_lossy());
+        if let Some(deny) = written["permissions"]["deny"].as_array_mut() {
+            deny.extend(["Read", "Edit"].map(|tool| json!(format!("{tool}(/{})", kubeconfig.display()))));
+        }
     }
     if !profile.plugins.is_empty() {
         written["enabledPlugins"] = profile.plugins.iter().map(|plugin| (plugin.clone(), json!(true))).collect::<serde_json::Map<_, _>>().into();
@@ -751,6 +757,31 @@ mod tests {
         let excluded = strings(&task_settings(Some(&ops.sandbox))["sandbox"]["excludedCommands"]);
         assert_eq!(excluded[..crate::sandbox::TASK_COMMANDS.len()], crate::sandbox::TASK_COMMANDS.map(|command| format!("/opt/kebbie/kebbie {command} *")));
         assert_eq!(excluded[crate::sandbox::TASK_COMMANDS.len()..], ["ssh *", "scp *", "rsync *"]);
+    }
+
+    #[test]
+    fn a_profile_with_a_kubeconfig_runs_kubectl_and_helm_outside_the_sandbox_on_that_file_while_the_shell_and_file_tools_stay_out_of_it() {
+        let task = crate::profiles::built_in(crate::profiles::TASK).unwrap();
+        let mut kube = crate::profiles::built_in(crate::profiles::OPS).unwrap();
+        kube.sandbox.kubeconfig = Some("/home/ada/.kube/kebbie-ops.yaml".to_string());
+        let written = |profile: &Profile, sandbox: bool| serde_json::from_str::<Value>(&super::super::Agent::Claude.task_settings("/k", "billing@app", None, Some(&dirs()), profile, sandbox)).unwrap();
+        for sandbox in [true, false] {
+            let plain = written(&task, sandbox);
+            assert!(plain["env"].get("KUBECONFIG").is_none() && !strings(&plain["permissions"]["deny"]).iter().any(|rule| rule.contains(".kube")), "a task without one has no cluster: {}", plain["env"]);
+            let ops = written(&kube, sandbox);
+            assert_eq!(ops["env"]["KUBECONFIG"], "/home/ada/.kube/kebbie-ops.yaml", "kubectl and helm read the profile's file alone");
+            let deny = strings(&ops["permissions"]["deny"]);
+            assert!(deny.contains(&"Read(//home/ada/.kube/kebbie-ops.yaml)".to_string()) && deny.contains(&"Edit(//home/ada/.kube/kebbie-ops.yaml)".to_string()), "Claude's file tools neither read the login nor rewrite it: {deny:?}");
+        }
+        let sandboxed = &written(&kube, true)["sandbox"];
+        let excluded = strings(&sandboxed["excludedCommands"]);
+        assert!(excluded.ends_with(&["ssh *".to_string(), "scp *".to_string(), "rsync *".to_string(), "kubectl *".to_string(), "helm *".to_string()]), "{excluded:?}");
+        assert!(excluded_matches("kubectl *", "kubectl get pods -n web") && excluded_matches("helm *", "helm list"));
+        let unread = strings(&sandboxed["filesystem"]["denyRead"]);
+        assert!(unread.contains(&"~/.kube".to_string()) && unread.contains(&"/home/ada/.kube/kebbie-ops.yaml".to_string()), "the rest of ~/.kube and the login itself stay out of the sandboxed shell, wherever the file is: {unread:?}");
+        assert!(strings(&sandboxed["filesystem"]["denyWrite"]).contains(&"/home/ada/.kube/kebbie-ops.yaml".to_string()), "the shell cannot rewrite the login");
+        let plain = strings(&written(&task, true)["sandbox"]["excludedCommands"]);
+        assert!(!plain.iter().any(|entry| entry.starts_with("kubectl") || entry.starts_with("helm")), "{plain:?}");
     }
 
     #[test]

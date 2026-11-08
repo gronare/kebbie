@@ -339,7 +339,7 @@ fn permission_profile(policy: &crate::sandbox::Policy, git_dir: Option<&Path>, m
     entries.extend(policy.writes().into_iter().filter(|path| path.starts_with('/') || path.starts_with("~/")).map(|path| access(path, "write")));
     entries.extend(commit_roots(git_dir).iter().map(|root| access(root.to_string_lossy().to_string(), "write")));
     entries.extend(git_run_as_user(git_dir).iter().map(|path| access(path.to_string_lossy().to_string(), "read")));
-    entries.extend(crate::sandbox::Protected::here().secrets().into_iter().map(|path| access(path, "deny")));
+    entries.extend(crate::sandbox::Protected::here().secrets().into_iter().chain(policy.kubeconfig_file().map(|file| file.to_string_lossy().to_string())).map(|path| access(path, "deny")));
     let domains: Vec<String> = policy.domains().iter().map(|domain| access(domain.clone(), "allow")).collect();
     let network = if domains.is_empty() { "{enabled=false}".to_string() } else { format!("{{enabled=true,allow_local_binding={mac},domains={{{}}}}}", domains.join(",")) };
     format!("permissions.{PERMISSIONS}={{filesystem={{{}}},network={network}}}", entries.join(","))
@@ -359,9 +359,10 @@ pub fn writable_roots_in(config: &toml::Table) -> Vec<String> {
 }
 
 // The commands Codex runs get the push block and the task's address, which also names the task to kebbie's caller check.
-fn env_override(address: &str, tmp: Option<&Path>, ssh_agent: bool) -> String {
-    let mut set = crate::push_block::env_vars(ssh_agent);
+fn env_override(address: &str, tmp: Option<&Path>, policy: &crate::sandbox::Policy) -> String {
+    let mut set = crate::push_block::env_vars(policy.runs_ssh());
     set.push((TASK_VAR.to_string(), address.to_string()));
+    set.extend(policy.kubeconfig_file().map(|kubeconfig| (crate::sandbox::KUBECONFIG.to_string(), kubeconfig.to_string_lossy().to_string())));
     if let Some(tmp) = tmp {
         set.push(("TMPDIR".to_string(), tmp.to_string_lossy().to_string()));
     }
@@ -382,7 +383,7 @@ pub(crate) fn start_args(mode: Option<&str>, profile: &Profile, files: &super::T
     if let Some(effort) = &profile.effort {
         args.extend(["-c".to_string(), format!("model_reasoning_effort={}", toml_string(effort))]);
     }
-    args.extend(["-c".to_string(), env_override(files.address, files.tmp, profile.sandbox.runs_ssh())]);
+    args.extend(["-c".to_string(), env_override(files.address, files.tmp, &profile.sandbox)]);
     args.extend(files.hidden.iter().cloned());
     args.extend(plugin_args());
     if let Session::Resume(id) = session {
@@ -966,6 +967,21 @@ mod tests {
             let (ops_set, task_set) = (set(&ops), set(&profile(None, None)));
             assert!(!ops_set.contains("SSH_AUTH_SOCK") && task_set.contains("SSH_AUTH_SOCK=\"\""), "ops inherits Codex's own agent socket, a plain task gets it emptied: {ops_set}");
             assert!(ops_set.contains("GH_TOKEN=\"\"") && ops_set.contains("GIT_ASKPASS=\"false\"") && ops_set.contains("\"credential.helper\"") && ops_set.contains("\"url.kebbie-blocks-push://.pushInsteadOf\""), "every other login stays dropped and the push rewrite stays: {ops_set}");
+        }
+    }
+
+    #[test]
+    fn a_codex_task_whose_profile_names_a_kubeconfig_gets_it_as_kubeconfig_and_its_shell_still_reads_none_of_it() {
+        let mut kube = profile(None, None);
+        kube.sandbox.kubeconfig = Some("/etc/kebbie/deploy.yaml".to_string());
+        for sandboxed in [true, false] {
+            let set = |profile: &Profile| value_of(&start_args(None, profile, &files(sandboxed, Some(Path::new(TMP)), &[]), &Session::New("ignored".to_string())), "shell_environment_policy.set").concat();
+            assert!(set(&kube).contains("KUBECONFIG=\"/etc/kebbie/deploy.yaml\"") && !set(&profile(None, None)).contains("KUBECONFIG"), "{}", set(&kube));
+        }
+        let args = start_args(None, &kube, &files(true, Some(Path::new(TMP)), &[]), &Session::New("x".to_string()));
+        let filesystem = toml_value(value_of(&args, "permissions.kebbie-task")[0])["filesystem"].as_table().unwrap().clone();
+        for denied in ["~/.kube", "/etc/kebbie/deploy.yaml"] {
+            assert_eq!(filesystem.get(denied).and_then(toml::Value::as_str), Some("deny"), "{denied}: {filesystem:?}");
         }
     }
 

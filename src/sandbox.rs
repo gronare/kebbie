@@ -9,6 +9,8 @@ pub const TASK_COMMANDS: [&str; 10] = ["peers", "tell", "ask", "report", "steps"
 pub const DOMAINS: [&str; 8] = ["crates.io", "static.crates.io", "index.crates.io", "registry.npmjs.org", "github.com", "objects.githubusercontent.com", "pypi.org", "files.pythonhosted.org"];
 pub const WRITES: [&str; 4] = ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache"];
 pub const OPS_COMMANDS: [&str; 3] = ["ssh *", "scp *", "rsync *"];
+pub const KUBE_COMMANDS: [&str; 2] = ["kubectl *", "helm *"];
+pub const KUBECONFIG: &str = "KUBECONFIG";
 const SHELL_FILES: [&str; 11] = ["~/.zshrc", "~/.zshenv", "~/.zprofile", "~/.zlogin", "~/.zlogout", "~/.bashrc", "~/.bash_profile", "~/.bash_login", "~/.bash_logout", "~/.profile", "~/.config/fish/**"];
 const HOSTS: [&str; 5] = ["kebbie", "herdr", "tmux", "screen", "zellij"];
 
@@ -18,6 +20,7 @@ pub struct Policy {
     pub domains: Option<Vec<String>>,
     pub writes: Option<Vec<String>>,
     pub excluded: Vec<String>,
+    pub kubeconfig: Option<String>,
 }
 
 impl Policy {
@@ -37,10 +40,16 @@ impl Policy {
     pub fn runs_ssh(&self) -> bool {
         self.excluded.iter().any(|entry| OPS_COMMANDS.iter().any(|ops| program(ops) == program(entry)))
     }
+
+    // The one kubeconfig a profile's kubectl and helm read, from ~ or /; none means the task reaches no cluster.
+    pub fn kubeconfig_file(&self) -> Option<PathBuf> {
+        self.kubeconfig.as_deref().and_then(crate::config::skill_path)
+    }
 }
 
 pub fn excluded(kebbie: &str, policy: &Policy) -> Vec<String> {
-    TASK_COMMANDS.iter().map(|command| format!("{kebbie} {command} *")).chain(policy.excluded.iter().cloned()).collect()
+    let kube = policy.kubeconfig_file().map(|_| KUBE_COMMANDS.map(str::to_string).to_vec()).unwrap_or_default();
+    TASK_COMMANDS.iter().map(|command| format!("{kebbie} {command} *")).chain(policy.excluded.iter().cloned()).chain(kube).collect()
 }
 
 // A task's worktree, the worktree's own git dir and its temp folder.
@@ -123,11 +132,16 @@ pub fn block(kebbie: &str, policy: &Policy, dirs: Option<&TaskDirs>, mac: bool) 
         denied.extend(git_pointers(dirs).iter().chain([&dirs.git_dir().join("kebbie-hooks")]).map(|path| path.display().to_string()));
         denied.extend(sibling_git_dirs(dirs).iter().map(|dir| dir.display().to_string()));
     }
+    let mut unread = Protected::here().secrets();
+    if let Some(kubeconfig) = policy.kubeconfig_file() {
+        denied.push(kubeconfig.display().to_string());
+        unread.push(kubeconfig.display().to_string());
+    }
     json!({
         "enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true,
         "excludedCommands": excluded(kebbie, policy),
         "network": network,
-        "filesystem": { "allowWrite": writes, "denyWrite": denied, "denyRead": Protected::here().secrets() },
+        "filesystem": { "allowWrite": writes, "denyWrite": denied, "denyRead": unread },
     })
 }
 
@@ -365,6 +379,9 @@ pub fn excluded_refusal(entry: &str) -> Option<String> {
     let name = program.rsplit('/').next().unwrap_or(program);
     if program.is_empty() || program.contains('*') || HOSTS.contains(&name) {
         return Some(format!("\"{entry}\" would run {} outside the sandbox, where a task can pass as you; name the command that needs it", if program.is_empty() || program.contains('*') { "any command" } else { name }));
+    }
+    if KUBE_COMMANDS.iter().any(|kube| self::program(kube) == name) {
+        return Some(format!("\"{entry}\" would run {name} outside the sandbox with your own cluster logins; set sandbox.kubeconfig to the one kubeconfig its tasks may use, and kebbie runs kubectl and helm outside the sandbox with it"));
     }
     None
 }
