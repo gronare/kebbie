@@ -45,6 +45,7 @@ mod profile_wizard;
 mod profiles;
 mod push_block;
 mod push_guard;
+mod kube_guard;
 mod questions;
 mod recipe;
 mod recover;
@@ -659,7 +660,7 @@ fn run(arguments: &Arguments) -> Result<String> {
                 return Ok(arguments.positional(2).map(|address| task_note::hook(address, &input)).unwrap_or_default());
             }
             if name == Some("push-guard") {
-                return Ok(push_guard::hook(&input));
+                return Ok(push_guard::hook(&input, kube_guard::Cluster::flagged(arguments.flag("--kube"), arguments.flag("--own-cluster"))));
             }
             if name == Some("codex") {
                 return Ok(agent::codex::hook(&input));

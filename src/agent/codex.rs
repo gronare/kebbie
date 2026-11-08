@@ -830,10 +830,10 @@ pub fn end(pane: &str) -> Result<()> {
 pub fn hook(input: &str) -> String {
     let value: Value = serde_json::from_str(input).unwrap_or_default();
     let cwd = value["cwd"].as_str().map(PathBuf::from).or_else(|| std::env::current_dir().ok());
-    let Some(me) = cwd.and_then(|cwd| crate::peers::me(&cwd)).filter(|me| me != crate::status::LEAD_LABEL) else { return String::new() };
+    let Some(me) = cwd.as_deref().and_then(crate::peers::me).filter(|me| me != crate::status::LEAD_LABEL) else { return String::new() };
     match value["hook_event_name"].as_str() {
         Some("SessionStart") => session_start(&me, &value, crate::lead::roles_dir().ok().as_deref()),
-        Some("PreToolUse") => crate::push_guard::hook(input),
+        Some("PreToolUse") => crate::push_guard::hook(input, cwd.as_deref().map_or(crate::kube_guard::Cluster::None, crate::tasks::cluster_at)),
         Some("UserPromptSubmit" | "Stop") => {
             let _ = crate::messages::flush();
             crate::report::hook(input)

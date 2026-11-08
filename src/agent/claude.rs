@@ -307,6 +307,13 @@ pub(crate) fn with_profile(settings: &str, profile: &Profile) -> String {
     if profile.sandbox.runs_ssh() && let Some(env) = written["env"].as_object_mut() {
         env.remove(crate::push_block::SSH_AGENT);
     }
+    if let Some(flag) = crate::kube_guard::Cluster::of(&profile.sandbox, written.get("sandbox").is_some()).flag() {
+        for guard in written["hooks"]["PreToolUse"].as_array_mut().into_iter().flatten().flat_map(|entry| entry["hooks"].as_array_mut().into_iter().flatten()) {
+            if let Some(command) = guard["command"].as_str().filter(|command| command.ends_with(" hook push-guard")) {
+                guard["command"] = json!(format!("{command} {flag}"));
+            }
+        }
+    }
     if let Some(kubeconfig) = profile.sandbox.kubeconfig_file() {
         written["env"][crate::sandbox::KUBECONFIG] = json!(kubeconfig.to_string_lossy());
         if let Some(deny) = written["permissions"]["deny"].as_array_mut() {

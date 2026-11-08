@@ -7,14 +7,22 @@ const PUSHING: [&str; 4] = ["push", "send-pack", "http-push", "receive-pack"];
 // git's global options that take the next word as their value when written without `=`.
 const GIT_VALUED: [&str; 8] = ["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix", "--attr-source"];
 
-// The words of one shell command line, split into simple commands; a $(…) or `…` inside double quotes is a command line of its own.
-fn commands(line: &str) -> Vec<Vec<String>> {
-    let mut found: Vec<Vec<String>> = vec![Vec::new()];
+#[derive(Default)]
+struct Parsed {
+    words: Vec<String>,
+    redirects: Vec<String>,
+}
+
+// The words of one shell command line, split into simple commands, each with the files its redirects name; a $(…) or `…` inside double quotes is a command line of its own.
+fn commands(line: &str) -> Vec<Parsed> {
+    let mut found: Vec<Parsed> = vec![Parsed::default()];
     let mut word: Option<String> = None;
+    let mut redirect = false;
     let mut chars = line.chars().peekable();
-    let end_word = |found: &mut Vec<Vec<String>>, word: &mut Option<String>| {
+    let end_word = |found: &mut Vec<Parsed>, word: &mut Option<String>, redirect: &mut bool| {
         if let Some(done) = word.take() {
-            found.last_mut().unwrap().push(done);
+            let last = found.last_mut().unwrap();
+            if std::mem::take(redirect) { last.redirects.push(done) } else { last.words.push(done) }
         }
     };
     while let Some(character) = chars.next() {
@@ -53,18 +61,22 @@ fn commands(line: &str) -> Vec<Vec<String>> {
                     word.get_or_insert_with(String::new).push(next);
                 }
             }
-            ';' | '&' | '|' | '\n' | '(' | ')' | '`' | '{' | '}' | '<' | '>' => {
-                end_word(&mut found, &mut word);
-                if !matches!(character, '<' | '>') {
-                    found.push(Vec::new());
-                }
+            '<' | '>' => {
+                end_word(&mut found, &mut word, &mut redirect);
+                redirect = true;
             }
-            space if space.is_whitespace() => end_word(&mut found, &mut word),
+            '&' if redirect && word.is_none() || chars.peek() == Some(&'>') => {}
+            ';' | '&' | '|' | '\n' | '(' | ')' | '`' | '{' | '}' => {
+                end_word(&mut found, &mut word, &mut redirect);
+                redirect = false;
+                found.push(Parsed::default());
+            }
+            space if space.is_whitespace() => end_word(&mut found, &mut word, &mut redirect),
             other => word.get_or_insert_with(String::new).push(other),
         }
     }
-    end_word(&mut found, &mut word);
-    found.retain(|command| !command.is_empty());
+    end_word(&mut found, &mut word, &mut redirect);
+    found.retain(|command| !command.words.is_empty() || !command.redirects.is_empty());
     found
 }
 
@@ -84,11 +96,11 @@ fn until_close(chars: &mut std::iter::Peekable<std::str::Chars>, open: char, clo
     inner
 }
 
-fn base(word: &str) -> &str {
+pub(crate) fn base(word: &str) -> &str {
     word.rsplit('/').next().unwrap_or(word)
 }
 
-fn assignment(word: &str) -> bool {
+pub(crate) fn assignment(word: &str) -> bool {
     word.split_once('=').is_some_and(|(name, _)| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit()))
 }
 
@@ -127,39 +139,51 @@ fn pushes_git(words: &[String]) -> bool {
     }
 }
 
-fn pushes_words(words: &[String]) -> bool {
-    let words = program(words);
+// One simple command a line runs: the assignments and wrappers before its program, the program with its arguments, and the files its redirects name.
+pub(crate) struct Simple {
+    pub before: Vec<String>,
+    pub words: Vec<String>,
+    pub redirects: Vec<String>,
+}
+
+// Every simple command of a line, with the lines an eval or a shell's -c runs taken in as their own.
+pub(crate) fn simple_commands(line: &str) -> Vec<Simple> {
+    let mut found = Vec::new();
+    for Parsed { words, redirects } in commands(line) {
+        let rest = program(&words);
+        let before = words[..words.len() - rest.len()].to_vec();
+        match rest.first().map(|first| base(first)) {
+            Some("eval") => found.extend(simple_commands(&rest[1..].join(" "))),
+            Some(shell) if SHELLS.contains(&shell) => {
+                let script = rest.iter().position(|word| word.starts_with('-') && !word.starts_with("--") && word.contains('c')).and_then(|at| rest.get(at + 1));
+                found.extend(script.map(|script| simple_commands(script)).unwrap_or_default());
+            }
+            _ => {}
+        }
+        found.push(Simple { before, words: rest.to_vec(), redirects });
+    }
+    found
+}
+
+fn pushes_program(words: &[String]) -> bool {
     let Some(first) = words.first() else { return false };
     let name = base(first);
-    if name == "git" {
-        return pushes_git(words);
-    }
-    if PUSHING.iter().any(|command| name == format!("git-{command}")) {
-        return true;
-    }
-    if name == "eval" {
-        return pushes(&words[1..].join(" "));
-    }
-    if SHELLS.contains(&name) {
-        let script = words.iter().position(|word| word.starts_with('-') && !word.starts_with("--") && word.contains('c')).and_then(|at| words.get(at + 1));
-        return script.is_some_and(|script| pushes(script));
-    }
-    false
+    name == "git" && pushes_git(words) || PUSHING.iter().any(|command| name == format!("git-{command}"))
 }
 
 // Whether a shell command line runs git push, in the forms a shell reaches it by: behind env, command or a shell's -c, after git's own options, or through an alias set on the command line.
 pub fn pushes(line: &str) -> bool {
-    commands(line).iter().any(|words| pushes_words(words))
+    simple_commands(line).iter().any(|command| pushes_program(&command.words))
 }
 
-// The PreToolUse hook on a task's shell commands, Claude's and Codex's alike.
-pub fn hook(input: &str) -> String {
+// The PreToolUse hook on a task's shell commands, Claude's and Codex's alike; cluster says what the task's kubectl and helm may reach.
+pub fn hook(input: &str, cluster: crate::kube_guard::Cluster) -> String {
     let input: Value = serde_json::from_str(input).unwrap_or_default();
     let shell = input["tool_name"].as_str().is_none_or(|tool| tool == "Bash" || tool == "exec_command" || tool == "shell");
-    match input["tool_input"]["command"].as_str() {
-        Some(command) if shell && pushes(command) => json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": REASON } }).to_string(),
-        _ => String::new(),
-    }
+    let Some(command) = input["tool_input"]["command"].as_str().filter(|_| shell) else { return String::new() };
+    let within = crate::kube_guard::within(input["cwd"].as_str().map(std::path::Path::new));
+    let reason = if pushes(command) { Some(REASON.to_string()) } else { crate::kube_guard::refusal(command, cluster, &within) };
+    reason.map(|reason| json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason } }).to_string()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -179,7 +203,7 @@ mod tests {
             "cd /src/app\ngit push", "true | sh -c 'git push'",
         ] {
             assert!(pushes(line), "{line:?} gets through");
-            let decision: Value = serde_json::from_str(&hook(&json!({ "tool_name": "Bash", "tool_input": { "command": line } }).to_string())).unwrap();
+            let decision: Value = serde_json::from_str(&hook(&json!({ "tool_name": "Bash", "tool_input": { "command": line } }).to_string(), crate::kube_guard::Cluster::None)).unwrap();
             assert_eq!(decision["hookSpecificOutput"]["permissionDecision"], "deny", "{line:?}");
         }
     }
@@ -196,7 +220,7 @@ mod tests {
             assert_eq!(settings["env"][name], value, "{name}: the shell has no login");
         }
         let ops: Value = serde_json::from_str(&crate::agent::Agent::Claude.task_settings("/k", "billing@app", None, None, &crate::profiles::built_in(crate::profiles::OPS).unwrap(), false)).unwrap();
-        assert!(ops["env"].get(crate::push_block::SSH_AGENT).is_none() && ops["env"]["GH_TOKEN"] == "" && ops["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "'/k' hook push-guard", "an ops task keeps the ssh agent, drops the token and meets the guard: {ops}");
+        assert!(ops["env"].get(crate::push_block::SSH_AGENT).is_none() && ops["env"]["GH_TOKEN"] == "" && ops["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "'/k' hook push-guard --own-cluster", "an unsandboxed ops task keeps the ssh agent, drops the token and meets the guard: {ops}");
     }
 
     #[test]
@@ -207,9 +231,9 @@ mod tests {
             "kebbie report --state ready --next 'review, then push' 'Done'", "git worktree list", "rg \"git push\" src", "git -C /src/app log", "npm run push-docs", "git remote -v",
         ] {
             assert!(!pushes(line), "{line:?} is refused");
-            assert_eq!(hook(&json!({ "tool_name": "Bash", "tool_input": { "command": line } }).to_string()), "", "{line:?}");
+            assert_eq!(hook(&json!({ "tool_name": "Bash", "tool_input": { "command": line } }).to_string(), crate::kube_guard::Cluster::None), "", "{line:?}");
         }
-        assert_eq!(hook(&json!({ "tool_name": "Edit", "tool_input": { "file_path": "/src/a.rs", "command": "git push" } }).to_string()), "", "only shell commands");
-        assert_eq!(hook("not json"), "");
+        assert_eq!(hook(&json!({ "tool_name": "Edit", "tool_input": { "file_path": "/src/a.rs", "command": "git push" } }).to_string(), crate::kube_guard::Cluster::None), "", "only shell commands");
+        assert_eq!(hook("not json", crate::kube_guard::Cluster::None), "");
     }
 }

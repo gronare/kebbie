@@ -161,7 +161,8 @@ fn sandboxed(configured: bool, profile: &Profile, missing: impl FnOnce() -> Vec<
 
 fn sandbox_said(on: bool, profile: &Profile) -> Option<String> {
     if !on {
-        return Some(crate::sandbox::OFF.to_string());
+        let kube = profile.sandbox.kubeconfig.as_deref().map_or("kubectl and helm run with your own cluster logins".to_string(), |kubeconfig| format!("kubectl and helm run with {kubeconfig}"));
+        return Some(format!("{}; {kube}", crate::sandbox::OFF));
     }
     let outside = &profile.sandbox.excluded;
     let ssh = (!outside.is_empty()).then(|| format!("{} run outside the sandbox in this task: they reach other machines, and this one as you", outside.join(", ")));
@@ -169,6 +170,18 @@ fn sandbox_said(on: bool, profile: &Profile) -> Option<String> {
     match (ssh, kube) {
         (Some(ssh), Some(kube)) => Some(format!("{ssh}; {kube}")),
         (ssh, kube) => ssh.or(kube),
+    }
+}
+
+// What the task at cwd's kubectl and helm may reach, for Codex's hook, whose command line carries no flag of the task's.
+pub(crate) fn cluster_at(cwd: &Path) -> crate::kube_guard::Cluster {
+    let none = crate::kube_guard::Cluster::None;
+    let Some((repo, slot)) = task_at(cwd) else { return none };
+    let task = slot.task.unwrap_or_default();
+    let Ok(configured) = config::resolve(Some(&repo)).map(|loaded| loaded.settings.sandbox.value) else { return none };
+    match task_profile(&repo, None, recorded_session(&task, &repo).profile.as_deref()) {
+        Ok((profile, None)) => crate::kube_guard::Cluster::of(&profile.sandbox, profile.sandbox.on(configured)),
+        _ => none,
     }
 }
 
@@ -1393,9 +1406,11 @@ mod tests {
             name: "designer".to_string(), model: Some("opus".to_string()), effort: Some("high".to_string()), permission_mode: Some("acceptEdits".to_string()),
             deny: vec!["Bash(rm -rf:*)".to_string()], allow: vec!["Bash(npx playwright:*)".to_string()], plugins: vec!["design@claude-plugins".to_string()], ..task.clone()
         };
-        let plain: Value = serde_json::from_str(&crate::inbox::with_inbox(&settings("/bin/kebbie", "billing@app", Some("billing@app"), None, None), "/bin/kebbie", "billing@app")).unwrap();
+        let mut plain: Value = serde_json::from_str(&crate::inbox::with_inbox(&settings("/bin/kebbie", "billing@app", Some("billing@app"), None, None), "/bin/kebbie", "billing@app")).unwrap();
         let ours: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", Some("billing@app"), None, &task, false)).unwrap();
-        assert_eq!(ours, plain, "the built-in task's settings are kebbie's own, nothing added");
+        assert_eq!(ours["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kebbie' hook push-guard --own-cluster", "an unsandboxed task's kubectl is the user's own");
+        plain["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = json!("'/bin/kebbie' hook push-guard --own-cluster");
+        assert_eq!(ours, plain, "the built-in task's settings are kebbie's own, nothing else added");
         assert_eq!((&ours["crossSessionInbound"], &ours["hooks"]["SessionStart"][0]["hooks"][0]["command"]), (&json!("accept"), &json!("'/bin/kebbie' hook inbox 'billing@app'")), "a task takes kebbie's messages in its inbox, whatever its permission mode");
         let written: Value = serde_json::from_str(&Agent::Claude.task_settings("/bin/kebbie", "billing@app", Some("billing@app"), None, &designer, false)).unwrap();
         let deny = written["permissions"]["deny"].as_array().unwrap();
@@ -1443,7 +1458,7 @@ mod tests {
     fn the_start_says_when_the_sandbox_is_off_and_what_a_profile_runs_outside_it() {
         let task = profiles::built_in(profiles::TASK).unwrap();
         assert_eq!(sandbox_said(true, &task), None);
-        assert!(sandbox_said(false, &task).unwrap().starts_with("off (task.sandbox = false)"));
+        assert!(sandbox_said(false, &task).unwrap().starts_with("off (task.sandbox = false)") && sandbox_said(false, &task).unwrap().ends_with("; kubectl and helm run with your own cluster logins"), "{:?}", sandbox_said(false, &task));
         let ops = sandbox_said(true, &profiles::built_in(profiles::OPS).unwrap()).unwrap();
         assert_eq!(ops, "ssh *, scp *, rsync * run outside the sandbox in this task: they reach other machines, and this one as you");
         let mut kube = task.clone();
