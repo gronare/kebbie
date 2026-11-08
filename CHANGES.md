@@ -28,6 +28,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Rewording a task's commit waits for kebbie's other rebase of its worktree, and gets past another git's index.lock.
 - The board's report window sends the bugs you read, even when a new or edited bug arrives while it is open.
 - A bug goes to kebbie's maintainers once, even when two batches or the board and kebbie issue report send at the same time.
+- A bug the endpoint took stays sent when saving its issue fails, and is never offered again.
 
 ## 0.36.0
 

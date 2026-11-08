@@ -333,7 +333,7 @@ pub fn offers(state: &Path, enabled: bool) -> Vec<Issue> {
     if !enabled {
         return Vec::new();
     }
-    issues::load(&issues::dir(state)).into_iter().filter(offered).collect()
+    sent_known(state, issues::load(&issues::dir(state))).into_iter().filter(offered).collect()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -408,14 +408,43 @@ fn attempt(state: &Path, issue: &mut Issue, report: BugReport, url: &str, now: u
     let upload = ReportUpload { signature: Bytes64(key.sign(&challenge.nonce.0, &report)), key: Bytes32(key.public()), report, challenge, counter };
     let accepted: ReportAccepted = client.post("/v1/reports", &upload).map_err(refused)?;
     let id = accepted.report.to_string();
+    let ledgered = record_sent(state, &issue.id, &id);
     issue.report = Some(id.clone());
     issue.sent = Some(issues::today(now));
-    issues::save(&issues::dir(state), issue)?;
+    if let Err(error) = issues::save(&issues::dir(state), issue) {
+        let kept = if ledgered.is_ok() { "kebbie will not send it again" } else { "kebbie could not record that either, so do not send it again" };
+        return Err(Refused::Other(format!("Bug {} went to kebbie's maintainers as report {id}, but saving the issue failed ({error}); {kept}", issue.id)));
+    }
     let _ = crate::messages::log_for_user_in(state, &sent_line(&id, &issue.id, &title), SENT_KIND);
     Ok(id)
 }
 
 pub const SENT_KIND: &str = "report-sent";
+const LEDGER: &str = "sent";
+
+// Appended the moment the hub takes a report, apart from the issue file, so a failed save of the issue never offers the bug again.
+fn record_sent(state: &Path, issue: &str, report: &str) -> Result<()> {
+    let path = dir(state).join(LEDGER);
+    crate::state::append_to(&path).and_then(|mut file| writeln!(file, "{issue} {report}")).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn sent_ledger(state: &Path) -> std::collections::HashMap<String, String> {
+    std::fs::read_to_string(dir(state).join(LEDGER)).unwrap_or_default().lines()
+        .filter_map(|line| line.split_once(' ')).map(|(issue, report)| (issue.to_string(), report.trim().to_string())).collect()
+}
+
+fn sent_known(state: &Path, mut all: Vec<Issue>) -> Vec<Issue> {
+    let ledger = sent_ledger(state);
+    for issue in all.iter_mut().filter(|issue| issue.report.is_none()) {
+        issue.report = ledger.get(&issue.id).cloned();
+    }
+    all
+}
+
+fn find_sent(state: &Path, id: &str) -> Result<Issue> {
+    let issue = issues::find(&issues::dir(state), id)?;
+    Ok(sent_known(state, vec![issue]).remove(0))
+}
 
 // Held from a bug's last read to its report id being saved, so two sends on this machine never post the same bug.
 struct SendLock(std::fs::File);
@@ -460,7 +489,7 @@ impl Skip {
 
 // The bug as it stands now, if it is still the one the user read and nothing has sent it.
 fn ready(state: &Path, id: &str, read: &[u8; 32], scrub: &Scrub) -> std::result::Result<(Issue, BugReport), Skip> {
-    let issue = issues::find(&issues::dir(state), id).map_err(Skip::Missing)?;
+    let issue = find_sent(state, id).map_err(Skip::Missing)?;
     if let Some(report) = &issue.report {
         return Err(Skip::Already(report.clone()));
     }
@@ -669,7 +698,7 @@ pub fn send_unasked_in(state: &Path, text: crate::config::ReportText, url: &str,
     let mut notes = Vec::new();
     for waited in waiting {
         let _lock = SendLock::take(state)?;
-        let Some(mut issue) = issues::find(&issues::dir(state), &waited.id).ok().filter(offered) else { continue };
+        let Some(mut issue) = find_sent(state, &waited.id).ok().filter(offered) else { continue };
         let report = payload(&issue, &scrub);
         let sent = deliver(state, &mut issue, report, url, now)?;
         notes.push(format!("reports: sent bug {} to kebbie's maintainers as report {sent}, as [report] text = \"always\" says", issue.id));
@@ -738,7 +767,7 @@ pub fn cli_all() -> Result<String> {
     crate::permit::user_only_as(&caller, "Sending reports to kebbie's maintainers")?;
     let state = crate::lead::state_dir()?;
     let settings = crate::config::report_settings()?;
-    let all = issues::load(&issues::dir(&state));
+    let all = sent_known(&state, issues::load(&issues::dir(&state)));
     let waiting: Vec<&Issue> = all.iter().filter(|issue| offered(issue)).collect();
     let already: Vec<String> = all.iter().filter(|issue| issue.is_open() && issue.kind == "bug" && issue.source.is_none()).filter_map(|issue| issue.report.as_ref().map(|report| format!("{} as report {report}", issue.id))).collect();
     let kept: Vec<&str> = all.iter().filter(|issue| left_out(issue)).map(|issue| issue.id.as_str()).collect();
@@ -1039,6 +1068,29 @@ mod tests {
         drop(held);
         let refused = send.join().unwrap().unwrap_err();
         assert!(refused.contains("went to kebbie's maintainers already, as report 7"), "{refused}");
+    }
+
+    #[test]
+    fn a_report_the_hub_took_is_not_offered_or_sent_again_when_saving_the_issue_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let state = crate::sh::test_dir("report-save-failed");
+        let dir = issues::dir(&state);
+        issues::save(&dir, &bug("t", "it broke")).unwrap();
+        let read = payload(&issues::find(&dir, "a1b2c3").unwrap(), &scrub()).digest();
+        install_key(&state).unwrap();
+        let (url, seen) = counting_endpoint(0);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let failed = send_in(&state, &Caller::User, "a1b2c3", &url, &scrub(), &read, NOW);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let failed = failed.unwrap_err();
+        assert!(failed.contains("went to kebbie's maintainers as report 1, but saving the issue failed"), "{failed}");
+        assert!(issues::find(&dir, "a1b2c3").unwrap().report.is_none(), "the issue file itself was not saved");
+        assert!(offers(&state, true).is_empty(), "it is not offered again");
+        let again = send_in(&state, &Caller::User, "a1b2c3", &url, &scrub(), &read, NOW).unwrap_err();
+        assert!(again.contains("already, as report 1"), "{again}");
+        let batch = send_all_in(&state, &Caller::User, &[("a1b2c3".to_string(), read)], &url, &scrub(), &Pace { clock: &std::time::Instant::now, wait: &|_| {}, say: &|_| {} }, NOW).unwrap();
+        assert_eq!(batch.already, [("a1b2c3".to_string(), "1".to_string())]);
+        assert_eq!(seen.lock().unwrap().1, 1, "posted once");
     }
 
     #[test]
