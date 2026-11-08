@@ -21,6 +21,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Queued pushes stay in line while git cannot read a free worktree or list the repo's worktrees, instead of being dropped as gone.
 - A task kebbie pushed that waited for its note tells the lead it is done, no longer that it landed outside kebbie's push.
 - kebbie doctor --fix and kebbie update install the push block again in a worktree whose hooksPath is not kebbie's.
+- A comment fix whose reading has no subject gets one the fixing task writes from its change, never a stock "Address …'s comment" line.
 - Rewording a task's commit waits for kebbie's other rebase of its worktree, and gets past another git's index.lock.
 
 ## 0.36.0

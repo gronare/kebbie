@@ -263,7 +263,7 @@ A narrow column drops the task, then the commit, from the row before it cuts wha
 | reply ready | `Fixed in 7c9e2f1, on the default branch` and `Reply to send`, as plain lines you can select in the terminal | `y Copy the reply (recommended)`, `d Mark it sent`, `w Edit the reply` |
 
 - Reopen tells the task that pushed the commit, while it runs, what to change and the commit message to use; once it has ended, a new task starts in the same repo, named `<task>-followup`, with that as its brief.
-- `w In my own words` reopens with what you type in place of the proposal, under the same commit message.
+- `w In my own words` reopens with what you type in place of the proposal, under the same commit message. When the reading has no commit subject, as for a question, the fixing task writes the subject and body from its change and ends them with the `Addresses` line.
 - The answer to a question goes to a fresh reading.
 - Once a commit carrying the `Addresses` line is on the default branch, the card turns to its reply, naming the fix's sha.
 - `y` copies with the clipboard program (`pbcopy`, `wl-copy` or `xclip`), or over ssh through the terminal (OSC 52).

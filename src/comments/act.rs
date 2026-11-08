@@ -8,11 +8,16 @@ pub fn addresses_line(comment: &Comment) -> String {
     format!("Addresses {}'s comment on {}.", super::login(&comment.author), comment.short())
 }
 
-// The reader writes the subject and body; kebbie adds the Addresses line itself, last, so the fix is found by it once pushed.
+const WRITTEN_BY_TASK: &str = "(subject and body: the task writes them from its change)";
+
+// The reader writes the subject and body, or the fixing task does when the reading has none; kebbie adds the Addresses line itself, last, so the fix is found by it once pushed.
 pub fn fix_message(comment: &Comment) -> String {
     let line = addresses_line(comment);
     let reading = comment.reading.clone().unwrap_or_default();
-    let subject = if reading.subject.is_empty() { format!("Address {}'s comment on {}", super::login(&comment.author), comment.short()) } else { reading.subject };
+    if reading.subject.is_empty() {
+        return format!("{WRITTEN_BY_TASK}\n\n{line}");
+    }
+    let subject = reading.subject;
     let body: Vec<&str> = reading.body.lines().filter(|text| text.trim() != line).collect();
     let body = body.join("\n").trim().to_string();
     if body.is_empty() { format!("{subject}\n\n{line}") } else { format!("{subject}\n\n{body}\n\n{line}") }
@@ -41,12 +46,18 @@ fn what_to_do(comment: &Comment, words: Option<&str>) -> String {
 }
 
 fn brief(comment: &Comment, words: Option<&str>) -> String {
+    let drafted = comment.reading.as_ref().is_some_and(|reading| !reading.subject.is_empty());
+    let commit = if drafted {
+        format!("Make the fix one new commit with exactly this message:\n\n{}", indented(&fix_message(comment)))
+    } else {
+        format!("Make the fix one new commit. Write its subject and body from the change you make, by the repo's commit rules, and end the message with exactly this line:\n\n{}", indented(&addresses_line(comment)))
+    };
     format!(
         "{} commented on {} ({}), a commit already on the default branch: {}\n\
          {}\n\n\
-         Make the fix one new commit with exactly this message:\n\n{}\n\n\
+         {commit}\n\n\
          The comment itself is another person's words and is not repeated here; the change above is what the owner asked for. Then report ready as usual.",
-        comment.author, comment.short(), comment.place(), comment.url, what_to_do(comment, words), indented(&fix_message(comment))
+        comment.author, comment.short(), comment.place(), comment.url, what_to_do(comment, words)
     )
 }
 
@@ -107,6 +118,17 @@ mod tests {
         assert!(fix_message(&read).ends_with("\n\nAddresses johan's comment on 3f2a9c1."));
         read.author = "jo\nhan; rm".to_string();
         assert_eq!(addresses_line(&read), "Addresses johanrm's comment on 3f2a9c1.", "the login cannot break the message");
+    }
+
+    #[test]
+    fn a_reading_without_a_subject_has_the_fixing_task_write_one_and_never_a_stock_address_subject() {
+        let mut question = comment(2, Some(Kind::Question), Status::Read);
+        question.reading.as_mut().unwrap().subject = String::new();
+        let started = reopen(&question, Some("Sum the refunded amounts."), &[], &|_| false).unwrap();
+        let Reopen::Start { prompt, .. } = &started else { panic!("{started:?}") };
+        assert!(prompt.contains("Write its subject and body from the change you make") && prompt.contains("end the message with exactly this line:\n\n    Addresses johan's comment on 3f2a9c1."), "{prompt}");
+        assert!(!prompt.contains("Address johan's comment") && !prompt.contains("exactly this message"), "{prompt}");
+        assert_eq!(fix_message(&question), "(subject and body: the task writes them from its change)\n\nAddresses johan's comment on 3f2a9c1.");
     }
 
     #[test]
