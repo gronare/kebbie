@@ -148,11 +148,39 @@ fn stash_index(repo: &Path, message: &str) -> Result<Option<usize>> {
     Ok(git(repo, &["stash", "list", "--format=%gs"])?.lines().position(|line| line.ends_with(message)))
 }
 
-pub(super) fn claim_slot(repo: &Path, upstream: &str) -> Result<Slot> {
-    match slots(repo)?.into_iter().find(|slot| slot.free) {
-        Some(slot) => Ok(slot),
-        None => create_slot(repo, upstream),
+// Held from finding a free slot until the new task's branch is on it, so two starts of one repo never take the same slot.
+pub(super) struct SlotLock(std::fs::File);
+
+impl SlotLock {
+    pub(super) fn take(repo: &Path) -> Result<SlotLock> {
+        use std::os::fd::AsRawFd;
+        let lock = PathBuf::from(git(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?).join("kebbie-slots.lock");
+        let file = crate::state::append_to(&lock).map_err(|error| format!("{}: {error}", lock.display()))?;
+        // SAFETY: flock on a descriptor this File owns.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(format!("{}: {}", lock.display(), std::io::Error::last_os_error()));
+        }
+        Ok(SlotLock(file))
     }
+}
+
+impl Drop for SlotLock {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+// A free slot, or a new one, with `onto` putting the task's branch on it before another start may look.
+pub(super) fn claim_slot(repo: &Path, upstream: &str, onto: impl FnOnce(&Slot) -> Result<()>) -> Result<Slot> {
+    let _alone = SlotLock::take(repo)?;
+    let slot = match slots(repo)?.into_iter().find(|slot| slot.free) {
+        Some(slot) => slot,
+        None => create_slot(repo, upstream)?,
+    };
+    onto(&slot)?;
+    Ok(slot)
 }
 
 pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, focus: bool) -> Result<String> {
@@ -196,9 +224,10 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
         }
     }
 
-    let slot = claim_slot(&repo, &upstream).map_err(stashed)?;
-    crate::push_block::warn_if_off(crate::push_block::install(&slot.path, &state_dir()?).map_err(stashed)?);
-    git_writing(&slot.path, &["switch", "--quiet", &task]).map_err(stashed)?;
+    let slot = claim_slot(&repo, &upstream, |slot| {
+        crate::push_block::warn_if_off(crate::push_block::install(&slot.path, &state_dir()?)?);
+        git_writing(&slot.path, &["switch", "--quiet", &task]).map(|_| ())
+    }).map_err(stashed)?;
     if let Some(index) = stash_index(&repo, &message)? {
         git_writing(&slot.path, &["stash", "pop", "--quiet", &format!("stash@{{{index}}}")]).map_err(stashed)?;
     }
@@ -325,6 +354,29 @@ mod tests {
         assert_eq!(file, state.join("started").join(format!("billing@{}", name_of(&dir))));
         assert!(file.parent().unwrap().starts_with(&state));
         cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_start_waits_for_another_start_of_the_repo_to_put_its_branch_on_the_slot_before_it_looks_for_a_free_one() {
+        let dir = repo();
+        let free = create_slot(&dir, "HEAD").unwrap();
+        let held = SlotLock::take(&dir).unwrap();
+        let second = std::thread::spawn({
+            let dir = dir.clone();
+            move || claim_slot(&dir, "HEAD", |slot| git(&slot.path, &["switch", "--quiet", "-c", "search"]).map(|_| ())).unwrap().path
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!second.is_finished(), "the second start looks for a slot only once the first has let go");
+        git(&free.path, &["switch", "--quiet", "-c", "billing"]).unwrap();
+        drop(held);
+        let taken = second.join().unwrap();
+        assert_ne!(taken, free.path, "the slot the first start took is no longer free");
+        assert_eq!(find_task(&dir, Some("billing"), &dir).unwrap().path, free.path);
+        assert_eq!(find_task(&dir, Some("search"), &dir).unwrap().path, taken);
+        for path in [free.path, taken] {
+            git(&dir, &["worktree", "remove", "--force", &path.to_string_lossy()]).unwrap();
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

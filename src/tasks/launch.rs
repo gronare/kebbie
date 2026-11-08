@@ -386,12 +386,10 @@ pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {
         fetch(&repo)?;
         let upstream = default_branch(&repo)?;
         let base = from.unwrap_or(&upstream);
-        let slot = claim_slot(&repo, &upstream)?;
-        if branch_exists(&repo, &task) {
-            git_writing(&slot.path, &["switch", "--quiet", &task])?;
-        } else {
-            git_writing(&slot.path, &["switch", "--quiet", "-c", &task, base])?;
-        }
+        let slot = claim_slot(&repo, &upstream, |slot| {
+            let switch: &[&str] = if branch_exists(&repo, &task) { &["switch", "--quiet", &task] } else { &["switch", "--quiet", "-c", &task, base] };
+            git_writing(&slot.path, switch).map(|_| ())
+        })?;
         let address = peers::address(&task, &name_of(&repo));
         let state = state_dir()?;
         super::after::forget_unwaited_watch(&state, &address);
