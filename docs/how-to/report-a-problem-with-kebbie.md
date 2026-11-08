@@ -153,7 +153,7 @@ The report holds the title, the text, kebbie's version and commit, and the OS an
 | Remote and other URLs | `<remote>` or `<url>` |
 | Email addresses, host names and IP addresses | `<email>`, `<host>` and `<ip>` |
 | Branch names such as `feature/…` | `<branch>` |
-| Anything shaped like a token, a key id, a long hex string that is not one of kebbie's own commits, or a secret assignment | `<token>` or `<redacted>` |
+| Anything shaped like a token, a key id, a long hex string that is not one of kebbie's own commits, or a secret assignment, and the word after `Bearer`, `Authorization: Basic` or a secret's name ending in `:` or `=` | `<token>` or `<redacted>` |
 | Terminal escapes and control characters | removed |
 
 > **Warning:** Read it anyway: the text is what the lead or you wrote.

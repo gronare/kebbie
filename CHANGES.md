@@ -33,6 +33,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Update restarts only real boards, never a kebbie command that names board in its arguments, such as kebbie start board.
 - A message held for a busy task is delivered once, even when the board and the keeper both wait on the message log for long.
 - Kept task titles in kebbie's state are private to you, and the board never reads one half written.
+- A bug report hides the value in Authorization: Basic and in password: hunter2, where the secret is the next word.
 
 ## 0.36.0
 

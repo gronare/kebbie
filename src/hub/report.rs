@@ -237,11 +237,18 @@ fn redact_word(core: &str, after_bearer: bool, scrub: &Scrub) -> Option<String> 
     None
 }
 
+// A word after which the next one is the secret: Bearer, Basic after Authorization:, or a secret's name ending in : or =.
+fn opens_secret(core: &str, previous: &str) -> bool {
+    let assigned = core.strip_suffix([':', '=']).is_some_and(|name| secret_name(name.trim_start_matches(['-', '$'])));
+    core.eq_ignore_ascii_case("bearer") || core.eq_ignore_ascii_case("token") || (core.eq_ignore_ascii_case("basic") && previous.eq_ignore_ascii_case("authorization:")) || assigned
+}
+
 fn redact_words(text: &str, scrub: &Scrub) -> String {
     let mut out = String::new();
     let mut bearer = false;
+    let mut previous = String::new();
     let mut word = String::new();
-    let flush = |word: &mut String, out: &mut String, bearer: &mut bool| {
+    let mut flush = |word: &mut String, out: &mut String, bearer: &mut bool| {
         if word.is_empty() {
             return;
         }
@@ -250,7 +257,8 @@ fn redact_words(text: &str, scrub: &Scrub) -> String {
         let start = if start > 0 && word[..start].ends_with('[') && ip(&word[start - 1..end.max(start)]) { start - 1 } else { start };
         let core = &word[start..end.max(start)];
         let replaced = redact_word(core, *bearer, scrub);
-        *bearer = core.eq_ignore_ascii_case("bearer") || core.eq_ignore_ascii_case("token");
+        *bearer = opens_secret(core, &previous);
+        previous = core.to_string();
         match replaced {
             Some(replacement) => out.push_str(&format!("{}{replacement}{}", &word[..start], &word[end.max(start)..])),
             None => out.push_str(word),
@@ -826,6 +834,14 @@ mod tests {
         assert!(redacted.contains("billing@<repo>") && redacted.contains("token <token>") && redacted.contains("GITHUB_TOKEN=<redacted>") && redacted.contains("Bearer <token>;"), "{redacted}");
         assert!(redacted.contains("~/notes and ~/.ssh"), "{redacted}");
         assert!(redacted.contains("the apply step") && redacted.contains("https://github.com/gronare/kebbie/issues/12") && redacted.contains("~/.config/kebbie."), "what is not private stays: {redacted}");
+    }
+
+    #[test]
+    fn a_basic_authorization_and_a_secret_whose_value_is_the_next_word_are_redacted() {
+        leaks("curl -H 'Authorization: Basic dXNlcjpodW50ZXIy' failed", &["dXNlcjpodW50ZXIy"], "Authorization: Basic <token>'");
+        leaks("the config had password: hunter2 in it", &["hunter2"], "password: <token> in it");
+        leaks("set API_KEY= s3cr3tvalue then ran it", &["s3cr3tvalue"], "API_KEY= <token> then");
+        leaks("a basic test failed", &[], "a basic test failed");
     }
 
     fn leaks(text: &str, gone: &[&str], shown: &str) {
