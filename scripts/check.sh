@@ -14,7 +14,7 @@ step "cargo clippy"
 cargo clippy --locked --all-targets -- -D warnings || fail "cargo clippy"
 step "cargo audit and cargo deny"
 cargo audit || fail "cargo audit"
-cargo deny check bans sources || fail "cargo deny"
+cargo deny check bans licenses sources || fail "cargo deny"
 oldest=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
 step "cargo +$oldest check (rust-version)"
 cargo "+$oldest" check --locked --all-targets || fail "cargo +$oldest check"

@@ -34,7 +34,7 @@ jobs:
       - name: cargo audit
         run: cargo audit
       - name: cargo deny
-        run: cargo deny check bans sources
+        run: cargo deny check bans licenses sources
 
   docs-site:
     needs: [test, audit]
