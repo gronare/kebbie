@@ -21,9 +21,24 @@ use super::started::{read_start, start_entry, started_file};
 // Tools put Unix sockets under TMPDIR, Chromium's SingletonSocket among them, and a socket path ends at 104 bytes on macOS, so a task's temp folder sits in a short per-user folder in /tmp, named for its worktree.
 pub(crate) fn task_tmp(worktree: &Path) -> Result<PathBuf> {
     let git_dir = PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?);
-    let tmp = Path::new("/tmp").canonicalize().unwrap_or_else(|_| PathBuf::from("/tmp"));
+    Ok(tmp_in(&slash_tmp(), uid(), &git_dir))
+}
+
+fn slash_tmp() -> PathBuf {
+    Path::new("/tmp").canonicalize().unwrap_or_else(|_| PathBuf::from("/tmp"))
+}
+
+fn uid() -> u32 {
     // SAFETY: getuid cannot fail.
-    Ok(tmp_in(&tmp, unsafe { libc::getuid() }, &git_dir))
+    unsafe { libc::getuid() }
+}
+
+// A folder of kebbie's own for scratch work, in the same private per-user folder as the tasks' temp folders, emptied of anything left there before.
+pub(crate) fn scratch_dir(name: &str) -> Result<PathBuf> {
+    let dir = slash_tmp().join(format!("kebbie-{}", uid())).join(name);
+    make_tmp(&dir)?;
+    std::fs::remove_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+    Ok(dir)
 }
 
 fn tmp_in(tmp: &Path, uid: u32, git_dir: &Path) -> PathBuf {

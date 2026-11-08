@@ -141,8 +141,7 @@ impl Drop for RebaseLock {
 
 // Rebases the commits after from through sha onto upstream in a detached worktree of kebbie's own, so the task's worktree, its HEAD and its uncommitted work stay as its Claude left them.
 fn rebased_elsewhere(path: &Path, from: &str, sha: &str, upstream: &str) -> Result<(Updated, String)> {
-    let place = std::env::temp_dir().join(format!("kebbie-push-{}-{}", std::process::id(), &sha[..12.min(sha.len())]));
-    let _ = std::fs::remove_dir_all(&place);
+    let place = push_place(sha)?;
     let spot = place.to_string_lossy().to_string();
     git(path, &[&UNHOOKED[..], &["worktree", "add", "--quiet", "--detach", &spot, sha]].concat())?;
     let built = update_in(&place, upstream, &UNHOOKED, Some(from)).and_then(|updated| Ok((updated, git(&place, &["rev-parse", "HEAD"])?)));
@@ -151,6 +150,10 @@ fn rebased_elsewhere(path: &Path, from: &str, sha: &str, upstream: &str) -> Resu
         let _ = git(path, &["worktree", "prune"]);
     }
     built
+}
+
+fn push_place(sha: &str) -> Result<std::path::PathBuf> {
+    super::launch::scratch_dir(&format!("push-{}-{}", std::process::id(), &sha[..12.min(sha.len())]))
 }
 
 fn refused(path: &Path, upstream: &str, error: &str) -> String {
@@ -898,6 +901,23 @@ mod tests {
         assert!(tell.contains("if landed.logged != Some(true) { messages::ToLead::PushToLog } else { messages::ToLead::Landed }"), "{tell}");
         let deliver = &source[source.find("\nfn deliver(").unwrap()..];
         assert!(deliver[..deliver.find("\n}\n").unwrap()].contains("messages::to_lead(messages::ToLead::Pushed, &format!(\"{} pushed {address}: {} to {target}. kebbie watches CI"), "the push under CI watch is a notice for the digest, not a turn of the lead's");
+    }
+
+    #[test]
+    fn a_push_rebases_elsewhere_in_kebbies_private_temp_folder_emptied_of_anything_left_there() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let sha = "0123456789abcdef0123";
+        let place = push_place(sha).unwrap();
+        let root = place.parent().unwrap();
+        // SAFETY: getuid cannot fail.
+        let uid = unsafe { libc::getuid() };
+        assert_eq!(root, Path::new("/tmp").canonicalize().unwrap().join(format!("kebbie-{uid}")), "never the shared temp dir, where anyone can plant the folder first");
+        let meta = std::fs::symlink_metadata(root).unwrap();
+        assert!(meta.is_dir() && meta.uid() == uid && meta.permissions().mode() & 0o077 == 0, "the folder is private to the user");
+        assert!(!place.exists(), "git worktree add makes the folder itself");
+        std::fs::create_dir_all(place.join("left")).unwrap();
+        assert_eq!(push_place(sha).unwrap(), place);
+        assert!(!place.exists(), "what an earlier push left is gone");
     }
 
     #[test]
