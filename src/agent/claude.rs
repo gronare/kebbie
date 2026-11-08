@@ -699,7 +699,7 @@ mod tests {
         assert_eq!((&sandbox["enabled"], &sandbox["allowUnsandboxedCommands"], &sandbox["failIfUnavailable"]), (&json!(true), &json!(false), &json!(true)), "no retry outside the sandbox, and no start without one");
         assert_eq!(strings(&sandbox["excludedCommands"]), crate::sandbox::TASK_COMMANDS.map(|command| format!("/opt/kebbie/kebbie {command} *")).to_vec(), "matched on the absolute path the role names");
         assert_eq!(strings(&sandbox["network"]["allowedDomains"]), crate::sandbox::DOMAINS.map(str::to_string).to_vec());
-        assert_eq!(strings(&sandbox["filesystem"]["allowWrite"]), ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache", "/tmp/kebbie-501/wt1.app-a1b2c3"]);
+        assert_eq!(strings(&sandbox["filesystem"]["allowWrite"]), ["~/.cargo/registry", "~/.cargo/git", "~/.npm", "~/.cache", "/tmp/kebbie-501/wt1.app-a1b2c3", "/src/app/.git/worktrees/1/kebbie-plan"]);
         let denied = strings(&sandbox["filesystem"]["denyWrite"]);
         for path in ["/src/app/.git/worktrees/1/config.worktree", "/src/app/.git/worktrees/1/kebbie-hooks"] {
             assert!(denied.contains(&path.to_string()), "the push block stays out of the shell's reach: {path}");

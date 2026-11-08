@@ -68,6 +68,10 @@ impl TaskDirs {
         self.git_dir.clone()
     }
 
+    pub fn plan_dir(&self) -> PathBuf {
+        self.git_dir().join("kebbie-plan")
+    }
+
     // A linked worktree's git dir is <common>/worktrees/<name>; the main checkout's is the common dir itself.
     pub fn common_dir(&self) -> PathBuf {
         let git_dir = self.git_dir();
@@ -110,7 +114,7 @@ pub fn block(kebbie: &str, policy: &Policy, dirs: Option<&TaskDirs>, mac: bool) 
     let mut writes = policy.writes();
     let mut denied: Vec<String> = other_sessions_temp().to_vec();
     if let Some(dirs) = dirs {
-        writes.push(dirs.tmp.display().to_string());
+        writes.extend([dirs.tmp.display().to_string(), dirs.plan_dir().display().to_string()]);
         denied.extend(git_pointers(dirs).iter().chain([&dirs.git_dir().join("kebbie-hooks")]).map(|path| path.display().to_string()));
         denied.extend(sibling_git_dirs(dirs).iter().map(|dir| dir.display().to_string()));
     }
@@ -215,7 +219,7 @@ pub fn file_refusal(target: &Path, dirs: &TaskDirs, claude_home: &Path) -> Optio
     let halves = dirs.all();
     let projects = halves.iter().flat_map(|half| [Some(half.worktree.clone()), half.main_checkout()]).flatten().map(|folder| crate::agent::claude::transcripts_dir(claude_home, &folder));
     let notes: Vec<PathBuf> = projects.chain([claude_home.join("plans")]).map(|dir| resolved(&dir)).collect();
-    if halves.iter().any(|half| target.starts_with(resolved(&half.tmp))) || notes.iter().any(|dir| target.starts_with(dir)) {
+    if halves.iter().any(|half| target.starts_with(resolved(&half.tmp)) || target.starts_with(resolved(&half.plan_dir()))) || notes.iter().any(|dir| target.starts_with(dir)) {
         return None;
     }
     let Some(inside) = halves.iter().find_map(|half| target.strip_prefix(resolved(&half.worktree)).ok().map(Path::to_path_buf)) else {
@@ -657,6 +661,27 @@ mod tests {
         assert!(!dir.join("deeper").exists(), "and the probe does not create it");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_sandboxed_tasks_plan_folder_in_its_git_dir_is_its_own_to_write_for_its_shell_and_its_file_tools_and_nothing_else_there_is() {
+        let base = crate::sh::test_dir("plan-dir").canonicalize().unwrap();
+        let (worktree, git_dir, tmp, claude) = (base.join("wt1.app"), base.join("app/.git/worktrees/wt1.app"), base.join("tmp/wt1.app-a1b2c3"), base.join("home/.claude"));
+        let dirs = TaskDirs::new(&worktree, &git_dir, &tmp);
+        let plan = dirs.plan_dir().join("plan.md");
+        assert_eq!(plan, git_dir.join("kebbie-plan/plan.md"));
+        for dir in [&worktree, &tmp, &dirs.plan_dir()] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        assert_eq!(file_refusal(&plan, &dirs, &claude), None, "the task writes its plan with its file tools");
+        for kept_out in [git_dir.join("config.worktree"), git_dir.join("kebbie-hooks/pre-push"), git_dir.join("kebbie-setup-elsewhere.md")] {
+            assert!(file_refusal(&kept_out, &dirs, &claude).is_some(), "{}", kept_out.display());
+        }
+        let written = block("/opt/kebbie/kebbie", &Policy::default(), Some(&dirs), false);
+        let writes: Vec<&str> = written["filesystem"]["allowWrite"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(writes.contains(&dirs.plan_dir().to_string_lossy().as_ref()), "its shell writes the plan folder too: {writes:?}");
+        assert!(!writes.contains(&git_dir.to_string_lossy().as_ref()), "never the whole git dir: {writes:?}");
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

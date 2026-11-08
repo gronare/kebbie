@@ -32,7 +32,7 @@ pub(crate) use line::complete as complete_pushes;
 pub(crate) use park::{all as parked_all, Parked, UNPARKED, load as park_of, morning_in as park_morning_in, park, park_address, unpark, unpark_address, until as park_until};
 pub(crate) use landed::{EVERY as LANDED_EVERY, passed_after_cancel, Unsure as LandedUnsure, mark as landed_mark, tick as landed_tick, tick_cli as landed_tick_cli};
 pub(crate) use red_ci::{dismiss as dismiss_ci, dismissed as ci_dismissed, outside as ci_outside, outside_reason as ci_outside_reason};
-pub(crate) use launch::{Begun, Session, Start, awaits_first_prompt, begin, codex_restart_refusal, codex_resume_args, bypasses, latest_transcript, mark_awaits_prompt, new_session_id, on_profile, own_start_mode, profile_of, record_session, recorded_agent, recorded_session_id, start, task_at, task_role, task_role_now, task_tmp, transcript};
+pub(crate) use launch::{Begun, Session, Start, awaits_first_prompt, begin, codex_restart_refusal, codex_resume_args, bypasses, latest_transcript, mark_awaits_prompt, new_session_id, on_profile, own_start_mode, plan_dir, profile_of, record_session, recorded_agent, recorded_session_id, start, task_at, task_role, task_role_now, transcript};
 pub(crate) use plan::{noted_after as steps_noted_after, seen_in as steps_seen_in, steps};
 pub(crate) use plan::{Step, Steps, State as StepState, Tips as StepTips, read_at as steps_read, shown_at as steps_shown_at, for_path as steps_for, mark as step_mark};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of};

@@ -507,7 +507,10 @@ mod tests {
         assert!(!tmp.starts_with(&dir) && !tmp.starts_with(&slot.path), "{}", tmp.display());
         std::fs::create_dir_all(tmp.join("deep")).unwrap();
         std::fs::write(tmp.join("deep/file"), "x").unwrap();
-        assert!(is_clean(&slot.path).unwrap(), "temp files never show as changes in the worktree");
+        let plan = crate::tasks::launch::plan_dir(&slot.path).unwrap();
+        std::fs::create_dir_all(&plan).unwrap();
+        std::fs::write(plan.join("plan.md"), "1. bill").unwrap();
+        assert!(is_clean(&slot.path).unwrap(), "temp files and the plan never show as changes in the worktree");
         let dirs = crate::sandbox::TaskDirs::new(&slot.path, &crate::sandbox::git_dir_of(&slot.path), &tmp);
         let written: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", None, Some(&dirs), None)).unwrap();
         for name in TMP_VARS {
@@ -516,6 +519,7 @@ mod tests {
         git(&dir, &["update-ref", &format!("refs/remotes/{upstream}"), "scratch"]).unwrap();
         finish(&dir, &slot, &upstream, &state_of(&dir), None).unwrap();
         assert!(!tmp.exists(), "done takes the temp dir and what is in it");
+        assert!(!plan.exists(), "and the plan, so the slot's next task never reads it");
         std::fs::create_dir_all(&tmp).unwrap();
         git(&slot.path, &["switch", "--quiet", "--create", "again"]).unwrap();
         let again = find_task(&dir, Some("again"), &dir).unwrap();

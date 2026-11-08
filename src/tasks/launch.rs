@@ -65,8 +65,13 @@ pub(crate) fn make_tmp(dir: &Path) -> Result<()> {
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(fail)
 }
 
+// A sandboxed task's plan outlives a reboot and /tmp's cleaning in its worktree's own git dir, which its file tools and shell may write.
+pub(crate) fn plan_dir(worktree: &Path) -> Result<PathBuf> {
+    Ok(PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?).join("kebbie-plan"))
+}
+
 pub(super) fn clear_tmp(worktree: &Path) {
-    if let Ok(dir) = task_tmp(worktree) {
+    for dir in [task_tmp(worktree), plan_dir(worktree)].into_iter().flatten() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
@@ -542,6 +547,9 @@ fn prepare(place: &Launch, resumed: bool) -> Result<Prepared> {
     let tmp = task_tmp(worktree)?;
     make_tmp(&tmp)?;
     let shell = sandboxed(config::resolve(Some(repo))?.settings.sandbox.value, profile, crate::sandbox::missing_here)?;
+    if shell {
+        crate::state::private_dir(&plan_dir(worktree)?)?;
+    }
     let git_dir = PathBuf::from(git(worktree, &["rev-parse", "--absolute-git-dir"])?);
     let mut dirs = crate::sandbox::TaskDirs::new(worktree, &git_dir, &tmp);
     crate::sandbox::mark(&state_dir()?, worktree, shell)?;

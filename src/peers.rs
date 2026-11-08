@@ -167,9 +167,9 @@ pub struct Place<'a> {
     pub sandboxed: bool,
 }
 
-// A sandboxed task's file tools reach its temp folder but not kebbie's state; without the sandbox the plan stays in kebbie's state.
-pub fn plan_file(sandboxed: bool, me: &str, tmp: impl FnOnce() -> Result<PathBuf>, state: impl FnOnce() -> Result<PathBuf>) -> Result<PathBuf> {
-    if sandboxed { Ok(tmp()?.join("plan.md")) } else { Ok(state()?.join("plans").join(format!("{me}.md"))) }
+// A sandboxed task's file tools reach its plan folder in its git dir but not kebbie's state; without the sandbox the plan stays in kebbie's state.
+pub fn plan_file(sandboxed: bool, me: &str, plan_dir: impl FnOnce() -> Result<PathBuf>, state: impl FnOnce() -> Result<PathBuf>) -> Result<PathBuf> {
+    if sandboxed { Ok(plan_dir()?.join("plan.md")) } else { Ok(state()?.join("plans").join(format!("{me}.md"))) }
 }
 
 pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
@@ -335,7 +335,7 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let me = address(task, &repo);
     let peers = peers.to_string();
     let kebbie = kebbie_command()?;
-    let plans = plan_file(place.sandboxed, &me, || crate::tasks::task_tmp(place.worktree), crate::lead::state_dir)?;
+    let plans = plan_file(place.sandboxed, &me, || crate::tasks::plan_dir(place.worktree), crate::lead::state_dir)?;
     let codex_vault = place.agent == crate::agent::Agent::Codex && crate::agent::codex_setup::found_server(&crate::agent::codex_setup::read_config(crate::agent::codex::home().as_deref())).is_some();
     let (plan, vault, tools) = vault_parts(place.agent, codex_vault, &crate::config::sources().unwrap_or_default(), place.note, &kebbie, task, &plans);
     let settings = crate::config::resolve(Some(place.repo))?.settings;
@@ -550,21 +550,21 @@ mod tests {
     }
 
     #[test]
-    fn the_plan_goes_in_the_vault_note_with_the_vault_and_in_the_tasks_temp_folder_without_it() {
+    fn the_plan_goes_in_the_vault_note_with_the_vault_and_in_the_worktrees_git_dir_without_it() {
         use crate::config::Source;
-        let (tmp, state) = (|| Ok(PathBuf::from("/tmp/kebbie-501/wt1.app-a1b2c3")), || Ok(PathBuf::from("/state")));
-        assert_eq!(plan_file(true, "billing@web", tmp, state).unwrap(), Path::new("/tmp/kebbie-501/wt1.app-a1b2c3/plan.md"), "a sandboxed task's file tools are denied kebbie's state");
-        assert_eq!(plan_file(false, "billing@web", tmp, state).unwrap(), Path::new("/state/plans/billing@web.md"), "without the sandbox the plan stays where 0.25.0 kept it");
+        let (plan_dir, state) = (|| Ok(PathBuf::from("/src/app/.git/worktrees/wt1.app/kebbie-plan")), || Ok(PathBuf::from("/state")));
+        assert_eq!(plan_file(true, "billing@web", plan_dir, state).unwrap(), Path::new("/src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md"), "a sandboxed task's file tools are denied kebbie's state, and /tmp loses the plan on a reboot");
+        assert_eq!(plan_file(false, "billing@web", plan_dir, state).unwrap(), Path::new("/state/plans/billing@web.md"), "without the sandbox the plan stays where 0.25.0 kept it");
         let source = include_str!("peers.rs");
         let values = &source[source.find("\nfn role_values(").unwrap()..];
-        assert!(values[..values.find("\n}\n").unwrap()].contains("plan_file(place.sandboxed,"), "the role names the plan file plan_file picks");
-        let plans = Path::new("/tmp/kebbie-501/wt1.app-a1b2c3/plan.md");
+        assert!(values[..values.find("\n}\n").unwrap()].contains("plan_file(place.sandboxed, &me, || crate::tasks::plan_dir(place.worktree),"), "the role names the plan file plan_file picks");
+        let plans = Path::new("/src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md");
         let vault = plan_step(&[Source::Linear, Source::Vault], None, "/bin/kebbie", "billing", plans);
         assert!(vault.contains("into this task's note in the vault") && vault.contains("/bin/kebbie link billing Projects/<note>.md") && vault.contains("/bin/kebbie ask --plan vault:Projects/<note>.md"), "{vault}");
         let file = plan_step(&[Source::Local], None, "/bin/kebbie", "billing", plans);
         let note = plan_step(&[Source::Local], Some("Projects/kebbie-billing.md"), "/bin/kebbie", "billing", plans);
         assert!(note.contains("into your note `Projects/kebbie-billing.md`") && note.contains("--plan vault:Projects/kebbie-billing.md"), "{note}");
-        assert!(file.contains("to `/tmp/kebbie-501/wt1.app-a1b2c3/plan.md`, kebbie's place for it outside your worktree") && file.contains("/bin/kebbie ask --plan /tmp/kebbie-501/wt1.app-a1b2c3/plan.md"), "{file}");
+        assert!(file.contains("to `/src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md`, kebbie's place for it outside your worktree") && file.contains("/bin/kebbie ask --plan /src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md"), "{file}");
         assert!(!file.contains("vault"), "{file}");
         let role = fill(include_str!("../roles/task.md"), &[("plan", &file)]);
         assert!(role.contains(&format!("2. A plan to approve: {file} The user approves it")) && !role.contains("{plan}"), "{role}");
@@ -598,10 +598,10 @@ mod tests {
     fn a_codex_task_has_the_lead_keep_its_vault_note_and_plans_in_its_plan_file() {
         use crate::agent::Agent;
         use crate::config::Source;
-        let plans = Path::new("/tmp/kebbie-501/wt1.app-a1b2c3/plan.md");
+        let plans = Path::new("/src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md");
         let (plan, vault, tools) = vault_parts(Agent::Codex, false, &[Source::Vault], Some("Projects/kebbie-billing.md"), "/bin/kebbie", "billing", plans);
         assert!(!tools, "a Codex session gets no vault MCP tools, so it files what it notices with kebbie backlog add");
-        assert!(plan.contains("/bin/kebbie ask --plan /tmp/kebbie-501/wt1.app-a1b2c3/plan.md") && !plan.contains("vault"), "{plan}");
+        assert!(plan.contains("/bin/kebbie ask --plan /src/app/.git/worktrees/wt1.app/kebbie-plan/plan.md") && !plan.contains("vault"), "{plan}");
         let role = fill(include_str!("../roles/task.md"), &[("vault", &vault)]);
         for needed in ["## Your note in the vault", "`Projects/kebbie-billing.md` in the vault, and the lead keeps it for you", "don't wait for them", "/bin/kebbie tell lead \"Write into Projects/kebbie-billing.md, Problem: ", "decision: <the choice>, because <the reason>", "A `Recipe:` line in your prompt", "`/bin/kebbie done` waits until the note's solution and decisions are written"] {
             assert!(role.contains(needed), "{needed}: {role}");
