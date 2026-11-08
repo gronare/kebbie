@@ -50,6 +50,10 @@ jobs:
           - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04, runs: true }
           - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm, runs: true }
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -67,6 +71,10 @@ jobs:
         run: |
           mkdir dist
           tar -czf "dist/kebbie-${GITHUB_REF_NAME#v}-${{ matrix.target }}.tar.gz" -C target/${{ matrix.target }}/release kebbie
+      - name: Attest the tarball's build provenance, which scripts/build.sh verifies with gh attestation verify
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/kebbie-*.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: kebbie-${{ matrix.target }}

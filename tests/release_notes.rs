@@ -67,6 +67,19 @@ fn release_sh_moves_the_notes_before_the_commit_and_the_workflow_publishes_them_
     assert!(!WORKFLOW.contains("--generate-notes"), "the release body is the handwritten notes");
 }
 
+#[test]
+fn every_tarball_is_attested_in_the_job_that_builds_it() {
+    let start = WORKFLOW.find("\n  binaries:\n").expect("the release workflow has a binaries job");
+    let end = WORKFLOW[start..].find("\n  release:\n").map_or(WORKFLOW.len(), |end| start + end);
+    let job = &WORKFLOW[start..end];
+    assert!(job.contains("id-token: write") && job.contains("attestations: write") && job.contains("contents: read"), "{job}");
+    let pack = job.find("tar -czf \"dist/kebbie-").unwrap();
+    let attest = job.find("uses: actions/attest@v4").expect("the binaries job attests");
+    assert!(pack < attest && job[attest..].contains("subject-path: dist/kebbie-*.tar.gz"), "the attestation covers the packed tarball");
+    let release = &WORKFLOW[end..];
+    assert!(!release.contains("id-token") && !release.contains("attestations:"), "the job holding contents: write gets no signing identity");
+}
+
 const CLEAN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/clean-builds.sh");
 
 fn write(path: &Path, bytes: usize) {
