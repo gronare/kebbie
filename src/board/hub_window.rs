@@ -832,7 +832,9 @@ mod tests {
         let now = crate::messages::now();
         let mut app = opened(joined(relay::Relay { posted_at: Some(now - 12), rev: 3, ..Default::default() }));
         let shown = screen(&mut app, 110, 40);
-        for line in ["╭ kebbie hub ─", "● mac on kebbie.example.com   board sent 12 s ago", "Sign in with your passkey on any phone or browser", "to see this board:  kebbie.example.com", "n rename · l leave the hub · esc close"] {
+        let ago = crate::messages::now() - (now - 12);
+        assert!((12..=ago).any(|seconds| shown.contains(&format!("● mac on kebbie.example.com   board sent {seconds} s ago"))), "{shown}");
+        for line in ["╭ kebbie hub ─", "Sign in with your passkey on any phone or browser", "to see this board:  kebbie.example.com", "n rename · l leave the hub · esc close"] {
             assert!(shown.contains(line), "{line}: {shown}");
         }
         assert!(!shown.contains("Device") && !shown.contains("dev_") && !shown.contains("https://") && !shown.contains("disconnect"), "no device list, no ids, no scheme: {shown}");
