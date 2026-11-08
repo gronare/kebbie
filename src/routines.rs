@@ -688,6 +688,31 @@ mod tests {
     }
 
     #[test]
+    fn a_routine_on_a_profile_with_a_kubeconfig_starts_its_task_with_kubectl_and_helm_on_that_file_alone() {
+        let profiles = crate::sh::test_dir("routine-kubeconfig");
+        std::fs::write(profiles.join("cluster.toml"), "for = \"scheduled cluster checks\"\n[sandbox]\nkubeconfig = \"/etc/kebbie/cluster-health.yaml\"\n").unwrap();
+        let routine = one(&format!("{CLUSTER}profile = \"cluster\"\n"));
+        let (profile, fell_back) = crate::profiles::for_running_task(&profiles, routine.profile.as_deref(), None, None).unwrap();
+        assert_eq!((profile.name.as_str(), fell_back), ("cluster", None));
+        for sandboxed in [true, false] {
+            let written: Value = serde_json::from_str(&profile.agent.task_settings("/k", "cluster-health-0108-0600@infra", None, None, &profile, sandboxed)).unwrap();
+            assert_eq!(written["env"]["KUBECONFIG"], "/etc/kebbie/cluster-health.yaml", "sandboxed {sandboxed}");
+            assert_eq!(written["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/k' hook push-guard --kube", "the guard knows the task has a kubeconfig");
+            if sandboxed {
+                let excluded: Vec<&str> = written["sandbox"]["excludedCommands"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+                assert!(excluded.contains(&"kubectl *") && excluded.contains(&"helm *"), "{excluded:?}");
+            }
+        }
+        let guard = |line: &str| crate::push_guard::hook(&json!({ "tool_name": "Bash", "tool_input": { "command": line }, "cwd": "/src/wt1.infra" }).to_string(), crate::kube_guard::Cluster::Kubeconfig);
+        assert_eq!(guard("kubectl get nodes -o wide"), "", "the routine's check runs");
+        assert!(guard("kubectl --context admin get nodes").contains("\"deny\""), "and keeps to its kubeconfig");
+        let source = include_str!("tasks/launch.rs");
+        let begin = &source[source.find("\npub fn begin(").unwrap()..];
+        assert!(begin[..begin.find("\n}\n").unwrap()].contains("task_profile(&repo, given, recorded.as_deref())") && source.contains("profiles::for_running_task(&profiles::dir(), given, recorded, configured.as_deref())"), "the routine's profile is the one the task loads from the machine's profiles folder");
+        std::fs::remove_dir_all(profiles).unwrap();
+    }
+
+    #[test]
     fn a_bad_routine_is_refused_with_the_key_and_the_value_named() {
         let refused = |text: &str, default_repo: Option<&str>| parsed(text, default_repo).unwrap_err();
         let base = |extra: &str| format!("[[routines]]\nid = \"x\"\ntitle = \"X\"\nprompt = \"p\"\n{extra}");
