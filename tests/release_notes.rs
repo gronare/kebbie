@@ -143,3 +143,17 @@ fn only_the_highest_version_tag_is_marked_latest() {
     assert!(WORKFLOW.contains("--latest=\"$latest\"") && !WORKFLOW.contains("--draft=false --latest\n"), "the release is marked latest only when its tag is the highest");
     assert!(WORKFLOW.contains("scripts/latest-tag.sh\n"), "the release job checks the script out");
 }
+
+#[test]
+fn release_sh_refuses_a_version_that_is_not_three_numbers_before_it_does_anything() {
+    let dir = std::env::temp_dir().join(format!("kebbie-release-version-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("scripts")).unwrap();
+    fs::write(dir.join("scripts/release.sh"), RELEASE).unwrap();
+    for version in ["0.36.0a", "0.36.0.1", "1.2", "v0.36.0", "0.36.0-rc1", "0..1", ""] {
+        let output = Command::new("sh").arg(dir.join("scripts/release.sh")).args([version, "summary"]).current_dir(&dir).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{version:?}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stderr).starts_with("usage: scripts/release.sh <X.Y.Z>"), "{version:?}");
+    }
+    let _ = fs::remove_dir_all(dir);
+}

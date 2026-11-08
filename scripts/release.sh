@@ -4,10 +4,10 @@ set -eu
 
 version=${1:-}
 summary=${2:-}
-case "$version" in
-  [0-9]*.[0-9]*.[0-9]*) ;;
-  *) printf '%s\n' "usage: scripts/release.sh <X.Y.Z> \"<what it brings>\"" "Before it, run scripts/release-smoke.sh on your machine: real Claude and Codex tasks through start, report, restart and drop." >&2; exit 2 ;;
-esac
+printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || {
+  printf '%s\n' "usage: scripts/release.sh <X.Y.Z> \"<what it brings>\"" "Before it, run scripts/release-smoke.sh on your machine: real Claude and Codex tasks through start, report, restart and drop." >&2
+  exit 2
+}
 [ -n "$summary" ] || { echo "say what the release brings: scripts/release.sh $version \"<what it brings>\"" >&2; exit 2; }
 tag="v$version"
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
