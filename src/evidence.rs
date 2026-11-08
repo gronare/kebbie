@@ -869,7 +869,7 @@ mod tests {
         ] {
             assert_eq!(recognise(command, &list), Some(runner), "{command}");
         }
-        for command in ["echo 'cd x; script/test'", "git commit -m 'run cargo test; fix'", "for f in a b; do script/test $f; done", "ls | xargs cargo test", "x=$(cargo test)"] {
+        for command in ["echo 'cd x; script/test'", "git commit -m 'run cargo test; fix'", "for f in a b; do script/test $f; done", "ls | xargs cargo test", "x=$(cargo test)", "set -e\ncat <<'EOF' > plan.md\ncargo test\nEOF"] {
             assert_eq!(recognise(command, &list), None, "{command}");
         }
     }

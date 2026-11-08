@@ -8,6 +8,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Every release carries a CycloneDX SBOM, kebbie-<version>.cdx.json, next to the binaries.
 
 ### Fixed
+- A test command written inside a heredoc, such as a plan written with cat <<EOF, is no longer recorded as a test run.
 
 ## 0.36.0
 

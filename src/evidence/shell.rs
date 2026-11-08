@@ -7,7 +7,46 @@ pub enum Op {
     Background,
 }
 
-// The commands of a shell line, split at ; && || | & and newlines outside quotes and parentheses, each with the operator after it.
+// The delimiter of a heredoc whose operator ends right before `rest`, its quotes and backslashes gone, whether <<- strips leading tabs, and how many chars it takes.
+fn heredoc(rest: &str) -> (String, bool, usize) {
+    let strip = rest.starts_with('-');
+    let (mut word, mut quote, mut taken) = (String::new(), None::<char>, usize::from(strip));
+    let mut chars = rest.chars().skip(taken).peekable();
+    while chars.peek().is_some_and(|char| *char == ' ' || *char == '\t') {
+        chars.next();
+        taken += 1;
+    }
+    for char in chars {
+        match (quote, char) {
+            (Some(open), _) if char == open => quote = None,
+            (Some(_), _) => word.push(char),
+            (None, '\'' | '"') => quote = Some(char),
+            (None, '\\') => {}
+            (None, char) if char.is_whitespace() || ";&|<>()".contains(char) => break,
+            (None, char) => word.push(char),
+        }
+        taken += 1;
+    }
+    (word, strip, taken)
+}
+
+// Where the bodies of the heredocs opened on a line end, from the byte after that line's newline: past each one's terminator line, or at the end.
+fn after_bodies(line: &str, from: usize, pending: &[(String, bool)]) -> usize {
+    let mut at = from;
+    for (word, strip) in pending {
+        while at < line.len() {
+            let end = line[at..].find('\n').map_or(line.len(), |found| at + found);
+            let text = &line[at..end];
+            at = (end + 1).min(line.len());
+            if (if *strip { text.trim_start_matches('\t') } else { text }) == word {
+                break;
+            }
+        }
+    }
+    at
+}
+
+// The commands of a shell line, split at ; && || | & and newlines outside quotes and parentheses, each with the operator after it; heredoc bodies are text, not commands.
 pub fn pieces(line: &str) -> Vec<(&str, Option<Op>)> {
     let chars: Vec<(usize, char)> = line.char_indices().collect();
     fn cut<'a>(out: &mut Vec<(&'a str, Option<Op>)>, text: &'a str, op: Option<Op>) {
@@ -16,6 +55,7 @@ pub fn pieces(line: &str) -> Vec<(&str, Option<Op>)> {
         }
     }
     let (mut out, mut start, mut depth, mut quote, mut index) = (Vec::new(), 0, 0usize, None::<char>, 0);
+    let mut pending: Vec<(String, bool)> = Vec::new();
     while index < chars.len() {
         let (at, char) = chars[index];
         let next = chars.get(index + 1).map(|(_, next)| *next);
@@ -33,6 +73,14 @@ pub fn pieces(line: &str) -> Vec<(&str, Option<Op>)> {
                     '(' => { depth += 1; None }
                     ')' => { depth = depth.saturating_sub(1); None }
                     _ if depth > 0 => None,
+                    '<' if next == Some('<') && prev != Some('<') && chars.get(index + 2).map(|(_, after)| *after) != Some('<') => {
+                        let (word, strip, taken) = heredoc(&line[chars.get(index + 2).map_or(line.len(), |(at, _)| *at)..]);
+                        index += 1 + taken;
+                        if !word.is_empty() {
+                            pending.push((word, strip));
+                        }
+                        None
+                    }
                     '#' if prev.is_none_or(char::is_whitespace) => {
                         while index + 1 < chars.len() && chars[index + 1].1 != '\n' {
                             index += 1;
@@ -52,6 +100,12 @@ pub fn pieces(line: &str) -> Vec<(&str, Option<Op>)> {
                     cut(&mut out, &line[start..at], Some(op));
                     index += len - 1;
                     start = chars.get(index + 1).map_or(line.len(), |(at, _)| *at);
+                    if char == '\n' && !pending.is_empty() {
+                        start = after_bodies(line, start, &pending);
+                        pending.clear();
+                        index = chars.partition_point(|(at, _)| *at < start);
+                        continue;
+                    }
                 }
             }
         }
@@ -211,6 +265,15 @@ mod tests {
         ]);
         assert_eq!(pieces("cargo test &> out.txt |& tee log"), [("cargo test &> out.txt", Some(Op::Pipe)), ("tee log", None)]);
         assert_eq!(pieces("echo 'it''s' \\; done"), [("echo 'it''s' \\; done", None)]);
+    }
+
+    #[test]
+    fn a_heredoc_body_is_text_and_never_a_command_of_the_line() {
+        assert_eq!(pieces("set -e\ncat <<EOF > notes.md\ncargo test\nit's done\nEOF\necho ok"), [("set -e", Some(Op::Seq)), ("cat <<EOF > notes.md", Some(Op::Seq)), ("echo ok", None)]);
+        assert_eq!(pieces("cat <<-'END' | tee x\n\tcargo test; npm test\n\tEND\ncargo test"), [("cat <<-'END'", Some(Op::Pipe)), ("tee x", Some(Op::Seq)), ("cargo test", None)]);
+        assert_eq!(pieces("cat <<\"A\" <<B\ncargo test\nA\nnpm test\nB\nls"), [("cat <<\"A\" <<B", Some(Op::Seq)), ("ls", None)], "two heredocs on one line, bodies in order");
+        assert_eq!(pieces("cat <<EOF\ncargo test"), [("cat <<EOF", Some(Op::Seq))], "a body without its terminator runs to the end");
+        assert_eq!(pieces("cat <<< 'x'; cargo test"), [("cat <<< 'x'", Some(Op::Seq)), ("cargo test", None)], "a here-string has no body");
     }
 
     #[test]
