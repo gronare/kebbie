@@ -4,6 +4,8 @@ What a vault command answers, so kebbie can run it as `vault.command`, whatever 
 
 kebbie runs the command with its own arguments after the words you set, such as `uvx mindin about --json`. Every answer is JSON on stdout; a refusal exits non-zero with its reason on the last line of stderr.
 
+A value kebbie cannot vouch for goes in the same word as its option, as `--line=<text>`, `--branch=<name>` and `--note=<path>`, so a log line that starts with `-` stays the line. The vault's parser takes `--option=value` as well as `--option value`.
+
 ## `about --json`
 
 kebbie asks this first, at each `kebbie doctor` run and whenever its kept answer is older than 10 minutes.

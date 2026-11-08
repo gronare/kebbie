@@ -41,6 +41,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task's review pane opens on its own after an edit whose text holds a newline or a tab.
 - The review split refuses a base that starts with - or names no commit.
 - The lead runs kebbie tell, status and its other allowed commands without a permission prompt.
+- A vault log line or branch that starts with - reaches the vault whole, never as an option.
 
 ## 0.36.0
 

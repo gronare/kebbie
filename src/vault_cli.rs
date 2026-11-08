@@ -154,9 +154,9 @@ impl Cli {
 
     pub fn open(&self, name: &str, cwd: &Path, branch: Option<&str>, note: Option<&str>) -> Result<Opened> {
         let cwd = cwd.to_string_lossy();
+        let (branch, note) = (branch.map(|branch| format!("--branch={branch}")), note.map(|note| format!("--note={note}")));
         let mut args = vec!["task", "open", "--name", name, "--cwd", &cwd];
-        args.extend(branch.map(|branch| ["--branch", branch]).into_iter().flatten());
-        args.extend(note.map(|note| ["--note", note]).into_iter().flatten());
+        args.extend(branch.as_deref().into_iter().chain(note.as_deref()));
         let value = self.call(&args)?;
         let path = field(&value, "path");
         if path.is_empty() {
@@ -210,9 +210,10 @@ impl Cli {
 
     pub fn log(&self, cwd: &Path, branch: Option<&str>, line: &str, commits: &[&str]) -> Result<String> {
         let cwd = cwd.to_string_lossy();
+        let (branch, line) = (branch.map(|branch| format!("--branch={branch}")), format!("--line={line}"));
         let mut args = vec!["log", "append", "--cwd", &cwd];
-        args.extend(branch.map(|branch| ["--branch", branch]).into_iter().flatten());
-        args.extend(["--line", line]);
+        args.extend(branch.as_deref());
+        args.push(&line);
         for commit in commits {
             args.extend(["--commit", commit]);
         }
@@ -719,12 +720,26 @@ mod tests {
         assert_eq!(fake.cli.missing("Projects/kebbie-billing.md", &["solution", "decisions"]).unwrap(), ["solution"]);
         assert_eq!(fake.cli.log(Path::new("/src/wt1.kebbie"), Some("billing"), "billing: Add refunds", &["a1b2c3d"]).unwrap(), "Log/kebbie-logg.md");
         assert_eq!(fake.calls(), [
-            "task open --name billing --cwd /src/wt1.kebbie --branch billing --note Projects/x.md",
+            "task open --name billing --cwd /src/wt1.kebbie --branch=billing --note=Projects/x.md",
             "task check Projects/kebbie-billing.md --need solution,decisions",
-            "log append --cwd /src/wt1.kebbie --branch billing --line billing: Add refunds --commit a1b2c3d",
+            "log append --cwd /src/wt1.kebbie --branch=billing --line=billing: Add refunds --commit a1b2c3d",
         ]);
         fake.fail("task-close", "Traceback\nNoteNotFound: Projects/kebbie-billing.md");
         assert_eq!(fake.cli.close("Projects/kebbie-billing.md").unwrap_err(), "vault task close: NoteNotFound: Projects/kebbie-billing.md");
+    }
+
+    #[test]
+    fn a_value_that_starts_with_a_dash_reaches_the_vault_as_its_options_value() {
+        let fake = Fake::new("dashes");
+        fake.answer("task-open", r#"{"path":"Projects/x.md","created":false}"#);
+        fake.answer("log-append", r#"{"path":"Log/kebbie-logg.md"}"#);
+        fake.cli.open("billing", Path::new("/src/wt1.kebbie"), Some("-b"), Some("--force.md")).unwrap();
+        fake.cli.log(Path::new("/src/wt1.kebbie"), Some("--cwd"), "- fixed x --commit y", &[]).unwrap();
+        assert_eq!(fake.calls(), ["task open --name billing --cwd /src/wt1.kebbie --branch=-b --note=--force.md", "log append --cwd /src/wt1.kebbie --branch=--cwd --line=- fixed x --commit y"]);
+        let parsed = std::process::Command::new("python3").args(["-c", "import argparse,sys;p=argparse.ArgumentParser();[p.add_argument(o) for o in ('--cwd','--branch','--line')];p.add_argument('--commit',action='append');print(vars(p.parse_args(sys.argv[1:])))", "--cwd", "/src", "--branch=--cwd", "--line=- fixed x --commit y"]).output();
+        if let Some(parsed) = parsed.ok().filter(|output| output.status.success()) {
+            assert_eq!(String::from_utf8_lossy(&parsed.stdout).trim(), "{'cwd': '/src', 'branch': '--cwd', 'line': '- fixed x --commit y', 'commit': None}", "an argparse vault reads each value whole");
+        }
     }
 
     #[test]

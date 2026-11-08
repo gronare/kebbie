@@ -219,7 +219,7 @@ mod tests {
         fake.answer("task-open", r#"{"path":"Projects/kebbie-billing.md","created":true,"repo":"kebbie","area":"kebbie"}"#);
         assert_eq!(open(&fake.cli, "billing", Path::new("/src/wt1.kebbie"), None).unwrap(), "Projects/kebbie-billing.md");
         assert_eq!(open(&fake.cli, "billing", Path::new("/src/wt1.kebbie"), Some("local:Fix login")).unwrap(), "Projects/kebbie-billing.md");
-        assert_eq!(fake.calls(), ["task open --name billing --cwd /src/wt1.kebbie --branch billing"; 2], "a local item or a Linear id is no vault note to claim");
+        assert_eq!(fake.calls(), ["task open --name billing --cwd /src/wt1.kebbie --branch=billing"; 2], "a local item or a Linear id is no vault note to claim");
     }
 
     #[test]
@@ -227,7 +227,7 @@ mod tests {
         let fake = Fake::new("claim");
         fake.answer("task-open", r#"{"path":"Projects/kebbie-refunds.md","created":false,"repo":"kebbie","area":"kebbie"}"#);
         assert_eq!(open(&fake.cli, "refunds", Path::new("/src/wt2.kebbie"), Some("Projects/kebbie-refunds.md")).unwrap(), "Projects/kebbie-refunds.md");
-        assert_eq!(fake.calls(), ["task open --name refunds --cwd /src/wt2.kebbie --branch refunds --note Projects/kebbie-refunds.md"]);
+        assert_eq!(fake.calls(), ["task open --name refunds --cwd /src/wt2.kebbie --branch=refunds --note=Projects/kebbie-refunds.md"]);
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
         fake.answer("log-append", r#"{"path":"Log/kebbie-logg.md"}"#);
         let said = logged_text(&log_push(&fake.cli, Path::new("/src/wt1.kebbie"), "billing", "a1b2c3d Add refunds\ne4f5a6b Show refunds on the invoice"));
         assert_eq!(said, "Log/kebbie-logg.md");
-        assert_eq!(fake.calls(), ["log append --cwd /src/wt1.kebbie --branch billing --line billing: Add refunds; Show refunds on the invoice --commit a1b2c3d --commit e4f5a6b"]);
+        assert_eq!(fake.calls(), ["log append --cwd /src/wt1.kebbie --branch=billing --line=billing: Add refunds; Show refunds on the invoice --commit a1b2c3d --commit e4f5a6b"]);
         fake.fail("log-append", "S3 unreachable");
         assert!(logged_text(&log_push(&fake.cli, Path::new("/src/wt1.kebbie"), "billing", "a1b2c3d Add refunds")).contains("not written (vault log append: S3 unreachable)"), "a failing vault never fails the push");
         assert_eq!(log_push(&fake.cli, Path::new("/src/wt1.kebbie"), "billing", ""), Ok(None));
