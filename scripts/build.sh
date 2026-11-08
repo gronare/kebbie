@@ -13,6 +13,20 @@ KEBBIE_RELEASES_URL=${KEBBIE_RELEASES_URL:-}
 
 say() { printf 'kebbie build: %s\n' "$*" >&2; }
 
+first_attested=0.37.0
+attesting_repo=gronare/kebbie
+signer=gronare/kebbie/.github/workflows/release.yml
+gh_dirs="/opt/homebrew/bin /usr/local/bin $HOME/.local/bin"
+
+# herdr's build can run with a PATH that leaves out where gh is usually installed.
+find_gh() {
+  command -v gh 2>/dev/null && return 0
+  for dir in $gh_dirs; do
+    [ -x "$dir/gh" ] && [ ! -d "$dir/gh" ] && { echo "$dir/gh"; return 0; }
+  done
+  return 1
+}
+
 # herdr runs this without KEBBIE_CHANNEL, so the machine config names the channel then.
 configured_channel() {
   config=${KEBBIE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/kebbie/config.toml}
@@ -58,6 +72,29 @@ tag_commit() {
   [ -n "$peeled$plain" ] && echo "${peeled:-$plain}"
 }
 
+# Leaves provenance verified or unverified, or empty for a release from before attestations; fails only when gh ran the check and it failed.
+verify_provenance() {
+  provenance=""
+  older "$version" "$first_attested" && return 0
+  provenance=unverified
+  gh=$(find_gh) || gh=""
+  if [ -z "$gh" ] || ! "$gh" attestation verify --help >/dev/null 2>&1; then
+    say "the origin of $asset was not verified: install the GitHub CLI (gh) and log in, and kebbie checks the next download it installs"
+    return 0
+  fi
+  checked=$("$gh" attestation verify "$work/$asset" --repo "$attesting_repo" --signer-workflow "$signer" --source-ref "refs/tags/$tag" --deny-self-hosted-runners 2>&1 </dev/null)
+  case $? in
+    0) provenance=verified ;;
+    4) say "the origin of $asset was not verified: gh is not logged in (gh auth login), and kebbie checks the next download it installs" ;;
+    *)
+      why=$(printf '%s\n' "$checked" | awk 'NF { last = $0 } END { print last }')
+      say "$asset failed gh attestation verify against $signer at $tag, so it is not used${why:+: $why}"
+      refused=yes
+      return 1
+      ;;
+  esac
+}
+
 sha256() { { sha256sum "$1" || shasum -a 256 "$1"; } 2>/dev/null | cut -d ' ' -f 1; }
 
 check_download() {
@@ -94,12 +131,13 @@ download() {
   got=$(sha256 "$work/$asset")
   if [ -z "$got" ]; then say "neither sha256sum nor shasum is installed to check the download"; return 1; fi
   if [ -z "$want" ] || [ "$want" != "$got" ]; then say "$asset does not match SHA256SUMS, so it is not used"; return 1; fi
+  verify_provenance || return 1
   if ! mkdir "$work/unpacked" || ! tar -xzf "$work/$asset" --no-same-owner -C "$work/unpacked" kebbie; then say "could not unpack $asset"; return 1; fi
   [ -f "$work/unpacked/kebbie" ] && [ ! -L "$work/unpacked/kebbie" ] || { say "$asset holds no kebbie binary"; return 1; }
   chmod 755 "$work/unpacked/kebbie" && touch "$work/unpacked/kebbie" || return 1
   # Renamed into place, never written into: a running kebbie keeps its file, and macOS kills a binary changed in place.
   mv -f "$work/unpacked/kebbie" "$binary" || return 1
-  printf 'downloaded %s %s\n' "$tag" "$target" > "$origin_file"
+  printf 'downloaded %s %s%s\n' "$tag" "$target" "${provenance:+ $provenance}" > "$origin_file"
   rm -rf "$work"
   trap - EXIT
   say "installed the prebuilt kebbie $tag for $target"
@@ -124,12 +162,15 @@ check_toolchain() {
 fresh && exit 0
 
 unpublished=no
+refused=no
 at_tag=no
 check_download
 if [ -z "$reason" ]; then
   download && exit 0
   if [ "$unpublished" = yes ]; then
     say "kebbie $version is not published yet; try again in a while"
+  elif [ "$refused" = yes ]; then
+    say "the release binary of kebbie $version was not installed because its provenance check failed; try again, and report it at https://github.com/$attesting_repo/issues if it fails again"
   else
     say "the release binary of kebbie $version was not installed; try again in a while"
   fi
