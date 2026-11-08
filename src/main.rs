@@ -273,9 +273,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   task is still open
   kebbie routines tick            one round of the routine scheduler, as the keeper runs every minute
   kebbie routine add --title <name> --repo <repo> --at <time> | --every <interval> [--mode report|plan|fix]
-                  [--push] [--paused] [--id <id>] <prompt>
+                  [--push] [--paused] [--id <id>] [--profile <name>] <prompt>
                                   add a routine to config.toml, as the board's Routines page does (n); the id comes
-                                  from the title unless --id names one; --push lets the lead push a fix routine's fix
+                                  from the title unless --id names one; --push lets the lead push a fix routine's fix;
+                                  --profile names the profile its task starts with
   kebbie routine run <id>         start a routine's run now, by the same rules
   kebbie routine ok <summary>     run by a routine's task when all is well: records the run as ok and closes the task,
                                   which must have no changes and no commits
@@ -717,7 +718,7 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("routine") if name == Some("ok") => routines::ok(&cwd, &arguments.positionals[2..].join(" ")),
         Some("routine") if name == Some("add") => routine_file::add_cli(&routine_file::Asked {
             title: arguments.value("--title"), id: arguments.value("--id"), repo: arguments.value("--repo"), at: arguments.value("--at"), every: arguments.value("--every"),
-            mode: arguments.value("--mode"), push: arguments.flag("--push"), paused: arguments.flag("--paused"), prompt: &arguments.positionals[2..].join(" "),
+            mode: arguments.value("--mode"), push: arguments.flag("--push"), paused: arguments.flag("--paused"), profile: arguments.value("--profile"), prompt: &arguments.positionals[2..].join(" "),
         }),
         Some("routine") => Err("kebbie routine knows add, run <id> and ok <summary>".to_string()),
         Some("done") if arguments.flag("--landed") => tasks::landed_tick_cli(),

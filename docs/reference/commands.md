@@ -553,7 +553,7 @@ In a `routines tick`, a run whose task closed without a word is marked failed, a
 The full form of `routine add`:
 
 ```
-kebbie routine add --title <name> --repo <repo> --at <time> | --every <interval> [--mode <mode>] [--push] [--paused] [--id <id>] <prompt>
+kebbie routine add --title <name> --repo <repo> --at <time> | --every <interval> [--mode <mode>] [--push] [--paused] [--id <id>] [--profile <name>] <prompt>
 ```
 
 | Option | What it takes |
@@ -565,6 +565,7 @@ kebbie routine add --title <name> --repo <repo> --at <time> | --every <interval>
 | `--id` | The id. Without it, the id comes from the title, with `-2` added when it is taken. |
 | `--push` | Lets the lead push a fix routine's fix. |
 | `--paused` | Adds it with `enabled = false`. |
+| `--profile` | The [profile](configuration.md#profiles) its task starts with, such as one with a kubeconfig for cluster work. |
 
 It is refused when the id is taken or config.toml does not parse.
 

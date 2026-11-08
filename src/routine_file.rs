@@ -416,11 +416,12 @@ pub struct Asked<'a> {
     pub mode: Option<&'a str>,
     pub push: bool,
     pub paused: bool,
+    pub profile: Option<&'a str>,
     pub prompt: &'a str,
 }
 
 pub fn draft_from(asked: &Asked, taken: &[String]) -> Result<Draft> {
-    let usage = "kebbie routine add --title <name> --repo <folder or path> --at <\"07:00\" or \"mon 07:00\"> | --every <\"6h\"> [--mode report|plan|fix] [--push] [--paused] [--id <id>] <prompt>";
+    let usage = "kebbie routine add --title <name> --repo <folder or path> --at <\"07:00\" or \"mon 07:00\"> | --every <\"6h\"> [--mode report|plan|fix] [--push] [--paused] [--id <id>] [--profile <name>] <prompt>";
     let title = asked.title.map(str::trim).filter(|title| !title.is_empty()).ok_or(format!("a routine needs --title\n{usage}"))?;
     let repo = asked.repo.map(str::trim).filter(|repo| !repo.is_empty()).ok_or(format!("a routine needs --repo, the folder name or path of the repo it runs in\n{usage}"))?;
     let schedule = match (asked.at, asked.every) {
@@ -440,7 +441,8 @@ pub fn draft_from(asked: &Asked, taken: &[String]) -> Result<Draft> {
         Some(id) => id.to_string(),
         None => free_id(&slug(title), taken),
     };
-    Ok(Draft { id, title: title.to_string(), repo: repo.to_string(), schedule, prompt: prompt.to_string(), mode, push: asked.push, enabled: !asked.paused, profile: None })
+    let profile = asked.profile.map(|profile| crate::profiles::name(profile.trim()).map(str::to_string).map_err(|error| format!("--profile: {error}"))).transpose()?;
+    Ok(Draft { id, title: title.to_string(), repo: repo.to_string(), schedule, prompt: prompt.to_string(), mode, push: asked.push, enabled: !asked.paused, profile })
 }
 
 pub fn add_cli(asked: &Asked) -> Result<String> {
@@ -554,7 +556,7 @@ mod tests {
 
     #[test]
     fn the_command_lines_flags_make_the_same_draft_as_the_popup() {
-        let asked = Asked { title: Some("Cluster health"), id: None, repo: Some("~/infra"), at: Some("07:00"), every: None, mode: None, push: false, paused: false, prompt: " Check every node, storage volume and certificate. " };
+        let asked = Asked { title: Some("Cluster health"), id: None, repo: Some("~/infra"), at: Some("07:00"), every: None, mode: None, push: false, paused: false, profile: None, prompt: " Check every node, storage volume and certificate. " };
         assert_eq!(draft_from(&asked, &[]), Ok(draft()));
         assert_eq!(draft_from(&asked, &["cluster-health".to_string()]).unwrap().id, "cluster-health-2");
         let fix = draft_from(&Asked { every: Some("6h"), at: None, mode: Some("fix"), push: true, paused: true, id: Some("ci"), ..asked }, &[]).unwrap();
@@ -563,6 +565,20 @@ mod tests {
         assert!(draft_from(&Asked { every: Some("6h"), ..asked }, &[]).unwrap_err().contains("one schedule, --at or --every"));
         assert!(draft_from(&Asked { mode: Some("auto"), ..asked }, &[]).unwrap_err().contains("\"auto\" is not a mode"));
         assert!(draft_from(&Asked { prompt: "", ..asked }, &[]).unwrap_err().contains("needs a prompt"));
+    }
+
+    #[test]
+    fn routine_add_names_the_profile_its_task_starts_with_and_refuses_one_that_is_no_profile_name() {
+        let asked = Asked { title: Some("Cluster health"), id: None, repo: Some("~/infra"), at: None, every: Some("6h"), mode: None, push: false, paused: false, profile: Some("cluster-read"), prompt: "Check every node." };
+        let drafted = draft_from(&asked, &[]).unwrap();
+        assert_eq!(drafted.profile.as_deref(), Some("cluster-read"));
+        let (machine, repos, dir) = files("routine-add-profile");
+        add_in(&machine, &repos, &drafted).unwrap();
+        assert!(fs::read_to_string(&machine).unwrap().contains("profile = \"cluster-read\"\n"), "{}", fs::read_to_string(&machine).unwrap());
+        assert_eq!(loaded(&machine, &repos)[0].profile.as_deref(), Some("cluster-read"), "the routine's task starts on it");
+        assert!(draft_from(&Asked { profile: Some("Cluster Read"), ..asked }, &[]).unwrap_err().starts_with("--profile: \"Cluster Read\" is not a profile name"));
+        assert_eq!(draft_from(&Asked { profile: None, ..asked }, &[]).unwrap().profile, None);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

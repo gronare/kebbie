@@ -17,11 +17,11 @@ Have kebbie run a check on a schedule, as a task that reports what it finds or p
 If you work in a shell, add it with:
 
 ```bash
-kebbie routine add --title "Cluster health" --repo infra --every 6h \
+kebbie routine add --title "Cluster health" --repo infra --every 6h --profile cluster-read \
   "Check the cluster with kubectl: every node Ready, no pod crash-looping, every volume healthy."
 ```
 
-A routine that runs `kubectl` also needs `profile = "<name>"` in its table, naming a profile with a kubeconfig, as below.
+A routine that runs `kubectl` needs `--profile` naming a profile with a kubeconfig; [Manage a cluster from a scheduled task](manage-a-cluster-from-a-scheduled-task.md) sets one up.
 
 If you would rather ask the lead, say it in your words. It shows you the routine's title, repo, schedule, mode and push, and adds it with `kebbie routine add` once you say yes. It sets `--push` only when you ask for it.
 

@@ -171,7 +171,21 @@ Run these from your own terminal, with your own admin access. A task's shell ref
 
 ## Check and fix the cluster on a schedule
 
-1. Add two routines to the repo config the cluster work belongs to, here `~/.config/kebbie/repos/infra.toml`:
+1. Add a routine on the read login for the check:
+
+   ```bash
+   kebbie routine add --title "Cluster health" --repo infra --every 6h --profile cluster-read \
+     "Check the cluster with kubectl: every node Ready, no pod crash-looping or pending for long, every volume attached."
+   ```
+
+2. Add one on the operate login for the fix:
+
+   ```bash
+   kebbie routine add --title "Restart stuck pods" --repo infra --at 06:00 --mode fix --profile cluster-operate \
+     "Find pods stuck in CrashLoopBackOff for over an hour. Delete each one once, or restart its workload with kubectl rollout restart, and report what you did and what is still failing."
+   ```
+
+   If you keep routines in a repo's own config instead, such as `~/.config/kebbie/repos/infra.toml`, the same two as tables:
 
    ```toml
    [[routines]]
@@ -190,7 +204,7 @@ Run these from your own terminal, with your own admin access. A task's shell ref
    prompt = "Find pods stuck in CrashLoopBackOff for over an hour. Delete each one once, or restart its workload with kubectl rollout restart, and report what you did and what is still failing."
    ```
 
-2. Start a run now to see it work:
+3. Start a run now to see it work:
 
    ```bash
    kebbie routine run cluster-health
