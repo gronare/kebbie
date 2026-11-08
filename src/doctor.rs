@@ -403,6 +403,25 @@ pub fn claude_models(profiles: &[crate::profiles::Profile]) -> Vec<Check> {
     }).collect()
 }
 
+// A profile's kubeconfig is the whole of what its tasks may do in a cluster, so it must be there, the user's alone, and not the user's own login.
+pub fn kubeconfigs(profiles: &[crate::profiles::Profile], home: &Path) -> Vec<Check> {
+    use std::os::unix::fs::PermissionsExt;
+    let default = home.join(".kube/config");
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    profiles.iter().filter_map(|profile| Some((profile, profile.sandbox.kubeconfig_file()?))).map(|(profile, file)| {
+        let shown = crate::area_page::home_relative(&file);
+        let fact = |what: String| format!("profile {}: sandbox.kubeconfig {shown} {what}", profile.name);
+        if real(&file) == real(&default) {
+            return warn("kubeconfig", fact("is your default kubeconfig, usually an admin login, so its tasks may do anything you may in the cluster".to_string()), one("export a kubeconfig for a ServiceAccount with only the RBAC the tasks need to its own file, and point sandbox.kubeconfig at it"));
+        }
+        match std::fs::metadata(&file) {
+            Err(_) => warn("kubeconfig", fact("is not there, so its tasks' kubectl and helm fail".to_string()), one(format!("export the ServiceAccount's kubeconfig to {shown} with mode 0600"))),
+            Ok(metadata) if metadata.permissions().mode() & 0o077 != 0 => warn("kubeconfig", fact(format!("is readable by others (mode {:04o})", metadata.permissions().mode() & 0o777)), one(format!("chmod 600 {shown}"))),
+            Ok(_) => ok("kubeconfig", fact("is there and yours alone (mode 0600)".to_string())).brief("kubeconfig"),
+        }
+    }).collect()
+}
+
 pub(crate) fn named_profiles(machine: Option<&Machine>, config: &Path, repos_dir: &Path) -> Vec<(String, String)> {
     let mut named: Vec<(String, String)> = machine.and_then(|machine| machine.worktree.profile.clone()).map(|profile| (crate::area_page::home_relative(config), profile)).into_iter().collect();
     let mut files: Vec<PathBuf> = std::fs::read_dir(repos_dir).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|extension| extension == "toml")).collect();
@@ -919,6 +938,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     checks.extend(repo_checks);
     checks.extend(task_profiles(&env.profiles_dir, &named_profiles(machine.as_ref(), &env.config, &env.repos_dir)));
     checks.extend(claude_models(&crate::profiles::list_in(&env.profiles_dir).0));
+    checks.extend(kubeconfigs(&crate::profiles::list_in(&env.profiles_dir).0, &env.home));
     checks.extend(unchosen_profiles(&crate::profiles::list_in(&env.profiles_dir).0, &chosen));
     checks.extend(config::resolve(env.repo.as_deref()).ok().and_then(|loaded| crate::review::doctor(&env.profiles_dir, &loaded.settings)).map(|wrong| warn("reviewer", format!("kebbie review refuses: {wrong}"), one("pick a review profile for review.profile and review.second on the Settings page (,)"))));
     checks.extend(env.repo.as_deref().map(push_block));
@@ -1722,5 +1742,28 @@ mod tests {
         assert_eq!(pinned.len(), 1, "an alias, an alias with its context suffix and a Codex model are fine: {pinned:?}");
         assert_eq!((pinned[0].level, pinned[0].fact.as_str(), pinned[0].fix[0].as_str()), (Level::Warn, "profile designer pins claude-opus-4-5-20251101, a full model id, so its tasks stay on that model; an alias (opus, sonnet, haiku, fable) follows Claude Code to each new one", "pick one with m on the Settings page"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn doctor_warns_of_a_profile_kubeconfig_that_is_missing_readable_by_others_or_the_users_own_default_login() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = crate::sh::test_dir("doctor-kubeconfig");
+        std::fs::create_dir_all(home.join(".kube")).unwrap();
+        let file = |name: &str, mode: u32| {
+            let path = home.join(".kube").join(name);
+            std::fs::write(&path, "").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            path
+        };
+        let (default, open, full) = (file("config", 0o600), file("shared.yaml", 0o644), file("kebbie-cluster-full.yaml", 0o600));
+        let kube = |name: &str, path: &Path| crate::profiles::Profile { name: name.to_string(), sandbox: crate::sandbox::Policy { kubeconfig: Some(path.display().to_string()), ..Default::default() }, ..crate::profiles::built_in(crate::profiles::TASK).unwrap() };
+        let checks = kubeconfigs(&[kube("admin", &default), kube("shared", &open), kube("gone", &home.join(".kube/gone.yaml")), kube("cluster-full", &full), crate::profiles::built_in(crate::profiles::TASK).unwrap()], &home);
+        let found: Vec<(Level, &str, Option<&str>)> = checks.iter().map(|check| (check.level, check.fact.as_str(), check.fix.first().map(String::as_str))).collect();
+        assert_eq!(found.len(), 4, "a profile without a kubeconfig says nothing: {found:?}");
+        assert!(found[0].0 == Level::Warn && found[0].1.contains("profile admin: sandbox.kubeconfig") && found[0].1.contains("is your default kubeconfig, usually an admin login") && found[0].2.unwrap().contains("ServiceAccount"), "{found:?}");
+        assert!(found[1].0 == Level::Warn && found[1].1.ends_with("is readable by others (mode 0644)") && found[1].2.unwrap().starts_with("chmod 600 "), "{found:?}");
+        assert!(found[2].0 == Level::Warn && found[2].1.ends_with("is not there, so its tasks' kubectl and helm fail"), "{found:?}");
+        assert!(found[3].0 == Level::Ok && found[3].1.ends_with("is there and yours alone (mode 0600)"), "a dedicated file the user chose reads ok, cluster-admin or not: {found:?}");
+        std::fs::remove_dir_all(home).unwrap();
     }
 }
