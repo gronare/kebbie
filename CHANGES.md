@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- Every release carries a CycloneDX SBOM, kebbie-<version>.cdx.json, next to the binaries.
 
 ### Fixed
 

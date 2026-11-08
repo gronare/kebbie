@@ -73,8 +73,29 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  sbom:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx
+      - name: CycloneDX SBOM kebbie-<version>.cdx.json
+        run: |
+          cargo cyclonedx --format json --spec-version 1.5 --target all --override-filename "kebbie-${GITHUB_REF_NAME#v}.cdx"
+          mkdir dist
+          mv "kebbie-${GITHUB_REF_NAME#v}.cdx.json" dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kebbie-sbom
+          path: dist/*
+          if-no-files-found: error
+
   release:
-    needs: [binaries]
+    needs: [binaries, sbom]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -98,23 +119,23 @@ jobs:
           [ $# -eq 4 ] || { echo "::error::expected 4 binaries, got $*"; exit 1; }
           sha256sum kebbie-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
-      - name: Draft a GitHub Release with the binaries and the version's notes
+      - name: Draft a GitHub Release with the binaries, the SBOM and the version's notes
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber kebbie-*.tar.gz SHA256SUMS
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber kebbie-*.tar.gz kebbie-*.cdx.json SHA256SUMS
           else
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --notes-file ../release-notes.md --title "kebbie ${GITHUB_REF_NAME#v}" kebbie-*.tar.gz SHA256SUMS
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --notes-file ../release-notes.md --title "kebbie ${GITHUB_REF_NAME#v}" kebbie-*.tar.gz kebbie-*.cdx.json SHA256SUMS
           fi
-      - name: Publish the release once every binary and SHA256SUMS is attached
+      - name: Publish the release once every binary, the SBOM and SHA256SUMS is attached
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           attached=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | sort)
-          expected=$(ls kebbie-*.tar.gz SHA256SUMS | sort)
+          expected=$(ls kebbie-*.tar.gz kebbie-*.cdx.json SHA256SUMS | sort)
           [ "$attached" = "$expected" ] || { echo "::error::attached $attached, expected $expected"; exit 1; }
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
 
