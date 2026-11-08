@@ -198,7 +198,12 @@ fn places_in(layout: &Value) -> Places {
 }
 
 fn runs_kebbie(pane: &str, command: &str) -> bool {
-    herdr::foreground(pane).ok().flatten().is_some_and(|argv| argv.iter().any(|arg| arg.ends_with("kebbie")) && argv.iter().any(|arg| arg == command))
+    herdr::foreground(pane).ok().flatten().is_some_and(|argv| kebbie_command(&argv.iter().map(String::as_str).collect::<Vec<_>>()) == Some(command))
+}
+
+// The kebbie command a process runs, read from its argv: `kebbie start board "fix header"` runs start, not the board.
+fn kebbie_command<'a>(argv: &[&'a str]) -> Option<&'a str> {
+    argv.first().filter(|program| program.ends_with("kebbie")).and(argv.get(1).copied())
 }
 
 pub fn role_text(template: &str, sources: &[Source], vault: bool, propose: bool) -> String {
@@ -588,7 +593,7 @@ pub struct Board {
 fn board_pid(info: &Value) -> Option<u32> {
     info["foreground_processes"].as_array()?.iter().find_map(|process| {
         let argv: Vec<&str> = process["argv"].as_array().into_iter().flatten().filter_map(|arg| arg.as_str()).collect();
-        let board = argv.first().is_some_and(|program| program.ends_with("kebbie")) && argv.contains(&"board") && !argv.contains(&"--overlay");
+        let board = kebbie_command(&argv) == Some("board") && !argv.contains(&"--overlay");
         board.then(|| process["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok())).flatten()
     })
 }
@@ -760,6 +765,15 @@ mod tests {
         assert_eq!(board_pid(&info(json!([{ "argv": ["kebbie", "board", "--overlay"], "pid": 5 }]))), None, "the update overlay is no board");
         assert_eq!(board_pid(&info(json!([{ "argv": ["vim", "kebbie", "board"], "pid": 6 }]))), None);
         assert_eq!(board_pid(&json!({})), None);
+    }
+
+    #[test]
+    fn a_kebbie_command_that_only_mentions_board_in_its_arguments_is_not_taken_for_a_board() {
+        let info = json!({ "foreground_processes": [{ "argv": ["/usr/local/bin/kebbie", "start", "board", "fix header"], "pid": 7 }], "shell_pid": 1 });
+        assert_eq!(board_pid(&info), None, "a task named board is no board to restart");
+        assert_eq!(kebbie_command(&["kebbie", "tell", "billing", "the board froze"]), Some("tell"));
+        assert_eq!(kebbie_command(&["kebbie", "messages"]), Some("messages"));
+        assert_eq!(kebbie_command(&["vim", "messages"]), None);
     }
 
     #[test]

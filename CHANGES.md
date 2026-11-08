@@ -30,6 +30,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A bug goes to kebbie's maintainers once, even when two batches or the board and kebbie issue report send at the same time.
 - A bug the endpoint took stays sent when saving its issue fails, and is never offered again.
 - kebbie doctor fails its hub line, naming the file, when the hub identity is unreadable, instead of saying not connected.
+- Update restarts only real boards, never a kebbie command that names board in its arguments, such as kebbie start board.
 
 ## 0.36.0
 
