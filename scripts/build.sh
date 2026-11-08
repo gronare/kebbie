@@ -94,8 +94,8 @@ download() {
   got=$(sha256 "$work/$asset")
   if [ -z "$got" ]; then say "neither sha256sum nor shasum is installed to check the download"; return 1; fi
   if [ -z "$want" ] || [ "$want" != "$got" ]; then say "$asset does not match SHA256SUMS, so it is not used"; return 1; fi
-  if ! mkdir "$work/unpacked" || ! tar -xzf "$work/$asset" -C "$work/unpacked"; then say "could not unpack $asset"; return 1; fi
-  [ -f "$work/unpacked/kebbie" ] || { say "$asset holds no kebbie binary"; return 1; }
+  if ! mkdir "$work/unpacked" || ! tar -xzf "$work/$asset" --no-same-owner -C "$work/unpacked" kebbie; then say "could not unpack $asset"; return 1; fi
+  [ -f "$work/unpacked/kebbie" ] && [ ! -L "$work/unpacked/kebbie" ] || { say "$asset holds no kebbie binary"; return 1; }
   chmod 755 "$work/unpacked/kebbie" && touch "$work/unpacked/kebbie" || return 1
   # Renamed into place, never written into: a running kebbie keeps its file, and macOS kills a binary changed in place.
   mv -f "$work/unpacked/kebbie" "$binary" || return 1

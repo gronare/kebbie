@@ -44,6 +44,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A vault log line or branch that starts with - reaches the vault whole, never as an option.
 - The install script takes the highest kebbie version, also after a patch release to an older one.
 - The review split opens when kebbie's path or the state folder holds a quote.
+- kebbie update installs a downloaded binary only when the archive holds it as a plain file.
 
 ## 0.36.0
 

@@ -155,6 +155,36 @@ fn a_download_that_fails_its_checksum_is_not_used_and_nothing_is_built() {
 }
 
 #[test]
+fn a_download_whose_kebbie_is_a_symlink_or_comes_with_other_files_places_only_a_real_binary() {
+    let lab = Lab::new("symlink");
+    let release = lab.releases.join("v1.2.3");
+    let stage = lab.dir.join("stage");
+    let asset = format!("kebbie-1.2.3-{}.tar.gz", triple());
+    let pack = |names: &[&str]| {
+        fs::create_dir_all(&release).unwrap();
+        let packed = Command::new("tar").args(["-czf", &release.join(&asset).to_string_lossy(), "-C", &stage.to_string_lossy()]).args(names).status().unwrap();
+        assert!(packed.success());
+        let sum = Command::new("shasum").args(["-a", "256", &asset]).current_dir(&release).output().unwrap();
+        fs::write(release.join("SHA256SUMS"), String::from_utf8_lossy(&sum.stdout).to_string()).unwrap();
+    };
+    fs::create_dir_all(&stage).unwrap();
+    executable(&lab.dir.join("elsewhere"), PREBUILT);
+    std::os::unix::fs::symlink(lab.dir.join("elsewhere"), stage.join("kebbie")).unwrap();
+    pack(&["kebbie"]);
+    let refused = lab.build(None);
+    assert!(!refused.status.success() && stderr(&refused).contains("holds no kebbie binary"), "{}", stderr(&refused));
+    assert!(fs::symlink_metadata(lab.root.join("target/release/kebbie")).is_err(), "no link is placed as kebbie");
+    fs::remove_file(stage.join("kebbie")).unwrap();
+    executable(&stage.join("kebbie"), PREBUILT);
+    fs::write(stage.join("extra"), "x").unwrap();
+    pack(&["kebbie", "extra"]);
+    let placed = lab.build(None);
+    assert!(placed.status.success(), "{}", stderr(&placed));
+    assert_eq!(lab.binary(), PREBUILT);
+    assert!(!lab.root.join("target/release/extra").exists());
+}
+
+#[test]
 fn herdrs_own_build_of_an_unpublished_tag_stops_unless_the_machine_follows_main() {
     let lab = Lab::new("herdr-draft");
     lab.fake_cargo();
