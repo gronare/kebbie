@@ -31,6 +31,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A bug the endpoint took stays sent when saving its issue fails, and is never offered again.
 - kebbie doctor fails its hub line, naming the file, when the hub identity is unreadable, instead of saying not connected.
 - Update restarts only real boards, never a kebbie command that names board in its arguments, such as kebbie start board.
+- A message held for a busy task is delivered once, even when the board and the keeper both wait on the message log for long.
 
 ## 0.36.0
 

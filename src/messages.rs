@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -415,8 +416,8 @@ fn deliver(session: &Session, text: &str, type_into: TypeInto) -> std::result::R
     }
 }
 
-// One sender at a time, so a held message is never delivered twice; a lock older than a minute is left over from a crash.
-pub struct Lock(PathBuf);
+// One sender at a time, so a held message is never delivered twice; the kernel drops the flock when its holder dies, so a crash leaves nothing to steal.
+pub struct Lock(File, PathBuf);
 
 thread_local! {
     static HELD: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
@@ -438,27 +439,28 @@ impl Lock {
 
     pub fn take_in(dir: &Path, wait: bool) -> Result<Option<Lock>> {
         let path = lock_in(dir);
+        let file = OpenOptions::new().write(true).create(true).truncate(false).mode(0o600).open(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         for _ in 0..100 {
-            match OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path) {
-                Ok(_) => {
-                    HELD.with(|held| held.borrow_mut().push(path.clone()));
-                    return Ok(Some(Lock(path)));
-                }
-                Err(_) if fs::metadata(&path).and_then(|metadata| metadata.modified()).is_ok_and(|time| time.elapsed().unwrap_or_default() > Duration::from_secs(60)) => {
-                    let _ = fs::remove_file(&path);
-                }
-                Err(_) if wait => std::thread::sleep(Duration::from_millis(100)),
-                Err(_) => return Ok(None),
+            // SAFETY: flock on a descriptor this File owns.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                HELD.with(|held| held.borrow_mut().push(path.clone()));
+                return Ok(Some(Lock(file, path)));
             }
+            if !wait {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
         Err("Another kebbie is holding the message log; try again".to_string())
     }
 }
 
 impl Drop for Lock {
+    // A child forked by another thread holds a copy of the descriptor until it execs; unlocking releases the lock for every copy at once.
     fn drop(&mut self) {
-        HELD.with(|held| held.borrow_mut().retain(|path| path != &self.0));
-        let _ = fs::remove_file(&self.0);
+        HELD.with(|held| held.borrow_mut().retain(|path| path != &self.1));
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
     }
 }
 
@@ -1956,18 +1958,19 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_lock_is_taken_over_and_a_fresh_one_is_waited_for() {
+    fn a_lock_left_by_a_crash_is_free_and_an_old_held_one_is_never_stolen() {
         let dir = state("stale-lock");
         let path = lock_in(&dir);
         fs::write(&path, "").unwrap();
+        let taken = Lock::take_in(&dir, false).unwrap();
+        assert!(taken.is_some(), "a lock file nobody holds is free at once");
         let old = SystemTime::now() - Duration::from_secs(120);
         File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
-        let taken = Lock::take_in(&dir, false).unwrap();
-        assert!(taken.is_some(), "a lock older than a minute is a crash's leftover");
-        assert_eq!(Lock::take_in(&dir, false).unwrap().map(|_| ()), None, "a fresh lock is somebody's");
+        let other = dir.clone();
+        let elsewhere = std::thread::spawn(move || Lock::take_in(&other, false).unwrap().is_some()).join().unwrap();
+        assert!(!elsewhere, "a lock its holder still holds is somebody's, however old its file");
         drop(taken);
-        assert!(!path.exists());
-        fs::remove_dir_all(&dir).unwrap();
+        assert!(std::thread::spawn(move || Lock::take_in(&dir, false).unwrap().is_some()).join().unwrap(), "free again once dropped");
     }
 
     #[test]
