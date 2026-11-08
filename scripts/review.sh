@@ -11,7 +11,7 @@ state="${KEBBIE_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/kebbie}"
 default_branch() {
   git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null && return
   for candidate in origin/main origin/master; do
-    git show-ref --verify --quiet "refs/remotes/$candidate" && echo "$candidate" && return
+    git show-ref --verify --quiet "refs/remotes/$candidate" && printf '%s\n' "$candidate" && return
   done
   return 1
 }
@@ -27,7 +27,7 @@ worktree_base() {
 
 # A review's base "fork" is resolved on every use: a sha frozen at opening would count the default branch's commits as the task's after a rebase.
 resolve_base() {
-  if [ "$1" = fork ]; then worktree_base 2>/dev/null || echo HEAD; else echo "$1"; fi
+  if [ "$1" = fork ]; then worktree_base 2>/dev/null || echo HEAD; else printf '%s\n' "$1"; fi
 }
 
 describe_base() {
@@ -45,14 +45,14 @@ default_base() {
 }
 
 review_dir() {
-  echo "$state/reviews/$(echo "$1" | tr ':/' '__')"
+  printf '%s\n' "$state/reviews/$(printf '%s' "$1" | tr ':/' '__')"
 }
 
 kebbie_bin() {
   if [ -n "${KEBBIE_BIN:-}" ]; then
-    echo "$KEBBIE_BIN"
+    printf '%s\n' "$KEBBIE_BIN"
   elif [ -x "$(dirname "$script")/../target/release/kebbie" ]; then
-    echo "$(dirname "$script")/../target/release/kebbie"
+    printf '%s\n' "$(dirname "$script")/../target/release/kebbie"
   else
     echo kebbie
   fi
@@ -72,7 +72,7 @@ open_split() {
   root=$(git rev-parse --show-toplevel)
   pane=$("$herdr" pane split --pane "$HERDR_PANE_ID" --direction right --cwd "$root" "--${3:-focus}" | jq -r '.result.pane.pane_id')
   "$herdr" pane run "$pane" "$2; exit" >/dev/null
-  echo "$pane"
+  printf '%s\n' "$pane"
 }
 
 review_open() {
@@ -90,8 +90,8 @@ prune_reviews() {
 open_review() {
   prune_reviews
   pane=$(open_split review "'$(kebbie_bin)' review --view '$1'" "$2")
-  echo "$pane" > "$1/pane"
-  echo "$pane"
+  printf '%s\n' "$pane" > "$1/pane"
+  printf '%s\n' "$pane"
 }
 
 split() {
@@ -103,9 +103,9 @@ split() {
   else
     rm -rf "$d"
     mkdir -p "$d"
-    echo "$HERDR_PANE_ID" > "$d/agent"
+    printf '%s\n' "$HERDR_PANE_ID" > "$d/agent"
   fi
-  echo "$base" > "$d/base"
+  printf '%s\n' "$base" > "$d/base"
   describe_base "$(resolve_base "$base")" > "$d/label"
   [ $# -gt 0 ] && printf '%s\n' "$@" > "$d/scope"
   if review_open "$d"; then
@@ -120,29 +120,29 @@ hook() {
   [ "${CLAUDE_PLUGIN_OPTION_AUTO_OPEN:-false}" = true ] || return 0
   [ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ] || return 0
   input=$(cat)
-  cwd=$(echo "$input" | jq -r '.cwd // empty')
+  cwd=$(printf '%s\n' "$input" | jq -r '.cwd // empty')
   [ -n "$cwd" ] && (cd "$cwd" 2>/dev/null && in_linked_worktree 2>/dev/null) || return 0
-  session=$(echo "$input" | jq -r '.session_id // empty')
+  session=$(printf '%s\n' "$input" | jq -r '.session_id // empty')
   d=$(review_dir "$HERDR_PANE_ID")
   [ -n "$session" ] && [ "$(cat "$d/session" 2>/dev/null)" = "$session" ] && return 0
   if review_open "$d"; then
-    echo "$session" > "$d/session"
+    printf '%s\n' "$session" > "$d/session"
     return 0
   fi
-  file=$(echo "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')
+  file=$(printf '%s\n' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')
   dir=$(dirname "${file:-.}")
-  [ -d "$dir" ] || dir=$(echo "$input" | jq -r '.cwd // "."')
+  [ -d "$dir" ] || dir=$(printf '%s\n' "$input" | jq -r '.cwd // "."')
   top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || return 0
   cd "$top" || return 0
   head=$(git rev-parse --verify HEAD 2>/dev/null) || return 0
   rm -rf "$d"
   mkdir -p "$d"
-  echo "$session" > "$d/session"
-  echo "$HERDR_PANE_ID" > "$d/agent"
+  printf '%s\n' "$session" > "$d/session"
+  printf '%s\n' "$HERDR_PANE_ID" > "$d/agent"
   if worktree_base >/dev/null 2>&1; then
     echo fork > "$d/base"
   else
-    echo "$head" > "$d/base"
+    printf '%s\n' "$head" > "$d/base"
     echo "since the work started ($(git rev-parse --short HEAD))" > "$d/label"
     changed_files "$head" | while read -r path; do
       printf '%s\t%s\n' "$path" "$(fingerprint "$path")"

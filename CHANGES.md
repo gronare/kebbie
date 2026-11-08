@@ -38,6 +38,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A question the lead marks answered stays on the board, marked answered through the lead, until the task moves on, so you can still answer it yourself.
 - A sandboxed task's shell, Claude or Codex, reads no cloud, cluster, Docker or agent credentials, nor kebbie's state and config.toml.
 - The reviewer reads every diff without the repo's external diff, textconv drivers or fsmonitor.
+- A task's review pane opens on its own after an edit whose text holds a newline or a tab.
 
 ## 0.36.0
 

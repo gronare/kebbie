@@ -137,6 +137,27 @@ fn the_hook_opens_a_tasks_review_once_per_session_without_taking_the_focus() {
 }
 
 #[test]
+fn the_hook_reads_an_input_whose_text_holds_escaped_newlines_and_tabs() {
+    let split = Split::new("escaped");
+    let input = format!(r#"{{"cwd":"{0}","session_id":"s1","tool_input":{{"file_path":"{0}/b","content":"one\ntwo\tthree\\c"}}}}"#, split.slot.display());
+    split.run(&["hook"], &input);
+    assert!(split.herdr_calls().iter().any(|call| call.starts_with("pane split")), "an edit with a newline in its text opens the review: {:?}", split.herdr_calls());
+    assert_eq!(fs::read_to_string(split.dir().join("session")).unwrap(), "s1\n");
+}
+
+#[test]
+fn no_script_pipes_a_variable_through_echo_which_sh_backslash_expands() {
+    for script in ["review.sh", "sync.sh", "build.sh", "release.sh", "install.sh", "check.sh", "herdr-startup.sh", "clean-builds.sh", "release-notes.sh", "release-smoke.sh"] {
+        let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts").join(script)).unwrap();
+        for (number, line) in text.lines().enumerate() {
+            let piped = line.split("echo \"$").skip(1).any(|rest| rest.split_once('"').is_some_and(|(_, after)| after.trim_start().starts_with('|')));
+            let hook_side = ["review.sh", "sync.sh"].contains(&script) && line.contains("echo \"$");
+            assert!(!piped && !hook_side, "scripts/{script}:{}: printf '%s\\n' passes a variable through unchanged: {line}", number + 1);
+        }
+    }
+}
+
+#[test]
 fn the_script_lists_no_files_itself_and_fzf_is_gone() {
     let output = Command::new("sh").arg(SCRIPT).arg("rows").output().unwrap();
     assert_eq!(output.status.code(), Some(2), "kebbie review --view lists the files");

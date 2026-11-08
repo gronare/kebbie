@@ -9,7 +9,7 @@ mkdir -p "$state"
 panes=$("$herdr" pane list 2>/dev/null) || exit 0
 tabs=$("$herdr" tab list 2>/dev/null) || exit 0
 
-programs=$(echo "$panes" | jq -r '.result.panes[] | select(.agent != "claude") | .pane_id' |
+programs=$(printf '%s\n' "$panes" | jq -r '.result.panes[] | select(.agent != "claude") | .pane_id' |
   while read -r pane; do
     "$herdr" pane process-info --pane "$pane" 2>/dev/null | jq -r --arg pane "$pane" '.result.process_info as $i
       | $i.foreground_processes[0] as $f
@@ -37,7 +37,7 @@ while IFS="$(printf '\t')" read -r ws server worker; do
 done
 
 # --agent claude keeps the task title from outliving Claude in that pane.
-echo "$panes" | jq -r '.result.panes[] | select(.agent == "claude") | [.pane_id, .terminal_title_stripped, (.agent_session.value // "-")] | @tsv' |
+printf '%s\n' "$panes" | jq -r '.result.panes[] | select(.agent == "claude") | [.pane_id, .terminal_title_stripped, (.agent_session.value // "-")] | @tsv' |
 while IFS="$(printf '\t')" read -r pane title session; do
   set -- --source sync --agent claude
   [ -n "$title" ] && set -- "$@" --display-agent "$title"
@@ -51,8 +51,8 @@ while IFS="$(printf '\t')" read -r pane title session; do
       | [($m.model | sub("^claude-"; "") | sub("-(?<a>[0-9]+)-(?<b>[0-9]+)$"; " \(.a).\(.b)")),
          ((($m.usage.input_tokens + $m.usage.cache_read_input_tokens + $m.usage.cache_creation_input_tokens) / 1000 | floor | tostring) + "k")]
       | @tsv' 2>/dev/null | tail -n 1)
-    model=$(echo "$usage" | cut -f1)
-    ctx=$(echo "$usage" | cut -f2)
+    model=$(printf '%s\n' "$usage" | cut -f1)
+    ctx=$(printf '%s\n' "$usage" | cut -f2)
     [ -n "$model" ] && set -- "$@" --token "model=$model" --token "ctx=$ctx"
   fi
   "$herdr" pane report-metadata "$pane" "$@" >/dev/null 2>&1
@@ -60,7 +60,7 @@ done
 
 # Leaves labels you set alone: empty, numeric or the last name set here counts as unnamed; "-" clears.
 auto_rename() {
-  file="$state/$(echo "$1" | tr ':' '_')"
+  file="$state/$(printf '%s' "$1" | tr ':' '_')"
   case "$2" in
     - | *[!0-9]*) [ "$2" = - ] || [ "$2" = "$(cat "$file" 2>/dev/null)" ] || return 0 ;;
   esac
@@ -68,7 +68,7 @@ auto_rename() {
   if [ "$3" = - ]; then
     "$herdr" "$4" rename "$1" --clear >/dev/null 2>&1 && rm -f "$file"
   else
-    "$herdr" "$4" rename "$1" "$3" >/dev/null 2>&1 && echo "$3" > "$file"
+    "$herdr" "$4" rename "$1" "$3" >/dev/null 2>&1 && printf '%s\n' "$3" > "$file"
   fi
 }
 
@@ -104,5 +104,5 @@ done
 live=$(jq -rn --argjson panes "$panes" --argjson tabs "$tabs" '$panes.result.panes[].pane_id, $tabs.result.tabs[].tab_id' | tr ':' '_')
 for file in "$state"/*; do
   [ -e "$file" ] || continue
-  echo "$live" | grep -qx "$(basename "$file")" || rm -f "$file"
+  printf '%s\n' "$live" | grep -qx "$(basename "$file")" || rm -f "$file"
 done
