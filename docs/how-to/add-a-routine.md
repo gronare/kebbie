@@ -21,6 +21,8 @@ kebbie routine add --title "Cluster health" --repo infra --every 6h \
   "Check the cluster with kubectl: every node Ready, no pod crash-looping, every volume healthy."
 ```
 
+A routine that runs `kubectl` also needs `profile = "<name>"` in its table, naming a profile with a kubeconfig, as below.
+
 If you would rather ask the lead, say it in your words. It shows you the routine's title, repo, schedule, mode and push, and adds it with `kebbie routine add` once you say yes. It sets `--push` only when you ask for it.
 
 If you write the table yourself, or keep a routine in a repo's own config, follow the examples below.
@@ -36,13 +38,14 @@ The cluster's manifests live in a gitops repo, `~/code/infra`, so the routine go
    id = "cluster-health"
    title = "Cluster health"
    every = "6h"
+   profile = "cluster-read"
    prompt = """
    Check the cluster with kubectl: every node Ready, no pod crash-looping or pending for long, \
    every volume attached and healthy, and every gitops bundle reconciled.
    """
    ```
 
-   `mode` is left at `"report"`: the task looks and changes nothing.
+   `mode` is left at `"report"`: the task looks and changes nothing. `profile = "cluster-read"` gives its kubectl a read-only login; a task on a profile without a kubeconfig runs no kubectl. [Manage a cluster from a scheduled task](manage-a-cluster-from-a-scheduled-task.md) sets that profile up.
 
 2. Check it parses:
 

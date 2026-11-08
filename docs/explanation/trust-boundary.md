@@ -203,6 +203,12 @@ A profile can name its own hosts (`allowed_domains`), folders (`allow_write`) an
 
 The built-in `ops` profile runs `ssh`, `scp` and `rsync` outside it, since they ignore the sandbox's proxy and cannot connect from inside. An ssh session reaches other machines, and this one as you, so kebbie says so when an `ops` task starts.
 
+## A cluster login is the profile's kubeconfig alone
+
+A task reaches no cluster unless its profile names a kubeconfig. Then its `kubectl` and `helm` run outside the sandbox with `KUBECONFIG` set to that file, while the sandboxed shell and Claude's file tools still read none of `~/.kube` nor the file. kebbie's shell guard refuses a `kubectl` or `helm` command that picks another login, sets `KUBECONFIG`, runs a plugin or names or redirects to a file outside the worktree, and refuses both outright in any other sandboxed task. With the sandbox off and no kubeconfig, they run with your own logins, as the task's start says, since the guard could not hold an unsandboxed shell anyway.
+
+The guard reads the command line, so it is best effort. What holds is the login's own RBAC: give a task's ServiceAccount only what its work needs. Only a profile file on this machine, never a symlinked one, picks the login. See [Manage a cluster from a scheduled task](../how-to/manage-a-cluster-from-a-scheduled-task.md).
+
 With `task.sandbox = false` a task's shell runs unsandboxed, and kebbie's guards are what remain. `kebbie doctor`, a task's start and the board's Areas page say so. Its recorded test runs read `unverified: recorded without a sandbox`, since its shell could have written them.
 
 ## Where it ends
@@ -215,7 +221,7 @@ kebbie's guards read the process tree and files in your own account. A process r
 
 ## Outside the sandbox only the guards hold
 
-The sandbox closes those to a task's shell, but not to a command that runs outside it: an `ops` task's ssh, a profile's own `excluded_commands`, or any task with `task.sandbox = false`. With the sandbox off, only kebbie's guards hold a task, and they read the process tree, which a script the task starts can leave. On your machine that is your choice to make.
+The sandbox closes those to a task's shell, but not to a command that runs outside it: an `ops` task's ssh, a profile's `kubectl` and `helm`, a profile's own `excluded_commands`, or any task with `task.sandbox = false`. With the sandbox off, only kebbie's guards hold a task, and they read the process tree, which a script the task starts can leave. On your machine that is your choice to make.
 
 ## Package caches are code you run later
 

@@ -114,6 +114,20 @@ kebbie start rotate-certs --profile ops "Rotate the TLS certificates on the web 
 
 An ssh session can reach this machine as you as well, past the sandbox, so `kebbie start` says so for an `ops` task. Start one only for work you would run over ssh yourself.
 
+## Manage a cluster
+
+A profile reaches a Kubernetes cluster only when it names a kubeconfig file. Its tasks' `kubectl` and `helm` then run outside the sandbox with that file alone:
+
+```toml
+# ~/.config/kebbie/profiles/cluster-read.toml
+for = "reading the cluster's state"
+
+[sandbox]
+kubeconfig = "~/.kube/kebbie-cluster-read.yaml"
+```
+
+What the task may do in the cluster is what that login's RBAC allows. [Manage a cluster from a scheduled task](manage-a-cluster-from-a-scheduled-task.md) sets up a login per level and the routines that use them.
+
 ## What a profile cannot change
 
 A profile only adds. Whatever it says, a task's Claude still has:
@@ -125,7 +139,7 @@ A profile only adds. Whatever it says, a task's Claude still has:
 When the profile loads, kebbie refuses:
 
 - An `allow` rule that would let a task run one of kebbie's guarded commands, or every shell command.
-- A `sandbox.excluded_commands` entry that names kebbie, herdr or a terminal multiplexer.
+- A `sandbox.excluded_commands` entry that names kebbie, herdr or a terminal multiplexer, or `kubectl` or `helm`, which take `sandbox.kubeconfig` instead.
 - An `allow_write` folder that holds kebbie's, herdr's or Claude Code's own files.
 
 `skills` puts the skills in the task's role as the first thing to run, and Claude follows it like the rest of its role. `claude.plugins` turns installed plugins on for the task only.

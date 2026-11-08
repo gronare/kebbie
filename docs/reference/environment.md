@@ -72,6 +72,7 @@ For every command a Codex task runs:
 | `KEBBIE_ADDRESS` | The task's address, `<task>@<repo>` |
 | `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>` | The push block: `url.kebbie-blocks-push://.pushInsteadOf` for every URL with `protocol.kebbie-blocks-push.allow = never`, so git refuses the push before it starts ssh or any helper, and rules that keep a local path (`/`, `./`, `../`) or a `file://` URL as it is, so a push to a repo on the disk, such as one a test makes, goes through |
 | `TMPDIR` | The task's temp folder, `/tmp/kebbie-<uid>/<worktree>-<hash>`, short enough for the Unix sockets tools such as headless Chrome make in it |
+| `KUBECONFIG` | The profile's [`sandbox.kubeconfig`](configuration.md#profiles), when it names one. A Claude task gets it in its settings' `env` too. |
 
 For `worktree.dev_server` and `worktree.dev_worker`:
 

@@ -8,6 +8,9 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Every release carries a CycloneDX SBOM, kebbie-<version>.cdx.json, next to the binaries.
 - A task's shell gets no GitHub token, git credential helper or ssh agent, so git there has no login to push with; an ops task keeps the ssh agent for its ssh to other machines.
 - A task's shell commands, Claude's and Codex's, are refused when they run git push in any form.
+- A profile can name a kubeconfig, so its tasks and routines run kubectl and helm on that login alone.
+- kubectl and helm are refused in a sandboxed task whose profile names no kubeconfig.
+- kebbie doctor warns when a profile's kubeconfig is missing, readable by others or your default one.
 
 ### Fixed
 - A test command written inside a heredoc, such as a plan written with cat <<EOF, is no longer recorded as a test run.
