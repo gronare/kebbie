@@ -11,7 +11,7 @@ use crate::sh::Result;
 use super::launch::{clear_tmp, open_space};
 use super::{fast_forward_main, fetch, slug};
 
-// Git is the only state: a slot on a task branch is busy; a clean detached or wt<N> slot is free.
+// Git is the only state: a slot on a task branch is busy; a clean detached or wt<N> slot is free, and one whose status git cannot read is busy, so it never fails the list.
 pub struct Slot {
     pub number: usize,
     pub path: PathBuf,
@@ -27,7 +27,7 @@ pub fn slots(repo: &Path) -> Result<Vec<Slot>> {
             continue;
         }
         let placeholder = worktree.branch.as_deref().is_none_or(|branch| branch == format!("wt{number}"));
-        let free = placeholder && is_clean(&worktree.path)?;
+        let free = placeholder && is_clean(&worktree.path).unwrap_or(false);
         let task = if placeholder { None } else { worktree.branch };
         list.push(Slot { number, path: worktree.path, task, free });
     }
@@ -377,6 +377,19 @@ mod tests {
             git(&dir, &["worktree", "remove", "--force", &path.to_string_lossy()]).unwrap();
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_free_slot_git_cannot_read_counts_as_busy_and_leaves_the_other_slots_listed() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let broken = create_slot(&dir, "HEAD").unwrap();
+        std::fs::write(crate::repo::git_dir_of(&broken.path).unwrap().join("index"), "not an index").unwrap();
+        assert!(is_clean(&broken.path).is_err(), "git status fails in it");
+        let listed = slots(&dir).unwrap();
+        assert_eq!(listed.iter().map(|slot| (slot.task.as_deref(), slot.free)).collect::<Vec<_>>(), [(Some("billing"), false), (None, false)], "the broken slot is no task and never handed to a start");
+        assert_eq!(find_task(&dir, Some("billing"), &dir).unwrap().path, slot.path, "the task beside it is still found");
+        git(&dir, &["worktree", "remove", "--force", &broken.path.to_string_lossy()]).unwrap();
+        cleanup(dir, origin, &slot);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::repo::{default_branch, name_of};
 use crate::sh::Result;
 use super::approval::{approval_holds, covers, fingerprint};
 use super::intent::{self, Intent, Next, Work};
-use super::pool::{Slot, find_task};
+use super::pool::{Slot, find_task, slots};
 use super::push::{Sent, pushed_fingerprint, rejected};
 
 // How long the head of a line waits for its task's Claude before the pushes behind it go on without it.
@@ -97,7 +97,7 @@ pub(super) fn complete_in(state: &Path, log: &[Message], now: u64, read: Read, p
 fn fixes(state: &Path, log: &[Message], now: u64, read: Read) -> Vec<String> {
     let reports = messages::latest_reports(log);
     let mut notes = Vec::new();
-    for waiting in intent::all(state).into_iter().filter(|waiting| waiting.queued.is_none()) {
+    for waiting in intent::all(state).into_iter().filter(|waiting| waiting.queued.is_none() && !unlisted(&waiting.repo)) {
         let slot = find_task(&waiting.repo, Some(&waiting.task), &waiting.repo).ok();
         let current = slot.as_ref().and_then(|slot| default_branch(&waiting.repo).and_then(|upstream| fingerprint(&slot.path, &upstream)).ok());
         let approved = current.as_deref().is_some_and(|current| approval_holds(state, &waiting.address, current));
@@ -152,7 +152,15 @@ pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Messag
     driven
 }
 
+// A repo whose worktrees git cannot list right now says nothing about whether the task is gone.
+fn unlisted(repo: &Path) -> bool {
+    repo.exists() && slots(repo).is_err()
+}
+
 fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push: Push) -> Turn {
+    if unlisted(&head.repo) {
+        return Turn::Waits;
+    }
     let Ok(slot) = find_task(&head.repo, Some(&head.task), &head.repo) else {
         let why = format!("{} is gone, so kebbie dropped the push {} asked for", head.address, head.by.word());
         intent::forget(state, &head.address);
@@ -307,6 +315,23 @@ mod tests {
         complete_in(&state, &ready("r3"), 300, &|_, _| None, &mut |_, _| Err("the reviewer has not passed it".to_string()));
         assert!(load(&state, &address).is_none(), "any other failure goes to the lead");
         assert_eq!(phase::load(&state, &address).map(|record| record.phase), Some(Phase::NeedsYou(Why::Failed)));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_queued_push_waits_while_git_cannot_list_the_repos_worktrees_and_is_dropped_only_once_its_task_is_gone() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = format!("billing@{}", crate::repo::name_of(&dir));
+        save(&state, &intent(By::User, &dir, &fingerprint(&slot.path, &upstream).unwrap())).unwrap();
+        std::fs::rename(dir.join(".git"), dir.join(".git-away")).unwrap();
+        let notes = complete_in(&state, &[], 300, &|_, _| None, &mut pushed);
+        assert!(notes.is_empty() && load(&state, &address).is_some(), "a list git cannot give is no sign the task is gone: {notes:?}");
+        std::fs::rename(dir.join(".git-away"), dir.join(".git")).unwrap();
+        git(&slot.path, &["switch", "--quiet", "--detach"]).unwrap();
+        let notes = complete_in(&state, &[], 300, &|_, _| None, &mut pushed);
+        assert!(notes.iter().any(|note| note.contains("is gone")) && load(&state, &address).is_none(), "{notes:?}");
+        git(&slot.path, &["switch", "--quiet", "billing"]).unwrap();
         cleanup(dir, origin, &slot);
     }
 

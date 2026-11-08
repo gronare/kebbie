@@ -18,6 +18,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A pushed task whose CI never starts, in a repo with workflows, moves to Needs you after 30 minutes instead of closing as green.
 - Two tasks started at once in one repo each get a worktree of their own.
 - A follow-up started for a comment takes the mode of the task started last in its own repo, never bypassPermissions.
+- Queued pushes stay in line while git cannot read a free worktree or list the repo's worktrees, instead of being dropped as gone.
 - Rewording a task's commit waits for kebbie's other rebase of its worktree, and gets past another git's index.lock.
 
 ## 0.36.0
