@@ -297,6 +297,18 @@ fn a_hub_that_moved_port_is_followed_with_the_same_method_and_body_and_kept() {
 }
 
 #[test]
+fn doctor_fails_naming_the_file_when_the_hub_identity_cannot_be_read() {
+    let state = crate::sh::test_dir("hub-doctor-unreadable");
+    let file = identity::dir(&state).join("identity.json");
+    crate::state::write(&file, "{ not json").unwrap();
+    let check = super::doctor(&state, Some("mac"), now(), |_| Ok(()));
+    assert_eq!(check.level, crate::doctor::Level::Fail, "{}", check.fact);
+    assert!(check.fact.contains("unreadable") && check.fact.contains(&file.display().to_string()) && !check.fact.contains("not connected"), "{}", check.fact);
+    assert!(check.fix.iter().any(|fix| fix.contains("kebbie hub connect")), "{:?}", check.fix);
+    assert!(super::config_line(Some(&state)).starts_with("hub.connected = unreadable ("), "{}", super::config_line(Some(&state)));
+}
+
+#[test]
 fn doctor_says_whether_the_hub_is_joined_reachable_and_posting() {
     let hub = open_hub(|_| {});
     let alone = crate::sh::test_dir("hub-doctor-none");

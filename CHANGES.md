@@ -29,6 +29,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The board's report window sends the bugs you read, even when a new or edited bug arrives while it is open.
 - A bug goes to kebbie's maintainers once, even when two batches or the board and kebbie issue report send at the same time.
 - A bug the endpoint took stays sent when saving its issue fails, and is never offered again.
+- kebbie doctor fails its hub line, naming the file, when the hub identity is unreadable, instead of saying not connected.
 
 ## 0.36.0
 

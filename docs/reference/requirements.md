@@ -121,7 +121,7 @@ With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `s
 | `backlog …` | Each backlog source can be read, and an installed source not in use. |
 
 - `docs` suggests turning `docs.required` on when `gh` says the repo is public on GitHub. Without `gh` or a GitHub remote the line is left out.
-- `hub`: when the machine has joined, it shows the hub's address and the machine's name, whether it pinned an account key and when the board last went out. It warns when the hub does not answer, the machine holds no account key (so no browser can read its board) or the last post failed.
+- `hub`: when the machine has joined, it shows the hub's address and the machine's name, whether it pinned an account key and when the board last went out. It warns when the hub does not answer, the machine holds no account key (so no browser can read its board) or the last post failed. It fails, naming the file, when the machine's hub identity cannot be read.
 - `maintainers`: whether error signals go to kebbie's maintainers (`report.signals`, `not asked` until it is set), when they last went and whether that failed, and what happens to kebbie's own bug reports (`report.text`). It warns while `"always"` is set but not armed.
 - `reports`: how many reports were filed here, the last fetch and its error, and how many reports wait in quarantine on the issues endpoint.
 - `comments` warns when `comments.watch` is on but origin is not on GitHub or `gh` is missing or logged out, with the same reason `kebbie ci` gives. With `comments.watch = false` it says it is off.

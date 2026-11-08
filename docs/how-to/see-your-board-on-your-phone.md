@@ -108,7 +108,7 @@ kebbie hub status
 It shows the hub, the machine's name, the account whose key the machine pinned with the key's two fingerprints, and when the board last went out.
 
 - The board's `H` window shows the machine on its hub with a dot: green with when the board last went out, red with the reason when it does not.
-- `kebbie doctor` has a `hub` line: connected, reachable, and the last post.
+- `kebbie doctor` has a `hub` line: connected, reachable, and the last post. A hub identity file it cannot read fails that line with the file's path.
 
 The keeper posts the board when it changes and once a minute while nothing does, so the phone can tell that the machine is awake. A machine not heard from for three minutes shows as asleep. The hub keeps a board a day at most, so the once-a-minute post keeps an awake machine's board fresh, and a machine that has slept longer shows as asleep with when it was last seen.
 

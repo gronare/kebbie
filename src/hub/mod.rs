@@ -429,8 +429,11 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
 }
 
 pub fn config_line(state: Option<&Path>) -> String {
-    let identity = state.and_then(|state| identity::load(state).ok().flatten());
-    let value = identity.map_or("none".to_string(), |identity| format!("{:?}", identity.url));
+    let value = match state.map(identity::load) {
+        Some(Ok(Some(identity))) => format!("{:?}", identity.url),
+        Some(Err(error)) => format!("unreadable ({error})"),
+        _ => "none".to_string(),
+    };
     format!("hub.connected = {value}  (kebbie hub connect)\n  The hub this machine posts its board to, sealed to the account that connected it; kebbie hub connect or join sets it, kebbie hub leave forgets it, kebbie hub move moves it. Kept in kebbie's state with the machine's keys, not in config.toml.")
 }
 
@@ -440,8 +443,10 @@ fn check(level: Level, name: &str, fact: impl Into<String>, fix: Vec<String>) ->
 
 pub fn doctor(state: &Path, configured: Option<&str>, now: u64, reach: impl FnOnce(&str) -> std::result::Result<(), String>) -> Check {
     let name = "hub";
-    let Ok(Some(identity)) = identity::load(state) else {
-        return check(Level::Ok, name, "not connected; kebbie hub connect shows the board on your phone", Vec::new()).brief("hub not connected");
+    let identity = match identity::load(state) {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return check(Level::Ok, name, "not connected; kebbie hub connect shows the board on your phone", Vec::new()).brief("hub not connected"),
+        Err(error) => return check(Level::Fail, name, format!("this machine's hub identity is unreadable, so nothing is posted: {error}"), vec!["fix the file, or move it away and run kebbie hub connect again".to_string()]).brief("hub identity unreadable"),
     };
     let relay = relay::load(state);
     let posted = relay.posted_at.map_or("no board posted yet".to_string(), |at| format!("board rev {} posted {}", relay.rev, ago(Some(at), now)));
