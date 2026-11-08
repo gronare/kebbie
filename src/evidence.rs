@@ -60,6 +60,7 @@ pub struct Run {
     pub transcript: String,
     pub says: Option<Exit>,
     pub worktree: String,
+    pub read_to: u64,
 }
 
 impl Run {
@@ -67,7 +68,7 @@ impl Run {
         json!({
             "command": self.command, "runner": self.runner, "result": self.result.name(), "ok": self.result == Outcome::Passed, "why": self.why, "exit": self.exit, "duration_ms": self.duration_ms,
             "summary": self.summary, "sha": self.sha, "dirty": self.dirty, "code": self.code, "at": self.at,
-            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key), "worktree": self.worktree,
+            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key), "worktree": self.worktree, "read_to": self.read_to,
         })
     }
 
@@ -94,6 +95,7 @@ impl Run {
             transcript: value["transcript"].as_str().unwrap_or_default().to_string(),
             says: value["says"].as_str().map(Exit::from_key),
             worktree: value["worktree"].as_str().unwrap_or_default().to_string(),
+            read_to: value["read_to"].as_u64().unwrap_or(0),
         })
     }
 
@@ -513,6 +515,8 @@ pub fn outcome(input: &Value, listed: &[String]) -> Option<Ended> {
 
 const IN_BACKGROUND: &str = "still running in the background";
 const RAN_NONE: &str = "it ran no tests";
+const NEVER_ENDED: &str = "kebbie never saw it end";
+const BACKGROUND_GIVE_UP: u64 = 24 * 60 * 60;
 
 // How a background command ended, as its <task-notification> in the session's transcript says: whether it ran to its end, its exit code when given, and its output file.
 #[derive(Clone, Debug, PartialEq)]
@@ -560,21 +564,42 @@ pub fn settled(run: &Run, end: &End, listed: &[String]) -> Run {
         (true, None) => judged(false, Exit::Silent("ended without an exit code"), summary.as_ref()),
         (true, Some(exit)) => judged(exit == 0, says, summary.as_ref()),
     };
-    Run { result, why: why.to_string(), exit: end.exit, summary: summary.map(|summary| summary.text).unwrap_or_default(), background: String::new(), transcript: String::new(), ..run.clone() }
+    Run { result, why: why.to_string(), exit: end.exit, summary: summary.map(|summary| summary.text).unwrap_or_default(), background: String::new(), transcript: String::new(), read_to: 0, ..run.clone() }
 }
 
-// Settles every run still in the background whose end the session's transcript now holds, and gives the runs it settled.
-pub fn settle(state: &Path, address: &str, listed: &[String]) -> Vec<Run> {
+// The complete lines a transcript gained since byte `from`, and the byte after the last of them; a transcript shorter than `from` was replaced and is read from its start.
+fn transcript_since(path: &Path, from: u64) -> Option<(String, u64)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(path).ok()?;
+    let from = if from > file.metadata().ok()?.len() { 0 } else { from };
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let complete = bytes.iter().rposition(|byte| *byte == b'\n').map_or(0, |at| at + 1);
+    bytes.truncate(complete);
+    Some((String::from_utf8_lossy(&bytes).into_owned(), from + complete as u64))
+}
+
+// Settles every run still in the background whose end the session's transcript now holds, reading only what it gained since the last look, and gives up on one that has not ended in a day; gives the runs it settled.
+pub fn settle(state: &Path, address: &str, listed: &[String], now: u64) -> Vec<Run> {
     let mut runs = runs_in(state, address);
-    let mut changed = Vec::new();
+    let (mut changed, mut moved) = (Vec::new(), false);
     for run in runs.iter_mut().filter(|run| !run.background.is_empty() && !run.transcript.is_empty()) {
-        let Ok(transcript) = fs::read_to_string(&run.transcript) else { continue };
-        if let Some(end) = background_end(&transcript, &run.background) {
-            *run = settled(run, &end, listed);
+        if let Some((transcript, read_to)) = transcript_since(Path::new(&run.transcript), run.read_to) {
+            moved |= read_to != run.read_to;
+            run.read_to = read_to;
+            if let Some(end) = background_end(&transcript, &run.background) {
+                *run = settled(run, &end, listed);
+                changed.push(run.clone());
+                continue;
+            }
+        }
+        if now.saturating_sub(run.at) >= BACKGROUND_GIVE_UP {
+            *run = Run { result: Outcome::Unknown, why: NEVER_ENDED.to_string(), background: String::new(), transcript: String::new(), read_to: 0, ..run.clone() };
             changed.push(run.clone());
         }
     }
-    if !changed.is_empty() {
+    if !changed.is_empty() || moved {
         let text: String = runs.iter().map(|run| format!("{}\n", run.to_json())).collect();
         let _ = crate::state::write(&file(state, address), text);
     }
@@ -602,7 +627,7 @@ pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String]
     let (sha, dirty, code) = snapshot(worktree).ok()?;
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
     let transcript = if background.as_deref().is_some_and(|id| !id.is_empty()) { input["transcript_path"].as_str().unwrap_or_default().to_string() } else { String::new() };
-    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned() };
+    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned(), read_to: 0 };
     save(state, address, &run).ok()?;
     Some(run)
 }
@@ -626,7 +651,7 @@ pub fn hook(address: &str, input: &str) -> String {
         said.extend(missed.as_deref().map(unrecorded_context));
         note_seen(&state, address, missed, crate::messages::now());
     }
-    let mut passed = passed_in(address, &state_dir().map(|state| settle(&state, address, &listed)).unwrap_or_default());
+    let mut passed = passed_in(address, &state_dir().map(|state| settle(&state, address, &listed, crate::messages::now())).unwrap_or_default());
     if let Some(run) = recorded(address, &cwd, &listed, &input) {
         match run.result {
             Outcome::Passed => passed = passed.or_else(|| passed_in(address, std::slice::from_ref(&run))),
@@ -812,7 +837,7 @@ pub fn brief_for(state: &Path, address: &str, worktree: &Path, upstream: &str, s
     let seen = seen_in(state, address);
     let configured = crate::config::resolve(Some(worktree)).map(|loaded| loaded.settings.test_commands.value).unwrap_or_default();
     let listed = commands(&configured);
-    settle(state, address, &listed);
+    settle(state, address, &listed, crate::messages::now());
     let unrecorded: Vec<String> = seen.unrecorded.iter().filter(|command| recognise(command, &listed).is_none()).cloned().collect();
     let current = |code: &str| tasks::same_code(worktree, upstream, code, sha);
     brief(&runs_in(state, address), |run| current(&run.code), |run| shown(run, current, true), hook_in(state, address, &seen), &unrecorded)
@@ -825,7 +850,7 @@ fn duration(ms: u64) -> String {
 pub fn print(cwd: &Path, name: Option<&str>, as_json: bool) -> Result<String> {
     let task = task_at(cwd, name)?;
     let configured = crate::config::resolve(Some(&task.path)).map(|loaded| loaded.settings.test_commands.value).unwrap_or_default();
-    settle(&state_dir()?, &task.address, &commands(&configured));
+    settle(&state_dir()?, &task.address, &commands(&configured), crate::messages::now());
     let runs = runs_in(&state_dir()?, &task.address);
     if as_json {
         let items: Vec<Value> = runs.iter().rev().map(|run| {
@@ -1021,7 +1046,7 @@ mod tests {
         let list = listed(&[]);
         let run = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 100).unwrap();
         let head = git(&dir, &["rev-parse", "HEAD"]).unwrap();
-        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks), worktree: dir.to_string_lossy().into_owned() });
+        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks), worktree: dir.to_string_lossy().into_owned(), read_to: 0 });
         assert_eq!(runs_in(&state, "billing@app"), [run]);
         let broke = record_in(&state, "billing@app", &dir, &list, &failed("npm test"), 200).unwrap();
         assert!(broke.result == Outcome::Failed && broke.exit == Some(1) && broke.runner == "npm test");
@@ -1084,6 +1109,38 @@ mod tests {
     }
 
     #[test]
+    fn a_background_run_reads_only_what_the_transcript_gained_and_is_given_up_after_a_day() {
+        let dir = repo();
+        let state = dir.join("state");
+        let list = listed(&[]);
+        let transcript = dir.join("session.jsonl");
+        let old = format!("{}\n", json!({ "type": "user", "content": "x".repeat(4096) }));
+        fs::write(&transcript, &old).unwrap();
+        let mut background = passed("cargo test");
+        background["tool_response"] = json!({ "stdout": "", "stderr": "", "interrupted": false, "backgroundTaskId": "bx9" });
+        background["transcript_path"] = json!(transcript.to_str().unwrap());
+        record_in(&state, "billing@app", &dir, &list, &background, 100).unwrap();
+        assert!(settle(&state, "billing@app", &list, 200).is_empty());
+        assert_eq!(runs_in(&state, "billing@app")[0].read_to, old.len() as u64, "the next look starts where this one ended");
+        let output = dir.join("bx9.output");
+        fs::write(&output, "test result: ok. 3 passed; 0 failed\n").unwrap();
+        let end = notification("bx9", &output, "completed", "Background command \"cargo test\" completed (exit code 0)");
+        let mut grown = fs::OpenOptions::new().append(true).open(&transcript).unwrap();
+        std::io::Write::write_all(&mut grown, &end.as_bytes()[..end.len() / 2]).unwrap();
+        assert!(settle(&state, "billing@app", &list, 300).is_empty(), "half a line is left for the next look");
+        assert_eq!(runs_in(&state, "billing@app")[0].read_to, old.len() as u64);
+        std::io::Write::write_all(&mut grown, &end.as_bytes()[end.len() / 2..]).unwrap();
+        assert_eq!(settle(&state, "billing@app", &list, 400)[0].result, Outcome::Passed);
+        background["tool_response"]["backgroundTaskId"] = json!("bx10");
+        record_in(&state, "billing@app", &dir, &list, &background, 1000).unwrap();
+        assert!(settle(&state, "billing@app", &list, 1000 + BACKGROUND_GIVE_UP - 1).is_empty());
+        let given_up = settle(&state, "billing@app", &list, 1000 + BACKGROUND_GIVE_UP);
+        assert_eq!((given_up[0].result, given_up[0].why.as_str(), given_up[0].background.as_str()), (Outcome::Unknown, NEVER_ENDED, ""), "a notice that never lands stops costing a read");
+        assert!(settle(&state, "billing@app", &list, 1000 + BACKGROUND_GIVE_UP + 1).is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn a_settled_pass_goes_back_to_the_reviewer_for_its_own_task_and_never_for_the_worktree_the_shell_is_in() {
         let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
         let (other_dir, other_origin, other_slot, _) = crate::tasks::test_support::task_in_another_repo("api");
@@ -1118,15 +1175,15 @@ mod tests {
         let run = record_in(&state, "billing@app", &dir, &list, &timed_out, 1).unwrap();
         assert_eq!((run.result, run.why.as_str(), run.exit, run.background.as_str()), (Outcome::Unknown, IN_BACKGROUND, None, "bx1"), "moved to the background at its timeout, it has not ended");
         assert!(unknown_context(&run).contains("run it in the foreground, or say in your report how it ended"));
-        assert!(settle(&state, "billing@app", &list).is_empty(), "no notice of its end yet");
+        assert!(settle(&state, "billing@app", &list, 10).is_empty(), "no notice of its end yet");
         let output = dir.join("bx1.output");
         fs::write(&output, "Test Case '-[AppUITests testCheckout]' failed\n\t Executed 40 tests, with 1 failure (0 unexpected) in 700.1 (700.2) seconds\n** TEST FAILED **\n").unwrap();
         fs::write(&transcript, notification("bx1", &output, "completed", "Background command \"xcodebuild test -scheme App\" completed (exit code 65)")).unwrap();
-        let settled = settle(&state, "billing@app", &list);
+        let settled = settle(&state, "billing@app", &list, 10);
         assert_eq!(settled.len(), 1);
         assert_eq!((settled[0].result, settled[0].exit, settled[0].summary.as_str()), (Outcome::Failed, Some(65), "Executed 40 tests, with 1 failure (0 unexpected)"));
         assert_eq!(runs_in(&state, "billing@app").last().unwrap().result, Outcome::Failed, "the record holds the real result");
-        assert!(settle(&state, "billing@app", &list).is_empty(), "settled once");
+        assert!(settle(&state, "billing@app", &list, 10).is_empty(), "settled once");
 
         let mut explicit = passed("cargo test");
         explicit["tool_input"]["run_in_background"] = json!(true);
@@ -1136,7 +1193,7 @@ mod tests {
         let output = dir.join("bx2.output");
         fs::write(&output, "test result: ok. 3 passed; 0 failed; 0 ignored\n").unwrap();
         fs::write(&transcript, notification("bx2", &output, "completed", "Background command \"cargo test\" completed (exit code 0)")).unwrap();
-        assert_eq!(settle(&state, "billing@app", &list)[0].result, Outcome::Passed);
+        assert_eq!(settle(&state, "billing@app", &list, 10)[0].result, Outcome::Passed);
 
         let long = format!("cargo test {} 2>&1 | tail -3", "--features x ".repeat(30));
         let mut piped = explicit.clone();
@@ -1147,13 +1204,13 @@ mod tests {
         let output = dir.join("bx4.output");
         fs::write(&output, "Compiling kebbie\n").unwrap();
         fs::write(&transcript, notification("bx4", &output, "completed", "Background command completed (exit code 0)")).unwrap();
-        assert_eq!((settle(&state, "billing@app", &list)[0].result), Outcome::Unknown, "judged on the whole line as it ran, so tail's exit 0 is no pass");
+        assert_eq!((settle(&state, "billing@app", &list, 10)[0].result), Outcome::Unknown, "judged on the whole line as it ran, so tail's exit 0 is no pass");
 
         let mut stopped = explicit.clone();
         stopped["tool_response"]["backgroundTaskId"] = json!("bx3");
         record_in(&state, "billing@app", &dir, &list, &stopped, 3).unwrap();
         fs::write(&transcript, notification("bx3", &dir.join("none"), "killed", "Background command \"cargo test\" was stopped")).unwrap();
-        assert_eq!(settle(&state, "billing@app", &list)[0].why, "stopped before it ended", "a stopped run proves nothing");
+        assert_eq!(settle(&state, "billing@app", &list, 10)[0].why, "stopped before it ended", "a stopped run proves nothing");
         let mut unseen = passed("cargo test");
         unseen["tool_input"]["run_in_background"] = json!(true);
         let run = record_in(&state, "billing@app", &dir, &list, &unseen, 4).unwrap();
@@ -1188,7 +1245,7 @@ mod tests {
 
     #[test]
     fn the_reviewer_reads_every_run_on_the_reviewed_code_one_line_per_command_and_older_ones_only_without_them() {
-        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None, worktree: String::new() };
+        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0 };
         let mut runs = vec![run(1, "cargo test", false, "old")];
         for at in 2..9 {
             runs.push(run(at, "cargo test --lib evidence", at != 4, "reviewed"));
@@ -1209,7 +1266,7 @@ mod tests {
 
     #[test]
     fn a_run_without_a_result_reads_as_unknown_and_counts_as_no_run_for_the_reviewer() {
-        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)), worktree: String::new() };
+        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)), worktree: String::new(), read_to: 0 };
         let judge = |run: &Run| shown(run, |code| code == "reviewed", true);
         assert_eq!(judge(&run).line(), "? cargo test result unknown, piped · at abcdef0", "not a pass even on the code as it is");
         assert_eq!(Run::from_json(&run.to_json()), Some(run.clone()));

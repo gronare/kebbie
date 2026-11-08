@@ -12,6 +12,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A test run whose result line counts no tests, such as a filter that matched nothing, shows as unknown, never as passed.
 - A long test command that ends in the background is judged on its whole line, so a cut-off | tail no longer reads as a pass.
 - A test run that passes in the background sends its own task back to the reviewer, never the task whose worktree the shell is in.
+- A task's shell commands stay quick while a background test run is pending, and a run whose end never shows stays unknown after a day.
 
 ## 0.36.0
 
