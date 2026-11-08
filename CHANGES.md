@@ -26,6 +26,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The lead's push of a task whose ready report names --after waits until that task lands, and your own push warns that it went first.
 - Done and drop name a task's other halves still open in other repos, and tell the lead, without closing them.
 - Rewording a task's commit waits for kebbie's other rebase of its worktree, and gets past another git's index.lock.
+- The board's report window sends the bugs you read, even when a new or edited bug arrives while it is open.
 
 ## 0.36.0
 

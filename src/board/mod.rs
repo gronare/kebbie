@@ -64,6 +64,7 @@ use crate::fetch::Fetcher;
 use crate::herdr;
 use crate::keys::{self, Act, Ctx};
 use crate::messages::Message;
+use kebbie_hub_protocol::BugReport;
 use crate::notice::{Notice, Tone};
 use crate::permit;
 use crate::peers;
@@ -124,8 +125,8 @@ enum Mode {
     EditMessage(Box<MessageEditor>),
     Working { label: String, result: Receiver<Result<String>> },
     Questions(Box<QuestionWindow>),
-    Report { id: String, scroll: u16, read: bool, nudged: bool },
-    ReportAll { scroll: u16, read: bool, nudged: bool },
+    Report { id: String, shown: Box<BugReport>, scroll: u16, read: bool, nudged: bool },
+    ReportAll { shown: Vec<bug_report::Offer>, scroll: u16, read: bool, nudged: bool },
     NoteCard { key: String, scroll: u16, nudged: bool },
     Comment { id: u64, scroll: u16, nudged: bool },
     Help(keys_window::Scroll),
@@ -612,8 +613,8 @@ impl App {
             Mode::PushAll { order, choice, back } => self.handle_push_all(order, choice, back, key, act),
             Mode::Update => self.handle_update(key),
             Mode::AgentUpdates => self.handle_agent_updates(key),
-            Mode::Report { id, scroll, read, .. } => self.confirm_report(id, scroll, read, key, cancels),
-            Mode::ReportAll { scroll, read, .. } => self.confirm_report_all(scroll, read, key, cancels),
+            Mode::Report { id, shown, scroll, read, .. } => self.confirm_report(id, shown, scroll, read, key, cancels),
+            Mode::ReportAll { shown, scroll, read, .. } => self.confirm_report_all(shown, scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
             Mode::Comment { id, scroll, .. } => self.handle_comment_window(id, scroll, key, cancels),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),

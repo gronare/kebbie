@@ -198,7 +198,7 @@ impl App {
             return self.decline_offer();
         }
         if shown && key.code == KeyCode::Char('a') && !self.offers.is_empty() {
-            self.mode = Mode::ReportAll { scroll: 0, read: false, nudged: false };
+            self.mode = Mode::ReportAll { shown: self.offers.clone(), scroll: 0, read: false, nudged: false };
             return;
         }
         match keys::map().act(self.ctx(), &key) {
@@ -240,39 +240,38 @@ impl App {
 
     pub(super) fn open_report(&mut self) -> bool {
         let Some(offer) = self.offers.get(self.offer_panel.selected) else { return false };
-        self.mode = Mode::Report { id: offer.id.clone(), scroll: 0, read: false, nudged: false };
+        self.mode = Mode::Report { id: offer.id.clone(), shown: Box::new(offer.report.clone()), scroll: 0, read: false, nudged: false };
         true
     }
 
-    // y counts only once the whole text has been on screen, and sends exactly the report that was shown.
-    pub(super) fn confirm_report(&mut self, id: String, scroll: u16, read: bool, key: KeyEvent, cancels: bool) {
-        let Some(offer) = self.offers.iter().find(|offer| offer.id == id).cloned() else { return };
+    // y counts only once the whole text has been on screen, and sends exactly the report that was shown, even when a snapshot has refreshed the list since.
+    pub(super) fn confirm_report(&mut self, id: String, shown: Box<BugReport>, scroll: u16, read: bool, key: KeyEvent, cancels: bool) {
         match key.code {
             KeyCode::Char('y') if read => {
                 self.subject = Some(super::notices::Subject::plain("report"));
                 self.offers.retain(|offer| offer.id != id);
                 self.offers_changed();
-                let digest = offer.report.digest();
+                let digest = shown.digest();
                 let send = self.reporter.send.clone();
                 self.in_background("Sending the report to kebbie's maintainers…".to_string(), move || send(&id, &digest));
             }
             KeyCode::Char('n') => self.decline(&id),
-            KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::Report { id, scroll: scroll.saturating_add(1), read, nudged: false },
-            KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::Report { id, scroll: scroll.saturating_sub(1), read, nudged: false },
-            KeyCode::PageDown | KeyCode::Char(' ') => self.mode = Mode::Report { id, scroll: scroll.saturating_add(PAGE), read, nudged: false },
-            KeyCode::PageUp => self.mode = Mode::Report { id, scroll: scroll.saturating_sub(PAGE), read, nudged: false },
+            KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::Report { id, shown, scroll: scroll.saturating_add(1), read, nudged: false },
+            KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::Report { id, shown, scroll: scroll.saturating_sub(1), read, nudged: false },
+            KeyCode::PageDown | KeyCode::Char(' ') => self.mode = Mode::Report { id, shown, scroll: scroll.saturating_add(PAGE), read, nudged: false },
+            KeyCode::PageUp => self.mode = Mode::Report { id, shown, scroll: scroll.saturating_sub(PAGE), read, nudged: false },
             _ if cancels => {}
-            _ => self.mode = Mode::Report { id, scroll, read, nudged: true },
+            _ => self.mode = Mode::Report { id, shown, scroll, read, nudged: true },
         }
     }
 }
 
 impl App {
     // One y sends every bug the window showed, in the background, so a paced batch never holds the board.
-    pub(super) fn confirm_report_all(&mut self, scroll: u16, read: bool, key: KeyEvent, cancels: bool) {
+    pub(super) fn confirm_report_all(&mut self, shown: Vec<Offer>, scroll: u16, read: bool, key: KeyEvent, cancels: bool) {
         match key.code {
             KeyCode::Char('y') if read => {
-                let read: Vec<(String, [u8; 32])> = self.offers.iter().map(|offer| (offer.id.clone(), offer.report.digest())).collect();
+                let read: Vec<(String, [u8; 32])> = shown.iter().map(|offer| (offer.id.clone(), offer.report.digest())).collect();
                 let count = read.len();
                 let (sender, result) = std::sync::mpsc::channel();
                 let send_all = self.reporter.send_all.clone();
@@ -286,12 +285,12 @@ impl App {
                 self.subject = Some(super::notices::Subject::plain("report"));
                 self.show(Notice::new(Tone::Moving, format!("Sending {} to kebbie's maintainers{later}", super::widgets::plural(count, "bug"))).next("Each one sent is a line under messages; the board says when all have gone.").ok());
             }
-            KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::ReportAll { scroll: scroll.saturating_add(1), read, nudged: false },
-            KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ReportAll { scroll: scroll.saturating_sub(1), read, nudged: false },
-            KeyCode::PageDown | KeyCode::Char(' ') => self.mode = Mode::ReportAll { scroll: scroll.saturating_add(PAGE), read, nudged: false },
-            KeyCode::PageUp => self.mode = Mode::ReportAll { scroll: scroll.saturating_sub(PAGE), read, nudged: false },
+            KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::ReportAll { shown, scroll: scroll.saturating_add(1), read, nudged: false },
+            KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ReportAll { shown, scroll: scroll.saturating_sub(1), read, nudged: false },
+            KeyCode::PageDown | KeyCode::Char(' ') => self.mode = Mode::ReportAll { shown, scroll: scroll.saturating_add(PAGE), read, nudged: false },
+            KeyCode::PageUp => self.mode = Mode::ReportAll { shown, scroll: scroll.saturating_sub(PAGE), read, nudged: false },
             _ if cancels => {}
-            _ => self.mode = Mode::ReportAll { scroll, read, nudged: true },
+            _ => self.mode = Mode::ReportAll { shown, scroll, read, nudged: true },
         }
     }
 
@@ -313,12 +312,11 @@ fn preview_rows(report: &BugReport, width: usize) -> Vec<String> {
 }
 
 // Returns the scroll it drew at and whether the text's last row was on screen.
-pub(super) fn draw_report(frame: &mut Frame, app: &App, id: &str, scroll: u16, read: bool, nudged: bool) -> (u16, bool) {
-    let Some(offer) = app.offers.iter().find(|offer| offer.id == id) else { return (scroll, read) };
+pub(super) fn draw_report(frame: &mut Frame, id: &str, shown: &BugReport, scroll: u16, read: bool, nudged: bool) -> (u16, bool) {
     let width = 88u16.min(frame.area().width.saturating_sub(4));
-    let rows = preview_rows(&offer.report, usize::from(width.saturating_sub(4)).max(20));
+    let rows = preview_rows(shown, usize::from(width.saturating_sub(4)).max(20));
     let ask = Ask {
-        head: &|range| format!("Bug {} as it would go to kebbie's maintainers{range}:", offer.id),
+        head: &|range| format!("Bug {id} as it would go to kebbie's maintainers{range}:"),
         question: "Send this report to kebbie's maintainers?",
         answers: "  y / n",
         keys: ["y sends it, signed with this install's key · n keeps it here only · esc decides later", "↓ pgdn read on: y counts once you have read to the end · n keeps it here only · esc decides later"],
@@ -327,12 +325,12 @@ pub(super) fn draw_report(frame: &mut Frame, app: &App, id: &str, scroll: u16, r
     draw_preview(frame, &rows, width, &ask, scroll, read, nudged)
 }
 
-pub(super) fn draw_all(frame: &mut Frame, app: &App, scroll: u16, read: bool, nudged: bool) -> (u16, bool) {
+pub(super) fn draw_all(frame: &mut Frame, shown: &[Offer], scroll: u16, read: bool, nudged: bool) -> (u16, bool) {
     let width = 88u16.min(frame.area().width.saturating_sub(4));
     let wrap_width = usize::from(width.saturating_sub(4)).max(20);
-    let reports: Vec<(String, BugReport)> = app.offers.iter().map(|offer| (offer.id.clone(), offer.report.clone())).collect();
+    let reports: Vec<(String, BugReport)> = shown.iter().map(|offer| (offer.id.clone(), offer.report.clone())).collect();
     let rows: Vec<String> = report::all_preview(&reports).lines().flat_map(|line| if line.is_empty() { vec![String::new()] } else { wrap(line, wrap_width, usize::MAX) }).collect();
-    let count = super::widgets::plural(app.offers.len(), "bug");
+    let count = super::widgets::plural(shown.len(), "bug");
     let question = format!("Send all {count} to kebbie's maintainers?");
     let ask = Ask {
         head: &|range| format!("{count} as they would go to kebbie's maintainers{range}:"),
@@ -629,6 +627,61 @@ mod tests {
         assert!(matches!(app.mode, Mode::Report { read: true, .. }));
         press(&mut app, key(KeyCode::Char('y')));
         assert!(matches!(app.mode, Mode::Working { .. }) && app.offers.is_empty(), "y sends once the end was on screen");
+    }
+
+    #[test]
+    fn a_bug_edited_while_its_window_is_open_is_refused_on_y_instead_of_sending_the_unread_text() {
+        let state = crate::sh::test_dir("board-report-edited");
+        filed(&state, "a1b2c3", "bug", "push hid git's error");
+        let mut app = test_app(Vec::new());
+        app.offers = offers_in(&state, true, &scrub);
+        let send_state = state.clone();
+        app.reporter.send = Arc::new(move |id, digest| report::send_in(&send_state, &crate::permit::Caller::User, id, "http://127.0.0.1:9", &scrub(), digest, crate::messages::now()));
+        app.offer_panel.shown = true;
+        app.focus_offers(0);
+        press(&mut app, key(KeyCode::Enter));
+        render(&mut app, 120, 40);
+        filed_with(&state, "a1b2c3", "bug", "push hid git's error", "It failed in /Users/carl/work/greenhouse, and the token was khs_0123456789abcdef.");
+        app.offers = offers_in(&state, true, &scrub);
+        app.offers_changed();
+        let shown = screen(&mut app);
+        assert!(shown.contains("It failed in ~/work/<repo>.") && !shown.contains("<token>"), "the window keeps the text that was read: {shown}");
+        press(&mut app, key(KeyCode::Char('y')));
+        settle(&mut app);
+        let shown = screen(&mut app);
+        assert!(shown.contains("changed since you read it"), "{shown}");
+        assert!(issues::find(&issues::dir(&state), "a1b2c3").unwrap().report.is_none());
+    }
+
+    #[test]
+    fn y_on_the_send_all_window_sends_the_bugs_it_showed_and_not_one_that_arrived_after() {
+        let state = crate::sh::test_dir("board-report-all-arrived");
+        filed(&state, "a1b2c3", "bug", "push hid git's error");
+        let mut app = test_app(Vec::new());
+        app.offers = offers_in(&state, true, &scrub);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = asked.clone();
+        app.reporter.send_all = Arc::new(move |read| {
+            seen.lock().unwrap().extend(read.iter().map(|(id, _)| id.clone()));
+            Notice::new(Tone::Done, "Sent 1 bug to kebbie's maintainers").ok()
+        });
+        app.offer_panel.shown = true;
+        app.focus_offers(0);
+        press(&mut app, key(KeyCode::Char('a')));
+        render(&mut app, 120, 40);
+        filed(&state, "b2c3d4", "bug", "the board froze on resize");
+        app.offers = offers_in(&state, true, &scrub);
+        app.offers_changed();
+        let shown = screen(&mut app);
+        assert!(shown.contains("Send all 1 bug to kebbie's maintainers?") && !shown.contains("── bug b2c3d4 ──"), "{shown}");
+        press(&mut app, key(KeyCode::Char('y')));
+        let start = std::time::Instant::now();
+        while app.sending.is_some() && start.elapsed() < std::time::Duration::from_secs(10) {
+            app.poll_sending();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(*asked.lock().unwrap(), ["a1b2c3"]);
+        assert_eq!(app.offers.iter().map(|offer| offer.id.as_str()).collect::<Vec<_>>(), ["b2c3d4"], "the unread bug still waits");
     }
 
     #[test]

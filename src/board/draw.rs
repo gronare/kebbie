@@ -144,15 +144,17 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::PushAll { order, choice, .. } => modal_hits = super::next_window::draw_push_all(frame, order, *choice),
         Mode::Update => super::update_window::draw(frame, app),
         Mode::AgentUpdates => super::agent_updates::draw(frame, app),
-        Mode::Report { id, scroll, read, nudged } => {
-            let (id, nudged) = (id.clone(), *nudged);
-            let (drawn, seen) = super::bug_report::draw_report(frame, app, &id, *scroll, *read, nudged);
-            app.mode = Mode::Report { id, scroll: drawn, read: seen, nudged };
+        Mode::Report { id, shown, scroll, read, nudged } => {
+            let drawn = super::bug_report::draw_report(frame, id, shown, *scroll, *read, *nudged);
+            if let Mode::Report { scroll, read, .. } = &mut app.mode {
+                (*scroll, *read) = drawn;
+            }
         }
-        Mode::ReportAll { scroll, read, nudged } => {
-            let nudged = *nudged;
-            let (drawn, seen) = super::bug_report::draw_all(frame, app, *scroll, *read, nudged);
-            app.mode = Mode::ReportAll { scroll: drawn, read: seen, nudged };
+        Mode::ReportAll { shown, scroll, read, nudged } => {
+            let drawn = super::bug_report::draw_all(frame, shown, *scroll, *read, *nudged);
+            if let Mode::ReportAll { scroll, read, .. } = &mut app.mode {
+                (*scroll, *read) = drawn;
+            }
         }
         Mode::NoteCard { key, scroll, nudged } => {
             let (key, nudged) = (key.clone(), *nudged);

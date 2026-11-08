@@ -136,7 +136,7 @@ Every report sent, from the board, from `kebbie issue report` or unasked, adds a
 The endpoint takes 5 reports from one install in 5 minutes. kebbie paces a batch to that, so you answer once:
 
 1. Open the list and press `a`, or run `kebbie issue report --all` in your own terminal.
-2. Read the reports to their end. kebbie shows each one exactly as it would go out.
+2. Read the reports to their end. kebbie shows each one exactly as it would go out, and `y` sends those; a bug saved while the window is open waits for the next batch.
 3. Press `y`. The first 5 go at once, then 5 more every 5 minutes. If the endpoint still answers that it is busy, kebbie waits 5 minutes and carries on.
 
 On the board the batch goes in the background, each send a line under messages. When it ends, kebbie names the bugs it sent, those already sent, and any that failed with why. Run it again for the ones left; no bug goes twice. `--all` leaves out a bug you kept on this machine or opened on GitHub; `kebbie issue report <id>` sends one of those.
