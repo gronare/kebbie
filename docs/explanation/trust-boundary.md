@@ -15,7 +15,13 @@ An agent that reads a README telling it to "push when done", or a message from a
 
 **A task does not push by accident.** A pre-push hook and a push URL rewrite in the worktree's own git config block `git push` in a task's worktree. The rewrite blocks every network URL, https, ssh and `host:path` alike, as a transport git refuses before it starts ssh, a helper or a DNS lookup, and leaves a local path or `file://` URL alone, so a test that makes a repo on the disk and pushes to it still works; the pre-push hook still asks for kebbie's token in the worktree itself. The task's Claude settings also deny `git push` and every user-only kebbie command (`approve`, `push`, `choose`, `after`, `ci dismiss`, `away`, `decide` and the rest), with the sandbox on or off.
 
-A shell that rewrites the URL on its own command line and skips the hook gets past both wherever it holds credentials for an allowed host. That is why the sandbox keeps the credentials files from it, as [A sandboxed shell reaches no credentials or sockets](#a-sandboxed-shell-reaches-no-credentials-or-sockets) lists. A token in the environment, a credential helper or the keychain it can still reach.
+A shell that rewrites the URL on its own command line and skips the hook gets past both wherever it holds credentials for an allowed host. That is why a task's shell gets no login for a host, with the sandbox on or off:
+
+- its git has no https login: `credential.helper` and `http.extraHeader` are reset, so none of your credential helpers, `gh`'s and the keychain's included, answers it, and git asks for no password,
+- `SSH_AUTH_SOCK`, `GH_TOKEN`, `GITHUB_TOKEN` and their enterprise forms are empty, so it reaches no ssh agent and `gh` has no token from the environment; a profile that runs `ssh`, `scp` or `rsync` outside the sandbox, as `ops` does, keeps your ssh agent to reach other machines, while the rewrite and the hook still refuse its `git push`,
+- the sandbox keeps the credentials files from it, as [A sandboxed shell reaches no credentials or sockets](#a-sandboxed-shell-reaches-no-credentials-or-sockets) lists.
+
+A task rebases onto the default branch kebbie already fetched, so nothing kebbie runs in a task needs ssh or `gh`; only the ssh a profile names for its own work gets the agent. With the sandbox off, the shell still runs as you and reads your key files, so there the block holds against a mistake, not a determined push.
 
 ## Only you and the lead push
 

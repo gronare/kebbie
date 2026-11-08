@@ -372,7 +372,7 @@ Three are built in:
 | Profile | What it is |
 | --- | --- |
 | `task` | kebbie's task as it is: nothing added. Tasks start with it unless `--profile` or `task.profile` names another. |
-| `ops` | kebbie's task whose `ssh`, `scp` and `rsync` run outside the sandbox, for work on other machines. An ssh session reaches this machine as you too, so kebbie says so when the task starts. |
+| `ops` | kebbie's task whose `ssh`, `scp` and `rsync` run outside the sandbox with your ssh agent, for work on other machines; `git push` stays refused. An ssh session reaches this machine as you too, so kebbie says so when the task starts. |
 | `reviewer` | The read-only reviewer `kebbie review` runs unless `review.profile` names another review profile. It is never a task's profile. |
 
 A file named `task.toml`, `ops.toml` or `reviewer.toml` adds its keys to that built-in profile.
@@ -396,7 +396,7 @@ The board's [Settings page](board.md#profiles) sets a profile's `model` and `eff
 | `sandbox.enabled` | `task.sandbox` | Whether this profile's tasks run sandboxed, ahead of `task.sandbox`. |
 | `sandbox.allowed_domains` | kebbie's registries | The hosts a task's shell may reach, in place of kebbie's list. |
 | `sandbox.allow_write` | kebbie's caches | The folders a task's shell may write besides its worktree and temp folder, in place of kebbie's list. |
-| `sandbox.excluded_commands` | `[]` | Commands that run outside the sandbox, added to kebbie's own and the built-in profile's. |
+| `sandbox.excluded_commands` | `[]` | Commands that run outside the sandbox, added to kebbie's own and the built-in profile's. One that runs `ssh`, `scp` or `rsync` gives the task your ssh agent. |
 
 - `agent = "codex"` runs OpenAI's Codex CLI, which needs kebbie's plugin installed with [`kebbie setup codex`](commands.md#setup-and-maintenance); see [Run a task with Codex](../how-to/run-a-task-with-codex.md).
 - `role` is a path relative to the profiles folder: no absolute path, no `..`, and not a symlink.

@@ -358,8 +358,8 @@ pub fn writable_roots_in(config: &toml::Table) -> Vec<String> {
 }
 
 // The commands Codex runs get the push block and the task's address, which also names the task to kebbie's caller check.
-fn env_override(address: &str, tmp: Option<&Path>) -> String {
-    let mut set = crate::push_block::env_vars();
+fn env_override(address: &str, tmp: Option<&Path>, ssh_agent: bool) -> String {
+    let mut set = crate::push_block::env_vars(ssh_agent);
     set.push((TASK_VAR.to_string(), address.to_string()));
     if let Some(tmp) = tmp {
         set.push(("TMPDIR".to_string(), tmp.to_string_lossy().to_string()));
@@ -381,7 +381,7 @@ pub(crate) fn start_args(mode: Option<&str>, profile: &Profile, files: &super::T
     if let Some(effort) = &profile.effort {
         args.extend(["-c".to_string(), format!("model_reasoning_effort={}", toml_string(effort))]);
     }
-    args.extend(["-c".to_string(), env_override(files.address, files.tmp)]);
+    args.extend(["-c".to_string(), env_override(files.address, files.tmp, profile.sandbox.runs_ssh())]);
     args.extend(files.hidden.iter().cloned());
     args.extend(plugin_args());
     if let Session::Resume(id) = session {
@@ -957,6 +957,17 @@ mod tests {
     }
 
     #[test]
+    fn an_ops_codex_task_keeps_the_users_ssh_agent_while_a_plain_one_has_it_emptied() {
+        let ops = Profile { agent: super::super::Agent::Codex, ..crate::profiles::built_in(crate::profiles::OPS).unwrap() };
+        for sandboxed in [true, false] {
+            let set = |profile: &Profile| value_of(&start_args(None, profile, &files(sandboxed, Some(Path::new(TMP)), &[]), &Session::New("ignored".to_string())), "shell_environment_policy.set").concat();
+            let (ops_set, task_set) = (set(&ops), set(&profile(None, None)));
+            assert!(!ops_set.contains("SSH_AUTH_SOCK") && task_set.contains("SSH_AUTH_SOCK=\"\""), "ops inherits Codex's own agent socket, a plain task gets it emptied: {ops_set}");
+            assert!(ops_set.contains("GH_TOKEN=\"\"") && ops_set.contains("GIT_ASKPASS=\"false\"") && ops_set.contains("\"credential.helper\"") && ops_set.contains("\"url.kebbie-blocks-push://.pushInsteadOf\""), "every other login stays dropped and the push rewrite stays: {ops_set}");
+        }
+    }
+
+    #[test]
     fn a_sandboxed_codex_task_writes_only_its_workspace_and_asks_before_leaving_it() {
         let args = start_args(None, &profile(Some("gpt-5.5"), Some("high")), &files(true, Some(Path::new(TMP)), &[]), &Session::New("ignored".to_string()));
         assert!(after(&args, "--sandbox").is_empty() && !args.iter().any(|word| word == "--approve-for-me"), "--sandbox would bring back Codex's own workspace-write over kebbie's profile: {args:?}");
@@ -965,7 +976,7 @@ mod tests {
         assert_eq!(after(&args, "--model"), ["gpt-5.5"]);
         let config = after(&args, "-c");
         assert!(config.contains(&"model_reasoning_effort=\"high\""), "{config:?}");
-        assert!(config.contains(&"shell_environment_policy.set={GIT_CONFIG_COUNT=\"6\",GIT_CONFIG_KEY_0=\"url.kebbie-blocks-push://.pushInsteadOf\",GIT_CONFIG_VALUE_0=\"\",GIT_CONFIG_KEY_1=\"protocol.kebbie-blocks-push.allow\",GIT_CONFIG_VALUE_1=\"never\",GIT_CONFIG_KEY_2=\"url./.pushInsteadOf\",GIT_CONFIG_VALUE_2=\"/\",GIT_CONFIG_KEY_3=\"url../.pushInsteadOf\",GIT_CONFIG_VALUE_3=\"./\",GIT_CONFIG_KEY_4=\"url.../.pushInsteadOf\",GIT_CONFIG_VALUE_4=\"../\",GIT_CONFIG_KEY_5=\"url.file://.pushInsteadOf\",GIT_CONFIG_VALUE_5=\"file://\",KEBBIE_ADDRESS=\"billing@app\",TMPDIR=\"/src/app/.git/worktrees/1/kebbie-tmp\"}"), "the push block reaches every command it runs, local paths let through: {config:?}");
+        assert!(config.contains(&"shell_environment_policy.set={GIT_CONFIG_COUNT=\"8\",GIT_CONFIG_KEY_0=\"url.kebbie-blocks-push://.pushInsteadOf\",GIT_CONFIG_VALUE_0=\"\",GIT_CONFIG_KEY_1=\"protocol.kebbie-blocks-push.allow\",GIT_CONFIG_VALUE_1=\"never\",GIT_CONFIG_KEY_2=\"url./.pushInsteadOf\",GIT_CONFIG_VALUE_2=\"/\",GIT_CONFIG_KEY_3=\"url../.pushInsteadOf\",GIT_CONFIG_VALUE_3=\"./\",GIT_CONFIG_KEY_4=\"url.../.pushInsteadOf\",GIT_CONFIG_VALUE_4=\"../\",GIT_CONFIG_KEY_5=\"url.file://.pushInsteadOf\",GIT_CONFIG_VALUE_5=\"file://\",GIT_CONFIG_KEY_6=\"credential.helper\",GIT_CONFIG_VALUE_6=\"\",GIT_CONFIG_KEY_7=\"http.extraHeader\",GIT_CONFIG_VALUE_7=\"\",SSH_AUTH_SOCK=\"\",GH_TOKEN=\"\",GITHUB_TOKEN=\"\",GH_ENTERPRISE_TOKEN=\"\",GITHUB_ENTERPRISE_TOKEN=\"\",GIT_TERMINAL_PROMPT=\"0\",GIT_ASKPASS=\"false\",SSH_ASKPASS=\"false\",SSH_ASKPASS_REQUIRE=\"never\",KEBBIE_ADDRESS=\"billing@app\",TMPDIR=\"/src/app/.git/worktrees/1/kebbie-tmp\"}"), "the push block and the dropped logins reach every command it runs, local paths let through: {config:?}");
         assert!(config.contains(&"plugins.kebbie@kebbie-tasks.enabled=true") && config.iter().any(|value| value.starts_with("hooks.state={\"kebbie@kebbie-tasks:hooks/hooks.json:session_start:0:0\"={trusted_hash=\"sha256:")), "{config:?}");
         assert!(!args.iter().any(|word| word.contains("ignored")), "Codex picks a new session's id itself");
         assert!(!args.iter().any(|word| word.starts_with("--dangerously") || word.contains("danger-full-access") || word.starts_with("sandbox_workspace_write")), "{args:?}");
@@ -1137,7 +1148,7 @@ mod tests {
         for block in [&hooks.join("pre-push"), &worktree_config, &common_config] {
             assert!(read_only(block) && !writable(block), "the push block's {} stays read-only to the task", block.display());
         }
-        let env = crate::push_block::env_vars();
+        let env = crate::push_block::env_vars(true);
         let output = std::process::Command::new("git").args(["push", "--no-verify", "origin", "HEAD:main"]).current_dir(&slot).env_remove(crate::push_block::TOKEN_VAR).envs(env.iter().map(|(name, value)| (name, value))).output().unwrap();
         assert!(!output.status.success() && String::from_utf8_lossy(&output.stderr).contains("kebbie-blocks-push"), "{}", String::from_utf8_lossy(&output.stderr));
         let hooked = std::process::Command::new("git").args(["push", &origin.to_string_lossy(), "HEAD:main"]).current_dir(&slot).env_remove(crate::push_block::TOKEN_VAR).envs(env.iter().map(|(name, value)| (name, value))).output().unwrap();

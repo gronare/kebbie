@@ -32,6 +32,11 @@ impl Policy {
     pub fn writes(&self) -> Vec<String> {
         self.writes.clone().unwrap_or_else(|| WRITES.map(str::to_string).to_vec())
     }
+
+    // ssh, scp or rsync among the commands outside the sandbox: the task reaches other machines with the user's ssh agent.
+    pub fn runs_ssh(&self) -> bool {
+        self.excluded.iter().any(|entry| OPS_COMMANDS.iter().any(|ops| program(ops) == program(entry)))
+    }
 }
 
 pub fn excluded(kebbie: &str, policy: &Policy) -> Vec<String> {
@@ -350,6 +355,11 @@ pub fn halves(state: &Path, task: &str, own: &Path) -> Vec<TaskDirs> {
 }
 
 // An entry that would run kebbie, herdr or a terminal multiplexer unsandboxed lets a task pass as the user.
+fn program(entry: &str) -> &str {
+    let program = entry.split_whitespace().next().unwrap_or_default();
+    program.rsplit('/').next().unwrap_or(program)
+}
+
 pub fn excluded_refusal(entry: &str) -> Option<String> {
     let program = entry.split_whitespace().next().unwrap_or_default();
     let name = program.rsplit('/').next().unwrap_or(program);

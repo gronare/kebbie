@@ -268,7 +268,7 @@ pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Op
     }
     // The vault plugin's Stop hook skips its commit check because kebbie writes a task's log lines; hooks inherit the session's env.
     let mut env = json!({ "VAULT_STOP_HOOK_COMMITS": "off" });
-    for (name, value) in crate::push_block::env_vars() {
+    for (name, value) in crate::push_block::env_vars(false) {
         env[name] = json!(value);
     }
     if let Some(dirs) = dirs {
@@ -295,13 +295,16 @@ pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Op
 
 pub(crate) const TMP_VARS: [&str; 4] = ["TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"];
 
-// A profile's rules go after kebbie's own, so kebbie's deny rules, hooks and env stay whatever the profile says.
+// A profile's rules go after kebbie's own, so kebbie's deny rules, hooks and env stay whatever the profile says; a profile that runs ssh keeps the user's ssh agent.
 pub(crate) fn with_profile(settings: &str, profile: &Profile) -> String {
     let mut written: Value = serde_json::from_str(settings).expect("kebbie writes its own task settings as JSON");
     for (key, rules) in [("deny", &profile.deny), ("allow", &profile.allow)] {
         if let Some(list) = written["permissions"][key].as_array_mut() {
             list.extend(rules.iter().map(|rule| json!(rule)));
         }
+    }
+    if profile.sandbox.runs_ssh() && let Some(env) = written["env"].as_object_mut() {
+        env.remove(crate::push_block::SSH_AGENT);
     }
     if !profile.plugins.is_empty() {
         written["enabledPlugins"] = profile.plugins.iter().map(|plugin| (plugin.clone(), json!(true))).collect::<serde_json::Map<_, _>>().into();
@@ -716,6 +719,29 @@ mod tests {
         assert_eq!(sandbox["network"]["allowLocalBinding"].as_bool(), cfg!(target_os = "macos").then_some(true));
         assert_eq!(crate::sandbox::block("/k", &Policy::default(), None, true)["network"]["allowLocalBinding"], json!(true), "dev servers listen on macOS");
         assert_eq!(crate::sandbox::block("/k", &Policy::default(), None, false)["network"].get("allowLocalBinding"), None);
+    }
+
+    #[test]
+    fn an_ops_task_keeps_the_users_ssh_agent_while_a_plain_task_and_every_other_login_stay_dropped() {
+        let ops = crate::profiles::built_in(crate::profiles::OPS).unwrap();
+        let task = crate::profiles::built_in(crate::profiles::TASK).unwrap();
+        let mut deploy = task.clone();
+        deploy.sandbox.excluded = vec!["/usr/bin/rsync *".to_string()];
+        let mut compose = task.clone();
+        compose.sandbox.excluded = vec!["docker compose *".to_string()];
+        for sandbox in [true, false] {
+            let written = |profile: &Profile| serde_json::from_str::<Value>(&super::super::Agent::Claude.task_settings("/k", "billing@app", None, Some(&dirs()), profile, sandbox)).unwrap()["env"].clone();
+            for (profile, agent) in [(&ops, true), (&deploy, true), (&task, false), (&compose, false)] {
+                let env = written(profile);
+                assert_eq!(env.get("SSH_AUTH_SOCK").is_none(), agent, "sandbox {sandbox}, outside it {:?}: {env}", profile.sandbox.excluded);
+                for (name, value) in crate::push_block::NO_LOGINS.iter().filter(|(name, _)| *name != "SSH_AUTH_SOCK") {
+                    assert_eq!(env[*name], *value, "{name} stays dropped in every profile");
+                }
+                assert_eq!((env["GIT_CONFIG_KEY_6"].as_str(), env["GIT_CONFIG_KEY_7"].as_str(), env["GIT_CONFIG_KEY_0"].as_str()), (Some("credential.helper"), Some("http.extraHeader"), Some("url.kebbie-blocks-push://.pushInsteadOf")), "git's https logins and the push rewrite stay in every profile");
+            }
+            let hooks = serde_json::from_str::<Value>(&super::super::Agent::Claude.task_settings("/k", "billing@app", None, Some(&dirs()), &ops, sandbox)).unwrap();
+            assert!(strings(&hooks["permissions"]["deny"]).contains(&"Bash(git push:*)".to_string()), "an ops task's git push is still refused");
+        }
     }
 
     #[test]

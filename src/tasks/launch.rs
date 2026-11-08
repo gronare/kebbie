@@ -1257,7 +1257,7 @@ mod tests {
         assert_eq!(on["env"]["GIT_CONFIG_KEY_0"], "url.kebbie-blocks-push://.pushInsteadOf");
         assert_eq!((on["env"]["GIT_CONFIG_KEY_1"].as_str(), on["env"]["GIT_CONFIG_VALUE_1"].as_str()), (Some("protocol.kebbie-blocks-push.allow"), Some("never")), "git refuses the rewritten URL before it starts ssh or a helper");
         assert_eq!(on["env"]["GIT_CONFIG_VALUE_0"], "");
-        assert_eq!((on["env"]["GIT_CONFIG_COUNT"].as_str(), on["env"]["GIT_CONFIG_KEY_2"].as_str(), on["env"]["GIT_CONFIG_VALUE_2"].as_str()), (Some("6"), Some("url./.pushInsteadOf"), Some("/")), "a push to a local path, as a test's temp repo, goes through");
+        assert_eq!((on["env"]["GIT_CONFIG_COUNT"].as_str(), on["env"]["GIT_CONFIG_KEY_2"].as_str(), on["env"]["GIT_CONFIG_VALUE_2"].as_str()), (Some("8"), Some("url./.pushInsteadOf"), Some("/")), "a push to a local path, as a test's temp repo, goes through");
         assert_eq!(on["env"]["VAULT_STOP_HOOK_COMMITS"], "off", "the vault plugin's Stop hook never asks a task for the repo log kebbie writes");
         assert!(on["env"].get("VAULT_STOP_HOOK").is_none(), "a task is still asked to save what it was told");
         assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 40);

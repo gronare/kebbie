@@ -108,14 +108,25 @@ pub fn url_rules() -> Vec<(String, String)> {
         .chain(LOCAL.iter().map(|local| (format!("url.{local}.pushInsteadOf"), local.to_string()))).collect()
 }
 
-// The same rules as GIT_CONFIG_* variables, for every git a task's shell runs.
-pub fn env_vars() -> Vec<(String, String)> {
-    let rules = url_rules();
+// An empty credential.helper or http.extraHeader at the command scope drops every one the user's config names, so git has no https login.
+const NO_CREDENTIALS: [(&str, &str); 2] = [("credential.helper", ""), ("http.extraHeader", "")];
+
+// A task's shell reaches no ssh agent, no GitHub token and no prompt for a password; nothing kebbie runs in a task's shell needs ssh or gh.
+pub const SSH_AGENT: &str = "SSH_AUTH_SOCK";
+pub const NO_LOGINS: [(&str, &str); 9] = [
+    ("SSH_AUTH_SOCK", ""), ("GH_TOKEN", ""), ("GITHUB_TOKEN", ""), ("GH_ENTERPRISE_TOKEN", ""), ("GITHUB_ENTERPRISE_TOKEN", ""),
+    ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", "false"), ("SSH_ASKPASS", "false"), ("SSH_ASKPASS_REQUIRE", "never"),
+];
+
+// The same rules as GIT_CONFIG_* variables, with git's https logins dropped and NO_LOGINS, for every command a task's shell runs; ssh_agent keeps SSH_AUTH_SOCK for a profile whose ssh reaches other machines, as ops does, and its git push still meets the guard and the rewrite.
+pub fn env_vars(ssh_agent: bool) -> Vec<(String, String)> {
+    let rules: Vec<(String, String)> = url_rules().into_iter().chain(NO_CREDENTIALS.iter().map(|(key, value)| (key.to_string(), value.to_string()))).collect();
     let mut vars = vec![("GIT_CONFIG_COUNT".to_string(), rules.len().to_string())];
     for (index, (key, value)) in rules.into_iter().enumerate() {
         vars.push((format!("GIT_CONFIG_KEY_{index}"), key));
         vars.push((format!("GIT_CONFIG_VALUE_{index}"), value));
     }
+    vars.extend(NO_LOGINS.iter().filter(|(name, _)| !(ssh_agent && *name == SSH_AGENT)).map(|(name, value)| (name.to_string(), value.to_string())));
     vars
 }
 
@@ -524,7 +535,7 @@ mod tests {
         commit(&work, "a");
         git(&base, &["init", "--quiet", "--bare", &local.to_string_lossy()]).unwrap();
         let (wires, mark) = tripwires(&base);
-        let mut vars = env_vars();
+        let mut vars = env_vars(false);
         vars.extend(wires);
         let env: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
         for remote in NETWORK {
@@ -533,6 +544,30 @@ mod tests {
         for remote in [local.to_string_lossy().to_string(), format!("file://{}", local.display()), "../local.git".to_string()] {
             let output = run(&work, &["push", "--quiet", &remote, "HEAD:refs/heads/main"], &env);
             assert!(output.status.success(), "{remote}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_tasks_shell_gets_no_https_login_ssh_agent_or_github_token_from_the_users_setup() {
+        let base = crate::sh::test_dir("push-block-logins");
+        let config = base.join("gitconfig");
+        fs::write(&config, "[credential \"https://github.com\"]\n\thelper = !echo username=ada; echo password=from-the-url-helper; true\n[credential]\n\thelper = !echo password=from-the-helper; true\n[http]\n\textraHeader = Authorization: Basic c2VjcmV0\n").unwrap();
+        let fill = |env: &[(String, String)]| {
+            use std::io::Write;
+            let mut child = std::process::Command::new("git").args(["credential", "fill"]).current_dir(&base).env("GIT_CONFIG_GLOBAL", &config).env("GH_TOKEN", "gho_from_the_shell").env("SSH_AUTH_SOCK", "/tmp/agent.sock")
+                .envs(env.iter().map(|(name, value)| (name, value))).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+            child.stdin.take().unwrap().write_all(b"protocol=https\nhost=github.com\n\n").unwrap();
+            child.wait_with_output().unwrap()
+        };
+        assert!(String::from_utf8_lossy(&fill(&[]).stdout).contains("password=from-the-"), "the user's helpers answer outside a task");
+        let vars = env_vars(false);
+        let task = fill(&vars);
+        assert!(!task.status.success() && !String::from_utf8_lossy(&task.stdout).contains("password="), "no helper answers in a task: {}", String::from_utf8_lossy(&task.stdout));
+        let header = std::process::Command::new("git").args(["config", "--get-all", "http.extraHeader"]).current_dir(&base).env("GIT_CONFIG_GLOBAL", &config).envs(vars.iter().map(|(name, value)| (name, value))).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&header.stdout).lines().last(), Some(""), "the last extra header is the empty one that resets the list");
+        for (name, value) in [("SSH_AUTH_SOCK", ""), ("GH_TOKEN", ""), ("GITHUB_TOKEN", ""), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ASKPASS", "false")] {
+            assert!(vars.contains(&(name.to_string(), value.to_string())), "{name}={value} in {vars:?}");
         }
         fs::remove_dir_all(base).unwrap();
     }
