@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -388,6 +389,7 @@ pub fn seen_in(state: &Path, address: &str) -> Seen {
 }
 
 fn note_seen(state: &Path, address: &str, unrecorded: Option<String>, at: u64) {
+    let _lock = Lock::take(state, address);
     let mut seen = seen_in(state, address);
     seen.at = Some(at);
     if let Some(command) = unrecorded.map(|command| command.trim_start_matches("./").to_string()) {
@@ -428,7 +430,36 @@ pub fn runs_in(state: &Path, address: &str) -> Vec<Run> {
         .filter_map(|line| serde_json::from_str::<Value>(line).ok()).filter_map(|value| Run::from_json(&value)).collect()
 }
 
+fn lock_file(state: &Path, address: &str) -> PathBuf {
+    state.join("evidence").join(format!(".{address}.lock"))
+}
+
+// Held while a hook reads, changes and writes a task's runs, so two hooks at once never drop each other's run.
+struct Lock {
+    file: fs::File,
+}
+
+impl Lock {
+    fn take(state: &Path, address: &str) -> Result<Lock> {
+        let path = lock_file(state, address);
+        let file = crate::state::append_to(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        // SAFETY: flock on a descriptor this File owns.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(format!("{}: {}", path.display(), std::io::Error::last_os_error()));
+        }
+        Ok(Lock { file })
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 pub fn save(state: &Path, address: &str, run: &Run) -> Result<()> {
+    let _lock = Lock::take(state, address)?;
     let mut runs = runs_in(state, address);
     runs.push(run.clone());
     let start = runs.len().saturating_sub(KEPT);
@@ -441,6 +472,7 @@ pub fn forget(task: &str, repo: &Path) {
         let address = peers::address(task, &name_of(repo));
         let _ = fs::remove_file(file(&state, &address));
         let _ = fs::remove_file(hook_file(&state, &address));
+        let _ = fs::remove_file(lock_file(&state, &address));
     }
 }
 
@@ -582,6 +614,7 @@ fn transcript_since(path: &Path, from: u64) -> Option<(String, u64)> {
 
 // Settles every run still in the background whose end the session's transcript now holds, reading only what it gained since the last look, and gives up on one that has not ended in a day; gives the runs it settled.
 pub fn settle(state: &Path, address: &str, listed: &[String], now: u64) -> Vec<Run> {
+    let Ok(_lock) = Lock::take(state, address) else { return Vec::new() };
     let mut runs = runs_in(state, address);
     let (mut changed, mut moved) = (Vec::new(), false);
     for run in runs.iter_mut().filter(|run| !run.background.is_empty() && !run.transcript.is_empty()) {
@@ -1106,6 +1139,20 @@ mod tests {
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &broke, 5).unwrap().result, Outcome::Failed, "nothing after it, so its exit is its own");
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &failed("cargo build && cargo test"), 6).unwrap().result, Outcome::Unknown, "the build may have failed before the tests ran");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn runs_saved_by_hooks_at_the_same_moment_are_all_kept() {
+        let state = crate::sh::test_dir("evidence-parallel");
+        let threads: Vec<_> = (0..4u64).map(|thread| {
+            let state = state.clone();
+            std::thread::spawn(move || for at in 0..5 { save(&state, "billing@app", &Run { command: "cargo test".to_string(), at: thread * 10 + at, ..Run::default() }).unwrap() })
+        }).collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(runs_in(&state, "billing@app").len(), 20, "no save reads the file while another writes it");
+        fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

@@ -13,6 +13,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A long test command that ends in the background is judged on its whole line, so a cut-off | tail no longer reads as a pass.
 - A test run that passes in the background sends its own task back to the reviewer, never the task whose worktree the shell is in.
 - A task's shell commands stay quick while a background test run is pending, and a run whose end never shows stays unknown after a day.
+- Test runs that end at the same moment in parallel shells are all recorded.
 
 ## 0.36.0
 
