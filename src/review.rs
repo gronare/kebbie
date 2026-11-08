@@ -1471,7 +1471,7 @@ mod tests {
         let asked = "verdict: changes\nreviewed: abc\n\n- src/billing.rs:12 — no test covers the retry; none passed on the code under review.\n";
         fs::write(verdict_file(&state, "billing@app"), asked).unwrap();
         let given = crate::messages::now();
-        let run = |at: u64, ok: bool, code: &str| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: if ok { crate::evidence::Outcome::Passed } else { crate::evidence::Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: String::new(), sha: code.to_string(), dirty: false, code: code.to_string(), at, background: String::new(), transcript: String::new() };
+        let run = |at: u64, ok: bool, code: &str| crate::evidence::Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: if ok { crate::evidence::Outcome::Passed } else { crate::evidence::Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: String::new(), sha: code.to_string(), dirty: false, code: code.to_string(), at, background: String::new(), transcript: String::new(), ..Default::default() };
         let current = |sha: &str| sha == "abc";
         assert!(!tests_answered_in(&state, "billing@app", current), "no run yet");
         crate::evidence::save(&state, "billing@app", &run(given.saturating_sub(100), true, "abc")).unwrap();

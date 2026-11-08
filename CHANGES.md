@@ -10,6 +10,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### Fixed
 - A test command written inside a heredoc, such as a plan written with cat <<EOF, is no longer recorded as a test run.
 - A test run whose result line counts no tests, such as a filter that matched nothing, shows as unknown, never as passed.
+- A long test command that ends in the background is judged on its whole line, so a cut-off | tail no longer reads as a pass.
 
 ## 0.36.0
 
