@@ -17,10 +17,11 @@ pub enum Why {
     Unreadable,
     LeftLine,
     NotStaged,
+    Unseen,
 }
 
 impl Why {
-    const ALL: [Why; 9] = [Why::Report, Why::Question, Why::NothingToPush, Why::Unreported, Why::Stopped, Why::Failed, Why::Unreadable, Why::LeftLine, Why::NotStaged];
+    const ALL: [Why; 10] = [Why::Report, Why::Question, Why::NothingToPush, Why::Unreported, Why::Stopped, Why::Failed, Why::Unreadable, Why::LeftLine, Why::NotStaged, Why::Unseen];
 
     fn key(self) -> &'static str {
         match self {
@@ -33,6 +34,7 @@ impl Why {
             Why::Unreadable => "unreadable",
             Why::LeftLine => "left-line",
             Why::NotStaged => "not-staged",
+            Why::Unseen => "unseen",
         }
     }
 
@@ -146,6 +148,7 @@ pub enum Event<'a> {
     Closing,
     CiRed { sha: &'a str, pushing: bool },
     CiUnreadable,
+    CiUnseen,
     Stopped,
     Dismissed { kept_open: bool },
 }
@@ -210,6 +213,10 @@ pub fn next(current: Option<&Phase>, event: &Event) -> Option<Phase> {
         Event::CiRed { sha, .. } => Phase::CiRed { sha: sha.to_string() },
         Event::CiUnreadable => match current {
             Some(Phase::CiRunning { .. }) => Phase::NeedsYou(Why::Unreadable),
+            _ => return None,
+        },
+        Event::CiUnseen => match current {
+            Some(Phase::CiRunning { .. }) => Phase::NeedsYou(Why::Unseen),
             _ => return None,
         },
         Event::Stopped => Phase::NeedsYou(Why::Stopped),

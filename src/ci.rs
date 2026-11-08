@@ -15,6 +15,7 @@ pub const SETTLE_SECONDS: u64 = 60;
 pub const PUSHING_SECONDS: u64 = 300;
 pub const LOG_LINES: usize = 60;
 pub const UNREADABLE_AFTER: u64 = 15 * 60;
+pub const UNSEEN_AFTER: u64 = 30 * 60;
 pub const GH_VAR: &str = "KEBBIE_GH_BIN";
 pub const CANCELLED_POLL: u64 = 5 * 60;
 pub const CANCELLED_WAIT: u64 = 7 * 24 * 60 * 60;
@@ -124,9 +125,15 @@ impl Watch {
         match &self.state {
             State::Failed { what, .. } => format!("CI failed: {what}"),
             State::Running if !cancelled.is_empty() => format!("CI running: {} cancelled, waits for the next run on {} to pass{}", cancelled.join(", "), self.branch(), self.unread()),
+            State::Running if self.runs.is_empty() && self.unseen_for() >= UNSEEN_AFTER => format!("no CI run of {} seen in {} min, though {} has workflows; check they run on a push{}, or kebbie done{}", self.short(), UNSEEN_AFTER / 60, self.slug, if self.pushed.target.is_empty() { String::new() } else { format!(" to {}", self.pushed.target) }, self.unread()),
+            State::Running if self.runs.is_empty() && self.unseen_for() >= APPEAR_SECONDS => format!("CI running: no run of {} seen for {} min, though {} has workflows{}", self.short(), self.unseen_for() / 60, self.slug, self.unread()),
             State::Running if self.runs.is_empty() => format!("CI running: waiting for runs of {}{}", self.short(), self.unread()),
             State::Running => format!("CI running: {}{}", self.runs.iter().map(Run::title).collect::<Vec<_>>().join(", "), self.unread()),
         }
+    }
+
+    fn unseen_for(&self) -> u64 {
+        self.checked_at.unwrap_or(self.started_at).saturating_sub(self.started_at)
     }
 
     fn unread(&self) -> String {
@@ -207,6 +214,12 @@ pub fn parse_runs(text: &str) -> Result<Vec<Run>> {
         let text = |key: &str| run[key].as_str().unwrap_or_default().to_string();
         Some(Run { id: run["databaseId"].as_u64()?, name: text("name"), workflow: text("workflowName"), status: text("status"), conclusion: text("conclusion"), url: text("url") })
     }).collect())
+}
+
+// Whether gh lists an active workflow in the repo, so a commit no run showed up for is waited on rather than taken as green.
+pub fn has_workflows(text: &str) -> Result<bool> {
+    let value: Value = serde_json::from_str(text).map_err(|error| format!("gh workflow list gave no JSON: {error}"))?;
+    Ok(value.as_array().ok_or("gh workflow list gave no list")?.iter().any(|workflow| workflow["state"] == "active"))
 }
 
 pub fn failed_job(text: &str) -> Option<(String, Option<u64>)> {
@@ -476,6 +489,9 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
         watch.checked_at = Some(now);
         match listed {
             Ok(runs) => {
+                if !runs.is_empty() && crate::phase::load(state, &watch.address).is_some_and(|record| record.phase == crate::phase::Phase::NeedsYou(crate::phase::Why::Unseen)) {
+                    crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::PushOut { sha: &watch.sha });
+                }
                 watch.runs = runs;
                 watch.error = None;
                 watch.erring_since = None;
@@ -495,7 +511,19 @@ pub fn tick_with(state: &Path, gh: &str, now: u64) -> Vec<Event> {
                 let _ = save(state, &watch);
             }
             Verdict::Green => events.push(green(state, &watch, format!("CI is green for {}", watch.short()))),
-            Verdict::NoneRan => events.push(green(state, &watch, format!("No CI ran for {}", watch.short()))),
+            Verdict::NoneRan => match crate::sh::run(gh, &["workflow", "list", "-R", &watch.slug, "--json", "state", "--limit", "100"], Some(&watch.repo)).and_then(|text| has_workflows(&text)) {
+                Ok(false) => events.push(green(state, &watch, format!("No CI ran for {}", watch.short()))),
+                Ok(true) => {
+                    let _ = save(state, &watch);
+                    if now.saturating_sub(watch.started_at) >= UNSEEN_AFTER {
+                        crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::CiUnseen);
+                    }
+                }
+                Err(error) => {
+                    watch.error = Some(error);
+                    let _ = save(state, &watch);
+                }
+            },
             Verdict::Cancelled(cancelled) => {
                 let waited = now.saturating_sub(watch.started_at);
                 if crate::tasks::passed_after_cancel(&watch, &cancelled, gh) {
@@ -648,6 +676,46 @@ mod tests {
         for conclusion in ["failure", "timed_out", "startup_failure", "action_required"] {
             assert!(matches!(verdict(&[run("completed", "success"), run("completed", conclusion), run("in_progress", "")], 5), Verdict::Failed(failed) if failed.len() == 1), "{conclusion}");
         }
+    }
+
+    #[test]
+    fn a_commit_no_run_showed_up_for_is_green_only_in_a_repo_without_workflows() {
+        let dir = crate::sh::test_dir("ci-unseen");
+        let gh = |name: &str, workflows: &str| {
+            let path = dir.join(name);
+            crate::executable::write(&path, format!("#!/bin/sh\ncase \"$*\" in\n*\"workflow list\"*) echo '{workflows}' ;;\n*) echo '[]' ;;\nesac\n")).unwrap();
+            path.to_string_lossy().to_string()
+        };
+        let watch = Watch { address: "billing@app".to_string(), task: "billing".to_string(), repo: dir.clone(), slug: "acme/app".to_string(), sha: "abcdef0".to_string(), started_at: 0, checked_at: None, close: false, runs: Vec::new(), state: State::Running, error: None, erring_since: None, pushed: Pushed::default() };
+        save(&dir, &watch).unwrap();
+        crate::phase::record(&dir, "billing@app", "push", &crate::phase::Event::PushOut { sha: "abcdef0" });
+        let phase = || crate::phase::load(&dir, "billing@app").map(|record| record.phase);
+        let with_workflows = gh("with", r#"[{"state":"active"},{"state":"disabled_manually"}]"#);
+        assert!(tick_with(&dir, &with_workflows, APPEAR_SECONDS + 300).is_empty(), "a repo with workflows waits for their run, it never reads the silence as green");
+        let waiting = load(&dir, "billing@app").unwrap();
+        assert!(waiting.running());
+        assert_eq!(waiting.note(), "CI running: no run of abcdef0 seen for 8 min, though acme/app has workflows");
+        assert_eq!(phase(), Some(crate::phase::Phase::CiRunning { sha: "abcdef0".to_string() }));
+        assert!(tick_with(&dir, &with_workflows, UNSEEN_AFTER - 1).is_empty());
+        assert_eq!(phase(), Some(crate::phase::Phase::CiRunning { sha: "abcdef0".to_string() }), "under half an hour it still waits under CI running");
+        assert!(tick_with(&dir, &with_workflows, UNSEEN_AFTER).is_empty());
+        assert_eq!(phase(), Some(crate::phase::Phase::NeedsYou(crate::phase::Why::Unseen)), "half an hour without a run needs the user");
+        let unseen = load(&dir, "billing@app").unwrap();
+        assert!(unseen.running(), "a run that shows up late still settles it");
+        assert_eq!(unseen.note(), "no CI run of abcdef0 seen in 30 min, though acme/app has workflows; check they run on a push, or kebbie done");
+        let to_main = Watch { pushed: Pushed { target: "main".to_string(), ..Pushed::default() }, ..unseen.clone() };
+        assert_eq!(to_main.note(), "no CI run of abcdef0 seen in 30 min, though acme/app has workflows; check they run on a push to main, or kebbie done", "never a re-run kebbie cannot do for a commit with no runs");
+        let late = dir.join("late");
+        crate::executable::write(&late, "#!/bin/sh\necho '[{\"databaseId\":1,\"name\":\"CI\",\"workflowName\":\"CI\",\"status\":\"in_progress\",\"conclusion\":\"\",\"url\":\"u\"}]'\n").unwrap();
+        assert!(tick_with(&dir, &late.to_string_lossy(), UNSEEN_AFTER + 30).is_empty());
+        assert_eq!(phase(), Some(crate::phase::Phase::CiRunning { sha: "abcdef0".to_string() }), "a run that shows up puts it back under CI running");
+        save(&dir, &Watch { checked_at: None, ..watch.clone() }).unwrap();
+        assert!(tick_with(&dir, &gh("broken", "not json"), APPEAR_SECONDS + 330).is_empty(), "a workflow list gh cannot read is no green either");
+        assert!(load(&dir, "billing@app").unwrap().error.is_some());
+        let events = tick_with(&dir, &gh("none", r#"[{"state":"disabled_manually"}]"#), APPEAR_SECONDS + 360);
+        assert!(events.len() == 1 && events[0].text.starts_with("No CI ran for abcdef0"), "{events:?}");
+        assert!(load(&dir, "billing@app").is_none());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     fn titled(workflow: &str, conclusion: &str) -> Run {

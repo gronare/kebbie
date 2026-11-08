@@ -15,6 +15,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A task's shell commands stay quick while a background test run is pending, and a run whose end never shows stays unknown after a day.
 - Test runs that end at the same moment in parallel shells are all recorded.
 - A test run recorded in a task without the sandbox reads unverified: recorded without a sandbox, wherever it shows.
+- A pushed task whose CI never starts, in a repo with workflows, moves to Needs you after 30 minutes instead of closing as green.
 
 ## 0.36.0
 
