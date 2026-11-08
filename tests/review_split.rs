@@ -146,6 +146,22 @@ fn the_hook_reads_an_input_whose_text_holds_escaped_newlines_and_tabs() {
 }
 
 #[test]
+fn split_refuses_a_base_that_is_an_option_or_no_commit() {
+    use std::process::Stdio;
+    let split = Split::new("option-base");
+    let target = split.root.join("truncated");
+    for base in [format!("--output={}", target.display()), "-p".to_string(), "no-such-ref".to_string()] {
+        let output = Command::new("sh").arg(SCRIPT).args(["split", &base]).current_dir(&split.slot)
+            .env("KEBBIE_STATE_DIR", split.root.join("state")).env("KEBBIE_BIN", "/k/kebbie").env("HERDR_BIN_PATH", split.root.join("herdr")).env("HERDR_PANE_ID", "p_claude").env("GIT_CONFIG_NOSYSTEM", "1")
+            .stdin(Stdio::null()).output().unwrap();
+        assert!(!output.status.success(), "{base} is refused");
+        assert!(!split.dir().join("base").exists(), "{base} is never written as the base");
+    }
+    assert!(!target.exists());
+    assert!(split.herdr_calls().is_empty(), "no review opens on a refused base");
+}
+
+#[test]
 fn no_script_pipes_a_variable_through_echo_which_sh_backslash_expands() {
     for script in ["review.sh", "sync.sh", "build.sh", "release.sh", "install.sh", "check.sh", "herdr-startup.sh", "clean-builds.sh", "release-notes.sh", "release-smoke.sh"] {
         let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts").join(script)).unwrap();

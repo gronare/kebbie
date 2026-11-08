@@ -79,7 +79,7 @@ fn default_branch(root: &Path) -> Option<String> {
 // A worktree's base is under its first commit not yet on the default branch, else its fork point as the board reads it, resolved on every read, so neither a rebase nor a push of its first commits counts what is on the default branch as the task's.
 pub fn resolve_base(root: &Path, spec: &str) -> String {
     if spec != "fork" {
-        return spec.to_string();
+        return git(root, &["rev-parse", "--verify", "--quiet", "--end-of-options", &format!("{spec}^{{commit}}")]).filter(|_| !spec.starts_with('-')).unwrap_or_else(|| "HEAD".to_string());
     }
     let fork = in_linked_worktree(root).then(|| default_branch(root)).flatten()
         .and_then(|branch| crate::tasks::rest_base(root, &branch).or_else(|| crate::status::fork_point(root, &branch).ok()));
@@ -400,7 +400,15 @@ pub mod tests {
         let new = all.iter().find(|file| file.path == "d").unwrap();
         assert!(new.new && new.added == "2", "an untracked file counts its lines: {new:?}");
         assert_eq!(since(&repo.dir, &repo.slot), "since origin/main");
-        assert_eq!(resolve_base(&repo.slot, "HEAD~1"), "HEAD~1");
+        assert_eq!(resolve_base(&repo.slot, "HEAD~1"), sh(&repo.slot, &["rev-parse", "HEAD~1"]), "a base the agent names is read as a commit");
+        let target = repo.root.join("truncated");
+        for option in [format!("--output={}", target.display()), "--no-index".to_string(), "no-such-ref".to_string()] {
+            let base = resolve_base(&repo.slot, &option);
+            assert_eq!(base, "HEAD", "{option} is no commit");
+            files(&repo.dir, &repo.slot, &base, None);
+            read_entries(&repo.slot, &base, &mut |_| None);
+        }
+        assert!(!target.exists(), "a base never reaches git as an option");
         let _ = fs::remove_dir_all(&repo.root);
     }
 

@@ -8,7 +8,7 @@ A herdr split next to Claude for reading the work under review: kebbie's own vie
 | --- | --- |
 | Files listed | The work under review, in the order of Claude's numbered review guide. Other changes follow, marked `other`. |
 | Base inside a worktree | Where the branch left the remote's default branch, so the split shows that task's work, committed or not. |
-| Base elsewhere | The argument to `/kebbie:review-split`, when given. |
+| Base elsewhere | The argument to `/kebbie:review-split`, when given: a commit, branch or tag. One that starts with `-` or names no commit is refused, and no split opens. |
 
 Claude takes the files it changed in this session. For work from elsewhere, it takes what the unpushed commits, uncommitted changes and project notes say belongs to it, and asks when that is unclear. Asking for everything lists every change against the base.
 

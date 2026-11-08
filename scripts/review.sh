@@ -98,6 +98,11 @@ split() {
   d=$(review_dir "$HERDR_PANE_ID")
   base="${1:-$(default_base)}"
   [ $# -gt 0 ] && shift
+  case "$base" in
+    fork) ;;
+    -*) echo "review.sh: the base must be a commit, not an option: $base" >&2; exit 2 ;;
+    *) git rev-parse --verify --quiet --end-of-options "$base^{commit}" >/dev/null || { echo "review.sh: no commit $base" >&2; exit 2; } ;;
+  esac
   if review_open "$d"; then
     rm -f "$d/scope" "$d/baseline"
   else
