@@ -1089,7 +1089,7 @@ fn a_red_ci_its_claude_calls_outside_the_code_is_dismissed_by_the_user_alone_and
     assert_eq!(task["ci_dismissed"][0]["why"], "pushed outside the deploy window", "{task}");
     assert!(task["ci"].is_null(), "{task}");
     let closed = lab.run(&["-C", app_dir, "done", "--landed"]);
-    assert!(stdout(&closed).contains("kebbie closed it as done"), "{}\n{}", stdout(&closed), stderr(&closed));
+    assert!(stdout(&closed).contains("kebbie closed billing@app as done"), "{}\n{}", stdout(&closed), stderr(&closed));
     assert!(git(&app, &["branch", "--list", "billing"]).is_empty());
 }
 

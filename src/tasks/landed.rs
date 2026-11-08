@@ -351,6 +351,7 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                         continue;
                     }
                     let head = head(&slot.path);
+                    let kebbie_pushed = crate::phase::load(state, &address).is_some_and(|record| record.phase == crate::phase::Phase::Closing);
                     let told = read_mark(state, &address).is_some_and(|(why, seen, _)| why == Unsure::Note && head.as_deref() == Some(seen.as_str()));
                     match close(repo, task, told) {
                         Ok(_) => {
@@ -362,7 +363,7 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
                             if intent::pending(state, &address).is_some_and(|pending| pending.work == Work::Ci) {
                                 intent::forget(state, &address);
                             }
-                            let text = format!("{address} landed on {main} outside kebbie's push, so kebbie closed it as done.");
+                            let text = if kebbie_pushed { format!("kebbie closed {address} as done, after its push to {main}.") } else { format!("{address} landed on {main} outside kebbie's push, so kebbie closed it as done.") };
                             tell(&text);
                             notes.push(format!("landed: {text}"));
                         }
@@ -500,6 +501,23 @@ mod tests {
         assert!(!branch_exists(&dir, "billing"), "closed as done: {notes:?}");
         let address = peers::address("billing", &name_of(&dir));
         assert_eq!(told.borrow().as_slice(), [format!("{address} landed on {} outside kebbie's push, so kebbie closed it as done.", upstream.trim_start_matches("origin/"))], "the lead hears one line");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_task_kebbie_pushed_that_waited_for_its_note_closes_with_one_done_line_and_no_word_of_a_push_outside_kebbie() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = peers::address("billing", &name_of(&dir));
+        git(&slot.path, &["push", "--quiet", "origin", &format!("HEAD:{}", upstream.trim_start_matches("origin/"))]).unwrap();
+        git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
+        crate::phase::record(&state, &address, "push", &crate::phase::Event::Closing);
+        let told = RefCell::new(Vec::new());
+        let repos = [dir.clone()];
+        let seen = herdr(&slot, "idle");
+        let notes = pass(&state, &world(&repos, &seen, &[], "false"), &mut closing_by_finish(&state, &upstream), &mut |text| told.borrow_mut().push(text.to_string()));
+        assert!(!branch_exists(&dir, "billing"), "closed as done: {notes:?}");
+        assert_eq!(told.borrow().as_slice(), [format!("kebbie closed {address} as done, after its push to {}.", upstream.trim_start_matches("origin/"))]);
         cleanup(dir, origin, &slot);
     }
 
