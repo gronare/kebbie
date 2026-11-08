@@ -82,7 +82,7 @@ A task's Claude can stop on a prompt of its own in its pane: a permission questi
 
 ## Pushing
 
-`kebbie push` decides who may push a task, and kebbie blocks `git push` in every task's worktree.
+`kebbie push` decides who may push a task. A task's own shell has no GitHub token or git credential login and kebbie refuses `git push` from it in every form, an ops task keeping the user's ssh agent for its ssh to other machines, and a `git push` in a task's worktree stops at kebbie's push block.
 
 - The user pushes from the board. You push a task (`kebbie -C <repo> push <task>`: it joins its repo's push line, and kebbie fetches and rebases it onto origin's default branch when its turn comes, however far behind it is) only under the user's push permission: on the task (`push_permission: "task"` in `kebbie status --json`, the board's `a`), or on its repo (`"repo, once reviewed"`, the Areas page's `a`), which covers a task once its reviewer passed its current code. Either way a rules approval, the reviewer's or yours, must match its commits. A ready task without a permission waits for the user under Ready to push.
 - Each repo has one push line: pushes go out one at a time, in the order they were asked for, and only the head of the line is rebased. `push_ahead` in `kebbie status --json` (and the board's `2nd in line after …`) is a push's place. A head whose Claude works on a conflict or tests keeps its place while the line waits; after 30 minutes without a ready report, or on a needs-you report, it leaves the line for Needs you, and new commits nobody checked take a push out of the line too. `kebbie -C <repo> push --cancel <task>` takes a push of yours out of the line; the user's you leave to them.
