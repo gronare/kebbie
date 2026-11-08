@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::mpsc::Receiver;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -15,7 +14,6 @@ use crate::report;
 use crate::sh::Result;
 use crate::tasks;
 use super::{App, Mode};
-use super::terminal::{init_terminal, restore_terminal};
 use super::widgets::{MAUVE, MUTED, TEXT, YELLOW, bold, centered, style};
 
 pub(super) enum Rewrite {
@@ -76,18 +74,9 @@ impl MessageEditor {
 
 // The user's editor on a commit message, in this pane; an empty result keeps the old message.
 fn edit_in_editor(terminal: &mut DefaultTerminal, message: &str) -> Result<Option<String>> {
-    let file = std::env::temp_dir().join(format!("kebbie-{}-COMMIT_EDITMSG", std::process::id()));
     let help = "\n\n# Edit the commit message. Lines starting with # are ignored; an empty message cancels.\n";
-    std::fs::write(&file, format!("{message}{help}")).map_err(|error| error.to_string())?;
-    restore_terminal();
-    let status = Command::new("sh").args(["-c", "${VISUAL:-${EDITOR:-vi}} \"$1\"", "sh"]).arg(&file).status();
-    *terminal = init_terminal();
-    let edited = std::fs::read_to_string(&file).map_err(|error| error.to_string());
-    let _ = std::fs::remove_file(&file);
-    if !status.map_err(|error| error.to_string())?.success() {
-        return Ok(None);
-    }
-    let message = edited?.lines().filter(|line| !line.starts_with('#')).collect::<Vec<_>>().join("\n").trim().to_string();
+    let Some(edited) = super::terminal::edit_in_editor(terminal, "COMMIT_EDITMSG", &format!("{message}{help}"))? else { return Ok(None) };
+    let message = edited.lines().filter(|line| !line.starts_with('#')).collect::<Vec<_>>().join("\n").trim().to_string();
     Ok((!message.is_empty()).then_some(message))
 }
 

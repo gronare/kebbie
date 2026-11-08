@@ -877,16 +877,8 @@ fn report_text(routine: &Routine, state: &State, (now, offset): (u64, i64)) -> S
 }
 
 fn edit_in_editor(terminal: &mut DefaultTerminal, text: &str) -> Result<Option<String>> {
-    let file = std::env::temp_dir().join(format!("kebbie-{}-routine-prompt.md", std::process::id()));
-    std::fs::write(&file, text).map_err(|error| error.to_string())?;
-    let status = crate::board::terminal::outside(terminal, || std::process::Command::new("sh").args(["-c", "${VISUAL:-${EDITOR:-vi}} \"$1\"", "sh"]).arg(&file).status().map_err(|error| error.to_string()));
-    let edited = std::fs::read_to_string(&file).map_err(|error| error.to_string());
-    let _ = std::fs::remove_file(&file);
-    if !status?.success() {
-        return Ok(None);
-    }
-    let text = edited?.trim().to_string();
-    Ok((!text.is_empty()).then_some(text))
+    let edited = crate::board::terminal::edit_in_editor(terminal, "routine-prompt.md", text)?;
+    Ok(edited.map(|edited| edited.trim().to_string()).filter(|text| !text.is_empty()))
 }
 
 #[cfg(test)]

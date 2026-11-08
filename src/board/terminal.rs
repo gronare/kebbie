@@ -88,8 +88,54 @@ pub fn outside<T>(terminal: &mut DefaultTerminal, step: impl FnOnce() -> Result<
     result
 }
 
+// A new file of the user's alone, in kebbie's private state, so no other user can plant a link at its name or read the text.
+fn edit_file(dir: &std::path::Path, name: &str, text: &str) -> Result<std::path::PathBuf> {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    crate::state::private_dir(dir)?;
+    let file = dir.join(format!("{}-{}-{name}", std::process::id(), COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    create_private(&file, text)?;
+    Ok(file)
+}
+
+fn create_private(file: &std::path::Path, text: &str) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(file)
+        .and_then(|mut out| out.write_all(text.as_bytes()))
+        .map_err(|error| format!("{}: {error}", file.display()))
+}
+
+// The user's editor on a text, in this pane; the edited text, or None when the editor failed.
+pub fn edit_in_editor(terminal: &mut DefaultTerminal, name: &str, text: &str) -> Result<Option<String>> {
+    let file = edit_file(&crate::lead::state_dir()?.join("edit"), name, text)?;
+    let status = outside(terminal, || std::process::Command::new("sh").args(["-c", "${VISUAL:-${EDITOR:-vi}} \"$1\"", "sh"]).arg(&file).status().map_err(|error| error.to_string()));
+    let edited = std::fs::read_to_string(&file).map_err(|error| error.to_string());
+    let _ = std::fs::remove_file(&file);
+    if !status?.success() {
+        return Ok(None);
+    }
+    edited.map(Some)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_file_an_editor_opens_is_new_private_and_refuses_a_planted_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::sh::test_dir("edit-file").join("edit");
+        let file = super::edit_file(&dir, "COMMIT_EDITMSG", "Fix the header").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Fix the header");
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        assert!(file.file_name().unwrap().to_string_lossy().ends_with("-COMMIT_EDITMSG"), "the name tells the editor what it edits");
+        assert_ne!(super::edit_file(&dir, "COMMIT_EDITMSG", "x").unwrap(), file, "a new name each time");
+        let target = dir.parent().unwrap().join("victim");
+        std::fs::write(&target, "keep me").unwrap();
+        let planted = dir.join("planted");
+        std::os::unix::fs::symlink(&target, &planted).unwrap();
+        assert!(super::create_private(&planted, "x").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep me", "a link at the name is never written through");
+    }
+
     #[test]
     fn a_frame_that_writes_every_cell_wipes_text_the_screen_kept_without_a_clear() {
         use ratatui::backend::TestBackend;

@@ -34,6 +34,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A message held for a busy task is delivered once, even when the board and the keeper both wait on the message log for long.
 - Kept task titles in kebbie's state are private to you, and the board never reads one half written.
 - A bug report hides the value in Authorization: Basic and in password: hunter2, where the secret is the next word.
+- A commit message or routine prompt you edit in your editor opens from a private file in kebbie's state, never from a shared temp folder.
 
 ## 0.36.0
 
