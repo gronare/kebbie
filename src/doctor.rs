@@ -204,6 +204,7 @@ pub fn sandbox(on: &Setting<bool>, missing: &[String]) -> Check {
 pub fn plugin_binary(root: &Path) -> Check {
     let binary = root.join("target/release/kebbie");
     match crate::update::binary_origin(root).filter(|_| binary.is_file()) {
+        Some(origin @ crate::update::Origin::Downloaded { provenance: crate::update::Provenance::Unverified, .. }) => warn("plugin binary", format!("{}, {}", binary.display(), origin.describe()), one(crate::update::UNVERIFIED_FIX)),
         Some(origin) => ok("plugin binary", format!("{}, {}", binary.display(), origin.describe())).brief(origin.describe()),
         None => fail("plugin binary", format!("{} is missing", binary.display()), one(format!("sh {} in {} (herdr runs it on install and update)", crate::update::BUILD_SCRIPT, root.display()))),
     }
@@ -1111,14 +1112,21 @@ mod tests {
 
     #[test]
     fn the_plugin_binary_says_where_it_came_from_and_whether_cargo_is_needed() {
-        use crate::update::{Origin, binary_origin};
+        use crate::update::{Origin, Provenance, binary_origin};
         let dir = scratch("origin");
         std::fs::create_dir_all(dir.join("target/release")).unwrap();
         executable(&dir.join("target/release/kebbie"));
         std::fs::write(dir.join("target/release/kebbie.origin"), "downloaded v0.24.0 aarch64-apple-darwin\n").unwrap();
-        let downloaded = Origin::Downloaded { tag: "v0.24.0".to_string(), target: "aarch64-apple-darwin".to_string() };
+        let downloaded = Origin::Downloaded { tag: "v0.24.0".to_string(), target: "aarch64-apple-darwin".to_string(), provenance: Provenance::Unattested };
         assert_eq!(binary_origin(&dir).as_ref(), Some(&downloaded));
         assert!(plugin_binary(&dir).fact.ends_with(", downloaded v0.24.0 for aarch64-apple-darwin"));
+        std::fs::write(dir.join("target/release/kebbie.origin"), "downloaded v0.37.0 aarch64-apple-darwin verified\n").unwrap();
+        let verified = plugin_binary(&dir);
+        assert!(verified.level == Level::Ok && verified.fact.ends_with(", downloaded v0.37.0 for aarch64-apple-darwin, its attestation verified"), "{verified:?}");
+        std::fs::write(dir.join("target/release/kebbie.origin"), "downloaded v0.37.0 aarch64-apple-darwin unverified\n").unwrap();
+        let unverified = plugin_binary(&dir);
+        assert!(unverified.level == Level::Warn && unverified.fact.ends_with(", its origin not verified") && unverified.fix[0].starts_with("install the GitHub CLI (gh)"), "an installed binary nothing checked is a warning, not a failure: {unverified:?}");
+        std::fs::write(dir.join("target/release/kebbie.origin"), "downloaded v0.24.0 aarch64-apple-darwin\n").unwrap();
         let tools = tools("0.9.0");
         let cargo_tool = named(&tools, "cargo");
         assert_eq!(cargo(cargo_tool, None, Channel::Release, Some(&downloaded)).level, Level::Ok, "a release machine with a downloaded binary needs no Rust");

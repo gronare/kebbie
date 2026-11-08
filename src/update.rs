@@ -372,6 +372,7 @@ fn modified(path: &Path) -> Option<std::time::SystemTime> {
 fn built_label(root: &Path, was: Option<std::time::SystemTime>) -> String {
     let binary = root.join("target/release/kebbie");
     match (binary_origin(root), modified(&binary) == was) {
+        (Some(Origin::Downloaded { tag, provenance: Provenance::Unverified, .. }), false) => format!("Downloaded kebbie {}, its origin not verified: {UNVERIFIED_FIX}", tag.trim_start_matches('v')),
         (Some(Origin::Downloaded { tag, .. }), false) => format!("Downloaded kebbie {}", tag.trim_start_matches('v')),
         (Some(Origin::Downloaded { .. }), true) => "kebbie was downloaded already".to_string(),
         (_, true) => "kebbie was built already".to_string(),
@@ -462,16 +463,32 @@ pub fn rebuild_staged(repo: &Path, announce: bool) -> Option<String> {
 pub const BUILD_SCRIPT: &str = "scripts/build.sh";
 const ORIGIN_FILE: &str = "target/release/kebbie.origin";
 
+pub const UNVERIFIED_FIX: &str = "install the GitHub CLI (gh) and log in, and kebbie checks the next release it downloads with gh attestation verify";
+
+#[derive(Debug, PartialEq)]
+pub enum Provenance {
+    Verified,
+    Unverified,
+    Unattested,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Origin {
-    Downloaded { tag: String, target: String },
+    Downloaded { tag: String, target: String, provenance: Provenance },
     Built,
 }
 
 impl Origin {
     pub fn describe(&self) -> String {
         match self {
-            Origin::Downloaded { tag, target } => format!("downloaded {tag} for {target}"),
+            Origin::Downloaded { tag, target, provenance } => {
+                let checked = match provenance {
+                    Provenance::Verified => ", its attestation verified",
+                    Provenance::Unverified => ", its origin not verified",
+                    Provenance::Unattested => "",
+                };
+                format!("downloaded {tag} for {target}{checked}")
+            }
             Origin::Built => "built from source".to_string(),
         }
     }
@@ -484,7 +501,14 @@ pub fn binary_origin(root: &Path) -> Option<Origin> {
     let downloaded = modified(root.join(ORIGIN_FILE)).filter(|written| *written >= binary).and_then(|_| std::fs::read_to_string(root.join(ORIGIN_FILE)).ok()).and_then(|text| {
         let mut words = text.split_whitespace();
         match (words.next(), words.next(), words.next()) {
-            (Some("downloaded"), Some(tag), Some(target)) => Some(Origin::Downloaded { tag: tag.to_string(), target: target.to_string() }),
+            (Some("downloaded"), Some(tag), Some(target)) => {
+                let provenance = match words.next() {
+                    Some("verified") => Provenance::Verified,
+                    Some("unverified") => Provenance::Unverified,
+                    _ => Provenance::Unattested,
+                };
+                Some(Origin::Downloaded { tag: tag.to_string(), target: target.to_string(), provenance })
+            }
             _ => None,
         }
     });
@@ -585,6 +609,18 @@ mod tests {
         assert!(finish.find("renew_old_blocks(").unwrap() < finish.find("restart::run_counted(").unwrap());
     }
     use serde_json::json;
+
+    #[test]
+    fn the_build_step_says_when_the_downloaded_binary_was_not_verified() {
+        let root = scratch("built-label");
+        std::fs::create_dir_all(root.join("target/release")).unwrap();
+        std::fs::write(root.join("target/release/kebbie"), "x").unwrap();
+        for (written, said) in [("verified", "Downloaded kebbie 0.37.0"), ("unverified", "Downloaded kebbie 0.37.0, its origin not verified: install the GitHub CLI (gh) and log in, and kebbie checks the next release it downloads with gh attestation verify")] {
+            std::fs::write(root.join(ORIGIN_FILE), format!("downloaded v0.37.0 aarch64-apple-darwin {written}\n")).unwrap();
+            assert_eq!(built_label(&root, None), said);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn the_plugins_step_says_updated_only_for_a_plugin_claude_updated() {
