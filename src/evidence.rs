@@ -59,6 +59,7 @@ pub struct Run {
     pub background: String,
     pub transcript: String,
     pub says: Option<Exit>,
+    pub worktree: String,
 }
 
 impl Run {
@@ -66,7 +67,7 @@ impl Run {
         json!({
             "command": self.command, "runner": self.runner, "result": self.result.name(), "ok": self.result == Outcome::Passed, "why": self.why, "exit": self.exit, "duration_ms": self.duration_ms,
             "summary": self.summary, "sha": self.sha, "dirty": self.dirty, "code": self.code, "at": self.at,
-            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key),
+            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key), "worktree": self.worktree,
         })
     }
 
@@ -92,6 +93,7 @@ impl Run {
             background: value["background"].as_str().unwrap_or_default().to_string(),
             transcript: value["transcript"].as_str().unwrap_or_default().to_string(),
             says: value["says"].as_str().map(Exit::from_key),
+            worktree: value["worktree"].as_str().unwrap_or_default().to_string(),
         })
     }
 
@@ -600,7 +602,7 @@ pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String]
     let (sha, dirty, code) = snapshot(worktree).ok()?;
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
     let transcript = if background.as_deref().is_some_and(|id| !id.is_empty()) { input["transcript_path"].as_str().unwrap_or_default().to_string() } else { String::new() };
-    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says) };
+    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned() };
     save(state, address, &run).ok()?;
     Some(run)
 }
@@ -624,18 +626,24 @@ pub fn hook(address: &str, input: &str) -> String {
         said.extend(missed.as_deref().map(unrecorded_context));
         note_seen(&state, address, missed, crate::messages::now());
     }
-    let mut passed = state_dir().map(|state| settle(&state, address, &listed)).unwrap_or_default().iter().any(|run| run.result == Outcome::Passed);
+    let mut passed = passed_in(address, &state_dir().map(|state| settle(&state, address, &listed)).unwrap_or_default());
     if let Some(run) = recorded(address, &cwd, &listed, &input) {
         match run.result {
-            Outcome::Passed => passed = true,
+            Outcome::Passed => passed = passed.or_else(|| passed_in(address, std::slice::from_ref(&run))),
             Outcome::Unknown => said.push(unknown_context(&run)),
             Outcome::Failed => {}
         }
     }
-    if passed && let Ok(state) = state_dir() && let Ok(top) = git(&cwd, &["rev-parse", "--show-toplevel"]) {
-        crate::review::again_for_tests(Path::new(&top), address, &crate::status::named(&state, address));
+    if let Some(worktree) = passed && let Ok(state) = state_dir() {
+        crate::review::again_for_tests(&worktree, address, &crate::status::named(&state, address));
     }
     if said.is_empty() { String::new() } else { context(&input["hook_event_name"], &said.join("\n")) }
+}
+
+// The worktree of the task under `address` that one of these runs passed in, wherever the shell that ran the hook stands now.
+fn passed_in(address: &str, runs: &[Run]) -> Option<PathBuf> {
+    runs.iter().filter(|run| run.result == Outcome::Passed && !run.worktree.is_empty()).map(|run| PathBuf::from(&run.worktree))
+        .find(|worktree| peers::me(worktree).as_deref() == Some(address))
 }
 
 fn recorded(address: &str, cwd: &Path, listed: &[String], input: &Value) -> Option<Run> {
@@ -1013,7 +1021,7 @@ mod tests {
         let list = listed(&[]);
         let run = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 100).unwrap();
         let head = git(&dir, &["rev-parse", "HEAD"]).unwrap();
-        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks) });
+        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks), worktree: dir.to_string_lossy().into_owned() });
         assert_eq!(runs_in(&state, "billing@app"), [run]);
         let broke = record_in(&state, "billing@app", &dir, &list, &failed("npm test"), 200).unwrap();
         assert!(broke.result == Outcome::Failed && broke.exit == Some(1) && broke.runner == "npm test");
@@ -1073,6 +1081,23 @@ mod tests {
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &broke, 5).unwrap().result, Outcome::Failed, "nothing after it, so its exit is its own");
         assert_eq!(record_in(&state, "billing@app", &dir, &list, &failed("cargo build && cargo test"), 6).unwrap().result, Outcome::Unknown, "the build may have failed before the tests ran");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_settled_pass_goes_back_to_the_reviewer_for_its_own_task_and_never_for_the_worktree_the_shell_is_in() {
+        let (dir, origin, slot, _) = crate::tasks::test_support::task_with_a_commit("billing");
+        let (other_dir, other_origin, other_slot, _) = crate::tasks::test_support::task_in_another_repo("api");
+        let address = peers::address("billing", &name_of(&dir));
+        let run = |worktree: &Path, result: Outcome| Run { result, worktree: worktree.to_string_lossy().into_owned(), ..Run::default() };
+        assert_eq!(passed_in(&address, &[run(&other_slot.path, Outcome::Passed)]), None, "a pass of this task never sends the task the shell has cd'd into");
+        assert_eq!(passed_in(&address, &[run(&slot.path, Outcome::Failed)]), None);
+        assert_eq!(passed_in(&address, &[run(&other_slot.path, Outcome::Passed), run(&slot.path, Outcome::Passed)]), Some(slot.path.clone()));
+        assert_eq!(passed_in(&address, &[Run { result: Outcome::Passed, ..Run::default() }]), None, "a run recorded before runs named their worktree");
+        let source = include_str!("evidence.rs");
+        let hook = &source[source.find("\npub fn hook(").unwrap()..];
+        assert!(!hook[..hook.find("\n}\n").unwrap()].contains("show-toplevel"), "the hook's cwd never picks the task to send back");
+        crate::tasks::test_support::cleanup(dir, origin, &slot);
+        crate::tasks::test_support::cleanup(other_dir, other_origin, &other_slot);
     }
 
     fn notification(id: &str, output: &Path, status: &str, summary: &str) -> String {
@@ -1163,7 +1188,7 @@ mod tests {
 
     #[test]
     fn the_reviewer_reads_every_run_on_the_reviewed_code_one_line_per_command_and_older_ones_only_without_them() {
-        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None };
+        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None, worktree: String::new() };
         let mut runs = vec![run(1, "cargo test", false, "old")];
         for at in 2..9 {
             runs.push(run(at, "cargo test --lib evidence", at != 4, "reviewed"));
@@ -1184,7 +1209,7 @@ mod tests {
 
     #[test]
     fn a_run_without_a_result_reads_as_unknown_and_counts_as_no_run_for_the_reviewer() {
-        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)) };
+        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)), worktree: String::new() };
         let judge = |run: &Run| shown(run, |code| code == "reviewed", true);
         assert_eq!(judge(&run).line(), "? cargo test result unknown, piped · at abcdef0", "not a pass even on the code as it is");
         assert_eq!(Run::from_json(&run.to_json()), Some(run.clone()));
