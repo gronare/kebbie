@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use kebbie_hub_api::{Bytes32, Bytes64, ReportAccepted, ReportChallenge, ReportUpload};
@@ -416,6 +417,63 @@ fn attempt(state: &Path, issue: &mut Issue, report: BugReport, url: &str, now: u
 
 pub const SENT_KIND: &str = "report-sent";
 
+// Held from a bug's last read to its report id being saved, so two sends on this machine never post the same bug.
+struct SendLock(std::fs::File);
+
+impl SendLock {
+    fn take(state: &Path) -> Result<SendLock> {
+        let path = dir(state).join("send.lock");
+        let file = crate::state::append_to(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        // SAFETY: flock on a descriptor this File owns.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(format!("{}: {}", path.display(), std::io::Error::last_os_error()));
+        }
+        Ok(SendLock(file))
+    }
+}
+
+impl Drop for SendLock {
+    // A child forked by another thread holds a copy of the descriptor until it execs; unlocking releases the lock for every copy at once.
+    fn drop(&mut self) {
+        // SAFETY: unlocks the descriptor this value owns.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+enum Skip {
+    Already(String),
+    NotOurs,
+    Changed,
+    Missing(String),
+}
+
+impl Skip {
+    fn why(self, id: &str) -> String {
+        match self {
+            Skip::Already(report) => format!("went already, as report {report}"),
+            Skip::NotOurs => "a wish or another install's report; only a bug you ran into goes".to_string(),
+            Skip::Changed => format!("it changed since you read it; kebbie issue report {id} shows it again"),
+            Skip::Missing(error) => error,
+        }
+    }
+}
+
+// The bug as it stands now, if it is still the one the user read and nothing has sent it.
+fn ready(state: &Path, id: &str, read: &[u8; 32], scrub: &Scrub) -> std::result::Result<(Issue, BugReport), Skip> {
+    let issue = issues::find(&issues::dir(state), id).map_err(Skip::Missing)?;
+    if let Some(report) = &issue.report {
+        return Err(Skip::Already(report.clone()));
+    }
+    if issue.kind != "bug" || issue.source.is_some() {
+        return Err(Skip::NotOurs);
+    }
+    let report = payload(&issue, scrub);
+    if report.digest() != *read {
+        return Err(Skip::Changed);
+    }
+    Ok((issue, report))
+}
+
 pub fn sent_line(report: &str, issue: &str, title: &str) -> String {
     format!("Sent bug {issue} to kebbie's maintainers as report {report}: \"{title}\", redacted; kebbie issue report {issue} shows the text that went.")
 }
@@ -423,18 +481,14 @@ pub fn sent_line(report: &str, issue: &str, title: &str) -> String {
 // The digest is of the report the user read; anything else that would go out instead is refused.
 pub fn send_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub, read: &[u8; 32], now: u64) -> Result<String> {
     crate::permit::user_only_as(caller, "Sending a report to kebbie's maintainers")?;
-    let dir = issues::dir(state);
-    let mut issue = issues::find(&dir, id)?;
-    if let Some(report) = &issue.report {
-        return Err(format!("Bug {} went to kebbie's maintainers already, as report {report}", issue.id));
-    }
-    if issue.kind != "bug" || issue.source.is_some() {
-        return Err(format!("{} is a wish or another install's report; only a bug you ran into goes to kebbie's maintainers", issue.id));
-    }
-    let report = payload(&issue, scrub);
-    if report.digest() != *read {
-        return Err(format!("Bug {} changed since you read it, so nothing was sent; read it again with kebbie issue report {0}", issue.id));
-    }
+    let _lock = SendLock::take(state)?;
+    let (mut issue, report) = match ready(state, id, read, scrub) {
+        Ok(ready) => ready,
+        Err(Skip::Already(report)) => return Err(format!("Bug {id} went to kebbie's maintainers already, as report {report}")),
+        Err(Skip::Changed) => return Err(format!("Bug {id} changed since you read it, so nothing was sent; read it again with kebbie issue report {id}")),
+        Err(Skip::NotOurs) => return Err(format!("{id} is a wish or another install's report; only a bug you ran into goes to kebbie's maintainers")),
+        Err(Skip::Missing(error)) => return Err(error),
+    };
     let sent = deliver(state, &mut issue, report, url, now)?;
     crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent bug {} to kebbie's maintainers as report {sent}", issue.id)).next("It stays on this machine too; after each update the keeper rechecks it and closes it once a commit plainly fixes it.").ok()
 }
@@ -467,6 +521,13 @@ fn minutes(wait: std::time::Duration) -> String {
 }
 
 impl Batch {
+    fn skipped(&mut self, id: &str, skip: Skip) {
+        match skip {
+            Skip::Already(report) => self.already.push((id.to_string(), report)),
+            skip => self.failed.push((id.to_string(), skip.why(id))),
+        }
+    }
+
     pub fn notice(&self) -> Result<String> {
         let headline = match (self.sent.len(), self.failed.len()) {
             (0, 0) => "Sent nothing: every bug had gone to kebbie's maintainers already".to_string(),
@@ -494,7 +555,6 @@ impl Batch {
 
 pub fn send_all_in(state: &Path, caller: &Caller, read: &[(String, [u8; 32])], url: &str, scrub: &Scrub, pace: &Pace, now: u64) -> Result<Batch> {
     crate::permit::user_only_as(caller, "Sending reports to kebbie's maintainers")?;
-    let dir = issues::dir(state);
     let mut batch = Batch::default();
     let mut recent: std::collections::VecDeque<std::time::Instant> = std::collections::VecDeque::new();
     let mut stuck = false;
@@ -503,24 +563,8 @@ pub fn send_all_in(state: &Path, caller: &Caller, read: &[(String, [u8; 32])], u
             batch.failed.push((id.clone(), "not tried, the reports endpoint stayed busy".to_string()));
             continue;
         }
-        let mut issue = match issues::find(&dir, id) {
-            Ok(issue) => issue,
-            Err(error) => {
-                batch.failed.push((id.clone(), error));
-                continue;
-            }
-        };
-        if let Some(report) = &issue.report {
-            batch.already.push((issue.id.clone(), report.clone()));
-            continue;
-        }
-        if issue.kind != "bug" || issue.source.is_some() {
-            batch.failed.push((issue.id.clone(), "a wish or another install's report; only a bug you ran into goes".to_string()));
-            continue;
-        }
-        let report = payload(&issue, scrub);
-        if report.digest() != *digest {
-            batch.failed.push((issue.id.clone(), format!("it changed since you read it; kebbie issue report {} shows it again", issue.id)));
+        if let Err(skip) = ready(state, id, digest, scrub) {
+            batch.skipped(id, skip);
             continue;
         }
         let mut waits = 0;
@@ -535,7 +579,15 @@ pub fn send_all_in(state: &Path, caller: &Caller, read: &[(String, [u8; 32])], u
                 recent.pop_front();
                 continue;
             }
-            match attempt(state, &mut issue, report.clone(), url, now) {
+            let lock = SendLock::take(state)?;
+            let (mut issue, report) = match ready(state, id, digest, scrub) {
+                Ok(ready) => ready,
+                Err(skip) => {
+                    batch.skipped(id, skip);
+                    break;
+                }
+            };
+            match attempt(state, &mut issue, report, url, now) {
                 Ok(sent) => {
                     recent.push_back((pace.clock)());
                     (pace.say)(&format!("Sent bug {} as report {sent}.", issue.id));
@@ -543,6 +595,7 @@ pub fn send_all_in(state: &Path, caller: &Caller, read: &[(String, [u8; 32])], u
                     break;
                 }
                 Err(Refused::Busy) if waits < WAITS => {
+                    drop(lock);
                     waits += 1;
                     (pace.say)(&format!("The reports endpoint is busy; waiting {} before bug {} goes…", minutes(WINDOW), issue.id));
                     (pace.wait)(WINDOW);
@@ -614,7 +667,9 @@ pub fn send_unasked_in(state: &Path, text: crate::config::ReportText, url: &str,
     }
     let scrub = scrub();
     let mut notes = Vec::new();
-    for mut issue in waiting {
+    for waited in waiting {
+        let _lock = SendLock::take(state)?;
+        let Some(mut issue) = issues::find(&issues::dir(state), &waited.id).ok().filter(offered) else { continue };
         let report = payload(&issue, &scrub);
         let sent = deliver(state, &mut issue, report, url, now)?;
         notes.push(format!("reports: sent bug {} to kebbie's maintainers as report {sent}, as [report] text = \"always\" says", issue.id));
@@ -948,6 +1003,42 @@ mod tests {
         for caller in [Caller::Lead, Caller::Task("a@b".to_string()), Caller::Agent, Caller::Sandboxed] {
             assert!(send_all_in(&state, &caller, &read, &url, &scrub(), &pace, NOW).unwrap_err().contains("is the user's call"));
         }
+    }
+
+    #[test]
+    fn a_bug_another_send_reported_while_the_batch_waited_is_not_posted_again() {
+        let state = crate::sh::test_dir("report-all-raced");
+        let dir = issues::dir(&state);
+        let ids: Vec<String> = (0..=BURST).map(|index| format!("e0000{index}")).collect();
+        for id in &ids {
+            issues::save(&dir, &Issue { id: id.clone(), ..bug("t", "it broke") }).unwrap();
+        }
+        let read: Vec<(String, [u8; 32])> = ids.iter().map(|id| (id.clone(), payload(&issues::find(&dir, id).unwrap(), &scrub()).digest())).collect();
+        let (url, seen) = counting_endpoint(0);
+        let last = ids[BURST].clone();
+        let wait = |_| issues::save(&dir, &Issue { id: last.clone(), report: Some("99".to_string()), ..bug("t", "it broke") }).unwrap();
+        let pace = Pace { clock: &std::time::Instant::now, wait: &wait, say: &|_| {} };
+        let batch = send_all_in(&state, &Caller::User, &read, &url, &scrub(), &pace, NOW).unwrap();
+        assert_eq!(batch.sent.len(), BURST, "{batch:?}");
+        assert_eq!(batch.already, [(last, "99".to_string())]);
+        assert_eq!(seen.lock().unwrap().1, BURST, "the one sent elsewhere during the wait is not posted");
+    }
+
+    #[test]
+    fn a_send_waits_for_another_one_on_this_machine_and_then_finds_the_bug_gone() {
+        let state = crate::sh::test_dir("report-send-locked");
+        let dir = issues::dir(&state);
+        issues::save(&dir, &bug("t", "it broke")).unwrap();
+        let read = payload(&issues::find(&dir, "a1b2c3").unwrap(), &scrub()).digest();
+        let held = SendLock::take(&state).unwrap();
+        let waiting = state.clone();
+        let send = std::thread::spawn(move || send_in(&waiting, &Caller::User, "a1b2c3", "http://127.0.0.1:9", &scrub(), &read, NOW));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!send.is_finished(), "the second send waits for the lock");
+        issues::save(&dir, &Issue { report: Some("7".to_string()), ..bug("t", "it broke") }).unwrap();
+        drop(held);
+        let refused = send.join().unwrap().unwrap_err();
+        assert!(refused.contains("went to kebbie's maintainers already, as report 7"), "{refused}");
     }
 
     #[test]

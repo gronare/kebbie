@@ -176,6 +176,7 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 | `install-id` | The install signal's random id, made on its first send. |
 | `install-signal.json` | The day the install signal last went. |
 | `always-armed` | The date you ran `kebbie issue report --always`, while it holds. |
+| `send.lock` | Held while one report goes, so two sends on this machine never post the same bug. |
 | `inbox.json` | With `[report] inbox_token` set: the reports filed here by their report id, the issues filed from error signals, how many reports wait in quarantine on the issues endpoint, and the last fetch and its error. |
 
 ### The hub

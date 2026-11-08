@@ -139,7 +139,7 @@ The endpoint takes 5 reports from one install in 5 minutes. kebbie paces a batch
 2. Read the reports to their end. kebbie shows each one exactly as it would go out, and `y` sends those; a bug saved while the window is open waits for the next batch.
 3. Press `y`. The first 5 go at once, then 5 more every 5 minutes. If the endpoint still answers that it is busy, kebbie waits 5 minutes and carries on.
 
-On the board the batch goes in the background, each send a line under messages. When it ends, kebbie names the bugs it sent, those already sent, and any that failed with why. Run it again for the ones left; no bug goes twice. `--all` leaves out a bug you kept on this machine or opened on GitHub; `kebbie issue report <id>` sends one of those.
+On the board the batch goes in the background, each send a line under messages. When it ends, kebbie names the bugs it sent, those already sent, and any that failed with why. Run it again for the ones left; no bug goes twice, even when two batches or the board and a terminal send at once. While a batch goes, `a` on the board says so and starts no second one. `--all` leaves out a bug you kept on this machine or opened on GitHub; `kebbie issue report <id>` sends one of those.
 
 ### What the report holds
 

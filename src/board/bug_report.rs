@@ -197,6 +197,10 @@ impl App {
         if shown && key.code == KeyCode::Char('n') {
             return self.decline_offer();
         }
+        if shown && key.code == KeyCode::Char('a') && self.sending.is_some() {
+            self.subject = Some(super::notices::Subject::plain("report"));
+            return self.show(Notice::new(Tone::Moving, "A batch of bugs is still going to kebbie's maintainers").next("a sends the rest once it has ended; the board says when.").ok());
+        }
         if shown && key.code == KeyCode::Char('a') && !self.offers.is_empty() {
             self.mode = Mode::ReportAll { shown: self.offers.clone(), scroll: 0, read: false, nudged: false };
             return;
@@ -598,6 +602,22 @@ mod tests {
         }
         assert_eq!(*asked.lock().unwrap(), digests, "exactly the reports shown, once");
         assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline == "Sent 2 bugs to kebbie's maintainers"));
+    }
+
+    #[test]
+    fn a_while_a_batch_is_still_going_starts_no_second_one() {
+        let state = crate::sh::test_dir("board-report-all-twice");
+        filed(&state, "a1b2c3", "bug", "push hid git's error");
+        let mut app = test_app(Vec::new());
+        app.offers = offers_in(&state, true, &scrub);
+        let (_still, result) = std::sync::mpsc::channel();
+        app.sending = Some((vec!["b2c3d4".to_string()], result));
+        app.offer_panel.shown = true;
+        app.focus_offers(0);
+        press(&mut app, key(KeyCode::Char('a')));
+        assert!(!matches!(app.mode, Mode::ReportAll { .. }), "no second window while the first batch goes");
+        assert!(app.sending.as_ref().is_some_and(|(going, _)| going == &["b2c3d4"]), "the batch in flight is kept");
+        assert!(screen(&mut app).contains("A batch of bugs is still going"), "{}", screen(&mut app));
     }
 
     #[test]
