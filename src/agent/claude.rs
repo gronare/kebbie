@@ -254,9 +254,10 @@ pub(crate) fn settings(kebbie: &str, address: &str, gate: Option<&str>, dirs: Op
     let hook = json!([{ "hooks": [{ "type": "command", "command": format!("{} hook", crate::sh::quote(kebbie)) }] }]);
     let allow = ["peers", "tell", "report", "ask", "steps", "accepted", "routine ok"].map(|command| format!("Bash({kebbie} {command}:*)"));
     let evidence = json!([{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook evidence {}", crate::sh::quote(kebbie), crate::sh::quote(address)) }] }]);
-    let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PostToolUse": evidence, "PostToolUseFailure": evidence });
+    let push_guard = json!({ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook push-guard", crate::sh::quote(kebbie)) }] });
+    let mut hooks = json!({ "UserPromptSubmit": hook, "Stop": hook, "PreToolUse": [push_guard], "PostToolUse": evidence, "PostToolUseFailure": evidence });
     if let Some(address) = gate {
-        hooks["PreToolUse"] = json!([{ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kebbie), crate::sh::quote(address)), "timeout": 40 }] }]);
+        hooks["PreToolUse"].as_array_mut().expect("the push guard is a PreToolUse list").push(json!({ "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash", "hooks": [{ "type": "command", "command": format!("{} hook gate {}", crate::sh::quote(kebbie), crate::sh::quote(address)), "timeout": 40 }] }));
     }
     if let Some(dirs) = dirs.filter(|_| sandbox.is_some()) {
         let task = address.rsplit_once('@').map_or(address, |(task, _)| task);
@@ -824,7 +825,8 @@ mod tests {
         let off = task_settings(None);
         assert_eq!(off.get("sandbox"), None, "kebbie writes no sandbox key, so the user's own settings decide");
         assert!(!strings(&off["permissions"]["deny"]).iter().any(|rule| rule.starts_with("Edit(") || rule.starts_with("Write(") || rule.starts_with("MultiEdit(")), "{:?}", off["permissions"]["deny"]);
-        assert!(off["hooks"].get("PreToolUse").is_none(), "no file hook");
+        let guards: Vec<&str> = off["hooks"]["PreToolUse"].as_array().unwrap().iter().filter_map(|entry| entry["hooks"][0]["command"].as_str()).collect();
+        assert_eq!(guards, ["'/opt/kebbie/kebbie' hook push-guard"], "no file hook, and the push guard in every mode");
     }
 
     #[test]
@@ -835,9 +837,9 @@ mod tests {
         assert_eq!(files["hooks"][0]["command"], "'/opt/kebbie/kebbie' hook files 'billing' '/src/wt1.app' '/tmp/kebbie-501/wt1.app-a1b2c3'", "the task's name finds its halves in other repos");
         let gated: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some("billing@app"), Some(&dirs()), Some(&Policy::default()))).unwrap();
         let matchers: Vec<&str> = gated["hooks"]["PreToolUse"].as_array().unwrap().iter().filter_map(|entry| entry["matcher"].as_str()).collect();
-        assert_eq!(matchers, ["Edit|Write|MultiEdit|NotebookEdit|Bash", "Edit|Write|MultiEdit|NotebookEdit"], "the vault's gate and the file hook both run");
+        assert_eq!(matchers, ["Bash", "Edit|Write|MultiEdit|NotebookEdit|Bash", "Edit|Write|MultiEdit|NotebookEdit"], "the push guard, the vault's gate and the file hook all run");
         let off: Value = serde_json::from_str(&settings("/opt/kebbie/kebbie", "billing@app", Some("billing@app"), Some(&dirs()), None)).unwrap();
-        assert_eq!(off["hooks"]["PreToolUse"].as_array().unwrap().len(), 1, "only the vault's gate without the sandbox");
+        assert_eq!(off["hooks"]["PreToolUse"].as_array().unwrap().len(), 2, "the push guard and the vault's gate without the sandbox");
     }
 
     #[test]

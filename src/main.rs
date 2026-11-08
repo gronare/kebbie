@@ -44,6 +44,7 @@ mod permit;
 mod profile_wizard;
 mod profiles;
 mod push_block;
+mod push_guard;
 mod questions;
 mod recipe;
 mod recover;
@@ -656,6 +657,9 @@ fn run(arguments: &Arguments) -> Result<String> {
             }
             if name == Some("gate") {
                 return Ok(arguments.positional(2).map(|address| task_note::hook(address, &input)).unwrap_or_default());
+            }
+            if name == Some("push-guard") {
+                return Ok(push_guard::hook(&input));
             }
             if name == Some("codex") {
                 return Ok(agent::codex::hook(&input));

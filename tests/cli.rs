@@ -253,6 +253,18 @@ fn a_held_proposal_is_never_an_issue_and_a_task_cannot_hold_one() {
 }
 
 #[test]
+fn the_push_guard_denies_a_tasks_git_push_in_any_spelling_and_passes_the_rest() {
+    let lab = Lab::new("push-guard");
+    for line in ["git -c url.x.pushInsteadOf=y push origin HEAD:main", "env -u GIT_CONFIG_COUNT sh -c 'git push'"] {
+        let denied = lab.run_with_stdin(&["hook", "push-guard"], &serde_json::json!({ "tool_name": "Bash", "tool_input": { "command": line } }).to_string());
+        let decision: serde_json::Value = serde_json::from_str(&stdout(&denied)).unwrap();
+        assert_eq!(decision["hookSpecificOutput"]["permissionDecision"], "deny", "{line}");
+    }
+    let passed = lab.run_with_stdin(&["hook", "push-guard"], r#"{"tool_name":"Bash","tool_input":{"command":"git commit -m 'push later'"}}"#);
+    assert!(passed.status.success() && stdout(&passed).is_empty(), "{}", stdout(&passed));
+}
+
+#[test]
 fn the_review_guard_denies_every_command_but_a_plain_git_read() {
     let lab = Lab::new("guard");
     let deny = lab.run_with_stdin(&["hook", "--review"], r#"{"tool_input":{"command":"git log | sh"}}"#);

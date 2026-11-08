@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 - Every release carries a CycloneDX SBOM, kebbie-<version>.cdx.json, next to the binaries.
 - A task's shell gets no GitHub token, git credential helper or ssh agent, so git there has no login to push with; an ops task keeps the ssh agent for its ssh to other machines.
+- A task's shell commands, Claude's and Codex's, are refused when they run git push in any form.
 
 ### Fixed
 - A test command written inside a heredoc, such as a plan written with cat <<EOF, is no longer recorded as a test run.

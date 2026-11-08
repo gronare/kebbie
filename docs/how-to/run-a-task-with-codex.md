@@ -63,18 +63,19 @@ S3_ENDPOINT = "https://s3.example.com"
 
 ### kebbie's plugin
 
-The plugin goes in Codex's plugin cache, `$CODEX_HOME/plugins/cache/kebbie-tasks/kebbie/local/` (`CODEX_HOME` defaults to `~/.codex`), as the plugin `kebbie@kebbie-tasks`, and holds three hooks:
+The plugin goes in Codex's plugin cache, `$CODEX_HOME/plugins/cache/kebbie-tasks/kebbie/local/` (`CODEX_HOME` defaults to `~/.codex`), as the plugin `kebbie@kebbie-tasks`, and holds four hooks:
 
 | Hook | What it does in a kebbie task |
 | --- | --- |
 | `SessionStart` | Records the session id Codex picked, so a restart resumes it, and gives the session its task role as context. |
 | `UserPromptSubmit` | Marks the start of a turn. |
 | `Stop` | Sends the turn back once when it has no `kebbie report` yet, the same as a Claude task's stop hook. |
+| `PreToolUse` | Refuses a shell command that runs `git push` in any form, the same guard a Claude task's shell has. |
 
 Outside a kebbie task's worktree each hook does nothing.
 
 - The plugin step never edits Codex's `config.toml` or `hooks.json`.
-- Codex loads the plugin only in the sessions kebbie starts. kebbie turns it on with `-c plugins.kebbie@kebbie-tasks.enabled=true` and trusts its three hooks by their hash with `-c hooks.state=…`, for that session alone. Your own Codex sessions don't load it.
+- Codex loads the plugin only in the sessions kebbie starts. kebbie turns it on with `-c plugins.kebbie@kebbie-tasks.enabled=true` and trusts its four hooks by their hash with `-c hooks.state=…`, for that session alone. Your own Codex sessions don't load it.
 - kebbie also starts each Codex session with `-c check_for_update_on_startup=false`, so Codex's update screen never stands before the task's prompt. Your own Codex sessions still check. See [Codex updates](#codex-updates) for how kebbie offers a newer Codex.
 - Codex 0.164 and later also bind that trust to the plugin's files. kebbie writes the same files whatever its version, so Codex keeps trusting the hooks across kebbie's updates. A machine whose plugin an older kebbie wrote gets `Hooks need review` once after its first update past 0.32.0: answer it in the task's Space, and Codex trusts the hooks from then on.
 - Codex trusts the hooks by their command line, not by the launcher script they run. So kebbie starts a Codex task only when every file of the plugin is exactly what it writes, and a missing, out-of-date or changed plugin stops the start with `run kebbie setup codex`.
@@ -158,7 +159,7 @@ kebbie's rules file, which `kebbie setup` writes for a ticked Codex, lets kebbie
 | `dontAsk`, `bypassPermissions` | `kebbie-task` with `--ask-for-approval never`: nothing leaves the sandbox, and what it refuses fails back to Codex | `dontAsk`: `--ask-for-approval never`; `bypassPermissions`: `--dangerously-bypass-approvals-and-sandbox` |
 | `auto` | `kebbie-task` with `--ask-for-approval on-request` and Codex's reviewer answering: its reviewer model answers requests to leave the sandbox instead of you, so a command can run outside it | `--ask-for-approval on-request` with Codex's reviewer answering |
 
-Every command Codex runs gets kebbie's push block in its environment and `KEBBIE_ADDRESS` set to the task's address, so a task that can commit still can't push. A Codex process kebbie started counts as that task when it calls kebbie, and any other Codex counts as an agent, so neither can run `kebbie push`, `approve` or another of your commands.
+Every command Codex runs gets kebbie's push block in its environment, with no GitHub token or git login and no ssh agent unless its profile runs `ssh` outside the sandbox, as `ops` does, and `KEBBIE_ADDRESS` set to the task's address, and kebbie's `PreToolUse` hook refuses a command that runs `git push`, so a task that can commit still can't push. A Codex process kebbie started counts as that task when it calls kebbie, and any other Codex counts as an agent, so neither can run `kebbie push`, `approve` or another of your commands.
 
 ## Approvals and choices
 

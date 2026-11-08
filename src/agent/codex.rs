@@ -32,10 +32,11 @@ struct Hook {
 }
 
 // The role arrives as SessionStart context, so its limit is 0: Codex would otherwise spill a long role to a file and show the model a preview.
-const HOOKS: [Hook; 3] = [
+const HOOKS: [Hook; 4] = [
     Hook { event: "SessionStart", label: "session_start", arg: "session-start", context_limit: Some(0) },
     Hook { event: "UserPromptSubmit", label: "user_prompt_submit", arg: "prompt", context_limit: None },
     Hook { event: "Stop", label: "stop", arg: "stop", context_limit: None },
+    Hook { event: "PreToolUse", label: "pre_tool_use", arg: "pre-tool", context_limit: None },
 ];
 
 pub fn home() -> Option<PathBuf> {
@@ -831,6 +832,7 @@ pub fn hook(input: &str) -> String {
     let Some(me) = cwd.and_then(|cwd| crate::peers::me(&cwd)).filter(|me| me != crate::status::LEAD_LABEL) else { return String::new() };
     match value["hook_event_name"].as_str() {
         Some("SessionStart") => session_start(&me, &value, crate::lead::roles_dir().ok().as_deref()),
+        Some("PreToolUse") => crate::push_guard::hook(input),
         Some("UserPromptSubmit" | "Stop") => {
             let _ = crate::messages::flush();
             crate::report::hook(input)
@@ -1192,11 +1194,11 @@ mod tests {
         }
         assert_eq!(file["hooks"]["SessionStart"][0]["hooks"][0]["additionalContextLimit"], json!(0), "a long role is passed whole");
         assert_eq!(hook_key(&HOOKS[2]), "kebbie@kebbie-tasks:hooks/hooks.json:stop:0:0");
-        let reported = ["sha256:295a39bbc9d240f43c3f0b9de092ff1e0b435dc36629e69ea10b3316f3b6163d", "sha256:7a7859ef4dc3adbcfaf3e02b025e11999a6850fdd9c76dffd746561da574a189", "sha256:d777eb217913a82b5591d44ce47b1653542e40ad4164479c2c427d6ca93f3482"];
-        assert_eq!(HOOKS.iter().map(hook_hash).collect::<Vec<_>>(), reported, "the currentHash codex app-server 0.163.0 reports in hooks/list for these hooks; a change to a hook changes it, and kebbie's override with it");
+        let reported = ["sha256:295a39bbc9d240f43c3f0b9de092ff1e0b435dc36629e69ea10b3316f3b6163d", "sha256:7a7859ef4dc3adbcfaf3e02b025e11999a6850fdd9c76dffd746561da574a189", "sha256:d777eb217913a82b5591d44ce47b1653542e40ad4164479c2c427d6ca93f3482", "sha256:8c65d9d34b88bdcaa4734912f941ba16c0a7e9c3f9947e51901789de58354c28"];
+        assert_eq!(HOOKS.iter().map(hook_hash).collect::<Vec<_>>(), reported, "the currentHash codex app-server reports in hooks/list for these hooks (0.163.0, pre_tool_use 0.166.0, before its /plugin suffix); a change to a hook changes it, and kebbie's override with it");
         assert!(trust_override().starts_with("hooks.state={\"kebbie@kebbie-tasks:hooks/hooks.json:session_start:0:0\"={trusted_hash=\"sha256:"));
         let parsed: toml::Table = trust_override().replacen("hooks.state=", "state = ", 1).parse().unwrap();
-        assert_eq!(parsed["state"].as_table().unwrap().len(), 3, "the override parses as TOML with all three entries");
+        assert_eq!(parsed["state"].as_table().unwrap().len(), 4, "the override parses as TOML with all four entries");
     }
 
     #[test]

@@ -1002,14 +1002,14 @@ mod tests {
     #[test]
     fn edits_are_gated_only_in_a_task_started_with_the_vault_on() {
         let off: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", None, None, None)).unwrap();
-        assert!(off["hooks"].get("PreToolUse").is_none(), "without the vault no edit hook runs");
+        assert_eq!(off["hooks"]["PreToolUse"].as_array().map(Vec::len), Some(1), "without the vault no edit hook runs, only the push guard");
         for event in ["PostToolUse", "PostToolUseFailure"] {
             assert_eq!(off["hooks"][event][0]["matcher"], "Bash");
             assert_eq!(off["hooks"][event][0]["hooks"][0]["command"], "'/bin/kebbie' hook evidence 'billing@app'", "every task records its test runs, passed and failed");
         }
         let on: Value = serde_json::from_str(&settings("/bin/kebbie", "billing@app", Some("billing@app"), None, None)).unwrap();
-        assert_eq!(on["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|MultiEdit|NotebookEdit|Bash", "a Bash command that writes a file waits for the Problem too");
-        assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "'/bin/kebbie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
+        assert_eq!(on["hooks"]["PreToolUse"][1]["matcher"], "Edit|Write|MultiEdit|NotebookEdit|Bash", "a Bash command that writes a file waits for the Problem too");
+        assert_eq!(on["hooks"]["PreToolUse"][1]["hooks"][0]["command"], "'/bin/kebbie' hook gate 'billing@app'", "the hook is told its task, so it runs no git and no herdr to find it");
         assert_eq!(on["hooks"]["Stop"], off["hooks"]["Stop"]);
     }
 
@@ -1260,7 +1260,7 @@ mod tests {
         assert_eq!((on["env"]["GIT_CONFIG_COUNT"].as_str(), on["env"]["GIT_CONFIG_KEY_2"].as_str(), on["env"]["GIT_CONFIG_VALUE_2"].as_str()), (Some("8"), Some("url./.pushInsteadOf"), Some("/")), "a push to a local path, as a test's temp repo, goes through");
         assert_eq!(on["env"]["VAULT_STOP_HOOK_COMMITS"], "off", "the vault plugin's Stop hook never asks a task for the repo log kebbie writes");
         assert!(on["env"].get("VAULT_STOP_HOOK").is_none(), "a task is still asked to save what it was told");
-        assert_eq!(on["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"], 40);
+        assert_eq!(on["hooks"]["PreToolUse"][1]["hooks"][0]["timeout"], 40);
     }
 
     #[test]
