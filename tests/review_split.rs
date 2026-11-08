@@ -162,6 +162,22 @@ fn split_refuses_a_base_that_is_an_option_or_no_commit() {
 }
 
 #[test]
+fn the_view_starts_from_a_kebbie_whose_path_holds_a_quote() {
+    use std::process::Stdio;
+    let split = Split::new("quoted");
+    let kebbie = "/k/it's kebbie/kebbie";
+    let output = Command::new("sh").arg(SCRIPT).arg("split").current_dir(&split.slot)
+        .env("KEBBIE_STATE_DIR", split.root.join("state")).env("KEBBIE_BIN", kebbie).env("HERDR_BIN_PATH", split.root.join("herdr")).env("HERDR_PANE_ID", "p_claude").env("GIT_CONFIG_NOSYSTEM", "1")
+        .stdin(Stdio::null()).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = split.herdr_calls();
+    let run = calls.iter().find_map(|call| call.strip_prefix("pane run p_review ")).unwrap_or_else(|| panic!("{calls:?}"));
+    let line = run.strip_suffix("; exit").unwrap();
+    let words = Command::new("sh").args(["-c", &format!("set -- {line}; printf '%s\\n' \"$@\"")]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&words.stdout).lines().collect::<Vec<_>>(), [kebbie, "review", "--view", split.dir().to_str().unwrap()], "the pane's shell reads the path back whole");
+}
+
+#[test]
 fn no_script_pipes_a_variable_through_echo_which_sh_backslash_expands() {
     for script in ["review.sh", "sync.sh", "build.sh", "release.sh", "install.sh", "check.sh", "herdr-startup.sh", "clean-builds.sh", "release-notes.sh", "release-smoke.sh"] {
         let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts").join(script)).unwrap();

@@ -43,6 +43,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The lead runs kebbie tell, status and its other allowed commands without a permission prompt.
 - A vault log line or branch that starts with - reaches the vault whole, never as an option.
 - The install script takes the highest kebbie version, also after a patch release to an older one.
+- The review split opens when kebbie's path or the state folder holds a quote.
 
 ## 0.36.0
 

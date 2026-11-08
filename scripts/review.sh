@@ -68,6 +68,11 @@ fingerprint() {
   if [ -e "$1" ]; then git hash-object -- "$1"; else echo deleted; fi
 }
 
+# One word for the shell herdr's pane run starts, whatever quotes the path holds.
+quoted() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 open_split() {
   root=$(git rev-parse --show-toplevel)
   pane=$("$herdr" pane split --pane "$HERDR_PANE_ID" --direction right --cwd "$root" "--${3:-focus}" | jq -r '.result.pane.pane_id')
@@ -89,7 +94,7 @@ prune_reviews() {
 
 open_review() {
   prune_reviews
-  pane=$(open_split review "'$(kebbie_bin)' review --view '$1'" "$2")
+  pane=$(open_split review "$(quoted "$(kebbie_bin)") review --view $(quoted "$1")" "$2")
   printf '%s\n' "$pane" > "$1/pane"
   printf '%s\n' "$pane"
 }
