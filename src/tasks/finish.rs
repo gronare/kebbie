@@ -120,6 +120,7 @@ pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::v
     crate::recover::forget(&state, &address);
     forget_held_prompt(&address);
     end_life(task_of(&slot), &repo, "done", landed.as_deref(), None);
+    let finished = name_open_halves(finished, task_of(&slot), &repo, &state, "done");
     Ok(match close_space(workspace) {
         Some(error) => finished.detail("space", error),
         None => finished,
@@ -291,6 +292,9 @@ fn discard(cwd: &Path, name: Option<&str>, force: bool, how: &str, kind: Option<
     forget_held_prompt(&peers::address(task, &name_of(&repo)));
     end_life(task, &repo, how, None, kind);
     let mut dropped = Notice::new(Tone::Done, "Dropped").next(format!("{} is free for the next task.", name_of(&slot.path)));
+    if let Ok(state) = state_dir() {
+        dropped = name_open_halves(dropped, task, &repo, &state, how);
+    }
     if taken_off.is_some() {
         dropped = dropped.detail("main", "its commits were taken off local main first");
     }
@@ -340,6 +344,34 @@ fn forget_held_prompt(address: &str) {
     }
 }
 
+// The task's halves in other repos that are still open, from the repos kebbie knows and the halves a sandboxed task recorded; none of them closes with this one.
+fn open_halves(task: &str, repo: &Path, state: &Path, repos: &[std::path::PathBuf]) -> Vec<String> {
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let own = real(repo);
+    let recorded = crate::sandbox::halves(state, task, Path::new("")).into_iter().filter_map(|half| main_checkout(&half.worktree).ok());
+    let mut found: Vec<String> = Vec::new();
+    for other in repos.iter().cloned().chain(recorded) {
+        let address = peers::address(task, &name_of(&other));
+        if real(&other) != own && !found.contains(&address) && find_task(&other, Some(task), &other).is_ok() {
+            found.push(address);
+        }
+    }
+    found.sort();
+    found
+}
+
+fn name_open_halves(notice: Notice, task: &str, repo: &Path, state: &Path, how: &str) -> Notice {
+    let open = open_halves(task, repo, state, &crate::repo::pooled_checkouts());
+    if open.is_empty() {
+        return notice;
+    }
+    let halves = open.join(", ");
+    if let Err(error) = messages::to_lead(messages::ToLead::TaskEnded, &format!("{} ended ({how}); its other halves stay open: {halves}. Close each with done or drop when its own work is in.", peers::address(task, &name_of(repo)))) {
+        eprintln!("Could not tell the lead about {task}'s other halves: {error}");
+    }
+    notice.detail("halves", format!("still open: {halves}"))
+}
+
 fn end_life(task: &str, repo: &Path, how: &str, landed: Option<&str>, kind: Option<&str>) {
     if let Err(error) = messages::log_end(task, &name_of(repo), how, landed, kind) {
         eprintln!("Could not log the end of {task}: {error}");
@@ -357,6 +389,27 @@ mod tests {
     use crate::tasks::launch::task_tmp;
     use crate::tasks::pool::{find_task, release, slots};
     use crate::tasks::started::{record_start, started_file_in};
+
+    #[test]
+    fn done_and_drop_name_the_tasks_other_open_halves_and_close_none_of_them() {
+        let (dir, origin, slot, _) = task_with_a_commit("payload");
+        let (api, api_origin, api_slot, _) = task_in_another_repo("payload");
+        let state = state_of(&dir);
+        let api_address = peers::address("payload", &name_of(&api));
+        assert_eq!(open_halves("payload", &dir, &state, &[dir.clone(), api.clone()]), std::slice::from_ref(&api_address), "its own repo is no half");
+        let dirs = crate::sandbox::TaskDirs::new(&api_slot.path, &crate::sandbox::git_dir_of(&api_slot.path), Path::new("/tmp/none"));
+        crate::sandbox::record_half(&state, "payload", &dirs).unwrap();
+        assert_eq!(open_halves("payload", &dir, &state, &[]), std::slice::from_ref(&api_address), "a half a sandboxed task recorded counts without knowing its repo");
+        assert!(find_task(&api, Some("payload"), &api).is_ok(), "nothing is closed");
+        git(&api_slot.path, &["switch", "--quiet", "--detach"]).unwrap();
+        assert!(open_halves("payload", &dir, &state, std::slice::from_ref(&api)).is_empty(), "a half that ended is not named");
+        git(&api_slot.path, &["switch", "--quiet", "payload"]).unwrap();
+        let source = include_str!("finish.rs");
+        let body = |name: &str| { let start = source.find(&format!("\npub(super) fn {name}(")).or_else(|| source.find(&format!("\nfn {name}("))).unwrap(); &source[start..start + source[start..].find("\n}\n").unwrap()] };
+        assert!(body("close_task").contains("name_open_halves(") && body("discard").contains("name_open_halves("), "done and drop both name them");
+        cleanup(api, api_origin, &api_slot);
+        cleanup(dir, origin, &slot);
+    }
 
     #[test]
     fn done_drop_and_reset_forget_the_approval() {
