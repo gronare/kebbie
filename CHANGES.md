@@ -23,6 +23,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie doctor --fix and kebbie update install the push block again in a worktree whose hooksPath is not kebbie's.
 - A comment fix whose reading has no subject gets one the fixing task writes from its change, never a stock "Address …'s comment" line.
 - A sandboxed task's plan file lives in its worktree's git dir, so it outlives a restart of the machine.
+- The lead's push of a task whose ready report names --after waits until that task lands, and your own push warns that it went first.
 - Rewording a task's commit waits for kebbie's other rebase of its worktree, and gets past another git's index.lock.
 
 ## 0.36.0

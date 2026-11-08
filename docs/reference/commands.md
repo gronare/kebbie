@@ -647,7 +647,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 `<state>` is `needs-you`, `ready`, `working` or `blocked`.
 
 - With `ready`, `--card <file>` is the sign-off card the push window shows, with an Also noticed list when the task found things outside its task.
-- With `ready`, `--after <task[@repo]>` names a task to push before this one, such as the other half of a task across repos; repeat it for several. A bare name is a task in the same repo. Next's push group puts that task first and this one says `after <task>` until it is pushed.
+- With `ready`, `--after <task[@repo]>` names a task to push before this one, such as the other half of a task across repos; repeat it for several. A bare name is a task in the same repo. Next's push group puts that task first and this one says `after <task>` until it is pushed. The lead's push of this task waits in the push line until that task has landed, letting the pushes behind it go first; your own push goes out and its notice warns that it went first.
 - A routine's task also lists its findings on a card with `needs-you`.
 - With `kebbie:work-rules` as the rules skill, `ready` is refused while a commit lacks a subject, a blank line and a body.
 

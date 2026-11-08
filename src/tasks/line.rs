@@ -2,11 +2,12 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 
 use crate::messages::{self, Message};
+use crate::notice::{Notice, Tone};
 use crate::phase::{self, Event, Phase, Why};
 use crate::repo::{default_branch, name_of};
 use crate::sh::Result;
 use super::approval::{approval_holds, covers, fingerprint};
-use super::intent::{self, Intent, Next, Work};
+use super::intent::{self, By, Intent, Next, Work};
 use super::pool::{Slot, find_task, slots};
 use super::push::{Sent, pushed_fingerprint, rejected};
 
@@ -126,7 +127,24 @@ pub(super) fn drive(state: &Path, repo: &Path, mine: Option<&str>, log: &[Messag
     let mut driven = Driven::default();
     let Some(_turnstile) = Turnstile::try_take(state, repo) else { return driven };
     let mut seen = Vec::new();
-    while let Some(head) = intent::line(state, repo).into_iter().next() {
+    let mut held: Vec<String> = Vec::new();
+    loop {
+        let mut next = None;
+        let line: Vec<Intent> = intent::line(state, repo).into_iter().filter(|queued| !held.contains(&queued.address)).collect();
+        for queued in line {
+            let first = if queued.by == By::Lead { open_before(&queued, log) } else { Vec::new() };
+            if first.is_empty() {
+                next = Some(queued);
+                break;
+            }
+            let said = format!("held in the push line until {} lands, which its ready report says goes out first", first.join(", "));
+            driven.notes.push(format!("push: {}: {said}", queued.address));
+            if mine == Some(queued.address.as_str()) {
+                driven.mine = Some(Ok(Notice::new(Tone::Moving, "In the push line, held").next(format!("It waits until {} lands, as its ready report asked; the pushes behind it go on meanwhile.", first.join(", "))).detail("task", &queued.task).to_string()));
+            }
+            held.push(queued.address);
+        }
+        let Some(head) = next else { break };
         let ours = mine == Some(head.address.as_str());
         if (mine.is_some() && !ours) || seen.contains(&head.address) {
             break;
@@ -199,10 +217,14 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push
             Next::Drop(why) => return Turn::Out(why),
         }
     }
+    let skipped = if head.by == By::User { open_before(head, log) } else { Vec::new() };
     match push(head, &slot) {
         Ok(Sent::Pushed(said)) => {
             intent::forget(state, &head.address);
-            Turn::Pushed(said)
+            if skipped.is_empty() {
+                return Turn::Pushed(said);
+            }
+            Turn::Pushed(Notice::read(&said, false).detail("careful", format!("pushed before {}, which its ready report says goes out first", skipped.join(", "))).to_string())
         }
         Ok(Sent::Handed(said)) => Turn::Handed(said),
         Err(error) if rejected(&error) => {
@@ -218,6 +240,18 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push
             Turn::Out(text)
         }
     }
+}
+
+// The tasks a ready report names to go out first that are still open; one whose repo kebbie cannot find counts as landed.
+fn open_before(head: &Intent, log: &[Message]) -> Vec<String> {
+    let reports = messages::latest_reports(log);
+    let Some(after) = reports.get(&head.address).and_then(|message| message.report.as_ref()).filter(|report| report.state == "ready").map(|report| report.after.clone()) else { return Vec::new() };
+    after.into_iter().filter(|address| {
+        let Some((task, place)) = address.split_once('@') else { return false };
+        let beside = if place == name_of(&head.repo) { head.repo.clone() } else { head.repo.with_file_name(place) };
+        let repo = if beside.join(".git").exists() { Some(beside) } else { crate::repo::pooled_checkouts().into_iter().find(|repo| name_of(repo) == place) };
+        repo.is_some_and(|repo| find_task(&repo, Some(task), &repo).is_ok())
+    }).collect()
 }
 
 // The push leaves its line for good; a task already under Needs you keeps its own reason there.
@@ -332,6 +366,44 @@ mod tests {
         let notes = complete_in(&state, &[], 300, &|_, _| None, &mut pushed);
         assert!(notes.iter().any(|note| note.contains("is gone")) && load(&state, &address).is_none(), "{notes:?}");
         git(&slot.path, &["switch", "--quiet", "billing"]).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_leads_push_of_a_task_reported_to_go_after_another_waits_until_that_one_lands_and_the_users_goes_out_with_a_warning() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let (api, api_origin, api_slot, _) = task_in_another_repo("payload");
+        let state = state_of(&dir);
+        let address = format!("billing@{}", crate::repo::name_of(&dir));
+        let first = format!("payload@{}", crate::repo::name_of(&api));
+        let copy = another_task(&dir, "copy", "x");
+        let ready = { let mut message = report("r1", 200, "ready"); message.from = address.clone(); message.report.as_mut().unwrap().after = vec![first.clone()]; vec![message] };
+        let queue = |by: By| {
+            save(&state, &Intent { work: Work::Turn, queued: Some(100), ..intent(by, &dir, &fingerprint(&slot.path, &upstream).unwrap()) }).unwrap();
+            save(&state, &Intent { work: Work::Turn, address: format!("copy@{}", crate::repo::name_of(&dir)), task: "copy".to_string(), queued: Some(150), ..intent(By::Lead, &dir, &fingerprint(&copy.path, &upstream).unwrap()) }).unwrap();
+        };
+        let done = Notice::new(Tone::Done, "Pushed 1 commit to main").to_string();
+        queue(By::Lead);
+        let mut pushed = Vec::new();
+        let notes = complete_in(&state, &ready, 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.task.clone()); Ok(Sent::Pushed(done.clone())) });
+        assert_eq!(pushed, ["copy"], "the held push steps aside and the one behind it goes out: {notes:?}");
+        assert!(load(&state, &address).is_some() && notes.iter().any(|note| note.contains(&format!("held in the push line until {first} lands"))), "{notes:?}");
+        forget(&state, &address);
+        queue(By::User);
+        let mut said = Vec::new();
+        complete_in(&state, &ready, 300, &|_, _| None, &mut |intent, _| { said.push((intent.task.clone(), intent.by)); Ok(Sent::Pushed(done.clone())) });
+        assert_eq!(said[0], ("billing".to_string(), By::User), "the user's own push goes out");
+        let mut out = Vec::new();
+        save(&state, &Intent { work: Work::Turn, ..intent(By::User, &dir, &fingerprint(&slot.path, &upstream).unwrap()) }).unwrap();
+        let driven = drive(&state, &dir, Some(&address), &ready, 300, &|_, _| None, &mut |_, _| { out.push(()); Ok(Sent::Pushed(done.clone())) });
+        assert!(driven.mine.unwrap().unwrap().contains(&format!("pushed before {first}, which its ready report says goes out first")), "the user hears which task it should have followed");
+        git(&api_slot.path, &["switch", "--quiet", "--detach"]).unwrap();
+        save(&state, &Intent { work: Work::Turn, ..intent(By::Lead, &dir, &fingerprint(&slot.path, &upstream).unwrap()) }).unwrap();
+        let mut landed = Vec::new();
+        complete_in(&state, &ready, 300, &|_, _| None, &mut |intent, _| { landed.push(intent.task.clone()); Ok(Sent::Pushed(done.clone())) });
+        assert_eq!(landed, ["billing"], "once the task it follows has landed, the lead's push goes out");
+        git(&api_slot.path, &["switch", "--quiet", "payload"]).unwrap();
+        cleanup(api, api_origin, &api_slot);
         cleanup(dir, origin, &slot);
     }
 

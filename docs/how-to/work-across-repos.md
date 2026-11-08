@@ -18,7 +18,7 @@ Run one task that changes two repos at once, such as an event one service sends 
 
    To reach one half, address it as `payload-v2@web`.
 
-3. Push each half on its own with `p`, in the order the change needs: usually the side that accepts the new field first. On the board, the halves sit next to each other. A half that must go second says so in its ready report with `--after payload-v2@api`, and Next lists it after the api half with `after payload-v2@api`.
+3. Push each half on its own with `p`, in the order the change needs: usually the side that accepts the new field first. On the board, the halves sit next to each other. A half that must go second says so in its ready report with `--after payload-v2@api`, and Next lists it after the api half with `after payload-v2@api`. The lead's push of it waits until the api half has landed; yours goes out with a warning.
 
 - A running task gets a half in another repo the same way, such as a comment follow-up whose fix lives elsewhere: `kebbie start payload-v2 "Add the field to the client." --repo client`. A task asks the lead for it rather than making a worktree there by hand, which Push would not see.
 - If you use the vault, both halves share one task note.
