@@ -5,7 +5,7 @@ description: Serve each worktree's dev server through Caddy at its own host, so 
 
 # Expose dev servers to the laptop
 
-`kebbie` is `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`. The main checkout is the parent of `git rev-parse --path-format=absolute --git-common-dir`. The routes file is `/etc/caddy/kebbie.caddy`.
+`kebbie` is the absolute path your kebbie role names for it, written out in full so your allow rules match the command; without a kebbie role, `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`. The main checkout is the parent of `git rev-parse --path-format=absolute --git-common-dir`. The routes file is `/etc/caddy/kebbie.caddy`.
 
 `kebbie routes` prints a Caddy site for every pooled worktree with a port, in each repo whose repo config has `worktree.dev_route = true`: the host its `worktree.dev_url` names, proxied to `localhost:<port>`. `--plain-http` serves each as `http://<host>` for a proxy in front that ends TLS. Routing is **opt-in per repo**: a repo is routed only on the user's yes in step 2.
 

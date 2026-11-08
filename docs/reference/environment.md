@@ -12,7 +12,7 @@ The variables kebbie reads, the ones it sets for the commands it runs, and how t
 | `KEBBIE_STATE_DIR` | `$XDG_STATE_HOME/kebbie`, else `~/.local/state/kebbie` | The state directory. Point it at a temp directory for a throwaway run. |
 | `KEBBIE_REPO_DIRS` | `~/projects:~/personal:~/src:~/code` | Colon-separated folders where `start --repo` looks for checkouts, in them or one level down. |
 | `KEBBIE_LEAD_DIR` | `lead` in the state directory | The lead Claude's working directory. |
-| `KEBBIE_BIN` | `~/.local/share/kebbie/current/target/release/kebbie` | The binary the lead's role, the task role, kebbie's skills and the sidebar sync run. |
+| `KEBBIE_BIN` | `~/.local/share/kebbie/current/target/release/kebbie` | The binary the sidebar sync runs, and kebbie's skills in a session kebbie did not start. The lead's and the task's roles, and the skills they run, name the binary that starts them by its absolute path, the one their allow rules match. |
 | `KEBBIE_CLAUDE_BIN` | `claude` | The Claude Code binary `kebbie setup` runs to install kebbie's plugin and the vault plugin. |
 | `KEBBIE_GH_BIN` | `gh` | The GitHub CLI kebbie watches CI with. |
 | `GH_HOST` | none | A GitHub Enterprise host whose remotes kebbie watches CI for, besides github.com. |

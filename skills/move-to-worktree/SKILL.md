@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # Move to worktree
 
-`kebbie` is `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`. Steps 1 to 3 run from the main checkout.
+`kebbie` is the absolute path your kebbie role names for it, written out in full so your allow rules match the command; without a kebbie role, `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`. Steps 1 to 3 run from the main checkout.
 
 1. **Check.** `HERDR_ENV` is `1` and `kebbie` exists. When one fails, say which and stop.
 2. **Claim what is yours.** Done when you have the task name and your files, or have stopped:

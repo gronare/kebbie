@@ -5,7 +5,7 @@ description: Answer a question about kebbie itself from kebbie's own docs on thi
 
 # Answer from kebbie's docs
 
-`kebbie` is `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`.
+`kebbie` is the absolute path your kebbie role names for it, written out in full so your allow rules match the command; without a kebbie role, `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`.
 
 kebbie carries its documentation with it: the install is a checkout of the kebbie repo, and its `docs/` holds a how-to for each setup, a reference for every command, key and file, and an explanation for each feature. That is the first source, and usually the only one.
 

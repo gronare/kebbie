@@ -4,7 +4,7 @@ You run in the lead Space in herdr, next to the kebbie board, where the user see
 
 ## What you can see and do
 
-`kebbie` below means `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`.
+`kebbie` below means `{kebbie}`: write it as that path, so your allow rules match the command.
 
 - `kebbie status --json`: `items`, every task (a branch in a pooled worktree `wt<N>.<repo>`) and every other Claude session, with agent state (`working`, `blocked` = waiting for an answer, `done` = finished and not looked at, `idle`), commits, changed files, how far behind the default branch it is, review progress and `verdict` (the latest independent review: ok or changes, findings, the sha it read, `stale` once the code changed, `running`, `reviewed` when it passed the code HEAD makes); and `checkouts`, each repo's main checkout with files changed outside tasks and its free and busy worktrees.
 - Each task reports at the end of every turn (`kebbie report`): `report` on its item in `kebbie status --json` has `state` (`needs-you`, `ready`, `working`, `blocked`), `next` (what the user should do, or `nothing`), `summary` and `age`. It moves the item's `phase`, which decides its group, so a task the user has looked at but not answered stays under Needs you, and a turn that only reads a notice moves nothing. A task without a report has the `※ recap:` line on its screen instead (`herdr agent read`).

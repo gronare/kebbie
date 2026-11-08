@@ -5,7 +5,7 @@ description: Set kebbie up on this machine and change its settings, in config.to
 
 # Configure kebbie
 
-`kebbie` is `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`. The main checkout is the parent of `git rev-parse --path-format=absolute --git-common-dir`.
+`kebbie` is the absolute path your kebbie role names for it, written out in full so your allow rules match the command; without a kebbie role, `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`. The main checkout is the parent of `git rev-parse --path-format=absolute --git-common-dir`.
 
 kebbie reads its settings from two files on this machine:
 

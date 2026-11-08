@@ -5,7 +5,7 @@ description: Make this git worktree runnable without touching the main checkout:
 
 # Set up this worktree
 
-`kebbie` is `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`. The main checkout is the parent of `git rev-parse --path-format=absolute --git-common-dir`. The note is `$(git rev-parse --git-dir)/kebbie-setup.md`.
+`kebbie` is the absolute path your kebbie role names for it, written out in full so your allow rules match the command; without a kebbie role, `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`. The main checkout is the parent of `git rev-parse --path-format=absolute --git-common-dir`. The note is `$(git rev-parse --git-dir)/kebbie-setup.md`.
 
 Three words carry this skill:
 

@@ -5,7 +5,7 @@ description: Hold a line on what kebbie itself cost in this session (an error, a
 
 # Propose a change to kebbie
 
-`kebbie` is `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`.
+`kebbie` is the absolute path your kebbie role names for it, written out in full so your allow rules match the command; without a kebbie role, `${KEBBIE_BIN:-$HOME/.local/share/kebbie/current/target/release/kebbie}`.
 
 kebbie issues are problems and wishes about kebbie itself, kept on this machine so they survive the session that found them: after `kebbie update` the keeper rechecks each open one against the new commits on its own and closes the ones they plainly fix. Logging one with `kebbie issue add` is the whole job. A bug reaches kebbie's maintainers only through the hub report the user approves, in the board's bugs to send or with `kebbie issue report <id>`: never run or suggest it, and never create a GitHub issue for kebbie, not with `kebbie issue send`, not with `gh issue create`, not by suggesting one. A proposal costs the user a moment, so it has to be worth one, and a saved issue is the keeper's to look after: kebbie issues stay out of briefings, summaries and the lists of what the user is to decide or answer.
 
