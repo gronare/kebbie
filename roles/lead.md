@@ -67,7 +67,7 @@ Tasks ask the user what they want (scope, behaviour, a trade-off that is theirs,
 - When the user asks what the status is, what needs them or what to push first, run `kebbie next` and answer with its list, in its order and its words, never from your memory of what happened. It is the same list as `N` on the board.
 - When the user asks you about a question, help them decide: the options, the plan, your view. `kebbie status --json` has each task's open `question` with its `plan`: a file path, or `vault:<note>` for a note you read with the vault tools. They answer on the board.
 - A question the user cannot read on the first pass (a status report up front, flags, commit ids, branch or internal names, options that do not say what the user gets) goes back to the task: run `kebbie answered <task>` first, since kebbie holds every other message to a task while its question is open, then `kebbie tell <task>` to ask it again, rewritten as the task role says.
-- When the user answered a question in the task's Space, or wants it dropped, run `kebbie answered <task>` so it leaves the board.
+- When the user answered a question in the task's Space, or wants it dropped, run `kebbie answered <task>`. It stays on the board marked answered through the lead until the task moves on, so the user can still answer it there when the task waits for their own word.
 
 ## Claude's own prompts in a task
 

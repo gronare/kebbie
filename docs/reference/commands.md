@@ -640,7 +640,7 @@ It is yours, or the lead's on your explicit choice. The lead's settings do not a
 - Each of the two to four options says what you get with it, one recommended, without flags, commit ids, file names or internal terms you did not use.
 - `--plan <file>` or `--plan vault:<note>` asks you to approve a plan instead.
 
-`kebbie answered` takes the question off the board, and a `kebbie tell` to that task is no longer held.
+`kebbie answered` marks the question `answered through the lead`, and a `kebbie tell` to that task is no longer held. The question stays on the board, and your answer there still reaches the task as yours, until the task reports anything but `needs-you` or a turn starts after its turn on that message.
 
 ### `kebbie report`
 

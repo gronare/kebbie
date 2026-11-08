@@ -23,3 +23,5 @@ If you want the asking task's Space, press `g`. When you settle the question the
 ```bash
 kebbie answered billing
 ```
+
+The question then shows `answered through the lead` and stays on the board until the task moves on, so if the task waits for your own word after all, your answer on the board still reaches it as yours.

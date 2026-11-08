@@ -674,7 +674,7 @@ impl Item {
             "question": self.question.as_ref().and_then(|message| {
                 let question = message.question.as_ref()?;
                 let options: Vec<Value> = question.options.iter().enumerate().map(|(index, (label, meaning))| json!({ "label": label, "meaning": meaning, "comment": question.comment.contains(&index) })).collect();
-                Some(json!({ "text": message.text, "options": options, "recommend": question.recommend, "plan": question.plan, "kept_for_user": question.waits, "age": messages::age(message.at) }))
+                Some(json!({ "text": message.text, "options": options, "recommend": question.recommend, "plan": question.plan, "kept_for_user": question.waits, "answered_through_lead": question.relayed.is_some(), "age": messages::age(message.at) }))
             }),
             "ci": self.ci.as_ref().map(crate::ci::Watch::to_json),
             "recover": self.recover.as_ref().map(|record| { let mut shown = record.to_json(); shown["note"] = json!(record.note()); shown }),
@@ -1925,7 +1925,7 @@ pub(crate) mod tests {
         assert_eq!(item.to_json()["push_permission"], "task");
         item.question = Some(Message {
             id: "q".to_string(), at: 0, from: "billing@web".to_string(), to: "you".to_string(), text: "Which?".to_string(), held: false, report: None, ended: false,
-            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, comment: Vec::new(), answered: false, waits: true }), about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
+            question: Some(crate::messages::Question { options: vec![("A".to_string(), "a".to_string())], recommend: 1, plan: None, plan_at: None, comment: Vec::new(), answered: false, waits: true, relayed: None }), about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
         });
         let shown = item.to_json();
         assert_eq!(shown["question"]["kept_for_user"], true);

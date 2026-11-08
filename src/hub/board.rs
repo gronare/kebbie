@@ -270,7 +270,7 @@ pub(crate) mod tests {
         item.place = place.to_string();
         item.question = Some(Message {
             id: "1761069540-4411-0-question".to_string(), at: 1_761_069_540, from: format!("{name}@{place}"), to: "you".to_string(), text: "Keep the old endpoint for a release?".to_string(), held: false, report: None, ended: false,
-            question: Some(Asked { options: vec![("Keep it".to_string(), "deprecate now".to_string()), ("Remove it".to_string(), "drop it in this task".to_string())], recommend: 2, plan: Some("/Users/someone/plans/refunds.md".to_string()), plan_at: None, comment: Vec::new(), answered: false, waits: false }),
+            question: Some(Asked { options: vec![("Keep it".to_string(), "deprecate now".to_string()), ("Remove it".to_string(), "drop it in this task".to_string())], recommend: 2, plan: Some("/Users/someone/plans/refunds.md".to_string()), plan_at: None, comment: Vec::new(), answered: false, waits: false, relayed: None }),
             about: None, kind: None, landed: None, why: None, forced: false, fyi: false,
         });
         in_phase(&mut item, Phase::NeedsYou(crate::phase::Why::Question));

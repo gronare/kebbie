@@ -435,6 +435,12 @@ fn question_keys(typing: bool, plan: bool, several: bool, open: bool) -> String 
     keys.join(" · ")
 }
 
+pub(super) const RELAYED: &str = "answered through the lead";
+
+fn relay_mark(message: &Message) -> String {
+    if questions::relayed(message) { format!(" · {RELAYED}") } else { String::new() }
+}
+
 fn question_list(questions: &[Message], selected: usize, area: Rect, hits: &mut Vec<(Rect, Hit)>) -> Vec<Line<'static>> {
     let width = area.width as usize;
     let mut lines = vec![section_header("QUESTIONS", vec![Span::styled(questions.len().to_string(), style(MUTED))], width)];
@@ -444,7 +450,7 @@ fn question_list(questions: &[Message], selected: usize, area: Rect, hits: &mut 
         let kind = if message.question.as_ref().is_some_and(|question| question.plan.is_some()) { "plan" } else { "ask " };
         let row = fit(vec![
             Span::raw(if active { "▸ " } else { "  " }), Span::styled(format!("{kind}  "), style(YELLOW)), Span::styled(name, if active { bold(TEXT) } else { style(TEXT) }),
-            Span::styled(format!("  {place} · {}", messages::age(message.at)), style(MUTED)),
+            Span::styled(format!("  {place} · {}{}", messages::age(message.at), relay_mark(message)), style(MUTED)),
         ], width);
         let y = area.y + 1 + index as u16;
         if y < area.bottom() {
@@ -479,7 +485,7 @@ pub(super) fn draw_questions(frame: &mut Frame, app: &mut App) -> Vec<(Rect, Hit
     let full = frame.area();
     let area = centered(full, (full.width * 92 / 100).max(40), (full.height * 84 / 100).max(16));
     frame.render_widget(Clear, area);
-    let title = format!(" question {}/{} · {} · {name} ", window.selected + 1, questions.len(), if planned { "plan" } else { "ask" });
+    let title = format!(" question {}/{} · {} · {name}{} ", window.selected + 1, questions.len(), if planned { "plan" } else { "ask" }, relay_mark(message));
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
         .title(Span::styled(title, bold(MAUVE))).style(Style::new().bg(MANTLE));
     let inner = block.inner(area);
@@ -650,7 +656,7 @@ fn draw_ask(frame: &mut Frame, window: &mut QuestionWindow, message: &Message, c
     let area = centered(full, width, body.lines.len() as u16 + 4);
     frame.render_widget(Clear, area);
     let (name, _) = split_address(&message.from);
-    let title = if width >= 70 { format!(" question {}/{count} · ask · {name} ", window.selected + 1) } else { format!(" {}/{count} · {name} ", window.selected + 1) };
+    let title = if width >= 70 { format!(" question {}/{count} · ask · {name}{} ", window.selected + 1, relay_mark(message)) } else { format!(" {}/{count} · {name} ", window.selected + 1) };
     let age = messages::age(message.at);
     let age = if age == "now" { " now ".to_string() } else { format!(" {age} ago ") };
     let block = Block::bordered().border_type(BorderType::Rounded).border_style(style(MAUVE)).padding(Padding::horizontal(1))
@@ -824,6 +830,15 @@ mod tests {
         assert!(render(&mut app, 60, 30).0.join("\n").contains("question 2/2 · plan · payload"));
         press(&mut app, KeyCode::Tab);
         assert!(render(&mut app, 100, 30).0.join("\n").contains("question 1/2 · ask · billing"), "tab wraps around");
+    }
+
+    #[test]
+    fn a_question_the_lead_marked_answered_says_so_and_keeps_its_answers() {
+        let mut app = test_app(Vec::new());
+        app.questions = crate::messages::fold(&format!("{QUESTION}\n{}", r#"{"id":"q1","at":20,"state":"relayed"}"#));
+        app.open_questions(Some(0));
+        let screen = render(&mut app, 100, 30).0.join("\n");
+        assert!(screen.contains("question 1/1 · ask · billing · answered through the lead") && screen.contains("2  Solid Queue"), "{screen}");
     }
 
     #[test]

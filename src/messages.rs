@@ -42,7 +42,7 @@ pub struct Message {
     pub fyi: bool,
 }
 
-// A question a task put to the user through kebbie: its options as (label, meaning), the recommended one (1-based), the plan to read (a file, or vault:<note>), the options (0-based) that take the user's comment, and whether the lead kept it for the user while they were away.
+// A question a task put to the user through kebbie: its options as (label, meaning), the recommended one (1-based), the plan to read (a file, or vault:<note>), the options (0-based) that take the user's comment, whether the lead kept it for the user while they were away, and when the lead marked it answered through itself.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Question {
     pub options: Vec<(String, String)>,
@@ -52,6 +52,7 @@ pub struct Question {
     pub comment: Vec<usize>,
     pub answered: bool,
     pub waits: bool,
+    pub relayed: Option<u64>,
 }
 
 pub const USER_LABEL: &str = "you";
@@ -103,7 +104,7 @@ fn question_from(record: &Value) -> Option<Question> {
     // A plan asked before options carried their comment mark still takes one on its three commented answers.
     let old_plan = plan.is_some() && listed.iter().all(|option| option.get("comment").is_none());
     let comment = if old_plan { questions::PLAN_COMMENT.to_vec() } else { marked };
-    Some(Question { options, recommend: question["recommend"].as_u64().unwrap_or(1) as usize, plan, plan_at: question["plan_at_ms"].as_i64().or_else(|| question["plan_at"].as_f64().map(questions::millis)), comment, answered: false, waits: false })
+    Some(Question { options, recommend: question["recommend"].as_u64().unwrap_or(1) as usize, plan, plan_at: question["plan_at_ms"].as_i64().or_else(|| question["plan_at"].as_f64().map(questions::millis)), comment, answered: false, waits: false, relayed: None })
 }
 
 // The log is append-only: a message line, and later lines with only its id and its new state (delivered, answered, kept for the user).
@@ -140,6 +141,7 @@ pub fn fold(log: &str) -> Vec<Message> {
                 match (record["state"].as_str(), message.question.as_mut()) {
                     (Some("answered"), Some(question)) => question.answered = true,
                     (Some("waits"), Some(question)) => question.waits = true,
+                    (Some("relayed"), Some(question)) => question.relayed = Some(record["at"].as_u64().unwrap_or(0)),
                     (_, Some(_)) => {}
                     _ => {
                         message.held = held;
@@ -546,7 +548,7 @@ fn flush_typing_in(dir: &Path, sessions: &[Session], type_into: TypeInto, heard:
             continue;
         }
         let Some(session) = sessions.iter().find(|session| session.address == message.to) else { continue };
-        let open_question = open.iter().find(|question| question.from == session.address).map(|question| question.id.as_str());
+        let open_question = questions::holding(&open, &session.address);
         if let Some(why) = question_hold(message.about.as_deref(), open_question).or_else(|| hold_reason(session)).or_else(|| lead_hold_in(dir, session, &message.from, message.kind.as_deref(), now())) {
             note_why(dir, message, why)?;
             continue;
@@ -711,7 +713,7 @@ fn send_locked_in(dir: &Path, from: &str, recipients: &[&Session], text: &str, s
         let question = open.iter().find(|question| question.from == session.address);
         let earlier_held = messages.iter().any(|message| message.held && message.to == session.address);
         let answering = question.is_some_and(|question| about == Some(question.id.as_str()));
-        let outcome = match question_hold(about, question.map(|question| question.id.as_str())) {
+        let outcome = match question_hold(about, questions::holding(&open, &session.address)) {
             Some(reason) => Err(reason),
             None if earlier_held && !answering => Err("still has earlier messages held"),
             None => match lead_hold_in(dir, session, from, kind, now()).map_or_else(|| deliver(session, &typed_text(from, &session.address, text), type_into), Err) {
@@ -1562,7 +1564,7 @@ mod tests {
     fn a_question_folds_with_its_options_and_its_answer() {
         let question = r#"{"id":"q1","at":10,"from":"billing@web","to":"you","text":"Which queue?","state":"asked","question":{"options":[{"label":"A","meaning":"one"},{"label":"B","meaning":"two"}],"recommend":1,"plan":"vault:Projects/billing.md"}}"#;
         let asked = fold(question);
-        assert_eq!(asked[0].question, Some(Question { options: vec![("A".to_string(), "one".to_string()), ("B".to_string(), "two".to_string())], recommend: 1, plan: Some("vault:Projects/billing.md".to_string()), plan_at: None, comment: questions::PLAN_COMMENT.to_vec(), answered: false, waits: false }));
+        assert_eq!(asked[0].question, Some(Question { options: vec![("A".to_string(), "one".to_string()), ("B".to_string(), "two".to_string())], recommend: 1, plan: Some("vault:Projects/billing.md".to_string()), plan_at: None, comment: questions::PLAN_COMMENT.to_vec(), answered: false, waits: false, relayed: None }));
         assert_eq!(addressee(&asked[0]), "you · asks");
         let kept = fold(&format!("{question}\n{{\"id\":\"q1\",\"at\":11,\"state\":\"waits\"}}"));
         assert!(kept[0].question.as_ref().unwrap().waits && !kept[0].held);

@@ -35,6 +35,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - Kept task titles in kebbie's state are private to you, and the board never reads one half written.
 - A bug report hides the value in Authorization: Basic and in password: hunter2, where the secret is the next word.
 - A commit message or routine prompt you edit in your editor opens from a private file in kebbie's state, never from a shared temp folder.
+- A question the lead marks answered stays on the board, marked answered through the lead, until the task moves on, so you can still answer it yourself.
 
 ## 0.36.0
 

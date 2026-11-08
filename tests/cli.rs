@@ -493,10 +493,9 @@ fn a_task_reports_asks_and_messages_through_the_log_and_the_fake_herdr_sees_only
     assert!(!agent.status.success() && stderr(&agent).contains("an agent session (Claude or Codex) cannot"), "{}", stderr(&agent));
     let settled = lab.run_as("billing@app", &["answered", "billing"]);
     assert!(settled.status.success(), "{}", stderr(&settled));
-    assert_eq!(stdout(&settled), "Marked the question from billing@app answered; it leaves the board.");
-    assert!(!lab.run_as("lead", &["answered", "billing"]).status.success(), "nothing is open any more");
+    assert!(stdout(&settled).starts_with("Marked the question from billing@app answered through the lead"), "{}", stdout(&settled));
     let status: serde_json::Value = serde_json::from_str(&stdout(&lab.run(&["status", "--json"]))).unwrap();
-    assert!(status["items"][0]["question"].is_null());
+    assert!(status["items"][0]["question"]["answered_through_lead"] == true, "the question stays on the board, marked: {status}");
 
     let landed = lab.run(&["-C", app_str, "land", "billing"]);
     assert!(landed.status.success(), "{}", stderr(&landed));

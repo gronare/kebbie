@@ -161,8 +161,27 @@ pub fn open(messages: &[Message], turn_started: impl Fn(&str) -> Option<u64>) ->
             }
         }
     }
-    open.retain(|question| turn_started(&question.from).is_none_or(|at| at <= question.at));
+    open.retain(|question| match question.question.as_ref().and_then(|asked| asked.relayed) {
+        Some(relayed) => relay_open(messages, question, relayed, &turn_started),
+        None => turn_started(&question.from).is_none_or(|at| at <= question.at),
+    });
     open
+}
+
+// A question the lead marked answered stays tappable through the turn its relay starts: a report other than needs-you, or a turn begun after that turn's report, closes it.
+fn relay_open(messages: &[Message], question: &Message, relayed: u64, turn_started: &impl Fn(&str) -> Option<u64>) -> bool {
+    let mut reports = messages.iter().filter(|message| message.from == question.from && message.at >= relayed).filter_map(|message| Some((message.at, message.report.as_ref()?)));
+    let Some((ended, first)) = reports.next() else { return true };
+    first.state == "needs-you" && reports.all(|(_, report)| report.state == "needs-you") && turn_started(&question.from).is_none_or(|at| at <= ended)
+}
+
+// The open question that holds a task's messages; one the lead marked answered lets its relay through.
+pub fn holding<'a>(open: &[&'a Message], address: &str) -> Option<&'a str> {
+    open.iter().find(|question| question.from == address).filter(|question| question.question.as_ref().is_none_or(|asked| asked.relayed.is_none())).map(|question| question.id.as_str())
+}
+
+pub fn relayed(message: &Message) -> bool {
+    message.question.as_ref().is_some_and(|question| question.relayed.is_some())
 }
 
 pub fn open_now(messages: &[Message]) -> Vec<&Message> {
@@ -340,7 +359,7 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
     let me = peers::me(cwd).filter(|me| me != LEAD_LABEL).ok_or("kebbie ask runs in a task's worktree")?;
     let sessions = peers::sessions().unwrap_or_default();
     let _lock = Lock::take(true)?;
-    if open_now(&messages::load()).iter().any(|question| question.from == me) {
+    if open_now(&messages::load()).iter().any(|question| question.from == me && !relayed(question)) {
         return Err("Your earlier question still waits for the user; one question at a time, so stop your turn and wait for the answer.".to_string());
     }
     let at = messages::now();
@@ -374,7 +393,7 @@ fn of_task(question: &Message, to: &str) -> bool {
     question.from == to || question.from.split_once('@').is_some_and(|(task, _)| task == to)
 }
 
-// For a question the user settled elsewhere (in the task's Space, or by dropping it), so it leaves the board.
+// For a question the user settled elsewhere, in the task's Space or through the lead: it stays tappable until the task's turn on that answer is over.
 pub fn answered(to: &str) -> Result<String> {
     answered_as(&crate::permit::caller(), to)
 }
@@ -397,10 +416,10 @@ fn answered_as(caller: &crate::permit::Caller, to: &str) -> Result<String> {
         return Err(format!("No question from \"{to}\" waits for the user; kebbie status --json lists each task's question"));
     }
     for question in &settled {
-        messages::append(&json!({ "id": question.id, "at": messages::now(), "state": "answered" }))?;
+        messages::append(&json!({ "id": question.id, "at": messages::now(), "state": "relayed" }))?;
     }
     let from: Vec<&str> = settled.iter().map(|question| question.from.as_str()).collect();
-    Ok(format!("Marked the question from {} answered; it leaves the board.", from.join(", ")))
+    Ok(format!("Marked the question from {} answered through the lead; your kebbie tell now reaches it. The question stays on the board, still the user's to answer, until the task's turn on your message is over or it reports anything but needs-you.", from.join(", ")))
 }
 
 // The lead answers a question of method itself whether or not the user is here; keeping a question for the user's return needs them away.
@@ -627,6 +646,30 @@ mod tests {
     }
 
     #[test]
+    fn a_question_answered_through_the_lead_lets_the_relay_through_and_stays_tappable_until_the_task_moves_on() {
+        let asked_q = record("q1", 10, "billing@web", &asked(), None, None);
+        let report = |at: u64, state: &str| json!({ "id": format!("r{at}"), "at": at, "from": "billing@web", "to": LEAD_LABEL, "text": "turn", "state": "logged", "report": { "state": state, "next": "answer" } });
+        let before = log(std::slice::from_ref(&asked_q));
+        assert_eq!(holding(&open(&before, |_| None), "billing@web"), Some("q1"), "before the mark the lead's tell is held");
+        let relayed = json!({ "id": "q1", "at": 20, "state": "relayed" });
+        let marked = log(&[asked_q.clone(), relayed.clone()]);
+        let waiting = open(&marked, |_| Some(21));
+        assert_eq!(waiting.len(), 1, "the relay's own turn does not close it");
+        assert_eq!(holding(&waiting, "billing@web"), None, "the relay gets through");
+        let refused = log(&[asked_q.clone(), relayed.clone(), report(25, "needs-you")]);
+        let tappable = open(&refused, |_| Some(21));
+        assert_eq!(tappable.iter().map(|question| question.id.as_str()).collect::<Vec<_>>(), ["q1"], "a task that refuses the relayed approval leaves the question for the user's tap");
+        assert!(relayed_mark_shown(tappable[0]));
+        assert!(open(&refused, |_| Some(30)).is_empty(), "a later turn closes it");
+        assert!(open(&log(&[asked_q.clone(), relayed.clone(), report(25, "ready")]), |_| Some(21)).is_empty(), "a report other than needs-you closes it");
+        assert!(open(&log(&[asked_q, relayed, report(25, "needs-you"), json!({ "id": "q1", "at": 26, "state": "answered" })]), |_| Some(21)).is_empty(), "the user's answer on the board closes it");
+    }
+
+    fn relayed_mark_shown(message: &Message) -> bool {
+        relayed(message) && message.question.as_ref().and_then(|question| question.relayed) == Some(20)
+    }
+
+    #[test]
     fn a_task_waiting_on_its_question_gets_only_the_answer_to_it() {
         assert_eq!(question_hold(None, Some("q1")), Some("waits for the user's answer to its question"), "a plain message, the lead's too, would start a turn and drop the question");
         assert_eq!(question_hold(Some("q0"), Some("q1")), Some("waits for the user's answer to its question"));
@@ -662,7 +705,7 @@ mod tests {
         assert_eq!(copy, base.join("state/plans/billing@web-10.md"));
         assert_eq!(fs::read_to_string(&copy).unwrap(), "# Plan\n1. rename");
         assert!(keep_plan(&base.join("missing.md"), &base.join("state"), "billing@web", "11").is_err());
-        let question = Question { options: Vec::new(), recommend: 1, plan: Some(copy.display().to_string()), plan_at: None, comment: Vec::new(), answered: false, waits: false };
+        let question = Question { options: Vec::new(), recommend: 1, plan: Some(copy.display().to_string()), plan_at: None, comment: Vec::new(), answered: false, waits: false, relayed: None };
         assert_eq!(plan_text(&question).as_deref(), Some("# Plan\n1. rename"));
         let own = base.join("state/plans/billing@web.md");
         fs::write(&own, "# Own plan").unwrap();
@@ -688,7 +731,7 @@ mod tests {
 
     #[test]
     fn a_vault_plan_reads_as_changed_once_its_note_changed_after_it_was_asked() {
-        let question = |plan: &str, plan_at: Option<i64>| Question { options: Vec::new(), recommend: 1, plan: Some(plan.to_string()), plan_at, comment: Vec::new(), answered: false, waits: false };
+        let question = |plan: &str, plan_at: Option<i64>| Question { options: Vec::new(), recommend: 1, plan: Some(plan.to_string()), plan_at, comment: Vec::new(), answered: false, waits: false, relayed: None };
         let note = |at: f64| move |key: &str| (key == "Projects/billing.md").then_some(at);
         assert!(!plan_changed_in(&question("vault:Projects/billing.md", Some(5000)), note(5.0)));
         assert!(plan_changed_in(&question("vault:Projects/billing.md", Some(5000)), note(9.0)));
