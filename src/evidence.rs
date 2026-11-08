@@ -62,6 +62,7 @@ pub struct Run {
     pub says: Option<Exit>,
     pub worktree: String,
     pub read_to: u64,
+    pub sandboxed: bool,
 }
 
 impl Run {
@@ -69,7 +70,7 @@ impl Run {
         json!({
             "command": self.command, "runner": self.runner, "result": self.result.name(), "ok": self.result == Outcome::Passed, "why": self.why, "exit": self.exit, "duration_ms": self.duration_ms,
             "summary": self.summary, "sha": self.sha, "dirty": self.dirty, "code": self.code, "at": self.at,
-            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key), "worktree": self.worktree, "read_to": self.read_to,
+            "background": self.background, "transcript": self.transcript, "says": self.says.map(Exit::key), "worktree": self.worktree, "read_to": self.read_to, "sandboxed": self.sandboxed,
         })
     }
 
@@ -97,6 +98,7 @@ impl Run {
             says: value["says"].as_str().map(Exit::from_key),
             worktree: value["worktree"].as_str().unwrap_or_default().to_string(),
             read_to: value["read_to"].as_u64().unwrap_or(0),
+            sandboxed: value["sandboxed"].as_bool().unwrap_or(true),
         })
     }
 
@@ -549,6 +551,7 @@ const IN_BACKGROUND: &str = "still running in the background";
 const RAN_NONE: &str = "it ran no tests";
 const NEVER_ENDED: &str = "kebbie never saw it end";
 const BACKGROUND_GIVE_UP: u64 = 24 * 60 * 60;
+const UNVERIFIED: &str = " · unverified: recorded without a sandbox";
 
 // How a background command ended, as its <task-notification> in the session's transcript says: whether it ran to its end, its exit code when given, and its output file.
 #[derive(Clone, Debug, PartialEq)]
@@ -660,7 +663,7 @@ pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String]
     let (sha, dirty, code) = snapshot(worktree).ok()?;
     let command = if command.chars().count() > COMMAND_LIMIT { format!("{}…", command.chars().take(COMMAND_LIMIT).collect::<String>()) } else { command };
     let transcript = if background.as_deref().is_some_and(|id| !id.is_empty()) { input["transcript_path"].as_str().unwrap_or_default().to_string() } else { String::new() };
-    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned(), read_to: 0 };
+    let run = Run { command, runner, result, why: why.to_string(), exit, duration_ms: input["duration_ms"].as_u64(), summary: summary.map(|summary| summary.text).unwrap_or_default(), sha, dirty, code, at, background: background.unwrap_or_default(), transcript, says: Some(says), worktree: worktree.to_string_lossy().into_owned(), read_to: 0, sandboxed: crate::sandbox::marked(state, worktree) };
     save(state, address, &run).ok()?;
     Some(run)
 }
@@ -753,18 +756,19 @@ impl Shown {
 // The latest run against the code now: covered when it passed on the same code with a clean tree, failed or unknown whatever the code since.
 pub fn shown(run: &Run, current: impl Fn(&str) -> bool, clean: bool) -> Shown {
     let counts = if run.summary.is_empty() { String::new() } else { format!(" · {}", run.summary) };
+    let unverified = if run.sandboxed { "" } else { UNVERIFIED };
     match run.result {
-        Outcome::Failed => return Shown { mark: Mark::Failed, text: format!("{} failed{counts} · at {}", run.runner, run.short()) },
+        Outcome::Failed => return Shown { mark: Mark::Failed, text: format!("{} failed{counts} · at {}{unverified}", run.runner, run.short()) },
         Outcome::Unknown => {
             let why = if run.why.is_empty() { String::new() } else { format!(", {}", run.why) };
-            return Shown { mark: Mark::Unknown, text: format!("{} result unknown{why}{counts} · at {}", run.runner, run.short()) };
+            return Shown { mark: Mark::Unknown, text: format!("{} result unknown{why}{counts} · at {}{unverified}", run.runner, run.short()) };
         }
         Outcome::Passed => {}
     }
     if clean && current(&run.code) {
-        Shown { mark: Mark::Covered, text: format!("{}{counts} · at {}", run.runner, run.short()) }
+        Shown { mark: Mark::Covered, text: format!("{}{counts} · at {}{unverified}", run.runner, run.short()) }
     } else {
-        Shown { mark: Mark::Stale, text: format!("{}{counts} · at {}, code changed since", run.runner, run.short()) }
+        Shown { mark: Mark::Stale, text: format!("{}{counts} · at {}, code changed since{unverified}", run.runner, run.short()) }
     }
 }
 
@@ -1079,7 +1083,7 @@ mod tests {
         let list = listed(&[]);
         let run = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 100).unwrap();
         let head = git(&dir, &["rev-parse", "HEAD"]).unwrap();
-        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks), worktree: dir.to_string_lossy().into_owned(), read_to: 0 });
+        assert_eq!(run, Run { command: "cargo test".to_string(), runner: "cargo test".to_string(), result: Outcome::Passed, why: String::new(), exit: Some(0), duration_ms: Some(4187), summary: "2 passed".to_string(), sha: head.clone(), dirty: false, code: head, at: 100, background: String::new(), transcript: String::new(), says: Some(Exit::Speaks), worktree: dir.to_string_lossy().into_owned(), read_to: 0, sandboxed: false });
         assert_eq!(runs_in(&state, "billing@app"), [run]);
         let broke = record_in(&state, "billing@app", &dir, &list, &failed("npm test"), 200).unwrap();
         assert!(broke.result == Outcome::Failed && broke.exit == Some(1) && broke.runner == "npm test");
@@ -1269,6 +1273,7 @@ mod tests {
     fn a_run_is_current_until_the_code_changes_and_a_run_before_the_commit_counts_for_it() {
         let dir = repo();
         let state = std::env::temp_dir().join(format!("kebbie-evidence-state-{}", std::process::id()));
+        crate::sandbox::mark(&state, &dir, true).unwrap();
         let list = listed(&[]);
         fs::write(dir.join("a"), "two\n").unwrap();
         let before = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 1).unwrap();
@@ -1291,8 +1296,27 @@ mod tests {
     }
 
     #[test]
+    fn a_run_recorded_without_a_sandbox_says_so_wherever_it_shows() {
+        let dir = repo();
+        let state = crate::sh::test_dir("evidence-unverified");
+        let list = listed(&[]);
+        let open = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 1).unwrap();
+        assert!(!open.sandboxed);
+        assert_eq!(judge(&dir, &open).line(), format!("✓ cargo test · 2 passed · at {} · unverified: recorded without a sandbox", &open.sha[..7]), "a task outside the sandbox could have written this record itself");
+        assert!(brief(std::slice::from_ref(&open), |_| true, |run| judge(&dir, run), Hook::Works, &[]).contains("unverified: recorded without a sandbox"));
+        crate::sandbox::mark(&state, &dir, true).unwrap();
+        let boxed = record_in(&state, "billing@app", &dir, &list, &passed("cargo test"), 2).unwrap();
+        assert!(boxed.sandboxed && !judge(&dir, &boxed).line().contains("unverified"));
+        let older = json!({ "command": "cargo test", "runner": "cargo test", "result": "passed", "sha": "a", "code": "a" });
+        assert!(Run::from_json(&older).unwrap().sandboxed, "a run recorded before the flag is not labelled");
+        assert!(!Run::from_json(&open.to_json()).unwrap().sandboxed);
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
     fn the_reviewer_reads_every_run_on_the_reviewed_code_one_line_per_command_and_older_ones_only_without_them() {
-        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0 };
+        let run = |at: u64, command: &str, ok: bool, code: &str| Run { command: command.to_string(), runner: "cargo test".to_string(), result: if ok { Outcome::Passed } else { Outcome::Failed }, why: String::new(), exit: Some(0), duration_ms: None, summary: "3 passed".to_string(), sha: format!("{at}abcdef0123"), dirty: at == 9, code: code.to_string(), at, background: String::new(), transcript: String::new(), says: None, worktree: String::new(), read_to: 0, sandboxed: true };
         let mut runs = vec![run(1, "cargo test", false, "old")];
         for at in 2..9 {
             runs.push(run(at, "cargo test --lib evidence", at != 4, "reviewed"));
@@ -1313,7 +1337,7 @@ mod tests {
 
     #[test]
     fn a_run_without_a_result_reads_as_unknown_and_counts_as_no_run_for_the_reviewer() {
-        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)), worktree: String::new(), read_to: 0 };
+        let run = Run { command: "cargo test | tail -3".to_string(), runner: "cargo test".to_string(), result: Outcome::Unknown, why: "piped".to_string(), exit: Some(0), duration_ms: None, summary: String::new(), sha: "abcdef0123".to_string(), dirty: false, code: "reviewed".to_string(), at: 1, background: String::new(), transcript: String::new(), says: Some(Exit::Silent(PIPED)), worktree: String::new(), read_to: 0, sandboxed: true };
         let judge = |run: &Run| shown(run, |code| code == "reviewed", true);
         assert_eq!(judge(&run).line(), "? cargo test result unknown, piped · at abcdef0", "not a pass even on the code as it is");
         assert_eq!(Run::from_json(&run.to_json()), Some(run.clone()));

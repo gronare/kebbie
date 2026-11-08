@@ -195,7 +195,7 @@ A profile can name its own hosts (`allowed_domains`), folders (`allow_write`) an
 
 The built-in `ops` profile runs `ssh`, `scp` and `rsync` outside it, since they ignore the sandbox's proxy and cannot connect from inside. An ssh session reaches other machines, and this one as you, so kebbie says so when an `ops` task starts.
 
-With `task.sandbox = false` a task's shell runs unsandboxed, and kebbie's guards are what remain. `kebbie doctor`, a task's start and the board's Areas page say so.
+With `task.sandbox = false` a task's shell runs unsandboxed, and kebbie's guards are what remain. `kebbie doctor`, a task's start and the board's Areas page say so. Its recorded test runs read `unverified: recorded without a sandbox`, since its shell could have written them.
 
 ## Where it ends
 
