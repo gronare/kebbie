@@ -338,6 +338,7 @@ fn permission_profile(policy: &crate::sandbox::Policy, git_dir: Option<&Path>, m
     entries.extend(policy.writes().into_iter().filter(|path| path.starts_with('/') || path.starts_with("~/")).map(|path| access(path, "write")));
     entries.extend(commit_roots(git_dir).iter().map(|root| access(root.to_string_lossy().to_string(), "write")));
     entries.extend(git_run_as_user(git_dir).iter().map(|path| access(path.to_string_lossy().to_string(), "read")));
+    entries.extend(crate::sandbox::Protected::here().secrets().into_iter().map(|path| access(path, "deny")));
     let domains: Vec<String> = policy.domains().iter().map(|domain| access(domain.clone(), "allow")).collect();
     let network = if domains.is_empty() { "{enabled=false}".to_string() } else { format!("{{enabled=true,allow_local_binding={mac},domains={{{}}}}}", domains.join(",")) };
     format!("permissions.{PERMISSIONS}={{filesystem={{{}}},network={network}}}", entries.join(","))
@@ -999,6 +1000,46 @@ mod tests {
     }
 
     #[test]
+    fn a_sandboxed_codex_tasks_shell_reads_no_credential_nor_kebbies_state_and_config() {
+        let args = start_args(None, &profile(None, None), &files(true, Some(Path::new(TMP)), &[]), &Session::New("x".to_string()));
+        let written = toml_value(value_of(&args, "permissions.kebbie-task")[0]);
+        let filesystem = written["filesystem"].as_table().unwrap();
+        let protected = crate::sandbox::Protected::here();
+        let secrets = protected.secrets();
+        for secret in ["~/.ssh", "~/.config/gh", "~/.codex/auth.json", "~/.claude/.credentials.json", "~/.aws", "~/.kube", "~/.docker/config.json"].map(str::to_string).into_iter().chain([protected.state.display().to_string(), crate::config::path().display().to_string()]) {
+            assert!(secrets.contains(&secret), "{secret} in {secrets:?}");
+            assert_eq!(filesystem.get(&secret).and_then(toml::Value::as_str), Some("deny"), "{secret}: {filesystem:?}");
+        }
+        for open in ["/src/app/.git/worktrees/1", "/src/app/.git/objects"] {
+            assert!(!secrets.iter().any(|secret| Path::new(open).starts_with(secret)), "{open} stays the task's to write");
+        }
+    }
+
+    #[test]
+    fn codexs_own_sandbox_keeps_kebbies_state_from_a_task_and_lets_it_read_and_write_its_worktree_and_git_dir() {
+        let path: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+        let Some(codex) = crate::doctor::which("codex", &path) else {
+            eprintln!("skipped: no codex on PATH to run its sandbox");
+            return;
+        };
+        let base = crate::sh::test_dir("codex-denies").canonicalize().unwrap();
+        let (worktree, git_dir) = (base.join("wt1.app"), base.join("app/.git/worktrees/1"));
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::create_dir_all(git_dir.join("kebbie-plan")).unwrap();
+        std::fs::write(worktree.join("a.rs"), "fine").unwrap();
+        let state = crate::sandbox::Protected::here().state;
+        std::fs::create_dir_all(state.join("push-tokens")).unwrap();
+        std::fs::write(state.join("push-tokens/0123"), "").unwrap();
+        let profile = permission_profile(&crate::sandbox::Policy::default(), Some(&git_dir), cfg!(target_os = "macos"));
+        let run = |script: &str| std::process::Command::new(&codex).current_dir(&worktree).args(["sandbox", "-c", &format!("default_permissions={}", toml_string(PERMISSIONS)), "-c", &profile, "-c", "features.network_proxy=true", "--", "sh", "-c", script]).output().unwrap();
+        let read = run(&format!("cat a.rs && echo plan > {0}/kebbie-plan/plan.md && cat {0}/kebbie-plan/plan.md", git_dir.display()));
+        assert!(read.status.success(), "the worktree and its git dir stay the task's: {}", String::from_utf8_lossy(&read.stderr));
+        let denied = run(&format!("ls {}", state.join("push-tokens").display()));
+        assert!(!denied.status.success() && !String::from_utf8_lossy(&denied.stdout).contains("0123"), "kebbie's state stays out of the task's shell: {}", String::from_utf8_lossy(&denied.stdout));
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn an_unsandboxed_codex_task_commits_and_reaches_the_network_under_the_users_own_sandbox_mode() {
         let args = start_args(None, &profile(None, None), &files(false, Some(Path::new(TMP)), &["~/code".to_string()]), &Session::New("x".to_string()));
         let [roots] = value_of(&args, "sandbox_workspace_write.writable_roots")[..] else { panic!("one list: {args:?}") };
@@ -1045,7 +1086,7 @@ mod tests {
         let profile: PermissionProfile = toml_value(value_of(&sandboxed, "permissions.kebbie-task")[0]).try_into().unwrap();
         for (path, access) in profile.filesystem.unwrap() {
             assert!(path.starts_with('/') || path.starts_with("~/") || path.starts_with(':'), "Codex refuses {path}: absolute, ~/ or :special only");
-            assert!(access.as_str().is_some_and(|access| ["read", "write"].contains(&access)) || access.is_table(), "{path}: {access:?}");
+            assert!(access.as_str().is_some_and(|access| ["read", "write", "deny"].contains(&access)) || access.is_table(), "{path}: {access:?}");
         }
     }
 

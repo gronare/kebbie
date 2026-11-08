@@ -142,6 +142,7 @@ With `task.sandbox` on, the default, a Codex task runs in Codex's sandbox under 
 
 - It writes its worktree, Codex's temp folders, kebbie's sandbox folders (`~/.cargo/registry`, `~/.npm`, `~/.cache` and the rest, or a profile's `allow_write`) and what a commit writes in the repo's `.git`: the objects, the refs and their logs, and its worktree's own git dir. So it commits, stashes and rebases without asking.
 - It never writes what git runs or follows as you: the repo's `.git/config`, its hooks and submodules, its worktree's `config.worktree`, `commondir` and `gitdir`, kebbie's push block, or another worktree's git dir. A change there asks for approval.
+- It reads none of the credentials files kebbie's sandbox keeps from a Claude task (`~/.ssh`, `~/.config/gh`, `~/.aws`, Codex's `auth.json` and the rest), nor kebbie's state directory and `config.toml`.
 - It reaches kebbie's sandbox hosts, the package registries and GitHub, or a profile's `allowed_domains`, through Codex's network proxy, and no other host. A profile with an empty `allowed_domains` turns the network off.
 
 kebbie's own commands, `kebbie tell` and `kebbie report` among them, still ask for approval: they write kebbie's state outside the worktree and reach herdr's socket. kebbie keeps its state out of the sandbox's reach on purpose, so a task can't write it directly.

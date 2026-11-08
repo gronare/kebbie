@@ -122,12 +122,12 @@ pub fn block(kebbie: &str, policy: &Policy, dirs: Option<&TaskDirs>, mac: bool) 
         "enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true,
         "excludedCommands": excluded(kebbie, policy),
         "network": network,
-        "filesystem": { "allowWrite": writes, "denyWrite": denied, "denyRead": SECRETS },
+        "filesystem": { "allowWrite": writes, "denyWrite": denied, "denyRead": Protected::here().secrets() },
     })
 }
 
-// Credentials a sandboxed shell could push or publish with through an allowed host.
-pub const SECRETS: [&str; 6] = ["~/.ssh", "~/.config/gh", "~/.git-credentials", "~/.netrc", "~/.cargo/credentials.toml", "~/.cargo/credentials"];
+// Credentials a sandboxed shell could push or publish with through an allowed host; kebbie's own task commands read its state and config outside the sandbox.
+pub const SECRETS: [&str; 12] = ["~/.ssh", "~/.config/gh", "~/.git-credentials", "~/.netrc", "~/.cargo/credentials.toml", "~/.cargo/credentials", "~/.codex/auth.json", "~/.claude/.credentials.json", "~/.aws", "~/.kube", "~/.docker/config.json", "~/.config/kebbie/config.toml"];
 
 pub fn reader_block() -> Value {
     json!({ "enabled": true, "allowUnsandboxedCommands": false, "failIfUnavailable": true, "excludedCommands": [], "network": { "allowedDomains": [] }, "filesystem": { "allowWrite": [] } })
@@ -169,6 +169,16 @@ impl Protected {
             claude_home: std::env::var("CLAUDE_CONFIG_DIR").ok().filter(|dir| !dir.is_empty()).map(PathBuf::from),
             codex_home: std::env::var("CODEX_HOME").ok().filter(|dir| !dir.is_empty()).map(PathBuf::from), install: crate::lead::install_root().ok(), path, home,
         }
+    }
+
+    pub fn secrets(&self) -> Vec<String> {
+        let mut paths: Vec<String> = SECRETS.map(str::to_string).to_vec();
+        paths.extend([self.state.clone(), crate::config::path(), self.config.join("config.toml")].iter().map(|path| path.display().to_string()));
+        paths.extend(self.claude_home.iter().map(|claude| claude.join(".credentials.json").display().to_string()));
+        paths.extend(self.codex_home.iter().map(|codex| codex.join("auth.json").display().to_string()));
+        let mut seen = std::collections::HashSet::new();
+        paths.retain(|path| !path.is_empty() && seen.insert(path.clone()));
+        paths
     }
 
     // Only Edit(path) rules guard Claude Code's file tools: a Write(...) or MultiEdit(...) path rule is never consulted. `//` anchors at /, `~/` at the home.
@@ -749,6 +759,26 @@ mod tests {
         let rules = Protected { path: Vec::new(), install: None, ..Protected::here() }.deny_rules("/k", Some(&dirs));
         assert!(rules.contains(&format!("Edit(/{}/**)", others[0].display())), "{rules:?}");
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_tasks_shell_reads_no_credential_nor_kebbies_state_while_kebbies_own_task_commands_run_outside_it() {
+        let dirs = TaskDirs::new(Path::new("/src/wt1.app"), Path::new("/src/app/.git/worktrees/1"), Path::new("/tmp/kebbie-501/wt1.app-a1b2c3"));
+        let sandbox = block("/opt/kebbie/kebbie", &Policy::default(), Some(&dirs), false);
+        let denied: Vec<String> = sandbox["filesystem"]["denyRead"].as_array().unwrap().iter().filter_map(|path| path.as_str().map(str::to_string)).collect();
+        let protected = Protected::here();
+        for secret in ["~/.ssh", "~/.codex/auth.json", "~/.claude/.credentials.json", "~/.aws", "~/.kube", "~/.docker/config.json", "~/.config/kebbie/config.toml"].map(str::to_string).into_iter().chain([protected.state.display().to_string(), crate::config::path().display().to_string()]) {
+            assert!(denied.contains(&secret), "{secret} in {denied:?}");
+        }
+        let home = protected.home.display().to_string();
+        let expand = |path: &str| path.strip_prefix("~/").map_or_else(|| PathBuf::from(path), |rest| Path::new(&home).join(rest));
+        for open in [PathBuf::from("/src/wt1.app/src/a.rs"), PathBuf::from("/src/app/.git/worktrees/1/kebbie-plan/plan.md"), dirs.tmp.join("x"), PathBuf::from("/opt/kebbie/kebbie")].into_iter().chain(protected.install.iter().map(|install| install.join("docs/README.md"))) {
+            assert!(!denied.iter().any(|secret| open.starts_with(expand(secret))), "{} stays readable to the task's shell", open.display());
+        }
+        let excluded: Vec<String> = sandbox["excludedCommands"].as_array().unwrap().iter().filter_map(|command| command.as_str().map(str::to_string)).collect();
+        for command in TASK_COMMANDS {
+            assert!(excluded.contains(&format!("/opt/kebbie/kebbie {command} *")), "kebbie {command} reads its state and config outside the sandbox: {excluded:?}");
+        }
     }
 
     #[test]

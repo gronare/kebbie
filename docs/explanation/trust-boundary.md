@@ -15,7 +15,7 @@ An agent that reads a README telling it to "push when done", or a message from a
 
 **A task does not push by accident.** A pre-push hook and a push URL rewrite in the worktree's own git config block `git push` in a task's worktree. The rewrite blocks every network URL, https, ssh and `host:path` alike, as a transport git refuses before it starts ssh, a helper or a DNS lookup, and leaves a local path or `file://` URL alone, so a test that makes a repo on the disk and pushes to it still works; the pre-push hook still asks for kebbie's token in the worktree itself. The task's Claude settings also deny `git push` and every user-only kebbie command (`approve`, `push`, `choose`, `after`, `ci dismiss`, `away`, `decide` and the rest), with the sandbox on or off.
 
-A shell that rewrites the URL on its own command line and skips the hook gets past both wherever it holds credentials for an allowed host. That is why the sandbox keeps `~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc` and cargo's credentials from it. A token in the environment, a credential helper or the keychain it can still reach.
+A shell that rewrites the URL on its own command line and skips the hook gets past both wherever it holds credentials for an allowed host. That is why the sandbox keeps the credentials files from it, as [A sandboxed shell reaches no credentials or sockets](#a-sandboxed-shell-reaches-no-credentials-or-sockets) lists. A token in the environment, a credential helper or the keychain it can still reach.
 
 ## Only you and the lead push
 
@@ -160,7 +160,7 @@ With `task.sandbox = true`, the default, kebbie writes Claude Code's sandbox int
 
 A task's shell commands in the sandbox:
 
-- read no credentials file (`~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, cargo's),
+- read no credentials file (`~/.ssh`, `~/.config/gh`, `~/.git-credentials`, `~/.netrc`, cargo's, `~/.aws`, `~/.kube`, `~/.docker/config.json`, Claude Code's `.credentials.json` and Codex's `auth.json`), nor kebbie's state directory and `config.toml`, which hold its push tokens and the inbox token,
 - reach only the package registries (crates.io, npm, PyPI, GitHub's downloads), and no Unix socket, so neither herdr's socket nor a tmux server,
 - run kebbie's own task commands (`peers`, `tell`, `ask`, `report`, `steps`, `routine ok`, `link`, `backlog add`, `config`) outside the sandbox, matched on kebbie's absolute path, since those write kebbie's state. No user-only command is ever among them.
 
