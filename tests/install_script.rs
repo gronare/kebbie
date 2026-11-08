@@ -12,6 +12,7 @@ const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/install.sh");
 struct Home {
     dir: PathBuf,
     home: PathBuf,
+    root: PathBuf,
 }
 
 impl Home {
@@ -29,7 +30,7 @@ impl Home {
         fs::create_dir_all(root.join("target/release")).unwrap();
         executable::write(root.join("target/release/kebbie"), "#!/bin/sh\nexit 0\n").unwrap();
         fs::create_dir_all(&home).unwrap();
-        Home { dir, home }
+        Home { dir, home, root }
     }
 
     fn install(&self) -> String {
@@ -51,4 +52,18 @@ fn an_install_links_the_plugin_checkout_as_the_current_kebbie() {
     let home = Home::new("current");
     home.install();
     assert!(home.home.join(".local/share/kebbie/current/target/release/kebbie").exists());
+}
+
+#[test]
+fn an_install_says_whether_gh_verified_the_binarys_attestation() {
+    let home = Home::new("provenance");
+    let origin = home.root.join("target/release/kebbie.origin");
+    fs::write(&origin, "downloaded v9.9.9 aarch64-apple-darwin verified\n").unwrap();
+    assert!(home.install().contains("✓ its attestation verified with gh: built by kebbie's release workflow at v9.9.9"));
+    fs::write(&origin, "downloaded v9.9.9 aarch64-apple-darwin unverified\n").unwrap();
+    let said = home.install();
+    assert_eq!(said.matches("not verified").count(), 1, "{said}");
+    assert!(said.contains("! the binary's origin was not verified: install the GitHub CLI (gh) and log in"), "{said}");
+    fs::write(&origin, "downloaded v0.36.0 aarch64-apple-darwin\n").unwrap();
+    assert!(!home.install().contains("verified"), "a release from before attestations says nothing about it");
 }

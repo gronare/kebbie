@@ -80,6 +80,10 @@ if [ ! -x "$root/target/release/kebbie" ]; then
   root=$(ls -dt "$plugins"/github-installations/kebbie-*/*/checkout 2>/dev/null | head -n 1)
 fi
 [ -x "$root/target/release/kebbie" ] || fail "herdr reports no kebbie binary under ${root:-the plugin}."
+case "$(cat "$root/target/release/kebbie.origin" 2>/dev/null)" in
+  *" verified") ok "its attestation verified with gh: built by kebbie's release workflow at $tag" ;;
+  *" unverified") warn "the binary's origin was not verified: install the GitHub CLI (gh) and log in, and kebbie checks the next release it downloads" ;;
+esac
 
 data="${XDG_DATA_HOME:-$HOME/.local/share}/kebbie"
 mkdir -p "$data" && ln -sfn "$root" "$data/current"
