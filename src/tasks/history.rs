@@ -41,8 +41,9 @@ pub fn reword(path: &Path, sha: &str, message: &str) -> Result<()> {
     if let Ok(upstream) = main_checkout(path).and_then(|repo| default_branch(&repo)) && !super::accept::open_commits(path, &upstream)?.iter().any(|open| open.sha == full) {
         return Err(format!("{} is not one of the task's commits to push; it is on the default branch already", &full[..7.min(full.len())]));
     }
+    let _alone = super::push::rebase_alone(path)?;
     let new = commit_like(path, &format!("{sha}^{{tree}}"), &format!("{sha}^"), sha, message)?;
-    git_writing(path, &["rebase", "--quiet", "--onto", &new, sha]).map(|_| ())
+    crate::repo::rebase_writing(path, &[], &["rebase", "--quiet", "--onto", &new, sha]).map(|_| ())
 }
 
 // One commit with the branch's final tree on the commit under the first one not yet on the default branch, written by that commit's author, so a commit already pushed is never rewritten.
@@ -97,6 +98,23 @@ mod tests {
         assert_eq!(git(&dir, &["log", "-1", "--format=%b", "HEAD~1"]).unwrap(), "with a body");
         assert_eq!(git(&dir, &["rev-parse", "HEAD^{tree}"]).unwrap(), tree);
         assert_eq!(git(&dir, &["log", "--format=%an", "-3"]).unwrap(), "Ada\nAda\nAda");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reword_waits_its_turn_behind_another_kebbie_rebase_of_the_worktree_and_never_runs_over_one_under_way() {
+        let dir = repo();
+        let second = git(&dir, &["rev-parse", "HEAD~1"]).unwrap();
+        let held = crate::tasks::push::RebaseLock::take(&dir).unwrap();
+        assert!(reword(&dir, &second, "second, reworded").unwrap_err().contains("kebbie is rebasing its worktree already"));
+        drop(held);
+        assert_eq!(git(&dir, &["log", "--format=%s", "-3"]).unwrap(), "third\nsecond\nfirst", "nothing was rewritten while the other rebase ran");
+        let rebase_merge = std::path::PathBuf::from(git(&dir, &["rev-parse", "--path-format=absolute", "--git-path", "rebase-merge"]).unwrap());
+        std::fs::create_dir_all(&rebase_merge).unwrap();
+        assert!(reword(&dir, &second, "second, reworded").unwrap_err().contains("a rebase is under way"));
+        std::fs::remove_dir_all(&rebase_merge).unwrap();
+        reword(&dir, &second, "second, reworded").unwrap();
+        assert_eq!(git(&dir, &["log", "--format=%s", "-3"]).unwrap(), "third\nsecond, reworded\nfirst");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

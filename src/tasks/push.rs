@@ -88,10 +88,7 @@ pub(super) fn update(path: &Path, upstream: &str) -> Result<Updated> {
 
 // With from, only the commits after it go onto upstream, as git rebase --onto takes them.
 fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) -> Result<Updated> {
-    let _alone = RebaseLock::take(path)?;
-    if rebase_in_progress(path) {
-        return Err(Notice::new(Tone::NotNow, "Not rebased: a rebase is under way in its worktree").next("kebbie left it running; try again once it is finished.").detail("folder", path.display().to_string()).to_string());
-    }
+    let _alone = rebase_alone(path)?;
     let touched = overlap(path, upstream, from)?;
     let rebase: Vec<&str> = match from {
         Some(from) => vec!["rebase", "--quiet", "--onto", upstream, from],
@@ -109,11 +106,20 @@ fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) 
     }
 }
 
-// Held for the length of one kebbie rebase of a worktree, so a push, land, rebase or follow never starts a second one there.
-struct RebaseLock(std::fs::File);
+// Every kebbie rebase of a worktree runs under this, through rebase_writing, and none starts over a rebase under way there.
+pub(super) fn rebase_alone(path: &Path) -> Result<RebaseLock> {
+    let alone = RebaseLock::take(path)?;
+    if rebase_in_progress(path) {
+        return Err(Notice::new(Tone::NotNow, "Not rebased: a rebase is under way in its worktree").next("kebbie left it running; try again once it is finished.").detail("folder", path.display().to_string()).to_string());
+    }
+    Ok(alone)
+}
+
+// Held for the length of one kebbie rebase of a worktree, so a push, land, rebase, follow or reword never starts a second one there.
+pub(super) struct RebaseLock(std::fs::File);
 
 impl RebaseLock {
-    fn take(path: &Path) -> Result<RebaseLock> {
+    pub(super) fn take(path: &Path) -> Result<RebaseLock> {
         use std::os::fd::AsRawFd;
         let lock = Path::new(&git(path, &["rev-parse", "--absolute-git-dir"])?).join("kebbie-rebase.lock");
         let file = std::fs::OpenOptions::new().create(true).append(true).open(&lock).map_err(|error| format!("{}: {error}", lock.display()))?;
