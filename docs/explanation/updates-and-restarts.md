@@ -13,10 +13,18 @@ herdr installs kebbie into a folder of its choosing, and herdr's startup links `
 herdr's install and `kebbie update` both put the binary in place with `scripts/build.sh`, in this order:
 
 1. A `target/release/kebbie` that is newer than every source file is kept.
-2. When the checkout is exactly at the `vX.Y.Z` tag of its version and the machine is not on the `main` channel, the script downloads `kebbie-<version>-<target>.tar.gz` from that tag's published GitHub Release, checks it against the release's `SHA256SUMS`, and renames it into place. Releases are built for macOS on Apple silicon and Intel, and for Linux on x86_64 and arm64 (glibc).
+2. When the checkout is exactly at the `vX.Y.Z` tag of its version and the machine is not on the `main` channel, the script downloads `kebbie-<version>-<target>.tar.gz` from that tag's published GitHub Release, checks it against the release's `SHA256SUMS` and its build attestation, and renames it into place. Releases are built for macOS on Apple silicon and Intel, and for Linux on x86_64 and arm64 (glibc).
 3. Otherwise it runs `cargo build --release`.
 
 `kebbie doctor` shows on its `plugin binary` line whether the binary was downloaded, and for which tag, or built. Its `cargo` line says whether this machine needs Rust.
+
+## A release binary proves where it was built
+
+`SHA256SUMS` sits in the same GitHub Release as the tarball, so it proves the download is whole, not that kebbie built it. Each tarball also carries a build attestation: a signature GitHub's release workflow makes for that tarball at that tag, kept in GitHub's attestation store and Sigstore's public log rather than in the release.
+
+With `gh` installed and logged in, the script runs `gh attestation verify` on the tarball after the checksum, pinned to `gronare/kebbie`'s `.github/workflows/release.yml` at the version's tag. A check that fails refuses the binary, builds nothing in its place and says `the release binary of kebbie <version> was not installed because its provenance check failed`, with gh's reason on the line before.
+
+Without `gh`, with a `gh` that has no `attestation` command, or logged out, the binary installs with one warning that its origin was not verified. `kebbie update`, the install script and the `plugin binary` line in `kebbie doctor` say so too. Releases before 0.37.0 have no attestations and install as before.
 
 ## A release tag is never built from source
 

@@ -40,6 +40,8 @@ Run over a kebbie that is already installed, the script also moves the keeper, t
 
 If a tool from step 1 is missing, the script names it and stops.
 
+If `gh` is installed and logged in, the build checks the binary's build attestation and the script says `its attestation verified with gh`. Without it the binary installs with one warning; see [A release binary proves where it was built](explanation/updates-and-restarts.md#a-release-binary-proves-where-it-was-built).
+
 If you installed from herdr's plugin list with `herdr plugin install gronare/kebbie`, setup has not run yet: the board opens the setup guide the first time it starts, and `esc` skips it until the next start.
 
 ## 3. Setup

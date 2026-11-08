@@ -12,6 +12,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie routine add takes --profile, the profile the routine's task starts with.
 - kubectl and helm are refused in a sandboxed task whose profile names no kubeconfig.
 - kebbie doctor warns when a profile's kubeconfig is missing, readable by others or your default one.
+- kebbie update and the install script check a release binary's build attestation with gh, and refuse one that fails.
 
 ### Fixed
 - A test command written inside a heredoc, such as a plan written with cat <<EOF, is no longer recorded as a test run.

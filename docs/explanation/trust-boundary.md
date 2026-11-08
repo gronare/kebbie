@@ -229,6 +229,10 @@ The package caches the shell may write are code your own builds load later: a cr
 
 > **Warning:** Work on code you do not trust needs OS-level separation: another user account, a container or a VM.
 
+## A release binary is the one kebbie's workflow built
+
+A downloaded release binary is checked against its build attestation with `gh attestation verify`, so a tarball and `SHA256SUMS` swapped in a release are refused. A machine without `gh`, or logged out, installs unchecked and says so. See [A release binary proves where it was built](updates-and-restarts.md#a-release-binary-proves-where-it-was-built).
+
 ## Settings come from your home only
 
 kebbie reads its configuration only from files in your home directory, never from a file inside a repo. Cloning a repo cannot change how kebbie behaves, which commands it runs or who may push.

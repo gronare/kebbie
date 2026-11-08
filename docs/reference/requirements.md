@@ -13,6 +13,7 @@ What kebbie needs on a machine and in a repo, and what `kebbie doctor` checks. k
 | `cargo` | building kebbie on the `main` channel or from `kebbie update --from` | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | the same |
 | `nvim` 0.10+ | the review split's diffs | `brew install neovim` | a [release](https://github.com/neovim/neovim/releases) |
 | `curl` | downloading a release's prebuilt binary | `brew install curl` | `sudo apt install curl` |
+| `gh`, logged in | verifying a downloaded binary's build attestation | `brew install gh` | [cli.github.com](https://github.com/cli/cli#installation) |
 | `tig` | the history split | `brew install tig` | `sudo apt install tig` |
 
 - Without rustup, `rustc` must be at least the `rust-version` in `Cargo.toml`.
@@ -91,7 +92,7 @@ With `--plain`, without a terminal or with `NO_COLOR` set, each line is `ok`, `s
 | `git`, `herdr`, `claude`, `jq`, `nvim`, `tig`, `curl`, `cargo` | Present on `PATH`, at the versions above. A missing `cargo` is fine on the release channel with a downloaded binary. |
 | `herdr plugin` | kebbie installed and enabled in herdr. |
 | `herdr link` | The folder herdr links kebbie from, for a local link, still holds a kebbie checkout. One that is gone fails, with `kebbie doctor --fix` as the fix. |
-| `plugin binary` | The plugin's binary is in place, and whether it was downloaded for a release tag or built from source. |
+| `plugin binary` | The plugin's binary is in place, and whether it was downloaded for a release tag or built from source. A download whose attestation `gh` did not verify warns, `its origin not verified`. |
 | `claude plugin` | The Claude Code plugin is installed, and the copy Claude Code runs matches the checkout. |
 | `claude login` | `claude auth status` says Claude Code is logged in. A `warn` names `claude auth login`; no answer reads `skip`, `login not checked`. |
 | `claude plugin source` | The plugin's marketplace matches the update channel. |
