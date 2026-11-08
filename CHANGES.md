@@ -42,6 +42,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - The review split refuses a base that starts with - or names no commit.
 - The lead runs kebbie tell, status and its other allowed commands without a permission prompt.
 - A vault log line or branch that starts with - reaches the vault whole, never as an option.
+- The install script takes the highest kebbie version, also after a patch release to an older one.
 
 ## 0.36.0
 

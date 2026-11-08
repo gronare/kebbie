@@ -128,3 +128,18 @@ fn the_release_commit_has_a_short_subject_and_the_summary_as_its_body() {
     assert!(body.starts_with("kebbie 1.2.3 brings park tasks") && body.ends_with("1.2.3."), "{body}");
     assert!(RELEASE.contains("git commit --quiet -m \"Release kebbie $version\" -m \"$body\""), "a subject well under 72 characters, then the body");
 }
+
+#[test]
+fn only_the_highest_version_tag_is_marked_latest() {
+    let highest = |tags: &str| {
+        use std::io::Write;
+        let mut child = Command::new("sh").arg(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/latest-tag.sh")).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(tags.as_bytes()).unwrap();
+        String::from_utf8_lossy(&child.wait_with_output().unwrap().stdout).trim().to_string()
+    };
+    assert_eq!(highest("v0.9.0\nv0.36.0\nv0.10.2\n"), "v0.36.0", "by version, not as text");
+    assert_eq!(highest("v0.36.0\nv0.35.4\n"), "v0.36.0", "a patch to an older line is not the latest");
+    assert_eq!(highest("v1.0.0\nv0.99.9\nv1.0.0a\nvnext\n"), "v1.0.0", "a name that is not vX.Y.Z is left out");
+    assert!(WORKFLOW.contains("--latest=\"$latest\"") && !WORKFLOW.contains("--draft=false --latest\n"), "the release is marked latest only when its tag is the highest");
+    assert!(WORKFLOW.contains("scripts/latest-tag.sh\n"), "the release job checks the script out");
+}

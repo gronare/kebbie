@@ -105,6 +105,7 @@ jobs:
           sparse-checkout: |
             CHANGES.md
             scripts/release-notes.sh
+            scripts/latest-tag.sh
           sparse-checkout-cone-mode: false
       - name: The release notes, from the version's section of CHANGES.md
         run: sh scripts/release-notes.sh "${GITHUB_REF_NAME#v}" > release-notes.md
@@ -137,7 +138,9 @@ jobs:
           attached=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | sort)
           expected=$(ls kebbie-*.tar.gz kebbie-*.cdx.json SHA256SUMS | sort)
           [ "$attached" = "$expected" ] || { echo "::error::attached $attached, expected $expected"; exit 1; }
-          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          highest=$(git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' | sh ../scripts/latest-tag.sh)
+          if [ "$highest" = "$GITHUB_REF_NAME" ]; then latest=true; else latest=false; fi
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
 
   site:
     needs: [release]
