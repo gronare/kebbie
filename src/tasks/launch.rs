@@ -112,21 +112,22 @@ fn configured_mode(repo: &Path) -> Result<Option<String>> {
     Ok(config::resolve(Some(repo))?.settings.permission_mode.value)
 }
 
-// A task kebbie starts by itself has no one to pass --mode, so without a profile or config mode it takes the mode of the task started last.
+// A task kebbie starts by itself has no one to pass --mode, so without a profile or config mode it takes the mode of the task started last in its repo, bypassPermissions never.
 pub fn own_start_mode(repo: &Path) -> Result<Option<String>> {
     let (profile, _) = task_profile(repo, None, None)?;
     if profile.permission_mode.is_some() || configured_mode(repo)?.is_some() {
         return Ok(None);
     }
-    Ok(latest_mode_in(&crate::lead::state_location()?))
+    Ok(latest_mode_in(&crate::lead::state_location()?, &name_of(repo)))
 }
 
-fn latest_mode_in(state: &Path) -> Option<String> {
+fn latest_mode_in(state: &Path, repo: &str) -> Option<String> {
+    let suffix = format!("@{repo}");
     let records = std::fs::read_dir(state.join("sessions")).ok()?.flatten()
-        .filter(|entry| !entry.file_name().to_string_lossy().ends_with(".prompt"))
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(&suffix))
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())));
     let (_, newest) = records.max_by_key(|(modified, _)| *modified)?;
-    parse_record(&std::fs::read_to_string(newest).ok()?).mode
+    parse_record(&std::fs::read_to_string(newest).ok()?).mode.filter(|mode| mode != BYPASS)
 }
 
 // Claude Code's sandbox needs its helpers on the machine; Codex brings its own.
@@ -1240,18 +1241,21 @@ mod tests {
     }
 
     #[test]
-    fn a_task_kebbie_starts_by_itself_takes_the_mode_of_the_task_started_last() {
+    fn a_task_kebbie_starts_by_itself_takes_the_mode_of_the_task_started_last_in_its_repo_but_never_bypass() {
         let state = std::env::temp_dir().join(format!("kebbie-own-mode-{}", std::process::id()));
         let sessions = state.join("sessions");
         std::fs::create_dir_all(&sessions).unwrap();
-        assert_eq!(latest_mode_in(&state), None, "no task yet: Claude's own default");
+        assert_eq!(latest_mode_in(&state, "web"), None, "no task yet: Claude's own default");
         let record = |mode: Option<&str>| record_text(&Record { session: Some("s".to_string()), mode: mode.map(str::to_string), ..Record::default() });
         std::fs::write(sessions.join("old@web"), record(Some("plan"))).unwrap();
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(sessions.join("billing@web"), record(Some("auto"))).unwrap();
         std::thread::sleep(Duration::from_millis(20));
         std::fs::write(sessions.join("billing@web.prompt"), "Bill the refunds").unwrap();
-        assert_eq!(latest_mode_in(&state).as_deref(), Some("auto"), "the newest record, never its prompt file");
+        std::fs::write(sessions.join("deploy@ops"), record(Some(BYPASS))).unwrap();
+        assert_eq!(latest_mode_in(&state, "web").as_deref(), Some("auto"), "the newest record of its own repo, never its prompt file nor another repo's");
+        assert_eq!(latest_mode_in(&state, "ops"), None, "bypassPermissions is never taken over unasked");
+        assert_eq!(latest_mode_in(&state, "api"), None, "a repo with no task of its own gets Claude's default");
         std::fs::remove_dir_all(&state).unwrap();
     }
 
