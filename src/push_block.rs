@@ -128,9 +128,16 @@ fn pooled(repos: &[PathBuf]) -> impl Iterator<Item = PathBuf> + '_ {
     repos.iter().filter_map(|repo| crate::tasks::slots(repo).ok()).flatten().map(|slot| slot.path)
 }
 
-// kebbie's block installed again where an earlier kebbie's host: rewrite is, one line for each worktree.
+// A worktree whose own hooksPath is not kebbie's hooks for it, as one an earlier install left: its pre-push hook may refuse kebbie's own push.
+pub fn foreign_hooks(worktree: &Path) -> bool {
+    let set = git(worktree, &["config", "--worktree", "--get-all", "core.hooksPath"]).unwrap_or_default();
+    let own = hooks_dir(worktree).map(|dir| dir.to_string_lossy().to_string()).unwrap_or_default();
+    set.lines().any(|path| path.trim_end_matches('/') != own)
+}
+
+// kebbie's block installed again where an earlier kebbie's host: rewrite or a hooksPath not kebbie's is, one line for each worktree.
 pub fn renew_old_blocks(repos: &[PathBuf], state: &Path) -> Vec<String> {
-    pooled(repos).filter(|worktree| old_rule(worktree)).map(|worktree| match install(&worktree, state) {
+    pooled(repos).filter(|worktree| old_rule(worktree) || foreign_hooks(worktree)).map(|worktree| match install(&worktree, state) {
         Ok(Block::On) => format!("{}: push block renewed", worktree.display()),
         Ok(Block::Off(why)) => format!("{}: the earlier push block stays: {why}", worktree.display()),
         Err(error) => format!("{}: the earlier push block could not be replaced: {error}", worktree.display()),
@@ -552,5 +559,33 @@ mod tests {
         assert!(!old_rule(slot), "the earlier rewrite is gone");
         started_nothing(&run(slot, &["push", "--no-verify", "git@github.com:acme/app.git", "HEAD:main"], &wires), &mark, "git push git@github.com:acme/app.git");
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_worktree_whose_own_hooks_path_is_not_kebbies_gets_kebbies_block_again_and_takes_kebbies_push() {
+        let fixture = fixture("foreign-hooks");
+        let Fixture { origin, slot, state, .. } = &fixture;
+        let old = PathBuf::from(git(slot, &["rev-parse", "--absolute-git-dir"]).unwrap()).join("other-hooks");
+        fs::create_dir_all(&old).unwrap();
+        crate::executable::write(old.join("pre-push"), "#!/bin/sh\nexit 1\n").unwrap();
+        git(slot, &["config", "extensions.worktreeConfig", "true"]).unwrap();
+        git(slot, &["config", "--worktree", "core.hooksPath", &old.to_string_lossy()]).unwrap();
+        commit(slot, "b");
+        let push = || {
+            let token = Token::new(state).unwrap();
+            let mut args = unblock_args(slot).unwrap();
+            args.extend(["push", "--quiet", "origin", "HEAD:main"].map(str::to_string));
+            run(slot, &args.iter().map(String::as_str).collect::<Vec<_>>(), &[(TOKEN_VAR, &token.value)])
+        };
+        assert!(!push().status.success(), "the other pre-push refuses kebbie's push");
+        assert!(foreign_hooks(slot));
+        let lines = renew_old_blocks(std::slice::from_ref(&fixture.main), state);
+        assert!(lines.len() == 1 && lines[0].ends_with("push block renewed"), "{lines:?}");
+        assert!(!foreign_hooks(slot), "its hooksPath is kebbie's own");
+        assert!(renew_old_blocks(std::slice::from_ref(&fixture.main), state).is_empty(), "a renewed block is left alone");
+        let pushed = push();
+        assert!(pushed.status.success(), "{}", String::from_utf8_lossy(&pushed.stderr));
+        assert_eq!(git(origin, &["rev-parse", "main"]).unwrap(), git(slot, &["rev-parse", "HEAD"]).unwrap());
+        fs::remove_dir_all(&fixture.base).unwrap();
     }
 }

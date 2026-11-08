@@ -39,6 +39,7 @@ Find what is wrong with kebbie, and the fix for each message it shows.
 | A task shows `no Claude` | Its Claude exited, or herdr has not resumed it yet: herdr resumes each Claude once a client is attached after a restart. Press `g` if it stays with herdr open, or with herdr's `[session] resume_agents_on_restore = false`. |
 | The lead is refused `kebbie approve` or `kebbie issue add` as an agent session | Its Claude runs without kebbie's lead settings, as when herdr resumed it on its own after a restart and kebbie could not restart it yet. Press `L` on the board and choose Resume this conversation. |
 | A task with an approval stays out of Ready to push, marked `N uncommitted files` | Tracked files have uncommitted changes. Commit or discard them; untracked files do not count. |
+| Your push of a task fails in its worktree's own `pre-push` hook | The worktree's `core.hooksPath` points somewhere other than kebbie's hooks for it. Run `kebbie doctor --fix`, which installs kebbie's push block there again; `kebbie update` does the same. |
 | A task worktree has no push block | The repo's shared git config sets `core.worktree` or `core.bare = true`. Move those settings out of the shared config. `kebbie doctor` in the repo shows when the block applies. |
 
 ## Codex tasks
