@@ -890,11 +890,39 @@ pub fn read_only(command: &str) -> bool {
     words.all(|word| !(word.starts_with("--ou") || word.starts_with("--ext")))
 }
 
+// A repo's diff.external and textconv drivers run as the reviewer and rewrite what it reads, and no config value turns them off.
+pub const NO_DRIVERS: [&str; 2] = ["--no-ext-diff", "--no-textconv"];
+
+// A repo's core.fsmonitor is a command git diff runs; the reviewer's command line cannot carry -c, so its environment turns it off.
+pub const NO_FSMONITOR: [(&str, &str); 3] = [("GIT_CONFIG_COUNT", "1"), ("GIT_CONFIG_KEY_0", "core.fsmonitor"), ("GIT_CONFIG_VALUE_0", "false")];
+
+// The flags go right after the subcommand, so a `--` later in the command keeps them options.
+pub fn without_drivers(command: &str) -> String {
+    let mut words = 0;
+    let mut in_word = false;
+    for (at, character) in command.char_indices() {
+        match (character.is_whitespace(), in_word) {
+            (false, false) => in_word = true,
+            (true, true) => {
+                in_word = false;
+                words += 1;
+                if words == 2 {
+                    return format!("{} {}{}", &command[..at], NO_DRIVERS.join(" "), &command[at..]);
+                }
+            }
+            _ => {}
+        }
+    }
+    format!("{} {}", command.trim_end(), NO_DRIVERS.join(" "))
+}
+
 // The PreToolUse hook the reviewer runs before each shell command.
 pub fn guard(input: &str) -> String {
     let input: Value = serde_json::from_str(input).unwrap_or_default();
-    if input["tool_input"]["command"].as_str().is_some_and(read_only) {
-        return String::new();
+    if let Some(command) = input["tool_input"]["command"].as_str().filter(|command| read_only(command)) {
+        let mut tool_input = input["tool_input"].clone();
+        tool_input["command"] = json!(without_drivers(command));
+        return json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "updatedInput": tool_input } }).to_string();
     }
     let reason = "The reviewer only reads: run git log, git diff or git show on their own (no pipes, redirection or --output), and use Read, Grep and Glob for files.";
     json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason } }).to_string()
@@ -1084,7 +1112,10 @@ mod tests {
     fn the_guard_lets_git_log_diff_and_show_through_and_stops_every_other_command() {
         for allowed in ["git log -p origin/main..HEAD", "git diff origin/main...HEAD -- src/a.rs", "git show --stat 1a2b3c", "git log --oneline --format=\"%h %s\"", "git show HEAD:src/main.rs"] {
             assert!(read_only(allowed), "{allowed}");
-            assert_eq!(guard(&json!({ "tool_input": { "command": allowed } }).to_string()), "");
+            let passed: Value = serde_json::from_str(&guard(&json!({ "tool_input": { "command": allowed, "description": "read" } }).to_string())).unwrap();
+            assert_eq!(passed["hookSpecificOutput"].get("permissionDecision"), None, "the reviewer's allow rules still decide: {passed}");
+            assert_eq!(passed["hookSpecificOutput"]["updatedInput"]["description"], "read", "the rest of the input stays");
+            assert!(read_only(passed["hookSpecificOutput"]["updatedInput"]["command"].as_str().unwrap()));
         }
         for refused in [
             "git diff --output=/tmp/x", "git log --outp=x", "git diff --o'utput'=x", "git diff --ext-diff", "git diff > patch", "git log | sh",
@@ -1445,7 +1476,7 @@ mod tests {
         let reviewer = Reviewer { model: Some("gpt-6.1-sol"), effort: Some("high"), settings: Path::new("/s.json"), prompt: Path::new("/kebbie/skills/review/SKILL.md"), rules: Some(Path::new("/rules")), docs: None, answer: Path::new("/state/roles/billing@app.second.answer") };
         let (program, args) = crate::agent::Agent::Codex.reviewer_command(&reviewer);
         assert_eq!(program, "codex");
-        assert_eq!(args, ["exec", "--sandbox", "read-only", "--ignore-user-config", "--ignore-rules", "--ephemeral", "--color", "never", "-c", "check_for_update_on_startup=false", "--output-last-message", "/state/roles/billing@app.second.answer", "--model", "gpt-6.1-sol", "-c", "model_reasoning_effort=\"high\"", "-"]);
+        assert_eq!(args, ["exec", "--sandbox", "read-only", "--ignore-user-config", "--ignore-rules", "--ephemeral", "--color", "never", "-c", "check_for_update_on_startup=false", "-c", "shell_environment_policy.set={GIT_CONFIG_COUNT=\"1\",GIT_CONFIG_KEY_0=\"core.fsmonitor\",GIT_CONFIG_VALUE_0=\"false\"}", "--output-last-message", "/state/roles/billing@app.second.answer", "--model", "gpt-6.1-sol", "-c", "model_reasoning_effort=\"high\"", "-"]);
         assert!(!args.iter().any(|arg| arg == "--add-dir" || arg.contains("bypass") || arg == "workspace-write"), "an --add-dir would be writable; the read-only sandbox reads the rules where they are");
         let dir = crate::sh::test_dir("codex-reviewer-input");
         fs::write(dir.join("SKILL.md"), "Read every commit.\n").unwrap();
@@ -1650,6 +1681,34 @@ mod tests {
     }
 
     #[test]
+    fn the_reviewers_git_reads_never_run_the_repos_diff_drivers() {
+        assert_eq!(without_drivers("git diff origin/main...HEAD -- src/a.rs"), "git diff --no-ext-diff --no-textconv origin/main...HEAD -- src/a.rs");
+        assert_eq!(without_drivers("  git\tlog"), "  git\tlog --no-ext-diff --no-textconv");
+        assert_eq!(without_drivers("git show HEAD "), "git show --no-ext-diff --no-textconv HEAD ");
+        let repo = crate::sh::test_dir("review-drivers");
+        let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(&repo).output().unwrap();
+        git(&["init", "--quiet"]);
+        std::fs::write(repo.join("f"), "before\n").unwrap();
+        std::fs::write(repo.join(".gitattributes"), "f diff=forged\n").unwrap();
+        git(&["add", "."]);
+        git(&["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "a"]);
+        std::fs::write(repo.join("f"), "after\n").unwrap();
+        git(&["config", "diff.external", "echo FORGED"]);
+        git(&["config", "diff.forged.textconv", "echo FORGED"]);
+        let shown = |command: &str| {
+            let words: Vec<&str> = command.split_whitespace().skip(1).collect();
+            String::from_utf8_lossy(&git(&words).stdout).to_string()
+        };
+        assert!(shown("git diff").contains("FORGED"), "the repo's drivers would run");
+        for command in ["git diff", "git log -p -1", "git show HEAD"] {
+            let read: Value = serde_json::from_str(&guard(&json!({ "tool_input": { "command": command } }).to_string())).unwrap();
+            let text = shown(read["hookSpecificOutput"]["updatedInput"]["command"].as_str().unwrap());
+            assert!(!text.contains("FORGED") && (text.contains("+after") || text.contains("+before")), "{command}: {text}");
+        }
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+
+    #[test]
     fn the_guard_reads_through_quoting_tabs_and_case_tricks() {
         for refused in [
             "git diff --o\"\"utput=/tmp/x", "git diff --o'u'tput /tmp/x", "git\tlog\t--output=x", "GIT log", "Git log", "git LOG", "git log --ext-diff", "git show --ext-diff",
@@ -1749,7 +1808,8 @@ mod tests {
     #[test]
     fn the_reviewers_settings_hold_only_the_guard_hook() {
         let settings: Value = serde_json::from_str(&guard_settings("/bin/kebbie", false)).unwrap();
-        assert_eq!(settings.as_object().unwrap().keys().collect::<Vec<_>>(), ["hooks"], "no permissions, env or model of its own: the command line decides those");
+        assert_eq!(settings.as_object().unwrap().keys().collect::<Vec<_>>(), ["env", "hooks"], "no permissions or model of its own: the command line decides those");
+        assert_eq!(settings["env"].as_object().unwrap().len(), NO_FSMONITOR.len(), "the env only turns off the repo's fsmonitor");
         assert_eq!(settings["hooks"].as_object().unwrap().keys().collect::<Vec<_>>(), ["PreToolUse"]);
     }
 

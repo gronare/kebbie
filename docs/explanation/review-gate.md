@@ -46,7 +46,7 @@ kebbie hands it the docs the commits change, so it judges whether they describe 
 
 ## The reviewer only reads
 
-A reviewer that can edit will fix what it finds, and then nobody has reviewed the fix. A Claude reviewer gets Read, Grep, Glob and the shell for `git log`, `git diff` and `git show` alone, in `dontAsk` mode, with a hook that refuses every other command.
+A reviewer that can edit will fix what it finds, and then nobody has reviewed the fix. A Claude reviewer gets Read, Grep, Glob and the shell for `git log`, `git diff` and `git show` alone, in `dontAsk` mode, with a hook that refuses every other command. Each git read runs with `--no-ext-diff --no-textconv` and `core.fsmonitor` off, so the repo's config cannot change the diff it reads.
 
 A review profile that runs Codex runs `codex exec` in Codex's read-only sandbox: its commands can read but neither write nor reach the network, and it loads none of your Codex config, its MCP servers, plugins and rules included, and keeps no session file. The keeper starts it as it starts a Claude reviewer, from its own environment and with the `codex` on its own PATH.
 

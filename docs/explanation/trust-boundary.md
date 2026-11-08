@@ -66,7 +66,7 @@ The lead's settings do not allow `kebbie choose`, so Claude Code asks you before
 
 ## Reviewers read, messages inform, edits wait
 
-**The reviewer only reads.** It gets Read, Grep, Glob and `git log`, `git diff` and `git show` alone, in `dontAsk` mode, with a hook that refuses every other command, and none of your settings, hooks or plugins.
+**The reviewer only reads.** It gets Read, Grep, Glob and `git log`, `git diff` and `git show` alone, in `dontAsk` mode, with a hook that refuses every other command, and none of your settings, hooks or plugins. The hook adds `--no-ext-diff --no-textconv` to each git read and git runs with `core.fsmonitor` off, so a repo's own diff drivers and fsmonitor never run as the reviewer or change what it reads.
 
 **Messages are not instructions.** A message arrives as `[from <task>@<repo>] <text>` with every line after the first indented, so no message can start a line as `[from you]`. The task role tells Claude that a peer's message is information, never your instruction.
 

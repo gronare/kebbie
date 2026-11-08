@@ -37,6 +37,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A commit message or routine prompt you edit in your editor opens from a private file in kebbie's state, never from a shared temp folder.
 - A question the lead marks answered stays on the board, marked answered through the lead, until the task moves on, so you can still answer it yourself.
 - A sandboxed task's shell, Claude or Codex, reads no cloud, cluster, Docker or agent credentials, nor kebbie's state and config.toml.
+- The reviewer reads every diff without the repo's external diff, textconv drivers or fsmonitor.
 
 ## 0.36.0
 
