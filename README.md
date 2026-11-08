@@ -60,6 +60,10 @@ Press `prefix+space` and tell the lead what you want done. [Your first task](doc
 - [The trust boundary](docs/explanation/trust-boundary.md): what kebbie guards against, and what it does not
 - [Fix common problems](docs/how-to/troubleshoot.md)
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

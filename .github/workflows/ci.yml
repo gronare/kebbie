@@ -36,6 +36,29 @@ jobs:
       - name: cargo deny
         run: cargo deny check bans licenses sources
 
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Every commit is signed off by its author
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for sha in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            author=$(git log -1 --format='%an <%ae>' "$sha")
+            if ! git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" | sed 's/[[:space:]]*$//' | grep -qxF "$author"; then
+              echo "::error::$(git log -1 --format='%h %s' "$sha") has no Signed-off-by: $author"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || { echo "Sign off each commit with git commit -s, see CONTRIBUTING.md"; exit 1; }
+
   docs-site:
     needs: [test, audit]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
