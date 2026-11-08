@@ -42,6 +42,7 @@ while IFS="$(printf '\t')" read -r pane title session; do
   set -- --source sync --agent claude
   [ -n "$title" ] && set -- "$@" --display-agent "$title"
   transcript=""
+  case "$session" in */* | .* | *[!A-Za-z0-9_-]*) session=- ;; esac
   for file in "$HOME"/.claude/projects/*/"$session".jsonl; do
     [ -e "$file" ] && transcript=$file && break
   done
