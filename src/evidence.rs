@@ -247,6 +247,7 @@ fn hidden(entry: &str) -> bool {
 pub struct Summary {
     pub text: String,
     pub failed: bool,
+    pub ran_none: bool,
 }
 
 fn plain(line: &str) -> String {
@@ -275,29 +276,30 @@ fn count(text: &str, noun: &str) -> Option<u64> {
 fn generic(line: &str) -> Option<Summary> {
     let trimmed = line.trim();
     let nonzero = |noun: &str| count(trimmed, noun).is_some_and(|count| count > 0);
+    let zero = |noun: &str| count(trimmed, noun) == Some(0);
     if let Some(rest) = trimmed.strip_prefix("Summary [").and_then(|rest| rest.split_once(']')).map(|(_, rest)| rest.trim()) {
         let text = rest.split_once(": ").map_or(rest, |(_, counts)| counts).to_string();
-        return Some(Summary { failed: nonzero("failed") || nonzero("timed"), text });
+        return Some(Summary { failed: nonzero("failed") || nonzero("timed"), ran_none: zero("test"), text });
     }
     if count(trimmed, "example").is_some() && count(trimmed, "failure").is_some() {
-        return Some(Summary { failed: nonzero("failure") || nonzero("error"), text: trimmed.to_string() });
+        return Some(Summary { failed: nonzero("failure") || nonzero("error"), ran_none: zero("example"), text: trimmed.to_string() });
     }
     if count(trimmed, "run").is_some() && count(trimmed, "assertion").is_some() {
-        return Some(Summary { failed: nonzero("failure") || nonzero("error"), text: trimmed.to_string() });
+        return Some(Summary { failed: nonzero("failure") || nonzero("error"), ran_none: zero("run"), text: trimmed.to_string() });
     }
     if count(trimmed, "test").is_some() && count(trimmed, "failure").is_some() {
-        return Some(Summary { failed: nonzero("failure"), text: trimmed.to_string() });
+        return Some(Summary { failed: nonzero("failure"), ran_none: zero("test"), text: trimmed.to_string() });
     }
     if trimmed.starts_with('=') && trimmed.ends_with('=') && trimmed.contains(" in ") {
         let text = trimmed.trim_matches(|char| char == '=' || char == ' ').to_string();
         if ["passed", "failed", "error", "no tests ran"].iter().any(|word| text.contains(word)) {
-            return Some(Summary { failed: text.contains("failed") || text.contains("error"), text });
+            return Some(Summary { failed: text.contains("failed") || text.contains("error"), ran_none: text.contains("no tests ran"), text });
         }
     }
     if let Some(rest) = trimmed.strip_prefix("Tests:").or_else(|| trimmed.strip_prefix("Tests ")) {
         let text = rest.trim().to_string();
         if text.contains("passed") || text.contains("failed") {
-            return Some(Summary { failed: nonzero("failed"), text });
+            return Some(Summary { failed: nonzero("failed"), ran_none: !nonzero("passed") && !nonzero("failed"), text });
         }
     }
     None
@@ -312,12 +314,12 @@ pub fn summary(output: &str) -> Option<Summary> {
         let (passed, failed) = (sum("passed"), sum("failed"));
         let broke = failed > 0 || cargo.iter().any(|line| line.contains("FAILED"));
         let text = if failed > 0 { format!("{passed} passed, {failed} failed") } else { format!("{passed} passed") };
-        return Some(Summary { text, failed: broke });
+        return Some(Summary { text, failed: broke, ran_none: passed == 0 && failed == 0 });
     }
     if let Some(failed) = lines.iter().rev().find_map(|line| match line.trim() { "** TEST FAILED **" => Some(true), "** TEST SUCCEEDED **" => Some(false), _ => None }) {
         let counts = lines.iter().rev().map(|line| line.trim()).find(|line| line.starts_with("Executed ") && count(line, "test").is_some());
         let text = counts.map_or(if failed { "TEST FAILED" } else { "TEST SUCCEEDED" }, |line| line.split(" in ").next().unwrap_or(line));
-        return Some(Summary { text: text.to_string(), failed });
+        return Some(Summary { text: text.to_string(), failed, ran_none: counts.is_some_and(|line| count(line, "test") == Some(0)) });
     }
     if let Some(found) = lines.iter().rev().find_map(|line| generic(line)) {
         return Some(found);
@@ -329,14 +331,14 @@ pub fn summary(output: &str) -> Option<Summary> {
         if let Some(failing) = failing {
             text.push_str(&format!(", {failing} failing"));
         }
-        return Some(Summary { text, failed: failing.is_some_and(|count| count > 0) });
+        return Some(Summary { text, failed: failing.is_some_and(|count| count > 0), ran_none: passing.unwrap_or(0) == 0 && failing.unwrap_or(0) == 0 });
     }
     let ok = lines.iter().filter(|line| line.starts_with("ok ") || line.starts_with("ok\t")).count();
     let failed = lines.iter().filter(|line| line.starts_with("FAIL\t") || line.starts_with("FAIL ")).count();
     if ok > 0 || failed > 0 {
         let packages = |count: usize| if count == 1 { "1 package".to_string() } else { format!("{count} packages") };
         let text = if failed > 0 { format!("{} failed, {} ok", packages(failed), ok) } else { format!("{} ok", packages(ok)) };
-        return Some(Summary { text, failed: failed > 0 });
+        return Some(Summary { text, failed: failed > 0, ran_none: false });
     }
     None
 }
@@ -488,6 +490,7 @@ pub fn outcome(input: &Value, listed: &[String]) -> Option<Ended> {
 }
 
 const IN_BACKGROUND: &str = "still running in the background";
+const RAN_NONE: &str = "it ran no tests";
 
 // How a background command ended, as its <task-notification> in the session's transcript says: whether it ran to its end, its exit code when given, and its output file.
 #[derive(Clone, Debug, PartialEq)]
@@ -556,10 +559,11 @@ pub fn settle(state: &Path, address: &str, listed: &[String]) -> Vec<Run> {
     changed
 }
 
-// A result line that counts failures decides; else the exit, as far as it speaks for the test command.
+// A result line that counts failures decides, one that counts no test at all proves nothing; else the exit, as far as it speaks for the test command.
 fn judged(finished: bool, says: Exit, summary: Option<&Summary>) -> (Outcome, &'static str) {
     match (summary.map(|summary| summary.failed), says) {
         (Some(true), _) => (Outcome::Failed, ""),
+        _ if summary.is_some_and(|summary| summary.ran_none) => (Outcome::Unknown, RAN_NONE),
         (_, Exit::Speaks) => (if finished { Outcome::Passed } else { Outcome::Failed }, ""),
         (Some(false), _) => (Outcome::Passed, ""),
         (None, Exit::ZeroOnly) if finished => (Outcome::Passed, ""),
@@ -917,9 +921,30 @@ mod tests {
             ("Testing failed:\n\tUITests-Runner encountered an error\n** TEST FAILED **", "TEST FAILED", true),
         ];
         for (output, text, failed) in cases {
-            assert_eq!(summary(output), Some(Summary { text: text.to_string(), failed }), "{output}");
+            assert_eq!(summary(output), Some(Summary { text: text.to_string(), failed, ran_none: false }), "{output}");
         }
         assert_eq!(summary("Compiling kebbie\nerror[E0425]: cannot find value"), None);
+    }
+
+    #[test]
+    fn a_test_run_whose_result_line_counts_no_test_is_unknown_and_never_passed() {
+        for output in [
+            "running 0 tests\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out", "     Summary [   0.0s] 0 tests run: 0 passed, 0 skipped",
+            "0 examples, 0 failures", "0 runs, 0 assertions, 0 failures, 0 errors, 0 skips", "============ no tests ran in 0.01s ============", "  0 passing (1ms)",
+            "\t Executed 0 tests, with 0 failures (0 unexpected) in 0.0 (0.0) seconds\n** TEST SUCCEEDED **",
+        ] {
+            let found = summary(output).unwrap();
+            assert!(found.ran_none && !found.failed, "{output}");
+            assert_eq!(judged(true, Exit::Speaks, Some(&found)), (Outcome::Unknown, RAN_NONE), "{output}");
+        }
+        assert!(!summary("test result: ok. 3 passed; 0 failed").unwrap().ran_none);
+        assert_eq!(judged(false, Exit::Speaks, summary("test result: FAILED. 0 passed; 1 failed").as_ref()), (Outcome::Failed, ""));
+        let dir = repo();
+        let mut filtered = passed("cargo test no_such_test");
+        filtered["tool_response"]["stdout"] = json!("running 0 tests\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 490 filtered out");
+        let run = record_in(&dir.join("state"), "billing@app", &dir, &listed(&[]), &filtered, 1).unwrap();
+        assert_eq!((run.result, run.why.as_str()), (Outcome::Unknown, RAN_NONE), "a filter that matched nothing is no pass");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     fn repo() -> PathBuf {
