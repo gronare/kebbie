@@ -13,6 +13,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - task.profile = "none" and review.profile = "none" mean the built-in task and reviewer, not a profile named none.
 - review.second = "always none" is refused, instead of running a second opinion from a profile named none.
 - A skill setting naming a ~/ Markdown file is refused while HOME is unset, instead of sending the task to run it as a skill.
+- A [docs] table in config.toml without required is refused by its own name, no longer as docs.required.
 
 ## 0.37.0
 

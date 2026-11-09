@@ -708,6 +708,8 @@ fn docs_required_is_off_until_a_repo_config_turns_it_on_and_config_toml_cannot()
     assert_eq!(settings(&repo("[docs]\nrequired = true\n"), &Machine::default()).docs_required, Setting { value: true, layer: Layer::Repo });
     let refused = parse_machine("[docs]\nrequired = true\n", "config.toml").unwrap_err();
     assert!(refused.starts_with("config.toml: docs.required: each repo opts in on its own, so it lives in its repo config"), "{refused}");
+    let other = parse_machine("[docs]\nrequire = true\n", "config.toml").unwrap_err();
+    assert!(other.starts_with("config.toml: docs: [docs] is a repo config's table, with the one key required; set it in"), "{other}");
     assert!(parse_repo("[docs]\nrequired = \"yes\"\n", "app.toml").unwrap_err().contains("docs.required: must be true or false"));
     assert!(unknown_repo("[docs]\nrequire = true\n").contains("docs.require: unknown key; known keys here: required"));
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&repo("[docs]\nrequired = true\n"), &Machine::default()) });

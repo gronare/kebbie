@@ -220,8 +220,9 @@ fn per_repo(key: &str) -> String {
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
-    if table.contains_key("docs") {
-        return Err(fail(per_repo("docs.required")));
+    if let Some(docs) = table.get("docs") {
+        let required = docs.as_table().is_some_and(|docs| docs.contains_key("required"));
+        return Err(fail(if required { per_repo("docs.required") } else { format!("docs: [docs] is a repo config's table, with the one key required; set it in {}/<repo>.toml", repos_dir().display()) }));
     }
     let worktree = layers(&table).map_err(fail)?;
     if worktree.dev_route.is_some() {
