@@ -485,6 +485,15 @@ enum Skip {
 }
 
 impl Skip {
+    fn refusal(self, id: &str) -> String {
+        match self {
+            Skip::Already(report) => format!("Bug {id} went to kebbie's maintainers already, as report {report}"),
+            Skip::Changed => format!("Bug {id} changed since you read it, so nothing was sent; read it again with kebbie issue report {id}"),
+            Skip::NotOurs => format!("{id} is a wish or another install's report; only a bug you ran into goes to kebbie's maintainers"),
+            Skip::Missing(error) => error,
+        }
+    }
+
     fn why(self, id: &str) -> String {
         match self {
             Skip::Already(report) => format!("went already, as report {report}"),
@@ -519,13 +528,7 @@ pub fn sent_line(report: &str, issue: &str, title: &str) -> String {
 pub fn send_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub, read: &[u8; 32], now: u64) -> Result<String> {
     crate::permit::user_only_as(caller, "Sending a report to kebbie's maintainers")?;
     let _lock = SendLock::take(state)?;
-    let (mut issue, report) = match ready(state, id, read, scrub) {
-        Ok(ready) => ready,
-        Err(Skip::Already(report)) => return Err(format!("Bug {id} went to kebbie's maintainers already, as report {report}")),
-        Err(Skip::Changed) => return Err(format!("Bug {id} changed since you read it, so nothing was sent; read it again with kebbie issue report {id}")),
-        Err(Skip::NotOurs) => return Err(format!("{id} is a wish or another install's report; only a bug you ran into goes to kebbie's maintainers")),
-        Err(Skip::Missing(error)) => return Err(error),
-    };
+    let (mut issue, report) = ready(state, id, read, scrub).map_err(|skip| skip.refusal(id))?;
     let sent = deliver(state, &mut issue, report, url, now)?;
     crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent bug {} to kebbie's maintainers as report {sent}", issue.id)).next("It stays on this machine too; after each update the keeper rechecks it and closes it once a commit plainly fixes it.").ok()
 }
