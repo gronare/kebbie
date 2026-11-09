@@ -5,52 +5,45 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
-- Every release carries a CycloneDX SBOM, kebbie-<version>.cdx.json, next to the binaries.
-- A task's shell gets no GitHub token, git credential helper or ssh agent, so git there has no login to push with; an ops task keeps the ssh agent for its ssh to other machines.
-- A task's shell commands, Claude's and Codex's, are refused when they run git push in any form.
-- A profile can name a kubeconfig, so its tasks and routines run kubectl and helm on that login alone.
+- A profile can name a kubeconfig, so its tasks and scheduled routines manage a cluster with that login alone.
 - kebbie routine add takes --profile, the profile the routine's task starts with.
-- kubectl and helm are refused in a sandboxed task whose profile names no kubeconfig.
-- kebbie doctor warns when a profile's kubeconfig is missing, readable by others or your default one.
-- kebbie update and the install script check a release binary's build attestation with gh, and refuse one that fails.
+- kebbie doctor warns about a profile's kubeconfig that is missing, readable by others or your default one.
+- A task's shell refuses git push in every form and holds no GitHub token or git login.
+- An ops task keeps your ssh agent for its ssh to other machines.
+- A sandboxed task runs no kubectl or helm unless its profile names a kubeconfig.
+- kebbie update and the install script check a release binary's build attestation with gh.
+- Every release carries a CycloneDX SBOM next to the binaries.
 
 ### Fixed
-- A test command written inside a heredoc, such as a plan written with cat <<EOF, is no longer recorded as a test run.
-- A test run whose result line counts no tests, such as a filter that matched nothing, shows as unknown, never as passed.
-- A long test command that ends in the background is judged on its whole line, so a cut-off | tail no longer reads as a pass.
-- A test run that passes in the background sends its own task back to the reviewer, never the task whose worktree the shell is in.
-- A task's shell commands stay quick while a background test run is pending, and a run whose end never shows stays unknown after a day.
-- Test runs that end at the same moment in parallel shells are all recorded.
-- A test run recorded in a task without the sandbox reads unverified: recorded without a sandbox, wherever it shows.
-- A pushed task whose CI never starts, in a repo with workflows, moves to Needs you after 30 minutes instead of closing as green.
+- A sandboxed task's shell reads no cloud, cluster, Docker or agent credentials, nor kebbie's state.
+- Test runs count only real tests: a heredoc line is no test run, and a run of zero tests reads unknown.
+- A long test command in the background is judged on its whole line, and sends only its own task back to review.
+- Test runs that end at once in parallel shells are all recorded, and a pending background run no longer slows the shell.
+- A test run recorded without the sandbox reads unverified wherever it shows.
+- A pushed task whose CI never starts moves to Needs you after 30 minutes instead of closing as green.
 - Two tasks started at once in one repo each get a worktree of their own.
-- A follow-up started for a comment takes the mode of the task started last in its own repo, never bypassPermissions.
-- Queued pushes stay in line while git cannot read a free worktree or list the repo's worktrees, instead of being dropped as gone.
-- A task kebbie pushed that waited for its note tells the lead it is done, no longer that it landed outside kebbie's push.
-- kebbie doctor --fix and kebbie update install the push block again in a worktree whose hooksPath is not kebbie's.
-- A comment fix whose reading has no subject gets one the fixing task writes from its change, never a stock "Address …'s comment" line.
-- A sandboxed task's plan file lives in its worktree's git dir, so it outlives a restart of the machine.
-- The lead's push of a task whose ready report names --after waits until that task lands, and your own push warns that it went first.
-- Done and drop name a task's other halves still open in other repos, and tell the lead, without closing them.
-- Rewording a task's commit waits for kebbie's other rebase of its worktree, and gets past another git's index.lock.
-- The board's report window sends the bugs you read, even when a new or edited bug arrives while it is open.
-- A bug goes to kebbie's maintainers once, even when two batches or the board and kebbie issue report send at the same time.
-- A bug the endpoint took stays sent when saving its issue fails, and is never offered again.
-- kebbie doctor fails its hub line, naming the file, when the hub identity is unreadable, instead of saying not connected.
-- Update restarts only real boards, never a kebbie command that names board in its arguments, such as kebbie start board.
-- A message held for a busy task is delivered once, even when the board and the keeper both wait on the message log for long.
-- Kept task titles in kebbie's state are private to you, and the board never reads one half written.
-- A bug report hides the value in Authorization: Basic and in password: hunter2, where the secret is the next word.
-- A commit message or routine prompt you edit in your editor opens from a private file in kebbie's state, never from a shared temp folder.
-- A question the lead marks answered stays on the board, marked answered through the lead, until the task moves on, so you can still answer it yourself.
-- A sandboxed task's shell, Claude or Codex, reads no cloud, cluster, Docker or agent credentials, nor kebbie's state and config.toml.
-- The reviewer reads every diff without the repo's external diff, textconv drivers or fsmonitor.
-- A task's review pane opens on its own after an edit whose text holds a newline or a tab.
-- The review split refuses a base that starts with - or names no commit.
-- The lead runs kebbie tell, status and its other allowed commands without a permission prompt.
-- A vault log line or branch that starts with - reaches the vault whole, never as an option.
+- A follow-up kebbie starts for a comment takes its mode from its own repo, never bypassPermissions.
+- Queued pushes stay in line while git cannot read a worktree, instead of being dropped.
+- A task kebbie pushed closes with one done line, no longer said to have landed outside kebbie.
+- kebbie doctor --fix and kebbie update put the push block back in a worktree whose hooks were changed.
+- A comment fix without a subject gets one written from its change.
+- A sandboxed task's plan file outlives a restart of the machine.
+- The lead's push waits for the task named in --after, and your own push warns that it went first.
+- Done and drop name a task's halves still open in other repos.
+- Rewording a commit waits for kebbie's other rebase of the worktree and gets past a held index.lock.
+- The report window sends exactly the bugs you read, each once, even when two sends overlap.
+- kebbie doctor names an unreadable hub identity file instead of saying not connected.
+- Update restarts only real boards, never a command such as kebbie start board.
+- A held message is delivered once, even when the board and the keeper both wait for the message log.
+- A bug report hides the secret after Authorization: Basic and after a name such as password:.
+- A commit message or routine prompt opens in your editor from a private file, never a shared temp folder.
+- A question the lead marks answered stays on the board until the task moves on, so you can still answer it.
+- The reviewer reads diffs without the repo's own diff drivers.
+- A task's review pane opens after an edit whose text holds a newline or a tab.
+- The review split refuses a base that is an option, and opens when kebbie's path holds a quote.
+- The lead runs its allowed kebbie commands without a permission prompt.
+- A vault log line that starts with - reaches the vault whole.
 - The install script takes the highest kebbie version, also after a patch release to an older one.
-- The review split opens when kebbie's path or the state folder holds a quote.
 - kebbie update installs a downloaded binary only when the archive holds it as a plain file.
 
 ## 0.36.0
