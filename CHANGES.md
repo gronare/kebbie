@@ -5,6 +5,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+
+### Fixed
+
+## 0.37.0
+
+### What's new
 - A profile can name a kubeconfig, so its tasks and scheduled routines manage a cluster with that login alone.
 - kebbie routine add takes --profile, the profile the routine's task starts with.
 - kebbie doctor warns about a profile's kubeconfig that is missing, readable by others or your default one.
