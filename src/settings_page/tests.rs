@@ -1,4 +1,5 @@
 use super::*;
+use crate::profile_wizard::Pick;
 
 struct Fixture {
     dir: PathBuf,
