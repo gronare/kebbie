@@ -594,17 +594,32 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
 
 pub(super) type Watch<'a> = &'a dyn Fn(&Path, &Path, &str, &str, bool, crate::ci::Pushed) -> crate::ci::Begin;
 
-#[allow(clippy::too_many_arguments)]
-fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &'static str, state: &Path, watch: Watch) -> Result<String> {
-    let task = task_of(slot).to_string();
-    let address = peers::address(&task, &name_of(repo));
+struct Went {
+    sha: String,
+    keep_open: bool,
+    rest: usize,
+    pushed: String,
+    shas: Vec<String>,
+    note: Option<String>,
+    target: String,
+}
+
+fn went_out(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out) -> Result<Went> {
     let sha = out.sha.clone();
     let keep_open = matches!(through, Through::First { .. });
     let rest = if keep_open { git(&slot.path, &["rev-list", "--count", &format!("{}..HEAD", through_sha(&slot.path, upstream, through)?)])?.parse::<usize>().unwrap_or(0) } else { 0 };
     let pushed = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
     let shas: Vec<String> = git(&slot.path, &["rev-list", "--reverse", &format!("{upstream}..{sha}")])?.lines().map(str::to_string).collect();
-    let note = started_file(&task, repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| crate::task_note::items(&text).into_iter().next());
+    let note = started_file(task_of(slot), repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| crate::task_note::items(&text).into_iter().next());
     let target = upstream.trim_start_matches("origin/").to_string();
+    Ok(Went { sha, keep_open, rest, pushed, shas, note, target })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &'static str, state: &Path, watch: Watch) -> Result<String> {
+    let task = task_of(slot).to_string();
+    let address = peers::address(&task, &name_of(repo));
+    let Went { sha, keep_open, rest, pushed, shas, note, target } = went_out(repo, slot, upstream, through, out)?;
     let main = main_of(upstream);
     let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: None };
     let before = crate::ci::load(state, &address);
