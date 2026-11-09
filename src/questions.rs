@@ -168,9 +168,9 @@ pub fn open(messages: &[Message], turn_started: impl Fn(&str) -> Option<u64>) ->
     open
 }
 
-// A question the lead marked answered stays tappable through the turn its relay starts: a report other than needs-you, or a turn begun after that turn's report, closes it.
+// A question the lead marked answered stays tappable through the turn its relay starts: a report other than needs-you, or a turn begun after that turn's report, closes it; a report in the mark's own second is the asking turn's, not the relay's.
 fn relay_open(messages: &[Message], question: &Message, relayed: u64, turn_started: &impl Fn(&str) -> Option<u64>) -> bool {
-    let mut reports = messages.iter().filter(|message| message.from == question.from && message.at >= relayed).filter_map(|message| Some((message.at, message.report.as_ref()?)));
+    let mut reports = messages.iter().filter(|message| message.from == question.from && message.at > relayed).filter_map(|message| Some((message.at, message.report.as_ref()?)));
     let Some((ended, first)) = reports.next() else { return true };
     first.state == "needs-you" && reports.all(|(_, report)| report.state == "needs-you") && turn_started(&question.from).is_none_or(|at| at <= ended)
 }
@@ -662,6 +662,7 @@ mod tests {
         assert!(relayed_mark_shown(tappable[0]));
         assert!(open(&refused, |_| Some(30)).is_empty(), "a later turn closes it");
         assert!(open(&log(&[asked_q.clone(), relayed.clone(), report(25, "ready")]), |_| Some(21)).is_empty(), "a report other than needs-you closes it");
+        assert_eq!(open(&log(&[asked_q.clone(), report(20, "needs-you"), relayed.clone()]), |_| Some(21)).len(), 1, "the asking turn's own report in the second of the mark, and a turn begun just after, leave the question tappable");
         assert!(open(&log(&[asked_q, relayed, report(25, "needs-you"), json!({ "id": "q1", "at": 26, "state": "answered" })]), |_| Some(21)).is_empty(), "the user's answer on the board closes it");
     }
 
