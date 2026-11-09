@@ -287,8 +287,8 @@ fn resolved(path: &Path) -> PathBuf {
 }
 
 pub fn file_hook(task: Option<&str>, worktree: Option<&str>, tmp: Option<&str>, input: &str) -> String {
-    let input: Value = serde_json::from_str(input).unwrap_or_default();
-    let target = ["file_path", "notebook_path", "path"].iter().find_map(|key| input["tool_input"][key].as_str()).filter(|path| path.starts_with('/'));
+    let input = crate::hooks::Payload::parse(input);
+    let target = ["file_path", "notebook_path", "path"].iter().find_map(|key| input.tool_input()[key].as_str()).filter(|path| path.starts_with('/'));
     let claude_home = crate::agent::claude::home().unwrap_or_default();
     let reason = match (target, task, worktree, tmp) {
         (Some(target), Some(task), Some(worktree), Some(tmp)) => {
@@ -298,7 +298,7 @@ pub fn file_hook(task: Option<&str>, worktree: Option<&str>, tmp: Option<&str>, 
         }
         _ => Some("kebbie could not tell which file this tool writes, so a task's file tool does not run; give it an absolute path".to_string()),
     };
-    reason.map(|reason| json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason } }).to_string()).unwrap_or_default()
+    crate::hooks::Answer::deny_if(reason).render()
 }
 
 // kebbie's state holds which worktrees run sandboxed tasks, where neither a task's shell nor its file tools reach.
