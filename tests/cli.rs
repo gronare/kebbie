@@ -265,6 +265,21 @@ fn the_push_guard_denies_a_tasks_git_push_in_any_spelling_and_passes_the_rest() 
 }
 
 #[test]
+fn status_shows_a_task_with_no_session_record_on_the_configured_task_profile() {
+    let lab = Lab::new("status-task-profile");
+    lab.task_fixture();
+    let profiles = lab.home.join(".config/kebbie/profiles");
+    fs::create_dir_all(&profiles).unwrap();
+    fs::write(profiles.join("kube.toml"), "about = \"cluster work\"\n").unwrap();
+    fs::write(&lab.config, "[task]\nprofile = \"kube\"\n").unwrap();
+    let shown = lab.run(&["status", "--json"]);
+    assert!(shown.status.success(), "{}", stderr(&shown));
+    let status: serde_json::Value = serde_json::from_str(&stdout(&shown)).unwrap();
+    let task = status["items"].as_array().unwrap().iter().find(|item| item["name"] == "billing").expect("the task is listed");
+    assert_eq!(task["profile"], "kube", "it runs as task.profile, so the board names that: {task}");
+}
+
+#[test]
 fn codexs_guard_holds_a_task_to_the_cluster_its_profile_and_sandbox_give_it_and_answers_as_claudes_does() {
     let lab = Lab::new("codex-guard");
     let (_, slot) = lab.task_fixture();

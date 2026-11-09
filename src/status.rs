@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -186,10 +186,11 @@ impl Item {
         }
     }
 
-    fn queued_from(shown: tasks::WaitShown) -> Item {
+    // A queued task starts with its own --profile, else the repo's task.profile.
+    fn queued_from(shown: tasks::WaitShown, configured: Option<&str>) -> Item {
         let tasks::WaitShown { wait, after, names, waiting, title, base, at } = shown;
         Item {
-            review: None, verdict: None, second: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(wait.profile.clone().unwrap_or_else(|| crate::profiles::TASK.to_string())), server: false, worker: false, url: None,
+            review: None, verdict: None, second: None, rules: None, permit: None, follows: false, bypass: false, profile: Some(crate::profiles::chosen(wait.profile.as_deref(), None, configured).to_string()), server: false, worker: false, url: None,
             name: wait.task.clone(), title, place: name_of(&wait.repo), repo: Some(wait.repo.clone()), path: None, workspace: None, agent: None, git: None,
             report: None, question: None, ci: None, recover: None, routine: None, push_waits: None,
             queued: Some(Queued { after, blocked: wait.blocked.clone(), waiting, names, base, at, backlog: wait.backlog.is_some() }),
@@ -931,6 +932,10 @@ fn sweep_phases(state: &Path, items: &[Item], every_pool_read: bool, began: u64)
     }
 }
 
+fn configured_profile_of(repo: &Path) -> Option<String> {
+    crate::config::resolve(Some(repo)).ok().and_then(|config| config.settings.profile.value)
+}
+
 pub fn gather() -> Result<Vec<Item>> {
     let workspaces = herdr::workspaces()?;
     let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| crate::agent::Agent::of(agent).is_some()).collect();
@@ -952,12 +957,16 @@ pub fn gather() -> Result<Vec<Item>> {
     let mut items = Vec::new();
     let mut task_workspaces = BTreeSet::new();
     let mut every_pool_read = true;
+    let mut configured_profiles = BTreeMap::new();
     for repo in &repos {
         let (Ok(upstream), Ok(pool)) = (default_branch(repo), slots(repo)) else {
             every_pool_read = false;
             continue;
         };
-        let steps_on = crate::config::resolve(Some(repo)).is_ok_and(|config| config.settings.steps.value);
+        let config = crate::config::resolve(Some(repo)).ok();
+        let steps_on = config.as_ref().is_some_and(|config| config.settings.steps.value);
+        let configured_profile = config.and_then(|config| config.settings.profile.value);
+        configured_profiles.insert(repo.clone(), configured_profile.clone());
         let upstream_sha = steps_on.then(|| crate::repo::git(repo, &["rev-parse", &upstream]).ok()).flatten();
         let accept_required = tasks::accept_required(repo);
         for slot in pool {
@@ -993,7 +1002,7 @@ pub fn gather() -> Result<Vec<Item>> {
                 permit: crate::permit::of(&address, &name_of(repo)),
                 follows: tasks::follows(&address),
                 bypass: tasks::bypasses(&address),
-                profile: Some(tasks::profile_of(&address).unwrap_or_else(|| crate::profiles::TASK.to_string())),
+                profile: Some(crate::profiles::chosen(None, tasks::profile_of(&address).as_deref(), configured_profile.as_deref()).to_string()),
                 server,
                 worker: tokens["worker"].is_string(),
                 url: if server { running_url(repo, &slot.path) } else { None },
@@ -1041,7 +1050,11 @@ pub fn gather() -> Result<Vec<Item>> {
     }
     name_push_fronts(&mut items);
     if let Some(state) = state.as_deref() {
-        let queued: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(Item::queued_from)
+        let queued: Vec<Item> = tasks::waits_shown(state, &items).into_iter()
+            .map(|shown| {
+                let configured = configured_profiles.get(&shown.wait.repo).cloned().unwrap_or_else(|| configured_profile_of(&shown.wait.repo));
+                Item::queued_from(shown, configured.as_deref())
+            })
             .map(|item| Item { recipe: crate::recipe::load(state, &peers::address(&item.name, &item.place)), ..item }).collect();
         items.extend(queued);
     }
@@ -1940,7 +1953,7 @@ pub(crate) mod tests {
         billing.place = "api".to_string();
         billing.ci = Some(watched(crate::ci::State::Running, true));
         let mut items = vec![billing];
-        let shown: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(Item::queued_from).collect();
+        let shown: Vec<Item> = tasks::waits_shown(state, &items).into_iter().map(|shown| Item::queued_from(shown, None)).collect();
         items.extend(shown);
         items
     }
@@ -1961,6 +1974,19 @@ pub(crate) mod tests {
         let source = include_str!("status.rs");
         let gather = &source[source.find("\npub fn gather(").unwrap()..];
         assert!(gather[..gather.find("\n}\n").unwrap()].contains("tasks::waits_shown(state, &items)"), "kebbie status and the board list them");
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn a_queued_task_shows_the_profile_it_will_start_with() {
+        let state = crate::sh::test_dir("status-queued-profile");
+        let items = queued(&state, None);
+        let shown = |configured: Option<&str>| tasks::waits_shown(&state, &items[..1]).into_iter().map(|shown| Item::queued_from(shown, configured).profile).collect::<Vec<_>>();
+        assert_eq!(shown(None), [Some(crate::profiles::TASK.to_string())]);
+        assert_eq!(shown(Some("kube")), [Some("kube".to_string())], "a wait without --profile starts with task.profile");
+        let wait = json!({ "task": "web-billing", "repo": "/repos/web", "after": [{ "address": "billing@api", "repo": "/repos/api" }], "prompt": "Use the rounding field", "profile": "designer", "by": "lead", "at": 4_000_000_000u64 });
+        crate::state::write(&state.join("after").join("web-billing@web.json"), wait.to_string()).unwrap();
+        assert_eq!(shown(Some("kube")), [Some("designer".to_string())], "its own --profile wins");
         std::fs::remove_dir_all(state).unwrap();
     }
 
