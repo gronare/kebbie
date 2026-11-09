@@ -856,7 +856,7 @@ pub fn hook(input: &str) -> String {
     let cwd = payload.cwd().map(PathBuf::from).or_else(|| std::env::current_dir().ok());
     let Some(me) = cwd.as_deref().and_then(crate::peers::me).filter(|me| me != crate::status::LEAD_LABEL) else { return String::new() };
     match payload.event() {
-        Some("SessionStart") => session_start(&me, payload.value(), crate::lead::roles_dir().ok().as_deref()),
+        Some("SessionStart") => session_start(&me, &payload, crate::lead::roles_dir().ok().as_deref()),
         Some("PreToolUse") => crate::push_guard::answer(&payload, cwd.as_deref().map_or(crate::kube_guard::Cluster::None, crate::tasks::cluster_at)).render(),
         Some("UserPromptSubmit" | "Stop") => {
             let _ = crate::messages::flush();
@@ -866,8 +866,8 @@ pub fn hook(input: &str) -> String {
     }
 }
 
-fn session_start(me: &str, input: &Value, roles: Option<&Path>) -> String {
-    if let Some(session) = input["session_id"].as_str().filter(|id| !id.is_empty()) {
+fn session_start(me: &str, input: &Payload, roles: Option<&Path>) -> String {
+    if let Some(session) = input.session_id().filter(|id| !id.is_empty()) {
         let _ = crate::tasks::record_session(me, session);
     }
     let Some(role) = roles.and_then(|dir| std::fs::read_to_string(dir.join(format!("{me}.md"))).ok()).filter(|role| !role.trim().is_empty()) else { return String::new() };
@@ -1618,10 +1618,10 @@ mod tests {
     fn the_session_start_hook_records_the_session_and_gives_the_role_whole() {
         let roles = crate::sh::test_dir("codex-roles");
         std::fs::write(roles.join("billing@app.md"), "# Your role\n\nReport before you stop.\n").unwrap();
-        let said: Value = serde_json::from_str(&session_start("billing@app", &json!({}), Some(&roles))).unwrap();
+        let said: Value = serde_json::from_str(&session_start("billing@app", &Payload::parse("{}"), Some(&roles))).unwrap();
         assert_eq!(said["hookSpecificOutput"]["hookEventName"], "SessionStart");
         assert_eq!(said["hookSpecificOutput"]["additionalContext"], "# Your role\n\nReport before you stop.\n");
-        assert_eq!(session_start("other@app", &json!({}), Some(&roles)), "", "no role file, no context");
+        assert_eq!(session_start("other@app", &Payload::parse("{}"), Some(&roles)), "", "no role file, no context");
         std::fs::remove_dir_all(roles).unwrap();
     }
 

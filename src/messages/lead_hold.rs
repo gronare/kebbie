@@ -3,8 +3,6 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
-use serde_json::Value;
-
 use crate::lead::state_dir;
 use crate::peers::Session;
 use crate::sh::Result;
@@ -41,7 +39,7 @@ pub fn note_lead_prompt_from_stdin() {
         let _ = sent.send(input);
     });
     let Ok(input) = got.recv_timeout(Duration::from_millis(300)) else { return };
-    let Some(prompt) = serde_json::from_str::<Value>(&input).ok().and_then(|input| input["prompt"].as_str().map(str::to_string)) else { return };
+    let Some(prompt) = crate::hooks::Payload::parse(&input).prompt().map(str::to_string) else { return };
     if let Ok(dir) = state_dir() {
         let _ = note_lead_prompt_in(&dir, &prompt, now());
     }

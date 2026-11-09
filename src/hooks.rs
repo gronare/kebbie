@@ -34,6 +34,10 @@ impl Payload {
         self.0["cwd"].as_str().map(Path::new)
     }
 
+    pub fn session_id(&self) -> Option<&str> {
+        self.0["session_id"].as_str()
+    }
+
     pub fn prompt(&self) -> Option<&str> {
         self.0["prompt"].as_str()
     }
@@ -94,11 +98,11 @@ mod tests {
 
     #[test]
     fn a_payload_reads_the_fields_the_hooks_use_and_nothing_from_input_that_is_not_json() {
-        let payload = Payload::parse(&json!({ "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": "ls" }, "cwd": "/src/app", "prompt": "go", "stop_hook_active": true }).to_string());
-        assert_eq!((payload.event(), payload.tool_name(), payload.command(), payload.cwd(), payload.prompt(), payload.stop_hook_active()), (Some("PreToolUse"), Some("Bash"), Some("ls"), Some(Path::new("/src/app")), Some("go"), true));
+        let payload = Payload::parse(&json!({ "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": "ls" }, "cwd": "/src/app", "session_id": "s-1", "prompt": "go", "stop_hook_active": true }).to_string());
+        assert_eq!((payload.event(), payload.tool_name(), payload.command(), payload.cwd(), payload.session_id(), payload.prompt(), payload.stop_hook_active()), (Some("PreToolUse"), Some("Bash"), Some("ls"), Some(Path::new("/src/app")), Some("s-1"), Some("go"), true));
         assert_eq!(payload.tool_input(), &json!({ "command": "ls" }));
         let broken = Payload::parse("not json");
-        assert_eq!((broken.event(), broken.tool_name(), broken.command(), broken.cwd(), broken.stop_hook_active()), (None, None, None, None, false));
+        assert_eq!((broken.event(), broken.tool_name(), broken.command(), broken.cwd(), broken.session_id(), broken.stop_hook_active()), (None, None, None, None, None, false));
         assert_eq!(broken.value(), &Value::Null);
         assert!(!Payload::parse(r#"{"stop_hook_active":"true"}"#).stop_hook_active(), "only the JSON true counts");
     }

@@ -64,7 +64,7 @@ pub fn hook(address: &str, input: &str) -> String {
     let socket = std::env::var(SOCKET_VAR).ok();
     let token = std::env::var(TOKEN_VAR).ok();
     if let Ok(dir) = crate::lead::state_dir() {
-        let _ = hook_in(&dir, address, input.value(), home_of(address).as_deref(), socket.as_deref(), token.as_deref());
+        let _ = hook_in(&dir, address, &input, home_of(address).as_deref(), socket.as_deref(), token.as_deref());
     }
     String::new()
 }
@@ -80,13 +80,13 @@ fn home_of(address: &str) -> Option<PathBuf> {
 }
 
 // A session records an inbox only for the address whose folder it runs in, so a task cannot take the lead's messages.
-pub fn hook_in(dir: &Path, address: &str, input: &Value, home: Option<&Path>, socket: Option<&str>, token: Option<&str>) -> Result<()> {
+pub fn hook_in(dir: &Path, address: &str, input: &crate::hooks::Payload, home: Option<&Path>, socket: Option<&str>, token: Option<&str>) -> Result<()> {
     let canonical = |path: &Path| std::fs::canonicalize(path).ok();
-    let at_home = input["cwd"].as_str().zip(home).is_some_and(|(cwd, home)| canonical(Path::new(cwd)).is_some_and(|cwd| Some(cwd) == canonical(home)));
+    let at_home = input.cwd().zip(home).is_some_and(|(cwd, home)| canonical(cwd).is_some_and(|cwd| Some(cwd) == canonical(home)));
     if !at_home {
         return Ok(());
     }
-    record_in(dir, address, socket, token, input["session_id"].as_str())
+    record_in(dir, address, socket, token, input.session_id())
 }
 
 // One connection's bytes: the auth line, then one user message per line, as Claude Code 2.1.308 took them from a process outside the session.
@@ -311,10 +311,10 @@ pub(crate) mod tests {
         let (lead_home, task_home) = (dir.join("lead"), dir.join("wt1.app"));
         std::fs::create_dir_all(&lead_home).unwrap();
         std::fs::create_dir_all(&task_home).unwrap();
-        let input = |cwd: &Path| json!({ "cwd": cwd.to_string_lossy(), "session_id": "s-1" });
+        let input = |cwd: &Path| crate::hooks::Payload::parse(&json!({ "cwd": cwd.to_string_lossy(), "session_id": "s-1" }).to_string());
         hook_in(&dir, "lead", &input(&task_home), Some(&lead_home), Some("/tmp/cc-socks/9.sock"), None).unwrap();
         assert!(known_in(&dir, "lead").is_none(), "a task naming the lead in its own worktree records nothing");
-        hook_in(&dir, "lead", &json!({ "session_id": "s-1" }), Some(&lead_home), Some("/tmp/cc-socks/9.sock"), None).unwrap();
+        hook_in(&dir, "lead", &crate::hooks::Payload::parse(r#"{"session_id":"s-1"}"#), Some(&lead_home), Some("/tmp/cc-socks/9.sock"), None).unwrap();
         hook_in(&dir, "lead", &input(&lead_home), None, Some("/tmp/cc-socks/9.sock"), None).unwrap();
         assert!(known_in(&dir, "lead").is_none(), "no folder to compare, no record");
         hook_in(&dir, "lead", &input(&lead_home), Some(&lead_home), Some("/tmp/cc-socks/1.sock"), None).unwrap();
