@@ -1,4 +1,7 @@
 use super::*;
+use crate::agent::Agent;
+use crate::board::widgets::TEXT;
+use crate::config::Layer;
 use crate::profile_wizard::Pick;
 
 struct Fixture {
