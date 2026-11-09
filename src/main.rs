@@ -22,6 +22,7 @@ mod executable;
 mod fetch;
 mod herdr;
 mod herdr_link;
+mod hooks;
 mod hub;
 mod inbox;
 mod install_signal;
