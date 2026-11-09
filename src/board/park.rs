@@ -273,6 +273,7 @@ mod tests {
 
     #[test]
     fn parked_tasks_leave_their_groups_for_one_line_that_counts_what_waits() {
+        let parked_from = now();
         let mut app = board_with_two_parked();
         assert_eq!(app.tasks.iter().map(|item| (item.name.as_str(), item.group())).collect::<Vec<_>>(), [("search-filters", Group::ReadyToPush), ("nightly-import", Group::Parked), ("refund-mails", Group::Parked)], "a question or red CI keeps a parked task parked, last");
         let (rows, _) = render(&mut app, 110, 30);
@@ -298,8 +299,8 @@ mod tests {
         let (rows, _) = render(&mut app, 110, 30);
         let screen = rows.join("\n");
         assert!(screen.contains("PARKED  2 · 1 question · 1 red CI  esc hides them"), "{screen}");
-        let back = format!("back {}", crate::when::shown(now() + 3600, now(), &offset));
-        assert!(rows[find(&rows, "nightly-import")[0].1].contains(&back) && rows[find(&rows, "refund-mails")[0].1].contains("back when you unpark it"), "{screen}");
+        let row = &rows[find(&rows, "nightly-import")[0].1];
+        assert!((parked_from..=now()).any(|at| row.contains(&format!("back {}", crate::when::shown(at + 3600, now(), &offset)))) && rows[find(&rows, "refund-mails")[0].1].contains("back when you unpark it"), "{screen}");
         assert!(!screen.contains("answer a question"), "outside Needs you it asks nothing of you: {screen}");
         press(&mut app, key(KeyCode::Down));
         press(&mut app, key(KeyCode::Esc));
