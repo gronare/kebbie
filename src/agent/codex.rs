@@ -460,46 +460,22 @@ const VALUES: [&str; 18] = ["-c", "--config", "-m", "--model", "-s", "--sandbox"
 const REFUSED: [&str; 6] = ["-h", "--help", "-V", "--version", "-i", "--image"];
 const DROPPED: [&str; 3] = ["--last", "--all", "--include-non-interactive"];
 
-fn base(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
-}
-
-// The process's own flags, without its subcommand, session and prompt, then resume <flags> <session>; an option kebbie cannot place is refused, since its next word could be a prompt.
-pub fn resume_args(argv: &[String], session: &str) -> std::result::Result<Vec<String>, String> {
-    let start = match argv {
-        [program, ..] if base(program) == "codex" => 1,
-        [program, script, ..] if base(program).starts_with("node") && script.contains("codex") => 2,
-        [] => return Err("its command line is empty".to_string()),
-        [program, ..] => return Err(format!("its command is {}, not codex", base(program))),
-    };
-    let mut kept = vec!["resume".to_string()];
-    let mut words = argv[start..].iter();
-    while let Some(word) = words.next() {
-        if word == "--" {
-            break;
-        }
-        if !word.starts_with('-') {
-            continue;
-        }
-        let flag = word.split_once('=').map_or(word.as_str(), |(flag, _)| flag);
-        if REFUSED.contains(&flag) {
-            return Err(format!("it runs with {flag}, which a resumed session cannot keep"));
-        }
-        if DROPPED.contains(&flag) {
-            continue;
-        }
-        kept.push(word.clone());
-        if SWITCHES.contains(&flag) || flag.len() < word.len() {
-            continue;
-        }
-        if !VALUES.contains(&flag) {
-            return Err(format!("it runs with {flag}, an option kebbie does not know"));
-        }
-        kept.push(words.next().ok_or(format!("its {flag} has no value"))?.clone());
-    }
-    kept.push(session.to_string());
-    Ok(kept)
-}
+pub(crate) const ARGS: super::ArgSpec = super::ArgSpec {
+    program: "codex",
+    runtimes: &["node"],
+    script: |script| script.contains("codex"),
+    lone_dash_is_prompt: false,
+    switches: &SWITCHES,
+    values: &VALUES,
+    optionals: &[],
+    many: &[],
+    dropped_switches: &DROPPED,
+    dropped_values: &[],
+    dropped_optionals: &[],
+    refused: &REFUSED,
+    before: &["resume"],
+    after: &[],
+};
 
 fn has_config(args: &[String], value: &str) -> bool {
     args.windows(2).any(|pair| (pair[0] == "-c" || pair[0] == "--config") && pair[1] == value)
@@ -1173,7 +1149,7 @@ mod tests {
         for sandboxed in [true, false] {
             let started = start_args(None, &profile(None, None), &files(sandboxed, Some(Path::new(TMP)), &[]), &Session::New("x".to_string()));
             let argv: Vec<String> = std::iter::once("codex".to_string()).chain(started.iter().cloned()).collect();
-            let resumed = with_role(&resume_args(&argv, "019b3136").unwrap());
+            let resumed = with_role(&crate::agent::Agent::Codex.resume_args(&argv, "019b3136").unwrap());
             let restarted = start_args(None, &profile(None, None), &files(sandboxed, Some(Path::new(TMP)), &[]), &Session::Resume("019b3136".to_string()));
             for args in [&started, &resumed, &restarted] {
                 let count = |key: &str| value_of(args, key).len();
@@ -1521,7 +1497,7 @@ mod tests {
             let args = start_args(None, &profile(None, None), &files(true, None, &[]), &session);
             assert!(after(&args, "-c").contains(&"check_for_update_on_startup=false"), "codex-rs/tui/src/updates.rs reads config.check_for_update_on_startup before it shows tui/src/update_prompt.rs: {args:?}");
         }
-        let resumed = with_role(&resume_args(&["codex".to_string(), "-c".to_string(), NO_UPDATE_CHECK.to_string()], "id").unwrap());
+        let resumed = with_role(&crate::agent::Agent::Codex.resume_args(&["codex".to_string(), "-c".to_string(), NO_UPDATE_CHECK.to_string()], "id").unwrap());
         assert_eq!(resumed.iter().filter(|word| *word == NO_UPDATE_CHECK).count(), 1, "a restart keeps the check off once: {resumed:?}");
         assert_eq!((SCREENS.held)(UPDATE), Some(Started::AwaitsUpdate), "a Codex that checks anyway, as under a managed config, holds the start on tui/src/update_prompt.rs");
         assert_eq!(startup_question(UPDATE), Some(Started::AwaitsUpdate));
@@ -1570,7 +1546,7 @@ mod tests {
         let args = start_args(None, &profile(None, None), &super::super::TaskFiles { hidden: &hidden, ..files(true, None, &[]) }, &Session::Resume("019b".to_string()));
         assert!(after(&args, "-c").contains(&"shell_environment_policy.filters.S3_SECRET_KEY=\"exclude\""), "{args:?}");
         assert_eq!(args.last().map(String::as_str), Some("019b"), "the session id stays last");
-        assert!(!lacks_role(&args) && resume_args(&std::iter::once("codex".to_string()).chain(args.iter().skip(1).cloned()).collect::<Vec<_>>(), "019b").unwrap().iter().any(|arg| arg.contains("S3_SECRET_KEY")), "a restart keeps the exclude with the rest of its flags");
+        assert!(!lacks_role(&args) && crate::agent::Agent::Codex.resume_args(&std::iter::once("codex".to_string()).chain(args.iter().skip(1).cloned()).collect::<Vec<_>>(), "019b").unwrap().iter().any(|arg| arg.contains("S3_SECRET_KEY")), "a restart keeps the exclude with the rest of its flags");
     }
 
     #[test]
@@ -1628,9 +1604,9 @@ mod tests {
     #[test]
     fn a_restarted_codex_keeps_its_flags_and_resumes_its_own_session() {
         let argv: Vec<String> = ["/Users/ada/.local/bin/codex", "resume", "--sandbox", "workspace-write", "-c", "plugins.kebbie@kebbie.enabled=true", "--last", "old-id"].map(str::to_string).to_vec();
-        assert_eq!(resume_args(&argv, "new-id").unwrap(), ["resume", "--sandbox", "workspace-write", "-c", "plugins.kebbie@kebbie.enabled=true", "new-id"]);
-        assert!(resume_args(&["codex".to_string(), "--frobnicate".to_string()], "x").unwrap_err().contains("--frobnicate"));
-        assert!(resume_args(&["claude".to_string()], "x").unwrap_err().contains("not codex"));
+        assert_eq!(crate::agent::Agent::Codex.resume_args(&argv, "new-id").unwrap(), ["resume", "--sandbox", "workspace-write", "-c", "plugins.kebbie@kebbie.enabled=true", "new-id"]);
+        assert!(crate::agent::Agent::Codex.resume_args(&["codex".to_string(), "--frobnicate".to_string()], "x").unwrap_err().contains("--frobnicate"));
+        assert!(crate::agent::Agent::Codex.resume_args(&["claude".to_string()], "x").unwrap_err().contains("not codex"));
         assert!(lacks_role(&argv), "an old trust entry does not count");
         let fixed = with_role(&argv[1..]);
         assert!(!lacks_role(&fixed) && fixed.last().map(String::as_str) == Some("old-id"), "{fixed:?}");

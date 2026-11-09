@@ -1048,7 +1048,7 @@ mod tests {
         assert!(!ours(&other, None, Some("w-lead")), "a Claude of the user's own outside a task is left alone");
         assert!(!ours(&other, None, None), "with no lead Space nothing outside a task is kebbie's");
     }
-    use crate::agent::claude::{lacks_role, resume_args, with_role};
+    use crate::agent::claude::{lacks_role, with_role};
 
     fn entry(at: u64, exe: &str, reasons: &[&str], kebbie: Option<&str>, started: Option<&str>) -> Value {
         json!({ "at": at, "exe": exe, "reasons": reasons, "kebbie": kebbie, "started": started })
@@ -1269,13 +1269,13 @@ mod tests {
     #[test]
     fn the_restart_keeps_the_flags_and_drops_the_old_conversation_and_prompt() {
         let lead = argv(&["claude", "--append-system-prompt-file", "/s/roles/lead.md", "--settings", "/s/roles/lead.settings.json", "--resume", "99137e9d"]);
-        assert_eq!(resume_args(&lead, "new-id").unwrap(), argv(&["--append-system-prompt-file", "/s/roles/lead.md", "--settings", "/s/roles/lead.settings.json", "--resume", "new-id"]));
+        assert_eq!(Agent::Claude.resume_args(&lead, "new-id").unwrap(), argv(&["--append-system-prompt-file", "/s/roles/lead.md", "--settings", "/s/roles/lead.settings.json", "--resume", "new-id"]));
         let task = argv(&["/opt/homebrew/bin/claude", "--permission-mode", "acceptEdits", "--settings", "/s/x.json", "--session-id", "0b5e", "--dangerously-skip-permissions", "--add-dir", "/a", "/b", "--model=opus", "-c", "fix the bug"]);
-        assert_eq!(resume_args(&task, "id").unwrap(), argv(&["--permission-mode", "acceptEdits", "--settings", "/s/x.json", "--dangerously-skip-permissions", "--add-dir", "/a", "/b", "--model=opus", "--resume", "id"]));
-        assert_eq!(resume_args(&argv(&["claude", "--plugin-dir", "/p", "-r", "--", "--model", "x"]), "id").unwrap(), argv(&["--plugin-dir", "/p", "--resume", "id"]));
-        assert_eq!(resume_args(&argv(&["claude", "explain this", "--resume=abc", "--fork-session"]), "id").unwrap(), argv(&["--resume", "id"]));
-        assert_eq!(resume_args(&argv(&["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js", "--model", "sonnet", "hello"]), "id").unwrap(), argv(&["--model", "sonnet", "--resume", "id"]));
-        assert_eq!(resume_args(&argv(&["claude", "--debug", "hooks"]), "id").unwrap(), argv(&["--debug", "hooks", "--resume", "id"]));
+        assert_eq!(Agent::Claude.resume_args(&task, "id").unwrap(), argv(&["--permission-mode", "acceptEdits", "--settings", "/s/x.json", "--dangerously-skip-permissions", "--add-dir", "/a", "/b", "--model=opus", "--resume", "id"]));
+        assert_eq!(Agent::Claude.resume_args(&argv(&["claude", "--plugin-dir", "/p", "-r", "--", "--model", "x"]), "id").unwrap(), argv(&["--plugin-dir", "/p", "--resume", "id"]));
+        assert_eq!(Agent::Claude.resume_args(&argv(&["claude", "explain this", "--resume=abc", "--fork-session"]), "id").unwrap(), argv(&["--resume", "id"]));
+        assert_eq!(Agent::Claude.resume_args(&argv(&["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js", "--model", "sonnet", "hello"]), "id").unwrap(), argv(&["--model", "sonnet", "--resume", "id"]));
+        assert_eq!(Agent::Claude.resume_args(&argv(&["claude", "--debug", "hooks"]), "id").unwrap(), argv(&["--debug", "hooks", "--resume", "id"]));
     }
 
     #[test]
@@ -1292,9 +1292,9 @@ mod tests {
     fn a_resumed_task_gets_its_settings_and_role_written_now_in_place_of_missing_or_stale_ones() {
         let (settings, role) = (Path::new("/s/roles/billing@app.settings.json"), Path::new("/s/roles/billing@app.md"));
         let fresh = ["--settings", "/s/roles/billing@app.settings.json", "--append-system-prompt-file", "/s/roles/billing@app.md", "--resume", "id"];
-        let bare = resume_args(&argv(&["claude", "--permission-mode", "acceptEdits", "--resume", "old"]), "id").unwrap();
+        let bare = Agent::Claude.resume_args(&argv(&["claude", "--permission-mode", "acceptEdits", "--resume", "old"]), "id").unwrap();
         assert_eq!(with_role(&bare, settings, role), [&["--permission-mode", "acceptEdits"][..], &fresh].concat(), "a session started before roles existed gets them on its resume");
-        let stale = resume_args(&argv(&["claude", "--settings", "/old/x.json", "--model=opus", "--append-system-prompt-file=/old/task.md", "--resume", "old"]), "id").unwrap();
+        let stale = Agent::Claude.resume_args(&argv(&["claude", "--settings", "/old/x.json", "--model=opus", "--append-system-prompt-file=/old/task.md", "--resume", "old"]), "id").unwrap();
         assert_eq!(with_role(&stale, settings, role), [&["--model=opus"][..], &fresh].concat(), "an old path is replaced, never kept beside the new one");
         let source = include_str!("restart.rs");
         let perform = &source[source.find("\nfn perform(").unwrap()..];
@@ -1321,11 +1321,11 @@ mod tests {
 
     #[test]
     fn a_command_line_kebbie_cannot_place_is_refused_rather_than_restarted_blind() {
-        assert!(resume_args(&argv(&["claude", "--brand-new-flag", "maybe a prompt"]), "id").unwrap_err().contains("--brand-new-flag, an option kebbie does not know"));
-        assert!(resume_args(&argv(&["claude", "-p", "hi"]), "id").unwrap_err().contains("-p"));
-        assert!(resume_args(&argv(&["vim", "x"]), "id").unwrap_err().contains("not claude"));
-        assert!(resume_args(&argv(&["claude", "--model"]), "id").unwrap_err().contains("--model has no value"));
-        assert!(resume_args(&[], "id").is_err());
+        assert!(Agent::Claude.resume_args(&argv(&["claude", "--brand-new-flag", "maybe a prompt"]), "id").unwrap_err().contains("--brand-new-flag, an option kebbie does not know"));
+        assert!(Agent::Claude.resume_args(&argv(&["claude", "-p", "hi"]), "id").unwrap_err().contains("-p"));
+        assert!(Agent::Claude.resume_args(&argv(&["vim", "x"]), "id").unwrap_err().contains("not claude"));
+        assert!(Agent::Claude.resume_args(&argv(&["claude", "--model"]), "id").unwrap_err().contains("--model has no value"));
+        assert!(Agent::Claude.resume_args(&[], "id").is_err());
     }
 
     #[test]

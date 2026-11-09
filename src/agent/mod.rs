@@ -216,8 +216,8 @@ impl Agent {
 
     pub fn resume_args(self, argv: &[String], session: &str) -> std::result::Result<Vec<String>, String> {
         match self {
-            Agent::Claude => claude::resume_args(argv, session),
-            Agent::Codex => codex::resume_args(argv, session),
+            Agent::Claude => resume_args(&claude::ARGS, argv, session),
+            Agent::Codex => resume_args(&codex::ARGS, argv, session),
         }
     }
 
@@ -253,6 +253,92 @@ impl Agent {
     pub fn reviewer_settings(self, kebbie: &str, sandbox: bool) -> String {
         claude::reviewer_settings(kebbie, sandbox)
     }
+}
+
+// What an agent's command line holds, as kebbie reads it to start the same process again on another session.
+pub(crate) struct ArgSpec {
+    pub program: &'static str,
+    pub runtimes: &'static [&'static str],
+    pub script: fn(&str) -> bool,
+    pub lone_dash_is_prompt: bool,
+    pub switches: &'static [&'static str],
+    pub values: &'static [&'static str],
+    pub optionals: &'static [&'static str],
+    pub many: &'static [&'static str],
+    pub dropped_switches: &'static [&'static str],
+    pub dropped_values: &'static [&'static str],
+    pub dropped_optionals: &'static [&'static str],
+    pub refused: &'static [&'static str],
+    pub before: &'static [&'static str],
+    pub after: &'static [&'static str],
+}
+
+fn base(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+// The process's own flags, without its conversation and prompt, between the spec's before and after words and the session; an option kebbie cannot place is refused, since its next word could be a prompt that would be sent again.
+fn resume_args(spec: &ArgSpec, argv: &[String], session: &str) -> std::result::Result<Vec<String>, String> {
+    let start = match argv {
+        [program, ..] if base(program) == spec.program => 1,
+        [program, script, ..] if spec.runtimes.iter().any(|name| base(program).starts_with(name)) && (spec.script)(script) => 2,
+        [] => return Err("its command line is empty".to_string()),
+        [program, ..] => return Err(format!("its command is {}, not {}", base(program), spec.program)),
+    };
+    let words = &argv[start..];
+    let next_is_value = |index: usize| words.get(index).is_some_and(|word| !word.starts_with('-'));
+    let mut kept: Vec<String> = spec.before.iter().map(|word| word.to_string()).collect();
+    let mut index = 0;
+    while index < words.len() {
+        let word = words[index].as_str();
+        index += 1;
+        if word == "--" {
+            break;
+        }
+        if !word.starts_with('-') || (word == "-" && spec.lone_dash_is_prompt) {
+            continue;
+        }
+        let flag = word.split_once('=').map_or(word, |(flag, _)| flag);
+        let inline = flag.len() < word.len();
+        if spec.refused.contains(&flag) {
+            return Err(format!("it runs with {flag}, which a resumed session cannot keep"));
+        }
+        if spec.dropped_switches.contains(&flag) {
+            continue;
+        }
+        if spec.dropped_values.contains(&flag) {
+            index += usize::from(!inline);
+            continue;
+        }
+        if spec.dropped_optionals.contains(&flag) {
+            index += usize::from(!inline && next_is_value(index));
+            continue;
+        }
+        kept.push(word.to_string());
+        if spec.switches.contains(&flag) || inline {
+            continue;
+        }
+        if spec.values.contains(&flag) {
+            let value = words.get(index).ok_or(format!("its {flag} has no value"))?;
+            kept.push(value.clone());
+            index += 1;
+        } else if spec.optionals.contains(&flag) {
+            if next_is_value(index) {
+                kept.push(words[index].clone());
+                index += 1;
+            }
+        } else if spec.many.contains(&flag) {
+            while next_is_value(index) {
+                kept.push(words[index].clone());
+                index += 1;
+            }
+        } else {
+            return Err(format!("it runs with {flag}, an option kebbie does not know"));
+        }
+    }
+    kept.extend(spec.after.iter().map(|word| word.to_string()));
+    kept.push(session.to_string());
+    Ok(kept)
 }
 
 #[cfg(test)]

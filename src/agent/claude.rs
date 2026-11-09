@@ -389,72 +389,22 @@ const DROPPED_SWITCHES: [&str; 4] = ["-c", "--continue", "--fork-session", "--tm
 const DROPPED_OPTIONALS: [&str; 7] = ["-r", "--resume", "--from-pr", "--teleport", "--cloud", "-w", "--worktree"];
 const REFUSED: [&str; 9] = ["-p", "--print", "--bg", "--background", "--desktop", "-h", "--help", "-v", "--version"];
 
-fn base(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
-}
-
-// The process's own flags, without its conversation and prompt, then --resume <session>; an option kebbie cannot place is refused, since its next word could be a prompt that would be sent again.
-pub fn resume_args(argv: &[String], session: &str) -> std::result::Result<Vec<String>, String> {
-    let start = match argv {
-        [program, ..] if base(program) == "claude" => 1,
-        [program, script, ..] if ["node", "bun"].iter().any(|name| base(program).starts_with(name)) && (script.contains("claude") || script.ends_with("cli.js")) => 2,
-        [] => return Err("its command line is empty".to_string()),
-        [program, ..] => return Err(format!("its command is {}, not claude", base(program))),
-    };
-    let words = &argv[start..];
-    let next_is_value = |index: usize| words.get(index).is_some_and(|word| !word.starts_with('-'));
-    let mut kept = Vec::new();
-    let mut index = 0;
-    while index < words.len() {
-        let word = words[index].as_str();
-        index += 1;
-        if word == "--" {
-            break;
-        }
-        if !word.starts_with('-') || word == "-" {
-            continue;
-        }
-        let flag = word.split_once('=').map_or(word, |(flag, _)| flag);
-        let inline = flag.len() < word.len();
-        if REFUSED.contains(&flag) {
-            return Err(format!("it runs with {flag}, which a resumed session cannot keep"));
-        }
-        if DROPPED_SWITCHES.contains(&flag) {
-            continue;
-        }
-        if flag == "--session-id" {
-            index += usize::from(!inline);
-            continue;
-        }
-        if DROPPED_OPTIONALS.contains(&flag) {
-            index += usize::from(!inline && next_is_value(index));
-            continue;
-        }
-        kept.push(word.to_string());
-        if SWITCHES.contains(&flag) || inline {
-            continue;
-        }
-        if VALUES.contains(&flag) {
-            let value = words.get(index).ok_or(format!("its {flag} has no value"))?;
-            kept.push(value.clone());
-            index += 1;
-        } else if OPTIONALS.contains(&flag) {
-            if next_is_value(index) {
-                kept.push(words[index].clone());
-                index += 1;
-            }
-        } else if MANY.contains(&flag) {
-            while next_is_value(index) {
-                kept.push(words[index].clone());
-                index += 1;
-            }
-        } else {
-            return Err(format!("it runs with {flag}, an option kebbie does not know"));
-        }
-    }
-    kept.extend(["--resume".to_string(), session.to_string()]);
-    Ok(kept)
-}
+pub(crate) const ARGS: super::ArgSpec = super::ArgSpec {
+    program: "claude",
+    runtimes: &["node", "bun"],
+    script: |script| script.contains("claude") || script.ends_with("cli.js"),
+    lone_dash_is_prompt: true,
+    switches: &SWITCHES,
+    values: &VALUES,
+    optionals: &OPTIONALS,
+    many: &MANY,
+    dropped_switches: &DROPPED_SWITCHES,
+    dropped_values: &["--session-id"],
+    dropped_optionals: &DROPPED_OPTIONALS,
+    refused: &REFUSED,
+    before: &[],
+    after: &["--resume"],
+};
 
 const ROLE_FLAGS: [&str; 2] = ["--settings", "--append-system-prompt-file"];
 
