@@ -23,6 +23,9 @@ pub struct Machine {
 }
 
 pub const DEFAULT_HUB_URL: &str = "https://hub.kebbie.dev";
+pub(super) const DEFAULT_KEEPER: bool = true;
+pub(super) const DEFAULT_RECOVER: bool = true;
+pub(super) const DEFAULT_PROPOSE_ISSUES: bool = true;
 pub(super) const REPORT_URL: &str = "https://issues.kebbie.dev";
 pub(super) const UNSENT_REPORT_URL: &str = "http://127.0.0.1:9";
 pub const INBOX_TOKEN_PREFIX: &str = "kha_";

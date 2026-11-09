@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, Channel, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES};
+use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, Channel, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -137,14 +137,14 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         comments_days: or_default(pick(repo.comments_days.as_ref(), machine.worktree.comments_days.as_ref()), crate::comments::DEFAULT_DAYS),
         clean_on_release: or_default(pick(repo.clean_on_release.as_ref(), machine.worktree.clean_on_release.as_ref()), vec!["target".to_string()]),
         docs_required: or_default(pick(repo.docs_required.as_ref(), None), false),
-        keeper: or_default(pick(None, machine.keeper.as_ref()), true),
-        recover: or_default(pick(None, machine.recover.as_ref()), true),
+        keeper: or_default(pick(None, machine.keeper.as_ref()), DEFAULT_KEEPER),
+        recover: or_default(pick(None, machine.recover.as_ref()), DEFAULT_RECOVER),
         machine_name: pick(None, machine.machine_name.as_ref()).unwrap_or_else(|| Setting { value: short_hostname(), layer: Layer::Default }),
         hub_url: or_default(pick(None, machine.hub_url.as_ref()), DEFAULT_HUB_URL.to_string()),
         report_signals: or_default(pick(None, machine.report.signals.as_ref().or((machine.report.enabled == Some(false)).then_some(&false))), false),
         report_text: or_default(pick(None, machine.report.text.as_ref().or((machine.report.enabled == Some(false)).then_some(&ReportText::Never))), ReportText::Ask),
         report_inbox: or_default(pick(None, machine.report.inbox_token.as_ref().map(|_| &true)), false),
-        propose_issues: or_default(pick(None, machine.propose_issues.as_ref()), true),
+        propose_issues: or_default(pick(None, machine.propose_issues.as_ref()), DEFAULT_PROPOSE_ISSUES),
     }
 }
 

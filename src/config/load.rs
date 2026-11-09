@@ -2,7 +2,7 @@ use std::path::Path;
 
 use toml::Table;
 
-use super::{parse_machine, parse_repo, path, read, short_hostname, unknown_in_file, update, warn_once, AgentUpdates, Channel, Machine, Report, Worktree, MACHINE_KEYS, REPO_KEYS};
+use super::{parse_machine, parse_repo, path, read, short_hostname, unknown_in_file, update, warn_once, AgentUpdates, Channel, Machine, Report, Worktree, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, MACHINE_KEYS, REPO_KEYS};
 use crate::sh::Result;
 
 pub fn load_machine(path: &Path) -> Result<Machine> {
@@ -28,15 +28,15 @@ pub(super) fn table(text: &str, source: &str) -> Result<Table> {
 }
 
 pub fn propose_issues_enabled() -> Result<bool> {
-    Ok(load_machine(&path())?.propose_issues.unwrap_or(true))
+    Ok(load_machine(&path())?.propose_issues.unwrap_or(DEFAULT_PROPOSE_ISSUES))
 }
 
 pub fn keeper_enabled() -> Result<bool> {
-    Ok(load_machine(&path())?.keeper.unwrap_or(true))
+    Ok(load_machine(&path())?.keeper.unwrap_or(DEFAULT_KEEPER))
 }
 
 pub fn recover_enabled() -> Result<bool> {
-    Ok(load_machine(&path())?.recover.unwrap_or(true))
+    Ok(load_machine(&path())?.recover.unwrap_or(DEFAULT_RECOVER))
 }
 
 // The name other machines on the same vault see this kebbie's claims under.
