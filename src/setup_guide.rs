@@ -2008,7 +2008,7 @@ mod tests {
         let old = |probe: &mut Probe| {
             probe.name = "notes-vault-mcp".to_string();
             probe.version = "0.13.0".to_string();
-            probe.server = "https://mindin.gronare.com".to_string();
+            probe.server = "https://notes.example.com".to_string();
             probe.setup = false;
         };
         let kept = "uv run -q --project /src/notes-vault-mcp notes-vault-mcp";
@@ -2016,8 +2016,8 @@ mod tests {
         let shown = screen(&guide);
         for line in [
             "( ) Hosted mindin    coming soon",
-            "▸ (•) Your own server  https://mindin.gronare.com · signed in",
-            "address   https://mindin.gronare.com",
+            "▸ (•) Your own server  https://notes.example.com · signed in",
+            "address   https://notes.example.com",
             "( ) S3 bucket        endpoint, bucket",
             "( ) Local folder     path",
             "( ) None             kebbie keeps tasks without one",
@@ -2025,7 +2025,7 @@ mod tests {
         ] {
             assert!(shown.contains(line), "{line:?} missing from:\n{shown}");
         }
-        assert_eq!(shown.matches("mindin.gronare.com · signed in").count(), 1, "one place, however many commands answer for it: {shown}");
+        assert_eq!(shown.matches("notes.example.com · signed in").count(), 1, "one place, however many commands answer for it: {shown}");
         assert!(!shown.contains("uvx notes-vault-mcp"), "the command is kebbie's choice, not a row: {shown}");
         press(&mut guide, &[KeyCode::Up]);
         assert_eq!(guide.answers.vault.chosen(), Place::None, "Hosted mindin cannot be chosen while it is coming soon, so ↑ wraps past it");
@@ -2033,7 +2033,7 @@ mod tests {
         assert_eq!(guide.answers.vault.chosen(), Place::Server);
         guide.go(Step::Review);
         assert_eq!(vault_rows(&guide), [
-            "mindin already setup your own server https://mindin.gronare.com · signed in".to_string(),
+            "mindin already setup your own server https://notes.example.com · signed in".to_string(),
             format!("kebbie already vault vault.command = \"{kept}\""),
             "Claude Code to do vault the vault plugin vault@gronare".to_string(),
             format!("Codex to do vault [mcp_servers.vault] in {}/codex/config.toml", lab.dir.display()),

@@ -151,8 +151,8 @@ mod tests {
         assert_eq!((item.title.as_str(), item.summary.as_str(), item.area.as_str()), ("One", "two — three", "web"));
         let nested = parse("- Fix (login) flow (app)").unwrap();
         assert_eq!((nested.title.as_str(), nested.area.as_str()), ("Fix (login) flow", "app"));
-        let unicode = parse("- [low] Åtgärda — något (grönare)").unwrap();
-        assert_eq!((unicode.title.as_str(), unicode.area.as_str()), ("Åtgärda", "grönare"));
+        let unicode = parse("- [low] Åtgärda — något (café)").unwrap();
+        assert_eq!((unicode.title.as_str(), unicode.area.as_str()), ("Åtgärda", "café"));
         assert_eq!(parse("- ()").map(|item| item.title), Some("()".to_string()), "an empty parenthesis is text");
         assert_eq!(parse("-  spaced  title  ").map(|item| item.title), Some("spaced  title".to_string()));
         assert_eq!(parse("- [ High ] Title").map(|item| item.priority), Some("high".to_string()));

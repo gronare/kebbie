@@ -384,7 +384,7 @@ mod tests {
     use crate::comments::{Kind, load, open};
 
     const LINK: &str = "HTTP/2.0 200 OK\nLink: <https://api.github.com/repositories/1/comments?per_page=2&page=2>; rel=\"next\", <https://api.github.com/repositories/1/comments?per_page=2&page=3>; rel=\"last\"\n\n[]";
-    const PAGE_3: &str = r#"[{"id":101,"commit_id":"abcdef0123","html_url":"https://github.com/acme/app/commit/abc#commitcomment-101","user":{"login":"johan","type":"User"},"body":"This misses partial refunds.","path":"app/models/refund.rb","line":42,"created_at":"2026-10-30T10:00:00Z"},{"id":102,"commit_id":"abcdef0123","user":{"login":"Carl","type":"User"},"body":"my own note"}]"#;
+    const PAGE_3: &str = r#"[{"id":101,"commit_id":"abcdef0123","html_url":"https://github.com/acme/app/commit/abc#commitcomment-101","user":{"login":"johan","type":"User"},"body":"This misses partial refunds.","path":"app/models/refund.rb","line":42,"created_at":"2026-10-30T10:00:00Z"},{"id":102,"commit_id":"abcdef0123","user":{"login":"Ada","type":"User"},"body":"my own note"}]"#;
     const PAGE_4: &str = r#"[{"id":103,"commit_id":"abcdef0123","user":{"login":"ci-bot","type":"Bot"},"body":"coverage 90%"},{"id":104,"commit_id":"abcdef0123","user":{"login":"anna","type":"User"},"body":"nice\u001b]8;;x\u0007"}]"#;
     const PAGE_5: &str = r#"[{"id":105,"commit_id":"9999999999","user":{"login":"olle","type":"User"},"body":"on a commit kebbie did not push"}]"#;
 
@@ -392,7 +392,7 @@ mod tests {
         let gh = state.join("gh");
         let log = state.join("gh.log");
         let answer = |text: &str| format!("cat <<'JSON'\n{text}\nJSON\n");
-        crate::executable::write(&gh, format!("#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n*\" user \"*) echo carl ;;\n*--include*) {};;\n*page=3*) {};;\n*page=4*) {};;\n*page=5*) {};;\n*) echo '[]' ;;\nesac\n", log.display(), answer(LINK), answer(PAGE_3), answer(PAGE_4), answer(PAGE_5))).unwrap();
+        crate::executable::write(&gh, format!("#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in\n*\" user \"*) echo ada ;;\n*--include*) {};;\n*page=3*) {};;\n*page=4*) {};;\n*page=5*) {};;\n*) echo '[]' ;;\nesac\n", log.display(), answer(LINK), answer(PAGE_3), answer(PAGE_4), answer(PAGE_5))).unwrap();
         gh.to_string_lossy().to_string()
     }
 

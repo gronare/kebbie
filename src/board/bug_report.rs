@@ -380,7 +380,7 @@ mod tests {
     use crate::issues::{self, Issue};
 
     fn filed(state: &std::path::Path, id: &str, kind: &str, title: &str) {
-        filed_with(state, id, kind, title, "It failed in /Users/carl/work/greenhouse.");
+        filed_with(state, id, kind, title, "It failed in /Users/ada/work/shop.");
     }
 
     fn filed_with(state: &std::path::Path, id: &str, kind: &str, title: &str, body: &str) {
@@ -389,7 +389,7 @@ mod tests {
     }
 
     fn scrub() -> Scrub {
-        Scrub::new(Some("/Users/carl".to_string()), vec!["greenhouse".to_string()])
+        Scrub::new(Some("/Users/ada".to_string()), vec!["shop".to_string()])
     }
 
     fn screen(app: &mut App) -> String {
@@ -452,7 +452,7 @@ mod tests {
         assert!(matches!(&app.mode, Mode::Report { id, nudged: false, .. } if id == "a1b2c3"), "a question waiting does not stand in the way");
         let shown = screen(&mut app);
         assert!(shown.contains("Send this report to kebbie's maintainers?  y / n") && shown.contains("It failed in ~/work/<repo>."), "the text as it would go out: {shown}");
-        assert!(!shown.contains("/Users/carl") && !shown.contains("greenhouse"), "{shown}");
+        assert!(!shown.contains("/Users/ada") && !shown.contains("shop"), "{shown}");
         press(&mut app, key(KeyCode::Char('x')));
         assert!(matches!(app.mode, Mode::Report { nudged: true, .. }), "another key keeps the question");
         press(&mut app, key(KeyCode::Esc));
@@ -587,7 +587,7 @@ mod tests {
             render(&mut app, 120, 16);
         }
         let shown = render(&mut app, 120, 16).0.join("\n");
-        assert!(shown.contains("It failed in ~/work/<repo>.") && !shown.contains("/Users/carl"), "the last bug's redacted text: {shown}");
+        assert!(shown.contains("It failed in ~/work/<repo>.") && !shown.contains("/Users/ada"), "the last bug's redacted text: {shown}");
         press(&mut app, key(KeyCode::Char('y')));
         assert!(matches!(app.mode, Mode::Normal) && app.offers.is_empty(), "the board stays free while they go");
         assert!(app.toast.as_ref().is_some_and(|toast| toast.notice.headline == "Sending 2 bugs to kebbie's maintainers"), "{:?}", app.toast.as_ref().map(|toast| toast.notice.headline.clone()));
@@ -661,7 +661,7 @@ mod tests {
         app.focus_offers(0);
         press(&mut app, key(KeyCode::Enter));
         render(&mut app, 120, 40);
-        filed_with(&state, "a1b2c3", "bug", "push hid git's error", "It failed in /Users/carl/work/greenhouse, and the token was khs_0123456789abcdef.");
+        filed_with(&state, "a1b2c3", "bug", "push hid git's error", "It failed in /Users/ada/work/shop, and the token was khs_0123456789abcdef.");
         app.offers = offers_in(&state, true, &scrub);
         app.offers_changed();
         let shown = screen(&mut app);

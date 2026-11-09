@@ -1117,20 +1117,20 @@ mod tests {
         assert!(page.is_normal(), "a click on esc cancel closes the steps");
         press(&mut page, KeyCode::Char('n'));
         let Mode::Wizard(wizard) = &mut page.mode else { panic!("n opens the steps") };
-        wizard.repos = ["infra", "greenhouse", "kebbie"].iter().map(|name| Repo { value: format!("~/{name}"), name: name.to_string(), shown: format!("~/{name}") }).collect();
+        wizard.repos = ["infra", "shop", "kebbie"].iter().map(|name| Repo { value: format!("~/{name}"), name: name.to_string(), shown: format!("~/{name}") }).collect();
         typed(&mut page, "Check every node.");
         click_on(&mut page, "⏎ next");
         assert_eq!(step(&page), 1, "a click on ⏎ next is ⏎");
-        click_on(&mut page, "greenhouse");
+        click_on(&mut page, "shop");
         let Mode::Wizard(wizard) = &page.mode else { panic!() };
-        assert_eq!((wizard.step, wizard.repo().as_deref()), (1, Some("~/greenhouse")), "a click selects the repo");
-        assert!(render(&mut page, 120, 40).join("\n").contains("▌greenhouse"));
+        assert_eq!((wizard.step, wizard.repo().as_deref()), (1, Some("~/shop")), "a click selects the repo");
+        assert!(render(&mut page, 120, 40).join("\n").contains("▌shop"));
         let list = spot(&mut page, "kebbie");
         mouse(&mut page, MouseEventKind::ScrollDown, list);
         let Mode::Wizard(wizard) = &page.mode else { panic!() };
         assert_eq!(wizard.repo().as_deref(), Some("~/kebbie"), "the wheel moves down the list");
         mouse(&mut page, MouseEventKind::ScrollUp, list);
-        click_on(&mut page, "greenhouse");
+        click_on(&mut page, "shop");
         assert_eq!(step(&page), 2, "a click on the selected repo goes on");
         click_on(&mut page, "⏎ next");
         click_on(&mut page, "Fix and push");
@@ -1148,7 +1148,7 @@ mod tests {
         click_on(&mut page, "y add");
         assert!(matches!(&page.mode, Mode::Message(text) if text.starts_with("Added the routine check-every-node")), "a click on y add writes it");
         let text = std::fs::read_to_string(&machine).unwrap();
-        assert!(text.contains("repo = \"~/greenhouse\"\nat = \"07:00\"\nmode = \"fix\"\npush = true"), "{text}");
+        assert!(text.contains("repo = \"~/shop\"\nat = \"07:00\"\nmode = \"fix\"\npush = true"), "{text}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

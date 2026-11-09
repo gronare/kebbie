@@ -279,16 +279,16 @@ pub(crate) mod tests {
 
     #[test]
     fn a_task_reaches_the_board_with_its_question_and_nothing_local() {
-        let mut item = asking("refunds", "greenhouse");
-        item.path = Some("/Users/someone/projects/wt3.greenhouse".into());
-        item.repo = Some("/Users/someone/projects/greenhouse".into());
+        let mut item = asking("refunds", "shop");
+        item.path = Some("/Users/someone/projects/wt3.shop".into());
+        item.repo = Some("/Users/someone/projects/shop".into());
         item.workspace = Some("w_secret_space".to_string());
         item.url = Some("http://localhost:3003".to_string());
         item.agent.as_mut().unwrap().pane = "w1:p9".to_string();
         item.git.as_mut().unwrap().head = Some("9f3c2a1e5b7d4c6a8b0e2f4d6c8a0b2e4f6d8c0a".to_string());
         let board = build(&[item], &[], Vec::new(), None, &Seen::default());
         let shown = &board.items[0];
-        assert_eq!(shown.address, "refunds@greenhouse");
+        assert_eq!(shown.address, "refunds@shop");
         assert_eq!(shown.group, Group::NeedsYou);
         let question = shown.question.as_ref().unwrap();
         assert_eq!((question.text.as_str(), question.options.len(), question.recommend), ("Keep the old endpoint for a release?", 2, Some(2)));
@@ -423,16 +423,16 @@ pub(crate) mod tests {
         let mut quiet = task(Some("idle"), Some("working"), 0);
         quiet.name = "quiet".to_string();
         quiet.parked = Some(crate::tasks::Parked { until: None });
-        let mut queued = queued_after("mail-dns", "greenhouse", &["forsmancare@greenhouse"]);
+        let mut queued = queued_after("mail-dns", "shop", &["billing-site@shop"]);
         queued.title = Some("Mail DNS to Migadu".to_string());
-        queued.queued.as_mut().unwrap().waiting = "waits for forsmancare to push".to_string();
+        queued.queued.as_mut().unwrap().waiting = "waits for billing-site to push".to_string();
         let board = build(&[parked, quiet, queued], &[], Vec::new(), None, &Seen::default());
         assert!(board.items.is_empty(), "they leave the groups");
         let later: Vec<(&str, LaterState, &str, Option<u64>, bool)> = board.later.as_ref().unwrap().iter().map(|later| (later.address.as_str(), later.state, later.line.as_str(), later.until, later.question)).collect();
         assert_eq!(later[0], ("herdr-app@kebbie", LaterState::Parked, later[0].2, Some(1_761_100_000), true));
         assert_eq!(later[1].1, LaterState::Parked);
         assert!(!later[1].4);
-        assert_eq!(later[2], ("mail-dns@greenhouse", LaterState::Queued, "waits for forsmancare to push", None, false));
+        assert_eq!(later[2], ("mail-dns@shop", LaterState::Queued, "waits for billing-site to push", None, false));
         assert_eq!(board.later.as_ref().unwrap()[2].title.as_deref(), Some("Mail DNS to Migadu"));
         assert_eq!(board.counts.as_ref().map(|counts| (counts.queued, counts.parked)), Some((1, 2)));
     }

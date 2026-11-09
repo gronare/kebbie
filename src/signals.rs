@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(panic_component(Some("src/board/draw.rs")), name("board.draw"));
         assert_eq!(panic_component(Some("src/tasks/mod.rs")), name("tasks"));
         assert_eq!(panic_component(Some("src/main.rs")), name("main"));
-        for elsewhere in ["/Users/carl/.cargo/registry/src/index.crates.io-1/ratatui-0.30.0/src/buffer.rs", "/rustc/abc123/library/core/src/option.rs", "src/Weird Name.rs", "../greenhouse/src/x.rs"] {
+        for elsewhere in ["/Users/ada/.cargo/registry/src/index.crates.io-1/ratatui-0.30.0/src/buffer.rs", "/rustc/abc123/library/core/src/option.rs", "src/Weird Name.rs", "../shop/src/x.rs"] {
             assert_eq!(panic_component(Some(elsewhere)), name(DEPENDENCY), "{elsewhere}");
         }
         assert_eq!(panic_component(None), name(DEPENDENCY));
@@ -352,7 +352,7 @@ mod tests {
         let _ = std::panic::catch_unwind(|| panic!("with signals off"));
         assert!(PREVIOUS_RAN.with(|ran| ran.replace(false)) && log_lines(&state).is_empty(), "with signals off a panic records nothing");
         assert!(install_panic_hook_if(true, Ok(state.clone())));
-        let caught = std::panic::catch_unwind(|| panic!("push of billing@greenhouse failed in /Users/carl/work/greenhouse with token ghp_abcdefghijklmnop1234"));
+        let caught = std::panic::catch_unwind(|| panic!("push of billing@shop failed in /Users/ada/work/shop with token ghp_abcdefghijklmnop1234"));
         let _ = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| original(info)));
         assert!(caught.is_err());
@@ -362,7 +362,7 @@ mod tests {
         assert_eq!((line["component"].as_str(), line["kind"].as_str(), line["count"].as_u64()), (Some("signals"), Some("panic"), Some(1)));
         let keys: Vec<&str> = line.as_object().unwrap().keys().map(String::as_str).collect();
         assert!(keys.iter().all(|key| ["version", "commit", "component", "kind", "count"].contains(key)), "{keys:?}");
-        for private in ["billing", "greenhouse", "/Users", "carl", "ghp_", "push of"] {
+        for private in ["billing", "shop", "/Users", "ada", "ghp_", "push of"] {
             assert!(recorded.iter().all(|line| !line.contains(private)), "{private} in {recorded:?}");
         }
     }
@@ -373,7 +373,7 @@ mod tests {
         let here = || Ok(state.clone());
         record_if(&|| false, &here, "keeper.push", SignalKind::InternalError);
         assert!(log_lines(&state).is_empty(), "off records nothing");
-        record_if(&|| true, &here, "keeper push: /Users/carl", SignalKind::InternalError);
+        record_if(&|| true, &here, "keeper push: /Users/ada", SignalKind::InternalError);
         assert!(log_lines(&state).is_empty(), "a component that is not a name records nothing");
         record_if(&|| true, &|| Err("no state dir".to_string()), "keeper.push", SignalKind::InternalError);
         record_if(&|| true, &here, "keeper.push", SignalKind::InternalError);
@@ -415,8 +415,8 @@ mod tests {
         let file = dir(&state).join(BATCH);
         let good = r#"{"version":"0.26.3","commit":"16983b9","component":"keeper.push","kind":"internal-error","count":2}"#;
         let tampered = [
-            r#"{"version":"0.26.3","component":"keeper.push","kind":"internal-error","message":"git refused /Users/carl/app"}"#,
-            r#"{"version":"0.26.3","component":"/Users/carl/app","kind":"panic"}"#,
+            r#"{"version":"0.26.3","component":"keeper.push","kind":"internal-error","message":"git refused /Users/ada/app"}"#,
+            r#"{"version":"0.26.3","component":"/Users/ada/app","kind":"panic"}"#,
             r#"{"version":"0.26.3","component":"push failed: auth","kind":"panic"}"#,
             r#"{"version":"0.26.3","component":"keeper.push","kind":"git-said-no"}"#,
         ];

@@ -355,7 +355,7 @@ mod tests {
     use super::*;
 
     fn repos() -> Vec<Repo> {
-        ["infra", "greenhouse", "kebbie"].iter().map(|name| Repo { value: format!("~/{name}"), name: name.to_string(), shown: format!("~/{name}") }).collect()
+        ["infra", "shop", "kebbie"].iter().map(|name| Repo { value: format!("~/{name}"), name: name.to_string(), shown: format!("~/{name}") }).collect()
     }
 
     fn typed(wizard: &mut Wizard, text: &str) {
@@ -393,7 +393,7 @@ mod tests {
         typed(&mut wizard, "Check every node, storage volume and certificate.");
         assert!(screen(&wizard).contains("step 1 of 5\nWhat should it do?\nIn your words; this is its prompt.") && screen(&wizard).contains("⏎ next · ctrl-e open in editor · esc cancel"), "{}", screen(&wizard));
         enter(&mut wizard);
-        assert!(screen(&wizard).contains("▌infra        ~/infra\n greenhouse   ~/greenhouse"), "{}", screen(&wizard));
+        assert!(screen(&wizard).contains("▌infra    ~/infra\n shop     ~/shop"), "{}", screen(&wizard));
         enter(&mut wizard);
         assert!(screen(&wizard).contains("every day at 07:00, first run today 07:00"), "06:30 now, so today: {}", screen(&wizard));
         enter(&mut wizard);
@@ -430,7 +430,7 @@ mod tests {
             wizard.key(KeyEvent::from(KeyCode::Backspace));
         }
         wizard.key(KeyEvent::from(KeyCode::Down));
-        assert_eq!(wizard.repo().as_deref(), Some("~/greenhouse"));
+        assert_eq!(wizard.repo().as_deref(), Some("~/shop"));
         enter(&mut wizard);
         typed(&mut wizard, "soon");
         enter(&mut wizard);
@@ -460,7 +460,7 @@ mod tests {
         assert!(screen(&wizard).contains("id ci-2"), "a taken id steps aside: {}", screen(&wizard));
         enter(&mut wizard);
         let draft = wizard.draft().unwrap();
-        assert_eq!((draft.id.as_str(), draft.repo.as_str(), draft.schedule, draft.mode, draft.push), ("ci-2", "~/greenhouse", Schedule::Every(6 * 3600), Mode::Fix, true), "the fourth answer is fix and push");
+        assert_eq!((draft.id.as_str(), draft.repo.as_str(), draft.schedule, draft.mode, draft.push), ("ci-2", "~/shop", Schedule::Every(6 * 3600), Mode::Fix, true), "the fourth answer is fix and push");
         assert!(screen(&wizard).contains("every = \"6h\"\nmode = \"fix\"\npush = true"), "{}", screen(&wizard));
     }
 

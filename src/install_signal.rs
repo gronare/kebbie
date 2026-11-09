@@ -155,7 +155,7 @@ mod tests {
         assert!(is_id(&id), "{id}");
         assert_eq!(install_id(&state).unwrap(), id, "kept across sends");
         assert_ne!(install_id(&crate::sh::test_dir("install-signal-other")).unwrap(), id, "another install makes its own");
-        crate::state::write(&dir(&state).join(ID), "/Users/carl\n").unwrap();
+        crate::state::write(&dir(&state).join(ID), "/Users/ada\n").unwrap();
         assert!(is_id(&install_id(&state).unwrap()), "a file that holds anything else is replaced");
     }
 

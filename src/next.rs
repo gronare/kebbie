@@ -480,7 +480,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_wait_from_another_repos_task_counts_as_one_in_its_own() {
-        let items = [ready("old-fix", "stomme", 180), ready("fix-grid", "stomme", 20), queued_after("bump-pins", "greenhouse", &["fix-grid@stomme"])];
+        let items = [ready("old-fix", "theme", 180), ready("fix-grid", "theme", 20), queued_after("bump-pins", "shop", &["fix-grid@theme"])];
         assert_eq!(order(&items), ["fix-grid", "old-fix"], "the push a task in another repo waits on goes first");
         assert_eq!(of(&items).rows[0].waits, ["bump-pins"]);
     }

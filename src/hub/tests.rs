@@ -101,7 +101,7 @@ fn a_machine_connected_from_the_link_pins_the_account_and_seals_its_board_to_it(
 
     let mut working = task(Some("working"), Some("working"), 1);
     working.name = "search".to_string();
-    let first = board_of(&[asking("refunds", "greenhouse"), working.clone()]);
+    let first = board_of(&[asking("refunds", "shop"), working.clone()]);
     let at = now();
     let one = relay::relay(&state, &first, at).unwrap().unwrap();
     let read = hub.runtime.block_on(browser.boards()).unwrap();
@@ -114,7 +114,7 @@ fn a_machine_connected_from_the_link_pins_the_account_and_seals_its_board_to_it(
 
     assert_eq!(relay::relay(&state, &first, at + 1).unwrap(), None, "an unchanged board is not posted again");
     working.git.as_mut().unwrap().ahead = 2;
-    let second = board_of(&[asking("refunds", "greenhouse"), working]);
+    let second = board_of(&[asking("refunds", "shop"), working]);
     let two = relay::relay(&state, &second, at + 2).unwrap().unwrap();
     assert!(two > one);
     let (rev, opened) = &hub.boards(&mut browser)[0];
@@ -131,7 +131,7 @@ fn an_unchanged_board_is_posted_again_well_within_the_day_a_board_lives() {
     let hub = open_hub(|_| {});
     let mut browser = member(&hub);
     let state = connected_state(&hub, &mut browser);
-    let board = board_of(&[asking("refunds", "greenhouse")]);
+    let board = board_of(&[asking("refunds", "shop")]);
     let at = now();
     let identity = identity::load(&state).unwrap().unwrap();
     let sealed = relay::seal_board(&identity, &board, 1, at).unwrap();
@@ -150,7 +150,7 @@ fn a_machine_connected_by_a_typed_code_posts_no_board_and_says_to_reconnect_from
     let mut browser = member(&hub);
     let state = connected(&hub, &mut browser);
     assert!(identity::load(&state).unwrap().unwrap().account.is_none());
-    assert_eq!(relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap(), None, "no board nobody can read");
+    assert_eq!(relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap(), None, "no board nobody can read");
     let read = hub.runtime.block_on(browser.boards()).unwrap();
     assert!(read.len() == 1 && read[0].rev.is_none(), "the hub holds no board of it: {read:?}");
     let shown = super::status_text(&state, Some("mac"), now()).unwrap();
@@ -186,7 +186,7 @@ fn leaving_removes_the_machine_from_the_hub_and_forgets_the_keys() {
     let mut browser = member(&hub);
     let state = connected_state(&hub, &mut browser);
     let token = identity::load(&state).unwrap().unwrap().token().to_string();
-    relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
+    relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap();
     assert_eq!(hub.boards(&mut browser).len(), 1);
     let left = super::leave(&state).unwrap();
     assert!(left.contains("This machine left") && left.contains("The hub removed the machine") && !left.contains("remove-machine"), "{left}");
@@ -291,7 +291,7 @@ fn a_hub_that_moved_port_is_followed_with_the_same_method_and_body_and_kept() {
     assert_eq!(identity::load(&state).unwrap().unwrap().url, hub.url, "connecting and pinning through the old port moves it");
 
     pointed_at(&state, &old);
-    let rev = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().expect("a board PUT through a 308 is stored");
+    let rev = relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap().expect("a board PUT through a 308 is stored");
     assert_eq!(hub.boards(&mut browser)[0].0, rev);
     assert_eq!(identity::load(&state).unwrap().unwrap().url, hub.url);
 }
@@ -320,7 +320,7 @@ fn doctor_says_whether_the_hub_is_joined_reachable_and_posting() {
     assert!(lonely.fact.contains("no account key") && lonely.fact.contains("no browser can read this machine's board"), "{}", lonely.fact);
     let mut browser = member(&hub);
     let state = connected_state(&hub, &mut browser);
-    relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
+    relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap();
     let posting = super::doctor(&state, Some("mac"), now(), super::reach);
     assert_eq!(posting.level, crate::doctor::Level::Ok, "{}", posting.fact);
     assert!(posting.fact.contains(&hub.url) && posting.fact.contains("account key pinned") && posting.fact.contains("board rev ") && posting.fact.contains(" posted "), "{}", posting.fact);
@@ -361,7 +361,7 @@ fn a_redirect_to_another_host_is_refused_until_the_user_moves_the_hub() {
     let mut kept = identity::load(&state).unwrap().unwrap();
     kept.url = elsewhere.clone();
     identity::save(&state, &kept).unwrap();
-    let refused = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap_err();
+    let refused = relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap_err();
     assert!(refused.contains(&format!("the hub points to http://localhost:{port}")) && refused.contains("kebbie hub move"), "{refused}");
     assert_eq!(identity::load(&state).unwrap().unwrap().url, elsewhere, "the stored address stays");
     assert!(hub.boards(&mut browser).is_empty(), "nothing reached the hub");
@@ -375,15 +375,15 @@ fn a_redirect_to_another_host_is_refused_until_the_user_moves_the_hub() {
     let moved = super::move_to(&state, &hub.url).unwrap();
     assert!(moved.contains(&format!("to {}", hub.url)), "{moved}");
     assert_eq!(identity::load(&state).unwrap().unwrap().url, hub.url);
-    let rev = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().unwrap();
+    let rev = relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap().unwrap();
     assert_eq!(hub.boards(&mut browser)[0].0, rev);
 }
 
 fn reported_bug(state: &Path) -> String {
     let issue = crate::issues::Issue {
-        id: "a1b2c3".to_string(), title: "push in greenhouse hid git's error".to_string(), kind: "bug".to_string(), status: "open".to_string(),
+        id: "a1b2c3".to_string(), title: "push in shop hid git's error".to_string(), kind: "bug".to_string(), status: "open".to_string(),
         version: "0.26.0".to_string(), commit: "e58e84a".to_string(), filed: "2026-10-23".to_string(), by: "lead".to_string(),
-        body: "Ran kebbie push in /Users/carl/work/greenhouse; origin git@github.com:acme/greenhouse.git refused and kebbie said nothing.".to_string(),
+        body: "Ran kebbie push in /Users/ada/work/shop; origin git@github.com:acme/shop.git refused and kebbie said nothing.".to_string(),
         ..Default::default()
     };
     crate::issues::save(&crate::issues::dir(state), &issue).unwrap();
@@ -397,7 +397,7 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
     let hub = TestHub::start_with(|config| config.report_difficulty = 8);
     let user = crate::sh::test_dir("report-user");
     let id = reported_bug(&user);
-    let scrub = report::Scrub::new(Some("/Users/carl".to_string()), vec!["greenhouse".to_string()]);
+    let scrub = report::Scrub::new(Some("/Users/ada".to_string()), vec!["shop".to_string()]);
     let read = report::payload(&crate::issues::find(&crate::issues::dir(&user), &id).unwrap(), &scrub).digest();
     assert!(report::send_in(&user, &Caller::Lead, &id, &hub.url, &scrub, &read, now()).unwrap_err().contains("the user's call"));
     let sent = report::send_in(&user, &Caller::User, &id, &hub.url, &scrub, &read, now()).unwrap();
@@ -425,7 +425,7 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
     let issue = &arrived[0];
     assert_eq!((issue.title.as_str(), issue.kind.as_str(), issue.source.as_deref(), issue.version.as_str()), ("push in <repo> hid git's error", "bug", Some(format!("report {number}").as_str()), "0.26.0 (e58e84a)"));
     assert!(issue.body.starts_with("Ran kebbie push in ~/work/<repo>; origin <remote> refused") && issue.body.ends_with(&format!("OS: {}", crate::issues::os())), "{}", issue.body);
-    for private in ["/Users/carl", "greenhouse", "acme"] {
+    for private in ["/Users/ada", "shop", "acme"] {
         assert!(!issue.body.contains(private) && !issue.title.contains(private), "{private} reached the maintainer: {issue:?}");
     }
     assert!(report::offers(&maintainer, true).is_empty(), "a report from elsewhere is never offered back");
@@ -583,7 +583,7 @@ fn a_name_set_after_joining_renames_the_machine_on_the_hub_and_a_failure_shows_u
     let state = connected_state(&hub, &mut browser);
     super::sync_name(&state, Some("studio")).unwrap();
     assert_eq!(identity::load(&state).unwrap().unwrap().name, "studio");
-    relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap();
+    relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap();
     let names: Vec<String> = hub.runtime.block_on(browser.boards()).unwrap().into_iter().map(|entry| entry.name).collect();
     assert_eq!(names, ["studio"]);
     assert!(!super::status_text(&state, Some("studio"), now()).unwrap().contains("name:"));
@@ -677,7 +677,7 @@ fn with_text_always_a_bug_goes_out_unasked_redacted_and_each_send_is_a_line_unde
     let hub = TestHub::start_with(|config| config.report_difficulty = 8);
     let user = crate::sh::test_dir("report-always");
     let id = reported_bug(&user);
-    let scrub = || report::Scrub::new(Some("/Users/carl".to_string()), vec!["greenhouse".to_string()]);
+    let scrub = || report::Scrub::new(Some("/Users/ada".to_string()), vec!["shop".to_string()]);
     let always = crate::config::ReportText::Always;
     assert!(report::send_unasked_in(&user, always, &hub.url, &|| panic!("unarmed, nothing is scrubbed"), now()).unwrap().is_empty(), "text = always alone sends nothing");
     for caller in [crate::permit::Caller::Lead, crate::permit::Caller::Task("a@b".to_string()), crate::permit::Caller::Agent, crate::permit::Caller::Sandboxed, crate::permit::Caller::LeadSandboxed] {
@@ -692,7 +692,7 @@ fn with_text_always_a_bug_goes_out_unasked_redacted_and_each_send_is_a_line_unde
     let stored = hub.hub.store().reports(kebbie_hub::store::KeyStatus::Quarantine, 0, false, 10).unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].report.title, "push in <repo> hid git's error");
-    assert!(!stored[0].report.text.contains("/Users/carl") && !stored[0].report.text.contains("acme"), "{}", stored[0].report.text);
+    assert!(!stored[0].report.text.contains("/Users/ada") && !stored[0].report.text.contains("acme"), "{}", stored[0].report.text);
     let line = crate::messages::load_in(&user).pop().unwrap();
     assert_eq!((line.from.as_str(), line.to.as_str(), line.kind.as_deref()), ("kebbie", crate::messages::USER_LABEL, Some(report::SENT_KIND)));
     assert_eq!(line.text, report::sent_line(&number, &id, "push in <repo> hid git's error"));
@@ -819,7 +819,7 @@ fn a_machine_connects_through_the_browser_which_hands_over_the_account_key_witho
     assert_eq!((identity.url.as_str(), identity.name.as_str(), identity.machine.clone()), (hub.url.as_str(), "mac", handed));
     assert!(identity.token().starts_with("khm_"));
     assert_eq!(identity.account.map(|account| account.fingerprints), browser.account_key().map(|key| key.fingerprints()));
-    let posted = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().unwrap();
+    let posted = relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap().unwrap();
     assert_eq!(hub.boards(&mut browser)[0].0, posted, "the browser reads the board the machine sealed to the account");
     let again = super::connect::prepare(&state, &config, None, None).err().unwrap();
     assert!(again.contains("kebbie hub leave first"), "{again}");
@@ -895,7 +895,7 @@ fn a_lapsed_plan_still_posts_the_board_and_status_and_doctor_say_nothing_of_it()
     hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Active, None).unwrap();
     let state = connected_state(&hub, &mut browser);
     hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Inactive, None).unwrap();
-    let rev = relay::relay(&state, &board_of(&[asking("refunds", "greenhouse")]), now()).unwrap().expect("reading the board is free, so a lapsed plan posts it");
+    let rev = relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap().expect("reading the board is free, so a lapsed plan posts it");
     assert_eq!(hub.boards(&mut browser)[0].0, rev);
     let relayed = relay::load(&state);
     assert_eq!((relayed.plan_inactive, relayed.error), (None, None));
@@ -1048,7 +1048,7 @@ fn connect_names_the_machine_after_the_hub_then_draws_the_card_and_ends_on_the_c
         assert!(done.contains(&line), "{line}: {done}");
     }
     assert!(done.lines().nth(1).is_some_and(|line| line.starts_with('╭')) && !done.contains("Waiting"), "the connected card replaces the waiting one: {done}");
-    assert!(!shown.contains("carl"), "no account name anywhere");
+    assert!(!shown.contains("ada"), "no account name anywhere");
     assert!(said.contains("No board goes out: no browser can read this machine's board, as it holds no account key, which only connecting from the link kebbie hub connect shows hands over. Connect it from the link: kebbie hub leave, then kebbie hub connect, and open the link it shows.") && said.contains(&format!("[machine] name = {host:?}")), "{said}");
     assert_eq!(identity::load(&state).unwrap().unwrap().name, host);
 }
@@ -1138,7 +1138,7 @@ fn the_keeper_posts_the_board_to_the_real_hub_and_the_dev_hub_each_with_its_own_
     let dev_state = connected_state(&dev_hub, &mut dev_browser);
     std::fs::rename(identity::dir_of(&dev_state, false), identity::dir_of(&state, true)).unwrap();
     let real = std::fs::read(state.join("hub/identity.json")).unwrap();
-    super::tick_in(&state, Some("mac"), now(), || Ok(board_of(&[asking("refunds", "greenhouse")]))).unwrap();
+    super::tick_in(&state, Some("mac"), now(), || Ok(board_of(&[asking("refunds", "shop")]))).unwrap();
     assert_eq!(real_hub.boards(&mut real_browser).len(), 1, "the real hub has its board");
     assert_eq!(dev_hub.boards(&mut dev_browser).len(), 1, "the dev hub has its board");
     assert_eq!(std::fs::read(state.join("hub/identity.json")).unwrap(), real);

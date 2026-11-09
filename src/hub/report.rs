@@ -125,7 +125,7 @@ fn other_homes(text: &str) -> String {
     out
 }
 
-// The user's name as a segment of any path, such as /srv/carl/app.
+// The user's name as a segment of any path, such as /srv/ada/app.
 fn user_segments(text: &str, user: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -815,19 +815,19 @@ mod tests {
     const NOW: u64 = 1_792_540_800;
 
     fn scrub() -> Scrub {
-        Scrub::new(Some("/Users/carl".to_string()), vec!["greenhouse".to_string(), "app".to_string(), "kebbie".to_string()])
+        Scrub::new(Some("/Users/ada".to_string()), vec!["shop".to_string(), "app".to_string(), "kebbie".to_string()])
     }
 
     #[test]
     fn a_report_names_no_home_repo_remote_or_token() {
-        let text = "Ran kebbie push in /Users/carl/work/greenhouse/wt2.greenhouse.\n\
-            origin is git@github.com:acme/greenhouse.git, mirror https://gitlab.example.com/acme/app.git\n\
+        let text = "Ran kebbie push in /Users/ada/work/shop/wt2.shop.\n\
+            origin is git@github.com:acme/shop.git, mirror https://gitlab.example.com/acme/app.git\n\
             The task billing@app said: token khm_Q2ZR8HWNx9a1b2c3d4 and GITHUB_TOKEN=ghp_abcdefghijklmnop1234\n\
             Authorization: Bearer abc.def.ghi; key eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9xyz123\n\
             Another user's /home/bob/notes and /Users/alice/.ssh stay out too.\n\
             Kept: commit 869bc49a1f3c2e0000000000000000000000abcd, the apply step, kebbie's own https://github.com/gronare/kebbie/issues/12, ~/.config/kebbie.";
         let redacted = redact(text, &scrub());
-        for gone in ["/Users/carl", "greenhouse", "acme", "gitlab.example.com", "billing@app", "khm_Q2ZR", "ghp_abcdef", "abc.def.ghi", "eyJhbGci", "/home/bob", "/Users/alice"] {
+        for gone in ["/Users/ada", "shop", "acme", "gitlab.example.com", "billing@app", "khm_Q2ZR", "ghp_abcdef", "abc.def.ghi", "eyJhbGci", "/home/bob", "/Users/alice"] {
             assert!(!redacted.contains(gone), "{gone} is still in:\n{redacted}");
         }
         assert!(redacted.contains("in ~/work/<repo>/wt2.<repo>.") && redacted.contains("origin is <remote>, mirror <url>"), "{redacted}");
@@ -854,7 +854,7 @@ mod tests {
 
     #[test]
     fn an_email_address_is_redacted() {
-        leaks("mail carl.green@acme-corp.se about it", &["carl.green", "acme-corp"], "mail <email> about it");
+        leaks("mail ada.lovelace@acme-corp.example about it", &["ada.lovelace", "acme-corp"], "mail <email> about it");
     }
 
     #[test]
@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn a_repo_name_inside_a_dashed_or_underscored_name_is_redacted() {
-        leaks("in greenhouse-bokning and greenhouse_api", &["greenhouse"], "in <repo>-bokning and <repo>_api");
+        leaks("in shop-orders and shop_api", &["shop"], "in <repo>-orders and <repo>_api");
     }
 
     #[test]
@@ -908,7 +908,7 @@ mod tests {
 
     #[test]
     fn every_home_root_and_the_users_name_in_any_path_are_redacted() {
-        leaks("in /var/home/bob/x, /export/home/eve/y and /srv/carl/work, not /srv/carlos", &["bob", "eve", "/srv/carl/"], "in ~/x, ~/y and /srv/<user>/work, not /srv/carlos");
+        leaks("in /var/home/bob/x, /export/home/eve/y and /srv/ada/work, not /srv/adam", &["bob", "eve", "/srv/ada/"], "in ~/x, ~/y and /srv/<user>/work, not /srv/adam");
     }
 
     #[test]
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn the_payload_is_the_redacted_issue_with_its_version_and_os_and_nothing_else() {
-        let report = payload(&bug("push in greenhouse hid an error", "Saw it in /Users/carl/greenhouse."), &scrub());
+        let report = payload(&bug("push in shop hid an error", "Saw it in /Users/ada/shop."), &scrub());
         assert_eq!(report, BugReport { title: "push in <repo> hid an error".to_string(), text: "Saw it in ~/<repo>.".to_string(), version: "0.26.0 (e58e84a)".to_string(), os: issues::os() });
         assert_eq!(preview(&report), format!("push in <repo> hid an error\nkebbie 0.26.0 (e58e84a) · {}\n\nSaw it in ~/<repo>.", issues::os()));
         let long = payload(&bug(&"t".repeat(300), &"å".repeat(MAX_TEXT_BYTES)), &scrub());
