@@ -60,11 +60,11 @@ pub fn record_in(dir: &Path, address: &str, socket: Option<&str>, token: Option<
 
 // kebbie's SessionStart hook: Claude Code exports the socket and token to hooks before SessionStart runs.
 pub fn hook(address: &str, input: &str) -> String {
-    let input: Value = serde_json::from_str(input).unwrap_or_default();
+    let input = crate::hooks::Payload::parse(input);
     let socket = std::env::var(SOCKET_VAR).ok();
     let token = std::env::var(TOKEN_VAR).ok();
     if let Ok(dir) = crate::lead::state_dir() {
-        let _ = hook_in(&dir, address, &input, home_of(address).as_deref(), socket.as_deref(), token.as_deref());
+        let _ = hook_in(&dir, address, input.value(), home_of(address).as_deref(), socket.as_deref(), token.as_deref());
     }
     String::new()
 }
