@@ -239,4 +239,17 @@ mod tests {
         assert_eq!(hook(&json!({ "tool_name": "Edit", "tool_input": { "file_path": "/src/a.rs", "command": "git push" } }).to_string(), crate::kube_guard::Cluster::None), "", "only shell commands");
         assert_eq!(hook("not json", crate::kube_guard::Cluster::None), "");
     }
+
+    #[test]
+    fn a_refusal_prints_the_exact_deny_json_for_push_and_cluster_alike() {
+        let deny = |reason: &str| format!(r#"{{"hookSpecificOutput":{{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":{}}}}}"#, Value::from(reason));
+        let shell = |line: &str| json!({ "tool_name": "Bash", "tool_input": { "command": line }, "cwd": "/nowhere" }).to_string();
+        assert_eq!(hook(&shell("git push"), crate::kube_guard::Cluster::None), deny(REASON));
+        let within = crate::kube_guard::within(Some(std::path::Path::new("/nowhere")));
+        for (line, cluster) in [("kubectl get pods", crate::kube_guard::Cluster::None), ("kubectl --context admin get nodes", crate::kube_guard::Cluster::Kubeconfig)] {
+            let reason = crate::kube_guard::refusal(line, cluster, &within).unwrap();
+            assert_eq!(hook(&shell(line), cluster), deny(&reason), "{line}");
+        }
+        assert_eq!(hook(&shell("kubectl get pods"), crate::kube_guard::Cluster::Kubeconfig), "");
+    }
 }
