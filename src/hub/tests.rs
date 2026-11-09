@@ -898,7 +898,7 @@ fn a_lapsed_plan_still_posts_the_board_and_status_and_doctor_say_nothing_of_it()
     let rev = relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap().expect("reading the board is free, so a lapsed plan posts it");
     assert_eq!(hub.boards(&mut browser)[0].0, rev);
     let relayed = relay::load(&state);
-    assert_eq!((relayed.plan_inactive, relayed.error), (None, None));
+    assert_eq!((relayed.plan_inactive, relayed.error), (false, None));
     let shown = super::status_text(&state, Some("mac"), now()).unwrap();
     assert!(shown.contains("board:    rev") && !shown.contains("subscription"), "{shown}");
     let check = super::doctor(&state, Some("mac"), now(), |_| Ok(()));

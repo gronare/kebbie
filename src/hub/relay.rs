@@ -13,14 +13,45 @@ pub const HEARTBEAT: u64 = 60;
 const FILE: &str = "relay.json";
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "Stored", into = "Stored")]
 pub struct Relay {
     pub rev: u64,
     pub posted_at: Option<u64>,
     pub fingerprint: Option<String>,
     pub error: Option<String>,
     pub error_at: Option<u64>,
+    pub plan_inactive: bool,
+}
+
+impl Relay {
+    pub fn inactive_plan(&self) -> Option<&str> {
+        self.error.as_deref().filter(|_| self.plan_inactive)
+    }
+}
+
+// relay.json repeats the error under plan_inactive, as older kebbies read it there.
+#[derive(Serialize, Deserialize)]
+struct Stored {
+    rev: u64,
+    posted_at: Option<u64>,
+    fingerprint: Option<String>,
+    error: Option<String>,
+    error_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_inactive: Option<String>,
+    plan_inactive: Option<String>,
+}
+
+impl From<Stored> for Relay {
+    fn from(stored: Stored) -> Relay {
+        Relay { rev: stored.rev, posted_at: stored.posted_at, fingerprint: stored.fingerprint, error: stored.error, error_at: stored.error_at, plan_inactive: stored.plan_inactive.is_some() }
+    }
+}
+
+impl From<Relay> for Stored {
+    fn from(relay: Relay) -> Stored {
+        let plan_inactive = relay.inactive_plan().map(str::to_string);
+        Stored { rev: relay.rev, posted_at: relay.posted_at, fingerprint: relay.fingerprint, error: relay.error, error_at: relay.error_at, plan_inactive }
+    }
 }
 
 pub fn load(state: &Path) -> Relay {
@@ -57,7 +88,7 @@ pub fn seal_board(identity: &Identity, board: &Board, rev: u64, now: u64) -> Res
 }
 
 fn failed(dir: &Path, relay: &mut Relay, error: &HubError, now: u64) -> String {
-    relay.plan_inactive = matches!(error, HubError::PlanInactive { .. }).then(|| error.to_string());
+    relay.plan_inactive = matches!(error, HubError::PlanInactive { .. });
     relay.error = Some(error.to_string());
     relay.error_at = Some(now);
     let _ = save(dir, relay);
@@ -102,8 +133,26 @@ pub fn relay_at(dir: &Path, board: &Board, now: u64) -> Result<Option<u64>> {
     relay.fingerprint = Some(print);
     relay.error = None;
     relay.error_at = None;
-    relay.plan_inactive = None;
+    relay.plan_inactive = false;
     save(dir, &relay)?;
     keep_move(dir, &client);
     Ok(Some(stored.rev))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_relay_file_says_a_lapsed_plan_as_before_and_one_written_before_still_loads() {
+        let plan = "The subscription is not active".to_string();
+        let written = serde_json::json!({ "rev": 7, "posted_at": 10, "fingerprint": "ab", "error": plan, "error_at": 20, "plan_inactive": plan });
+        let relay: Relay = serde_json::from_value(written.clone()).unwrap();
+        assert_eq!(relay.inactive_plan(), Some(plan.as_str()));
+        assert_eq!(serde_json::to_value(&relay).unwrap(), written, "an older kebbie reads the lapsed plan where it wrote it");
+        let posted = serde_json::json!({ "rev": 7, "posted_at": 10, "fingerprint": "ab", "error": null, "error_at": null });
+        let relay: Relay = serde_json::from_value(posted.clone()).unwrap();
+        assert_eq!((relay.plan_inactive, relay.inactive_plan()), (false, None));
+        assert_eq!(serde_json::to_value(&relay).unwrap(), posted);
+    }
 }

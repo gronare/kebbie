@@ -1171,7 +1171,7 @@ pub fn run(overlay: bool) -> Result<String> {
                             save_fold(app.fold_file.as_deref(), app.fold, app.seen);
                         }
                         app.follow_questions();
-                        app.hub_banner = crate::lead::state_location().ok().and_then(|state| crate::hub::relay::load(&state).plan_inactive);
+                        app.hub_banner = crate::lead::state_location().ok().and_then(|state| crate::hub::relay::load(&state).inactive_plan().map(str::to_string));
                         app.error = None;
                     }
                     Err(error) => app.error = Some(error),
