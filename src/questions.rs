@@ -589,7 +589,7 @@ mod tests {
         assert!(asked.contains("kebbie decide billing@web \"<answer>\"") && asked.contains("kebbie defer billing@web"), "a command's argument stays as it runs: {asked}");
         let answered = crate::status::with_titles_in(&state, &answer_copy(&messages[0], Some(0), ""));
         assert!(answered.starts_with("Retry failed charges (billing@web) asked"), "{answered}");
-        let source = include_str!("messages.rs");
+        let source = include_str!("messages/mod.rs");
         let copy = &source[source.find("\npub fn copy_to_lead_locked(").unwrap()..];
         assert!(copy[..copy.find("\n}\n").unwrap()].contains("with_titles(text)"), "every copy to the lead goes through with_titles");
         std::fs::remove_dir_all(state).unwrap();

@@ -1132,7 +1132,7 @@ pub(crate) mod tests {
         assert_eq!(crate::messages::report_line(&reported[0]), "- Titled one (zz-titled@app) (ready): done — you: nothing", "the lead's report digest");
         assert_eq!(crate::notice::Notice::new(crate::notice::Tone::Done, "Pushed").detail("task", "zz-titled@app").details[0].1, "Titled one (zz-titled@app)");
         let _ = std::fs::remove_file(global.join(TITLES).join("zz-titled@app"));
-        for source in [include_str!("messages.rs"), include_str!("notify.rs"), include_str!("notice.rs")] {
+        for source in [include_str!("messages/mod.rs"), include_str!("notify.rs"), include_str!("notice.rs")] {
             assert!(source.contains("with_titles"), "lead messages, desktop notices and kebbie's notices all name tasks the board's way");
         }
     }
