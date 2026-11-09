@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
-
+use crate::hooks::{Answer, Payload};
 use crate::sh::Result;
 use crate::vault::Claim;
 use crate::vault_cli::{self, Cli, Released};
@@ -87,18 +86,19 @@ pub fn decide(state: &Path, address: &str, cli: impl FnOnce() -> Option<Cli>) ->
 
 pub fn answer(verdict: &Gate) -> String {
     match verdict {
-        Gate::Allow | Gate::Passed => String::new(),
-        Gate::Deny(reason) => json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason } }).to_string(),
-        Gate::Warn(text) => json!({ "systemMessage": text }).to_string(),
+        Gate::Allow | Gate::Passed => Answer::Silent,
+        Gate::Deny(reason) => Answer::Deny(reason.clone()),
+        Gate::Warn(text) => Answer::Warn(text.clone()),
     }
+    .render()
 }
 
 // The PreToolUse hook on a task's edits; the task's settings name its address, so a warm pass reads two files and runs nothing.
 pub fn hook(address: &str, input: &str) -> String {
-    let input: serde_json::Value = serde_json::from_str(input).unwrap_or_default();
-    if input["tool_name"] == "Bash" {
-        let cwd = input["cwd"].as_str().map(PathBuf::from).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
-        let command = input["tool_input"]["command"].as_str().unwrap_or_default();
+    let input = Payload::parse(input);
+    if input.tool_name() == Some("Bash") {
+        let cwd = input.cwd().map(PathBuf::from).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+        let command = input.command().unwrap_or_default();
         if !crate::shell_write::writes_into(command, &cwd) {
             return String::new();
         }
