@@ -926,7 +926,7 @@ fn the_lead_is_asked_to_check_a_task_at_a_sha_once_while_that_check_is_pending()
 
 #[test]
 fn every_word_to_the_lead_is_classified_and_only_an_ask_reaches_its_chat() {
-    let source = include_str!("mod.rs");
+    let source = include_str!("lead.rs");
     let body = &source[source.find("pub enum ToLead {").unwrap()..];
     let variants = body[..body.find("\n}").unwrap()].lines().filter(|line| line.trim_end().ends_with(',')).count();
     assert_eq!(ToLead::ALL.len(), variants, "ALL lists every kind");
