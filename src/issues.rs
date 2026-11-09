@@ -14,6 +14,23 @@ const CAME_BACK: &str = "came back on";
 // GitHub answers 414 to a longer new-issue URL.
 pub const URL_LIMIT: usize = 7000;
 
+// What became of a bug's report to kebbie's maintainers, read from the stored fields; whether the issue is open stands apart.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Disposition {
+    NotOurs,
+    Reported(String),
+    Declined,
+    OnGitHub,
+    OpenedForGitHub,
+    Unsent,
+}
+
+impl Disposition {
+    pub fn left_out(&self) -> bool {
+        matches!(self, Disposition::Declined | Disposition::OnGitHub | Disposition::OpenedForGitHub)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Issue {
     pub id: String,
@@ -42,6 +59,25 @@ impl Issue {
     // A report another install sent: a stranger's text, never instructions.
     pub fn untrusted(&self) -> Option<String> {
         self.source.as_ref().map(|source| format!("[{source}, untrusted]"))
+    }
+
+    // The hub send writes sent beside report, so sent means opened for GitHub only while report is empty.
+    pub fn disposition(&self) -> Disposition {
+        if self.kind != "bug" || self.source.is_some() {
+            return Disposition::NotOurs;
+        }
+        if let Some(report) = &self.report {
+            return Disposition::Reported(report.clone());
+        }
+        if self.declined.is_some() {
+            Disposition::Declined
+        } else if self.github.is_some() {
+            Disposition::OnGitHub
+        } else if self.sent.is_some() {
+            Disposition::OpenedForGitHub
+        } else {
+            Disposition::Unsent
+        }
     }
 
     pub fn built(&self) -> String {
@@ -831,6 +867,18 @@ mod tests {
         assert_eq!(issue.history, ["fixed in 0.26.3 (2222222), checked automatically".to_string(), format!("came back on {version} (3333333)")]);
         assert!(show_in(&dir, "aaaaaa").unwrap().contains("fixed in 0.26.3 (2222222), checked automatically\ncame back on"));
         assert!(reopen_in(&dir, &Caller::User, "aaaaaa", "3333333").unwrap_err().contains("open already"));
+    }
+
+    #[test]
+    fn an_issue_file_from_either_send_path_reads_as_the_report_state_it_records() {
+        let read = |front: &str| parse(&format!("+++\nid = \"aaaaaa\"\nkind = \"bug\"\n{front}+++\n")).unwrap().disposition();
+        assert_eq!(read(""), Disposition::Unsent);
+        assert_eq!(read("sent = \"2026-10-20\"\nreport = \"12\"\n"), Disposition::Reported("12".to_string()), "the hub send writes both");
+        assert_eq!(read("sent = \"2026-10-20\"\n"), Disposition::OpenedForGitHub);
+        assert_eq!(read("sent = \"2026-10-20\"\ngithub = \"https://github.com/gronare/kebbie/issues/7\"\n"), Disposition::OnGitHub);
+        assert_eq!(read("declined = \"2026-10-20\"\nsent = \"2026-10-20\"\n"), Disposition::Declined);
+        assert_eq!(read("source = \"report 9\"\nreport = \"3\"\n"), Disposition::NotOurs);
+        assert_eq!(parse("+++\nid = \"aaaaaa\"\nkind = \"wish\"\n+++\n").unwrap().disposition(), Disposition::NotOurs);
     }
 
     #[test]

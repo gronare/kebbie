@@ -7,7 +7,7 @@ use kebbie_hub_protocol::{BugReport, InstallKey, MAX_TEXT_BYTES, MAX_TITLE_CHARS
 use serde::{Deserialize, Serialize};
 
 use super::http::{CALL, Client, HubError};
-use crate::issues::{self, Issue};
+use crate::issues::{self, Disposition, Issue};
 use crate::permit::Caller;
 use crate::sh::Result;
 
@@ -334,7 +334,7 @@ pub fn preview(report: &BugReport) -> String {
 }
 
 pub fn offered(issue: &Issue) -> bool {
-    issue.is_open() && issue.kind == "bug" && issue.report.is_none() && issue.declined.is_none() && issue.source.is_none() && issue.github.is_none() && issue.sent.is_none()
+    issue.is_open() && issue.disposition() == Disposition::Unsent
 }
 
 pub fn offers(state: &Path, enabled: bool) -> Vec<Issue> {
@@ -507,11 +507,10 @@ impl Skip {
 // The bug as it stands now, if it is still the one the user read and nothing has sent it.
 fn ready(state: &Path, id: &str, read: &[u8; 32], scrub: &Scrub) -> std::result::Result<(Issue, BugReport), Skip> {
     let issue = find_sent(state, id).map_err(Skip::Missing)?;
-    if let Some(report) = &issue.report {
-        return Err(Skip::Already(report.clone()));
-    }
-    if issue.kind != "bug" || issue.source.is_some() {
-        return Err(Skip::NotOurs);
+    match issue.disposition() {
+        Disposition::NotOurs => return Err(Skip::NotOurs),
+        Disposition::Reported(report) => return Err(Skip::Already(report)),
+        _ => {}
     }
     let report = payload(&issue, scrub);
     if report.digest() != *read {
@@ -793,7 +792,7 @@ pub fn cli(id: &str) -> Result<String> {
 }
 
 fn left_out(issue: &Issue) -> bool {
-    issue.is_open() && issue.kind == "bug" && issue.source.is_none() && issue.report.is_none() && !offered(issue)
+    issue.is_open() && issue.disposition().left_out()
 }
 
 pub fn all_preview(reports: &[(String, BugReport)]) -> String {
@@ -804,7 +803,10 @@ pub fn cli_all() -> Result<String> {
     let Asked { caller, state, settings } = asked("Sending reports to kebbie's maintainers")?;
     let all = sent_known(&state, issues::load(&issues::dir(&state)));
     let waiting: Vec<&Issue> = all.iter().filter(|issue| offered(issue)).collect();
-    let already: Vec<String> = all.iter().filter(|issue| issue.is_open() && issue.kind == "bug" && issue.source.is_none()).filter_map(|issue| issue.report.as_ref().map(|report| format!("{} as report {report}", issue.id))).collect();
+    let already: Vec<String> = all.iter().filter(|issue| issue.is_open()).filter_map(|issue| match issue.disposition() {
+        Disposition::Reported(report) => Some(format!("{} as report {report}", issue.id)),
+        _ => None,
+    }).collect();
     let kept: Vec<&str> = all.iter().filter(|issue| left_out(issue)).map(|issue| issue.id.as_str()).collect();
     let mut aside = Vec::new();
     if !already.is_empty() {
