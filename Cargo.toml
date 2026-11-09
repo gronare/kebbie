@@ -11,14 +11,14 @@ repository = "https://github.com/gronare/kebbie"
 # macOS kqueue rejects /dev/tty, and install.sh runs kebbie setup with </dev/tty; this feature polls it instead.
 crossterm = { version = "0.29", features = ["use-dev-tty"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-kebbie-hub-api = { git = "https://github.com/gronare/kebbie-hub", rev = "8d64e3fdeedb5a748a0163bbc2757919e4dacb50" }
-kebbie-hub-protocol = { git = "https://github.com/gronare/kebbie-hub", rev = "8d64e3fdeedb5a748a0163bbc2757919e4dacb50" }
+kebbie-hub-api = { git = "https://github.com/gronare/kebbie-hub", rev = "4089f5f0580c483c4e09efa0a0e9bde5f6bd0cb5" }
+kebbie-hub-protocol = { git = "https://github.com/gronare/kebbie-hub", rev = "4089f5f0580c483c4e09efa0a0e9bde5f6bd0cb5" }
 libc = "0.2"
 qrcodegen = "1.8"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 ratatui-textarea = "0.9"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1_smol = "1.0.1"
@@ -30,8 +30,8 @@ unicode-width = "0.2"
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
-kebbie-hub = { git = "https://github.com/gronare/kebbie-hub", rev = "8d64e3fdeedb5a748a0163bbc2757919e4dacb50" }
-kebbie-hub-fakes = { git = "https://github.com/gronare/kebbie-hub", rev = "8d64e3fdeedb5a748a0163bbc2757919e4dacb50" }
+kebbie-hub = { git = "https://github.com/gronare/kebbie-hub", rev = "4089f5f0580c483c4e09efa0a0e9bde5f6bd0cb5" }
+kebbie-hub-fakes = { git = "https://github.com/gronare/kebbie-hub", rev = "4089f5f0580c483c4e09efa0a0e9bde5f6bd0cb5" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
 
 [profile.release]
