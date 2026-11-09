@@ -3,17 +3,19 @@ mod choices;
 mod unknown;
 mod fields;
 mod skills;
+mod placeholders;
 pub use paths::*;
 pub use choices::*;
 pub use unknown::*;
 use fields::*;
 pub use skills::*;
+pub use placeholders::*;
 
 use std::path::{Component, Path, PathBuf};
 
 use toml::{Table, Value};
 
-use crate::repo::{main_checkout, name_of, slot_number, worktree_port};
+use crate::repo::main_checkout;
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -22,7 +24,6 @@ pub const DEFAULT_RULES_SKILL: &str = "kebbie:work-rules";
 pub const DEFAULT_DEV_URL: &str = "http://localhost:{port}";
 pub const DEFAULT_SERVER_NAME: &str = "server";
 pub const DEFAULT_WORKER_NAME: &str = "worker";
-const PLACEHOLDERS: [&str; 4] = ["worktree", "repo", "number", "port"];
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Worktree {
@@ -245,60 +246,6 @@ pub fn check_machine(path: &Path) -> Result<(Machine, Vec<String>)> {
 pub fn check_repo(path: &Path) -> Result<(Worktree, Vec<String>)> {
     let source = path.display().to_string();
     read(path)?.map_or(Ok((Worktree::default(), Vec::new())), |text| Ok((parse_repo(&text, &source)?, unknown_in_file(&text, &source, &REPO_KEYS))))
-}
-
-enum Piece<'a> {
-    Text(&'a str),
-    Field(&'a str),
-}
-
-fn pieces(template: &str) -> Result<Vec<Piece<'_>>> {
-    let mut pieces = Vec::new();
-    let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        pieces.push(Piece::Text(&rest[..open]));
-        let close = rest[open..].find('}').ok_or(format!("{template:?} opens a {{ it never closes"))? + open;
-        let name = &rest[open + 1..close];
-        if !PLACEHOLDERS.contains(&name) {
-            return Err(format!("{{{name}}} is not a placeholder; use {{worktree}}, {{repo}}, {{number}} or {{port}}"));
-        }
-        pieces.push(Piece::Field(name));
-        rest = &rest[close + 1..];
-    }
-    pieces.push(Piece::Text(rest));
-    Ok(pieces)
-}
-
-// An empty template is kept, since it is how dev_url turns the link off.
-fn template(table: &Table, field: &str, key: &str) -> Result<Option<String>> {
-    let Some(value) = table.get(field) else { return Ok(None) };
-    let text = value.as_str().ok_or(format!("{key}: must be a string"))?.trim();
-    pieces(text).map_err(|error| format!("{key}: {error}"))?;
-    Ok(Some(text.to_string()))
-}
-
-pub struct Place {
-    pub worktree: String,
-    pub repo: String,
-    pub number: Option<usize>,
-    pub port: Option<u16>,
-}
-
-pub fn expand(template: &str, place: &Place) -> Option<String> {
-    let parts: Option<Vec<String>> = pieces(template).ok()?.into_iter().map(|piece| match piece {
-        Piece::Text(text) => Some(text.to_string()),
-        Piece::Field("worktree") => Some(place.worktree.clone()),
-        Piece::Field("repo") => Some(place.repo.clone()),
-        Piece::Field("number") => place.number.map(|number| number.to_string()),
-        Piece::Field(_) => place.port.map(|port| port.to_string()),
-    }).collect();
-    Some(parts?.concat()).filter(|url| !url.is_empty())
-}
-
-pub fn dev_url(template: Option<&str>, repo: &Path, worktree: &Path) -> Option<String> {
-    let template = template?;
-    let port = if template.contains("{port}") { worktree_port(worktree) } else { None };
-    expand(template, &Place { worktree: name_of(worktree), repo: name_of(repo), number: slot_number(repo, worktree), port })
 }
 
 fn backlog_sources(backlog: &Table) -> Result<Option<Vec<Source>>> {
