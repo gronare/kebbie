@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 
 use super::Started;
 use super::claude::Screens;
+use crate::hooks::{Answer, Payload};
 use crate::profiles::Profile;
 use crate::sh::Result;
 use crate::tasks::Session;
@@ -875,15 +876,15 @@ pub fn end(pane: &str) -> Result<()> {
 
 // kebbie's Codex hooks, run by the plugin's launcher: outside a kebbie task's worktree each is silent.
 pub fn hook(input: &str) -> String {
-    let value: Value = serde_json::from_str(input).unwrap_or_default();
-    let cwd = value["cwd"].as_str().map(PathBuf::from).or_else(|| std::env::current_dir().ok());
+    let payload = Payload::parse(input);
+    let cwd = payload.cwd().map(PathBuf::from).or_else(|| std::env::current_dir().ok());
     let Some(me) = cwd.as_deref().and_then(crate::peers::me).filter(|me| me != crate::status::LEAD_LABEL) else { return String::new() };
-    match value["hook_event_name"].as_str() {
-        Some("SessionStart") => session_start(&me, &value, crate::lead::roles_dir().ok().as_deref()),
+    match payload.event() {
+        Some("SessionStart") => session_start(&me, payload.value(), crate::lead::roles_dir().ok().as_deref()),
         Some("PreToolUse") => crate::push_guard::hook(input, cwd.as_deref().map_or(crate::kube_guard::Cluster::None, crate::tasks::cluster_at)),
         Some("UserPromptSubmit" | "Stop") => {
             let _ = crate::messages::flush();
-            crate::report::hook(input)
+            crate::report::answer(&payload).render()
         }
         _ => String::new(),
     }
@@ -894,7 +895,7 @@ fn session_start(me: &str, input: &Value, roles: Option<&Path>) -> String {
         let _ = crate::tasks::record_session(me, session);
     }
     let Some(role) = roles.and_then(|dir| std::fs::read_to_string(dir.join(format!("{me}.md"))).ok()).filter(|role| !role.trim().is_empty()) else { return String::new() };
-    json!({ "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": role } }).to_string()
+    Answer::Context { event: json!("SessionStart"), text: role }.render()
 }
 
 #[derive(Debug, PartialEq)]
