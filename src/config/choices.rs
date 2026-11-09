@@ -146,8 +146,10 @@ impl Second {
             Some(_) => return Err(format!("review.second: \"{text}\" is not a choice; name a review profile, or \"always <profile>\" to run it with every review")),
             None => (false, text),
         };
-        if name == NONE && !always {
-            return Ok(Second::None);
+        match (name, always) {
+            (NONE, false) => return Ok(Second::None),
+            (NONE, true) => return Err(format!("review.second: \"{text}\" names no review profile to run; name one after \"always\", or set \"none\" for no second opinion")),
+            _ => {}
         }
         crate::profiles::name(name).map_err(|error| format!("review.second: {error}"))?;
         Ok(if always { Second::Always(name.to_string()) } else { Second::Offered(name.to_string()) })

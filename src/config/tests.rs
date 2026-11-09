@@ -356,6 +356,7 @@ fn review_profile_names_the_default_reviewer_and_review_second_a_second_opinion_
     assert_eq!(own.review_second, Setting { value: Second::Offered("codex-review".to_string()), layer: Layer::Repo }, "a repo wins over the machine");
     assert_eq!(settings(&Worktree::default(), &machine("[review]\nsecond = \"always codex-review\"\n")).review_second.value, Second::Always("codex-review".to_string()));
     assert_eq!(Second::parse("none"), Ok(Second::None));
+    assert!(Second::parse("always none").unwrap_err().contains("review.second: \"always none\" names no review profile to run"));
     assert_eq!(Second::Always("codex-review".to_string()).key(), "always codex-review");
     assert!(Second::parse("often codex-review").unwrap_err().contains("review.second: \"often codex-review\" is not a choice"));
     assert!(parse_repo("[review]\nprofile = \"Bad Name\"\n", "app.toml").unwrap_err().contains("review.profile: \"Bad Name\" is not a profile name"));

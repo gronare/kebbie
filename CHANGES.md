@@ -11,6 +11,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie issue report says why a wish, another install's report or a bug already sent cannot go, instead of asking.
 - kebbie issue show names the report a bug went as, also when saving the issue failed after the send.
 - task.profile = "none" and review.profile = "none" mean the built-in task and reviewer, not a profile named none.
+- review.second = "always none" is refused, instead of running a second opinion from a profile named none.
 
 ## 0.37.0
 

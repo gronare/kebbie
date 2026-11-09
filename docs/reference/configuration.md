@@ -129,7 +129,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `review.profile` names a review profile, one with `kind = "review"` in `~/.config/kebbie/profiles/`, or the built-in `reviewer`, which `"none"` also names. A task's profile is refused. The Settings page picks from the review profiles whose agent you set up. See [Add a review profile](../how-to/give-tasks-a-profile.md#add-a-review-profile).
 
-`review.second` names another review profile. Its points show on the task's row and go to the lead, which passes them to the task as a review's findings; the push never waits on them. Set, `s` (review with a second opinion) and `o` (the second opinion only) join the board's `v` menu, and `kebbie review --second` and `--second-only` run it. `"always <profile>"` runs it with every review, `v` included.
+`review.second` names another review profile. Its points show on the task's row and go to the lead, which passes them to the task as a review's findings; the push never waits on them. Set, `s` (review with a second opinion) and `o` (the second opinion only) join the board's `v` menu, and `kebbie review --second` and `--second-only` run it. `"always <profile>"` runs it with every review, `v` included. `"none"` turns off a second opinion config.toml sets.
 
 `review.model` is the `model` of the profile `review.profile` names, by another name, and ahead of it when both are set. Unset leaves it to that profile, and then to its agent's default.
 
