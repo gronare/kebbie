@@ -265,6 +265,33 @@ fn the_push_guard_denies_a_tasks_git_push_in_any_spelling_and_passes_the_rest() 
 }
 
 #[test]
+fn codexs_guard_holds_a_task_to_the_cluster_its_profile_and_sandbox_give_it_and_answers_as_claudes_does() {
+    let lab = Lab::new("codex-guard");
+    let (_, slot) = lab.task_fixture();
+    let profiles = lab.home.join(".config/kebbie/profiles");
+    fs::create_dir_all(&profiles).unwrap();
+    fs::write(profiles.join("kube.toml"), "about = \"cluster work\"\n\n[sandbox]\nkubeconfig = \"~/.kube/kebbie-ops.yaml\"\n").unwrap();
+    let lines = ["git push origin main", "kubectl get pods -n web", "kubectl --context admin get pods"];
+    fs::create_dir_all(lab.state.join("sessions")).unwrap();
+    for (profile, config, claudes, denied) in [
+        ("task", "", vec!["hook", "push-guard"], [true, true, true]),
+        ("kube", "", vec!["hook", "push-guard", "--kube"], [true, false, true]),
+        ("task", "[task]\nsandbox = false\n", vec!["hook", "push-guard", "--own-cluster"], [true, false, false]),
+    ] {
+        fs::write(lab.state.join("sessions/billing@app"), serde_json::json!({ "session": "019b", "agent": "codex", "profile": profile }).to_string()).unwrap();
+        fs::write(&lab.config, config).unwrap();
+        for (line, denied) in lines.iter().zip(denied) {
+            let payload = serde_json::json!({ "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": line }, "cwd": slot }).to_string();
+            let answered = lab.run_with_stdin(&["hook", "codex"], &payload);
+            assert!(answered.status.success(), "{}", stderr(&answered));
+            let codex = stdout(&answered);
+            assert_eq!(codex.contains("\"permissionDecision\":\"deny\""), denied, "{profile} {config:?} {line}: {codex}");
+            assert_eq!(codex, stdout(&lab.run_with_stdin(&claudes, &payload)), "{profile} {config:?} {line}");
+        }
+    }
+}
+
+#[test]
 fn the_review_guard_denies_every_command_but_a_plain_git_read() {
     let lab = Lab::new("guard");
     let deny = lab.run_with_stdin(&["hook", "--review"], r#"{"tool_input":{"command":"git log | sh"}}"#);

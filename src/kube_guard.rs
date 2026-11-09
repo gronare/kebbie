@@ -259,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn the_task_settings_give_the_guard_the_profiles_kubeconfig_and_codexs_hook_reads_it_from_the_tasks_profile() {
+    fn the_task_settings_give_the_guard_the_profiles_kubeconfig() {
         let mut kube = crate::profiles::built_in(crate::profiles::TASK).unwrap();
         kube.sandbox.kubeconfig = Some("/home/ada/.kube/kebbie-ops.yaml".to_string());
         let guards = |profile: &crate::profiles::Profile, sandboxed: bool| -> Vec<String> {
@@ -274,8 +274,6 @@ mod tests {
         assert_eq!(guards(&task, false), ["'/k' hook push-guard --own-cluster"], "an unsandboxed one runs it with the user's login");
         let main = include_str!("main.rs");
         assert!(main.contains("push_guard::hook(&input, kube_guard::Cluster::flagged(arguments.flag(\"--kube\"), arguments.flag(\"--own-cluster\")))"), "the flags reach the guard");
-        let codex = include_str!("agent/codex.rs");
-        assert!(codex.contains("crate::push_guard::hook(input, cwd.as_deref().map_or(crate::kube_guard::Cluster::None, crate::tasks::cluster_at))"), "Codex's hook asks the task's own profile");
         let launch = include_str!("tasks/launch.rs");
         assert!(launch.contains("Ok((profile, None)) => crate::kube_guard::Cluster::of(&profile.sandbox, profile.sandbox.on(configured))"), "and its sandbox, as the start decides it");
     }
