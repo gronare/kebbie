@@ -519,14 +519,18 @@ impl Skip {
     }
 }
 
+fn sendable(issue: &Issue) -> std::result::Result<(), Skip> {
+    match issue.disposition() {
+        Disposition::NotOurs => Err(Skip::NotOurs),
+        Disposition::Reported(report) => Err(Skip::Already(report)),
+        _ => Ok(()),
+    }
+}
+
 // The bug as it stands now, if it is still the one the user read and nothing has sent it.
 fn ready(state: &Path, id: &str, read: &[u8; 32], scrub: &Scrub) -> std::result::Result<(Issue, BugReport), Skip> {
     let issue = find_sent(state, id).map_err(Skip::Missing)?;
-    match issue.disposition() {
-        Disposition::NotOurs => return Err(Skip::NotOurs),
-        Disposition::Reported(report) => return Err(Skip::Already(report)),
-        _ => {}
-    }
+    sendable(&issue)?;
     let report = payload(&issue, scrub);
     if report.digest() != *read {
         return Err(Skip::Changed);
@@ -790,19 +794,27 @@ fn put(question: Question) -> Answer {
 
 pub fn cli(id: &str) -> Result<String> {
     let Asked { caller, state, settings } = asked("Sending a report to kebbie's maintainers")?;
-    let scrub = Scrub::current();
-    let issue = issues::find(&issues::dir(&state), id)?;
-    let read = payload(&issue, &scrub);
+    report_in(&state, &caller, id, settings.url(), &Scrub::current(), &put, crate::messages::now())
+}
+
+fn report_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub, put: &dyn Fn(Question) -> Answer, now: u64) -> Result<String> {
+    let issue = find_sent(state, id)?;
+    let read = payload(&issue, scrub);
+    match sendable(&issue) {
+        Err(Skip::Already(report)) => return Ok(format!("{}\n\n{}.", preview(&read), Skip::Already(report).refusal(&issue.id))),
+        Err(skip) => return Err(skip.refusal(&issue.id)),
+        Ok(()) => {}
+    }
     let question = Question {
         shown: preview(&read),
-        elsewhere: format!("This is the report as it would go to kebbie's maintainers at {}. Run kebbie issue report {} in your own terminal to answer y or n.", settings.url(), issue.id),
-        goes: format!("This goes to kebbie's maintainers at {}, signed with this install's key.", settings.url()),
+        elsewhere: format!("This is the report as it would go to kebbie's maintainers at {url}. Run kebbie issue report {} in your own terminal to answer y or n.", issue.id),
+        goes: format!("This goes to kebbie's maintainers at {url}, signed with this install's key."),
         ask: "Send this report to kebbie's maintainers?".to_string(),
     };
     match put(question) {
         Answer::Elsewhere(text) => Ok(text),
-        Answer::Yes => send_in(&state, &caller, id, settings.url(), &scrub, &read.digest(), crate::messages::now()),
-        Answer::No => decline_in(&state, &caller, id, crate::messages::now()),
+        Answer::Yes => send_in(state, caller, id, url, scrub, &read.digest(), now),
+        Answer::No => decline_in(state, caller, id, now),
     }
 }
 
@@ -1133,6 +1145,30 @@ mod tests {
         let again = send_in(&state, &Caller::User, "a1b2c3", &url, &scrub(), &read(), NOW).unwrap();
         assert!(again.contains("as report 2"), "{again}");
         assert_eq!(seen.lock().unwrap().1, 2, "posted again after it came back");
+    }
+
+    #[test]
+    fn kebbie_issue_report_says_why_a_bug_cannot_go_instead_of_asking() {
+        let state = crate::sh::test_dir("report-cli-unsendable");
+        let dir = issues::dir(&state);
+        let wish = Issue { id: "bbbbbb".to_string(), kind: "wish".to_string(), ..bug("a wish", "") };
+        let incoming = Issue { id: "eeeeee".to_string(), source: Some("report 9".to_string()), ..bug("from a report", "") };
+        for issue in [bug("t", "it broke"), wish, incoming] {
+            issues::save(&dir, &issue).unwrap();
+        }
+        record_sent(&state, "a1b2c3", "5").unwrap();
+        let never = |_: Question| -> Answer { panic!("asked about a bug that cannot go") };
+        for id in ["bbbbbb", "eeeeee"] {
+            let refused = report_in(&state, &Caller::User, id, "http://127.0.0.1:9", &scrub(), &never, NOW).unwrap_err();
+            assert!(refused.contains("only a bug you ran into goes"), "{refused}");
+        }
+        let shown = report_in(&state, &Caller::User, "a1b2c3", "http://127.0.0.1:9", &scrub(), &never, NOW).unwrap();
+        assert!(shown.starts_with("t\nkebbie 0.26.0") && shown.ends_with("went to kebbie's maintainers already, as report 5."), "{shown}");
+        assert!(issues::load(&dir).iter().all(|issue| issue.declined.is_none()), "nothing is written");
+        let no = |_: Question| Answer::No;
+        issues::save(&dir, &Issue { id: "cccccc".to_string(), ..bug("t", "") }).unwrap();
+        report_in(&state, &Caller::User, "cccccc", "http://127.0.0.1:9", &scrub(), &no, NOW).unwrap();
+        assert!(issues::find(&dir, "cccccc").unwrap().declined.is_some(), "a sendable bug is still asked about, and n keeps it here");
     }
 
     #[test]

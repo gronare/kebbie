@@ -944,7 +944,8 @@ Prints a bug as it would go to kebbie's maintainers, with paths under your home 
 - `y` sends exactly the text shown to kebbie's issues endpoint, with a proof of work, signed with this install's key, and records the report's id in the issue. An issue changed meanwhile sends nothing.
 - `n` keeps it here, and the board stops offering it.
 - Without a terminal it prints the text and sends nothing.
-- It is sent once: a second time is refused.
+- A bug already sent prints its text and the report it went as, and asks nothing.
+- A wish or another install's report is refused with why, and nothing is asked or written.
 
 `kebbie issue report --all` prints every bug waiting to go, the same way, and asks once.
 
