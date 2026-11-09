@@ -1,3 +1,5 @@
+use toml::Table;
+
 use super::*;
 
 #[test]
