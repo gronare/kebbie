@@ -92,7 +92,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 - `"ask"` puts each to you with `kebbie ask` first.
 - Each is listed under Also noticed on the sign-off card. Under `"backlog"` and `"ask"`, the reviewer counts a change outside the task as a finding.
 
-`task.profile`: unset, tasks start with the built-in `task`. A restarted task keeps the profile it started with. The board's Settings page picks it from the profiles there are, each with its `for`, and `none (task)` removes the key. See [Give tasks a profile](../how-to/give-tasks-a-profile.md).
+`task.profile`: unset, tasks start with the built-in `task`. `"none"` in a repo's file starts its tasks with the built-in `task` whatever config.toml names. A restarted task keeps the profile it started with. The board's Settings page picks it from the profiles there are, each with its `for`, and `none (task)` removes the key. See [Give tasks a profile](../how-to/give-tasks-a-profile.md).
 
 `task.steps`: on, the default, a task's role tells it to list its steps with `kebbie steps` before its first line of code, and you accept and push its commits one at a time while it builds the next. `false`, in the machine config or in a repo's own file, turns it off: a task commits its own way and `kebbie steps` refuses. New tasks follow it; a running task once it restarts. `kebbie accept` works either way. See [Work in steps](../how-to/work-in-steps.md).
 
@@ -127,7 +127,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `docs.required`: a task's Claude updates the README and `docs/` when its change alters what a user sees or does, by the [`kebbie:keep-docs`](skills.md) skill. The reviewer, in the rules check on a ready report and in `kebbie review`, fails a branch that changes such behaviour and leaves it undescribed in the README or `docs/`. `kebbie doctor` suggests it for a repo that is public on GitHub. See [Keep docs in step with changes](../how-to/keep-docs-in-step.md).
 
-`review.profile` names a review profile, one with `kind = "review"` in `~/.config/kebbie/profiles/`, or the built-in `reviewer`. A task's profile is refused. The Settings page picks from the review profiles whose agent you set up. See [Add a review profile](../how-to/give-tasks-a-profile.md#add-a-review-profile).
+`review.profile` names a review profile, one with `kind = "review"` in `~/.config/kebbie/profiles/`, or the built-in `reviewer`, which `"none"` also names. A task's profile is refused. The Settings page picks from the review profiles whose agent you set up. See [Add a review profile](../how-to/give-tasks-a-profile.md#add-a-review-profile).
 
 `review.second` names another review profile. Its points show on the task's row and go to the lead, which passes them to the task as a review's findings; the push never waits on them. Set, `s` (review with a second opinion) and `o` (the second opinion only) join the board's `v` menu, and `kebbie review --second` and `--second-only` run it. `"always <profile>"` runs it with every review, `v` included.
 

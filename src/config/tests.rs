@@ -829,6 +829,11 @@ fn task_profile_names_the_profile_a_task_starts_with_and_a_repo_config_wins() {
     assert!(shown.contains("task.profile = \"designer\"  (repo config)\n  The profile a task starts with when kebbie start names none with --profile"), "{shown}");
     let none = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
     assert!(none.contains("task.profile = none (\"task\")  (default)"), "{none}");
+    let reset = settings(&repo("[task]\nprofile = \"none\"\n[review]\nprofile = \"none\"\n"), &parse_machine("[task]\nprofile = \"quick\"\n[review]\nprofile = \"careful-review\"\n", "config.toml").unwrap());
+    assert_eq!(reset.profile, Setting { value: None, layer: Layer::Repo }, "none is the built-in task, over the machine's profile");
+    assert_eq!(reset.review_profile, Setting { value: crate::profiles::REVIEWER.to_string(), layer: Layer::Repo });
+    let shown = describe(&Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: reset });
+    assert!(shown.contains("task.profile = none (\"task\")  (repo config)") && shown.contains("review.profile = \"reviewer\"  (repo config)"), "{shown}");
 }
 
 #[test]

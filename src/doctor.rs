@@ -428,6 +428,7 @@ pub(crate) fn named_profiles(machine: Option<&Machine>, config: &Path, repos_dir
     let mut files: Vec<PathBuf> = std::fs::read_dir(repos_dir).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|extension| extension == "toml")).collect();
     files.sort();
     named.extend(files.iter().filter_map(|file| config::check_repo(file).ok()?.0.profile.map(|profile| (crate::area_page::home_relative(file), profile))));
+    named.retain(|(_, profile)| profile != config::NONE);
     named
 }
 
@@ -1730,6 +1731,7 @@ mod tests {
         std::fs::write(dir.join("config.toml"), "[task]\nprofile = \"coder\"\n").unwrap();
         std::fs::write(repos.join("app.toml"), "[task]\nprofile = \"designer\"\n").unwrap();
         std::fs::write(repos.join("api.toml"), "[ci]\nwatch = true\n").unwrap();
+        std::fs::write(repos.join("web.toml"), "[task]\nprofile = \"none\"\n").unwrap();
         let machine = config::check_machine(&dir.join("config.toml")).unwrap().0;
         let named = named_profiles(Some(&machine), &dir.join("config.toml"), &repos);
         assert_eq!(named, [(dir.join("config.toml").display().to_string(), "coder".to_string()), (repos.join("app.toml").display().to_string(), "designer".to_string())]);

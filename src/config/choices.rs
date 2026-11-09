@@ -116,6 +116,9 @@ pub enum Second {
 
 pub const ALWAYS: &str = "always";
 
+// The word a profile setting takes for its default at that layer, over a lower layer's profile.
+pub const NONE: &str = "none";
+
 impl Second {
     pub fn profile(&self) -> Option<&str> {
         match self {
@@ -130,7 +133,7 @@ impl Second {
 
     pub fn key(&self) -> String {
         match self {
-            Second::None => "none".to_string(),
+            Second::None => NONE.to_string(),
             Second::Offered(name) => name.clone(),
             Second::Always(name) => format!("{ALWAYS} {name}"),
         }
@@ -143,7 +146,7 @@ impl Second {
             Some(_) => return Err(format!("review.second: \"{text}\" is not a choice; name a review profile, or \"always <profile>\" to run it with every review")),
             None => (false, text),
         };
-        if name == "none" && !always {
+        if name == NONE && !always {
             return Ok(Second::None);
         }
         crate::profiles::name(name).map_err(|error| format!("review.second: {error}"))?;

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, Channel, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER};
+use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, Channel, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -31,6 +31,12 @@ impl Layer {
 pub struct Setting<T> {
     pub value: T,
     pub layer: Layer,
+}
+
+impl<T> Setting<T> {
+    fn map<U>(self, change: impl FnOnce(T) -> U) -> Setting<U> {
+        Setting { value: change(self.value), layer: self.layer }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,13 +122,14 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         test_commands: or_default(pick(repo.test_commands.as_ref(), machine.worktree.test_commands.as_ref()), Vec::new()),
         also_noticed: or_default(pick(repo.also_noticed.as_ref(), machine.worktree.also_noticed.as_ref()), AlsoNoticed::default()),
         permission_mode: optional(pick(repo.permission_mode.as_ref(), machine.worktree.permission_mode.as_ref())),
-        profile: optional(pick(repo.profile.as_ref(), machine.worktree.profile.as_ref())),
+        profile: optional(pick(repo.profile.as_ref(), machine.worktree.profile.as_ref())).map(|profile| profile.filter(|name| name != NONE)),
         sandbox: or_default(pick(repo.sandbox.as_ref(), machine.worktree.sandbox.as_ref()), true),
         steps: or_default(pick(repo.steps.as_ref(), machine.worktree.steps.as_ref()), true),
         require_accept: or_default(pick(repo.require_accept.as_ref(), machine.worktree.require_accept.as_ref()), false),
         review_model: optional(pick(repo.review_model.as_ref(), machine.worktree.review_model.as_ref())),
         review_auto: or_default(pick(repo.review_auto.as_ref(), machine.worktree.review_auto.as_ref()), ReviewAuto::default()),
-        review_profile: or_default(pick(repo.review_profile.as_ref(), machine.worktree.review_profile.as_ref()), crate::profiles::REVIEWER.to_string()),
+        review_profile: or_default(pick(repo.review_profile.as_ref(), machine.worktree.review_profile.as_ref()), crate::profiles::REVIEWER.to_string())
+            .map(|name| if name == NONE { crate::profiles::REVIEWER.to_string() } else { name }),
         review_second: or_default(pick(repo.review_second.as_ref(), machine.worktree.review_second.as_ref()), Second::default()),
         notify_command: optional(pick(None, machine.worktree.notify_command.as_ref())),
         vault_command: optional(pick(None, machine.worktree.vault_command.as_ref())),

@@ -2,7 +2,7 @@ use std::path::{Component, Path};
 
 use toml::{Table, Value};
 
-use super::{flag, path, permission_mode, skill, strings, subtable, table, template, text, AlsoNoticed, ReviewAuto, Second};
+use super::{flag, path, permission_mode, skill, strings, subtable, table, template, text, AlsoNoticed, ReviewAuto, Second, NONE};
 use crate::sh::Result;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -90,13 +90,20 @@ fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
         worktree.also_noticed = also_noticed(task)?;
         worktree.permission_mode = text(task, "permission_mode", "task.permission_mode")?
             .map(|mode| permission_mode(&mode).map(str::to_string).map_err(|error| format!("task.permission_mode: {error}"))).transpose()?;
-        worktree.profile = text(task, "profile", "task.profile")?
-            .map(|profile| crate::profiles::name(&profile).map(str::to_string).map_err(|error| format!("task.profile: {error}"))).transpose()?;
+        worktree.profile = profile(task, "task.profile")?;
         worktree.sandbox = flag(task, "sandbox", "task.sandbox")?;
         worktree.steps = flag(task, "steps", "task.steps")?;
         worktree.require_accept = flag(task, "require_accept", "task.require_accept")?;
     }
     Ok(worktree)
+}
+
+fn profile(table: &Table, key: &str) -> Result<Option<String>> {
+    let Some(name) = text(table, "profile", key)? else { return Ok(None) };
+    if name != NONE {
+        crate::profiles::name(&name).map_err(|error| format!("{key}: {error}"))?;
+    }
+    Ok(Some(name))
 }
 
 fn also_noticed(task: &Table) -> Result<Option<AlsoNoticed>> {
@@ -117,7 +124,7 @@ fn with_review(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(review) = subtable(table, "review", "review")? {
         worktree.review_model = text(review, "model", "review.model")?;
         worktree.review_auto = review_auto(review)?;
-        worktree.review_profile = text(review, "profile", "review.profile")?.map(|name| crate::profiles::name(&name).map(str::to_string).map_err(|error| format!("review.profile: {error}"))).transpose()?;
+        worktree.review_profile = profile(review, "review.profile")?;
         worktree.review_second = text(review, "second", "review.second")?.map(|text| Second::parse(&text)).transpose()?;
     }
     Ok(worktree)
