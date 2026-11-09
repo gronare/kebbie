@@ -2,7 +2,7 @@ use std::path::{Component, Path};
 
 use toml::{Table, Value};
 
-use super::{path, permission_mode, skill, strings, subtable, table, template, text, AlsoNoticed, ReviewAuto, Second};
+use super::{flag, path, permission_mode, skill, strings, subtable, table, template, text, AlsoNoticed, ReviewAuto, Second};
 use crate::sh::Result;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -45,8 +45,8 @@ fn worktree(table: &Table) -> Result<Worktree> {
         dev_server: text(worktree, "dev_server", "worktree.dev_server")?,
         dev_worker: text(worktree, "dev_worker", "worktree.dev_worker")?,
         dev_url: template(worktree, "dev_url", "worktree.dev_url")?,
-        dev_route: worktree.get("dev_route").map(|value| value.as_bool().ok_or("worktree.dev_route: must be true or false")).transpose()?,
-        stage_on_main: worktree.get("stage_on_main").map(|value| value.as_bool().ok_or("worktree.stage_on_main: must be true or false")).transpose()?,
+        dev_route: flag(worktree, "dev_route", "worktree.dev_route")?,
+        stage_on_main: flag(worktree, "stage_on_main", "worktree.stage_on_main")?,
         rules_skill: None,
         test_commands: None,
         also_noticed: None,
@@ -92,9 +92,9 @@ fn with_task(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
             .map(|mode| permission_mode(&mode).map(str::to_string).map_err(|error| format!("task.permission_mode: {error}"))).transpose()?;
         worktree.profile = text(task, "profile", "task.profile")?
             .map(|profile| crate::profiles::name(&profile).map(str::to_string).map_err(|error| format!("task.profile: {error}"))).transpose()?;
-        worktree.sandbox = task.get("sandbox").map(|value| value.as_bool().ok_or("task.sandbox: must be true or false")).transpose()?;
-        worktree.steps = task.get("steps").map(|value| value.as_bool().ok_or("task.steps: must be true or false")).transpose()?;
-        worktree.require_accept = task.get("require_accept").map(|value| value.as_bool().ok_or("task.require_accept: must be true or false")).transpose()?;
+        worktree.sandbox = flag(task, "sandbox", "task.sandbox")?;
+        worktree.steps = flag(task, "steps", "task.steps")?;
+        worktree.require_accept = flag(task, "require_accept", "task.require_accept")?;
     }
     Ok(worktree)
 }
@@ -145,14 +145,14 @@ fn with_vault(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 
 fn with_ci(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(ci) = subtable(table, "ci", "ci")? {
-        worktree.ci_watch = ci.get("watch").map(|value| value.as_bool().ok_or("ci.watch: must be true or false")).transpose()?;
+        worktree.ci_watch = flag(ci, "watch", "ci.watch")?;
     }
     Ok(worktree)
 }
 
 fn with_comments(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(comments) = subtable(table, "comments", "comments")? {
-        worktree.comments_watch = comments.get("watch").map(|value| value.as_bool().ok_or("comments.watch: must be true or false")).transpose()?;
+        worktree.comments_watch = flag(comments, "watch", "comments.watch")?;
         worktree.comments_days = comments.get("watch_days").map(|value| value.as_integer().filter(|days| (1..=90).contains(days)).map(|days| days as u64).ok_or("comments.watch_days: must be a whole number of days, 1 to 90")).transpose()?;
     }
     Ok(worktree)
@@ -160,7 +160,7 @@ fn with_comments(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
 
 fn with_docs(table: &Table, mut worktree: Worktree) -> Result<Worktree> {
     if let Some(docs) = subtable(table, "docs", "docs")? {
-        worktree.docs_required = docs.get("required").map(|value| value.as_bool().ok_or("docs.required: must be true or false")).transpose()?;
+        worktree.docs_required = flag(docs, "required", "docs.required")?;
     }
     Ok(worktree)
 }

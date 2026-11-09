@@ -1,6 +1,6 @@
 use toml::{Table, Value};
 
-use super::{layers, repos_dir, strings, subtable, table, text, AgentUpdates, Channel, OngoingAt, ReportText, Source, Worktree};
+use super::{flag, layers, repos_dir, strings, subtable, table, text, AgentUpdates, Channel, OngoingAt, ReportText, Source, Worktree};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -148,24 +148,24 @@ fn restart(table: &Table) -> Result<Restart> {
         None => None,
         Some(value) => Some(value.as_integer().filter(|minutes| (1..=1440).contains(minutes)).ok_or("restart.idle_minutes: must be a whole number of minutes, 1 to 1440")? as u64),
     };
-    let auto = restart.get("auto").map(|value| value.as_bool().ok_or("restart.auto: must be true or false")).transpose()?;
+    let auto = flag(restart, "auto", "restart.auto")?;
     Ok(Restart { idle_minutes, auto })
 }
 
 fn propose_issues(table: &Table) -> Result<Option<bool>> {
     let Some(section) = subtable(table, "issues", "issues")? else { return Ok(None) };
-    section.get("propose").map(|value| value.as_bool().ok_or_else(|| "issues.propose: must be true or false".to_string())).transpose()
+    flag(section, "propose", "issues.propose")
 }
 
 fn enabled_in(table: &Table, name: &str) -> Result<Option<bool>> {
     let Some(section) = subtable(table, name, name)? else { return Ok(None) };
-    section.get("enabled").map(|value| value.as_bool().ok_or_else(|| format!("{name}.enabled: must be true or false"))).transpose()
+    flag(section, "enabled", &format!("{name}.enabled"))
 }
 
 fn report(table: &Table) -> Result<Report> {
     let Some(report) = subtable(table, "report", "report")? else { return Ok(Report::default()) };
-    let enabled = report.get("enabled").map(|value| value.as_bool().ok_or("report.enabled: must be true or false")).transpose()?;
-    let signals = report.get("signals").map(|value| value.as_bool().ok_or("report.signals: must be true or false")).transpose()?;
+    let enabled = flag(report, "enabled", "report.enabled")?;
+    let signals = flag(report, "signals", "report.signals")?;
     let text = report.get("text").map(|value| value.as_str().and_then(|given| ReportText::ALL.into_iter().find(|mode| mode.key() == given)).ok_or("report.text: must be \"ask\", \"always\" or \"never\"")).transpose()?;
     let inbox_token = match report.get("inbox_token") {
         None => None,

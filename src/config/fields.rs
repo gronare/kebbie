@@ -19,3 +19,7 @@ pub(super) fn text(table: &Table, field: &str, key: &str) -> Result<Option<Strin
         None => Err(format!("{key}: must be a string")),
     }
 }
+
+pub(super) fn flag(table: &Table, field: &str, key: &str) -> Result<Option<bool>> {
+    table.get(field).map(|value| value.as_bool().ok_or(format!("{key}: must be true or false"))).transpose()
+}
