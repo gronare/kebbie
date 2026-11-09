@@ -393,7 +393,6 @@ pub(crate) const ARGS: super::ArgSpec = super::ArgSpec {
     program: "claude",
     runtimes: &["node", "bun"],
     script: |script| script.contains("claude") || script.ends_with("cli.js"),
-    lone_dash_is_prompt: true,
     switches: &SWITCHES,
     values: &VALUES,
     optionals: &OPTIONALS,

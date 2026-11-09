@@ -464,7 +464,6 @@ pub(crate) const ARGS: super::ArgSpec = super::ArgSpec {
     program: "codex",
     runtimes: &["node"],
     script: |script| script.contains("codex"),
-    lone_dash_is_prompt: false,
     switches: &SWITCHES,
     values: &VALUES,
     optionals: &[],
@@ -1607,6 +1606,8 @@ mod tests {
         assert_eq!(crate::agent::Agent::Codex.resume_args(&argv, "new-id").unwrap(), ["resume", "--sandbox", "workspace-write", "-c", "plugins.kebbie@kebbie.enabled=true", "new-id"]);
         assert!(crate::agent::Agent::Codex.resume_args(&["codex".to_string(), "--frobnicate".to_string()], "x").unwrap_err().contains("--frobnicate"));
         assert!(crate::agent::Agent::Codex.resume_args(&["claude".to_string()], "x").unwrap_err().contains("not codex"));
+        let piped: Vec<String> = ["codex", "--sandbox", "workspace-write", "-"].map(str::to_string).to_vec();
+        assert_eq!(crate::agent::Agent::Codex.resume_args(&piped, "new-id").unwrap(), ["resume", "--sandbox", "workspace-write", "new-id"], "a lone - is Codex's prompt word, as it is Claude's");
         assert!(lacks_role(&argv), "an old trust entry does not count");
         let fixed = with_role(&argv[1..]);
         assert!(!lacks_role(&fixed) && fixed.last().map(String::as_str) == Some("old-id"), "{fixed:?}");

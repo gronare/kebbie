@@ -260,7 +260,6 @@ pub(crate) struct ArgSpec {
     pub program: &'static str,
     pub runtimes: &'static [&'static str],
     pub script: fn(&str) -> bool,
-    pub lone_dash_is_prompt: bool,
     pub switches: &'static [&'static str],
     pub values: &'static [&'static str],
     pub optionals: &'static [&'static str],
@@ -295,7 +294,7 @@ fn resume_args(spec: &ArgSpec, argv: &[String], session: &str) -> std::result::R
         if word == "--" {
             break;
         }
-        if !word.starts_with('-') || (word == "-" && spec.lone_dash_is_prompt) {
+        if !word.starts_with('-') || word == "-" {
             continue;
         }
         let flag = word.split_once('=').map_or(word, |(flag, _)| flag);

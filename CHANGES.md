@@ -16,6 +16,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A [docs] table in config.toml without required is refused by its own name, no longer as docs.required.
 - A task with no session record takes the profile task.profile names, its kubeconfig included, instead of the built-in task.
 - The settings page's title hint reaches the right edge of the screen.
+- A Codex task started with a lone - as its prompt restarts instead of being refused.
 
 ## 0.37.0
 
