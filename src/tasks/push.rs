@@ -908,14 +908,62 @@ mod tests {
         pushed_notice(&Landed { pusher: "the user", address: "billing@app", target: "main", commits, closed: true, note: None, logged: Some(false), waits: false })
     }
 
+    fn told_lead(address: &str) -> Vec<messages::Message> {
+        messages::load().into_iter().filter(|message| message.to == crate::status::LEAD_LABEL && message.text.contains(&format!("pushed {address}:"))).collect()
+    }
+
+    fn watching(state: &Path, repo: &Path, address: &str, sha: &str, close: bool, pushed: crate::ci::Pushed) -> crate::ci::Begin {
+        let watch = crate::ci::Watch { address: address.to_string(), repo: repo.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 0, checked_at: None, close, runs: Vec::new(), state: crate::ci::State::Running, error: None, erring_since: None, pushed };
+        crate::ci::save(state, &watch).unwrap();
+        crate::ci::Begin::Watching
+    }
+
     #[test]
     fn a_push_notice_reaches_the_lead_live_only_when_kebbie_could_not_write_the_log_line() {
-        let source = include_str!("push.rs");
-        let tell = &source[source.find("fn tell_lead_pushed").unwrap()..];
-        let tell = &tell[..tell.find("\n}\n").unwrap()];
-        assert!(tell.contains("if landed.logged != Some(true) { messages::ToLead::PushToLog } else { messages::ToLead::Landed }"), "{tell}");
-        let deliver = &source[source.find("\nfn deliver(").unwrap()..];
-        assert!(deliver[..deliver.find("\n}\n").unwrap()].contains("messages::to_lead(messages::ToLead::Pushed, &format!(\"{} pushed {address}: {} to {target}. kebbie watches CI"), "the push under CI watch is a notice for the digest, not a turn of the lead's");
+        let landed = |address: &str, logged: Option<bool>| tell_lead_pushed(&Landed { pusher: "the user", address, target: "main", commits: "a1b2c3d Add refunds", closed: true, note: None, logged, waits: false });
+        let id = std::process::id();
+        let (wrote, failed, off) = (format!("wrote-{id}@app"), format!("failed-{id}@app"), format!("off-{id}@app"));
+        landed(&wrote, Some(true));
+        landed(&failed, Some(false));
+        landed(&off, None);
+        let heard = |address: &str| told_lead(address).iter().map(|message| (message.fyi, message.kind.clone())).collect::<Vec<_>>();
+        assert_eq!(heard(&wrote), [(true, Some("landed".to_string()))], "logged by kebbie, the lead reads it in its digest");
+        assert_eq!(heard(&failed), [(false, Some("push".to_string()))], "a log line kebbie could not write is the lead's to write now");
+        assert_eq!(heard(&off), [(false, Some("push".to_string()))], "without the vault the lead writes the log line");
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head, rebased: false }, "the user", &state, &watching).unwrap();
+        let told = told_lead(&address);
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert!(told[0].fyi && told[0].kind.is_none() && told[0].text.starts_with(&format!("The user pushed {address}: 1 commit to {}. kebbie watches CI", upstream.trim_start_matches("origin/"))), "the push under CI watch is a notice for the digest, not a turn of the lead's: {:?}", told[0]);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn git_pushes_with_the_ci_watch_and_ci_running_already_written_and_a_refused_push_puts_both_back() {
+        use crate::phase::{Event, Phase};
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        let phase = |state: &Path| crate::phase::load(state, &address).map(|record| record.phase);
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        crate::phase::record(&state, &address, "report", &Event::Reported { state: "ready", head: Some(&head), committed: true, pushing: false });
+        git(&dir, &["remote", "set-url", "origin", &dir.with_extension("nowhere").to_string_lossy()]).unwrap();
+        assert!(deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, &watching).unwrap_err().contains("git refused the push"));
+        assert!(crate::ci::load(&state, &address).is_none(), "a refused push leaves no watch");
+        assert_eq!(phase(&state), Some(Phase::Ready { head: Some(head.clone()) }), "and leaves the phase where it was");
+        git(&dir, &["remote", "set-url", "origin", &origin.to_string_lossy()]).unwrap();
+        let seen = dir.with_extension("seen");
+        let _ = std::fs::remove_dir_all(&seen);
+        crate::executable::write(dir.join(".git/hooks/pre-push"), format!("#!/bin/sh\ncp -R '{}' '{}'\n", state.display(), seen.display())).unwrap();
+        deliver(&dir, &slot, &upstream, Through::All, &Out { sha: head.clone(), rebased: false }, "the user", &state, &watching).unwrap();
+        assert_eq!(crate::ci::load(&seen, &address).map(|watch| watch.sha), Some(head.clone()), "between the push and the watch a task is neither pushable nor CI running");
+        assert_eq!(phase(&seen), Some(Phase::CiRunning { sha: head.clone() }), "CI running is written before the push, so the push never shows anywhere else");
+        assert_eq!(git(&origin, &["rev-parse", upstream.trim_start_matches("origin/")]).unwrap(), head, "pushed");
+        std::fs::remove_dir_all(seen).unwrap();
+        cleanup(dir, origin, &slot);
     }
 
     #[test]
