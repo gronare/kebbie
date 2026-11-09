@@ -210,18 +210,22 @@ pub fn short_hostname() -> String {
     if short.is_empty() { "this-machine".to_string() } else { short }
 }
 
+fn per_repo(key: &str) -> String {
+    format!("{key}: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())
+}
+
 pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     let table = table(text, source)?;
     let fail = |error: String| format!("{source}: {error}");
     if table.contains_key("docs") {
-        return Err(fail(format!("docs.required: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
+        return Err(fail(per_repo("docs.required")));
     }
     let worktree = layers(&table).map_err(fail)?;
     if worktree.dev_route.is_some() {
-        return Err(fail(format!("worktree.dev_route: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
+        return Err(fail(per_repo("worktree.dev_route")));
     }
     if worktree.stage_on_main.is_some() {
-        return Err(fail(format!("worktree.stage_on_main: each repo opts in on its own, so it lives in its repo config; set it in {}/<repo>.toml", repos_dir().display())));
+        return Err(fail(per_repo("worktree.stage_on_main")));
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
     let Board { sources, groups, ongoing } = board(&table).map_err(fail)?;
