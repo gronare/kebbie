@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use crate::hooks::{Answer, Payload};
 
 const REASON: &str = "A task never pushes: kebbie refuses git push in a task's shell in every form. The user pushes from the board, or the lead with kebbie push for a task the user gave push permission; report ready when the work is done.";
 const SHELLS: [&str; 6] = ["sh", "bash", "zsh", "dash", "ksh", "fish"];
@@ -178,17 +178,20 @@ pub fn pushes(line: &str) -> bool {
 
 // The PreToolUse hook on a task's shell commands, Claude's and Codex's alike; cluster says what the task's kubectl and helm may reach.
 pub fn hook(input: &str, cluster: crate::kube_guard::Cluster) -> String {
-    let input: Value = serde_json::from_str(input).unwrap_or_default();
-    let shell = input["tool_name"].as_str().is_none_or(|tool| tool == "Bash" || tool == "exec_command" || tool == "shell");
-    let Some(command) = input["tool_input"]["command"].as_str().filter(|_| shell) else { return String::new() };
-    let within = crate::kube_guard::within(input["cwd"].as_str().map(std::path::Path::new));
-    let reason = if pushes(command) { Some(REASON.to_string()) } else { crate::kube_guard::refusal(command, cluster, &within) };
-    reason.map(|reason| json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason } }).to_string()).unwrap_or_default()
+    answer(&Payload::parse(input), cluster).render()
+}
+
+fn answer(payload: &Payload, cluster: crate::kube_guard::Cluster) -> Answer {
+    let shell = payload.tool_name().is_none_or(|tool| tool == "Bash" || tool == "exec_command" || tool == "shell");
+    let Some(command) = payload.command().filter(|_| shell) else { return Answer::Silent };
+    let within = crate::kube_guard::within(payload.cwd());
+    Answer::deny_if(if pushes(command) { Some(REASON.to_string()) } else { crate::kube_guard::refusal(command, cluster, &within) })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{Value, json};
 
     #[test]
     fn every_way_a_shell_reaches_git_push_is_refused() {
