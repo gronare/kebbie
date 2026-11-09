@@ -243,7 +243,7 @@ fn note_why(dir: &Path, message: &Message, why: &str) -> Result<()> {
 const SENT_AGAIN: [&str; 2] = [RULES_KIND, HAND_KIND];
 pub const BUSY_HOLD: &str = "did not take it mid-turn; it goes again when the turn ends";
 
-// A rules check Claude did not take is held again, so the next flush retypes it once the lead is free; other messages are only reported.
+// A rules check or hand-over Claude did not take is held again, so the next flush retypes it once the lead is free; other messages are only reported.
 pub fn hold_again(to: &str, typed: &str) -> Result<bool> {
     let dir = state_dir()?;
     let _lock = Lock::take_in(&dir, true)?;
