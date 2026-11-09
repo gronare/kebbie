@@ -92,7 +92,7 @@ pub struct Watch {
 
 impl Watch {
     pub fn task(&self) -> &str {
-        self.address.split('@').next().unwrap_or(&self.address)
+        crate::peers::task_part(&self.address)
     }
 
     pub fn short(&self) -> &str {

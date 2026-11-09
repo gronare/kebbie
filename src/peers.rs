@@ -38,6 +38,10 @@ pub fn address(task: &str, repo: &str) -> String {
     format!("{task}@{repo}")
 }
 
+pub fn task_part(address: &str) -> &str {
+    address.split_once('@').map_or(address, |(task, _)| task)
+}
+
 pub fn sessions() -> Result<Vec<Session>> {
     let workspaces = herdr::workspaces()?;
     let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| crate::agent::Agent::of(agent).is_some()).collect();
@@ -354,6 +358,15 @@ pub fn write_role(file: &Path, template: &str, pairs: &[(&str, &str)], profile: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_addresss_task_is_the_text_before_its_first_at() {
+        assert_eq!(task_part("billing@app"), "billing");
+        assert_eq!(task_part("billing"), "billing", "an address without a repo is its task");
+        assert_eq!(task_part("billing@app@fork"), "billing", "a second @ belongs to the repo");
+        assert_eq!(task_part("@app"), "");
+        assert_eq!(task_part(""), "");
+    }
 
     #[test]
     fn a_tasks_role_file_carries_its_profiles_section_after_kebbies_role() {

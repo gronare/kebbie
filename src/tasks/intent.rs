@@ -208,7 +208,7 @@ pub(super) fn forget_left(state: &Path, address: &str) {
 
 // The pushed commits are on the default branch, so the push waits for a fix whose rules are checked: no commit of the task's is approved by the push itself.
 pub(crate) fn after_red_ci(state: &Path, repo: &Path, address: &str, by: By) -> Result<()> {
-    let task = address.split('@').next().unwrap_or(address).to_string();
+    let task = crate::peers::task_part(address).to_string();
     let log = messages::load();
     let seen = messages::latest_reports(&log).get(address).map(|report| report.id.clone());
     save(state, &Intent { by, work: Work::Ci, address: address.to_string(), repo: repo.to_path_buf(), task, fingerprint: String::new(), through: Through::All, at: messages::now(), seen, hand: last_hand_over(&log, address), queued: None })

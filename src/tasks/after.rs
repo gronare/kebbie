@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::notice::{Notice, Tone};
 use crate::messages::{self, Message};
-use crate::peers;
+use crate::peers::{self, task_part};
 use crate::permit::Caller;
 use crate::repo::name_of;
 use crate::sh::Result;
@@ -495,10 +495,6 @@ fn queuer(caller: &Caller) -> Result<By> {
     By::of(caller).ok_or_else(|| format!("only the user or the lead queues a task after another or changes a wait; {} cannot", crate::permit::describe(caller)))
 }
 
-fn task_part(address: &str) -> &str {
-    address.split('@').next().unwrap_or(address)
-}
-
 pub(crate) fn plan(me: &str, prompt: &str, asked: &[&str], known: &Known) -> Result<Plan> {
     if prompt.trim().is_empty() {
         return Err(format!("{me} needs its prompt to wait: kebbie start {} \"<prompt>\" --after <task>", task_part(me)));
@@ -741,7 +737,7 @@ pub(crate) fn shown(state: &Path, items: &[crate::status::Item]) -> Vec<Shown> {
 
 // The other task by the title its row shows, with its repo when it is not this one's.
 fn dep_name(state: &Path, dep: &Dep, wait: &Wait, item: Option<&crate::status::Item>) -> String {
-    let task = dep.address.split_once('@').map_or(dep.address.as_str(), |(task, _)| task);
+    let task = task_part(&dep.address);
     let title = item.and_then(|item| item.title.clone()).or_else(|| crate::status::kept_title(state, &dep.address)).unwrap_or_else(|| task.to_string());
     let repo = name_of(&dep.repo);
     if repo == name_of(&wait.repo) { title } else { format!("{title} in {repo}") }
@@ -890,7 +886,7 @@ mod tests {
     }
 
     fn end(address: &str, at: u64, how: &str, landed: Option<&str>) -> Message {
-        let task = address.split('@').next().unwrap();
+        let task = task_part(address);
         Message { id: format!("end-{address}-{at}"), at, from: "kebbie".to_string(), to: address.to_string(), text: format!("{task} ended ({how})"), held: false, report: None, ended: true, question: None, about: None, kind: None, landed: landed.map(str::to_string), why: None, forced: false, fyi: false }
     }
 

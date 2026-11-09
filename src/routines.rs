@@ -436,7 +436,7 @@ pub fn repo_path(repo: &str) -> Result<PathBuf> {
 }
 
 fn open(routine: &Routine, address: &str) -> bool {
-    let task = address.split_once('@').map_or(address, |(task, _)| task);
+    let task = crate::peers::task_part(address);
     repo_path(&routine.repo).and_then(|repo| crate::tasks::slots(&repo)).is_ok_and(|slots| slots.iter().any(|slot| slot.task.as_deref() == Some(task)))
 }
 

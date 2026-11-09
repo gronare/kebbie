@@ -723,7 +723,7 @@ pub(crate) fn kept_title(state: &Path, address: &str) -> Option<String> {
 
 // A task as the board shows it, with the name or address kebbie knows it by: "Title (name)", or the name alone while it has no title.
 pub fn named(state: &Path, id: &str) -> String {
-    let task = id.split('@').next().unwrap_or(id);
+    let task = peers::task_part(id);
     let address = if id.contains('@') { Some(id.to_string()) } else { None };
     let title = address.as_deref().and_then(|address| kept_title(state, address)).or_else(|| title_by_task(state, task));
     match title {

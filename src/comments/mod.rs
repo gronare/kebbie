@@ -300,7 +300,7 @@ pub fn row_word(comment: &Comment) -> String {
     match (comment.status, comment.kind()) {
         (Status::Unread, _) => "reading…".to_string(),
         (Status::Failed, _) => "not read · ⏎ reads it again".to_string(),
-        (Status::Reopened, _) => format!("fixing in {}", comment.fixing.as_deref().unwrap_or(&comment.task).split('@').next().unwrap_or_default()),
+        (Status::Reopened, _) => format!("fixing in {}", crate::peers::task_part(comment.fixing.as_deref().unwrap_or(&comment.task))),
         (Status::Reply, _) => "reply ready · y copy".to_string(),
         (_, Some(Kind::Holds)) => "holds · reopen with a fix".to_string(),
         (_, Some(Kind::Opinion)) => "opinion · reply, no change".to_string(),

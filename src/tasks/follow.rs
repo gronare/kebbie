@@ -232,7 +232,7 @@ fn pass(state: &Path, workspaces: &[Value], agents: &[Value], hand: HandOver) ->
     let mut notes = Vec::new();
     for (address, repo) in flagged {
         let Ok(pool) = slots(&repo) else { continue };
-        let task = address.split('@').next().unwrap_or_default();
+        let task = peers::task_part(&address);
         let Some(slot) = pool.into_iter().find(|slot| slot.task.as_deref() == Some(task)) else {
             let _ = set_in(state, &address, &repo, false);
             continue;

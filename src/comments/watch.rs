@@ -110,7 +110,7 @@ pub fn begin(state: &Path, repo: &Path, address: &str, shas: &[String], now: u64
         return;
     }
     let Ok(slug) = crate::ci::target(repo, &crate::ci::gh()) else { return };
-    let task = address.split('@').next().unwrap_or(address).to_string();
+    let task = crate::peers::task_part(address).to_string();
     let until = now + settings.comments_days.value * 86_400;
     for sha in shas {
         let _ = save_watch(state, &Watch { sha: sha.clone(), address: address.to_string(), task: task.clone(), repo: repo.to_path_buf(), slug: slug.clone(), pushed_at: now, until });
