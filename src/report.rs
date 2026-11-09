@@ -1,9 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
-
 use crate::herdr;
+use crate::hooks::{Answer, Payload};
 use crate::lead::state_dir;
 use crate::messages::{self, Report};
 use crate::peers;
@@ -246,32 +245,35 @@ fn block_reason(kebbie: &str) -> String {
 
 // Both hooks kebbie gives a task's Claude: a prompt marks the start of a turn, and a stop without a report since then is sent back once.
 pub fn hook(input: &str) -> String {
-    let input: Value = serde_json::from_str(input).unwrap_or_default();
-    let cwd = input["cwd"].as_str().map(PathBuf::from).or_else(|| std::env::current_dir().ok());
-    let Some(me) = cwd.and_then(|cwd| peers::me(&cwd)).filter(|me| me != LEAD_LABEL) else { return String::new() };
-    let Ok(turn) = turn_file(&me) else { return String::new() };
-    match input["hook_event_name"].as_str() {
+    answer(&Payload::parse(input)).render()
+}
+
+pub fn answer(input: &Payload) -> Answer {
+    let cwd = input.cwd().map(PathBuf::from).or_else(|| std::env::current_dir().ok());
+    let Some(me) = cwd.and_then(|cwd| peers::me(&cwd)).filter(|me| me != LEAD_LABEL) else { return Answer::Silent };
+    let Ok(turn) = turn_file(&me) else { return Answer::Silent };
+    match input.event() {
         Some("UserPromptSubmit") => {
             let _ = crate::state::write(&turn, messages::now().to_string());
             if let Ok(state) = state_dir() {
-                let by_user = input["prompt"].as_str().is_none_or(crate::phase::by_user);
+                let by_user = input.prompt().is_none_or(crate::phase::by_user);
                 crate::phase::record(&state, &me, "turn", &crate::phase::Event::TurnBegan { by_user });
             }
-            crate::known::stale_for(&me).unwrap_or_default()
+            crate::known::stale_for(&me).map_or(Answer::Silent, Answer::Text)
         }
         Some("Stop") => {
             let turn_started = fs::read_to_string(turn).ok().and_then(|at| at.trim().parse().ok());
             let last_report = messages::latest_reports(&messages::load()).get(&me).map(|message| message.at);
-            if !should_block(input["stop_hook_active"] == true, turn_started, last_report) {
+            if !should_block(input.stop_hook_active(), turn_started, last_report) {
                 if unreported(turn_started, last_report) && let Ok(state) = state_dir() {
                     crate::phase::record(&state, &me, "stop", &crate::phase::Event::TurnEndedUnreported);
                 }
-                return String::new();
+                return Answer::Silent;
             }
             let kebbie = peers::kebbie_command().unwrap_or_else(|_| "kebbie".to_string());
-            json!({ "decision": "block", "reason": block_reason(&kebbie) }).to_string()
+            Answer::Block(block_reason(&kebbie))
         }
-        _ => String::new(),
+        _ => Answer::Silent,
     }
 }
 
