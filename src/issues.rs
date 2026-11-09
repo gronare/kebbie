@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use crate::issue_recheck::Rechecked;
 use crate::permit::Caller;
 use crate::sh::Result;
 
@@ -47,7 +48,7 @@ pub struct Issue {
     pub declined: Option<String>,
     pub source: Option<String>,
     pub history: Vec<String>,
-    pub rechecked: Option<String>,
+    pub rechecked: Option<Rechecked>,
     pub body: String,
 }
 
@@ -89,7 +90,7 @@ impl Issue {
     }
 
     fn to_json(&self) -> Value {
-        json!({ "id": self.id, "title": self.title, "kind": self.kind, "status": self.status, "version": self.version, "commit": self.commit, "filed": self.filed, "by": self.by, "github": self.github, "sent": self.sent, "report": self.report, "declined": self.declined, "source": self.source, "untrusted": self.source.is_some(), "history": self.history, "rechecked": self.rechecked, "body": self.body })
+        json!({ "id": self.id, "title": self.title, "kind": self.kind, "status": self.status, "version": self.version, "commit": self.commit, "filed": self.filed, "by": self.by, "github": self.github, "sent": self.sent, "report": self.report, "declined": self.declined, "source": self.source, "untrusted": self.source.is_some(), "history": self.history, "rechecked": self.rechecked.as_ref().map(Rechecked::text), "body": self.body })
     }
 
     fn text(&self) -> String {
@@ -98,7 +99,8 @@ impl Issue {
         for (key, value) in [("id", &self.id), ("title", &self.title), ("kind", &self.kind), ("status", &self.status), ("version", &self.version), ("commit", &self.commit), ("filed", &self.filed), ("by", &self.by)] {
             lines.push(format!("{key} = {}", quoted(value)));
         }
-        for (key, value) in [("github", &self.github), ("sent", &self.sent), ("report", &self.report), ("declined", &self.declined), ("source", &self.source), ("rechecked", &self.rechecked)] {
+        let rechecked = self.rechecked.as_ref().map(Rechecked::text);
+        for (key, value) in [("github", &self.github), ("sent", &self.sent), ("report", &self.report), ("declined", &self.declined), ("source", &self.source), ("rechecked", &rechecked)] {
             if let Some(value) = value {
                 lines.push(format!("{key} = {}", quoted(value)));
             }
@@ -130,7 +132,7 @@ pub fn parse(text: &str) -> Option<Issue> {
         report: field("report"),
         declined: field("declined"),
         source: field("source"),
-        rechecked: field("rechecked"),
+        rechecked: field("rechecked").and_then(|text| Rechecked::parse(&text)),
         history: table.get("history").and_then(|value| value.as_array()).map(|lines| lines.iter().filter_map(|line| line.as_str().map(str::to_string)).collect()).unwrap_or_default(),
         body: body.trim().to_string(),
     })
@@ -871,6 +873,20 @@ mod tests {
         assert_eq!(issue.history, ["fixed in 0.26.3 (2222222), checked automatically".to_string(), format!("came back on {version} (3333333)")]);
         assert!(show_in(&state, "aaaaaa").unwrap().contains("fixed in 0.26.3 (2222222), checked automatically\ncame back on"));
         assert!(reopen_in(&state, &Caller::User, "aaaaaa", "3333333").unwrap_err().contains("open already"));
+    }
+
+    #[test]
+    fn a_stored_recheck_reads_back_as_its_parts_and_is_written_as_it_was() {
+        let dir = crate::sh::test_dir("issues-rechecked");
+        let file = |rechecked: &str| format!("+++\nid = \"aaaaaa\"\ntitle = \"t\"\nkind = \"bug\"\nstatus = \"fixed\"\nversion = \"0.26.3\"\ncommit = \"1111111\"\nfiled = \"2026-10-20\"\nby = \"lead\"\nrechecked = \"{rechecked}\"\n+++\n\nit broke\n");
+        for (stored, version) in [("2222222 fixed 1792540800 0.26.3", "0.26.3"), ("2222222 fixed 1792540800", "")] {
+            fs::write(dir.join("aaaaaa.md"), file(stored)).unwrap();
+            let issue = find(&dir, "aaaaaa").unwrap();
+            assert_eq!(issue.rechecked, Some(Rechecked { head: "2222222".to_string(), verdict: "fixed".to_string(), at: 1_792_540_800, version: version.to_string() }));
+            save(&dir, &issue).unwrap();
+            assert_eq!(fs::read_to_string(dir.join("aaaaaa.md")).unwrap(), file(stored), "saved back unchanged");
+            assert_eq!(issue.to_json()["rechecked"], stored);
+        }
     }
 
     #[test]

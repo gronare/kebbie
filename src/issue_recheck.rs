@@ -39,24 +39,24 @@ pub struct Rechecked {
 }
 
 impl Rechecked {
-    pub fn of(issue: &Issue) -> Option<Rechecked> {
-        let mut words = issue.rechecked.as_deref()?.split_whitespace();
+    pub fn parse(text: &str) -> Option<Rechecked> {
+        let mut words = text.split_whitespace();
         Some(Rechecked { head: words.next()?.to_string(), verdict: words.next()?.to_string(), at: words.next()?.parse().ok()?, version: words.next().unwrap_or_default().to_string() })
     }
 
-    fn text(&self) -> String {
+    pub fn text(&self) -> String {
         format!("{} {} {} {}", self.head, self.verdict, self.at, self.version).trim_end().to_string()
     }
 }
 
 fn record(dir: &Path, id: &str, rechecked: &Rechecked) -> Result<()> {
     let mut issue = issues::find(dir, id)?;
-    issue.rechecked = Some(rechecked.text());
+    issue.rechecked = Some(rechecked.clone());
     issues::save(dir, &issue)
 }
 
 pub fn mark(state: &Path, older: &[&Issue], head: &str, version: &str) -> usize {
-    older.iter().filter(|issue| issue.is_open() && issue.source.is_none() && Rechecked::of(issue).is_none_or(|rechecked| rechecked.head != head))
+    older.iter().filter(|issue| issue.is_open() && issue.source.is_none() && issue.rechecked.as_ref().is_none_or(|rechecked| rechecked.head != head))
         .filter(|issue| crate::state::write(&file(state, &issue.id, "wanted"), format!("{head}\n{version}\n")).is_ok())
         .count()
 }
@@ -263,7 +263,7 @@ pub fn settle(state: &Path, root: &Path, id: &str, checked: &Checked, outcome: R
         (Err(_), _) => "failed",
     };
     let rechecked = Rechecked { head: checked.head.to_string(), verdict: word.to_string(), at: now, version: checked.version.to_string() };
-    issue.rechecked = Some(rechecked.text());
+    issue.rechecked = Some(rechecked);
     if let Some(short) = &fixed_by {
         issue.status = "fixed".to_string();
         issue.history.push(format!("fixed in {} ({short}), checked automatically", checked.version));
@@ -290,7 +290,7 @@ pub struct Fixed {
 
 fn fixed_where(state: &Path, wanted: impl Fn(&Rechecked) -> bool) -> Option<Fixed> {
     let fixed: Vec<(Issue, Rechecked)> = issues::load(&issues::dir(state)).into_iter()
-        .filter_map(|issue| Rechecked::of(&issue).map(|rechecked| (issue, rechecked)))
+        .filter_map(|issue| issue.rechecked.clone().map(|rechecked| (issue, rechecked)))
         .filter(|(issue, rechecked)| issue.status == "fixed" && issue.source.is_none() && rechecked.verdict == "fixed" && wanted(rechecked))
         .collect();
     let latest = fixed.iter().map(|(_, rechecked)| rechecked).max_by_key(|rechecked| rechecked.at)?;
@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(ids_with(&state, "wanted"), ["aaaaaa"]);
         fs::remove_file(file(&state, "aaaaaa", "wanted")).unwrap();
         let mut checked = own.clone();
-        checked.rechecked = Some("2222222 not-fixed 1792540800 0.26.3".to_string());
+        checked.rechecked = Rechecked::parse("2222222 not-fixed 1792540800 0.26.3");
         assert_eq!(mark(&state, &[&checked], "2222222", "0.26.3"), 0, "checked on this build, it waits for the next update");
         assert_eq!(mark(&state, &[&checked], "3333333", "0.26.4"), 1, "the next update checks it again");
     }
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(issue.status, "fixed");
         assert_eq!(issue.history, [format!("fixed in 0.26.3 ({}), checked automatically", shas[1])]);
         assert!(issues::list_in(&issues::dir(&state), true, false).contains("checked automatically"));
-        assert_eq!(issue.rechecked.as_deref(), Some(format!("{} fixed {NOW} 0.26.3", shas[2]).as_str()), "the result lives on the issue");
+        assert_eq!(issue.rechecked.map(|rechecked| rechecked.text()), Some(format!("{} fixed {NOW} 0.26.3", shas[2])), "the result lives on the issue");
         assert_eq!(shown(&state, NOW + 60), Some(Fixed { version: "0.26.3".to_string(), titles: vec!["push hid git's error (aaaaaa)".to_string()], bugs: vec!["push hid git's error (aaaaaa)".to_string()], wishes: 0, last: NOW }));
         issues::reopen_in(&state, &Caller::Lead, "aaaaaa", "3333333").unwrap();
         assert_eq!(shown(&state, NOW + 60), None, "a reopened issue is no longer shown as fixed");
@@ -412,7 +412,7 @@ mod tests {
         let closed = |id: &str, rechecked: &str| {
             let mut found = issue(id, "1111111");
             found.status = "fixed".to_string();
-            found.rechecked = Some(rechecked.to_string());
+            found.rechecked = Rechecked::parse(rechecked);
             filed(&state, &found);
         };
         closed("earlier", &format!("2222222 fixed {} 0.27.0", NOW - 600));
@@ -456,7 +456,7 @@ mod tests {
             assert!(kept.status == "open" && kept.history.is_empty(), "{id}");
             assert_eq!(mark(&state, &[&kept], &shas[2], "0.26.3"), 0, "{id}");
         }
-        assert_eq!(stored(&state, "bbbbbb").rechecked, Some(format!("{} unclear {NOW} 0.26.3", shas[2])));
+        assert_eq!(stored(&state, "bbbbbb").rechecked.map(|rechecked| rechecked.text()), Some(format!("{} unclear {NOW} 0.26.3", shas[2])));
         assert!(ids_with(&state, "note").is_empty() && shown(&state, NOW).is_none(), "nothing is said");
     }
 
@@ -552,7 +552,7 @@ mod tests {
     fn fix(state: &Path, id: &str, head: &str, version: &str, at: u64) {
         let mut fixed = issue(id, "");
         fixed.status = "fixed".to_string();
-        fixed.rechecked = Some(format!("{head} fixed {at} {version}"));
+        fixed.rechecked = Rechecked::parse(&format!("{head} fixed {at} {version}"));
         filed(state, &fixed);
     }
 
@@ -578,7 +578,7 @@ mod tests {
         let state = crate::sh::test_dir("recheck-next");
         fix(&state, "aaaaaa", "2222222", "0.26.3", NOW);
         let mut started = issue("bbbbbb", "2222222");
-        started.rechecked = Some(format!("3333333 started {} 0.26.4", NOW + 50));
+        started.rechecked = Rechecked::parse(&format!("3333333 started {} 0.26.4", NOW + 50));
         filed(&state, &started);
         assert_eq!(shown(&state, NOW + 60).map(|fixed| fixed.titles), Some(vec!["push hid git's error (aaaaaa)".to_string()]));
     }
@@ -589,7 +589,7 @@ mod tests {
         let mut report = issue("r7", "");
         report.status = "fixed".to_string();
         report.source = Some("report 7".to_string());
-        report.rechecked = Some(format!("2222222 fixed {NOW} 0.26.3"));
+        report.rechecked = Rechecked::parse(&format!("2222222 fixed {NOW} 0.26.3"));
         filed(&state, &report);
         assert_eq!(shown(&state, NOW), None, "a report file carrying a fixed recheck never shows");
         fix(&state, "aaaaaa", "2222222", "9.9.9", NOW + 10 * SHOWN_FOR);

@@ -352,7 +352,7 @@ mod tests {
     }
 
     fn closed_by_recheck(state: &Path, id: &str, rechecked: String) {
-        let issue = crate::issues::Issue { id: id.to_string(), title: format!("bug {id}"), kind: "bug".to_string(), status: "fixed".to_string(), rechecked: Some(rechecked), ..crate::issues::Issue::default() };
+        let issue = crate::issues::Issue { id: id.to_string(), title: format!("bug {id}"), kind: "bug".to_string(), status: "fixed".to_string(), rechecked: crate::issue_recheck::Rechecked::parse(&rechecked), ..crate::issues::Issue::default() };
         crate::issues::save(&crate::issues::dir(state), &issue).unwrap();
     }
 
