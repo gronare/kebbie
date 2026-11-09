@@ -799,7 +799,7 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
         }
         Some("hold") if arguments.flag("--take") => issues::take_held_in(&dir, &caller()),
         Some("hold") => issues::hold_in(&dir, &caller(), &arguments.positionals[2..].join(" "), config::propose_issues_enabled()?),
-        Some("show") => issues::show_in(&dir, id()?),
+        Some("show") => issues::show_in(&lead::state_dir()?, id()?),
         Some("close") => issues::close_in(&dir, &caller(), id()?, arguments.positional(3)),
         Some("retry") => issues::retry_in(&dir, &caller(), id()?),
         Some("reopen") => issues::reopen_in(&lead::state_dir()?, &caller(), id()?, env!("KEBBIE_BUILT_FROM")),

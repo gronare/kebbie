@@ -9,6 +9,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### Fixed
 - A reopened bug that went to kebbie's maintainers before is offered and sent again.
 - kebbie issue report says why a wish, another install's report or a bug already sent cannot go, instead of asking.
+- kebbie issue show names the report a bug went as, also when saving the issue failed after the send.
 
 ## 0.37.0
 

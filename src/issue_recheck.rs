@@ -178,7 +178,7 @@ fn claim(state: &Path, caller: &crate::permit::Caller, presented: &str, id: &str
 
 fn check(state: &Path, root: &Path, id: &str, head: &str) -> Result<String> {
     let issue = issues::find(&issues::dir(state), id)?;
-    let shown = issues::show_in(&issues::dir(state), id)?;
+    let shown = issues::show_in(state, id)?;
     let claude = trusted_spawn::claude_from_keeper()?;
     let settings = crate::config::resolve(None)?.settings;
     let input = brief(&shown, &commits_since(root, &issue.commit, head)?, root, head);

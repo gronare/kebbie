@@ -464,7 +464,7 @@ pub fn forget_sent(state: &Path, issue: &str) -> Result<Option<String>> {
     Ok(last.split_once(' ').map(|(_, report)| report.trim().to_string()))
 }
 
-fn find_sent(state: &Path, id: &str) -> Result<Issue> {
+pub fn find_sent(state: &Path, id: &str) -> Result<Issue> {
     let issue = issues::find(&issues::dir(state), id)?;
     Ok(sent_known(state, vec![issue]).remove(0))
 }
@@ -1020,7 +1020,7 @@ mod tests {
         assert_eq!(issues::load(&issues::dir(&state))[0], bug("t", ""));
         decline_in(&state, &Caller::User, "a1b2c3", NOW).unwrap();
         assert!(offers(&state, true).is_empty(), "a no takes it off the board");
-        assert!(issues::show_in(&issues::dir(&state), "a1b2c3").unwrap().contains("kebbie issue report a1b2c3 sends it"));
+        assert!(issues::show_in(&state, "a1b2c3").unwrap().contains("kebbie issue report a1b2c3 sends it"));
     }
 
     #[test]
@@ -1204,6 +1204,8 @@ mod tests {
         assert!(failed.contains("went to kebbie's maintainers as report 1, but saving the issue failed"), "{failed}");
         assert!(issues::find(&dir, "a1b2c3").unwrap().report.is_none(), "the issue file itself was not saved");
         assert!(offers(&state, true).is_empty(), "it is not offered again");
+        let shown = issues::show_in(&state, "a1b2c3").unwrap();
+        assert!(shown.contains("sent to kebbie's maintainers as report 1"), "kebbie issue show reads the send from the ledger: {shown}");
         let again = send_in(&state, &Caller::User, "a1b2c3", &url, &scrub(), &read, NOW).unwrap_err();
         assert!(again.contains("already, as report 1"), "{again}");
         let batch = send_all_in(&state, &Caller::User, &[("a1b2c3".to_string(), read)], &url, &scrub(), &Pace { clock: &std::time::Instant::now, wait: &|_| {}, say: &|_| {} }, NOW).unwrap();
