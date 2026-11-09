@@ -449,6 +449,21 @@ fn sent_known(state: &Path, mut all: Vec<Issue>) -> Vec<Issue> {
     all
 }
 
+// A bug that came back is a new report to make, so the send before it stops counting; the lock keeps a send's line from landing mid-rewrite.
+pub fn forget_sent(state: &Path, issue: &str) -> Result<Option<String>> {
+    let _lock = SendLock::take(state)?;
+    let path = dir(state).join(LEDGER);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    let (gone, kept): (Vec<&str>, Vec<&str>) = text.lines().partition(|line| line.split_once(' ').is_some_and(|(id, _)| id == issue));
+    let Some(last) = gone.last() else { return Ok(None) };
+    crate::state::write(&path, kept.iter().map(|line| format!("{line}\n")).collect::<String>())?;
+    Ok(last.split_once(' ').map(|(_, report)| report.trim().to_string()))
+}
+
 fn find_sent(state: &Path, id: &str) -> Result<Issue> {
     let issue = issues::find(&issues::dir(state), id)?;
     Ok(sent_known(state, vec![issue]).remove(0))
@@ -1098,6 +1113,26 @@ mod tests {
         assert_eq!(batch.sent.len(), BURST, "{batch:?}");
         assert_eq!(batch.already, [(last, "99".to_string())]);
         assert_eq!(seen.lock().unwrap().1, BURST, "the one sent elsewhere during the wait is not posted");
+    }
+
+    #[test]
+    fn a_reopened_bug_is_offered_to_kebbies_maintainers_again() {
+        let state = crate::sh::test_dir("report-reopened");
+        let dir = issues::dir(&state);
+        let read = || payload(&issues::find(&dir, "a1b2c3").unwrap(), &scrub()).digest();
+        let (url, seen) = counting_endpoint(0);
+        issues::save(&dir, &bug("t", "it broke")).unwrap();
+        issues::save(&dir, &Issue { id: "dddddd".to_string(), declined: Some("2026-10-20".to_string()), ..bug("kept", "") }).unwrap();
+        send_in(&state, &Caller::User, "a1b2c3", &url, &scrub(), &read(), NOW).unwrap();
+        for id in ["a1b2c3", "dddddd"] {
+            issues::close_in(&dir, &Caller::User, id, Some("fixed")).unwrap();
+            issues::reopen_in(&state, &Caller::User, id, "3333333 2026-10-23").unwrap();
+        }
+        assert_eq!(offers(&state, true).iter().map(|issue| issue.id.as_str()).collect::<Vec<_>>(), ["a1b2c3", "dddddd"]);
+        assert!(issues::find(&dir, "a1b2c3").unwrap().history.last().unwrap().ends_with("(3333333) (was report 1)"));
+        let again = send_in(&state, &Caller::User, "a1b2c3", &url, &scrub(), &read(), NOW).unwrap();
+        assert!(again.contains("as report 2"), "{again}");
+        assert_eq!(seen.lock().unwrap().1, 2, "posted again after it came back");
     }
 
     #[test]

@@ -802,7 +802,7 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
         Some("show") => issues::show_in(&dir, id()?),
         Some("close") => issues::close_in(&dir, &caller(), id()?, arguments.positional(3)),
         Some("retry") => issues::retry_in(&dir, &caller(), id()?),
-        Some("reopen") => issues::reopen_in(&dir, &caller(), id()?, env!("KEBBIE_BUILT_FROM")),
+        Some("reopen") => issues::reopen_in(&lead::state_dir()?, &caller(), id()?, env!("KEBBIE_BUILT_FROM")),
         Some("recheck") if arguments.flag("--run") => issue_recheck::run(id()?),
         Some("list") => Ok(issues::list_in(&dir, arguments.flag("--all"), arguments.flag("--json"))),
         Some("link") => issues::link_in(&dir, &caller(), id()?, arguments.positional(3)),

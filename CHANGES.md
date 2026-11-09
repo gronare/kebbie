@@ -7,6 +7,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 
 ### Fixed
+- A reopened bug that went to kebbie's maintainers before is offered and sent again.
 
 ## 0.37.0
 

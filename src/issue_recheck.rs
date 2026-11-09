@@ -401,7 +401,7 @@ mod tests {
         assert!(issues::list_in(&issues::dir(&state), true, false).contains("checked automatically"));
         assert_eq!(issue.rechecked.as_deref(), Some(format!("{} fixed {NOW} 0.26.3", shas[2]).as_str()), "the result lives on the issue");
         assert_eq!(shown(&state, NOW + 60), Some(Fixed { version: "0.26.3".to_string(), titles: vec!["push hid git's error (aaaaaa)".to_string()], bugs: vec!["push hid git's error (aaaaaa)".to_string()], wishes: 0, last: NOW }));
-        issues::reopen_in(&issues::dir(&state), &Caller::Lead, "aaaaaa", "3333333").unwrap();
+        issues::reopen_in(&state, &Caller::Lead, "aaaaaa", "3333333").unwrap();
         assert_eq!(shown(&state, NOW + 60), None, "a reopened issue is no longer shown as fixed");
         assert!(crate::messages::load().iter().all(|message| !message.text.contains("aaaaaa")), "nobody is told");
     }
@@ -607,7 +607,7 @@ mod tests {
         let state = crate::sh::test_dir("recheck-hand");
         fix(&state, "aaaaaa", "2222222", "0.26.3", NOW);
         let dir = issues::dir(&state);
-        issues::reopen_in(&dir, &Caller::User, "aaaaaa", "3333333").unwrap();
+        issues::reopen_in(&state, &Caller::User, "aaaaaa", "3333333").unwrap();
         assert_eq!(stored(&state, "aaaaaa").rechecked, None);
         issues::close_in(&dir, &Caller::User, "aaaaaa", Some("fixed")).unwrap();
         assert_eq!(shown(&state, NOW), None);

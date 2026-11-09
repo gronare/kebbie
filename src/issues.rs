@@ -365,23 +365,25 @@ pub fn retry_in(dir: &Path, caller: &Caller, id: &str) -> Result<String> {
     Ok(format!("kebbie issue {} is marked worth retrying; it stays open.", issue.id))
 }
 
-pub fn reopen_in(dir: &Path, caller: &Caller, id: &str, built: &str) -> Result<String> {
+pub fn reopen_in(state: &Path, caller: &Caller, id: &str, built: &str) -> Result<String> {
     may_write(caller, "Reopening a kebbie issue")?;
-    let mut issue = find(dir, id)?;
+    let folder = dir(state);
+    let mut issue = find(&folder, id)?;
     if issue.is_open() {
         return Err(format!("kebbie issue {} is open already ({})", issue.id, issue.status));
     }
+    let ledgered = crate::hub::report::forget_sent(state, &issue.id)?;
     let (commit, _) = built.split_once(' ').unwrap_or((built, ""));
     issue.status = "open".to_string();
     issue.rechecked = None;
     issue.version = env!("CARGO_PKG_VERSION").to_string();
     issue.commit = commit.to_string();
-    let was = issue.report.take().map(|report| format!(" (was report {report})")).unwrap_or_default();
+    let was = issue.report.take().or(ledgered).map(|report| format!(" (was report {report})")).unwrap_or_default();
     issue.declined = None;
     issue.sent = None;
     issue.history.push(format!("{CAME_BACK} {}{was}", issue.built()));
-    save(dir, &issue)?;
-    let _ = fs::remove_file(held_file(dir));
+    save(&folder, &issue)?;
+    let _ = fs::remove_file(held_file(&folder));
     Ok(format!("kebbie issue {} is open again: came back on {}.", issue.id, issue.built()))
 }
 
@@ -853,20 +855,21 @@ mod tests {
 
     #[test]
     fn a_closed_issue_reopens_as_come_back_on_this_build_and_keeps_its_history() {
-        let dir = crate::sh::test_dir("issues-reopen");
+        let state = crate::sh::test_dir("issues-reopen");
+        let dir = super::dir(&state);
         let mut fixed = issue("aaaaaa", "1111111", "");
         fixed.status = "fixed".to_string();
         fixed.history = vec!["fixed in 0.26.3 (2222222), checked automatically".to_string()];
         save(&dir, &fixed).unwrap();
-        assert!(reopen_in(&dir, &Caller::Task("a@b".to_string()), "aaaaaa", "3333333 2026-10-23").is_err());
-        let said = reopen_in(&dir, &Caller::Lead, "aaaaaa", "3333333 2026-10-23").unwrap();
+        assert!(reopen_in(&state, &Caller::Task("a@b".to_string()), "aaaaaa", "3333333 2026-10-23").is_err());
+        let said = reopen_in(&state, &Caller::Lead, "aaaaaa", "3333333 2026-10-23").unwrap();
         let version = env!("CARGO_PKG_VERSION");
         assert_eq!(said, format!("kebbie issue aaaaaa is open again: came back on {version} (3333333)."));
         let issue = find(&dir, "aaaaaa").unwrap();
         assert_eq!((issue.status.as_str(), issue.commit.as_str()), ("open", "3333333"), "the next recheck reads only the commits after it came back");
         assert_eq!(issue.history, ["fixed in 0.26.3 (2222222), checked automatically".to_string(), format!("came back on {version} (3333333)")]);
         assert!(show_in(&dir, "aaaaaa").unwrap().contains("fixed in 0.26.3 (2222222), checked automatically\ncame back on"));
-        assert!(reopen_in(&dir, &Caller::User, "aaaaaa", "3333333").unwrap_err().contains("open already"));
+        assert!(reopen_in(&state, &Caller::User, "aaaaaa", "3333333").unwrap_err().contains("open already"));
     }
 
     #[test]
@@ -879,25 +882,6 @@ mod tests {
         assert_eq!(read("declined = \"2026-10-20\"\nsent = \"2026-10-20\"\n"), Disposition::Declined);
         assert_eq!(read("source = \"report 9\"\nreport = \"3\"\n"), Disposition::NotOurs);
         assert_eq!(parse("+++\nid = \"aaaaaa\"\nkind = \"wish\"\n+++\n").unwrap().disposition(), Disposition::NotOurs);
-    }
-
-    #[test]
-    fn a_reopened_bug_is_offered_to_kebbies_maintainers_again() {
-        let dir = crate::sh::test_dir("issues-reopen-offer");
-        for (id, sent) in [("aaaaaa", true), ("bbbbbb", false)] {
-            let mut closed = issue(id, "1111111", "");
-            closed.status = "fixed".to_string();
-            if sent {
-                (closed.report, closed.sent) = (Some("12".to_string()), Some("2026-10-20".to_string()));
-            } else {
-                closed.declined = Some("2026-10-20".to_string());
-            }
-            save(&dir, &closed).unwrap();
-            reopen_in(&dir, &Caller::User, id, "3333333 2026-10-23").unwrap();
-            let reopened = find(&dir, id).unwrap();
-            assert!(crate::hub::report::offered(&reopened), "{id}: {reopened:?}");
-        }
-        assert!(find(&dir, "aaaaaa").unwrap().history.last().unwrap().ends_with("(3333333) (was report 12)"));
     }
 
     #[test]
@@ -990,14 +974,15 @@ esac
 
     #[test]
     fn saving_or_reopening_an_issue_clears_the_held_line() {
-        let dir = crate::sh::test_dir("issues-held-saved");
+        let state = crate::sh::test_dir("issues-held-saved");
+        let dir = super::dir(&state);
         hold_in(&dir, &Caller::Lead, "kebbie push hid git's error", true).unwrap();
         add_in(&dir, &Caller::Lead, &filing("push hides git's error", ""), "", crate::config::ReportText::Ask, NOW).unwrap();
         assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "Nothing held.");
         let id = load(&dir).remove(0).id;
         close_in(&dir, &Caller::Lead, &id, Some("fixed")).unwrap();
         hold_in(&dir, &Caller::Lead, "kebbie push hides git's error again", true).unwrap();
-        reopen_in(&dir, &Caller::Lead, &id, "3333333 2026-10-23").unwrap();
+        reopen_in(&state, &Caller::Lead, &id, "3333333 2026-10-23").unwrap();
         assert_eq!(take_held_in(&dir, &Caller::Lead).unwrap(), "Nothing held.");
     }
 }
