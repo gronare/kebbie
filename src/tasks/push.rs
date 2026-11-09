@@ -621,20 +621,10 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     let address = peers::address(&task, &name_of(repo));
     let went = went_out(repo, slot, upstream, through, out)?;
     let (count, watch) = send(state, repo, slot, upstream, &address, &task, pusher, &went, watch)?;
-    let Went { sha, keep_open, rest, pushed, shas, note, target } = went;
+    let (vault, log) = after_push(state, repo, slot, &address, &task, &went, &crate::vault_cli::detect);
+    let Went { sha, keep_open, rest, pushed, note, target, .. } = went;
     let main = main_of(upstream);
-    super::landed::keep_open(state, &address, keep_open);
-    if keep_open && let Err(error) = crate::assessment::note_pushed(state, &address, &shas) {
-        eprintln!("kebbie: the review of {address} may miss its pushed steps: {error}");
-    }
-    crate::comments::begin(state, repo, &address, &shas, messages::now());
-    crate::comments::after_push(state);
-    let vault = crate::vault_cli::detect();
-    let log = vault.as_ref().map(|cli| crate::task_note::log_push(cli, &slot.path, &task, &pushed));
     let logged = log.as_ref().map(crate::task_note::logged_text).unwrap_or_default();
-    if let Some(cli) = vault.as_ref() {
-        crate::task_note::heartbeat(cli, state, &address);
-    }
     let named = crate::status::with_titles_in(state, &address);
     let landed = |closed: bool, waits: bool| Landed { pusher, address: &named, target: &target, commits: &pushed, closed, note: note.as_deref(), logged: log.as_ref().map(|log| matches!(log, Ok(Some(_)))), waits };
     let short = &sha[..7.min(sha.len())];
@@ -722,6 +712,23 @@ fn send(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, t
             Notice::new(Tone::Failed, "Not pushed: git refused the push").detail("task", task).detail("error", error).err()
         }
     }
+}
+
+type Log = Option<std::result::Result<Option<String>, String>>;
+
+fn after_push(state: &Path, repo: &Path, slot: &Slot, address: &str, task: &str, went: &Went, vault: &dyn Fn() -> Option<crate::vault_cli::Cli>) -> (Option<crate::vault_cli::Cli>, Log) {
+    super::landed::keep_open(state, address, went.keep_open);
+    if went.keep_open && let Err(error) = crate::assessment::note_pushed(state, address, &went.shas) {
+        eprintln!("kebbie: the review of {address} may miss its pushed steps: {error}");
+    }
+    crate::comments::begin(state, repo, address, &went.shas, messages::now());
+    crate::comments::after_push(state);
+    let vault = vault();
+    let log = vault.as_ref().map(|cli| crate::task_note::log_push(cli, &slot.path, task, &went.pushed));
+    if let Some(cli) = vault.as_ref() {
+        crate::task_note::heartbeat(cli, state, address);
+    }
+    (vault, log)
 }
 
 fn tell_lead(text: &str) {
@@ -945,6 +952,26 @@ mod tests {
         let told = told_lead(&address);
         assert_eq!(told.len(), 1, "{told:?}");
         assert!(told[0].fyi && told[0].kind.is_none() && told[0].text.starts_with(&format!("The user pushed {address}: 1 commit to {}. kebbie watches CI", upstream.trim_start_matches("origin/"))), "the push under CI watch is a notice for the digest, not a turn of the lead's: {:?}", told[0]);
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_push_logs_its_commits_in_the_vault_and_renews_the_task_notes_claim() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let address = crate::peers::address("billing", &name_of(&dir));
+        let fake = crate::vault_cli::fake::Fake::new(&format!("push-{}", name_of(&dir)));
+        fake.answer("task-claim", r#"{"path":"Projects/api-billing.md","claimed":true}"#);
+        std::fs::create_dir_all(state.join("started")).unwrap();
+        std::fs::write(state.join("started").join(&address), "Projects/api-billing.md").unwrap();
+        let went = went_out(&dir, &slot, &upstream, Through::All, &Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }).unwrap();
+        let claiming = fake.claiming();
+        let (vault, log) = after_push(&state, &dir, &slot, &address, "billing", &went, &|| Some(claiming.clone()));
+        assert!(vault.is_some() && log.is_some(), "the vault that answered is the one the report and the close use");
+        let calls = fake.calls();
+        assert!(calls.iter().any(|call| call.starts_with("log ")), "the push writes the repo's log line: {calls:?}");
+        assert_eq!(calls.last().map(String::as_str), Some(format!("task claim Projects/api-billing.md --machine mac --task billing --repo {}", name_of(&dir)).as_str()), "then renews the claim, so a note still worked on never reads as stale elsewhere");
+        let _ = std::fs::remove_dir_all(&fake.dir);
         cleanup(dir, origin, &slot);
     }
 
