@@ -1151,3 +1151,13 @@ fn task_profile_is_picked_from_the_profiles_there_are_and_none_removes_it() {
     press(&mut fixture.page, &[KeyCode::Enter]);
     assert!(!file(&fixture, "config.toml").contains("profile"), "none starts the built-in task: the key goes");
 }
+
+#[test]
+fn the_title_line_ends_at_the_right_edge() {
+    let mut fixture = fixture("settings-title-edge", "", None);
+    let (shown, buffer) = screen_at(&mut fixture.page, 100, 30);
+    let row = shown.lines().position(|line| line.contains("Settings")).unwrap();
+    let last = buffer.area.width - 3;
+    let end: String = (last - 3..=last).map(|x| buffer[(x, row as u16)].symbol().to_string()).collect();
+    assert_eq!(end, "edit", "the hint ends in the title area's last column: {shown}");
+}

@@ -227,7 +227,7 @@ impl Page {
     pub fn draw(&mut self, frame: &mut Frame, body: Rect) {
         let [title, tabs, _, main, said] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Min(3), Constraint::Length(2)]).areas(body);
         let right = "from the board: , · or kebbie config edit";
-        let gap = (title.width as usize).saturating_sub(8 + right.len()).max(1);
+        let gap = (title.width as usize).saturating_sub(8 + text_width(right)).max(1);
         frame.render_widget(Paragraph::new(Line::from(vec![Span::styled("Settings", bold(MAUVE)), Span::raw(" ".repeat(gap)), Span::styled(right, style(MUTED))])), title);
         let lit = |on: bool| if on { bold(MANTLE).bg(MAUVE) } else { style(MUTED) };
         let mut spans = vec![Span::styled(" This machine ", lit(self.tab == Tab::Machine)), Span::raw("  ")];
