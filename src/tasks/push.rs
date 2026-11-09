@@ -669,10 +669,16 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
             Err(error) => said(Notice::new(Tone::You, format!("{}, but the task did not close", headline(false)))).you("Close it once the reason below is settled.").detail("error", error).to_string(),
         });
     }
-    tell_lead_pushed(&landed(false, false));
-    crate::report::forget_card_in(state, &address);
-    let clean = !out.rebased;
-    crate::phase::record(state, &address, "push", &crate::phase::Event::KeptOpen { rest, steps_left: super::plan::left_at(state, &slot.path, &address, &sha), clean, head: git(&slot.path, &["rev-parse", "HEAD"]).ok().as_deref() });
+    let after = kept_open(state, slot, upstream, &address, &sha, rest, count, !out.rebased, &landed(false, false));
+    Ok(said(Notice::new(Tone::Done, headline(true)).next(after)).detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn kept_open(state: &Path, slot: &Slot, upstream: &str, address: &str, sha: &str, rest: usize, count: usize, clean: bool, landed: &Landed) -> String {
+    let (pusher, target, short, main) = (landed.pusher, landed.target, &sha[..7.min(sha.len())], main_of(upstream));
+    tell_lead_pushed(landed);
+    crate::report::forget_card_in(state, address);
+    crate::phase::record(state, address, "push", &crate::phase::Event::KeptOpen { rest, steps_left: super::plan::left_at(state, &slot.path, address, sha), clean, head: git(&slot.path, &["rev-parse", "HEAD"]).ok().as_deref() });
     let told = if clean {
         format!(
             "{} pushed {} of this task, through {short}, to {target}; they are on {target} for good. Your branch continues from there with {} on top: reshape only those.",
@@ -686,11 +692,10 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
             capitalized(pusher), plural(count, "commit"), plural(rest, "commit")
         )
     };
-    if let Err(error) = messages::notify(&address, &told) {
+    if let Err(error) = messages::notify(address, &told) {
         eprintln!("Could not tell {address} about the push: {error}");
     }
-    let after = if clean && rest == 0 { "It stays open, as you chose, with everything on main; close it from its options when you are done.".to_string() } else if clean { format!("It stays open with {} on top.", plural(rest, "commit")) } else { format!("It stays open; its Claude rebases the rest onto {main} when it is ready, and kebbie changed nothing in its worktree.") };
-    Ok(said(Notice::new(Tone::Done, headline(true)).next(after)).detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string())
+    if clean && rest == 0 { "It stays open, as you chose, with everything on main; close it from its options when you are done.".to_string() } else if clean { format!("It stays open with {} on top.", plural(rest, "commit")) } else { format!("It stays open; its Claude rebases the rest onto {main} when it is ready, and kebbie changed nothing in its worktree.") }
 }
 
 #[allow(clippy::too_many_arguments)]
