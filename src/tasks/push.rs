@@ -619,24 +619,10 @@ fn went_out(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Ou
 fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &'static str, state: &Path, watch: Watch) -> Result<String> {
     let task = task_of(slot).to_string();
     let address = peers::address(&task, &name_of(repo));
-    let Went { sha, keep_open, rest, pushed, shas, note, target } = went_out(repo, slot, upstream, through, out)?;
+    let went = went_out(repo, slot, upstream, through, out)?;
+    let (count, watch) = send(state, repo, slot, upstream, &address, &task, pusher, &went, watch)?;
+    let Went { sha, keep_open, rest, pushed, shas, note, target } = went;
     let main = main_of(upstream);
-    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: target.clone(), commits: pushed.clone(), note: note.clone(), logged: None };
-    let before = crate::ci::load(state, &address);
-    let phase_before = crate::phase::load(state, &address);
-    let watch = watch(state, repo, &address, &sha, !keep_open, told_ci);
-    if !keep_open && matches!(watch, crate::ci::Begin::Watching) {
-        crate::phase::record(state, &address, "push", &crate::phase::Event::PushOut { sha: &sha });
-    }
-    super::plan::seen_in(state, &slot.path);
-    let count = match push_prefix(&slot.path, upstream, &sha, state) {
-        Ok(count) => count,
-        Err(error) => {
-            crate::ci::put_back(state, &address, before);
-            crate::phase::put_back(state, &address, &crate::phase::Phase::CiRunning { sha: sha.clone() }, phase_before);
-            return Notice::new(Tone::Failed, "Not pushed: git refused the push").detail("task", &task).detail("error", error).err();
-        }
-    };
     super::landed::keep_open(state, &address, keep_open);
     if keep_open && let Err(error) = crate::assessment::note_pushed(state, &address, &shas) {
         eprintln!("kebbie: the review of {address} may miss its pushed steps: {error}");
@@ -715,6 +701,27 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     }
     let after = if clean && rest == 0 { "It stays open, as you chose, with everything on main; close it from its options when you are done.".to_string() } else if clean { format!("It stays open with {} on top.", plural(rest, "commit")) } else { format!("It stays open; its Claude rebases the rest onto {main} when it is ready, and kebbie changed nothing in its worktree.") };
     Ok(said(Notice::new(Tone::Done, headline(true)).next(after)).detail("checkout", follow_upstream(repo, upstream, &super::stage::load(state, repo))?).to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send(state: &Path, repo: &Path, slot: &Slot, upstream: &str, address: &str, task: &str, pusher: &str, went: &Went, watch: Watch) -> Result<(usize, crate::ci::Begin)> {
+    let sha = &went.sha;
+    let told_ci = crate::ci::Pushed { pusher: pusher.to_string(), target: went.target.clone(), commits: went.pushed.clone(), note: went.note.clone(), logged: None };
+    let before = crate::ci::load(state, address);
+    let phase_before = crate::phase::load(state, address);
+    let watch = watch(state, repo, address, sha, !went.keep_open, told_ci);
+    if !went.keep_open && matches!(watch, crate::ci::Begin::Watching) {
+        crate::phase::record(state, address, "push", &crate::phase::Event::PushOut { sha });
+    }
+    super::plan::seen_in(state, &slot.path);
+    match push_prefix(&slot.path, upstream, sha, state) {
+        Ok(count) => Ok((count, watch)),
+        Err(error) => {
+            crate::ci::put_back(state, address, before);
+            crate::phase::put_back(state, address, &crate::phase::Phase::CiRunning { sha: sha.clone() }, phase_before);
+            Notice::new(Tone::Failed, "Not pushed: git refused the push").detail("task", task).detail("error", error).err()
+        }
+    }
 }
 
 fn tell_lead(text: &str) {
