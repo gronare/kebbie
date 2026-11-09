@@ -53,6 +53,7 @@ pub(super) fn skill(table: &Table, field: &str, key: &str) -> Result<Option<Stri
     let name = text(table, field, key)?;
     match name {
         Some(name) if !skill_name(&name) && !markdown(&name) => Err(format!("{key}: \"{name}\" is not a skill name or a Markdown file; use <skill>, <plugin>:<skill>, or a path to a .md file starting with / or ~/")),
+        Some(name) if markdown(&name) && skill_path(&name).is_none() => Err(format!("{key}: \"{name}\" starts with ~/, and HOME is not set to say whose home that is; name the file from /")),
         name => Ok(name),
     }
 }

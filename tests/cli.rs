@@ -370,6 +370,16 @@ fn kebbie_config_edit_needs_a_terminal_and_writes_nothing_without_one() {
 }
 
 #[test]
+fn a_skill_file_under_home_is_refused_when_home_is_not_set() {
+    let lab = Lab::new("config-skill-home");
+    fs::write(&lab.config, "[task]\nrules_skill = \"~/team/RULES.md\"\n").unwrap();
+    let refused = lab.command().env("HOME", "").args(["config"]).output().unwrap();
+    assert!(!refused.status.success() && stderr(&refused).contains("task.rules_skill: \"~/team/RULES.md\" starts with ~/, and HOME is not set"), "{}", stderr(&refused));
+    let shown = lab.run(&["config"]);
+    assert!(shown.status.success() && stdout(&shown).contains("task.rules_skill = \"~/team/RULES.md\"  (machine config)"), "{}", stderr(&shown));
+}
+
+#[test]
 fn the_repo_config_on_the_machine_layers_over_config_toml() {
     let lab = Lab::new("repo-config");
     let (_, slot) = lab.task_fixture();
