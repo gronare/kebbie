@@ -734,34 +734,61 @@ pub fn decline_in(state: &Path, caller: &Caller, id: &str, now: u64) -> Result<S
     crate::notice::Notice::new(crate::notice::Tone::Done, format!("Kept bug {} on this machine only", issue.id)).next(format!("kebbie issue report {} sends it to kebbie's maintainers later.", issue.id)).ok()
 }
 
-fn ask_send() -> bool {
-    print!("Send this report to kebbie's maintainers? [y/N] ");
-    answered_yes()
-}
-
 fn answered_yes() -> bool {
     let _ = std::io::stdout().flush();
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer).is_ok() && matches!(answer.trim(), "y" | "Y" | "yes")
 }
 
-pub fn cli(id: &str) -> Result<String> {
+struct Asked {
+    caller: Caller,
+    state: PathBuf,
+    settings: crate::config::Report,
+}
+
+fn asked(what: &str) -> Result<Asked> {
     let caller = crate::permit::caller();
-    crate::permit::user_only_as(&caller, "Sending a report to kebbie's maintainers")?;
-    let state = crate::lead::state_dir()?;
-    let settings = crate::config::report_settings()?;
+    crate::permit::user_only_as(&caller, what)?;
+    Ok(Asked { caller, state: crate::lead::state_dir()?, settings: crate::config::report_settings()? })
+}
+
+struct Question {
+    shown: String,
+    elsewhere: String,
+    goes: String,
+    ask: String,
+}
+
+enum Answer {
+    Yes,
+    No,
+    Elsewhere(String),
+}
+
+fn put(question: Question) -> Answer {
+    if !super::interactive() {
+        return Answer::Elsewhere(format!("{}\n\n{}", question.shown, question.elsewhere));
+    }
+    println!("{}\n\n{}", question.shown, question.goes);
+    print!("{} [y/N] ", question.ask);
+    if answered_yes() { Answer::Yes } else { Answer::No }
+}
+
+pub fn cli(id: &str) -> Result<String> {
+    let Asked { caller, state, settings } = asked("Sending a report to kebbie's maintainers")?;
     let scrub = Scrub::current();
     let issue = issues::find(&issues::dir(&state), id)?;
     let read = payload(&issue, &scrub);
-    let shown = preview(&read);
-    if !super::interactive() {
-        return Ok(format!("{shown}\n\nThis is the report as it would go to kebbie's maintainers at {}. Run kebbie issue report {} in your own terminal to answer y or n.", settings.url(), issue.id));
-    }
-    println!("{shown}\n\nThis goes to kebbie's maintainers at {}, signed with this install's key.", settings.url());
-    if ask_send() {
-        send_in(&state, &caller, id, settings.url(), &scrub, &read.digest(), crate::messages::now())
-    } else {
-        decline_in(&state, &caller, id, crate::messages::now())
+    let question = Question {
+        shown: preview(&read),
+        elsewhere: format!("This is the report as it would go to kebbie's maintainers at {}. Run kebbie issue report {} in your own terminal to answer y or n.", settings.url(), issue.id),
+        goes: format!("This goes to kebbie's maintainers at {}, signed with this install's key.", settings.url()),
+        ask: "Send this report to kebbie's maintainers?".to_string(),
+    };
+    match put(question) {
+        Answer::Elsewhere(text) => Ok(text),
+        Answer::Yes => send_in(&state, &caller, id, settings.url(), &scrub, &read.digest(), crate::messages::now()),
+        Answer::No => decline_in(&state, &caller, id, crate::messages::now()),
     }
 }
 
@@ -774,10 +801,7 @@ pub fn all_preview(reports: &[(String, BugReport)]) -> String {
 }
 
 pub fn cli_all() -> Result<String> {
-    let caller = crate::permit::caller();
-    crate::permit::user_only_as(&caller, "Sending reports to kebbie's maintainers")?;
-    let state = crate::lead::state_dir()?;
-    let settings = crate::config::report_settings()?;
+    let Asked { caller, state, settings } = asked("Sending reports to kebbie's maintainers")?;
     let all = sent_known(&state, issues::load(&issues::dir(&state)));
     let waiting: Vec<&Issue> = all.iter().filter(|issue| offered(issue)).collect();
     let already: Vec<String> = all.iter().filter(|issue| issue.is_open() && issue.kind == "bug" && issue.source.is_none()).filter_map(|issue| issue.report.as_ref().map(|report| format!("{} as report {report}", issue.id))).collect();
@@ -795,15 +819,17 @@ pub fn cli_all() -> Result<String> {
     }
     let scrub = Scrub::current();
     let reports: Vec<(String, BugReport)> = waiting.iter().map(|issue| (issue.id.clone(), payload(issue, &scrub))).collect();
-    let shown = all_preview(&reports);
     let aside = if aside.is_empty() { String::new() } else { format!("\n\n{aside}") };
-    if !super::interactive() {
-        return Ok(format!("{shown}{aside}\n\nThese are the {} as they would go to kebbie's maintainers at {}. Run kebbie issue report --all in your own terminal to answer y or n.", bugs(reports.len()), settings.url()));
-    }
-    println!("{shown}{aside}\n\nThese {} go to kebbie's maintainers at {}, each signed with this install's key; {BURST} go at once, then {BURST} every 5 minutes.", bugs(reports.len()), settings.url());
-    print!("Send all {}? [y/N] ", reports.len());
-    if !answered_yes() {
-        return crate::notice::Notice::new(crate::notice::Tone::NotNow, "Sent nothing").next("kebbie issue report <id> sends one, n there keeps it here.").ok();
+    let question = Question {
+        shown: format!("{}{aside}", all_preview(&reports)),
+        elsewhere: format!("These are the {} as they would go to kebbie's maintainers at {}. Run kebbie issue report --all in your own terminal to answer y or n.", bugs(reports.len()), settings.url()),
+        goes: format!("These {} go to kebbie's maintainers at {}, each signed with this install's key; {BURST} go at once, then {BURST} every 5 minutes.", bugs(reports.len()), settings.url()),
+        ask: format!("Send all {}?", reports.len()),
+    };
+    match put(question) {
+        Answer::Elsewhere(text) => return Ok(text),
+        Answer::No => return crate::notice::Notice::new(crate::notice::Tone::NotNow, "Sent nothing").next("kebbie issue report <id> sends one, n there keeps it here.").ok(),
+        Answer::Yes => {}
     }
     let read: Vec<(String, [u8; 32])> = reports.iter().map(|(id, report)| (id.clone(), report.digest())).collect();
     let say = |line: &str| println!("{line}");
