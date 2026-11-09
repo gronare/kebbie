@@ -857,7 +857,7 @@ pub fn hook(input: &str) -> String {
     let Some(me) = cwd.as_deref().and_then(crate::peers::me).filter(|me| me != crate::status::LEAD_LABEL) else { return String::new() };
     match payload.event() {
         Some("SessionStart") => session_start(&me, payload.value(), crate::lead::roles_dir().ok().as_deref()),
-        Some("PreToolUse") => crate::push_guard::hook(input, cwd.as_deref().map_or(crate::kube_guard::Cluster::None, crate::tasks::cluster_at)),
+        Some("PreToolUse") => crate::push_guard::answer(&payload, cwd.as_deref().map_or(crate::kube_guard::Cluster::None, crate::tasks::cluster_at)).render(),
         Some("UserPromptSubmit" | "Stop") => {
             let _ = crate::messages::flush();
             crate::report::answer(&payload).render()

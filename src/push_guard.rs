@@ -181,7 +181,7 @@ pub fn hook(input: &str, cluster: crate::kube_guard::Cluster) -> String {
     answer(&Payload::parse(input), cluster).render()
 }
 
-fn answer(payload: &Payload, cluster: crate::kube_guard::Cluster) -> Answer {
+pub(crate) fn answer(payload: &Payload, cluster: crate::kube_guard::Cluster) -> Answer {
     let shell = payload.tool_name().is_none_or(|tool| tool == "Bash" || tool == "exec_command" || tool == "shell");
     let Some(command) = payload.command().filter(|_| shell) else { return Answer::Silent };
     let within = crate::kube_guard::within(payload.cwd());
