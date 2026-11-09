@@ -206,8 +206,11 @@ impl Record {
     }
 }
 
-// The task's session id, permission mode, profile and agent, so a restart resumes that conversation the same way; a file of two lines, id then mode, is a task on Claude.
+// The task's session id, permission mode, profile and agent, so a restart resumes that conversation the same way; a file of two lines, id then mode, predates profiles and is a task on Claude, and no record leaves the profile to task.profile.
 pub(crate) fn parse_record(text: &str) -> Record {
+    if text.trim().is_empty() {
+        return Record::default();
+    }
     if let Ok(value) = serde_json::from_str::<Value>(text) && value.is_object() {
         let field = |key: &str| value[key].as_str().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string);
         return Record { session: field("session"), mode: field("mode"), profile: field("profile"), agent: field("agent"), awaits_prompt: value["awaits_prompt"] == true, rollout: field("rollout") };
@@ -1377,13 +1380,15 @@ mod tests {
     }
 
     #[test]
-    fn a_tasks_session_record_keeps_its_profile_and_an_old_two_line_record_reads_as_task_on_claude() {
+    fn a_tasks_session_record_keeps_its_profile_an_old_two_line_record_reads_as_task_on_claude_and_none_leaves_it_to_the_config() {
         let designer = Record { session: Some("1f0c".to_string()), mode: Some(BYPASS.to_string()), profile: Some("designer".to_string()), agent: Some("claude".to_string()), awaits_prompt: false, rollout: None };
         assert_eq!(parse_record(&record_text(&designer)), designer);
         let old = |session: &str, mode: Option<&str>| Record { session: Some(session.to_string()), mode: mode.map(str::to_string), profile: Some("task".to_string()), agent: Some("claude".to_string()), awaits_prompt: false, rollout: None };
         assert_eq!(parse_record("1f0c\nacceptEdits\n"), old("1f0c", Some("acceptEdits")));
         assert_eq!(parse_record("1f0c\n\n"), old("1f0c", None));
         assert_eq!(parse_record("1f0c\n"), old("1f0c", None));
+        assert_eq!(parse_record("").profile, None, "a task with no record starts with task.profile");
+        assert_eq!(profiles::chosen(None, parse_record(" \n").profile.as_deref(), Some("kube")), "kube");
         assert_eq!(parse_record(&record_text(&Record { mode: None, ..designer.clone() })).mode, None);
         assert_eq!(Record::default().agent(), Agent::Claude);
         let state = crate::sh::test_dir("task-record");

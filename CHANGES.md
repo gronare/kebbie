@@ -14,6 +14,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - review.second = "always none" is refused, instead of running a second opinion from a profile named none.
 - A skill setting naming a ~/ Markdown file is refused while HOME is unset, instead of sending the task to run it as a skill.
 - A [docs] table in config.toml without required is refused by its own name, no longer as docs.required.
+- A task with no session record takes the profile task.profile names, its kubeconfig included, instead of the built-in task.
 
 ## 0.37.0
 
