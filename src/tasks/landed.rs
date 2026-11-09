@@ -386,7 +386,7 @@ pub(super) fn pass(state: &Path, world: &World, close: Close, tell: &mut dyn FnM
         }
     }
     let mut fetched: Vec<PathBuf> = Vec::new();
-    for watch in crate::ci::all(state).into_iter().filter(|watch| !watch.running() && find_task(&watch.repo, Some(&watch.task), &watch.repo).is_err()) {
+    for watch in crate::ci::all(state).into_iter().filter(|watch| !watch.running() && find_task(&watch.repo, Some(watch.task()), &watch.repo).is_err()) {
         if !fetched.contains(&watch.repo) {
             fetched.push(watch.repo.clone());
             if stale(&watch.repo) {
@@ -792,7 +792,7 @@ mod tests {
         assert_eq!(ready.group(), crate::status::Group::NeedsYou);
         let mut red = crate::status::tests::task(Some("idle"), None, 1);
         red.ci = Some(crate::ci::Watch {
-            address: "billing@web".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
+            address: "billing@web".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
             state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         });
         red.ci_outside = Some("pushed outside the deploy window".to_string());
@@ -844,7 +844,7 @@ mod tests {
         let failed = crate::ci::Run { id: 1, name: "deploy".to_string(), workflow: "deploy".to_string(), status: "completed".to_string(), conclusion: "failure".to_string(), url: "u".to_string() };
         let passed = crate::ci::Run { id: 2, name: "lint".to_string(), workflow: "lint".to_string(), status: "completed".to_string(), conclusion: "success".to_string(), url: "u".to_string() };
         crate::ci::Watch {
-            address: address.to_string(), task: "billing".to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 1, checked_at: None, close, runs: vec![failed, passed],
+            address: address.to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: sha.to_string(), started_at: 1, checked_at: None, close, runs: vec![failed, passed],
             state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         }
     }

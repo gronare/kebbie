@@ -254,7 +254,7 @@ mod tests {
 
     fn red_ci(item: &mut Item) {
         item.ci = Some(crate::ci::Watch {
-            address: format!("{}@{}", item.name, item.place), task: item.name.clone(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
+            address: format!("{}@{}", item.name, item.place), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
             state: crate::ci::State::Failed { at: 2, what: "CI · test".to_string(), url: String::new() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         });
     }

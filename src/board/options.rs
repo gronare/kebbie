@@ -309,7 +309,7 @@ mod tests {
     fn watched(state: crate::ci::State, conclusion: &str) -> crate::ci::Watch {
         let run = crate::ci::Run { id: 7, name: "deploy".to_string(), workflow: "deploy".to_string(), status: "completed".to_string(), conclusion: conclusion.to_string(), url: String::new() };
         crate::ci::Watch {
-            address: "billing@web".to_string(), task: "billing".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: vec![run],
+            address: "billing@web".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abc".to_string(), started_at: 1, checked_at: None, close: true, runs: vec![run],
             state, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         }
     }
@@ -545,7 +545,7 @@ mod tests {
         item.place = "web".to_string();
         let run = |id: u64, name: &str| crate::ci::Run { id, name: name.to_string(), workflow: name.to_string(), status: "completed".to_string(), conclusion: "failure".to_string(), url: format!("https://github.com/acme/web/actions/runs/{id}") };
         item.ci = Some(crate::ci::Watch {
-            address: "search-filters@web".to_string(), task: "search-filters".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
+            address: "search-filters@web".to_string(), repo: std::path::PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
             started_at: 0, checked_at: None, close: true, runs: vec![run(42, "CI"), run(43, "Lint")], state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         });
         let long = format!("https://claude.ai/artifact/{}", "a1b2c3d4".repeat(12));

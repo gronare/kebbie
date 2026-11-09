@@ -639,7 +639,7 @@ mod tests {
         assert!(ci_lines(&item, 60).0.is_empty());
         let run = crate::ci::Run { id: 42, name: "CI".to_string(), workflow: "CI".to_string(), status: "in_progress".to_string(), conclusion: String::new(), url: "https://github.com/acme/web/actions/runs/42".to_string() };
         item.ci = Some(crate::ci::Watch {
-            address: "billing@web".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
+            address: "billing@web".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
             started_at: 0, checked_at: None, close: true, runs: vec![run], state: crate::ci::State::Running, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         });
         crate::status::tests::rederive(&mut item);

@@ -110,7 +110,7 @@ mod tests {
 
     fn red_watch(dir: &Path, address: &str) -> crate::ci::Watch {
         crate::ci::Watch {
-            address: address.to_string(), task: "billing".to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
+            address: address.to_string(), repo: dir.to_path_buf(), slug: "acme/app".to_string(), sha: "abcdef0123".to_string(), started_at: 1, checked_at: None, close: true, runs: Vec::new(),
             state: crate::ci::State::Failed { at: 2, what: "deploy · release · Deploy".to_string(), url: "https://ci/1".to_string() }, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         }
     }

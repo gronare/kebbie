@@ -1395,7 +1395,7 @@ pub(crate) mod tests {
 
     fn watched(state: crate::ci::State, close: bool) -> crate::ci::Watch {
         crate::ci::Watch {
-            address: "billing@web".to_string(), task: "billing".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
+            address: "billing@web".to_string(), repo: PathBuf::new(), slug: "acme/web".to_string(), sha: "abcdef0".to_string(),
             started_at: 10, checked_at: None, close, runs: Vec::new(), state, error: None, erring_since: None, pushed: crate::ci::Pushed::default(),
         }
     }
