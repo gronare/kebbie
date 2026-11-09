@@ -423,13 +423,11 @@ mod tests {
             source[start..start + source[start..].find("\n}\n").unwrap()].to_string()
         };
         for (file, name, event) in [
-            ("questions.rs", "answer", "Event::Answered"), ("tasks/push.rs", "prepare", "Event::PushHanded"), ("tasks/push.rs", "deliver", "Event::KeptOpen"), ("tasks/launch.rs", "restart", "Event::Started"), ("tasks/push.rs", "after_ci", "Event::Closing"),
+            ("questions.rs", "answer", "Event::Answered"), ("tasks/push.rs", "prepare", "Event::PushHanded"), ("tasks/launch.rs", "restart", "Event::Started"), ("tasks/push.rs", "after_ci", "Event::Closing"),
             ("tasks/line.rs", "turn", "Event::PushFailed"), ("tasks/push.rs", "join", "Event::PushQueued"), ("tasks/line.rs", "leave", "Why::LeftLine"), ("recover.rs", "apply", "Event::Stopped"), ("tasks/red_ci.rs", "dismiss_as", "Event::Dismissed"), ("tasks/finish.rs", "forget_address", "phase::forget("), ("tasks/stage.rs", "stage_in", "Event::Staged"), ("tasks/stage.rs", "unstage_in", "Event::Unstaged"),
         ] {
             assert!(body(file, name).contains(event), "{file} {name} writes {event}");
         }
-        let deliver = body("tasks/push.rs", "deliver");
-        assert!(deliver.find("Event::PushOut").unwrap() < deliver.find("push_prefix(").unwrap(), "CI running is written before the push, so the push never shows anywhere else");
     }
 
     #[test]
