@@ -131,8 +131,45 @@ fn hook_hash(hook: &Hook) -> String {
 }
 
 fn sha256_version(value: &Value) -> String {
-    let digest = Sha256::digest(serde_json::to_vec(value).unwrap_or_default());
+    sha256_text(&Sha256::digest(serde_json::to_vec(value).unwrap_or_default()))
+}
+
+fn sha256_text(digest: &[u8]) -> String {
     format!("sha256:{}", digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
+}
+
+// Codex 0.166's plugin_content_hash (hooks/src/engine/plugin_fingerprint.rs): each entry under the root, depth first in byte order, as its relative path, its kind, and a file's length and bytes.
+fn content_hash(root: &Path) -> std::io::Result<String> {
+    if !std::fs::symlink_metadata(root)?.is_dir() {
+        return Err(std::io::Error::other("plugin root is not a directory"));
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"codex-plugin-bundle-v1");
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let relative = path.strip_prefix(root).map_err(std::io::Error::other)?;
+        if relative.file_name().and_then(|name| name.to_str()).is_some_and(|name| matches!(name, "__pycache__" | ".venv") || name.ends_with(".pyc") || name.ends_with(".egg-info")) {
+            continue;
+        }
+        let name = relative.as_os_str().as_encoded_bytes();
+        hash.update((name.len() as u64).to_le_bytes());
+        hash.update(name);
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            hash.update(b"directory");
+            let mut entries = std::fs::read_dir(&path)?.collect::<std::io::Result<Vec<_>>>()?;
+            entries.sort_by_key(std::fs::DirEntry::file_name);
+            pending.extend(entries.iter().rev().map(std::fs::DirEntry::path));
+        } else if metadata.is_file() {
+            let bytes = std::fs::read(&path)?;
+            hash.update(b"file");
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(&bytes);
+        } else {
+            return Err(std::io::Error::other(format!("unsupported plugin entry type: {}", path.display())));
+        }
+    }
+    Ok(sha256_text(&hash.finalize()))
 }
 
 fn toml_string(text: &str) -> String {
@@ -152,10 +189,20 @@ fn toml_string(text: &str) -> String {
     quoted
 }
 
+pub fn hook_count() -> usize {
+    HOOKS.len()
+}
+
 // A -c key is split on every dot, so the trust entries, whose keys hold "hooks.json", go in as one inline table.
-pub fn trust_override() -> String {
-    let entries: Vec<String> = HOOKS.iter().map(|hook| format!("{}={{trusted_hash={}}}", toml_string(&hook_key(hook)), toml_string(&hook_hash(hook)))).collect();
+fn trust_entries(content: Option<&str>) -> String {
+    let content = content.map(|hash| format!(",trusted_content_hash={}", toml_string(hash))).unwrap_or_default();
+    let entries: Vec<String> = HOOKS.iter().map(|hook| format!("{}={{trusted_hash={}{content}}}", toml_string(&hook_key(hook)), toml_string(&hook_hash(hook)))).collect();
     format!("hooks.state={{{}}}", entries.join(","))
+}
+
+// Codex 0.166 without trusted_content_hash checks the plugin against the baseline it pinned in .hook-trust on first sight, which any later change to the plugin leaves stale (hooks/src/engine/plugin_trust.rs, matches_hash).
+pub fn trust_override() -> String {
+    trust_entries(home().and_then(|home| content_hash(&plugin_root(&home)).ok()).as_deref())
 }
 
 pub fn enable_override() -> String {
@@ -278,7 +325,7 @@ const NO_UPDATE_CHECK: &str = "check_for_update_on_startup=false";
 // kebbie reads a waiting view and the thread title from Codex's default title items (tui/src/chatwidget/status_surfaces.rs), so the sessions it starts show those whatever the user's tui.terminal_title names.
 const TITLE_ITEMS: &str = "tui.terminal_title=[\"activity\",\"thread-name\",\"project-name\"]";
 
-// kebbie's plugin runs only in the sessions kebbie starts: enabled, and its three hooks trusted by hash, for that invocation alone.
+// kebbie's plugin runs only in the sessions kebbie starts: enabled, and its hooks and files trusted by hash, for that invocation alone.
 pub fn plugin_args() -> [String; 8] {
     ["-c".to_string(), enable_override(), "-c".to_string(), trust_override(), "-c".to_string(), NO_UPDATE_CHECK.to_string(), "-c".to_string(), TITLE_ITEMS.to_string()]
 }
@@ -1211,7 +1258,7 @@ mod tests {
         assert_eq!(file["hooks"]["SessionStart"][0]["hooks"][0]["additionalContextLimit"], json!(0), "a long role is passed whole");
         assert_eq!(hook_key(&HOOKS[2]), "kebbie@kebbie-tasks:hooks/hooks.json:stop:0:0");
         let reported = ["sha256:295a39bbc9d240f43c3f0b9de092ff1e0b435dc36629e69ea10b3316f3b6163d", "sha256:7a7859ef4dc3adbcfaf3e02b025e11999a6850fdd9c76dffd746561da574a189", "sha256:d777eb217913a82b5591d44ce47b1653542e40ad4164479c2c427d6ca93f3482", "sha256:8c65d9d34b88bdcaa4734912f941ba16c0a7e9c3f9947e51901789de58354c28"];
-        assert_eq!(HOOKS.iter().map(hook_hash).collect::<Vec<_>>(), reported, "the currentHash codex app-server reports in hooks/list for these hooks (0.163.0, pre_tool_use 0.166.0, before its /plugin suffix); a change to a hook changes it, and kebbie's override with it");
+        assert_eq!(HOOKS.iter().map(hook_hash).collect::<Vec<_>>(), reported, "the currentHash codex app-server reports in hooks/list for these hooks (0.163.0, pre_tool_use 0.166.0, the part before the / that joins the plugin's content hash); a change to a hook changes it, and kebbie's override with it");
         assert!(trust_override().starts_with("hooks.state={\"kebbie@kebbie-tasks:hooks/hooks.json:session_start:0:0\"={trusted_hash=\"sha256:"));
         let parsed: toml::Table = trust_override().replacen("hooks.state=", "state = ", 1).parse().unwrap();
         assert_eq!(parsed["state"].as_table().unwrap().len(), 4, "the override parses as TOML with all four entries");
@@ -1223,6 +1270,26 @@ mod tests {
         let file: Value = serde_json::from_str(&hooks_json()).unwrap();
         assert_eq!(file["hooks"]["Stop"][0]["hooks"][0]["command"], "\"${PLUGIN_ROOT}/bin/kebbie-hook\" stop", "the launcher in the plugin, which knows where kebbie is");
         assert!(launcher("/opt/kebbie/kebbie").contains("kebbie='/opt/kebbie/kebbie'\n[ -x \"$kebbie\" ] || exit 0\nexec \"$kebbie\" hook codex \"$@\""));
+    }
+
+    #[test]
+    fn kebbie_trusts_its_plugins_files_by_the_hash_codex_takes_of_them() {
+        let home = crate::sh::test_dir("codex-content");
+        install(&home, "/opt/kebbie").unwrap();
+        let root = plugin_root(&home);
+        let content = content_hash(&root).unwrap();
+        assert_eq!(content, "sha256:30c4b10e7f3e14aa4bf668d2c709ccbf76ca7af77db0e89f0293b40f8a05d891", "the part after the / of the currentHash codex app-server 0.166.0 reports in hooks/list for this plugin, installed for /opt/kebbie");
+        let parsed: toml::Table = trust_entries(Some(&content)).replacen("hooks.state=", "state = ", 1).parse().unwrap();
+        let state = parsed["state"].as_table().unwrap();
+        assert_eq!(state.len(), HOOKS.len());
+        for hook in &HOOKS {
+            let entry = &state[&hook_key(hook)];
+            assert_eq!((entry["trusted_hash"].as_str(), entry["trusted_content_hash"].as_str()), (Some(hook_hash(hook).as_str()), Some(content.as_str())), "without the content hash Codex 0.166 judges {} against a .hook-trust baseline that an earlier plugin left", hook.label);
+        }
+        std::fs::write(root.join("bin/.DS_Store"), "x").unwrap();
+        assert_ne!(content_hash(&root).unwrap(), content, "Codex hashes every entry under the plugin, not only the files kebbie writes");
+        assert!(!trust_entries(None).contains("trusted_content_hash"), "a plugin kebbie cannot read is trusted by declaration alone");
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

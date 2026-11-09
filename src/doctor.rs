@@ -839,7 +839,7 @@ pub fn codex(found: &crate::agent::codex::Availability, config: Option<&toml::Ta
     }
     let blocked = crate::agent::codex::hooks_blocked(config);
     checks.push(if blocked.is_empty() {
-        ok("codex hooks", "kebbie enables its plugin and trusts its three hooks by hash in each Codex session it starts").brief("hooks")
+        ok("codex hooks", format!("kebbie enables its plugin and trusts its {} hooks and the plugin's files by hash in each Codex session it starts", crate::agent::codex::hook_count())).brief("hooks")
     } else {
         missing("codex hooks", format!("{}: {}", home.join("config.toml").display(), blocked.join("; ")), one("turn them back on in Codex's /hooks, or drop [features] hooks = false"))
     });
@@ -1654,7 +1654,7 @@ mod tests {
         assert_eq!(lines.iter().map(|check| (check.level, check.name.as_str())).collect::<Vec<_>>(), [(Level::Ok, "codex"), (Level::Ok, "codex plugin"), (Level::Ok, "codex hooks"), (Level::Ok, "codex model")]);
         assert_eq!(lines[3].fact, "gpt-5.5, from /u/.codex/config.toml, for a Codex profile without model");
         assert_eq!(lines[0].fact, "0.163.0 at /u/.local/bin/codex");
-        assert!(lines[1].fact.contains("/u/.codex/plugins/cache/kebbie-tasks/kebbie/local") && lines[2].fact.contains("trusts its three hooks by hash"));
+        assert!(lines[1].fact.contains("/u/.codex/plugins/cache/kebbie-tasks/kebbie/local") && lines[2].fact.contains(&format!("trusts its {} hooks and the plugin's files by hash", crate::agent::codex::hook_count())));
         let old = Availability { version: Some("codex-cli 0.120.4".to_string()), plugin: Installed::Missing, ..ready };
         let off: toml::Table = "[features]\nhooks = false\n".parse().unwrap();
         let lines = codex(&old, Some(&off), true, home, None);

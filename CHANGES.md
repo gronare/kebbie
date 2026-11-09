@@ -28,6 +28,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - kebbie doctor --fix and kebbie update put the push block back in a worktree whose hooks were changed.
 - A comment fix without a subject gets one written from its change.
 - A sandboxed task's plan file outlives a restart of the machine.
+- A Codex task starts without asking you to trust kebbie's hooks, also after an update changed kebbie's plugin.
 - The lead's push waits for the task named in --after, and your own push warns that it went first.
 - Done and drop name a task's halves still open in other repos.
 - Rewording a commit waits for kebbie's other rebase of the worktree and gets past a held index.lock.
