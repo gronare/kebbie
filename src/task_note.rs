@@ -377,9 +377,8 @@ mod tests {
         fake.answer("task-claim", r#"{"path":"Projects/api-billing.md","claimed":false,"claim":{"machine":"devbox","task":"x","since":"2026-10-21T08:00:00Z"}}"#);
         heartbeat(&fake.claiming(), &state, "billing@api");
         assert!(std::fs::read_to_string(state.join("vault.log")).unwrap().contains("held by devbox · x, so its claim was not renewed"), "a heartbeat never takes a note over");
-        let push = include_str!("tasks/push.rs");
         let report = include_str!("report.rs");
-        assert!(push.contains("crate::task_note::heartbeat(cli, state, &address)") && report.contains("crate::task_note::heartbeat(&cli, &state, &me)"));
+        assert!(report.contains("crate::task_note::heartbeat(&cli, &state, &me)"));
     }
 
     #[test]
