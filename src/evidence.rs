@@ -668,27 +668,24 @@ pub fn record_in(state: &Path, address: &str, worktree: &Path, listed: &[String]
     Some(run)
 }
 
-fn context(event: &Value, text: &str) -> String {
-    json!({ "hookSpecificOutput": { "hookEventName": event, "additionalContext": text } }).to_string()
-}
-
 // The PostToolUse and PostToolUseFailure hooks on a task's Bash; it prints only what the task must hear about a test run kebbie could not record.
 pub fn hook(address: &str, input: &str) -> String {
-    let input: Value = serde_json::from_str(input).unwrap_or_default();
-    let Some(cwd) = input["cwd"].as_str().map(PathBuf::from) else { return String::new() };
+    let payload = crate::hooks::Payload::parse(input);
+    let input = payload.value();
+    let Some(cwd) = payload.cwd().map(PathBuf::from) else { return String::new() };
     let settings = crate::config::resolve(Some(&cwd)).map(|loaded| loaded.settings);
     if settings.as_ref().is_ok_and(|settings| settings.steps.value) && let Ok(state) = state_dir() {
-        tasks::steps_noted_after(&state, address, &input);
+        tasks::steps_noted_after(&state, address, input);
     }
     let listed = commands(&settings.map(|settings| settings.test_commands.value).unwrap_or_default());
     let mut said = Vec::new();
-    if input["tool_name"] == "Bash" && let Ok(state) = state_dir() {
-        let missed = unrecorded(input["tool_input"]["command"].as_str().unwrap_or_default(), &listed);
+    if payload.tool_name() == Some("Bash") && let Ok(state) = state_dir() {
+        let missed = unrecorded(payload.command().unwrap_or_default(), &listed);
         said.extend(missed.as_deref().map(unrecorded_context));
         note_seen(&state, address, missed, crate::messages::now());
     }
     let mut passed = passed_in(address, &state_dir().map(|state| settle(&state, address, &listed, crate::messages::now())).unwrap_or_default());
-    if let Some(run) = recorded(address, &cwd, &listed, &input) {
+    if let Some(run) = recorded(address, &cwd, &listed, input) {
         match run.result {
             Outcome::Passed => passed = passed.or_else(|| passed_in(address, std::slice::from_ref(&run))),
             Outcome::Unknown => said.push(unknown_context(&run)),
@@ -698,7 +695,7 @@ pub fn hook(address: &str, input: &str) -> String {
     if let Some(worktree) = passed && let Ok(state) = state_dir() {
         crate::review::again_for_tests(&worktree, address, &crate::status::named(&state, address));
     }
-    if said.is_empty() { String::new() } else { context(&input["hook_event_name"], &said.join("\n")) }
+    if said.is_empty() { String::new() } else { crate::hooks::Answer::Context { event: input["hook_event_name"].clone(), text: said.join("\n") }.render() }
 }
 
 // The worktree of the task under `address` that one of these runs passed in, wherever the shell that ran the hook stands now.
