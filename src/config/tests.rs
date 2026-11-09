@@ -1,6 +1,9 @@
+use std::path::{Path, PathBuf};
+
 use toml::Table;
 
 use super::*;
+use crate::status::Group;
 
 #[test]
 fn keys_live_in_config_toml_only_and_kebbie_config_shows_each_with_why_an_entry_was_ignored() {
