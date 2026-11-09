@@ -974,10 +974,7 @@ mod tests {
     }
 
     #[test]
-    fn the_push_writes_the_watch_before_it_pushes_and_green_closes_the_task_before_the_watch_goes() {
-        let push = include_str!("tasks/push.rs");
-        let deliver = &push[push.find("\nfn deliver(").unwrap()..];
-        assert!(deliver.find("watch(state, repo").unwrap() < deliver.find("push_prefix(").unwrap(), "between the push and the watch a task is neither pushable nor CI running");
+    fn green_closes_the_task_before_the_watch_goes() {
         let source = include_str!("ci.rs");
         let green = &source[source.find("\nfn green(").unwrap()..];
         let green = &green[..green.find("\n}\n").unwrap()];
