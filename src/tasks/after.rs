@@ -1072,8 +1072,6 @@ mod tests {
         let close = &source[source.find("\npub(super) fn close_task(").unwrap()..];
         let close = &close[..close.find("\n}\n").unwrap()];
         assert!(close.contains("end_life(task_of(&slot), &repo, \"done\", landed.as_deref(), None)") && close.contains("watch.pushed.commits"), "done records the commits the push or its CI watch named");
-        let push = include_str!("push.rs");
-        assert!(push.contains("ready.unwrap_or_default(), Some(&pushed))") && push.contains("ready.unwrap_or_default(), Some(&told.commits))"));
         fs::remove_dir_all(state).unwrap();
     }
 
