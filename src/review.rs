@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::agent::Reviewer;
 use crate::config;
+use crate::hooks::{Answer, Payload};
 use crate::lead::{install_root, roles_dir, state_dir, write_settings};
 use crate::messages;
 use crate::peers;
@@ -918,14 +919,13 @@ pub fn without_drivers(command: &str) -> String {
 
 // The PreToolUse hook the reviewer runs before each shell command.
 pub fn guard(input: &str) -> String {
-    let input: Value = serde_json::from_str(input).unwrap_or_default();
-    if let Some(command) = input["tool_input"]["command"].as_str().filter(|command| read_only(command)) {
-        let mut tool_input = input["tool_input"].clone();
+    let input = Payload::parse(input);
+    if let Some(command) = input.command().filter(|command| read_only(command)) {
+        let mut tool_input = input.tool_input().clone();
         tool_input["command"] = json!(without_drivers(command));
-        return json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "updatedInput": tool_input } }).to_string();
+        return Answer::Rewrite(tool_input).render();
     }
-    let reason = "The reviewer only reads: run git log, git diff or git show on their own (no pipes, redirection or --output), and use Read, Grep and Glob for files.";
-    json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason } }).to_string()
+    Answer::Deny("The reviewer only reads: run git log, git diff or git show on their own (no pipes, redirection or --output), and use Read, Grep and Glob for files.".to_string()).render()
 }
 
 const PROMPT_BUDGET: usize = 12_000;
