@@ -36,7 +36,7 @@ pub(crate) use launch::{Begun, Session, Start, awaits_first_prompt, begin, codex
 pub(crate) use plan::{noted_after as steps_noted_after, seen_in as steps_seen_in, steps};
 pub(crate) use plan::{Step, Steps, State as StepState, Tips as StepTips, read_at as steps_read, shown_at as steps_shown_at, for_path as steps_for, mark as step_mark};
 pub(crate) use pool::{Slot, find_task, list, move_work, slots, task_of};
-pub(crate) use push::{after_ci, cancel as cancel_push, land, place_in_line, push, rebase, tidy};
+pub(crate) use push::{DevicePush, after_ci, cancel as cancel_push, land, place_in_line, push, push_as, rebase, tidy};
 pub(crate) use stage::{WAIT_CEILING as STAGE_WAIT, stage, staged, tick as stage_tick, unstage};
 pub(crate) use started::{link, started_items, started_links};
 

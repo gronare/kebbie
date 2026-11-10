@@ -163,7 +163,7 @@ pub(super) fn step(state: &Path, slot: &Slot, address: &str, waiting: Option<boo
             tell(&overlap_text(&upstream, &touched));
             Ok(Step::Rebased(touched))
         }
-        Ok(Updated::Conflict) => match hand(slot, &conflict_prompt(WHY, &upstream)) {
+        Ok(Updated::Conflict(_)) => match hand(slot, &conflict_prompt(WHY, &upstream)) {
             Ok(()) => Ok(Step::Handed),
             Err(cannot) => Ok(Step::Stuck(format!("rebasing onto {upstream} conflicts and {cannot}"))),
         },

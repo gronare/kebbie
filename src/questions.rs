@@ -242,7 +242,7 @@ pub fn answer_text(message: &Message, choice: Option<usize>, comment: &str) -> R
     }
 }
 
-fn answer_copy(message: &Message, choice: Option<usize>, comment: &str) -> String {
+fn answer_copy(message: &Message, choice: Option<usize>, comment: &str, caller: &crate::permit::Caller) -> String {
     let picked = choice.and_then(|index| message.question.as_ref()?.options.get(index)).map(|(label, _)| label.clone());
     let comment = comment.trim();
     let answered = match (picked, comment.is_empty()) {
@@ -250,34 +250,74 @@ fn answer_copy(message: &Message, choice: Option<usize>, comment: &str) -> Strin
         (Some(label), false) => format!("{label}, with the comment: {comment}"),
         (None, _) => format!("in their own words: {comment}"),
     };
-    format!("{} asked \"{}\"; the user answered on the board: {answered}", message.from, message.text)
+    let place = match caller {
+        crate::permit::Caller::Hub { name, .. } => format!("from {name}"),
+        _ => "on the board".to_string(),
+    };
+    format!("{} asked \"{}\"; the user answered {place}: {answered}", message.from, message.text)
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Unanswered {
+    NotAllowed(String),
+    Settled(String),
+    Invalid(String),
+    Failed(String),
+}
+
+impl From<String> for Unanswered {
+    fn from(error: String) -> Unanswered {
+        Unanswered::Failed(error)
+    }
+}
+
+impl From<Unanswered> for String {
+    fn from(unanswered: Unanswered) -> String {
+        match unanswered {
+            Unanswered::NotAllowed(text) | Unanswered::Settled(text) | Unanswered::Invalid(text) | Unanswered::Failed(text) => text,
+        }
+    }
 }
 
 // The board's answer to a question: the task gets it as a message from the user, the question closes, and the lead gets a one-line copy.
 pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> {
+    answer_as(&crate::permit::Caller::User, id, choice, comment).map_err(String::from)
+}
+
+// Only the user answers, at the board or from a trusted device through the hub; a device answers a task's or a plan's question, never a restart's or a review's.
+pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>, comment: &str) -> std::result::Result<String, Unanswered> {
+    use crate::permit::Caller;
+    let hub = matches!(caller, Caller::Hub { .. });
+    if !matches!(caller, Caller::User) && !hub {
+        return Err(Unanswered::NotAllowed(format!("answering the user's question is the user's call; {} cannot", crate::permit::describe(caller))));
+    }
     let sessions = peers::sessions().unwrap_or_default();
     let _lock = Lock::take(true)?;
     let messages = messages::load();
     let open = open_now(&messages);
     let Some(message) = open.iter().copied().find(|question| question.id == id) else {
-        return answer_late(&messages, id, choice, comment, &sessions);
+        return answer_late(&messages, id, choice, comment, &sessions, caller);
     };
+    let local = [Some(crate::restart::QUESTION_KIND), Some(crate::review::QUESTION_KIND)].contains(&message.kind.as_deref());
+    if hub && local {
+        return Err(Unanswered::NotAllowed("A restart or review question waits for the user at the machine; answer it on the board".to_string()));
+    }
     if message.kind.as_deref() == Some(crate::restart::QUESTION_KIND) {
-        let session = message.about.clone().ok_or("That restart question names no session")?;
+        let session = message.about.clone().ok_or_else(|| Unanswered::Failed("That restart question names no session".to_string()))?;
         let yes = choice == Some(0);
         if choice.is_none() {
-            return Err("Answer the restart question with yes or no".to_string());
+            return Err(Unanswered::Invalid("Answer the restart question with yes or no".to_string()));
         }
         messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
         drop(_lock);
-        return crate::restart::answer(&session, yes);
+        return Ok(crate::restart::answer(&session, yes)?);
     }
     if message.kind.as_deref() == Some(crate::review::QUESTION_KIND) {
         let message = (*message).clone();
         drop(_lock);
-        return crate::review::answer_question(&message, choice, comment);
+        return Ok(crate::review::answer_question(&message, choice, comment)?);
     }
-    let text = answer_text(message, choice, comment)?;
+    let text = answer_text(message, choice, comment).map_err(Unanswered::Invalid)?;
     let told = match sessions.iter().find(|session| session.address == message.from) {
         Some(task) => {
             let sent = messages::send_locked(USER_LABEL, &[task], &text, &sessions, Some(id), Some("answer"))?.join(" ");
@@ -290,8 +330,12 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
             format!("{} has no session now; held, and delivered when it runs.", message.from)
         }
     };
-    messages::copy_to_lead_locked(&answer_copy(message, choice, comment), None, &sessions)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).ok()
+    messages::copy_to_lead_locked(&answer_copy(message, choice, comment, caller), None, &sessions)?;
+    Ok(crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).to_string())
+}
+
+pub fn asked_by(id: &str) -> Option<String> {
+    messages::load().into_iter().find(|message| message.id == id && message.question.is_some()).map(|message| message.from)
 }
 
 #[derive(Debug, PartialEq)]
@@ -328,14 +372,14 @@ fn closed_unanswered<'a>(messages: &'a [Message], id: &str) -> Option<&'a Messag
 }
 
 // The caller holds the lock. A turn that starts in the task's pane, or a newer question, closes a question, so an answer given on the board a moment later is delivered as the user's word rather than lost; a task that ended gets nothing.
-fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &str, sessions: &[peers::Session]) -> Result<String> {
-    let message = closed_unanswered(messages, id).ok_or("That question no longer waits for an answer")?;
+fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &str, sessions: &[peers::Session], caller: &crate::permit::Caller) -> std::result::Result<String, Unanswered> {
+    let message = closed_unanswered(messages, id).ok_or_else(|| Unanswered::Settled("That question no longer waits for an answer".to_string()))?;
     let closed = closed_by(messages, message, report::turn_started);
     if closed == Closed::Ended {
         messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
-        return crate::notice::Notice::new(crate::notice::Tone::NotNow, "Not sent: its task ended before you answered").detail("task", &message.from).err();
+        return Err(Unanswered::Settled(crate::notice::Notice::new(crate::notice::Tone::NotNow, "Not sent: its task ended before you answered").detail("task", &message.from).to_string()));
     }
-    let text = format!("{} {}", answer_text(message, choice, comment)?, closed_before(&closed));
+    let text = format!("{} {}", answer_text(message, choice, comment).map_err(Unanswered::Invalid)?, closed_before(&closed));
     let told = match sessions.iter().find(|session| session.address == message.from) {
         Some(task) => messages::send_locked(USER_LABEL, &[task], &text, sessions, None, Some("answer"))?.join(" "),
         None => {
@@ -344,14 +388,14 @@ fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &
         }
     };
     messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
-    messages::copy_to_lead_locked(&answer_copy(message, choice, comment), None, sessions)?;
+    messages::copy_to_lead_locked(&answer_copy(message, choice, comment, caller), None, sessions)?;
     let notice = match closed {
         Closed::Newer { open: true } => crate::notice::Notice::new(crate::notice::Tone::Moving, "Answer held: the task asked a newer question")
             .next(format!("It reaches {} once you answer its newer question.", message.from)),
         Closed::Newer { open: false } => crate::notice::Notice::new(crate::notice::Tone::Done, "Answered, as a message").next(format!("The question had closed when the task asked a newer one. {told}")),
         _ => crate::notice::Notice::new(crate::notice::Tone::Done, "Answered, as a message").next(format!("The question had closed when a turn started in its pane. {told}")),
     };
-    notice.detail("task", &message.from).ok()
+    Ok(notice.detail("task", &message.from).to_string())
 }
 
 pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&str>, text: &str) -> Result<String> {
@@ -404,7 +448,7 @@ fn answered_as(caller: &crate::permit::Caller, to: &str) -> Result<String> {
     let own = match caller {
         Caller::User | Caller::Lead => None,
         Caller::Task(address) => Some(address.as_str()),
-        Caller::Agent | Caller::Sandboxed | Caller::LeadSandboxed => return Err(format!("marking a question answered is the user's or the lead's; {} cannot", crate::permit::describe(caller))),
+        Caller::Agent | Caller::Sandboxed | Caller::LeadSandboxed | Caller::Hub { .. } => return Err(format!("marking a question answered is the user's or the lead's; {} cannot", crate::permit::describe(caller))),
     };
     let _lock = Lock::take(true)?;
     let messages = messages::load();
@@ -564,8 +608,39 @@ mod tests {
         assert_eq!(answer_text(&messages[0], None, "neither, use cron").unwrap(), "The user's answer to \"Which queue should retries use?\", in their own words: neither, use cron");
         assert!(answer_text(&messages[0], Some(2), "").is_err());
         assert!(answer_text(&messages[0], None, "  ").is_err());
-        assert_eq!(answer_copy(&messages[0], Some(1), "fine"), "billing@web asked \"Which queue should retries use?\"; the user answered on the board: Solid Queue, with the comment: fine");
-        assert_eq!(answer_copy(&messages[0], None, "use cron"), "billing@web asked \"Which queue should retries use?\"; the user answered on the board: in their own words: use cron");
+        let user = crate::permit::Caller::User;
+        assert_eq!(answer_copy(&messages[0], Some(1), "fine", &user), "billing@web asked \"Which queue should retries use?\"; the user answered on the board: Solid Queue, with the comment: fine");
+        assert_eq!(answer_copy(&messages[0], None, "use cron", &user), "billing@web asked \"Which queue should retries use?\"; the user answered on the board: in their own words: use cron");
+        let phone = crate::permit::Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() };
+        assert_eq!(answer_copy(&messages[0], Some(0), "", &phone), "billing@web asked \"Which queue should retries use?\"; the user answered from iPhone Duo: Sidekiq");
+    }
+
+    #[test]
+    fn a_device_answers_a_tasks_question_as_the_user_and_never_a_restart_or_a_review_question() {
+        use crate::permit::Caller;
+        let from = format!("hubanswer{}@web", std::process::id());
+        let id = messages::new_id("question");
+        messages::append(&record(&id, messages::now(), &from, &asked(), None, None)).unwrap();
+        let phone = Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() };
+        assert_eq!(asked_by(&id).as_deref(), Some(from.as_str()));
+        assert!(matches!(answer_as(&Caller::Agent, &id, Some(0), ""), Err(Unanswered::NotAllowed(_))), "only the user answers");
+        assert!(matches!(answer_as(&phone, &id, Some(9), ""), Err(Unanswered::Invalid(_))));
+        let said = answer_as(&phone, &id, Some(1), "keep it short").unwrap();
+        assert!(said.contains("Answered"), "{said}");
+        let log = messages::load();
+        assert!(log.iter().any(|message| message.to == from && message.from == USER_LABEL && message.text.contains("Solid Queue (one less service). Their comment: keep it short")), "the task hears the user's answer");
+        assert!(log.iter().any(|message| message.to == LEAD_LABEL && message.text.contains(&format!("{from} asked")) && message.text.contains("the user answered from iPhone Duo: Solid Queue, with the comment: keep it short")), "the lead hears which device answered");
+        assert!(matches!(answer_as(&phone, &id, Some(0), ""), Err(Unanswered::Settled(_))), "an answered question takes no second answer");
+        for kind in [crate::restart::QUESTION_KIND, crate::review::QUESTION_KIND] {
+            let id = messages::new_id("question");
+            let mut asking = record(&id, messages::now(), &format!("{kind}{}@web", std::process::id()), &asked(), None, None);
+            asking["kind"] = json!(kind);
+            asking["about"] = json!("session");
+            messages::append(&asking).unwrap();
+            let refused = answer_as(&phone, &id, Some(0), "").unwrap_err();
+            assert!(matches!(&refused, Unanswered::NotAllowed(text) if text.contains("answer it on the board")), "{kind}: {refused:?}");
+            messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" })).unwrap();
+        }
     }
 
     #[test]
@@ -587,7 +662,7 @@ mod tests {
         let asked = crate::status::with_titles_in(&state, &question_copy(&messages[0], true));
         assert!(asked.starts_with("Retry failed charges (billing@web) asks the user:"), "{asked}");
         assert!(asked.contains("kebbie decide billing@web \"<answer>\"") && asked.contains("kebbie defer billing@web"), "a command's argument stays as it runs: {asked}");
-        let answered = crate::status::with_titles_in(&state, &answer_copy(&messages[0], Some(0), ""));
+        let answered = crate::status::with_titles_in(&state, &answer_copy(&messages[0], Some(0), "", &crate::permit::Caller::User));
         assert!(answered.starts_with("Retry failed charges (billing@web) asked"), "{answered}");
         let source = include_str!("messages/lead.rs");
         let copy = &source[source.find("\npub fn copy_to_lead_locked(").unwrap()..];

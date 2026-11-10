@@ -217,7 +217,7 @@ fn turn(state: &Path, head: &Intent, log: &[Message], now: u64, read: Read, push
             Next::Drop(why) => return Turn::Out(why),
         }
     }
-    let skipped = if head.by == By::User { open_before(head, log) } else { Vec::new() };
+    let skipped = if head.by.is_user() { open_before(head, log) } else { Vec::new() };
     match push(head, &slot) {
         Ok(Sent::Pushed(said)) => {
             intent::forget(state, &head.address);
@@ -325,20 +325,20 @@ mod tests {
         let ready = |id: &str| { let mut message = report(id, 200, "ready"); message.from = address.clone(); vec![message] };
         save(&state, &intent(By::Lead, &dir, &current)).unwrap();
         let mut pushed = Vec::new();
-        complete_in(&state, &[], 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &[], 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert!(pushed.is_empty() && load(&state, &address).is_some(), "no report yet: it waits");
-        complete_in(&state, &ready("r1"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &ready("r1"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed, [By::Lead], "pushed as the lead that asked, under its own checks");
         assert!(load(&state, &address).is_none());
-        complete_in(&state, &ready("r1"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &ready("r1"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed.len(), 1, "an intent pushes once");
         save(&state, &intent(By::User, &dir, &current)).unwrap();
         commit(&slot.path, "e", "a fix while testing");
-        complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed.len(), 1, "changed commits are never pushed on the old commits' word");
         assert!(load(&state, &address).is_some(), "the push stays under way while the fix is checked");
         crate::tasks::approval::record_approval(&state, &address, &fingerprint(&slot.path, &upstream).unwrap()).unwrap();
-        complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by); Ok(Sent::Pushed(String::new())) });
+        complete_in(&state, &ready("r2"), 300, &|_, _| None, &mut |intent, _| { pushed.push(intent.by.clone()); Ok(Sent::Pushed(String::new())) });
         assert_eq!(pushed, [By::Lead, By::User], "the lead's approval of the fix lets the user's push go out");
         assert!(load(&state, &address).is_none());
         let current = fingerprint(&slot.path, &upstream).unwrap();
@@ -391,7 +391,7 @@ mod tests {
         forget(&state, &address);
         queue(By::User);
         let mut said = Vec::new();
-        complete_in(&state, &ready, 300, &|_, _| None, &mut |intent, _| { said.push((intent.task.clone(), intent.by)); Ok(Sent::Pushed(done.clone())) });
+        complete_in(&state, &ready, 300, &|_, _| None, &mut |intent, _| { said.push((intent.task.clone(), intent.by.clone())); Ok(Sent::Pushed(done.clone())) });
         assert_eq!(said[0], ("billing".to_string(), By::User), "the user's own push goes out");
         let mut out = Vec::new();
         save(&state, &Intent { work: Work::Turn, ..intent(By::User, &dir, &fingerprint(&slot.path, &upstream).unwrap()) }).unwrap();

@@ -344,11 +344,11 @@ fn not_done(state: &DepState) -> &'static str {
     }
 }
 
-pub(crate) fn intro(wait: &Wait, facts: &Facts, anyway: Option<By>) -> String {
+pub(crate) fn intro(wait: &Wait, facts: &Facts, anyway: Option<&By>) -> String {
     wait.after.iter().map(|dep| match facts.state(&dep.address, wait.at) {
         DepState::Done => landed_lines(&dep.address, facts.ends.get(&dep.address)),
-        DepState::Ended(how) => format!("This task waited for {}, which was {how}; {} started it anyway.", dep.address, anyway.map_or("kebbie", By::word)),
-        state => format!("This task waited for {}, which was not done ({}) when {} started it anyway: build on main as it is, and expect {} to land later.", dep.address, not_done(&state), anyway.map_or("kebbie", By::word), dep.address),
+        DepState::Ended(how) => format!("This task waited for {}, which was {how}; {} started it anyway.", dep.address, anyway.map_or("kebbie", |by| by.word())),
+        state => format!("This task waited for {}, which was not done ({}) when {} started it anyway: build on main as it is, and expect {} to land later.", dep.address, not_done(&state), anyway.map_or("kebbie", |by| by.word()), dep.address),
     }).collect::<Vec<_>>().join("\n")
 }
 
@@ -594,7 +594,7 @@ pub(crate) fn queue_in(state: &Path, caller: &Caller, repos: &[PathBuf], asked: 
             Plan::Now if asked.starts_at.is_some() => Vec::new(),
             Plan::Now => continue,
         };
-        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by, at: now, blocked: None, gone_since: None, why: asked.why.map(str::to_string), starts_at: asked.starts_at };
+        let wait = Wait { task: task.clone(), repo: repo.clone(), after, prompt: asked.prompt.to_string(), mode: asked.mode.map(str::to_string), profile: asked.profile.map(str::to_string), backlog: asked.backlog.map(str::to_string), by: by.clone(), at: now, blocked: None, gone_since: None, why: asked.why.map(str::to_string), starts_at: asked.starts_at };
         save(state, &wait)?;
         if let Some(title) = asked.title.map(str::to_string).or_else(|| prompt_title(asked.prompt)) {
             crate::status::keep_title(state, &wait.address(), &crate::title::readable(&title, &name_of(repo)));
@@ -649,7 +649,7 @@ pub(crate) fn now_in(state: &Path, caller: &Caller, name: &str, log: &[Message],
             said.push((wait.address(), Notice::new(Tone::NotNow, "It is starting already").detail("task", wait.address()).to_string()));
             continue;
         }
-        match launch(state, wait, &intro(wait, &facts, Some(by)), begin, tell) {
+        match launch(state, wait, &intro(wait, &facts, Some(&by)), begin, tell) {
             Ok(started) => said.push((wait.address(), started)),
             Err(error) => {
                 failed = true;

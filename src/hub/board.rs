@@ -60,7 +60,7 @@ fn question(item: &status::Item) -> Option<Question> {
     Some(Question {
         id: message.id.clone(),
         text: message.text.clone(),
-        options: asked.options.iter().map(|(label, meaning)| QuestionOption { label: label.clone(), meaning: meaning.clone() }).collect(),
+        options: asked.options.iter().enumerate().map(|(index, (label, meaning))| QuestionOption { label: label.clone(), meaning: meaning.clone(), comment: asked.comment.contains(&index) }).collect(),
         recommend: u8::try_from(asked.recommend).ok().filter(|recommend| *recommend > 0),
         kept_for_user: asked.waits,
         plan: None,
@@ -332,12 +332,22 @@ pub(crate) mod tests {
         let question = shown.question.as_ref().unwrap();
         assert_eq!((question.text.as_str(), question.options.len(), question.recommend), ("Keep the old endpoint for a release?", 2, Some(2)));
         assert_eq!(question.options[1].label, "Remove it");
+        assert!(!question.options[0].comment && !question.options[1].comment, "neither option takes a comment");
         assert!(question.plan.is_none(), "a plan path stays on the machine");
         assert_eq!(shown.git.as_ref().unwrap().upstream, "main");
         let text = serde_json::to_string(&board).unwrap();
         for local in ["/Users/someone", "w_secret_space", "localhost:3003", "w1:p9"] {
             assert!(!text.contains(local), "{local} leaked: {text}");
         }
+    }
+
+    #[test]
+    fn an_option_that_takes_the_users_comment_tells_the_phone_so() {
+        let mut item = asking("refunds", "shop");
+        item.question.as_mut().unwrap().question.as_mut().unwrap().comment = vec![1];
+        let board = build(&[item], &[], Vec::new(), None, &Seen::default());
+        let options = &board.items[0].question.as_ref().unwrap().options;
+        assert_eq!(options.iter().map(|option| option.comment).collect::<Vec<_>>(), [false, true], "the phone asks for a comment exactly where kebbie refuses an answer without one");
     }
 
     #[test]

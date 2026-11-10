@@ -334,7 +334,7 @@ impl Item {
         let pending = self.push_waits.as_ref()?;
         let stalled = self.report.as_ref().is_some_and(|report| now.saturating_sub(report.at) > PUSH_STALLS_AFTER);
         let who = match pending.by {
-            tasks::PushBy::User => "you",
+            tasks::PushBy::User | tasks::PushBy::Hub { .. } => "you",
             tasks::PushBy::Lead => "the lead",
         };
         if pending.work == tasks::PushWork::Turn {

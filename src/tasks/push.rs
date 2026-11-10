@@ -78,7 +78,7 @@ pub(super) struct Touched {
 pub(super) enum Updated {
     Clean,
     Overlap(Vec<Touched>),
-    Conflict,
+    Conflict(Vec<String>),
 }
 
 // Rebases onto upstream, already fetched; a conflict is aborted, and a rebase git refuses to start is an error with git's own reason.
@@ -100,7 +100,7 @@ fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) 
         Err(error) if rebase_in_progress(path) => {
             let unmerged = git(path, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
             git_writing(path, &[options, &["rebase", "--abort"]].concat())?;
-            if unmerged.is_empty() { Err(refused(path, upstream, &error)) } else { Ok(Updated::Conflict) }
+            if unmerged.is_empty() { Err(refused(path, upstream, &error)) } else { Ok(Updated::Conflict(unmerged.lines().map(str::to_string).collect())) }
         }
         Err(error) => Err(refused(path, upstream, &error)),
     }
@@ -191,7 +191,7 @@ fn overlap(path: &Path, upstream: &str, since: Option<&str>) -> Result<Vec<Touch
 
 // Ok(false) when the rebase conflicted and the task's Claude took it over.
 fn rebase_or_hand_over(slot: &Slot, upstream: &str, why: &str) -> Result<bool> {
-    if update(&slot.path, upstream)? != Updated::Conflict {
+    if !matches!(update(&slot.path, upstream)?, Updated::Conflict(_)) {
         return Ok(true);
     }
     let task = task_of(slot);
@@ -213,7 +213,7 @@ pub(super) fn conflict_prompt(why: &str, upstream: &str) -> String {
     )
 }
 
-fn overlap_prompt(by: By, upstream: &str, touched: &[Touched], through: Through) -> String {
+fn overlap_prompt(by: &By, upstream: &str, touched: &[Touched], through: Through) -> String {
     let files: Vec<String> = touched.iter().map(|touched| format!("- {}: {}", touched.file, touched.commits.join("; "))).collect();
     if let Through::First { count, .. } = through {
         return format!(
@@ -325,7 +325,7 @@ pub(super) fn pushed_fingerprint(path: &Path, upstream: &str, through: Through) 
     }
 }
 
-fn authorize(caller: &Caller, repo: &Path, slot: &Slot, upstream: &str, through: Through) -> Result<&'static str> {
+fn authorize(caller: &Caller, repo: &Path, slot: &Slot, upstream: &str, through: Through) -> Result<String> {
     let pusher = authorize_as(caller, repo, slot, upstream, through, "Not pushed")?;
     if super::accept::accept_required(repo) {
         let take = match through { Through::All => None, Through::First { count, .. } => Some(count) };
@@ -334,7 +334,7 @@ fn authorize(caller: &Caller, repo: &Path, slot: &Slot, upstream: &str, through:
     Ok(pusher)
 }
 
-pub(super) fn authorize_as(caller: &Caller, repo: &Path, slot: &Slot, upstream: &str, through: Through, refused: &str) -> Result<&'static str> {
+pub(super) fn authorize_as(caller: &Caller, repo: &Path, slot: &Slot, upstream: &str, through: Through, refused: &str) -> Result<String> {
     let task = task_of(slot);
     let address = peers::address(task, &name_of(repo));
     let head = git(&slot.path, &["rev-parse", "HEAD"])?;
@@ -351,6 +351,69 @@ pub(super) fn authorize_as(caller: &Caller, repo: &Path, slot: &Slot, upstream: 
 
 fn nothing_to_push<T>(task: &str) -> Result<T> {
     Notice::new(Tone::NotNow, "Nothing to push: it has no commits").detail("task", task).err()
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum DevicePush {
+    Pushed { short: String, main: String },
+    Queued(String),
+    Conflict { files: Vec<String>, main: String },
+    Tests { files: Vec<String>, main: String },
+    Settled(String),
+    Refused(String),
+    UnknownTask(String),
+    Failed(String),
+}
+
+// The same push kebbie push runs, the whole branch, for a device on the user's behalf; it refuses only by the gates every push of the user's passes, never because HEAD or main moved since the device saw the task.
+pub(crate) fn push_as(caller: &Caller, address: &str) -> DevicePush {
+    let (task, place) = address.split_once('@').unwrap_or((address, ""));
+    let Some(repo) = crate::repo::pooled_checkouts().into_iter().find(|repo| name_of(repo) == place) else {
+        return DevicePush::UnknownTask(format!("No repo {place} on this machine"));
+    };
+    let slot = match find_task(&repo, Some(task), &repo) {
+        Ok(slot) => slot,
+        Err(error) => return DevicePush::UnknownTask(error),
+    };
+    let state = match state_dir() {
+        Ok(state) => state,
+        Err(error) => return DevicePush::Failed(error),
+    };
+    device_push(&state, caller, &repo, &slot, &super::line::live_read(), &mut live_push(&state))
+}
+
+pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, read: super::line::Read, push: super::line::Push) -> DevicePush {
+    let task = task_of(slot);
+    let address = peers::address(task, &name_of(repo));
+    let upstream = match default_branch(repo) {
+        Ok(upstream) => upstream,
+        Err(error) => return DevicePush::Failed(error),
+    };
+    let main = main_of(&upstream).to_string();
+    match open_shas(&slot.path, &upstream) {
+        Ok(open) if open.is_empty() => return DevicePush::Settled(Notice::new(Tone::NotNow, "Nothing to push: it has no commits").detail("task", task).to_string()),
+        Ok(_) => {}
+        Err(error) => return DevicePush::Failed(error),
+    }
+    if let Err(refused) = join(state, caller, repo, slot, Through::All) {
+        return DevicePush::Refused(refused);
+    }
+    let driven = super::line::drive(state, repo, Some(&address), &messages::load(), messages::now(), read, push);
+    let said = match driven.mine {
+        Some(Err(error)) => return DevicePush::Failed(error),
+        Some(Ok(said)) => said,
+        None => return DevicePush::Queued(queued_notice(state, &address, task).unwrap_or_default()),
+    };
+    let files = || Notice::read(&said, false).details.into_iter().find(|(label, _)| label == "files").map(|(_, files)| files.split(" · ").map(str::to_string).collect()).unwrap_or_default();
+    match intent::load(state, &address).map(|waiting| waiting.work) {
+        Some(Work::Conflict) => DevicePush::Conflict { files: files(), main },
+        Some(Work::Tests) => DevicePush::Tests { files: files(), main },
+        Some(Work::Turn | Work::Ci) => DevicePush::Queued(said),
+        None => match git(repo, &["rev-parse", "--short=7", &upstream]) {
+            Ok(short) => DevicePush::Pushed { short, main },
+            Err(_) => DevicePush::Failed(said),
+        },
+    }
 }
 
 pub(super) fn push_task(caller: &Caller, repo: &Path, slot: &Slot, through: Through) -> Result<String> {
@@ -424,13 +487,13 @@ pub(super) fn join(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, thro
     authorize(caller, repo, slot, &upstream, through)?;
     let by = By::of(caller).ok_or_else(|| Notice::new(Tone::Failed, format!("Not pushed: {} may not push it", crate::permit::describe(caller))).detail("task", &task).to_string())?;
     let waiting = intent::load(state, &address);
-    if waiting.is_some() && *caller != Caller::User {
+    if waiting.is_some() && !By::of(caller).is_some_and(|by| by.is_user()) {
         return Notice::new(Tone::NotNow, "Already being pushed").next("It is in the push line; kebbie pushes it when its turn comes.").detail("task", &task).err();
     }
     let now = messages::now();
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
     let queued = waiting.and_then(|waiting| waiting.queued).unwrap_or(now);
-    intent::save(state, &Intent { by, work: Work::Turn, address: address.clone(), repo: repo.to_path_buf(), task, fingerprint: pushed_fingerprint(&slot.path, &upstream, through)?, through, at: now, seen, hand: None, queued: Some(queued) })?;
+    intent::save(state, &Intent { by: by.clone(), work: Work::Turn, address: address.clone(), repo: repo.to_path_buf(), task, fingerprint: pushed_fingerprint(&slot.path, &upstream, through)?, through, at: now, seen, hand: None, queued: Some(queued) })?;
     intent::forget_left(state, &address);
     let ahead = intent::line(state, repo).iter().position(|queued| queued.address == address).unwrap_or(0);
     crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushQueued { ahead });
@@ -453,7 +516,7 @@ pub(super) fn cancel_as(state: &Path, caller: &Caller, repo: &Path, slot: &Slot)
     if waiting.work == Work::Ci {
         return Notice::new(Tone::NotNow, "Not taken out: its commits are on main").you("Fix the red CI, or dismiss it.").detail("task", task).err();
     }
-    if by == By::Lead && waiting.by == By::User {
+    if by == By::Lead && waiting.by.is_user() {
         return Notice::new(Tone::Failed, "Not taken out: the user asked for this push").you("Ask the user; only they take their push back.").detail("task", task).err();
     }
     let Some(_turnstile) = super::line::Turnstile::try_take(state, repo) else {
@@ -487,13 +550,13 @@ pub(super) enum Sent {
 
 // Someone else's push can land between the fetch and this push; then it fetches, rebases and decides again, so shared files still go to the task's Claude.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn push_task_with(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through, queued: Option<u64>, hand_over: HandOver, send: &mut dyn FnMut(&'static str, &Out) -> Result<String>) -> Result<Sent> {
+pub(super) fn push_task_with(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Through, queued: Option<u64>, hand_over: HandOver, send: &mut dyn FnMut(&str, &Out) -> Result<String>) -> Result<Sent> {
     let mut tried = 0;
     loop {
         tried += 1;
         match prepare(state, caller, repo, slot, through, queued, hand_over)? {
             Prepared::Handed(said) => return Ok(Sent::Handed(said)),
-            Prepared::Push(pusher, out) => match send(pusher, &out) {
+            Prepared::Push(pusher, out) => match send(&pusher, &out) {
                 Err(error) if rejected(&error) && tried < PUSH_TRIES => {}
                 sent => return sent.map(Sent::Pushed),
             },
@@ -515,7 +578,7 @@ pub(super) struct Out {
 
 #[derive(Debug, PartialEq)]
 pub(super) enum Prepared {
-    Push(&'static str, Out),
+    Push(String, Out),
     Handed(String),
 }
 
@@ -538,7 +601,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     fetch(repo)?;
     let recorded = pushed_fingerprint(&slot.path, &upstream, through)?;
     let seen = messages::latest_reports(&messages::load()).get(&address).map(|report| report.id.clone());
-    let record = |work: Work, fingerprint: String| intent::save(state, &Intent { by, work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone(), hand: None, queued });
+    let record = |work: Work, fingerprint: String| intent::save(state, &Intent { by: by.clone(), work, address: address.clone(), repo: repo.to_path_buf(), task: task.clone(), fingerprint, through, at: messages::now(), seen: seen.clone(), hand: None, queued });
     let (updated, out) = match through {
         Through::All => (update(&slot.path, &upstream)?, None),
         Through::First { .. } => {
@@ -555,24 +618,24 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
     let kept = if through == Through::All { String::new() } else { format!(" {LEFT_AS_IT_WAS}") };
     match updated {
         Updated::Clean => {}
-        Updated::Conflict => {
+        Updated::Conflict(files) => {
             record(Work::Conflict, recorded)?;
-            let why = format!("{} asked kebbie to push this task", capitalized(pusher));
+            let why = format!("{} asked kebbie to push this task", capitalized(&pusher));
             let prompt = format!("{}{kept} {WAITING_BEHIND}", conflict_prompt(&why, &upstream));
             if let Err(cannot) = hand_over(slot, &prompt).and_then(|_| intent::note_hand_over(state, &address)) {
                 intent::forget(state, &address);
                 return Notice::new(Tone::Failed, format!("Not pushed: it conflicts with {}, and kebbie could not pass the rebase to its Claude", main_of(&upstream)))
-                    .you("Push again; if this repeats, rebase it yourself in its worktree.").detail("task", &task).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
+                    .you("Push again; if this repeats, rebase it yourself in its worktree.").detail("task", &task).detail("files", files.join(" · ")).detail("folder", slot.path.display().to_string()).detail("error", cannot).err();
             }
             crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushHanded);
-            tell_lead(&format!("{} pushed {address}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kebbie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line meanwhile, for up to {} minutes.", capitalized(pusher), by.word(), super::line::CEILING / 60));
+            tell_lead(&format!("{}; rebasing onto {upstream} conflicted, so its Claude resolves it as part of the push. When it reports ready, the reviewer checks the resolved commits against the rules and kebbie pushes them for {} then; you hear only of a break, or when the reviewer gives no verdict. The task keeps the head of its repo's push line meanwhile, for up to {} minutes.", who_pushed(&pusher, &address), by.word(), super::line::CEILING / 60));
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: it conflicts with {}", main_of(&upstream)))
-                .next(format!("Its Claude resolves the conflict, the reviewer checks the result against the rules, then kebbie pushes it{}.", for_whom(pusher))).detail("task", &task).to_string()));
+                .next(format!("Its Claude resolves the conflict, the reviewer checks the result against the rules, then kebbie pushes it{}.", for_whom(&pusher))).detail("task", &task).detail("files", files.join(" · ")).to_string()));
         }
         Updated::Overlap(touched) => {
             let files: Vec<&str> = touched.iter().map(|touched| touched.file.as_str()).collect();
             record(Work::Tests, pushed_fingerprint(&slot.path, &upstream, through)?)?;
-            if let Err(cannot) = hand_over(slot, &overlap_prompt(by, &upstream, &touched, through)).and_then(|_| intent::note_hand_over(state, &address)) {
+            if let Err(cannot) = hand_over(slot, &overlap_prompt(&by, &upstream, &touched, through)).and_then(|_| intent::note_hand_over(state, &address)) {
                 intent::forget(state, &address);
                 return Notice::new(Tone::Failed, format!("Not pushed: {} changed the same files, and kebbie could not pass their tests to its Claude", main_of(&upstream)))
                     .you("Run the tests for those files in its worktree, then push again.").detail("task", &task).detail("files", files.join(" · "))
@@ -580,7 +643,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
             }
             crate::phase::record(state, &address, by.key(), &crate::phase::Event::PushHanded);
             return Ok(Prepared::Handed(Notice::new(Tone::Moving, format!("Not pushed yet: {} changed the same files, so their tests run first", main_of(&upstream)))
-                .next(format!("Its Claude runs those tests now; kebbie pushes it{} as soon as it reports ready.", for_whom(pusher))).detail("task", &task).detail("files", files.join(" · ")).to_string()));
+                .next(format!("Its Claude runs those tests now; kebbie pushes it{} as soon as it reports ready.", for_whom(&pusher))).detail("task", &task).detail("files", files.join(" · ")).to_string()));
         }
     }
     intent::forget(state, &address);
@@ -616,7 +679,7 @@ fn went_out(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Ou
 }
 
 #[allow(clippy::too_many_arguments)]
-fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &'static str, state: &Path, watch: Watch) -> Result<String> {
+fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out, pusher: &str, state: &Path, watch: Watch) -> Result<String> {
     let task = task_of(slot).to_string();
     let address = peers::address(&task, &name_of(repo));
     let went = went_out(repo, slot, upstream, through, out)?;
@@ -639,7 +702,7 @@ fn deliver(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Out
     let said = |notice: Notice| notice.detail("task", &task).detail("commit", short).detail("ci", &ci).detail("log", &logged);
     if !keep_open {
         if matches!(watch, crate::ci::Begin::Watching) {
-            if let Err(error) = messages::to_lead(messages::ToLead::Pushed, &format!("{} pushed {address}: {} to {target}. kebbie watches CI for {short} and closes the task once every run is green; you hear what landed then.", capitalized(pusher), plural(count, "commit"))) {
+            if let Err(error) = messages::to_lead(messages::ToLead::Pushed, &format!("{}: {} to {target}. kebbie watches CI for {short} and closes the task once every run is green; you hear what landed then.", who_pushed(pusher, &address), plural(count, "commit"))) {
                 eprintln!("Could not tell the lead about the push: {error}");
             }
             let notice = Notice::new(Tone::Done, headline(false)).next("CI runs now; kebbie closes the task when it is green.").detail("task", &task).detail("commit", short).detail("log", &logged);
@@ -770,7 +833,17 @@ fn close_pushed(state: &Path, task: &str, by: &str, vault: Option<&crate::vault_
 }
 
 fn for_whom(pusher: &str) -> String {
-    if pusher == "the user" { String::new() } else { format!(" for {pusher}") }
+    if pusher.starts_with("the user") { String::new() } else { format!(" for {pusher}") }
+}
+
+const HUB_PUSHER: &str = "the user from ";
+
+// The lead's word on who pushed: the user's push from a device names it after the task, as the lead's copy of a device's answer does.
+fn who_pushed(pusher: &str, address: &str) -> String {
+    match pusher.strip_prefix(HUB_PUSHER) {
+        Some(device) => format!("The user pushed {address} from {device}"),
+        None => format!("{} pushed {address}", capitalized(pusher)),
+    }
 }
 
 fn capitalized(text: &str) -> String {
@@ -787,16 +860,17 @@ struct Pusher {
 }
 
 impl Pusher {
-    fn allowed(&self) -> std::result::Result<&'static str, String> {
+    fn allowed(&self) -> std::result::Result<String, String> {
         use crate::permit::Caller;
         match &self.caller {
-            Caller::User => Ok("the user"),
+            Caller::User => Ok("the user".to_string()),
+            Caller::Hub { name, .. } => Ok(format!("{HUB_PUSHER}{name}")),
             Caller::Lead => {
                 crate::permit::lead_may_push(self.permit, self.reviewed)?;
                 if !self.approved {
                     return Err("its commits have no rules approval that matches them: wait for the reviewer's rules check, or check them and run kebbie approve".to_string());
                 }
-                Ok("the lead")
+                Ok("the lead".to_string())
             }
             Caller::LeadSandboxed => Err(format!("{} cannot push", crate::permit::describe(&Caller::LeadSandboxed))),
             Caller::Task(_) | Caller::Agent | Caller::Sandboxed => Err("no agent pushes; the user pushes from the board, or the lead for a task the user gave push permission".to_string()),
@@ -819,7 +893,7 @@ struct Landed<'a> {
 fn pushed_notice(landed: &Landed) -> String {
     let Landed { pusher, address, target, commits, closed, note, logged, waits } = *landed;
     let count = commits.lines().count();
-    let mut text = format!("{} pushed {address}: {} to {target} ({}).", capitalized(pusher), plural(count, "commit"), commits.lines().collect::<Vec<_>>().join("; "));
+    let mut text = format!("{}: {} to {target} ({}).", who_pushed(pusher, address), plural(count, "commit"), commits.lines().collect::<Vec<_>>().join("; "));
     text.push_str(match (closed, waits) {
         (true, _) => " The task is done and closed.",
         (false, true) => " The task stays open until its note has its solution and decisions; kebbie asked it to write them.",
@@ -879,12 +953,13 @@ mod tests {
     fn only_the_user_pushes_freely_the_lead_with_permission_and_its_approval_and_no_agent_at_all() {
         use crate::permit::{Caller, Permit};
         let check = |caller: Caller, permit: Option<Permit>, reviewed: bool, approved: bool| Pusher { caller, permit, reviewed, approved }.allowed();
-        assert_eq!(check(Caller::User, None, false, false), Ok("the user"));
-        assert_eq!(check(Caller::Lead, Some(Permit::Task), false, true), Ok("the lead"));
+        assert_eq!(check(Caller::User, None, false, false), Ok("the user".to_string()));
+        assert_eq!(check(Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() }, None, false, false), Ok("the user from iPhone Duo".to_string()), "a device pushes as the user, named");
+        assert_eq!(check(Caller::Lead, Some(Permit::Task), false, true), Ok("the lead".to_string()));
         assert!(check(Caller::Lead, None, true, true).unwrap_err().contains("no push permission"));
         assert!(check(Caller::Lead, Some(Permit::Task), true, false).unwrap_err().contains("kebbie approve"));
         assert!(check(Caller::Lead, Some(Permit::Repo), false, true).unwrap_err().contains("reviewer passed"));
-        assert_eq!(check(Caller::Lead, Some(Permit::Repo), true, true), Ok("the lead"));
+        assert_eq!(check(Caller::Lead, Some(Permit::Repo), true, true), Ok("the lead".to_string()));
         for agent in [Caller::Task("billing@app".to_string()), Caller::Agent] {
             assert!(check(agent, Some(Permit::Task), true, true).unwrap_err().contains("no agent pushes"), "a permission is the lead's, never a task's");
         }
@@ -1163,7 +1238,7 @@ mod tests {
         std::fs::write(slot.path.join("d"), "uncommitted").unwrap();
         let through = chosen(&slot, &upstream, Some(&fourth), true).unwrap();
         let (_, hand) = handed();
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand).unwrap(), Prepared::Push("the user", Out { sha: fourth.clone(), rebased: false }));
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, through, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: fourth.clone(), rebased: false }));
         let state = state_of(&dir);
         let said = deliver(&dir, &slot, &upstream, through, &Out { sha: fourth.clone(), rebased: false }, "the user", &state, &crate::ci::begin).unwrap();
         assert!(said.contains("It stays open with 1 commit on top"), "{said}");
@@ -1251,7 +1326,7 @@ mod tests {
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (2, 0), "an overlap is rebased all the same");
         let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         upstream_commit(&dir, "d", "theirs", "d on main");
-        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Conflict);
+        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Conflict(vec!["d".to_string()]), "the conflict names the file both sides changed");
         assert!(!rebase_in_progress(&slot.path) && git(&slot.path, &["rev-parse", "HEAD"]).unwrap() == head, "a conflict is aborted and leaves the branch as it was");
         cleanup(dir, origin, &slot);
     }
@@ -1269,7 +1344,7 @@ mod tests {
         let refused = update(&slot.path, &upstream).unwrap_err();
         assert!(refused.contains("Not rebased: kebbie is rebasing its worktree already"), "{refused}");
         drop(held);
-        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Conflict, "once the first is done, the next one runs");
+        assert_eq!(update(&slot.path, &upstream).unwrap(), Updated::Conflict(vec!["d".to_string()]), "once the first is done, the next one runs");
         cleanup(dir, origin, &slot);
     }
 
@@ -1360,7 +1435,7 @@ mod tests {
         std::fs::write(slot.path.join("notes.txt"), "scratch").unwrap();
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 1));
         let (texts, hand) = handed();
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user", Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }));
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }));
         assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0), "rebased, ready for the push");
         assert!(texts.borrow().is_empty(), "nothing for its Claude to do");
         std::fs::write(slot.path.join("d"), "half done").unwrap();
@@ -1444,8 +1519,58 @@ mod tests {
         join(&pushing.state, &Caller::User, &dir, &slot, Through::All).unwrap();
         let again = intent::load(&pushing.state, &pushing.address).unwrap();
         assert_eq!((again.by, again.work, again.queued), (By::User, Work::Turn, recorded.queued), "the user may push past it, in the same place in line");
-        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, again.queued, &hand).unwrap(), Prepared::Push("the user", Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }));
+        assert_eq!(prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, again.queued, &hand).unwrap(), Prepared::Push("the user".to_string(), Out { sha: git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), rebased: false }));
         assert!(intent::load(&pushing.state, &pushing.address).is_none());
+        cleanup(dir, origin, &slot);
+    }
+
+    fn device_pushes<'a>(state: &'a std::path::Path, hand: &'a dyn Fn(&Slot, &str) -> std::result::Result<(), String>) -> impl FnMut(&Intent, &Slot) -> Result<Sent> + 'a {
+        move |intent: &Intent, slot: &Slot| {
+            let upstream = default_branch(&intent.repo)?;
+            push_task_with(state, &intent.by.caller(), &intent.repo, slot, intent.through, intent.queued, hand, &mut |_, out| push_prefix(&slot.path, &upstream, &out.sha, state).map(|count| format!("pushed {count}")))
+        }
+    }
+
+    #[test]
+    fn a_device_push_goes_out_rebased_over_a_main_that_moved_since_the_phone_saw_it() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        let seen = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        upstream_commit(&dir, "elsewhere", "x", "landed after the phone showed the task");
+        let (_, hand) = handed();
+        let phone = Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() };
+        let pushed = device_push(&pushing.state, &phone, &dir, &slot, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let main = main_of(&upstream).to_string();
+        let short = git(&origin, &["rev-parse", "--short=7", &main]).unwrap();
+        assert_eq!(pushed, DevicePush::Pushed { short, main: main.clone() }, "HEAD and main both moved since the phone saw {seen}, and it is pushed all the same");
+        let landed = git(&origin, &["log", "--format=%s", &main]).unwrap();
+        assert!(landed.starts_with("fourth\nlanded after the phone showed the task\n"), "the task's commit on top of what landed: {landed}");
+        assert!(intent::load(&pushing.state, &pushing.address).is_none());
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_device_push_that_conflicts_names_the_files_and_waits_for_its_claude_as_the_users_push() {
+        use crate::permit::Caller;
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let pushing = Pushing::new(&dir);
+        upstream_commit(&dir, "d", "theirs", "d on main");
+        let (texts, hand) = handed();
+        let phone = Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() };
+        let pushed = device_push(&pushing.state, &phone, &dir, &slot, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
+        let DevicePush::Conflict { files, .. } = &pushed else { panic!("the rebase conflicts: {pushed:?}") };
+        assert_eq!(files, &["d".to_string()]);
+        assert_eq!(texts.borrow().len(), 1, "its Claude got the rebase");
+        let waiting = intent::load(&pushing.state, &pushing.address).unwrap();
+        assert_eq!((waiting.by, waiting.work), (By::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() }, Work::Conflict), "the push waits as the device's, so its turn later names the device");
+        let stored = std::fs::read_to_string(intent::file(&pushing.state, &pushing.address)).unwrap();
+        let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!((stored["by"].as_str(), stored["hub"]["name"].as_str()), (Some("user"), Some("iPhone Duo")), "an older kebbie reads it as the user's push");
+        let told = format!("The user pushed {} from iPhone Duo; rebasing onto", pushing.address);
+        assert!(messages::load().iter().any(|message| message.to == crate::status::LEAD_LABEL && message.text.contains(&told)), "the lead hears which device pushed");
+        assert_eq!(who_pushed("the user", "billing@app"), "The user pushed billing@app");
+        assert_eq!(who_pushed("the lead", "billing@app"), "The lead pushed billing@app");
         cleanup(dir, origin, &slot);
     }
 
@@ -1459,14 +1584,15 @@ mod tests {
         let (texts, hand) = handed();
         let Prepared::Handed(said) = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &hand).unwrap() else { panic!("the rebase conflicts") };
         assert!(said.contains("conflicts with") && said.contains("then kebbie pushes it"), "{said}");
+        assert!(Notice::read(&said, false).details.contains(&("files".to_string(), "d".to_string())), "the notice names the conflicting file: {said}");
         assert_eq!(git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), head);
         let typed = texts.borrow()[0].clone();
         assert!(typed.contains("kebbie ask") && typed.contains("recommendation") && typed.contains("Do not push") && typed.contains("kebbie pushes the resolved commits"), "{typed}");
         let recorded = intent::load(&pushing.state, &pushing.address).unwrap();
-        assert_eq!((recorded.by, recorded.work, recorded.fingerprint), (By::User, Work::Conflict, fingerprint(&slot.path, &upstream).unwrap()));
+        assert_eq!((recorded.by.clone(), recorded.work, recorded.fingerprint), (By::User, Work::Conflict, fingerprint(&slot.path, &upstream).unwrap()));
         let failing = |_: &Slot, _: &str| Err("the log is locked".to_string());
         let refused = prepare(&pushing.state, &Caller::User, &dir, &slot, Through::All, None, &failing).unwrap_err();
-        assert!(refused.contains("could not pass the rebase to its Claude") && refused.contains("error: the log is locked"), "{refused}");
+        assert!(refused.contains("could not pass the rebase to its Claude") && refused.contains("error: the log is locked") && Notice::read(&refused, true).details.contains(&("files".to_string(), "d".to_string())), "{refused}");
         assert!(intent::load(&pushing.state, &pushing.address).is_none(), "a push nobody works on is not shown as under way");
         cleanup(dir, origin, &slot);
     }
@@ -1637,7 +1763,7 @@ mod tests {
         let order = [("billing".to_string(), slot.path.clone()), ("pricing".to_string(), dir.join("elsewhere"))];
         let outcome = crate::next::push_in_order(&order, |path| {
             tried.push(path.to_path_buf());
-            authorize(&Caller::User, &dir, &crate::tasks::find_task(&dir, None, path)?, &upstream, Through::All).map(str::to_string)
+            authorize(&Caller::User, &dir, &crate::tasks::find_task(&dir, None, path)?, &upstream, Through::All)
         }).unwrap_err();
         let notice = crate::notice::Notice::parse(&outcome).unwrap();
         assert_eq!(notice.headline, "billing did not push, so the rest wait");

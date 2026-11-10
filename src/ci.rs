@@ -596,7 +596,7 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
     let step = jobs.as_deref().and_then(failed_step).map(|step| format!(" · {step}")).unwrap_or_default();
     let what = format!("{} · {job}{step}", run.title());
     let by = crate::tasks::PushBy::of_word(&watch.pushed.pusher).filter(|_| watch.close);
-    let who = by.map(crate::tasks::PushBy::word);
+    let who = by.as_ref().map(crate::tasks::PushBy::word);
     let open = task_open(watch, &messages::load());
     if open {
         crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::CiRed { sha: &watch.sha, pushing: by.is_some() });
@@ -610,7 +610,7 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
             false
         }
     };
-    let pushing = by.filter(|by| handed && crate::tasks::after_red_ci(state, &watch.repo, &watch.address, *by).is_ok()).map(crate::tasks::PushBy::word);
+    let pushing = by.clone().filter(|by| handed && crate::tasks::after_red_ci(state, &watch.repo, &watch.address, by.clone()).is_ok()).map(|by| by.word());
     if open && by.is_some() && pushing.is_none() {
         crate::phase::record(state, &watch.address, "ci", &crate::phase::Event::CiRed { sha: &watch.sha, pushing: false });
     }

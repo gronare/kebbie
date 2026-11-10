@@ -15,11 +15,12 @@ pub(super) enum Through {
     First { count: usize, of: usize },
 }
 
-// Only the user or the lead ever push, so an intent names one of them and nothing else.
-#[derive(Clone, Copy, Debug, PartialEq)]
+// Only the user or the lead ever push, so an intent names one of them and nothing else; Hub is the user from a trusted device, stored as by user with the device beside it so an older kebbie still reads the user's push.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum By {
     User,
     Lead,
+    Hub { device: String, name: String },
 }
 
 impl By {
@@ -27,33 +28,39 @@ impl By {
         match caller {
             Caller::User => Some(By::User),
             Caller::Lead => Some(By::Lead),
+            Caller::Hub { device, name } => Some(By::Hub { device: device.clone(), name: name.clone() }),
             Caller::Task(_) | Caller::Agent | Caller::Sandboxed | Caller::LeadSandboxed => None,
         }
     }
 
-    pub(super) fn caller(self) -> Caller {
+    pub(super) fn caller(&self) -> Caller {
         match self {
             By::User => Caller::User,
             By::Lead => Caller::Lead,
+            By::Hub { device, name } => Caller::Hub { device: device.clone(), name: name.clone() },
         }
     }
 
-    pub(crate) fn key(self) -> &'static str {
+    pub(crate) fn is_user(&self) -> bool {
+        matches!(self, By::User | By::Hub { .. })
+    }
+
+    pub(crate) fn key(&self) -> &'static str {
         match self {
-            By::User => "user",
+            By::User | By::Hub { .. } => "user",
             By::Lead => "lead",
         }
     }
 
-    pub(crate) fn word(self) -> &'static str {
+    pub(crate) fn word(&self) -> &'static str {
         match self {
-            By::User => "the user",
+            By::User | By::Hub { .. } => "the user",
             By::Lead => "the lead",
         }
     }
 
     pub(crate) fn of_word(word: &str) -> Option<By> {
-        [By::User, By::Lead].into_iter().find(|by| by.word() == word)
+        [By::User, By::Lead].into_iter().find(|by| word == by.word() || word.starts_with(&format!("{} from ", by.word())))
     }
 }
 
@@ -99,17 +106,22 @@ impl Intent {
             Through::All => Value::Null,
             Through::First { count, of } => json!({ "count": count, "of": of }),
         };
-        json!({
+        let mut value = json!({
             "by": self.by.key(), "work": self.work.key(),
             "address": self.address, "repo": self.repo, "task": self.task, "fingerprint": self.fingerprint,
             "through": through, "at": self.at, "seen": self.seen, "hand": self.hand, "queued": self.queued,
-        })
+        });
+        if let By::Hub { device, name } = &self.by {
+            value["hub"] = json!({ "device": device, "name": name });
+        }
+        value
     }
 
     fn from_json(value: &Value) -> Option<Intent> {
-        let by = match value["by"].as_str()? {
-            "user" => By::User,
-            "lead" => By::Lead,
+        let by = match (value["by"].as_str()?, value["hub"]["device"].as_str(), value["hub"]["name"].as_str()) {
+            ("user", Some(device), Some(name)) => By::Hub { device: device.to_string(), name: name.to_string() },
+            ("user", _, _) => By::User,
+            ("lead", _, _) => By::Lead,
             _ => return None,
         };
         let work = match value["work"].as_str() {
@@ -144,7 +156,7 @@ fn dir(state: &Path) -> PathBuf {
     state.join("push-intents")
 }
 
-fn file(state: &Path, address: &str) -> PathBuf {
+pub(super) fn file(state: &Path, address: &str) -> PathBuf {
     dir(state).join(address)
 }
 
@@ -320,7 +332,7 @@ pub(super) mod tests {
         }
         assert_eq!(By::of(&Caller::Agent), None);
         assert_eq!(By::of(&Caller::Task("billing@app".to_string())), None);
-        assert_eq!(By::of(&Caller::Lead).map(By::caller), Some(Caller::Lead));
+        assert_eq!(By::of(&Caller::Lead).map(|by| by.caller()), Some(Caller::Lead));
         save(&state, &written).unwrap();
         assert_eq!((pending(&state, "billing@app"), pending(&state, "other@app")), (Some(Pending { by: By::Lead, work: Work::Conflict, at: 100, ahead: 0, after: None }), None));
         assert_eq!(load(&state, "billing@app"), Some(written.clone()), "reading what waits leaves the intent in place");
@@ -355,7 +367,7 @@ pub(super) mod tests {
         let address = format!("billing@{}", crate::repo::name_of(&dir));
         after_red_ci(&state, &dir, &address, By::User).unwrap();
         let red = load(&state, &address).expect("a red CI's push has no commits of its own yet, and still waits");
-        assert_eq!((red.by, red.work, red.fingerprint.as_str(), red.through, red.task.as_str()), (By::User, Work::Ci, "", Through::All, "billing"));
+        assert_eq!((red.by.clone(), red.work, red.fingerprint.as_str(), red.through, red.task.as_str()), (By::User, Work::Ci, "", Through::All, "billing"));
         let mut forged = red.to_json();
         forged["work"] = json!("tests");
         crate::state::write(&file(&state, &address), forged.to_string()).unwrap();

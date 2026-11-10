@@ -411,7 +411,7 @@ pub(super) fn stage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, 
             if let Err(cannot) = hand_over(slot, &prompt).and_then(|_| save_pending(state, &address, &Pending { repo: repo.to_path_buf(), task: task.clone(), by, at: messages::now(), waits: None })) {
                 return Notice::new(Tone::Failed, format!("{refused}: it conflicts with local {local}, and kebbie could not pass the rebase to its Claude")).you(format!("Rebase it onto {local} yourself in its worktree.")).detail("task", &task).detail("error", cannot).err();
             }
-            tell_lead(&format!("{} asked to put {address} on local {local}; it conflicts with what is staged there, so its Claude rebases it onto {local}. {local} is as it was.", capitalized(pusher)));
+            tell_lead(&format!("{} asked to put {address} on local {local}; it conflicts with what is staged there, so its Claude rebases it onto {local}. {local} is as it was.", capitalized(&pusher)));
             return Notice::new(Tone::Moving, format!("{refused}: it conflicts with local {local}")).next(format!("Its Claude rebases it onto {local}; when it reports ready, kebbie puts it on {local} again. {local} is as it was.")).detail("task", &task).ok();
         }
     }
@@ -428,7 +428,7 @@ pub(super) fn stage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, 
     write(&file(state, repo), &entries)?;
     let head = git(&slot.path, &["rev-parse", "HEAD"]).ok();
     phase::record(state, &address, "stage", &Event::Staged { head: head.as_deref() });
-    tell_lead(&format!("{} put {address} on local {local} to try it, unpushed; it stays open until main is pushed.", capitalized(pusher)));
+    tell_lead(&format!("{} put {address} on local {local} to try it, unpushed; it stays open until main is pushed.", capitalized(&pusher)));
     let order: Vec<&str> = entries.iter().map(|entry| entry.task.as_str()).collect();
     let mut notice = Notice::new(Tone::Done, format!("On local {local}: {}", plural(add.len(), "commit"))).next(format!("Try it from the main checkout. Push {local} when it is right, and kebbie closes it once its commits are on origin; or take it off with kebbie unstage {task}."))
         .detail("task", &task).detail("staged", order.join(" · ")).detail("checkout", follow);

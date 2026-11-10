@@ -298,6 +298,10 @@ pub fn stamp(at: u64) -> String {
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
+pub fn stopping() -> bool {
+    STOP.load(Ordering::SeqCst)
+}
+
 extern "C" fn on_stop(_: libc::c_int) {
     STOP.store(true, Ordering::SeqCst);
 }
@@ -491,6 +495,7 @@ pub fn run() -> Result<String> {
     let log = Log(dir.join(LOG));
     let me = Holder { pid: Some(std::process::id()), exe: Some(exe.to_string_lossy().to_string()), started: Some(crate::messages::now()) };
     log.line(&format!("started: pid {}, kebbie {}, {}", std::process::id(), env!("CARGO_PKG_VERSION"), exe.display()));
+    crate::hub::commands::spawn(&dir);
     let routines = routines();
     let mut tracks = vec![Track::default(); routines.len()];
     let mut ctx = Ctx::default();

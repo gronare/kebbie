@@ -1,6 +1,7 @@
 pub mod blobs;
 pub mod board;
 pub mod card;
+pub mod commands;
 pub mod connect;
 pub mod console;
 pub mod http;
