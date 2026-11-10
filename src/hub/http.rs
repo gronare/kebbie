@@ -6,6 +6,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 const MAX_HOPS: usize = 5;
+const JSON: &str = "application/json";
 pub const CALL: Duration = Duration::from_secs(15);
 pub const LONG_POLL: Duration = Duration::from_secs(35);
 
@@ -75,27 +76,31 @@ impl Client {
     }
 
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, HubError> {
-        parse(&self.send(Method::Get, path, None)?)
+        parse(&self.send(Method::Get, path, None, JSON)?)
     }
 
     pub fn post<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T, HubError> {
-        parse(&self.send(Method::Post, path, Some(json(body)))?)
+        parse(&self.send(Method::Post, path, Some(json(body)), JSON)?)
     }
 
     pub fn put<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T, HubError> {
-        parse(&self.send(Method::Put, path, Some(json(body)))?)
+        parse(&self.send(Method::Put, path, Some(json(body)), JSON)?)
+    }
+
+    pub fn put_bytes(&self, path: &str, body: &[u8]) -> Result<(), HubError> {
+        parse::<serde::de::IgnoredAny>(&self.send(Method::Put, path, Some(body.to_vec()), "application/octet-stream")?).map(|_| ())
     }
 
     pub fn reachable(&self) -> Result<(), HubError> {
-        self.send(Method::Get, "/healthz", None).map(|_| ())
+        self.send(Method::Get, "/healthz", None, JSON).map(|_| ())
     }
 
     // 307 and 308 keep the method, the body and the token; nothing else is followed.
-    fn send(&self, method: Method, path: &str, body: Option<Vec<u8>>) -> Result<String, HubError> {
+    fn send(&self, method: Method, path: &str, body: Option<Vec<u8>>, content_type: &str) -> Result<String, HubError> {
         let base = self.moved().unwrap_or_else(|| self.base.clone());
         let mut url = format!("{base}{path}");
         for _ in 0..=MAX_HOPS {
-            let mut response = self.once(method, &url, body.as_deref())?;
+            let mut response = self.once(method, &url, body.as_deref(), content_type)?;
             let status = response.status().as_u16();
             if matches!(status, 307 | 308) {
                 let location = response.headers().get("location").and_then(|value| value.to_str().ok()).ok_or_else(|| HubError::Redirect(format!("{status} without a Location")))?;
@@ -120,7 +125,7 @@ impl Client {
         Err(HubError::Redirect(format!("more than {MAX_HOPS} redirects")))
     }
 
-    fn once(&self, method: Method, url: &str, body: Option<&[u8]>) -> Result<ureq::http::Response<ureq::Body>, HubError> {
+    fn once(&self, method: Method, url: &str, body: Option<&[u8]>, content_type: &str) -> Result<ureq::http::Response<ureq::Body>, HubError> {
         let bearer = self.token.as_ref().map(|token| format!("Bearer {token}"));
         let answer = match method {
             Method::Get => {
@@ -129,7 +134,7 @@ impl Client {
             }
             Method::Post | Method::Put => {
                 let request = if method == Method::Post { self.agent.post(url) } else { self.agent.put(url) };
-                let request = request.content_type("application/json");
+                let request = request.content_type(content_type);
                 let request = match &bearer { Some(bearer) => request.header("authorization", bearer), None => request };
                 request.send(body.unwrap_or_default())
             }

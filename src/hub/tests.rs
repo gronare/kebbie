@@ -1138,11 +1138,123 @@ fn the_keeper_posts_the_board_to_the_real_hub_and_the_dev_hub_each_with_its_own_
     let dev_state = connected_state(&dev_hub, &mut dev_browser);
     std::fs::rename(identity::dir_of(&dev_state, false), identity::dir_of(&state, true)).unwrap();
     let real = std::fs::read(state.join("hub/identity.json")).unwrap();
-    super::tick_in(&state, Some("mac"), now(), || Ok(board_of(&[asking("refunds", "shop")]))).unwrap();
+    super::tick_in(&state, Some("mac"), now(), || Ok((board_of(&[asking("refunds", "shop")]), Vec::new()))).unwrap();
     assert_eq!(real_hub.boards(&mut real_browser).len(), 1, "the real hub has its board");
     assert_eq!(dev_hub.boards(&mut dev_browser).len(), 1, "the dev hub has its board");
     assert_eq!(std::fs::read(state.join("hub/identity.json")).unwrap(), real);
     assert!(identity::dir_of(&state, true).join("relay.json").exists() && identity::dir_of(&state, false).join("relay.json").exists(), "each hub keeps its own relay record");
     assert_eq!(super::on_dev_hub(&dev_hub.url, || identity::load(&state).unwrap().unwrap().url), dev_hub.url);
     assert_eq!(identity::load(&state).unwrap().unwrap().url, real_hub.url);
+}
+
+fn planned(dir: &Path, text: &str) -> crate::status::Item {
+    let file = dir.join("refunds-plan.md");
+    std::fs::write(&file, text).unwrap();
+    let mut item = asking("refunds", "shop");
+    item.question.as_mut().unwrap().question.as_mut().unwrap().plan = Some(file.display().to_string());
+    item
+}
+
+fn counting(identity: &identity::Identity, puts: &Arc<std::sync::atomic::AtomicUsize>) -> impl Fn(&Id, &[u8]) -> Result<(), super::http::HubError> {
+    let (put, puts) = (super::blobs::put_with(identity), Arc::clone(puts));
+    move |id, ciphertext| {
+        puts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        put(id, ciphertext)
+    }
+}
+
+#[test]
+fn a_plan_reaches_the_phone_as_a_blob_put_once_that_opens_to_the_plan_and_no_path_leaves() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
+    let dir = identity::dir(&state);
+    let identity = identity::load(&state).unwrap().unwrap();
+    let mut item = planned(&state, "## Steps\n1. Keep the old endpoint a release\n");
+    item.question.as_mut().unwrap().question.as_mut().unwrap().plan_at = Some(1_761_068_280_500);
+    let plan_path = item.question.as_ref().unwrap().question.as_ref().unwrap().plan.clone().unwrap();
+    let attachments = super::board::attachments(std::slice::from_ref(&item), &state);
+    let board = board_of(std::slice::from_ref(&item));
+    let puts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let at = now();
+    let attached = super::blobs::attach(&dir, &board, &attachments, at, counting(&identity, &puts));
+    let rev = relay::relay(&state, &attached, at).unwrap().unwrap();
+    let (read_rev, opened) = hub.boards(&mut browser).remove(0);
+    assert_eq!(read_rev, rev);
+    let blob = opened.items[0].question.as_ref().unwrap().plan.clone().expect("the plan's ref is on the board");
+    assert_eq!(blob.media_type, "text/markdown");
+    assert_eq!(opened.items[0].question.as_ref().unwrap().plan_at, Some(1_761_068_280), "when the plan was written goes with its ref, in seconds");
+    let ciphertext = hub.runtime.block_on(browser.blob(&blob.id)).unwrap();
+    assert_eq!(kebbie_hub_protocol::open_blob(&blob, &ciphertext).unwrap(), b"## Steps\n1. Keep the old endpoint a release\n");
+    assert!(!String::from_utf8_lossy(&ciphertext).contains("Keep the old endpoint a release"), "the hub holds only ciphertext");
+    let sent = serde_json::to_string(&opened).unwrap();
+    assert!(!sent.contains(&plan_path) && !sent.contains("refunds-plan.md"), "a plan path stays on the machine: {sent}");
+    let mode = std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(dir.join("blobs.json")).unwrap().permissions());
+    assert_eq!(mode & 0o777, 0o600);
+
+    let again = super::blobs::attach(&dir, &board, &attachments, at + 3, counting(&identity, &puts));
+    assert_eq!(puts.load(std::sync::atomic::Ordering::SeqCst), 1, "an unchanged plan is not put again");
+    assert_eq!(again, attached);
+    assert_eq!(relay::relay(&state, &again, at + 3).unwrap(), None, "the same ref leaves the board unchanged, so it is not posted again");
+    let renewed = super::blobs::attach(&dir, &board, &attachments, at + super::blobs::REPUT, counting(&identity, &puts));
+    assert_eq!((puts.load(std::sync::atomic::Ordering::SeqCst), &renewed), (2, &attached), "a day on the same blob is put again under the same id, so the hub keeps it");
+
+    let changed = planned(&state, "## Steps\n1. Remove the old endpoint\n");
+    let moved = super::blobs::attach(&dir, &board, &super::board::attachments(&[changed], &state), at + super::blobs::REPUT + 3, counting(&identity, &puts));
+    assert_eq!(puts.load(std::sync::atomic::Ordering::SeqCst), 3, "a changed plan is a new blob");
+    assert_ne!(moved.items[0].question.as_ref().unwrap().plan.as_ref().unwrap().id, blob.id);
+}
+
+#[test]
+fn a_blob_the_hub_did_not_take_leaves_the_board_without_its_ref_until_a_later_round_puts_it() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
+    let dir = identity::dir(&state);
+    let identity = identity::load(&state).unwrap().unwrap();
+    let item = planned(&state, "## Plan\n1. Refund in cents\n");
+    let attachments = super::board::attachments(std::slice::from_ref(&item), &state);
+    let board = board_of(&[item]);
+    let at = now();
+    let down = super::blobs::attach(&dir, &board, &attachments, at, |_: &Id, _: &[u8]| Err(super::http::HubError::Transport("connection refused".to_string())));
+    assert_eq!(down, board, "the board goes without the plan's ref");
+    let up = super::blobs::attach(&dir, &board, &attachments, at + 3, super::blobs::put_with(&identity));
+    assert!(up.items[0].question.as_ref().unwrap().plan.is_some(), "the next round puts it and names it");
+
+    let refusing = crate::sh::test_dir("hub-blob-refused");
+    let refused = |_: &Id, _: &[u8]| Err(super::http::HubError::Status { status: 404, code: "not-found".to_string() });
+    assert_eq!(super::blobs::attach(&refusing, &board, &attachments, at, refused), board);
+    let puts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    assert_eq!(super::blobs::attach(&refusing, &board, &attachments, at + 3, counting(&identity, &puts)), board);
+    assert_eq!(puts.load(std::sync::atomic::Ordering::SeqCst), 0, "a hub that refused a blob is not asked again every round");
+    let later = super::blobs::attach(&refusing, &board, &attachments, at + super::blobs::REFUSED_WAIT, counting(&identity, &puts));
+    assert!(puts.load(std::sync::atomic::Ordering::SeqCst) == 1 && later.items[0].question.as_ref().unwrap().plan.is_some());
+}
+
+#[test]
+fn a_ready_card_reaches_the_board_as_a_blob_marked_current_while_head_is_the_cards_commit() {
+    let hub = open_hub(|_| {});
+    let mut browser = member(&hub);
+    let state = connected_state(&hub, &mut browser);
+    let identity = identity::load(&state).unwrap().unwrap();
+    let (sha, later) = ("9f3c2a1e5b7d4c6a8b0e2f4d6c8a0b2e4f6d8c0a", "1111111e5b7d4c6a8b0e2f4d6c8a0b2e4f6d8c0a");
+    let mut ready = task(Some("idle"), Some("ready"), 2);
+    ready.name = "refunds".to_string();
+    ready.place = "shop".to_string();
+    ready.git.as_mut().unwrap().head = Some(sha.to_string());
+    crate::report::save_card(&state, "refunds@shop", sha, "Refunds now go back in cents.\n\nCheck one on staging.").unwrap();
+    let attachments = super::board::attachments(std::slice::from_ref(&ready), &state);
+    let board = super::blobs::attach(&identity::dir(&state), &board_of(std::slice::from_ref(&ready)), &attachments, now(), super::blobs::put_with(&identity));
+    let card = board.items[0].card.clone().expect("the card's ref is on the board");
+    assert_eq!((card.sha.as_str(), card.current), (sha, true));
+    let ciphertext = hub.runtime.block_on(browser.blob(&card.blob.id)).unwrap();
+    assert_eq!(kebbie_hub_protocol::open_blob(&card.blob, &ciphertext).unwrap(), b"Refunds now go back in cents.\n\nCheck one on staging.");
+
+    ready.git.as_mut().unwrap().head = Some(later.to_string());
+    let moved = super::blobs::attach(&identity::dir(&state), &board_of(std::slice::from_ref(&ready)), &super::board::attachments(std::slice::from_ref(&ready), &state), now(), super::blobs::put_with(&identity));
+    let card_after = moved.items[0].card.clone().unwrap();
+    assert_eq!((card_after.current, &card_after.blob), (false, &card.blob), "a commit after the card marks it not current and reuses its blob");
+    let mut plain = ready.clone();
+    plain.name = "search".to_string();
+    assert!(super::board::attachments(&[plain], &state).is_empty(), "a task without a card or plan has nothing to attach");
 }

@@ -1,3 +1,4 @@
+pub mod blobs;
 pub mod board;
 pub mod card;
 pub mod connect;
@@ -371,20 +372,19 @@ pub fn tick() -> Result<()> {
 }
 
 // The keeper posts to the real hub and to the dev hub alike, whichever this machine is connected to, so a keeper started without KEBBIE_HUB_DEV still serves a dev connection.
-pub fn tick_in(state: &Path, configured: Option<&str>, now: u64, gather: impl Fn() -> Result<kebbie_hub_protocol::Board>) -> Result<()> {
-    let mut board = None;
+pub fn tick_in(state: &Path, configured: Option<&str>, now: u64, gather: impl Fn() -> Result<(kebbie_hub_protocol::Board, Vec<blobs::Attachment>)>) -> Result<()> {
+    let mut gathered = None;
     let mut failed = Vec::new();
     for dir in [identity::dir_of(state, false), identity::dir_of(state, true)] {
         let posted = (|| {
             sync_name_at(&dir, configured)?;
-            if identity::load_at(&dir)?.is_none_or(|identity| identity.account.is_none()) {
-                return Ok(());
-            }
-            let board = match &board {
-                Some(board) => board,
-                None => board.insert(gather()?),
+            let Some(identity) = identity::load_at(&dir)?.filter(|identity| identity.account.is_some()) else { return Ok(()) };
+            let (board, attachments) = match &gathered {
+                Some(gathered) => gathered,
+                None => gathered.insert(gather()?),
             };
-            relay::relay_at(&dir, board, now).map(|_| ())
+            let board = blobs::attach(&dir, board, attachments, now, blobs::put_with(&identity));
+            relay::relay_at(&dir, &board, now).map(|_| ())
         })();
         failed.extend(posted.err());
     }

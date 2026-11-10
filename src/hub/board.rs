@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Mutex;
 
 use kebbie_hub_protocol::{Agent, AgentStatus, Board, Checkout, Ci, CiState, Counts, Git, Group, Item, Later, LaterState, NextPart, NextRow, Prompt, PromptOption, PushPermission, Question, QuestionOption, Recover, Report, RoutineSummary, SecondOpinion, Step, StepState, Steps, Verdict, VerdictOutcome};
 
+use super::blobs::{Attachment, PLAN_LIMIT};
 use crate::menu::Menu;
 use crate::next::{self, Part};
 use crate::status::{self, Surface};
@@ -51,7 +53,7 @@ fn report(item: &status::Item) -> Option<Report> {
     Some(Report { state: report.state.clone(), next: message.next_for_you().map(str::to_string), summary: message.text.clone(), at: message.at })
 }
 
-// A plan lives on this machine as a file or a vault note, so the phone gets the question without it.
+// The plan reaches the phone as a blob the relay attaches, so its path or vault key stays on the machine.
 fn question(item: &status::Item) -> Option<Question> {
     let message = item.question.as_ref()?;
     let asked = message.question.as_ref()?;
@@ -62,6 +64,7 @@ fn question(item: &status::Item) -> Option<Question> {
         recommend: u8::try_from(asked.recommend).ok().filter(|recommend| *recommend > 0),
         kept_for_user: asked.waits,
         plan: None,
+        plan_at: None,
         at: message.at,
     })
 }
@@ -251,10 +254,46 @@ fn seen(items: &[status::Item]) -> Seen {
     Seen { menus, models, home: std::env::var("HOME").ok(), accepting }
 }
 
-pub fn gather(state: &Path, now: u64) -> crate::sh::Result<Board> {
+// HEAD still makes the change the card was written for, by the push dialog's rule; the answer is kept per (card, HEAD) so the board loop runs git only when either moves.
+fn card_current(item: &status::Item, sha: &str) -> bool {
+    static KNOWN: Mutex<BTreeMap<(String, String), bool>> = Mutex::new(BTreeMap::new());
+    let Some((git, head)) = item.git.as_ref().and_then(|git| Some((git, git.head.as_deref()?))) else { return false };
+    if head == sha {
+        return true;
+    }
+    let Some(path) = item.path.as_ref() else { return false };
+    let key = (sha.to_string(), head.to_string());
+    if let Some(known) = KNOWN.lock().ok().and_then(|known| known.get(&key).copied()) {
+        return known;
+    }
+    let current = crate::tasks::same_code(path, &git.upstream, sha, head);
+    if let Ok(mut known) = KNOWN.lock() {
+        if known.len() >= 256 {
+            known.clear();
+        }
+        known.insert(key, current);
+    }
+    current
+}
+
+pub fn attachments(items: &[status::Item], state: &Path) -> Vec<Attachment> {
+    items.iter().filter(|item| item.is_task() && group(item.group()).is_some()).flat_map(|item| {
+        let address = crate::peers::address(&item.name, &item.place);
+        let asked = item.question.as_ref().and_then(|message| message.question.as_ref()).filter(|asked| asked.plan.is_some());
+        let at = asked.and_then(|asked| asked.plan_at).and_then(|millis| u64::try_from(millis / 1000).ok());
+        let plan = asked.and_then(crate::questions::plan_text).filter(|text| !text.trim().is_empty() && text.len() <= PLAN_LIMIT).map(|text| Attachment::Plan { address: address.clone(), text, at });
+        let card = crate::report::card_in(state, &address).filter(|card| !card.text.is_empty() && card.text.len() <= PLAN_LIMIT).map(|card| {
+            let current = card_current(item, &card.sha);
+            Attachment::Card { address: address.clone(), text: card.text, sha: card.sha, current }
+        });
+        [plan, card].into_iter().flatten()
+    }).collect()
+}
+
+pub fn gather(state: &Path, now: u64) -> crate::sh::Result<(Board, Vec<Attachment>)> {
     let items = status::gather()?;
     let checkouts = status::checkouts()?;
-    Ok(build(&items, &checkouts, routines(state, now), crate::permit::away_since_in(state), &seen(&items)))
+    Ok((build(&items, &checkouts, routines(state, now), crate::permit::away_since_in(state), &seen(&items)), attachments(&items, state)))
 }
 
 #[cfg(test)]
@@ -464,5 +503,42 @@ pub(crate) mod tests {
         assert_eq!(build(std::slice::from_ref(&stepped), &[], Vec::new(), None, &Seen::default()).items[0].steps.as_ref().unwrap().required, Some(false), "without task.require_accept push takes what is committed");
         let accepting = Seen { accepting: BTreeSet::from(["web".to_string()]), ..Seen::default() };
         assert_eq!(build(&[stepped], &[], Vec::new(), None, &accepting).items[0].steps.as_ref().unwrap().required, Some(true), "with task.require_accept in its repo each step waits on your accept");
+    }
+
+    #[test]
+    fn a_card_stays_current_through_a_clean_rebase_and_not_after_a_new_code_commit_and_git_runs_once_per_head() {
+        use crate::repo::git;
+        let dir = crate::sh::test_dir("board-card-rebase");
+        let run = |args: &[&str]| git(&dir, &[&["-c", "user.name=Ada", "-c", "user.email=ada@example.com"], args].concat()).unwrap();
+        run(&["init", "--quiet", "--initial-branch=main"]);
+        std::fs::write(dir.join("a"), "one\n").unwrap();
+        run(&["add", "a"]);
+        run(&["commit", "--quiet", "-m", "first"]);
+        run(&["checkout", "--quiet", "-b", "refunds"]);
+        std::fs::write(dir.join("refund"), "cents\n").unwrap();
+        run(&["add", "refund"]);
+        run(&["commit", "--quiet", "-m", "Refund in cents"]);
+        let card = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        run(&["checkout", "--quiet", "main"]);
+        std::fs::write(dir.join("b"), "two\n").unwrap();
+        run(&["add", "b"]);
+        run(&["commit", "--quiet", "-m", "main moves"]);
+        run(&["checkout", "--quiet", "refunds"]);
+        run(&["rebase", "--quiet", "main"]);
+        let rebased = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        assert_ne!(rebased, card);
+        let mut item = task(Some("idle"), Some("ready"), 1);
+        item.path = Some(dir.clone());
+        item.git.as_mut().unwrap().upstream = "main".to_string();
+        item.git.as_mut().unwrap().head = Some(rebased.clone());
+        assert!(card_current(&item, &card), "a clean rebase onto a moved main keeps the card current");
+        std::fs::write(dir.join("refund"), "whole crowns\n").unwrap();
+        run(&["commit", "--quiet", "-am", "Refund in crowns"]);
+        let changed = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        item.git.as_mut().unwrap().head = Some(changed);
+        assert!(!card_current(&item, &card), "a new code commit makes the card not current");
+        std::fs::remove_dir_all(&dir).unwrap();
+        item.git.as_mut().unwrap().head = Some(rebased);
+        assert!(card_current(&item, &card), "the answer for this card and HEAD is kept, so git does not run again");
     }
 }
