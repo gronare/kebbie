@@ -188,6 +188,15 @@ fn help_lists_every_command_and_an_unknown_command_fails_with_the_usage() {
 }
 
 #[test]
+fn a_command_given_without_its_words_answers_instead_of_crashing() {
+    let lab = Lab::new("bare");
+    for command in ["hub", "after", "follow", "recipe", "move", "tidy", "link"] {
+        let output = lab.run(&[command]);
+        assert!(!stderr(&output).contains("panicked"), "{command}: {}", stderr(&output));
+    }
+}
+
+#[test]
 fn setup_codex_rewrites_a_stale_plugin_at_once_and_doctor_then_reports_it_ok() {
     let lab = Lab::new("setup-codex");
     let codex_home = lab.root.join("codex");

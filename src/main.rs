@@ -466,6 +466,10 @@ impl Arguments {
         self.positionals.get(index).map(String::as_str)
     }
 
+    fn rest(&self, from: usize) -> &[String] {
+        self.positionals.get(from..).unwrap_or_default()
+    }
+
     // A command that takes words as text refuses a flag it does not know, so a word that starts with - is never dropped or read as a switch.
     fn only(&self, command: &str, flags: &[&str]) -> Result<()> {
         let unknown = self.flags.iter().map(String::as_str).chain(self.values.iter().map(|(flag, _)| flag.as_str()).filter(|flag| *flag != "-C")).find(|flag| !flags.contains(flag));
@@ -555,7 +559,7 @@ fn run(arguments: &Arguments) -> Result<String> {
             let state = lead::state_dir()?;
             let addresses = tasks::slug(name).map(|task| repos.iter().map(|repo| peers::address(&task, &repo::name_of(repo))).collect::<Vec<_>>())?;
             let recipe = recipe::asked_of(&caller, arguments.value("--recipe"), addresses.iter().all(|address| recipe::load(&state, address).is_some()))?;
-            let mut prompt = arguments.positionals[2..].join(" ");
+            let mut prompt = arguments.rest(2).join(" ");
             if let Some((recipe, why)) = recipe.as_ref().filter(|_| !prompt.trim().is_empty()) {
                 prompt = format!("{prompt}\n\n{}", recipe::prompt_line(recipe, why)).trim_start().to_string();
             }
@@ -590,10 +594,10 @@ fn run(arguments: &Arguments) -> Result<String> {
             let report = started.iter().map(|result| match result { Ok(text) | Err(text) => text.as_str() }).collect::<Vec<_>>().join("\n");
             if started.iter().any(Result::is_err) { Err(report) } else { Ok(report) }
         }
-        Some("after") => tasks::after_command(&arguments.positionals[1..], arguments.flag("--now"), arguments.flag("--drop"), arguments.value("--at")),
+        Some("after") => tasks::after_command(arguments.rest(1), arguments.flag("--now"), arguments.flag("--drop"), arguments.value("--at")),
         Some("move") => {
             let name = name.ok_or("kebbie move needs a task name")?;
-            tasks::move_work(&cwd, name, &arguments.positionals[2..], arguments.value("--pane"), !arguments.flag("--no-focus"))
+            tasks::move_work(&cwd, name, arguments.rest(2), arguments.value("--pane"), !arguments.flag("--no-focus"))
         }
         Some("list") if arguments.flag("--json") => {
             serde_json::to_string_pretty(&tasks::list(&cwd)?).map_err(|error| error.to_string())
@@ -629,8 +633,8 @@ fn run(arguments: &Arguments) -> Result<String> {
             if forced { messages::tell_forced(to, Some(&text)) } else { messages::tell(&cwd, to, &text) }
         }
         Some("release") => messages::tell_forced(name.ok_or("kebbie release needs the task whose held messages go through")?, None),
-        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.values_of("--after"), &arguments.positionals[1..].join(" ")),
-        Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.positionals[1..].join(" ")),
+        Some("report") => report::report(&cwd, arguments.value("--state"), arguments.value("--next"), arguments.value("--card"), &arguments.values_of("--after"), &arguments.rest(1).join(" ")),
+        Some("ask") => questions::ask(&cwd, &arguments.values_of("--option"), arguments.value("--recommend"), arguments.value("--plan"), &arguments.rest(1).join(" ")),
         Some("notify") => {
             let text: Vec<String> = std::env::args().skip_while(|argument| argument != "notify").skip(1).collect();
             notify::notify(&cwd, &text.join(" "))
@@ -679,36 +683,36 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("messages") => messages::run(),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
-        Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), &arguments.positionals[2..].join(" ")),
+        Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), &arguments.rest(2).join(" ")),
         Some("backlog") => backlog::show(),
         Some("land") => tasks::land(&cwd, name),
-        Some("follow") => tasks::follow(&cwd, &arguments.positionals[1..]),
+        Some("follow") => tasks::follow(&cwd, arguments.rest(1)),
         Some("park") => tasks::park(&cwd, name, arguments.value("--until")),
-        Some("recipe") => arguments.only("recipe", &[]).and_then(|_| recipe::command(&cwd, &arguments.positionals[1..])),
+        Some("recipe") => arguments.only("recipe", &[]).and_then(|_| recipe::command(&cwd, arguments.rest(1))),
         Some("unpark") => tasks::unpark(&cwd, name),
         Some("push") if arguments.flag("--cancel") => tasks::cancel_push(&cwd, name),
         Some("push") => tasks::push(&cwd, name, arguments.value("--through"), arguments.value("--through").is_some()),
         Some("stage") => tasks::stage(&cwd, name, true),
         Some("unstage") => tasks::unstage(&cwd, name),
-        Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kebbie tidy needs a task name")?), &arguments.positionals[2..].join(" ")),
+        Some("tidy") => tasks::tidy(&cwd, Some(name.ok_or("kebbie tidy needs a task name")?), &arguments.rest(2).join(" ")),
         Some("review") if arguments.flag("--run") && arguments.flag("--rules") => rules_check::run(&cwd),
         Some("review") if arguments.flag("--run") => review::run(&cwd),
         Some("review") if arguments.flag("--second-opinion") => review::run_second(&cwd),
         Some("review") if arguments.flag("--assess") => assessment::run(&cwd),
         Some("review") if arguments.flag("--withdraw") => review::withdraw(&cwd, name),
-        Some("review") if arguments.flag("--confirm") => review::confirm(&cwd, name, &arguments.positionals[2..].join(" ")),
+        Some("review") if arguments.flag("--confirm") => review::confirm(&cwd, name, &arguments.rest(2).join(" ")),
         Some("review") if arguments.flag("--view") => board::review::run(Path::new(name.ok_or("kebbie review --view needs the review's folder")?)),
         Some("review") if arguments.flag("--second-only") => review::request(&cwd, name, review::Request::SecondOnly),
         Some("review") if arguments.flag("--second") => review::request(&cwd, name, review::Request::WithSecond),
         Some("review") => review::request(&cwd, name, review::Request::Review),
         Some("evidence") => evidence::print(&cwd, name, arguments.flag("--json")),
-        Some("steps") => arguments.only("steps", &["--json"]).and_then(|_| tasks::steps(&cwd, &arguments.positionals[1..], arguments.flag("--json"))),
+        Some("steps") => arguments.only("steps", &["--json"]).and_then(|_| tasks::steps(&cwd, arguments.rest(1), arguments.flag("--json"))),
         Some("accepted") => tasks::accepted_shown(&cwd, name, arguments.flag("--json")),
         Some("accept") => tasks::accept(&cwd, name, arguments.positional(2), !arguments.flag("--withdraw")),
         Some("approve") => tasks::approve(&cwd, Some(name.ok_or("kebbie approve needs a task name")?)),
         Some("ci") if name == Some("tick") => ci::tick_cli(),
         Some("ci") if name == Some("dismiss") => tasks::dismiss_ci(&cwd, arguments.positional(2), arguments.value("--why")),
-        Some("ci") if name == Some("outside") => tasks::ci_outside(&arguments.positionals[2..].join(" ")),
+        Some("ci") if name == Some("outside") => tasks::ci_outside(&arguments.rest(2).join(" ")),
         Some("ci") if name.is_some() => Err("kebbie ci knows tick, outside and dismiss: kebbie ci [--json], kebbie ci tick, kebbie ci outside \"<reason>\" or kebbie ci dismiss <task> [--why <reason>]".to_string()),
         Some("ci") => Ok(ci::list(&lead::state_dir()?, arguments.flag("--json"))),
         Some("comments") => Ok(comments::list(&lead::state_dir()?, arguments.flag("--json"))),
@@ -717,10 +721,10 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("routines") if name.is_some() => Err("kebbie routines knows tick: kebbie routines [--json] or kebbie routines tick".to_string()),
         Some("routines") => routines::list(arguments.flag("--json")),
         Some("routine") if name == Some("run") => routines::run_now(arguments.positional(2).ok_or("kebbie routine run needs the routine's id; kebbie routines lists them")?),
-        Some("routine") if name == Some("ok") => routines::ok(&cwd, &arguments.positionals[2..].join(" ")),
+        Some("routine") if name == Some("ok") => routines::ok(&cwd, &arguments.rest(2).join(" ")),
         Some("routine") if name == Some("add") => routine_file::add_cli(&routine_file::Asked {
             title: arguments.value("--title"), id: arguments.value("--id"), repo: arguments.value("--repo"), at: arguments.value("--at"), every: arguments.value("--every"),
-            mode: arguments.value("--mode"), push: arguments.flag("--push"), paused: arguments.flag("--paused"), profile: arguments.value("--profile"), prompt: &arguments.positionals[2..].join(" "),
+            mode: arguments.value("--mode"), push: arguments.flag("--push"), paused: arguments.flag("--paused"), profile: arguments.value("--profile"), prompt: &arguments.rest(2).join(" "),
         }),
         Some("routine") => Err("kebbie routine knows add, run <id> and ok <summary>".to_string()),
         Some("done") if arguments.flag("--landed") => tasks::landed_tick_cli(),
@@ -729,11 +733,11 @@ fn run(arguments: &Arguments) -> Result<String> {
         Some("reset") => tasks::reset(&cwd, name),
         Some("link") => {
             let name = name.ok_or("kebbie link needs a task name and the item")?;
-            tasks::link(&cwd, name, &arguments.positionals[2..].join(" "))
+            tasks::link(&cwd, name, &arguments.rest(2).join(" "))
         }
-        Some("docs") => docs::print(&arguments.positionals[1..]),
+        Some("docs") => docs::print(arguments.rest(1)),
         Some("profiles") => profiles::print(arguments.flag("--json")),
-        Some("hub") => hub::cli(name, &arguments.positionals[2..], arguments.value("--name")),
+        Some("hub") => hub::cli(name, arguments.rest(2), arguments.value("--name")),
         Some("config") if name == Some("edit") => settings_page::edit(&cwd, arguments.value("--repo")),
         Some("config") => match arguments.value("--get") {
             Some(key) => config::get(key),
@@ -795,11 +799,11 @@ fn issue(arguments: &Arguments, action: Option<&str>) -> Result<String> {
     let caller = permit::caller;
     match action {
         Some("add") => {
-            let body = issues::read_body(&arguments.positionals[2..], arguments.flag("-"));
+            let body = issues::read_body(arguments.rest(2), arguments.flag("-"));
             issues::add_in(&dir, &caller(), &issues::Filing { kind: arguments.value("--kind"), title: arguments.value("--title"), body: &body }, env!("KEBBIE_BUILT_FROM"), config::report_settings().map_or(config::ReportText::Ask, |report| report.text()), messages::now())
         }
         Some("hold") if arguments.flag("--take") => issues::take_held_in(&dir, &caller()),
-        Some("hold") => issues::hold_in(&dir, &caller(), &arguments.positionals[2..].join(" "), config::propose_issues_enabled()?),
+        Some("hold") => issues::hold_in(&dir, &caller(), &arguments.rest(2).join(" "), config::propose_issues_enabled()?),
         Some("show") => issues::show_in(&lead::state_dir()?, id()?),
         Some("close") => issues::close_in(&dir, &caller(), id()?, arguments.positional(3)),
         Some("retry") => issues::retry_in(&dir, &caller(), id()?),
