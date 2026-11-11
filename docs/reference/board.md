@@ -21,7 +21,7 @@ The status line shows:
 | Marker | Means |
 | --- | --- |
 | `⚠N` on Routines | N routine runs wait for you with findings. |
-| Counts | Tasks that need you, are working, are in review, are ready to push and wait for CI, and waiting questions. |
+| Counts | What needs you (tasks, and devices waiting for your approval), tasks that are working, are in review, are ready to push and wait for CI, and waiting questions. |
 | `◆ N to accept`, yellow | N commits of tasks working in steps wait for you to accept them. |
 | `! N bugs to send` | Bugs in kebbie you ran into wait for you to send them to its maintainers, on their row under Work. |
 | Plan usage | How much of the plan is used. |
@@ -436,6 +436,7 @@ The note's card shows its whole title, area, status and summary, and who works o
 
 | Group | What is in it | In what order |
 | --- | --- | --- |
+| Approve or deny | A device on your account that sent this machine a command under [`hub.trust = "device"`](configuration.md#machine), waiting for you to let it make changes here. Its row says when `hub.auto_approve` lets it in. | The one that has waited longest first. |
 | Stopped on you | A task that stands still until you act: a question or a plan to approve, Claude's own prompt, a report that asks you something, a crash, a red CI only you can settle, a step to accept with `task.require_accept` on. | The one most tasks wait behind first, then the one that has waited longest. |
 | Push, in this order | What is ready to push and not in the push line yet. A task whose ready report names another to push first (`kebbie report --after`) says `after <task>` while that task is open. | What other tasks wait on first, in any repo, queued or ready to push after it, then two tasks that change the same files in the order they were built, then the one that was ready first. |
 | To read | A task that reported ready with nothing to push, such as a research result. | The one a decision waits on first, then the oldest. |
@@ -451,6 +452,7 @@ The note's card shows its whole title, area, status and summary, and who works o
 | `↑` `↓`, `j` `k` | Move. `PgUp` `PgDn`, `Home` `End` move further. |
 | `⏎` | Open or do it: a question opens in the inbox, a push opens its push window, a result opens its card, anything else opens the task's options. Its row is selected on the board. |
 | `P` | Push the push group in its order, after a window that shows the order. |
+| `a`, `x` | On a device's row: approve it, so what it sent goes in now, or deny it, so it stays view only here. `⏎` opens a window with what it sent, its key and when it is let in by itself, with the same keys and `esc` to leave it waiting. |
 | `esc`, `q`, `N` | Back to the board. |
 
 `P` opens `Push 3 tasks in this order`, with each task, its commits and what waits on it.

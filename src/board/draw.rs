@@ -138,10 +138,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Hub(window) => super::hub_window::draw(frame, window),
         Mode::Next(window) => {
             let mut window = *window;
-            modal_hits = super::next_window::draw(frame, &crate::next::of(&app.tasks), &mut window, messages::now());
+            modal_hits = super::next_window::draw(frame, &app.next(), &mut window, messages::now());
             app.mode = Mode::Next(window);
         }
         Mode::PushAll { order, choice, .. } => modal_hits = super::next_window::draw_push_all(frame, order, *choice),
+        Mode::Device { id, .. } => modal_hits = super::next_window::draw_device(frame, app.devices.iter().find(|request| request.id.as_str() == id), messages::now()),
         Mode::Update => super::update_window::draw(frame, app),
         Mode::AgentUpdates => super::agent_updates::draw(frame, app),
         Mode::Report { id, shown, scroll, read, nudged } => {

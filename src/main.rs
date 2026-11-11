@@ -322,6 +322,11 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie hub move <url>           the hub moved: post there once <url> answers as a hub; move only to a hub you run or trust;
                                   a redirect to another host is never followed by itself; yours only
   kebbie hub leave                leave the hub: remove this machine's keys, token and pinned account key
+  kebbie hub devices [approve|deny <name>]
+                                  the devices that sent this machine commands through the hub, with whether each may
+                                  make changes here (hub.trust); approve lets a waiting device in and releases what it
+                                  sent, deny keeps it view only; a name two devices share takes the id; approve and
+                                  deny are yours only
   kebbie doctor [--all] [--plain] [--fix]
                                   check that this machine has what kebbie needs, with the fix for each gap; checks
                                   config.toml and every repo config, and whether tasks run in the sandbox

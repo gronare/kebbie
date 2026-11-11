@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use kebbie_hub_api::{HubInfo, Inbox, ResultStored, ResultUpload};
-use kebbie_hub_protocol::{AccountKey, Answer, AppliedCommands, CommandResult, Dropped, Envelope, Header, Id, Kind, Machine, Outcome, Payload, PromptAnswer, PushApproval, Reason, Refusal, authorize, seal};
+use kebbie_hub_protocol::{AccountKey, Answer, AppliedCommands, CommandResult, Dropped, Envelope, Header, Id, Kind, Machine, Outcome, Payload, PromptAnswer, PushApproval, Reason, Refusal, Trust, VerifiedDevice, authorize, seal};
 use serde::{Deserialize, Serialize};
 
+use super::devices::{self, Asked, Locked, Policy};
 use super::http::{CALL, Client, HubError, LONG_POLL};
 use super::identity::{self, Identity};
 use crate::config::HubCommands;
@@ -18,6 +19,7 @@ pub const WAIT: u64 = 25;
 const LEDGER: &str = "applied.json";
 const BRIDGE: &str = "commands.json";
 const LOCK: &str = "commands.lock";
+const LEDGER_LOCK: &str = "applied.lock";
 const IDLE: u64 = 60;
 const MAX_BACKOFF: u64 = 300;
 pub const STOPPED: &str = "kebbie stopped while applying it; check the board";
@@ -29,12 +31,22 @@ pub struct Started {
     pub at: u64,
 }
 
+// A command from a device that waits for approval, kept whole so it is authorized again once the device is decided.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Held {
+    pub envelope: Envelope,
+    pub device: Id,
+    pub asked: Asked,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Ledger {
     #[serde(default)]
     pub applied: AppliedCommands,
     #[serde(default)]
     pub started: BTreeMap<Id, Started>,
+    #[serde(default)]
+    pub held: BTreeMap<Id, Held>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -51,6 +63,7 @@ pub struct Hands<'a> {
     pub push: &'a dyn Fn(&Caller, &PushApproval) -> Done,
     pub prompt: &'a dyn Fn(&Caller, &PromptAnswer) -> Done,
     pub relay: &'a dyn Fn(),
+    pub notify: &'a dyn Fn(&str),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -58,6 +71,7 @@ pub enum Handled {
     Applied(CommandResult),
     Refused(CommandResult),
     Replayed(CommandResult),
+    Held(Id),
     Dropped(Dropped),
 }
 
@@ -65,7 +79,7 @@ impl Handled {
     pub fn result(&self) -> Option<&CommandResult> {
         match self {
             Handled::Applied(result) | Handled::Refused(result) | Handled::Replayed(result) => Some(result),
-            Handled::Dropped(_) => None,
+            Handled::Held(_) | Handled::Dropped(_) => None,
         }
     }
 }
@@ -121,46 +135,88 @@ fn refusal_text(reason: Reason, kind: Kind, machine: &str, accepts: &[Kind]) -> 
         Reason::NotAllowed => not_taken(kind, machine, accepts),
         Reason::Undecryptable => "This machine could not open it; reload the page and send it again".to_string(),
         Reason::BadRequest => "This machine could not read what was asked".to_string(),
+        Reason::NotApproved => format!("Not delivered: {machine} had not approved this device before it expired. Approve it there with kebbie hub devices approve, then send it again."),
+        Reason::Denied => format!("Not delivered: {machine} denied this device; it stays view only there."),
         other => format!("Refused: {}", other.key()),
     }
 }
 
-fn result(command: &Id, (outcome, text): Done) -> CommandResult {
-    CommandResult { command: command.clone(), outcome, text }
+fn result(header: &Header, (outcome, text): Done) -> CommandResult {
+    CommandResult { command: header.id.clone(), device: header.from.clone(), outcome, text }
 }
 
-// One command from the inbox: checked against the pinned account and hub.commands, applied at most once, and its result recorded before it is sent.
-pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[Kind], envelope: &Envelope, hands: &Hands, now: u64) -> Result<Handled> {
+// One command from the inbox: checked against the pinned account, hub.commands and the device's approval, applied at most once, and its result recorded before it is sent; a device waiting for approval has its command held.
+#[allow(clippy::too_many_arguments)]
+pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[Kind], policy: Policy, envelope: &Envelope, hands: &Hands, now: u64) -> Result<Handled> {
     let header = &envelope.header;
     let secret = identity.secret();
-    let machine = Machine { id: &identity.machine, keys: &secret, account, accepts };
+    let _ledger_lock = Locked::wait(dir, LEDGER_LOCK)?;
     let mut ledger = ledger(dir);
     ledger.applied.prune(now);
     ledger.started.retain(|_, started| started.at + AppliedCommands::KEEP_SECONDS > now);
-    let handled = match authorize(&machine, &ledger.applied, envelope, now) {
-        Err(Refusal::Drop(dropped)) => return Ok(Handled::Dropped(dropped)),
-        Err(Refusal::Replay(result)) => return Ok(Handled::Replayed(result)),
-        Err(Refusal::Answer(reason)) => Handled::Refused(result(&header.id, (Outcome::Refused { reason }, refusal_text(reason, header.kind, &identity.name, accepts)))),
-        Ok(_) if ledger.started.get(&header.id).is_some_and(|started| started.from == header.from) => Handled::Refused(result(&header.id, (Outcome::Failed, STOPPED.to_string()))),
-        Ok(payload) => {
+    let (outcome, asking) = devices::change(dir, |known| {
+        known.settle(policy, now);
+        let asked = std::cell::RefCell::new(Vec::new());
+        let trust = |device: &VerifiedDevice, at: u64| -> Trust {
+            asked.borrow_mut().push(device.clone());
+            known.trust(policy, device, at)
+        };
+        let machine = Machine { id: &identity.machine, keys: &secret, account, accepts, trust: &trust };
+        let outcome = authorize(&machine, &ledger.applied, envelope, now);
+        let asking: Vec<String> = asked.into_inner().into_iter().filter(|device| known.seen(policy, device, now)).map(|device| device.cert().name.clone()).collect();
+        Ok((outcome, asking))
+    })?;
+    for name in asking {
+        (hands.notify)(&format!("{name} wants to make changes on {}: approve or deny it under N on the board, or with kebbie hub devices", identity.name));
+    }
+    let handled = match outcome {
+        Err(Refusal::Drop(dropped)) => Handled::Dropped(dropped),
+        Err(Refusal::Replay(result)) => Handled::Replayed(result),
+        Err(Refusal::Waiting(verified)) => {
+            let device = verified.device.id().clone();
+            ledger.held.entry(header.id.clone()).or_insert_with(|| Held { envelope: envelope.clone(), device: device.clone(), asked: Asked::of(&verified.payload, devices::question_label) });
+            save_ledger(dir, &ledger)?;
+            return Ok(Handled::Held(device));
+        }
+        Err(Refusal::Answer(reason)) => {
+            let reason = if reason == Reason::Expired && ledger.held.contains_key(&header.id) { Reason::NotApproved } else { reason };
+            Handled::Refused(result(header, (Outcome::Refused { reason }, refusal_text(reason, header.kind, &identity.name, accepts))))
+        }
+        Ok(_) if ledger.started.get(&header.id).is_some_and(|started| started.from == header.from) => Handled::Refused(result(header, (Outcome::Failed, STOPPED.to_string()))),
+        Ok(verified) => {
             ledger.started.insert(header.id.clone(), Started { from: header.from.clone(), at: now });
             save_ledger(dir, &ledger)?;
-            let caller = Caller::hub(account.account.as_str());
-            let done = match &payload {
+            let caller = Caller::Hub { account: account.account.as_str().to_string(), name: verified.device.cert().name.clone() };
+            let done = match &verified.payload {
                 Payload::Answer(answer) => (hands.answer)(&caller, answer),
                 Payload::Push(push) => (hands.push)(&caller, push),
                 Payload::PromptAnswer(prompt) => (hands.prompt)(&caller, prompt),
                 _ => (Outcome::Refused { reason: Reason::NotAllowed }, not_taken(header.kind, &identity.name, accepts)),
             };
-            Handled::Applied(result(&header.id, done))
+            Handled::Applied(result(header, done))
         }
     };
-    if let Some(result) = handled.result() {
-        ledger.applied.record(&header.from, now, result.clone());
+    if let Handled::Applied(result) | Handled::Refused(result) = &handled {
+        ledger.applied.record(now, result.clone());
     }
     ledger.started.remove(&header.id);
+    ledger.held.remove(&header.id);
     save_ledger(dir, &ledger)?;
     Ok(handled)
+}
+
+// The held commands authorized again: a device approved since has them applied, a denied one or one that expired while it waited has them answered.
+pub fn release(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[Kind], policy: Policy, hands: &Hands, now: u64) -> Result<Vec<(Envelope, Handled)>> {
+    let held: Vec<Envelope> = ledger(dir).held.into_values().map(|held| held.envelope).collect();
+    held.into_iter().map(|envelope| handle(dir, identity, account, accepts, policy, &envelope, hands, now).map(|handled| (envelope, handled))).filter(|done| !matches!(done, Ok((_, Handled::Held(_))))).collect()
+}
+
+fn note(header: &Header, handled: &Handled) -> String {
+    match handled {
+        Handled::Held(device) => format!("commands: {} {} from {device} waits for the device to be approved", header.kind.name(), header.id),
+        Handled::Dropped(_) => format!("commands: dropped {} {} from {}", header.kind.name(), header.id, header.from),
+        Handled::Applied(result) | Handled::Refused(result) | Handled::Replayed(result) => format!("commands: {} {}: {}", header.kind.name(), header.id, result.text),
+    }
 }
 
 fn sealed(identity: &Identity, account: &AccountKey, result: &CommandResult) -> Result<Envelope> {
@@ -196,28 +252,31 @@ impl Drop for Alone {
     }
 }
 
-// One long poll of the inbox and everything it brings; a keeper handing over to its successor holds the lock, so two never apply the same command.
-pub fn round(dir: &Path, wait: u64, accepts: &[Kind], hands: &Hands, clock: &dyn Fn() -> u64) -> Result<Vec<String>> {
+// The commands held for approval first, then one long poll of the inbox and everything it brings; a keeper handing over to its successor holds the lock, so two never poll at once.
+pub fn round(dir: &Path, wait: u64, accepts: &[Kind], policy: Policy, hands: &Hands, clock: &dyn Fn() -> u64) -> Result<Vec<String>> {
     let Some(identity) = identity::load_at(dir)? else { return Ok(Vec::new()) };
     let Some(account) = identity.account.as_ref().map(|account| account.key.clone()) else { return Ok(Vec::new()) };
     let _alone = Alone::take(dir).ok_or("another kebbie applies this machine's commands now")?;
+    let client = Client::new(&identity.url, Some(identity.token()), CALL);
+    let released = release(dir, &identity, &account, accepts, policy, hands, clock())?;
+    let mut applied = released.iter().any(|(_, handled)| matches!(handled, Handled::Applied(_)));
+    let mut notes = Vec::new();
+    for (envelope, handled) in &released {
+        if let Some(result) = handled.result() {
+            deliver(&client, &identity, &account, result)?;
+        }
+        notes.push(note(&envelope.header, handled));
+    }
     let mut bridge = bridge(dir);
     let polling = Client::new(&identity.url, Some(identity.token()), LONG_POLL);
     let inbox: Inbox = polling.get(&format!("/v1/m/inbox?after={}&wait={wait}", bridge.inbox_seq)).map_err(|error| error.to_string())?;
-    let client = Client::new(&identity.url, Some(identity.token()), CALL);
-    let mut notes = Vec::new();
-    let mut applied = false;
     for message in inbox.messages.iter().filter(|message| message.envelope.header.kind.is_command()) {
-        let header = &message.envelope.header;
-        let handled = handle(dir, &identity, &account, accepts, &message.envelope, hands, clock())?;
+        let handled = handle(dir, &identity, &account, accepts, policy, &message.envelope, hands, clock())?;
         applied |= matches!(handled, Handled::Applied(_));
-        match handled.result() {
-            None => notes.push(format!("commands: dropped {} {} from {}", header.kind.name(), header.id, header.from)),
-            Some(result) => {
-                deliver(&client, &identity, &account, result)?;
-                notes.push(format!("commands: {} {}: {}", header.kind.name(), header.id, result.text));
-            }
+        if let Some(result) = handled.result() {
+            deliver(&client, &identity, &account, result)?;
         }
+        notes.push(note(&message.envelope.header, &handled));
     }
     bridge.inbox_seq = inbox.seq;
     save_bridge(dir, &bridge)?;
@@ -296,8 +355,7 @@ fn backoff(failures: u32) -> u64 {
     (5u64 << failures.min(10)).min(MAX_BACKOFF)
 }
 
-// The keeper's thread for one identity directory: it idles while the machine has no pinned account or the hub takes no commands, and long-polls otherwise.
-fn serve(state: &Path, dir: &Path) {
+fn keeper_hands<T>(state: &Path, run: impl FnOnce(&Hands) -> T) -> T {
     let log = |text: &str| crate::keeper::log_line(state, text);
     let relay = || {
         if let Err(error) = super::tick() {
@@ -305,43 +363,99 @@ fn serve(state: &Path, dir: &Path) {
         }
     };
     let prompt = |caller: &Caller, answer: &PromptAnswer| chose(crate::menu::choose_as(caller, &answer.address, &answer.key, &answer.prompt));
-    let hands = Hands { answer: &answered, push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address)), prompt: &prompt, relay: &relay };
-    let mut failures = 0;
-    let mut checked: Option<(bool, u64)> = None;
-    while !crate::keeper::stopping() {
-        let now = crate::messages::now();
-        let Some(identity) = identity::load_at(dir).ok().flatten().filter(|identity| identity.account.is_some()) else {
-            pause(IDLE);
-            continue;
-        };
-        if checked.is_none_or(|(_, at)| now.saturating_sub(at) >= IDLE) {
-            checked = Some((commands_on(&identity.url), now));
-        }
-        if !checked.is_some_and(|(on, _)| on) {
-            pause(IDLE);
-            continue;
-        }
-        match round(dir, WAIT, &accepts(crate::config::hub_commands()), &hands, &crate::messages::now) {
-            Ok(notes) => {
-                failures = 0;
-                notes.iter().for_each(|note| log(note));
-            }
-            Err(error) => {
-                failures += 1;
-                log(&format!("commands: {error}; next try in {}", crate::keeper::span(backoff(failures))));
-                pause(backoff(failures));
-            }
-        }
-    }
+    let notify = |text: &str| {
+        crate::notify::send(state, &crate::notify::Notice::from(crate::notify::Event::Device, "kebbie", text.to_string()));
+    };
+    run(&Hands { answer: &answered, push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address)), prompt: &prompt, relay: &relay, notify: &notify })
 }
 
-// One thread per identity directory, the real hub's and the dev hub's, beside the keeper's routines, since a long poll would hold up their loop.
+// The keeper's thread for one identity directory: it idles while the machine has no pinned account or the hub takes no commands, and long-polls otherwise.
+fn serve(state: &Path, dir: &Path) {
+    let log = |text: &str| crate::keeper::log_line(state, text);
+    keeper_hands(state, |hands| {
+        let mut failures = 0;
+        let mut checked: Option<(bool, u64)> = None;
+        while !crate::keeper::stopping() {
+            let now = crate::messages::now();
+            let Some(identity) = identity::load_at(dir).ok().flatten().filter(|identity| identity.account.is_some()) else {
+                pause(IDLE);
+                continue;
+            };
+            if checked.is_none_or(|(_, at)| now.saturating_sub(at) >= IDLE) {
+                checked = Some((commands_on(&identity.url), now));
+            }
+            if !checked.is_some_and(|(on, _)| on) {
+                pause(IDLE);
+                continue;
+            }
+            match round(dir, WAIT, &accepts(crate::config::hub_commands()), Policy::current(), hands, &crate::messages::now) {
+                Ok(notes) => {
+                    failures = 0;
+                    notes.iter().for_each(|note| log(note));
+                }
+                Err(error) => {
+                    failures += 1;
+                    log(&format!("commands: {error}; next try in {}", crate::keeper::span(backoff(failures))));
+                    pause(backoff(failures));
+                }
+            }
+        }
+    });
+}
+fn modified(file: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(file).and_then(|metadata| metadata.modified()).ok()
+}
+
+// A decision on the board or in a terminal changes devices.json while the inbox poll waits, so this thread releases what it held at once.
+fn watch(state: &Path, dir: &Path) {
+    let log = |text: &str| crate::keeper::log_line(state, text);
+    keeper_hands(state, |hands| {
+        let mut seen = modified(&dir.join(devices::FILE));
+        while !crate::keeper::stopping() {
+            std::thread::sleep(Duration::from_secs(1));
+            let now = modified(&dir.join(devices::FILE));
+            if now == seen {
+                continue;
+            }
+            seen = now;
+            match released(dir, hands) {
+                Ok(notes) if notes.is_empty() => {}
+                Ok(notes) => {
+                    notes.iter().for_each(|note| log(note));
+                    (hands.relay)();
+                }
+                Err(error) => log(&format!("commands: {error}")),
+            }
+        }
+    });
+}
+
+pub fn released(dir: &Path, hands: &Hands) -> Result<Vec<String>> {
+    let Some(identity) = identity::load_at(dir)? else { return Ok(Vec::new()) };
+    let Some(account) = identity.account.as_ref().map(|account| account.key.clone()) else { return Ok(Vec::new()) };
+    if ledger(dir).held.is_empty() {
+        return Ok(Vec::new());
+    }
+    let client = Client::new(&identity.url, Some(identity.token()), CALL);
+    let mut notes = Vec::new();
+    for (envelope, handled) in release(dir, &identity, &account, &accepts(crate::config::hub_commands()), Policy::current(), hands, crate::messages::now())? {
+        if let Some(result) = handled.result() {
+            deliver(&client, &identity, &account, result)?;
+        }
+        notes.push(note(&envelope.header, &handled));
+    }
+    Ok(notes)
+}
+
+// Per identity directory, the real hub's and the dev hub's: one thread long-polls, one releases held commands when a device is decided, beside the keeper's routines, since a long poll would hold up their loop.
 pub fn spawn(state: &Path) {
     for dev in [false, true] {
-        let (kept, dir): (PathBuf, PathBuf) = (state.to_path_buf(), identity::dir_of(state, dev));
-        let name = if dev { "hub-commands-dev" } else { "hub-commands" };
-        if let Err(error) = std::thread::Builder::new().name(name.to_string()).spawn(move || serve(&kept, &dir)) {
-            crate::keeper::log_line(state, &format!("commands: {name} did not start: {error}"));
+        for (name, run) in [("hub-commands", serve as fn(&Path, &Path)), ("hub-devices", watch)] {
+            let (kept, dir): (PathBuf, PathBuf) = (state.to_path_buf(), identity::dir_of(state, dev));
+            let name = if dev { format!("{name}-dev") } else { name.to_string() };
+            if let Err(error) = std::thread::Builder::new().name(name.clone()).spawn(move || run(&kept, &dir)) {
+                crate::keeper::log_line(state, &format!("commands: {name} did not start: {error}"));
+            }
         }
     }
 }
@@ -350,9 +464,15 @@ pub fn spawn(state: &Path) {
 mod tests {
     use std::cell::{Cell, RefCell};
 
-    use kebbie_hub_protocol::{Prefix, SecretKeys};
+    use kebbie_hub_protocol::{DeviceCert, DeviceKey, DeviceKind, Prefix, SecretKeys};
 
     use super::*;
+    use crate::config::{AutoApprove, HubTrust};
+    use crate::hub::devices::{Decision, State};
+
+    const ACCOUNT: Policy = Policy { trust: HubTrust::Account, auto: AutoApprove::Day };
+    const DEVICE: Policy = Policy { trust: HubTrust::Device, auto: AutoApprove::Day };
+    const NEVER: Policy = Policy { trust: HubTrust::Device, auto: AutoApprove::Never };
     use crate::hub::tests::{TestHub, WAIT as LONG, connected_state, member, open_hub};
 
     fn now() -> u64 {
@@ -364,11 +484,12 @@ mod tests {
         pushes: RefCell<Vec<(Caller, PushApproval)>>,
         prompts: RefCell<Vec<(Caller, PromptAnswer)>>,
         relays: Cell<u32>,
+        told: RefCell<Vec<String>>,
     }
 
     impl Seen {
         fn new() -> Seen {
-            Seen { answers: RefCell::new(Vec::new()), pushes: RefCell::new(Vec::new()), prompts: RefCell::new(Vec::new()), relays: Cell::new(0) }
+            Seen { answers: RefCell::new(Vec::new()), pushes: RefCell::new(Vec::new()), prompts: RefCell::new(Vec::new()), relays: Cell::new(0), told: RefCell::new(Vec::new()) }
         }
 
         fn applied(&self) -> usize {
@@ -390,7 +511,8 @@ mod tests {
             (Outcome::Done, "Chose it".to_string())
         };
         let relay = || seen.relays.set(seen.relays.get() + 1);
-        run(&Hands { answer: &answer, push: &push, prompt: &prompt, relay: &relay })
+        let notify = |text: &str| seen.told.borrow_mut().push(text.to_string());
+        run(&Hands { answer: &answer, push: &push, prompt: &prompt, relay: &relay, notify: &notify })
     }
 
     fn answer() -> Payload {
@@ -435,7 +557,15 @@ mod tests {
         }
 
         fn round(&self, seen: &Seen, policy: HubCommands) -> Vec<String> {
-            with_hands(seen, |hands| round(&self.dir, 0, &accepts(policy), hands, &now)).unwrap()
+            self.round_under(seen, policy, ACCOUNT)
+        }
+
+        fn round_under(&self, seen: &Seen, policy: HubCommands, trust: Policy) -> Vec<String> {
+            with_hands(seen, |hands| round(&self.dir, 0, &accepts(policy), trust, hands, &now)).unwrap()
+        }
+
+        fn caller(&self) -> Caller {
+            Caller::Hub { account: self.account.as_str().to_string(), name: self.browser.device_name.clone() }
         }
     }
 
@@ -445,11 +575,12 @@ mod tests {
         let seen = Seen::new();
         let sent = account.send(&answer());
         account.round(&seen, HubCommands::AnswerAndPush);
-        assert_eq!(seen.answers.borrow().as_slice(), [(Caller::hub(account.account.as_str()), Answer { address: "refunds@shop".to_string(), question: "q1".to_string(), choice: Some(0), comment: String::new() })]);
+        assert_eq!(seen.answers.borrow().as_slice(), [(account.caller(), Answer { address: "refunds@shop".to_string(), question: "q1".to_string(), choice: Some(0), comment: String::new() })]);
         assert_eq!(seen.relays.get(), 1, "the board goes out again at once");
         let result = account.result(&sent);
         assert_eq!((result.outcome, result.text.as_str()), (Outcome::Done, "Answered"));
-        assert_eq!(ledger(&account.dir).applied.result(&account.account, &sent.header.id), Some(&result), "recorded before it was sent");
+        assert_eq!(result.device, sent.header.from, "the result names the device that sent it");
+        assert_eq!(ledger(&account.dir).applied.result(&sent.header.from, &sent.header.id), Some(&result), "recorded before it was sent");
 
         let mut lost = bridge(&account.dir);
         lost.inbox_seq = 0;
@@ -492,7 +623,7 @@ mod tests {
         let seen = Seen::new();
         let soon = account.browser.seal_command(&account.identity.machine, &answer(), now(), Some(60)).unwrap();
         account.hub.runtime.block_on(account.browser.send_command(&soon)).unwrap();
-        with_hands(&seen, |hands| round(&account.dir, 0, &accepts(HubCommands::AnswerAndPush), hands, &|| now() + 120)).unwrap();
+        with_hands(&seen, |hands| round(&account.dir, 0, &accepts(HubCommands::AnswerAndPush), ACCOUNT, hands, &|| now() + 120)).unwrap();
         assert_eq!(account.result(&soon).outcome, Outcome::Refused { reason: Reason::Expired });
         assert!(seen.applied() == 0 && seen.relays.get() == 0, "nothing was applied");
     }
@@ -507,8 +638,8 @@ mod tests {
                 seen.answers.borrow_mut().push((Caller::User, Answer { address: String::new(), question: String::new(), choice: None, comment: String::new() }));
                 panic!("kebbie stopped here")
             };
-            let (push, prompt, relay) = (|_: &Caller, _: &PushApproval| unreachable!(), |_: &Caller, _: &PromptAnswer| unreachable!(), || {});
-            round(&account.dir, 0, &accepts(HubCommands::AnswerAndPush), &Hands { answer: &answer, push: &push, prompt: &prompt, relay: &relay }, &now)
+            let (push, prompt, relay, notify) = (|_: &Caller, _: &PushApproval| unreachable!(), |_: &Caller, _: &PromptAnswer| unreachable!(), || {}, |_: &str| {});
+            round(&account.dir, 0, &accepts(HubCommands::AnswerAndPush), ACCOUNT, &Hands { answer: &answer, push: &push, prompt: &prompt, relay: &relay, notify: &notify }, &now)
         }));
         assert!(crashed.is_err());
         assert_eq!(seen.answers.borrow().len(), 1, "applied once, then cut off before it was recorded");
@@ -520,34 +651,231 @@ mod tests {
         assert!(ledger(&account.dir).started.is_empty());
     }
 
-    fn sealed_by(account: &AccountKey, keys: &SecretKeys, identity: &Identity, payload: &Payload) -> Envelope {
-        let header = Header::new(Id::new(Prefix::Command).unwrap(), payload.kind(), account.account.clone(), identity.machine.clone(), now());
-        seal(header, payload, keys, &[account.recipient(), (identity.machine.clone(), identity.public())]).unwrap()
+    struct Phone {
+        key: DeviceKey,
+        cert: DeviceCert,
+    }
+
+    impl Phone {
+        fn new(keys: &SecretKeys, account: &AccountKey, name: &str) -> Phone {
+            Phone::with_id(keys, account, name, Id::new(Prefix::Device).unwrap())
+        }
+
+        fn with_id(keys: &SecretKeys, account: &AccountKey, name: &str, id: Id) -> Phone {
+            let key = DeviceKey::generate();
+            let cert = DeviceCert::issue(keys, &account.account, id, name, DeviceKind::Web, key.public(), 1_000).unwrap();
+            Phone { key, cert }
+        }
+
+        fn id(&self) -> &Id {
+            &self.cert.device
+        }
+
+        fn send(&self, account: &AccountKey, identity: &Identity, payload: &Payload, at: u64) -> Envelope {
+            let header = Header::command(Id::new(Prefix::Command).unwrap(), payload.kind(), self.cert.clone(), identity.machine.clone(), at);
+            kebbie_hub_protocol::seal_command(header, payload, &self.key, &identity.public(), account).unwrap()
+        }
+    }
+
+    struct Machine {
+        dir: PathBuf,
+        identity: Identity,
+        keys: SecretKeys,
+        account: AccountKey,
+    }
+
+    impl Machine {
+        fn new() -> Machine {
+            let dir = crate::sh::test_dir("hub-devices");
+            let identity = Identity::new("https://hub.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_token".to_string(), &SecretKeys::generate(), now());
+            identity::save_at(&dir, &identity).unwrap();
+            let keys = SecretKeys::generate();
+            let account = AccountKey::new(Id::account([3; 16]), 1, keys.public()).unwrap();
+            Machine { dir, identity, keys, account }
+        }
+
+        fn phone(&self, name: &str) -> Phone {
+            Phone::new(&self.keys, &self.account, name)
+        }
+
+        fn handle(&self, seen: &Seen, policy: Policy, envelope: &Envelope, at: u64) -> Handled {
+            with_hands(seen, |hands| handle(&self.dir, &self.identity, &self.account, &accepts(HubCommands::AnswerAndPush), policy, envelope, hands, at)).unwrap()
+        }
+
+        fn release(&self, seen: &Seen, policy: Policy, at: u64) -> Vec<Handled> {
+            with_hands(seen, |hands| release(&self.dir, &self.identity, &self.account, &accepts(HubCommands::AnswerAndPush), policy, hands, at)).unwrap().into_iter().map(|(_, handled)| handled).collect()
+        }
+
+        fn state(&self, phone: &Phone) -> Option<State> {
+            devices::load(&self.dir).devices.get(phone.id()).map(|device| device.state)
+        }
     }
 
     #[test]
     fn a_forged_command_or_one_another_account_signed_is_dropped_and_nothing_is_applied() {
-        let dir = crate::sh::test_dir("hub-commands");
-        let identity = Identity::new("https://hub.example.com", Id::new(Prefix::Machine).unwrap(), "mac", "khm_token".to_string(), &SecretKeys::generate(), now());
-        let (keys, other_keys) = (SecretKeys::generate(), SecretKeys::generate());
-        let pinned = AccountKey::new(Id::account([3; 16]), 1, keys.public()).unwrap();
+        let machine = Machine::new();
+        let other_keys = SecretKeys::generate();
         let other = AccountKey::new(Id::account([4; 16]), 1, other_keys.public()).unwrap();
-        let genuine = sealed_by(&pinned, &keys, &identity, &answer());
+        let phone = machine.phone("iPhone 16");
+        let genuine = phone.send(&machine.account, &machine.identity, &answer(), now());
         let mut forged = genuine.clone();
         forged.sig = format!("{}{}", if forged.sig.starts_with('A') { 'B' } else { 'A' }, &forged.sig[1..]);
-        let impostor = sealed_by(&pinned, &other_keys, &identity, &answer());
-        let elsewhere = sealed_by(&other, &other_keys, &identity, &answer());
-        let all = accepts(HubCommands::AnswerAndPush);
+        let posing = AccountKey::new(machine.account.account.clone(), 1, other_keys.public()).unwrap();
+        let impostor = Phone::new(&other_keys, &posing, "iPhone 16").send(&posing, &machine.identity, &answer(), now());
+        let elsewhere = Phone::new(&other_keys, &other, "iPhone 16").send(&other, &machine.identity, &answer(), now());
         let seen = Seen::new();
-        with_hands(&seen, |hands| {
-            assert_eq!(handle(&dir, &identity, &pinned, &all, &forged, hands, now()).unwrap(), Handled::Dropped(Dropped::BadSignature));
-            assert_eq!(handle(&dir, &identity, &pinned, &all, &impostor, hands, now()).unwrap(), Handled::Dropped(Dropped::BadSignature), "the pinned account's id signed with another key");
-            assert_eq!(handle(&dir, &identity, &pinned, &all, &elsewhere, hands, now()).unwrap(), Handled::Dropped(Dropped::WrongAccount), "a command another account signed");
-            assert_eq!(seen.applied(), 0, "nothing was applied");
-            assert!(ledger(&dir).applied.is_empty(), "a dropped command leaves no result");
-            assert!(matches!(handle(&dir, &identity, &pinned, &all, &genuine, hands, now()).unwrap(), Handled::Applied(_)), "the genuine command from the pinned account goes through");
-        });
+        assert_eq!(machine.handle(&seen, ACCOUNT, &forged, now()), Handled::Dropped(Dropped::BadSignature));
+        assert_eq!(machine.handle(&seen, ACCOUNT, &impostor, now()), Handled::Dropped(Dropped::BadCertificate), "a device the pinned account's id names, certified by another key");
+        assert_eq!(machine.handle(&seen, ACCOUNT, &elsewhere, now()), Handled::Dropped(Dropped::WrongAccount), "a command another account signed");
+        assert_eq!(seen.applied(), 0, "nothing was applied");
+        assert!(ledger(&machine.dir).applied.is_empty(), "a dropped command leaves no result");
+        assert!(devices::load(&machine.dir).devices.is_empty(), "a device that did not verify is never recorded");
+        assert!(matches!(machine.handle(&seen, ACCOUNT, &genuine, now()), Handled::Applied(_)), "the genuine command from the pinned account goes through");
         assert_eq!(seen.answers.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_new_devices_command_waits_and_goes_in_as_that_device_once_approved() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPhone 16");
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, now()), Handled::Held(phone.id().clone()));
+        assert_eq!(seen.applied(), 0, "nothing is applied while it waits");
+        assert_eq!(seen.told.borrow().as_slice(), ["iPhone 16 wants to make changes on mac: approve or deny it under N on the board, or with kebbie hub devices"]);
+        assert_eq!(machine.state(&phone), Some(State::Waiting));
+        let held = &ledger(&machine.dir).held[&sent.header.id];
+        assert_eq!((held.device.clone(), held.asked.described()), (phone.id().clone(), "an answer to refunds".to_string()));
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, now()), Handled::Held(phone.id().clone()), "the same command again waits once");
+        assert_eq!((ledger(&machine.dir).held.len(), seen.told.borrow().len()), (1, 1), "and is neither kept twice nor told twice");
+        assert!(machine.release(&seen, DEVICE, now()).is_empty(), "still waiting, nothing is answered");
+
+        let approved = devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
+        assert!(approved.starts_with("✓ iPhone 16 makes changes on mac from now on\n  next: Its answer to refunds goes in"), "{approved}");
+        assert!(approved.ends_with(&format!("  key: {}", phone.cert.fingerprint())), "{approved}");
+        let released = machine.release(&seen, DEVICE, now());
+        let [Handled::Applied(result)] = released.as_slice() else { panic!("{released:?}") };
+        assert_eq!((result.outcome, result.device.clone()), (Outcome::Done, phone.id().clone()));
+        assert_eq!(seen.answers.borrow()[0].0, Caller::Hub { account: machine.account.account.as_str().to_string(), name: "iPhone 16".to_string() }, "the answer names the device");
+        assert_eq!(crate::permit::describe(&seen.answers.borrow()[0].0), "the user, from iPhone 16");
+        assert!(ledger(&machine.dir).held.is_empty());
+        let later = phone.send(&machine.account, &machine.identity, &push(), now());
+        assert!(matches!(machine.handle(&seen, DEVICE, &later, now()), Handled::Applied(_)), "an approved device's next command goes in at once");
+    }
+
+    #[test]
+    fn a_denied_devices_held_command_is_answered_denied_and_so_is_every_later_one() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPhone 16");
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
+        machine.handle(&seen, DEVICE, &sent, now());
+        let denied = devices::answer(&machine.dir, phone.id().as_str(), Decision::Deny, now()).unwrap();
+        assert!(denied.starts_with("✓ iPhone 16 stays view only on mac\n  next: Its answer to refunds is dropped; kebbie hub devices approve \"iPhone 16\" lets it in later."), "{denied}");
+        let released = machine.release(&seen, DEVICE, now());
+        let [Handled::Refused(result)] = released.as_slice() else { panic!("{released:?}") };
+        assert_eq!((result.outcome, result.text.as_str()), (Outcome::Refused { reason: Reason::Denied }, "Not delivered: mac denied this device; it stays view only there."));
+        let later = phone.send(&machine.account, &machine.identity, &answer(), now() + 10 * devices::DAY);
+        assert!(matches!(machine.handle(&seen, DEVICE, &later, now() + 10 * devices::DAY), Handled::Refused(CommandResult { outcome: Outcome::Refused { reason: Reason::Denied }, .. })), "a denial never lapses into an approval");
+        assert_eq!(seen.applied(), 0);
+    }
+
+    #[test]
+    fn a_command_that_expires_while_its_device_waits_is_answered_not_approved() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPhone 16");
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
+        machine.handle(&seen, DEVICE, &sent, now());
+        assert!(machine.release(&seen, DEVICE, sent.header.exp - 1).is_empty());
+        let released = machine.release(&seen, DEVICE, sent.header.exp);
+        let [Handled::Refused(result)] = released.as_slice() else { panic!("{released:?}") };
+        assert_eq!(result.outcome, Outcome::Refused { reason: Reason::NotApproved });
+        assert_eq!(result.text, "Not delivered: mac had not approved this device before it expired. Approve it there with kebbie hub devices approve, then send it again.");
+        assert!(ledger(&machine.dir).held.is_empty() && seen.applied() == 0);
+        assert_eq!(machine.state(&phone), Some(State::Waiting), "the device still waits for the user");
+    }
+
+    #[test]
+    fn a_waiting_device_is_approved_a_day_after_its_first_command_unless_auto_approve_is_never() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPhone 16");
+        let start = now();
+        let first = phone.send(&machine.account, &machine.identity, &answer(), start);
+        machine.handle(&seen, DEVICE, &first, start);
+        let standing = devices::load(&machine.dir).standings(DEVICE, start);
+        assert_eq!(standing[phone.id()], kebbie_hub_protocol::DeviceStanding::Waiting { fingerprint: phone.cert.fingerprint(), until: Some(start + devices::DAY) });
+        let early = phone.send(&machine.account, &machine.identity, &answer(), start + devices::DAY - 1);
+        assert!(matches!(machine.handle(&seen, NEVER, &early, start + devices::DAY + 1), Handled::Held(_)), "never keeps it waiting past the day");
+        assert!(matches!(machine.handle(&seen, DEVICE, &early, start + devices::DAY - 1), Handled::Held(_)), "a second short of the day it still waits");
+        let late = phone.send(&machine.account, &machine.identity, &push(), start + devices::DAY);
+        assert!(matches!(machine.handle(&seen, DEVICE, &late, start + devices::DAY), Handled::Applied(_)), "24h lets it in a day after its first command");
+        let device = &devices::load(&machine.dir).devices[phone.id()];
+        assert_eq!((device.state, device.at), (State::Approved, start + devices::DAY));
+        let released = machine.release(&seen, DEVICE, start + devices::DAY);
+        assert_eq!(released.iter().filter(|handled| matches!(handled, Handled::Applied(_))).count(), 1, "what it held and is still live goes in too: {released:?}");
+        assert!(released.iter().any(|handled| matches!(handled, Handled::Refused(CommandResult { outcome: Outcome::Refused { reason: Reason::NotApproved }, .. }))), "the first command's hour ran out while it waited: {released:?}");
+        assert!(ledger(&machine.dir).held.is_empty());
+    }
+
+    #[test]
+    fn a_device_whose_key_changed_is_a_new_request_however_it_stood() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPhone 16");
+        let first = phone.send(&machine.account, &machine.identity, &answer(), now());
+        machine.handle(&seen, DEVICE, &first, now());
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
+        machine.release(&seen, DEVICE, now());
+        let rekeyed = Phone::with_id(&machine.keys, &machine.account, "iPhone 16", phone.id().clone());
+        let sent = rekeyed.send(&machine.account, &machine.identity, &answer(), now() + 60);
+        assert_eq!(machine.handle(&seen, DEVICE, &sent, now() + 60), Handled::Held(phone.id().clone()), "approval holds for the key it was given");
+        let device = &devices::load(&machine.dir).devices[phone.id()];
+        assert_eq!((device.state, device.first_seen, device.signing.0), (State::Waiting, now() + 60, rekeyed.key.public()));
+        assert_eq!(seen.told.borrow().len(), 2, "the user is asked again");
+    }
+
+    #[test]
+    fn under_account_trust_every_device_on_the_account_goes_in_at_once_and_is_listed() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPad");
+        let sent = phone.send(&machine.account, &machine.identity, &answer(), now());
+        assert!(matches!(machine.handle(&seen, ACCOUNT, &sent, now()), Handled::Applied(_)));
+        assert!(seen.told.borrow().is_empty(), "nothing to approve, nothing to tell");
+        assert_eq!(machine.state(&phone), Some(State::Approved), "recorded for kebbie hub devices");
+        assert!(matches!(devices::load(&machine.dir).standings(ACCOUNT, now())[phone.id()], kebbie_hub_protocol::DeviceStanding::Approved { .. }));
+    }
+
+    #[test]
+    fn a_name_two_devices_share_is_refused_with_their_ids() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let (one, two) = (machine.phone("iPhone"), machine.phone("iPhone"));
+        for phone in [&one, &two] {
+            machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
+        }
+        let refused = devices::answer(&machine.dir, "iPhone", Decision::Approve, now()).unwrap_err();
+        assert!(refused.starts_with("2 devices are named \"iPhone\"; name one by its id: ") && refused.contains(one.id().as_str()) && refused.contains(two.id().as_str()), "{refused}");
+        assert_eq!((machine.state(&one), machine.state(&two)), (Some(State::Waiting), Some(State::Waiting)), "neither was decided");
+        assert!(devices::answer(&machine.dir, one.id().as_str(), Decision::Approve, now()).is_ok());
+        assert!(devices::answer(&machine.dir, "iPad", Decision::Approve, now()).unwrap_err().starts_with("No device \"iPad\" has sent this machine a command"));
+    }
+
+    #[test]
+    fn a_held_answer_reaches_the_browser_once_its_device_is_approved() {
+        let mut account = Account::connected();
+        let seen = Seen::new();
+        let sent = account.send(&answer());
+        account.round_under(&seen, HubCommands::AnswerAndPush, DEVICE);
+        assert_eq!(seen.applied(), 0, "held, not applied");
+        let name = account.browser.device_name.clone();
+        devices::answer(&account.dir, &name, Decision::Approve, now()).unwrap();
+        account.round_under(&seen, HubCommands::AnswerAndPush, DEVICE);
+        assert_eq!(seen.answers.borrow().as_slice().iter().map(|(caller, _)| caller.clone()).collect::<Vec<_>>(), [account.caller()]);
+        let result = account.result(&sent);
+        assert_eq!((result.outcome, result.text.as_str(), result.device.clone()), (Outcome::Done, "Answered", sent.header.from.clone()));
     }
 
     #[test]
@@ -571,12 +899,12 @@ mod tests {
         let sent = account.send(&prompt_answer("y"));
         assert_eq!(sent.header.exp - sent.header.at, 600, "a screen prompt is momentary");
         account.round(&seen, HubCommands::AnswerAndPush);
-        assert_eq!(seen.prompts.borrow().as_slice(), [(Caller::hub(account.account.as_str()), PromptAnswer { address: "hub@kebbie".to_string(), prompt: "3f2a9c1d".to_string(), key: "y".to_string() })]);
+        assert_eq!(seen.prompts.borrow().as_slice(), [(account.caller(), PromptAnswer { address: "hub@kebbie".to_string(), prompt: "3f2a9c1d".to_string(), key: "y".to_string() })]);
         assert_eq!(account.result(&sent).text, "Chose it");
         assert_eq!(seen.relays.get(), 1, "the board goes out again at once");
 
         let late = account.send(&prompt_answer("esc"));
-        with_hands(&seen, |hands| round(&account.dir, 0, &accepts(HubCommands::Answer), hands, &|| now() + 601)).unwrap();
+        with_hands(&seen, |hands| round(&account.dir, 0, &accepts(HubCommands::Answer), ACCOUNT, hands, &|| now() + 601)).unwrap();
         assert_eq!(account.result(&late).outcome, Outcome::Refused { reason: Reason::Expired });
         assert_eq!(seen.prompts.borrow().len(), 1, "nothing chosen after ten minutes");
     }

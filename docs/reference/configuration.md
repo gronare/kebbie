@@ -150,6 +150,8 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 | `vault.command` | none | config.toml only | The vault command kebbie runs for task notes, log lines and the board's snapshot, before its own arguments, such as `"uvx mindin"`. |
 | `hub.url` | the kebbie hub, `https://hub.kebbie.dev` | config.toml only | The [kebbie hub](../how-to/see-your-board-on-your-phone.md) `kebbie hub connect` and the board's `H` window connect this machine to. |
 | `hub.commands` | `"answer-and-push"` | config.toml only | What this machine takes from your devices through the hub: `"answer-and-push"`, `"answer"` or `"off"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
+| `hub.trust` | `"device"` | config.toml only | Which of your devices this machine takes commands from: `"device"`, each device you approve here, or `"account"`, any device signed in to your account. |
+| `hub.auto_approve` | `"24h"` | config.toml only | When a device waiting under `hub.trust = "device"` is let in: `"24h"` after its first command unless you deny it, or `"never"`, only when you approve it. |
 
 `machine.name`: your phone shows it through the [hub](../how-to/see-your-board-on-your-phone.md#connect-the-machine), and kebbie claims vault notes under it. See [Two machines, one vault](../explanation/vault.md#two-machines-one-vault).
 
@@ -172,7 +174,7 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 - The hub a machine is connected to stays with its keys in [`hub/`](files.md#the-state-directory), so a change here moves nothing. `kebbie hub move` moves it, and so does a permanent redirect (308) to another port or to `https` on the same host.
 - `kebbie config` shows it, and `hub.connected` with the hub this machine posts to.
 
-`hub.commands` says what this machine takes from your devices through the hub. A command counts only when the account this machine is connected to signed it.
+`hub.commands` says what this machine takes from your devices through the hub. A command counts only from a device `hub.trust` lets in, below.
 
 | Value | Answers to questions | Choices on an agent's prompt | Pushes |
 | --- | --- | --- | --- |
@@ -183,6 +185,18 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 - The board still posts with `"off"`, and your phone shows each machine's choice under Machines.
 - A refused command gets an answer that names it, such as `Not pushed: devbox takes answers, not pushes. Push at the machine, or allow pushes in its kebbie settings.`
 - A change counts from the next command; `kebbie hub status` shows it on its `commands:` line.
+
+`hub.trust` says which of your devices this machine takes commands from. Every command names the device that sent it, and [`kebbie hub devices`](commands.md#kebbie-hub-devices) lists them.
+
+| Value | A device's first command |
+| --- | --- |
+| `"device"` | Waits on this machine until you approve the device under `N` on the board or with `kebbie hub devices approve <name>`, or `hub.auto_approve` lets it in. |
+| `"account"` | Goes in at once from any device signed in to the account this machine is connected to. |
+
+- A command waits at most its hour. One that expires before the approval is answered `not-approved`, and the device says it was not delivered.
+- A device you deny stays view only on this machine, and its commands are answered `denied`.
+- A device whose key changed is a new device to approve. Compare the key under Account on the device with the one kebbie shows.
+- `"24h"` for `hub.auto_approve` approves a waiting device 24 hours after its first command unless you deny it first; `"never"` keeps it waiting until you approve it.
 
 ### CI, updates and the keeper
 
@@ -276,7 +290,7 @@ The command gets:
 
 | Variable | Value |
 | --- | --- |
-| `KEBBIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed`, `ci-green`, `api-error`, `routine-findings` or `routine-failed` |
+| `KEBBIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed`, `ci-green`, `api-error`, `routine-findings`, `routine-failed` or `device` |
 | `KEBBIE_TASK` | The task's name |
 | `KEBBIE_REPO` | The task's repo |
 | `KEBBIE_TEXT` | One line, such as `billing@app needs you: answer which queue` |
@@ -293,6 +307,7 @@ The command gets:
 | `api-error` | An API error stopped a task and kebbie will not resume it. The text gives the reason and Claude Code's words. |
 | `routine-findings` | A routine's task found something: its first report or question, in place of that report's `needs-you`, `ready` or `question`. |
 | `routine-failed` | A routine's run could not start, or its task closed before it reported. |
+| `device` | A new device on your account sent this machine its first command, which waits for you to approve or deny the device. |
 
 An `api-error` is a login, billing, invalid request or refusal error, or one that persisted through every retry. A routine run that ends with `kebbie routine ok` sends nothing.
 

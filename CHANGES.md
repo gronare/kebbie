@@ -8,6 +8,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
 - The phone answers an agent's prompt on a task's screen with one tap, while that prompt still shows; update the hub first.
 - hub.commands sets what a machine takes through the hub, answers and pushes by default, and only from your account.
+- A new device's first command waits on the machine until you approve it under N or with kebbie hub devices; update the hub first.
+- hub.trust and hub.auto_approve set which devices a machine takes commands from, and when a waiting one is let in.
 
 ### Fixed
 - A Codex task runs git add and git commit in its worktree without asking you to let them out of the sandbox, and the lead no longer recommends letting git through for good.

@@ -10,7 +10,7 @@ It works on any phone or browser you sign in on with your passkey. Every device 
 
 Every board the machine sends is end-to-end encrypted to your account's key and signed by the machine. Only your passkeys unlock that key, so the hub relays the board without being able to read it.
 
-The hub cannot act on the machine by itself: the machine takes an answer, a prompt choice or a push only when your account's key signed it, and only the kinds [`hub.commands`](../reference/configuration.md#keys) allows. The board carries task names, repo names, summaries and questions, never a local path, a host name or a dev server address.
+The hub cannot act on the machine by itself: the machine takes an answer, a prompt choice or a push only from a device your account's key signed and the machine approved, and only the kinds [`hub.commands`](../reference/configuration.md#keys) allows. The board carries task names, repo names, summaries and questions, never a local path, a host name or a dev server address.
 
 ## What you need
 
@@ -110,6 +110,25 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 - If a machine takes answers but not pushes, its task says `Not pushed: devbox takes answers, not pushes. Push at the machine, or allow pushes in its kebbie settings.`
 - If you turn the switch off, the device sends nothing; the setting stays in that browser alone.
 - If the hub has not enabled answering for your account, the task says so instead.
+
+### Approve a new device on the machine
+
+Each machine decides which of your devices may change things on it, by [`hub.trust`](../reference/configuration.md#machine). A new device's first command waits on the machine until you let the device in.
+
+1. Answer or push from the new device. The task shows that it waits for the machine.
+2. On the machine, press `N` on the board. The device stands first, under `APPROVE OR DENY`.
+3. Press `⏎` to see what it sent and its key. Check that the key matches the one under **Account** on the device.
+4. Press `a` to approve. Or, in your own terminal, run:
+
+   ```bash
+   kebbie hub devices approve "iPhone 16"
+   ```
+
+What it sent goes in at once, and the device makes changes on this machine from then on. `kebbie hub devices` lists every device with whether it waits, is approved or is denied.
+
+- If you leave it, `hub.auto_approve = "24h"` approves the device 24 hours after its first command; a command waits at most its hour, so send it again then.
+- If you press `x` or run `kebbie hub devices deny`, the device stays view only on this machine.
+- If you set `hub.trust = "account"`, every device signed in to your account makes changes at once.
 
 ## Notifications
 

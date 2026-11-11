@@ -4,6 +4,7 @@ pub mod card;
 pub mod commands;
 pub mod connect;
 pub mod console;
+pub mod devices;
 pub mod http;
 pub mod identity;
 pub mod inbox;
@@ -395,7 +396,8 @@ pub fn tick_in(state: &Path, configured: Option<&str>, now: u64, gather: impl Fn
                 Some(gathered) => gathered,
                 None => gathered.insert(gather()?),
             };
-            let board = blobs::attach(&dir, board, attachments, now, blobs::put_with(&identity));
+            let mut board = blobs::attach(&dir, board, attachments, now, blobs::put_with(&identity));
+            board.devices = Some(devices::load(&dir).standings(devices::Policy::current(), now));
             relay::relay_at(&dir, &board, now).map(|_| ())
         })();
         failed.extend(posted.err());
@@ -436,7 +438,8 @@ pub fn cli(action: Option<&str>, rest: &[String], name: Option<&str>) -> Result<
             let url = rest.first().ok_or("kebbie hub move needs the hub's new address: kebbie hub move https://hub.example.com")?;
             move_to(&state, url)
         }
-        Some(other) => Err(format!("kebbie hub knows connect, join, move, status and leave, not {other}")),
+        Some("devices") => devices::cli(&state, rest, now),
+        Some(other) => Err(format!("kebbie hub knows connect, join, move, status, devices and leave, not {other}")),
     }
 }
 

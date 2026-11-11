@@ -1,6 +1,6 @@
 use toml::{Table, Value};
 
-use super::{flag, layers, repos_dir, strings, subtable, table, text, AgentUpdates, Channel, HubCommands, OngoingAt, ReportText, Source, Worktree};
+use super::{flag, layers, repos_dir, strings, subtable, table, text, AgentUpdates, AutoApprove, Channel, HubCommands, HubTrust, OngoingAt, ReportText, Source, Worktree};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -18,6 +18,8 @@ pub struct Machine {
     pub machine_name: Option<String>,
     pub hub_url: Option<String>,
     pub hub_commands: Option<HubCommands>,
+    pub hub_trust: Option<HubTrust>,
+    pub hub_auto_approve: Option<AutoApprove>,
     pub report: Report,
     pub propose_issues: Option<bool>,
     pub worktree: Worktree,
@@ -191,6 +193,16 @@ fn hub_commands(table: &Table) -> Result<Option<HubCommands>> {
     }
 }
 
+fn hub_choice<T: Copy>(table: &Table, key: &str, choices: &[(&str, T)]) -> Result<Option<T>> {
+    let Some(hub) = subtable(table, "hub", "hub")? else { return Ok(None) };
+    let Some(given) = text(hub, key, &format!("hub.{key}"))? else { return Ok(None) };
+    choices.iter().find(|(name, _)| *name == given).map(|(_, choice)| Some(*choice)).ok_or_else(|| {
+        let names: Vec<String> = choices.iter().map(|(name, _)| format!("\"{name}\"")).collect();
+        let (last, rest) = names.split_last().expect("a key has choices");
+        format!("hub.{key}: \"{given}\" is not a choice; use {} or {last}", rest.join(", "))
+    })
+}
+
 fn machine_name(table: &Table) -> Result<Option<String>> {
     let Some(machine) = subtable(table, "machine", "machine")? else { return Ok(None) };
     let Some(value) = machine.get("name") else { return Ok(None) };
@@ -242,5 +254,5 @@ pub fn parse_machine(text: &str, source: &str) -> Result<Machine> {
     }
     crate::routines::parse_list(&table, None, source).map_err(fail)?;
     let Board { sources, groups, ongoing } = board(&table).map_err(fail)?;
-    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, channel: update(&table).map_err(fail)?, agent_updates: agent_updates(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, hub_url: hub_url(&table).map_err(fail)?, hub_commands: hub_commands(&table).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, worktree })
+    Ok(Machine { keys: keys(&table).map_err(fail)?, sources, groups, ongoing, channel: update(&table).map_err(fail)?, agent_updates: agent_updates(&table).map_err(fail)?, restart: restart(&table).map_err(fail)?, keeper: enabled_in(&table, "keeper").map_err(fail)?, recover: enabled_in(&table, "recover").map_err(fail)?, machine_name: machine_name(&table).map_err(fail)?, hub_url: hub_url(&table).map_err(fail)?, hub_commands: hub_commands(&table).map_err(fail)?, hub_trust: hub_choice(&table, "trust", &HubTrust::ALL.map(|trust| (trust.key(), trust))).map_err(fail)?, hub_auto_approve: hub_choice(&table, "auto_approve", &AutoApprove::ALL.map(|auto| (auto.key(), auto))).map_err(fail)?, report: report(&table).map_err(fail)?, propose_issues: propose_issues(&table).map_err(fail)?, worktree })
 }

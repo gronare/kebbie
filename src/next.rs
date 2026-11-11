@@ -10,16 +10,18 @@ use crate::status::{Group, Item};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Part {
+    Device,
     Stopped,
     Push,
     Read,
 }
 
 impl Part {
-    pub const ALL: [Part; 3] = [Part::Stopped, Part::Push, Part::Read];
+    pub const ALL: [Part; 4] = [Part::Device, Part::Stopped, Part::Push, Part::Read];
 
     pub fn title(self) -> &'static str {
         match self {
+            Part::Device => "APPROVE OR DENY",
             Part::Stopped => "STOPPED ON YOU",
             Part::Push => "PUSH, IN THIS ORDER",
             Part::Read => "TO READ",
@@ -30,7 +32,7 @@ impl Part {
     pub fn board_group(self) -> Group {
         match self {
             Part::Push => Group::ReadyToPush,
-            Part::Stopped | Part::Read => Group::NeedsYou,
+            Part::Device | Part::Stopped | Part::Read => Group::NeedsYou,
         }
     }
 }
@@ -59,7 +61,7 @@ impl Row {
         let age = self.age(now);
         match self.part {
             _ if age.is_empty() => age,
-            Part::Stopped => format!("waiting {age}"),
+            Part::Device | Part::Stopped => format!("waiting {age}"),
             Part::Push => format!("ready {age}"),
             Part::Read => age,
         }
@@ -200,7 +202,7 @@ fn row(items: &[Item], item: &Item, part: Part) -> Row {
     let after = open_before(items, item);
     let since = item.phase.as_ref().map(|record| record.since);
     let (icon, what, short, said, since) = match part {
-        Part::Stopped => {
+        Part::Stopped | Part::Device => {
             let (icon, what, short, since) = stopped(item);
             (icon, what, short.clone(), short, since)
         }
@@ -291,7 +293,36 @@ pub fn of(items: &[Item]) -> Next {
     next
 }
 
+// A device waiting for approval stops its command on the user, so it goes above everything a task waits on.
+fn device_row(request: &crate::hub::devices::Request, now: u64) -> Row {
+    let wait = match request.until {
+        Some(until) => crate::hub::devices::auto_in(until, now),
+        None => "approve it to let it make changes".to_string(),
+    };
+    Row {
+        part: Part::Device,
+        address: request.id.as_str().to_string(),
+        name: request.name.clone(),
+        icon: '?',
+        what: format!("{} · wants to make changes · {wait}", crate::hub::devices::kind_name(request.kind)),
+        short: "approve or deny".to_string(),
+        said: "approve or deny it".to_string(),
+        since: Some(request.first_seen),
+        waits: Vec::new(),
+        after: Vec::new(),
+        path: None,
+    }
+}
+
 impl Next {
+    pub fn with_devices(mut self, requests: &[crate::hub::devices::Request], now: u64) -> Next {
+        let mut rows: Vec<Row> = requests.iter().map(|request| device_row(request, now)).collect();
+        rows.sort_by_key(|row| row.since);
+        rows.append(&mut self.rows);
+        self.rows = rows;
+        self
+    }
+
     pub fn pushes(&self) -> Vec<&Row> {
         self.rows.iter().filter(|row| row.part == Part::Push).collect()
     }
@@ -354,7 +385,9 @@ impl Next {
 }
 
 pub fn print() -> Result<String> {
-    Ok(of(&crate::status::gather()?).text(crate::messages::now(), &crate::recover::local_offset))
+    let now = crate::messages::now();
+    let devices = crate::lead::state_dir().map(|state| crate::hub::devices::requests(&state, now)).unwrap_or_default();
+    Ok(of(&crate::status::gather()?).with_devices(&devices, now).text(now, &crate::recover::local_offset))
 }
 
 // Each push in turn; the first that is refused stops the rest, which stay ready.

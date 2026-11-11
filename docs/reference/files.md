@@ -188,6 +188,7 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 | Entry | Holds |
 | --- | --- |
 | `hub/identity.json` | The hub's address, the machine's id and name there, its token, and its signing and encryption keys. |
+| `hub/devices.json` | Each device on your account that sent this machine a command: its name, kind and full key, when it was first and last seen, and whether it waits, is approved or is denied. |
 | `hub/relay.json` | The board's last revision, when it went out, its fingerprint, the last error and whether the hub refused it because it has not enabled answering for your account. |
 | `hub-dev/` | The same for the dev hub, used instead of `hub/` while [`KEBBIE_HUB_DEV`](environment.md) is set. |
 

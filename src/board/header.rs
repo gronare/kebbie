@@ -15,7 +15,7 @@ fn pill(text: String, color: Color, lit: bool) -> Vec<Span<'static>> {
 
 fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
     let count = |group: Group| app.tasks.iter().filter(|item| item.group() == group).count();
-    let (needs, working, review, ready) = (count(Group::NeedsYou), count(Group::Working), count(Group::InReview), count(Group::ReadyToPush));
+    let (needs, working, review, ready) = (count(Group::NeedsYou) + app.devices.len(), count(Group::Working), count(Group::InReview), count(Group::ReadyToPush));
     let ci = count(Group::CiRunning);
     let questions = app.questions.len();
     let accept: usize = app.tasks.iter().map(super::steps::to_accept).sum();

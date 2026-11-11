@@ -85,6 +85,42 @@ impl HubCommands {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum HubTrust {
+    #[default]
+    Device,
+    Account,
+}
+
+impl HubTrust {
+    pub const ALL: [HubTrust; 2] = [HubTrust::Device, HubTrust::Account];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            HubTrust::Device => "device",
+            HubTrust::Account => "account",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum AutoApprove {
+    #[default]
+    Day,
+    Never,
+}
+
+impl AutoApprove {
+    pub const ALL: [AutoApprove; 2] = [AutoApprove::Day, AutoApprove::Never];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            AutoApprove::Day => "24h",
+            AutoApprove::Never => "never",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum AlsoNoticed {
     #[default]
     Backlog,

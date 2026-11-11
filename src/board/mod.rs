@@ -133,6 +133,7 @@ enum Mode {
     Hub(Box<hub_window::Window>),
     Next(next_window::Window),
     PushAll { order: Vec<next_window::Push>, choice: usize, back: next_window::Window },
+    Device { id: String, back: next_window::Window },
     Update,
     AgentUpdates,
 }
@@ -228,6 +229,7 @@ struct App {
     lead_fresh_starter: Updater,
     lead_checker: std::sync::Arc<dyn Fn() -> Result<()> + Send + Sync>,
     lead_context: Option<f64>,
+    devices: Vec<crate::hub::devices::Request>,
     subject: Option<notices::Subject>,
     shown: Option<notices::Subject>,
     toast: Option<notices::Toast>,
@@ -611,6 +613,7 @@ impl App {
             Mode::Hub(window) => self.handle_hub(window, key),
             Mode::Next(window) => self.handle_next(window, key, act),
             Mode::PushAll { order, choice, back } => self.handle_push_all(order, choice, back, key, act),
+            Mode::Device { id, back } => self.handle_device(id, back, key, act),
             Mode::Update => self.handle_update(key),
             Mode::AgentUpdates => self.handle_agent_updates(key),
             Mode::Report { id, shown, scroll, read, .. } => self.confirm_report(id, shown, scroll, read, key, cancels),
@@ -1057,7 +1060,7 @@ impl App {
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
-            filter: None, ctrl_c: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_context: None, subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
+            filter: None, ctrl_c: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_context: None, devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
             comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: None,
         }
     }
@@ -1164,6 +1167,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         app.lead_chat = snapshot.lead_chat;
                         app.restart_auto = snapshot.restart_auto;
                         app.lead_context = snapshot.lead_context;
+                        app.devices = snapshot.devices;
                         app.backlog_selected = app.backlog_selected.min(app.backlog_len().saturating_sub(1));
                         let newest = app.messages.last().map_or(0, |message| message.at);
                         if app.fold == Fold::Open && newest > app.seen {

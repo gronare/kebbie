@@ -60,7 +60,7 @@ For `notify.command`:
 
 | Variable | Value |
 | --- | --- |
-| `KEBBIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed`, `ci-green`, `api-error`, `routine-findings` or `routine-failed` |
+| `KEBBIE_EVENT` | `needs-you`, `ready`, `question`, `summary`, `ci-failed`, `ci-green`, `api-error`, `routine-findings`, `routine-failed` or `device` |
 | `KEBBIE_TASK` | The task's name |
 | `KEBBIE_REPO` | The task's repo |
 | `KEBBIE_TEXT` | The notification's one line |

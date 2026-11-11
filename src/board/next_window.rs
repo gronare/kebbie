@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::hub::devices::{self, Asked, Decision, Request};
 use crate::keys::Act;
 use crate::next::{self, Next, Part, Row};
 use crate::peers;
@@ -138,6 +139,9 @@ pub(super) fn draw(frame: &mut Frame, next: &Next, window: &mut Window, now: u64
         let span = next.push_span();
         let push = span.as_ref().map(|span| if wide { format!("P push {span} in order") } else { format!("P push {span}") });
         let mut parts: Vec<(&str, Option<KeyEvent>)> = vec![("⏎ open", key(KeyCode::Enter))];
+        if next.rows.get(window.selected).is_some_and(|row| row.part == Part::Device) {
+            parts.extend([("a approve", key(KeyCode::Char('a'))), ("x deny", key(KeyCode::Char('x')))]);
+        }
         if let Some(push) = &push {
             parts.push((push.as_str(), key(KeyCode::Char('P'))));
         }
@@ -224,14 +228,96 @@ pub(super) fn draw_push_all(frame: &mut Frame, order: &[Push], choice: usize) ->
     spots.into_iter().map(|(at, width, index)| (Rect::new(area.x + 2 + at as u16, area.y + 1 + choice_at as u16, width as u16, 1), Hit::Choice(index))).collect()
 }
 
+fn expiry_word(asked: &Asked) -> &'static str {
+    match asked.kind {
+        kebbie_hub_protocol::Kind::Push => "its push",
+        kebbie_hub_protocol::Kind::PromptAnswer => "its choice",
+        _ => "its answer",
+    }
+}
+
+pub(super) fn device_lines(request: &Request, now: u64, offset: &dyn Fn(i64) -> i64, inner: usize) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    let first = match request.sent.as_slice() {
+        [] => format!("A device on your account wants to make changes on {}; what it sent has expired.", request.machine),
+        [_] => format!("A device on your account sent its first command to {}:", request.machine),
+        _ => format!("A device on your account sent its first commands to {}:", request.machine),
+    };
+    lines.extend(super::widgets::wrap(&first, inner, 3));
+    for sent in &request.sent {
+        lines.extend(super::widgets::wrap(&format!("{}, at {}.", sent.asked.described(), devices::clock(sent.at, offset)), inner, 3));
+    }
+    lines.push(String::new());
+    lines.push(format!("device  {} · {} · added {}", request.name, devices::kind_name(request.kind), devices::added(request.first_seen, now, offset)));
+    lines.push(format!("key     {}, the same as Account on that device shows", request.fingerprint));
+    let waits = request.until.map_or("until you approve it".to_string(), |until| devices::auto_in(until, now));
+    let expires = request.sent.first().map(|sent| format!(" · {} expires {}", expiry_word(&sent.asked), devices::clock(sent.expires, offset))).unwrap_or_default();
+    lines.push(format!("waits   {waits}{expires}"));
+    lines.push(String::new());
+    let (goes, dropped) = match request.sent.first() {
+        Some(sent) => (format!("; {} goes in now", expiry_word(&sent.asked)), format!("; {} is dropped", expiry_word(&sent.asked))),
+        None => (String::new(), String::new()),
+    };
+    lines.push(format!("▌a   approve  it makes changes here{goes}"));
+    lines.push(format!(" x   deny     it stays view only here{dropped}"));
+    lines.push(" esc later    nothing changes; it stays under Next until then".to_string());
+    lines.push(String::new());
+    lines
+}
+
+pub(super) fn draw_device(frame: &mut Frame, request: Option<&Request>, now: u64) -> Vec<(Rect, Hit)> {
+    let Some(request) = request else { return Vec::new() };
+    let width = 80u16.min(frame.area().width.saturating_sub(4));
+    let inner = width.saturating_sub(4) as usize;
+    let mut lines: Vec<Line<'static>> = device_lines(request, now, &crate::recover::local_offset, inner).into_iter().map(|line| match line.strip_prefix('▌') {
+        Some(rest) => Line::from(vec![Span::styled("▌", style(MAUVE)), Span::styled(rest.to_string(), style(TEXT))]),
+        None if line.starts_with(' ') => Line::from(Span::styled(line, style(TEXT))),
+        None => Line::from(Span::styled(line, style(SUBTEXT))),
+    }).collect();
+    let key = |code: KeyCode| Some(KeyEvent::from(code));
+    let mut footer = Vec::new();
+    let mut spots = Vec::new();
+    hint_line(&mut footer, &mut spots, &[("a approve", key(KeyCode::Char('a'))), ("x deny", key(KeyCode::Char('x'))), ("esc later", key(KeyCode::Esc))]);
+    let footer_at = lines.len();
+    lines.extend(footer);
+    let area = centered(frame.area(), width, lines.len() as u16 + 2);
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(modal_block(format!("{} wants to make changes", request.name))), area);
+    spots.into_iter().filter_map(|(line, spot)| match spot {
+        Spot::Key { at, width, key } => Some((Rect::new(area.x + 2 + at as u16, area.y + 1 + (footer_at + line) as u16, width as u16, 1), Hit::Key(key.code))),
+        _ => None,
+    }).collect()
+}
+
 impl App {
+    pub(super) fn next(&self) -> Next {
+        next::of(&self.tasks).with_devices(&self.devices, crate::messages::now())
+    }
+
+    pub(super) fn handle_device(&mut self, id: String, back: Window, key: KeyEvent, act: Option<Act>) {
+        match key.code {
+            KeyCode::Char('a') => self.decide_device(&id, Decision::Approve),
+            KeyCode::Char('x') => self.decide_device(&id, Decision::Deny),
+            _ if matches!(act, Some(Act::Back | Act::Close)) => self.mode = Mode::Next(back),
+            _ => self.mode = Mode::Device { id, back },
+        }
+    }
+
+    fn decide_device(&mut self, id: &str, decision: Decision) {
+        let Some(request) = self.devices.iter().find(|request| request.id.as_str() == id).cloned() else { return self.mode = Mode::Normal };
+        self.devices.retain(|known| known.id != request.id);
+        let label = format!("{} {}…", if decision == Decision::Approve { "Approving" } else { "Denying" }, request.name);
+        self.in_background(label, move || devices::answer(&request.dir, request.id.as_str(), decision, crate::messages::now()));
+    }
+
     pub(super) fn open_next(&mut self) {
         self.mode = Mode::Next(Window::default());
     }
 
     pub(super) fn handle_next(&mut self, mut window: Window, key: KeyEvent, act: Option<Act>) {
-        let next = next::of(&self.tasks);
+        let next = self.next();
         let last = next.rows.len().saturating_sub(1);
+        let device = next.rows.get(window.selected).filter(|row| row.part == Part::Device).map(|row| row.address.clone());
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => window.selected = window.selected.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => window.selected = (window.selected + 1).min(last),
@@ -239,6 +325,9 @@ impl App {
             KeyCode::PageDown => window.selected = (window.selected + 10).min(last),
             KeyCode::Home => window.selected = 0,
             KeyCode::End => window.selected = last,
+            KeyCode::Char('a') if device.is_some() => return self.decide_device(&device.unwrap_or_default(), Decision::Approve),
+            KeyCode::Char('x') if device.is_some() => return self.decide_device(&device.unwrap_or_default(), Decision::Deny),
+            KeyCode::Enter if device.is_some() => return self.mode = Mode::Device { id: device.unwrap_or_default(), back: window },
             KeyCode::Enter => return self.open_row(next.rows.get(window.selected)),
             KeyCode::Char('P') if !next.pushes().is_empty() => return self.ask_push_all(&next, window),
             _ if matches!(act, Some(Act::Back | Act::Close | Act::Next)) => return,
@@ -249,7 +338,10 @@ impl App {
 
     pub(super) fn click_next(&mut self, mut window: Window, index: usize) {
         if window.selected == index {
-            return self.open_row(next::of(&self.tasks).rows.get(index));
+            if let Some(row) = self.next().rows.get(index).filter(|row| row.part == Part::Device) {
+                return self.mode = Mode::Device { id: row.address.clone(), back: window };
+            }
+            return self.open_row(self.next().rows.get(index));
         }
         window.selected = index;
         self.mode = Mode::Next(window);
@@ -269,7 +361,7 @@ impl App {
             },
             Part::Push => self.act(Act::Push),
             Part::Read if self.card_of(&item).is_some() => self.act(Act::Card),
-            Part::Read => self.mode = Mode::Options(0),
+            Part::Read | Part::Device => self.mode = Mode::Options(0),
         }
     }
 
@@ -459,6 +551,82 @@ mod tests {
         let outcome = result.recv().unwrap();
         assert_eq!(*tried.lock().unwrap(), [PathBuf::from("/work/card-component"), PathBuf::from("/work/fix-grid")]);
         assert!(outcome.unwrap_err().contains("fix-grid did not push, so the rest wait"));
+    }
+
+    // iPhone 16 sent an answer seven minutes ago from a device this machine has not approved.
+    fn waiting_phone() -> Request {
+        use crate::hub::devices::{Asked, Device, Sent, State};
+        let dir = crate::sh::test_dir("next-device");
+        let identity = crate::hub::identity::Identity::new("https://hub.example.com", kebbie_hub_protocol::Id::new(kebbie_hub_protocol::Prefix::Machine).unwrap(), "MacBook", "khm_token".to_string(), &kebbie_hub_protocol::SecretKeys::generate(), now());
+        crate::hub::identity::save_at(&dir, &identity).unwrap();
+        let id = kebbie_hub_protocol::Id::new(kebbie_hub_protocol::Prefix::Device).unwrap();
+        let first_seen = now() - 7 * 60;
+        let device = Device { signing: kebbie_hub_api::Bytes32([7; 32]), name: "iPhone 16".to_string(), kind: kebbie_hub_protocol::DeviceKind::Web, first_seen, seen: first_seen, state: State::Waiting, at: first_seen };
+        let fingerprint = device.fingerprint();
+        devices::change(&dir, |known| Ok(known.devices.insert(id.clone(), device))).unwrap();
+        let asked = Asked { kind: kebbie_hub_protocol::Kind::Answer, task: "billing".to_string(), said: Some("Per invoice".to_string()) };
+        Request { dir, machine: "MacBook".to_string(), id, name: "iPhone 16".to_string(), kind: kebbie_hub_protocol::DeviceKind::Web, fingerprint, first_seen, until: Some(first_seen + devices::DAY), sent: vec![Sent { asked, at: first_seen, expires: first_seen + 3600 }] }
+    }
+
+    #[test]
+    fn a_device_waiting_for_approval_comes_first_and_counts_as_needing_you() {
+        let mut app = app_with(vec![asking("billing", "web", 9), ready("cache", "web", 60), working("one"), working("two"), queued_after("later", "web", &["cache@web"])]);
+        app.devices = vec![waiting_phone()];
+        let rows = window(&mut app, 104, 44);
+        let screen = rows.join("\n");
+        println!("{screen}");
+        assert!(screen.contains("Next · 3 need you") && screen.contains("● 2 need you"), "the device counts in both: {screen}");
+        let (_, approve) = find(&rows, "APPROVE OR DENY")[0];
+        let (_, stopped) = find(&rows, "STOPPED ON YOU")[0];
+        let (_, phone) = find(&rows, "1  ? iPhone 16")[0];
+        assert!(approve < phone && phone < stopped, "{screen}");
+        assert!(screen.contains("web app · wants to make changes · approved automatically in 23 h") && screen.contains("waiting 7 min"), "{screen}");
+        assert!(screen.contains("? iPhone 16  web app · wants to make changes · approved automatically in 23 h  waiting 7 min"), "{screen}");
+        assert!(screen.contains("⏎ open · a approve · x deny · P push 3 in order · ↑↓ move · esc board"), "{screen}");
+        app.handle_key(key(KeyCode::Down), None);
+        assert!(!render(&mut app, 104, 44).0.join("\n").contains("a approve"), "a and x are offered on a device's row only");
+        let mut never = waiting_phone();
+        never.until = None;
+        app.devices = vec![never];
+        assert_eq!(app.next().rows[0].what, "web app · wants to make changes · approve it to let it make changes");
+    }
+
+    #[test]
+    fn enter_on_a_device_opens_what_it_sent_and_its_key_and_x_denies_it() {
+        let phone = waiting_phone();
+        let lines = device_lines(&phone, phone.first_seen + 7 * 60, &|_| 0, 76);
+        let at = |offset: u64| crate::hub::devices::clock(phone.first_seen + offset, &|_| 0);
+        assert_eq!(lines, [
+            String::new(),
+            "A device on your account sent its first command to MacBook:".to_string(),
+            format!("an answer to billing, \"Per invoice\", at {}.", at(0)),
+            String::new(),
+            "device  iPhone 16 · web app · added today ".to_string() + &at(0),
+            format!("key     {}, the same as Account on that device shows", phone.fingerprint),
+            format!("waits   approved automatically in 23 h · its answer expires {}", at(3600)),
+            String::new(),
+            "▌a   approve  it makes changes here; its answer goes in now".to_string(),
+            " x   deny     it stays view only here; its answer is dropped".to_string(),
+            " esc later    nothing changes; it stays under Next until then".to_string(),
+            String::new(),
+        ]);
+        let mut app = app_with(a_day());
+        app.devices = vec![phone.clone()];
+        app.open_next();
+        app.handle_key(key(KeyCode::Enter), None);
+        assert!(matches!(&app.mode, Mode::Device { id, .. } if id == phone.id.as_str()), "⏎ opens the device's window");
+        let screen = render(&mut app, 100, 40).0.join("\n");
+        println!("{screen}");
+        assert!(screen.contains("iPhone 16 wants to make changes") && screen.contains("a approve · x deny · esc later"), "{screen}");
+        app.handle_key(key(KeyCode::Esc), None);
+        assert!(matches!(app.mode, Mode::Next(_)), "esc leaves it waiting under Next");
+        app.mode = Mode::Device { id: phone.id.as_str().to_string(), back: Window::default() };
+        app.handle_key(key(KeyCode::Char('x')), None);
+        let Mode::Working { result, .. } = &app.mode else { panic!("deciding runs in the background") };
+        let said = result.recv().unwrap().unwrap();
+        assert!(said.starts_with("✓ iPhone 16 stays view only on MacBook\n  next: kebbie hub devices approve \"iPhone 16\" lets it in later."), "{said}");
+        assert_eq!(crate::hub::devices::load(&phone.dir).devices[&phone.id].state, crate::hub::devices::State::Denied);
+        assert!(app.devices.is_empty(), "it leaves Next at once");
     }
 
     #[test]

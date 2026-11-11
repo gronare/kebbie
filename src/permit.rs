@@ -189,9 +189,11 @@ pub enum Caller {
     Hub { account: String, name: String },
 }
 
+#[cfg(test)]
 pub const HUB_ACCOUNT: &str = "your kebbie hub account";
 
 impl Caller {
+    #[cfg(test)]
     pub fn hub(account: &str) -> Caller {
         Caller::Hub { account: account.to_string(), name: HUB_ACCOUNT.to_string() }
     }

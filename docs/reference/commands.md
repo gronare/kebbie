@@ -821,7 +821,7 @@ With open [kebbie issues](#kebbie-issues), it looks them up on GitHub through `g
 
 ## The hub
 
-Show the board on your phone through a kebbie hub. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md). `connect`, `join`, `move` and `leave` are yours only.
+Show the board on your phone through a kebbie hub. See [See your board on your phone](../how-to/see-your-board-on-your-phone.md). `connect`, `join`, `move`, `leave` and approving or denying a device are yours only.
 
 | Command | What it does |
 | --- | --- |
@@ -830,6 +830,9 @@ Show the board on your phone through a kebbie hub. See [See your board on your p
 | `kebbie hub join <url> <code> [--name <name>]` | For scripts: join the hub at `<url>` with a code from `kebbie-hub admin join-code`. |
 | `kebbie hub move <url>` | The hub moved to `<url>`: post there from now on with the machine's token. |
 | `kebbie hub leave` | Leave the hub: remove the machine from it, then forget the hub, the keys, the account key and the token. |
+| `kebbie hub devices` | The devices that sent this machine commands, and whether each may make changes here. See [below](#kebbie-hub-devices). |
+| `kebbie hub devices approve <name>` | Let a waiting device make changes here; what it sent goes in at once. |
+| `kebbie hub devices deny <name>` | Keep a device view only here; what it sent is dropped. |
 
 `kebbie hub status`:
 
@@ -853,6 +856,31 @@ Show the board on your phone through a kebbie hub. See [See your board on your p
 A hub that has not enabled answering for your account keeps taking the machine's posts. When a hub refuses one, kebbie says `This hub has not enabled answering for your account:` with the hub's link, in `kebbie hub status`, `kebbie doctor`, a line on the board and its `H` window, and everything on the machine keeps working.
 
 With [`KEBBIE_HUB_DEV`](environment.md) set, every `kebbie hub` command works on the dev hub at `KEBBIE_HUB_DEV_URL` (`http://localhost:8470`) and its own identity in `hub-dev/`. It never reads `[hub] url` or touches `hub/`, and `kebbie hub status` starts with `dev hub · localhost:8470`.
+
+### `kebbie hub devices`
+
+Lists the devices on your account that sent this machine a command, waiting ones first, under the machine's [`hub.trust`](configuration.md#machine) and `hub.auto_approve`:
+
+```
+trust:    each device you approve on this machine (hub.trust = "device")
+new:      approved automatically 24 h after its first command (hub.auto_approve = "24h")
+  ⧗ iPhone 16      web app  added today 13:58  seen 14:09      waiting · approved automatically in 23 h
+  ✓ iPad           web app  added 2 Oct        seen Tue 09:14  approved 2 Oct
+  ✗ Chrome on Mac  web app  added 28 Sep       seen 30 Sep     denied 28 Sep
+kebbie hub devices approve <name> lets one in, deny <name> keeps it out; N on the board asks too.
+```
+
+- `approve` and `deny` take the device's name, or its id when two devices share the name; a shared name is refused with their ids.
+- `approve` answers with the device's key, to compare with the one under **Account** on the device:
+
+  ```
+  ✓ iPhone 16 makes changes on MacBook from now on
+    next: Its answer to billing goes in now.
+    key: 7F3A-91C2
+  ```
+
+- The keeper applies what the device sent as soon as the device is approved. With the keeper stopped, it does so once the keeper runs.
+- A device whose key changed is listed again as waiting.
 
 ### `kebbie hub connect`
 

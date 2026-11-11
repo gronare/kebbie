@@ -521,7 +521,25 @@ fn hub_commands_takes_answers_and_pushes_unless_the_machine_config_says_answer_o
     assert!(parse_machine("[hub]\ncommands = \"push\"\n", "config.toml").unwrap_err().contains("hub.commands: \"push\" is not a choice; use \"answer-and-push\", \"answer\" or \"off\""));
     let entry = entries(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) }).into_iter().find(|entry| entry.key == "hub.commands").expect("kebbie config edit lists hub.commands");
     assert_eq!((entry.value.as_str(), entry.kind, entry.scope), ("\"answer-and-push\"", Kind::Choice(vec!["answer-and-push", "answer", "off"]), Scope::Machine));
-    assert!(entry.about.starts_with("What this machine takes from your devices through the hub: \"answer-and-push\" takes answers to questions, choices on an agent's prompt and pushes; \"answer\" takes answers and prompt choices, and refuses a push; \"off\" takes nothing, and the board still posts. A command counts only when the account this machine is connected to signed it."), "{}", entry.about);
+    assert!(entry.about.starts_with("What this machine takes from your devices through the hub: \"answer-and-push\" takes answers to questions, choices on an agent's prompt and pushes; \"answer\" takes answers and prompt choices, and refuses a push; \"off\" takes nothing, and the board still posts. A command counts only from a device hub.trust lets in."), "{}", entry.about);
+}
+
+#[test]
+fn hub_trust_takes_approved_devices_and_auto_approves_after_a_day_unless_the_machine_config_says_otherwise() {
+    let defaults = settings(&Worktree::default(), &Machine::default());
+    assert_eq!((defaults.hub_trust.clone(), defaults.hub_auto_approve.clone()), (Setting { value: HubTrust::Device, layer: Layer::Default }, Setting { value: AutoApprove::Day, layer: Layer::Default }));
+    let set = settings(&Worktree::default(), &machine("[hub]\ntrust = \"account\"\nauto_approve = \"never\"\n"));
+    assert_eq!((set.hub_trust, set.hub_auto_approve), (Setting { value: HubTrust::Account, layer: Layer::Machine }, Setting { value: AutoApprove::Never, layer: Layer::Machine }));
+    assert!(parse_machine("[hub]\ntrust = \"app\"\n", "config.toml").unwrap_err().contains("hub.trust: \"app\" is not a choice; use \"device\" or \"account\""));
+    assert!(parse_machine("[hub]\nauto_approve = \"1h\"\n", "config.toml").unwrap_err().contains("hub.auto_approve: \"1h\" is not a choice; use \"24h\" or \"never\""));
+    assert!(unknown_machine("[hub]\ntrust = \"device\"\nauto_approve = \"24h\"\n").is_empty());
+    let listed = entries(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: defaults });
+    let entry = |key: &str| listed.iter().find(|entry| entry.key == key).cloned().unwrap_or_else(|| panic!("kebbie config lists {key}"));
+    let (trust, auto) = (entry("hub.trust"), entry("hub.auto_approve"));
+    assert_eq!((trust.value.as_str(), trust.kind, trust.scope), ("\"device\"", Kind::Choice(vec!["device", "account"]), Scope::Machine));
+    assert_eq!((auto.value.as_str(), auto.kind, auto.scope), ("\"24h\"", Kind::Choice(vec!["24h", "never"]), Scope::Machine));
+    assert!(trust.about.starts_with("Which of your devices this machine takes commands from: \"device\" takes them from each device you approve on this machine") && trust.about.ends_with("config.toml only."), "{}", trust.about);
+    assert!(auto.about.starts_with("What happens to a device that waits for your approval under hub.trust = \"device\": \"24h\" approves it 24 hours after its first command"), "{}", auto.about);
 }
 
 #[test]
@@ -635,7 +653,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 44);
+    assert_eq!(all.len(), 46);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));

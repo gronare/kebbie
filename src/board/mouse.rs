@@ -139,7 +139,7 @@ impl App {
                         let order = std::mem::take(order);
                         self.push_all(order, index);
                     }
-                    (Some(Hit::Key(code)), Mode::Next(_) | Mode::PushAll { .. }) => return Some(KeyEvent::from(code)),
+                    (Some(Hit::Key(code)), Mode::Next(_) | Mode::PushAll { .. } | Mode::Device { .. }) => return Some(KeyEvent::from(code)),
                     (None, Mode::Next(_) | Mode::PushAll { .. }) => self.mode = Mode::Normal,
                     (Some(Hit::Choice(index)), Mode::ReviewMenu(_)) => {
                         if let Mode::ReviewMenu(menu) = std::mem::replace(&mut self.mode, Mode::Normal) {

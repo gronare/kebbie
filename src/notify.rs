@@ -29,6 +29,7 @@ pub enum Event {
     ApiError,
     RoutineFindings,
     RoutineFailed,
+    Device,
 }
 
 impl Event {
@@ -43,6 +44,7 @@ impl Event {
             Event::ApiError => "api-error",
             Event::RoutineFindings => "routine-findings",
             Event::RoutineFailed => "routine-failed",
+            Event::Device => "device",
         }
     }
 
@@ -286,6 +288,7 @@ mod tests {
         assert_eq!(summary.env[..2], [("KEBBIE_EVENT".to_string(), "summary".to_string()), ("KEBBIE_TASK".to_string(), String::new())]);
         assert_eq!(Notice::from(Event::Question, "lead", "x".to_string()).task, None);
         assert_eq!(Event::of_state("ready"), Some(Event::Ready));
+        assert_eq!(Event::Device.key(), "device");
         assert_eq!(Event::of_state("working"), None);
         assert_eq!(Event::of_state("blocked"), None);
     }
