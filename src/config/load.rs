@@ -2,7 +2,7 @@ use std::path::Path;
 
 use toml::Table;
 
-use super::{parse_machine, parse_repo, path, read, short_hostname, unknown_in_file, update, warn_once, AgentUpdates, Channel, Machine, Report, Worktree, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, MACHINE_KEYS, REPO_KEYS};
+use super::{parse_machine, parse_repo, path, read, short_hostname, unknown_in_file, update, warn_once, AgentUpdates, Channel, HubCommands, Machine, Report, Worktree, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, MACHINE_KEYS, REPO_KEYS};
 use crate::sh::Result;
 
 pub fn load_machine(path: &Path) -> Result<Machine> {
@@ -46,6 +46,11 @@ pub fn machine() -> String {
 
 pub fn report_settings() -> Result<Report> {
     Ok(load_machine(&path())?.report)
+}
+
+// The command thread reads this each round, so a change takes effect on the next command.
+pub fn hub_commands() -> HubCommands {
+    load_machine(&path()).ok().and_then(|machine| machine.hub_commands).unwrap_or_default()
 }
 
 pub fn agent_updates_in(path: &Path) -> AgentUpdates {

@@ -149,6 +149,7 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 | `notify.command` | none | config.toml only | The shell command kebbie runs when something needs you. Unset sends nothing. See [Notify command](#notify-command). |
 | `vault.command` | none | config.toml only | The vault command kebbie runs for task notes, log lines and the board's snapshot, before its own arguments, such as `"uvx mindin"`. |
 | `hub.url` | the kebbie hub, `https://hub.kebbie.dev` | config.toml only | The [kebbie hub](../how-to/see-your-board-on-your-phone.md) `kebbie hub connect` and the board's `H` window connect this machine to. |
+| `hub.commands` | `"answer-and-push"` | config.toml only | What this machine takes from your devices through the hub: `"answer-and-push"`, `"answer"` or `"off"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
 
 `machine.name`: your phone shows it through the [hub](../how-to/see-your-board-on-your-phone.md#connect-the-machine), and kebbie claims vault notes under it. See [Two machines, one vault](../explanation/vault.md#two-machines-one-vault).
 
@@ -170,6 +171,18 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 - Unset, `connect` and `H` ask whether to use the kebbie hub or your own. Choosing your own tests the address and sets this key, never through a config.toml that is a link.
 - The hub a machine is connected to stays with its keys in [`hub/`](files.md#the-state-directory), so a change here moves nothing. `kebbie hub move` moves it, and so does a permanent redirect (308) to another port or to `https` on the same host.
 - `kebbie config` shows it, and `hub.connected` with the hub this machine posts to.
+
+`hub.commands` says what this machine takes from your devices through the hub. A command counts only when the account this machine is connected to signed it.
+
+| Value | Answers to questions | Choices on an agent's prompt | Pushes |
+| --- | --- | --- | --- |
+| `"answer-and-push"` | taken | taken | taken |
+| `"answer"` | taken | taken | refused |
+| `"off"` | refused | refused | refused |
+
+- The board still posts with `"off"`, and your phone shows each machine's choice under Machines.
+- A refused command gets an answer that names it, such as `Not pushed: devbox takes answers, not pushes. Push at the machine, or allow pushes in its kebbie settings.`
+- A change counts from the next command; `kebbie hub status` shows it on its `commands:` line.
 
 ### CI, updates and the keeper
 

@@ -284,7 +284,7 @@ pub fn answer(id: &str, choice: Option<usize>, comment: &str) -> Result<String> 
     answer_as(&crate::permit::Caller::User, id, choice, comment).map_err(String::from)
 }
 
-// Only the user answers, at the board or from a trusted device through the hub; a device answers a task's or a plan's question, never a restart's or a review's.
+// Only the user answers, at the board or through the hub; the hub answers a task's or a plan's question, never a restart's or a review's.
 pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>, comment: &str) -> std::result::Result<String, Unanswered> {
     use crate::permit::Caller;
     let hub = matches!(caller, Caller::Hub { .. });
@@ -611,8 +611,8 @@ mod tests {
         let user = crate::permit::Caller::User;
         assert_eq!(answer_copy(&messages[0], Some(1), "fine", &user), "billing@web asked \"Which queue should retries use?\"; the user answered on the board: Solid Queue, with the comment: fine");
         assert_eq!(answer_copy(&messages[0], None, "use cron", &user), "billing@web asked \"Which queue should retries use?\"; the user answered on the board: in their own words: use cron");
-        let phone = crate::permit::Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() };
-        assert_eq!(answer_copy(&messages[0], Some(0), "", &phone), "billing@web asked \"Which queue should retries use?\"; the user answered from iPhone Duo: Sidekiq");
+        let phone = crate::permit::Caller::hub("acc_01");
+        assert_eq!(answer_copy(&messages[0], Some(0), "", &phone), "billing@web asked \"Which queue should retries use?\"; the user answered from your kebbie hub account: Sidekiq");
     }
 
     #[test]
@@ -621,7 +621,7 @@ mod tests {
         let from = format!("hubanswer{}@web", std::process::id());
         let id = messages::new_id("question");
         messages::append(&record(&id, messages::now(), &from, &asked(), None, None)).unwrap();
-        let phone = Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() };
+        let phone = Caller::hub("acc_01");
         assert_eq!(asked_by(&id).as_deref(), Some(from.as_str()));
         assert!(matches!(answer_as(&Caller::Agent, &id, Some(0), ""), Err(Unanswered::NotAllowed(_))), "only the user answers");
         assert!(matches!(answer_as(&phone, &id, Some(9), ""), Err(Unanswered::Invalid(_))));
@@ -629,7 +629,7 @@ mod tests {
         assert!(said.contains("Answered"), "{said}");
         let log = messages::load();
         assert!(log.iter().any(|message| message.to == from && message.from == USER_LABEL && message.text.contains("Solid Queue (one less service). Their comment: keep it short")), "the task hears the user's answer");
-        assert!(log.iter().any(|message| message.to == LEAD_LABEL && message.text.contains(&format!("{from} asked")) && message.text.contains("the user answered from iPhone Duo: Solid Queue, with the comment: keep it short")), "the lead hears which device answered");
+        assert!(log.iter().any(|message| message.to == LEAD_LABEL && message.text.contains(&format!("{from} asked")) && message.text.contains("the user answered from your kebbie hub account: Solid Queue, with the comment: keep it short")), "the lead hears which device answered");
         assert!(matches!(answer_as(&phone, &id, Some(0), ""), Err(Unanswered::Settled(_))), "an answered question takes no second answer");
         for kind in [crate::restart::QUESTION_KIND, crate::review::QUESTION_KIND] {
             let id = messages::new_id("question");

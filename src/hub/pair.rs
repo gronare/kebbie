@@ -69,7 +69,7 @@ impl Run<'_> {
         }
         let key = revealed.account_key.ok_or("the hub left out the account's key")?;
         let nonce = revealed.account_nonce.ok_or("the hub left out the account's nonce")?;
-        let named = committed.account.as_ref().is_none_or(|account| *account == key.account);
+        let named = committed.account == key.account;
         let Some(fingerprints) = pin_account(&commitment.0, &key, &nonce.0, &secret.pairing_code()).ok().filter(|_| named) else {
             refuse(&self.client, &self.path, PairingFailure::Mismatch)?;
             return Err(format!("the hub handed over an account key the browser did not commit to; nothing was pinned; start again with {}", super::RECONNECT));

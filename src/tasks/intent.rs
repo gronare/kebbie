@@ -15,12 +15,12 @@ pub(super) enum Through {
     First { count: usize, of: usize },
 }
 
-// Only the user or the lead ever push, so an intent names one of them and nothing else; Hub is the user from a trusted device, stored as by user with the device beside it so an older kebbie still reads the user's push.
+// Only the user or the lead ever push, so an intent names one of them and nothing else; Hub is the user through the hub, stored as by user with the account beside it.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum By {
     User,
     Lead,
-    Hub { device: String, name: String },
+    Hub { account: String, name: String },
 }
 
 impl By {
@@ -28,7 +28,7 @@ impl By {
         match caller {
             Caller::User => Some(By::User),
             Caller::Lead => Some(By::Lead),
-            Caller::Hub { device, name } => Some(By::Hub { device: device.clone(), name: name.clone() }),
+            Caller::Hub { account, name } => Some(By::Hub { account: account.clone(), name: name.clone() }),
             Caller::Task(_) | Caller::Agent | Caller::Sandboxed | Caller::LeadSandboxed => None,
         }
     }
@@ -37,7 +37,7 @@ impl By {
         match self {
             By::User => Caller::User,
             By::Lead => Caller::Lead,
-            By::Hub { device, name } => Caller::Hub { device: device.clone(), name: name.clone() },
+            By::Hub { account, name } => Caller::Hub { account: account.clone(), name: name.clone() },
         }
     }
 
@@ -111,15 +111,15 @@ impl Intent {
             "address": self.address, "repo": self.repo, "task": self.task, "fingerprint": self.fingerprint,
             "through": through, "at": self.at, "seen": self.seen, "hand": self.hand, "queued": self.queued,
         });
-        if let By::Hub { device, name } = &self.by {
-            value["hub"] = json!({ "device": device, "name": name });
+        if let By::Hub { account, name } = &self.by {
+            value["hub"] = json!({ "account": account, "name": name });
         }
         value
     }
 
     fn from_json(value: &Value) -> Option<Intent> {
-        let by = match (value["by"].as_str()?, value["hub"]["device"].as_str(), value["hub"]["name"].as_str()) {
-            ("user", Some(device), Some(name)) => By::Hub { device: device.to_string(), name: name.to_string() },
+        let by = match (value["by"].as_str()?, value["hub"]["account"].as_str(), value["hub"]["name"].as_str()) {
+            ("user", Some(account), Some(name)) => By::Hub { account: account.to_string(), name: name.to_string() },
             ("user", _, _) => By::User,
             ("lead", _, _) => By::Lead,
             _ => return None,

@@ -365,7 +365,7 @@ pub(crate) enum DevicePush {
     Failed(String),
 }
 
-// The same push kebbie push runs, the whole branch, for a device on the user's behalf; it refuses only by the gates every push of the user's passes, never because HEAD or main moved since the device saw the task.
+// The same push kebbie push runs, the whole branch, for the hub on the user's behalf; it refuses only by the gates every push of the user's passes, never because HEAD or main moved since the user saw the task.
 pub(crate) fn push_as(caller: &Caller, address: &str) -> DevicePush {
     let (task, place) = address.split_once('@').unwrap_or((address, ""));
     let Some(repo) = crate::repo::pooled_checkouts().into_iter().find(|repo| name_of(repo) == place) else {
@@ -838,7 +838,7 @@ fn for_whom(pusher: &str) -> String {
 
 const HUB_PUSHER: &str = "the user from ";
 
-// The lead's word on who pushed: the user's push from a device names it after the task, as the lead's copy of a device's answer does.
+// The lead's word on who pushed: the user's push through the hub says so after the task, as the lead's copy of a hub answer does.
 fn who_pushed(pusher: &str, address: &str) -> String {
     match pusher.strip_prefix(HUB_PUSHER) {
         Some(device) => format!("The user pushed {address} from {device}"),
@@ -954,7 +954,7 @@ mod tests {
         use crate::permit::{Caller, Permit};
         let check = |caller: Caller, permit: Option<Permit>, reviewed: bool, approved: bool| Pusher { caller, permit, reviewed, approved }.allowed();
         assert_eq!(check(Caller::User, None, false, false), Ok("the user".to_string()));
-        assert_eq!(check(Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() }, None, false, false), Ok("the user from iPhone Duo".to_string()), "a device pushes as the user, named");
+        assert_eq!(check(Caller::hub("acc_01"), None, false, false), Ok("the user from your kebbie hub account".to_string()), "the hub pushes as the user, named");
         assert_eq!(check(Caller::Lead, Some(Permit::Task), false, true), Ok("the lead".to_string()));
         assert!(check(Caller::Lead, None, true, true).unwrap_err().contains("no push permission"));
         assert!(check(Caller::Lead, Some(Permit::Task), true, false).unwrap_err().contains("kebbie approve"));
@@ -1539,7 +1539,7 @@ mod tests {
         let seen = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
         upstream_commit(&dir, "elsewhere", "x", "landed after the phone showed the task");
         let (_, hand) = handed();
-        let phone = Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() };
+        let phone = Caller::hub("acc_01");
         let pushed = device_push(&pushing.state, &phone, &dir, &slot, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
         let main = main_of(&upstream).to_string();
         let short = git(&origin, &["rev-parse", "--short=7", &main]).unwrap();
@@ -1557,17 +1557,17 @@ mod tests {
         let pushing = Pushing::new(&dir);
         upstream_commit(&dir, "d", "theirs", "d on main");
         let (texts, hand) = handed();
-        let phone = Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() };
+        let phone = Caller::hub("acc_01");
         let pushed = device_push(&pushing.state, &phone, &dir, &slot, &|_, _| None, &mut device_pushes(&pushing.state, &hand));
         let DevicePush::Conflict { files, .. } = &pushed else { panic!("the rebase conflicts: {pushed:?}") };
         assert_eq!(files, &["d".to_string()]);
         assert_eq!(texts.borrow().len(), 1, "its Claude got the rebase");
         let waiting = intent::load(&pushing.state, &pushing.address).unwrap();
-        assert_eq!((waiting.by, waiting.work), (By::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() }, Work::Conflict), "the push waits as the device's, so its turn later names the device");
+        assert_eq!((waiting.by, waiting.work), (By::Hub { account: "acc_01".to_string(), name: crate::permit::HUB_ACCOUNT.to_string() }, Work::Conflict), "the push waits as the hub's, so its turn later names the hub account");
         let stored = std::fs::read_to_string(intent::file(&pushing.state, &pushing.address)).unwrap();
         let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
-        assert_eq!((stored["by"].as_str(), stored["hub"]["name"].as_str()), (Some("user"), Some("iPhone Duo")), "an older kebbie reads it as the user's push");
-        let told = format!("The user pushed {} from iPhone Duo; rebasing onto", pushing.address);
+        assert_eq!((stored["by"].as_str(), stored["hub"]["name"].as_str()), (Some("user"), Some("your kebbie hub account")), "an older kebbie reads it as the user's push");
+        let told = format!("The user pushed {} from your kebbie hub account; rebasing onto", pushing.address);
         assert!(messages::load().iter().any(|message| message.to == crate::status::LEAD_LABEL && message.text.contains(&told)), "the lead hears which device pushed");
         assert_eq!(who_pushed("the user", "billing@app"), "The user pushed billing@app");
         assert_eq!(who_pushed("the lead", "billing@app"), "The lead pushed billing@app");

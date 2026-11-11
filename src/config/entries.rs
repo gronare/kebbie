@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, Channel, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Settings, PERMISSION_MODES};
+use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, Channel, HubCommands, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Settings, PERMISSION_MODES};
 use crate::repo::main_checkout;
 use crate::sh::Result;
 use crate::status::Group;
@@ -54,7 +54,7 @@ fn board_keys(loaded: &Loaded) -> (crate::keys::Keys, Vec<String>) {
 }
 
 fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
-    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, comments_watch, comments_days, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
+    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, comments_watch, comments_days, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, hub_commands, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
     let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
     let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
     let mut entries = Vec::new();
@@ -142,6 +142,8 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
         "The machine's one name: your phone shows it through the hub, and kebbie claims vault notes under it; kebbie hub connect and kebbie hub join use it, set it from --name or ask for it when unset. A task started from a vault note writes it with the task's name into the note's kebbie frontmatter key, and kebbie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
     key("hub.url", format!("{:?}", hub_url.value), hub_url.layer, Kind::Text, Scope::Machine,
         "The hub kebbie hub connect and the board's hub window connect this machine to: the kebbie hub unless set, or your own kebbie hub at an https address (http only on this machine). Choosing your own hub there sets it; the hub a machine is connected to stays in kebbie's state with its keys, so changing this key later moves nothing (kebbie hub move does). config.toml only.");
+    key("hub.commands", format!("{:?}", hub_commands.value.key()), hub_commands.layer, Kind::Choice(HubCommands::ALL.map(HubCommands::key).to_vec()), Scope::Machine,
+        "What this machine takes from your devices through the hub: \"answer-and-push\" takes answers to questions, choices on an agent's prompt and pushes; \"answer\" takes answers and prompt choices, and refuses a push; \"off\" takes nothing, and the board still posts. A command counts only when the account this machine is connected to signed it. config.toml only.");
     key("report.signals", report_signals.value.to_string(), report_signals.layer, Kind::Bool, Scope::Machine,
         "Whether kebbie sends its maintainers error signals, counts of kebbie's own failures: when kebbie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kebbie's version and commit, the OS and CPU architecture, the component (a fixed name from kebbie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Once a day it also sends an install signal: a random id made for this install alone, kebbie's version, the OS and CPU architecture and the update channel. Each error signal is a line under messages on the board. Not set, nothing is sent and no install id is made; kebbie setup asks. true turns both on; false sends none, drops what was counted and deletes the install id; config.toml only.");
     key("report.text", format!("{:?}", report_text.value.key()), report_text.layer, Kind::Choice(ReportText::ALL.map(ReportText::key).to_vec()), Scope::Machine,

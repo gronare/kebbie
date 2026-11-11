@@ -103,6 +103,7 @@ fn a_machine_connected_from_the_link_pins_the_account_and_seals_its_board_to_it(
     let shown = super::status_text(&state, Some("mac"), now()).unwrap();
     let (signing, encryption) = account.prints();
     assert!(shown.contains(&format!("account:  {} · signing key {signing} · encryption key {encryption}", key.account)), "{shown}");
+    assert!(shown.contains("\ncommands: answers, prompt choices and pushes (hub.commands = \"answer-and-push\")\n"), "the default policy shows under the account: {shown}");
 
     let mut working = task(Some("working"), Some("working"), 1);
     working.name = "search".to_string();

@@ -13,8 +13,8 @@ base64 = "0.23"
 crossterm = { version = "0.29", features = ["use-dev-tty"] }
 ed25519-dalek = "3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-kebbie-hub-api = { git = "https://github.com/gronare/kebbie-hub", rev = "40fbeaa01f78bb9540476a23d556ce4ee9170082" }
-kebbie-hub-protocol = { git = "https://github.com/gronare/kebbie-hub", rev = "40fbeaa01f78bb9540476a23d556ce4ee9170082" }
+kebbie-hub-api = { git = "https://github.com/gronare/kebbie-hub", rev = "6fe68f08cdc8d0ee4ac1b50b36e1c481b1523a23" }
+kebbie-hub-protocol = { git = "https://github.com/gronare/kebbie-hub", rev = "6fe68f08cdc8d0ee4ac1b50b36e1c481b1523a23" }
 libc = "0.2"
 qrcodegen = "1.8"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
@@ -32,8 +32,8 @@ unicode-width = "0.2"
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
-kebbie-hub = { git = "https://github.com/gronare/kebbie-hub", rev = "40fbeaa01f78bb9540476a23d556ce4ee9170082" }
-kebbie-hub-fakes = { git = "https://github.com/gronare/kebbie-hub", rev = "40fbeaa01f78bb9540476a23d556ce4ee9170082" }
+kebbie-hub = { git = "https://github.com/gronare/kebbie-hub", rev = "6fe68f08cdc8d0ee4ac1b50b36e1c481b1523a23" }
+kebbie-hub-fakes = { git = "https://github.com/gronare/kebbie-hub", rev = "6fe68f08cdc8d0ee4ac1b50b36e1c481b1523a23" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
 
 [profile.release]

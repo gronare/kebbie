@@ -65,6 +65,26 @@ impl AgentUpdates {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum HubCommands {
+    #[default]
+    AnswerAndPush,
+    Answer,
+    Off,
+}
+
+impl HubCommands {
+    pub const ALL: [HubCommands; 3] = [HubCommands::AnswerAndPush, HubCommands::Answer, HubCommands::Off];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            HubCommands::AnswerAndPush => "answer-and-push",
+            HubCommands::Answer => "answer",
+            HubCommands::Off => "off",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum AlsoNoticed {
     #[default]
     Backlog,

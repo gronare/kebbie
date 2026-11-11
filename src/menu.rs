@@ -338,7 +338,7 @@ fn choose_in(caller: &Caller, panes: &[Pane], choice: &str, id: &str) -> std::re
     choose_with(caller, &state, panes, choice, id, &mut sent)
 }
 
-// The user's choice from a trusted device, made through the same choose as the board's and the lead's; the lead gets a copy naming the device.
+// The user's choice through the hub, made through the same choose as the board's and the lead's; the lead gets a copy saying where it came from.
 pub fn choose_as(caller: &Caller, address: &str, key: &str, id: &str) -> std::result::Result<String, Unchosen> {
     let sessions = crate::peers::sessions().map_err(Unchosen::Failed)?;
     let copy = |text: &str| {
@@ -658,7 +658,7 @@ mod tests {
     }
 
     fn phone() -> Caller {
-        Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() }
+        Caller::hub("acc_01")
     }
 
     #[test]
@@ -694,7 +694,7 @@ mod tests {
             Ok("Chose \"1. Yes, proceed (y)\" in hub@kebbie's prompt; the menu is gone.".to_string())
         }, copy);
         assert!(result.is_ok());
-        assert_eq!(copies.borrow().as_slice(), ["The user answered hub@kebbie's prompt 3f2a9c1d from iPhone Duo, so it needs nothing from you: Chose \"1. Yes, proceed (y)\" in hub@kebbie's prompt; the menu is gone."]);
+        assert_eq!(copies.borrow().as_slice(), ["The user answered hub@kebbie's prompt 3f2a9c1d from your kebbie hub account, so it needs nothing from you: Chose \"1. Yes, proceed (y)\" in hub@kebbie's prompt; the menu is gone."]);
         let refused = choose_for(&phone(), "hub@kebbie", "3f2a9c1d", &sessions, |_| Err(Unchosen::Gone("gone".to_string())), |_: &str| -> Result<()> { panic!("no copy for a choice not made") });
         assert_eq!(refused, Err(Unchosen::Gone("gone".to_string())));
         let lead = choose_for(&Caller::Lead, "hub@kebbie", "3f2a9c1d", &sessions, |_| Ok("Chose".to_string()), |_: &str| -> Result<()> { panic!("the lead chose it itself") });

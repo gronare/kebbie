@@ -2,7 +2,7 @@
 
 Follow your tasks from your phone through a [kebbie hub](https://github.com/gronare/kebbie-hub): every task grouped as on the board, a task's steps under its row, and the questions waiting for you with their options.
 
-It works on any phone or browser you sign in on with your passkey. The phone reads; you still answer and push on the machine.
+It works on any phone or browser you sign in on with your passkey. Every device reads; one where you allow changes also answers questions, chooses on an agent's prompt and pushes.
 
 ![H connects this machine to a hub: the card with the code to check on the page and the link to open](../assets/clips/hub-connect.webp)
 
@@ -10,7 +10,7 @@ It works on any phone or browser you sign in on with your passkey. The phone rea
 
 Every board the machine sends is end-to-end encrypted to your account's key and signed by the machine. Only your passkeys unlock that key, so the hub relays the board without being able to read it.
 
-Nothing the hub sends can start anything on the machine. The board carries task names, repo names, summaries and questions, never a local path, a host name or a dev server address.
+The hub cannot act on the machine by itself: the machine takes an answer, a prompt choice or a push only when your account's key signed it, and only the kinds [`hub.commands`](../reference/configuration.md#keys) allows. The board carries task names, repo names, summaries and questions, never a local path, a host name or a dev server address.
 
 ## What you need
 
@@ -80,7 +80,7 @@ The phone shows the board of every machine your account connected. Nothing is ad
 
 Above the groups, Next lists what needs you in the order `N` on the board and `kebbie next` give it, one list per machine, with how long each has waited and a line counting what is working, queued and parked; with nothing waiting it says Nothing needs you. Each task shows its title, its agent with the model its profile names, its recipe and the review assessment, and a line says when a machine is in away mode. Below the groups, Queued and Parked list the tasks set aside, a parked one with whether a question waits on it, and Routines list each routine's next run and last outcome.
 
-A prompt on a task's agent's screen, such as Codex asking to run a command, shows under Questions and counts in its badge: the question, the command apart from it, and each option with the key it takes. The phone only shows it; you answer at the machine, from Next or through the lead.
+A prompt on a task's agent's screen, such as Codex asking to run a command, shows under Questions and counts in its badge: the question, the command apart from it, and each option with the key it takes. With changes allowed on the device, you choose a plain option there; an option that takes your own words is answered at the machine.
 
 The open task shows its agent, profile and recipe, its steps, and a review section: the assessment, the reviewer's verdict, whether the push waits for it, and a second opinion's points, which never hold the push.
 
@@ -94,6 +94,22 @@ To keep the hub on the phone's home screen:
 
 - iPhone: in Safari, tap Share, then **Add to Home Screen**.
 - Android: in Chrome, open the menu and tap **Add to Home screen** (or **Install app**).
+
+## Answer and push from your phone
+
+Each device starts view only. Allow changes on the ones you use to answer and push:
+
+1. Open **Account** on the device.
+2. Under **This device**, turn on **Allow changes from this device**. It says `Changes go to each machine that takes them.`
+3. Open a task that asks a question or is ready to push, and answer or push from it.
+
+The task shows the answer as sent, then the machine's own reply once it applied it. A device left view only shows `View only on this device. Allow changes in Account` on a task instead of the buttons.
+
+What reaches a machine is its own choice, set by [`hub.commands`](../reference/configuration.md#keys) in its config.toml. **Machines** says it under each one: `takes answers and pushes`, `takes answers, not pushes` or `takes nothing from the hub`.
+
+- If a machine takes answers but not pushes, its task says `Not pushed: devbox takes answers, not pushes. Push at the machine, or allow pushes in its kebbie settings.`
+- If you turn the switch off, the device sends nothing; the setting stays in that browser alone.
+- If the hub has not enabled answering for your account, the task says so instead.
 
 ## Notifications
 

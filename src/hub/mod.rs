@@ -316,6 +316,7 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
         }
         None => format!("account:  none, so {UNREAD}; connect it from the link: {RECONNECT}"),
     });
+    lines.push(commands_line(crate::config::hub_commands()));
     lines.push(match relay.posted_at {
         Some(at) => format!("board:    rev {} posted {}", relay.rev, ago(Some(at), now)),
         None => "board:    not posted yet".to_string(),
@@ -324,6 +325,16 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
         lines.push(format!("error:    {error} ({})", ago(relay.error_at, now)));
     }
     Ok(lines.join("\n"))
+}
+
+pub fn commands_line(policy: crate::config::HubCommands) -> String {
+    use crate::config::HubCommands;
+    let takes = match policy {
+        HubCommands::AnswerAndPush => "answers, prompt choices and pushes",
+        HubCommands::Answer => "answers and prompt choices; pushes off",
+        HubCommands::Off => "off",
+    };
+    format!("commands: {takes} (hub.commands = {:?})", policy.key())
 }
 
 // Nothing here proves the new address is the same hub, so no token goes there until the user has chosen it.

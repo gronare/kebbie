@@ -835,6 +835,7 @@ Show the board on your phone through a kebbie hub. See [See your board on your p
 
 - It renames the machine on the hub first when `[machine] name` has changed, and shows why when that fails.
 - It shows the account whose key it pinned, with the fingerprints of its signing and encryption keys. With none, it says that no browser can read the board, and to connect it from the link: `kebbie hub leave`, then `kebbie hub connect`.
+- It shows what the machine takes from the hub by [`hub.commands`](configuration.md#keys), such as `commands: answers and prompt choices; pushes off (hub.commands = "answer")`.
 - It shows the board's last revision and when it went out.
 
 `kebbie hub join`:

@@ -177,7 +177,7 @@ pub fn return_brief(log: &[Message], since: u64, waiting: &[Message]) -> String 
     )
 }
 
-// Who runs this kebbie, read from its ancestors: a Claude that kebbie started carries its role in its --settings file. Hub is the user acting from a trusted device through the hub bridge, which passes it explicitly; caller() never returns it.
+// Who runs this kebbie, read from its ancestors: a Claude that kebbie started carries its role in its --settings file. Hub is the user acting through the hub with a command their account signed, which the bridge passes explicitly; caller() never returns it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Caller {
     User,
@@ -186,7 +186,15 @@ pub enum Caller {
     Agent,
     Sandboxed,
     LeadSandboxed,
-    Hub { device: String, name: String },
+    Hub { account: String, name: String },
+}
+
+pub const HUB_ACCOUNT: &str = "your kebbie hub account";
+
+impl Caller {
+    pub fn hub(account: &str) -> Caller {
+        Caller::Hub { account: account.to_string(), name: HUB_ACCOUNT.to_string() }
+    }
 }
 
 // The subcommands kebbie refuses to a task by who calls it: a task's settings deny each, and never take one out of the sandbox.
