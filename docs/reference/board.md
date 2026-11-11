@@ -23,7 +23,7 @@ The status line shows:
 | `⚠N` on Routines | N routine runs wait for you with findings. |
 | Counts | What needs you (tasks, and devices waiting for your approval), tasks that are working, are in review, are ready to push and wait for CI, and waiting questions. |
 | `◆ N to accept`, yellow | N commits of tasks working in steps wait for you to accept them. |
-| `! N bugs to send` | Bugs in kebbie you ran into wait for you to send them to its maintainers, on their row under Work. |
+| `! N bugs to send` | Bugs and wishes about kebbie, saved here, wait for you to send them to its maintainers, on their row under Work, such as `! 1 bug and 2 wishes to send`. |
 | Plan usage | How much of the plan is used. |
 | `↻ N stale` | Claude sessions or Codex tasks wait to be restarted. |
 | `☾ away` | Away mode is on. |
@@ -67,8 +67,8 @@ Work:
 - A task's halves in other repos sit next to each other.
 - Under READY TO PUSH: [COMMENTS](#comments), the comments colleagues left on commits kebbie pushed, while any waits for you.
 - Under the groups: the [parked line](#parked) while you have parked tasks.
-- Under the tasks: the [bugs to send](#bugs-to-send), folded into one row until you open them, and the main checkouts with files changed outside any task.
-- A folded row, the parked line, the comments or the bugs to send, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
+- Under the tasks: the [bugs and wishes to send](#bugs-and-wishes-to-send), folded into one row until you open them, and the main checkouts with files changed outside any task.
+- A folded row, the parked line, the comments or the bugs and wishes to send, is selected like a task: `⏎` or a click on it once selected opens it, and `esc` on a row inside folds it back with the selection on the row.
 - After an update's recheck fixed some bugs, `✓ Fixed in kebbie <version>: N bugs you ran into` with their titles. `i` shows the list and clears the line.
 
 Backlog: ONGOING lists vault project notes in progress (status active or draft) when the vault is on. It sits above the items, below them or nowhere, by [`board.backlog.ongoing`](configuration.md).
@@ -300,7 +300,7 @@ kebbie never posts a reply.
 | `ctrl+c` | Twice within 2 seconds quits the board. The first press says so. |
 | `ctrl+l` | Redraw every cell of the board, over any old text the terminal still shows, on every page and in every window. The board does this by itself after its pane changes size. |
 
-The [bugs to send](#bugs-to-send) are folded into one row at first. While any bug waits, the header counts them, such as `! 2 bugs to send`. The board remembers whether the list shows. See [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers).
+The [bugs and wishes to send](#bugs-and-wishes-to-send) are folded into one row at first. While any waits, the header counts them, such as `! 2 bugs to send`. The board remembers whether the list shows. See [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers).
 
 `U` shows a bar while kebbie builds or downloads. `esc` hides the window while the update goes on, and `U` opens it again. Done, it shows what's new and fixed from kebbie's release notes and what restarts; `d` shows the details, any other key or a click closes it. A summary or details taller than the screen scroll with `↑` `↓`, `PgUp` `PgDn`, `Home` `End` and the mouse wheel, and `↓ more` on the keys line says there is more. See [What an update shows](../explanation/updates-and-restarts.md#what-an-update-shows).
 
@@ -560,17 +560,17 @@ The answers sit on one row at the bottom under an `ANSWER` header, each as its k
 | `esc`, `q` | Back to the tasks. |
 | `m` | Hide the panel. |
 
-### Bugs to send
+### Bugs and wishes to send
 
-Folded, the bugs are one row under the tasks, `! 2 bugs to send · ⏎ shows them`; `↓` from the last task selects it.
+Folded, the bugs and wishes are one row under the tasks, `! 2 bugs to send · ⏎ shows them`; `↓` from the last task selects it.
 
 | Key | Action |
 | --- | --- |
-| `⏎` on the row | Open the list with its first bug selected. A click on the selected row does the same. |
-| `↑` `↓`, `j` `k` | Pick a bug. `↑` on the first, or on the folded row, goes back to the tasks. |
+| `⏎` on the row | Open the list with its first one selected. A click on the selected row does the same. |
+| `↑` `↓`, `j` `k` | Pick one. `↑` on the first, or on the folded row, goes back to the tasks. |
 | `⏎` | Show the report as it would go out and ask `y / n`. |
-| `n` | Keep the selected bug on this machine only, without opening it. |
-| `a` | Show every bug in the list as it would go out, and ask once whether to send them all. |
+| `n` | Keep the selected one on this machine only, without opening it. |
+| `a` | Show every one in the list as it would go out, and ask once whether to send them all. |
 | `esc`, `q` | Fold the list back into its row, with the selection on it; on the row, back to the tasks. |
 
 In the report window `↓` and `pgdn` scroll, `y` sends once you have read to the end, `n` keeps it on this machine only, and `esc` decides later.
@@ -846,7 +846,7 @@ The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hi
 - `esc`, `ctrl+c`, `⏎`, the arrows, `j` `k` and `tab` stay where they are, and so do the keys inside a window or a text field.
 - A key another action already uses where both act is refused, naming that action. Moving two actions onto each other's keys in the same table works.
 - An entry that breaks a rule is ignored; `kebbie config` lists every action with its key and says why an entry was ignored.
-- An entry for `reports`, from an older config, is read without a word and changes nothing: the bugs to send open with `⏎` on their row.
+- An entry for `reports`, from an older config, is read without a word and changes nothing: the bugs and wishes to send open with `⏎` on their row.
 
 ## Mouse
 
@@ -855,7 +855,7 @@ The actions are `work_page`, `areas_page`, `routines_page`, `settings_page`, `hi
 | Click a row | Select it. Click again for its options. |
 | Click an option, a commit or a key in the status line | Use it. |
 | Click the messages line | Open it. |
-| Click a folded row, the parked line or the bugs to send | Select it. Click again to open it. |
+| Click a folded row, the parked line or the bugs and wishes to send | Select it. Click again to open it. |
 | Click a bug to send | Select it. Click again to show its report. |
 | Click a comment | Select it. Click again to open its window. |
 | Click a row in Next | Select it. Click again to open it. |

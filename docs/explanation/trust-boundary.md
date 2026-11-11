@@ -130,7 +130,7 @@ The format has no text field, every value is limited to lowercase letters, digit
 
 ## Only you send a bug report
 
-**Bug reports** are the redacted text of a bug in kebbie you ran into, saved by you or the lead. kebbie asks each time unless you set `[report] text = "always"`. Only you send one: the lead, tasks and sandboxed processes are refused.
+**Bug and wish reports** are the redacted text of a bug or wish about kebbie, saved by you or the lead. kebbie asks each time unless you set `[report] text = "always"`. Only you send one: the lead, tasks and sandboxed processes are refused.
 
 `"always"` in config.toml is not enough, since the lead can write that file. It takes effect only once you arm it with `kebbie issue report --always`, a command kebbie refuses to every Claude. Armed, it is your consent in advance: kebbie sends, redacted, what the lead wrote without you reading it.
 

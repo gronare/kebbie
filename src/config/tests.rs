@@ -607,7 +607,7 @@ fn signals_are_off_until_set_to_true_and_text_is_asked_by_default_and_an_old_ena
     assert!(parse_machine("[report]\nsignals = \"yes\"\n", "config.toml").unwrap_err().contains("report.signals: must be true or false"));
     let shown = describe(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) });
     assert!(shown.contains("report.signals = false  (default)\n  Whether kebbie sends its maintainers error signals, counts of kebbie's own failures") && shown.contains("Never an error message, path, repo, task or host name") && shown.contains("Not set, nothing is sent and no install id is made; kebbie setup asks"), "{shown}");
-    assert!(shown.contains("report.text = \"ask\"  (default)\n  What happens to a bug in kebbie you ran into"), "{shown}");
+    assert!(shown.contains("report.text = \"ask\"  (default)\n  What happens to a bug or wish about kebbie"), "{shown}");
 }
 
 #[test]

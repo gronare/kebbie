@@ -1,9 +1,9 @@
 # Report a problem with kebbie
 
-Keep what kebbie got wrong, or could not do, on your machine, and send a bug to kebbie's maintainers when you choose.
+Keep what kebbie got wrong, or could not do, on your machine, and send it to kebbie's maintainers when you choose.
 
 - What you save stays on your machine. After an update, kebbie shows which of it may be fixed.
-- A bug goes to kebbie's issues endpoint, from the board's bugs to send or `kebbie issue report`.
+- A bug or wish goes to kebbie's issues endpoint, from the board's list to send or `kebbie issue report`.
 - A GitHub issue is optional, and only ever one you open yourself.
 - Separately, once you say yes in `kebbie setup`, kebbie counts its own crashes and internal errors and sends the maintainers those counts, with no text at all.
 - With the same yes, kebbie sends an install signal once a day so the maintainers can count active installs, with no text and nothing about your work.
@@ -15,16 +15,16 @@ Keep what kebbie got wrong, or could not do, on your machine, and send a bug to 
 | `kebbie issue add --kind bug\|wish --title <title> [<text>\|-]` | Saves a bug or a wish on this machine. |
 | `kebbie issues [--all]` | Lists the open ones, or every status. |
 | `kebbie issue show <id>` | Prints one. |
-| `kebbie issue report <id>` | Shows a bug as it would go to kebbie's maintainers and sends it on your `y`. |
-| `kebbie issue report --all` | Shows every bug waiting to go and sends them all on one `y`. |
-| `kebbie issue report --always` \| `--ask` | Sends each saved bug without asking, or asks again. |
+| `kebbie issue report <id>` | Shows a bug or wish as it would go to kebbie's maintainers and sends it on your `y`. |
+| `kebbie issue report --all` | Shows every bug and wish waiting to go and sends them all on one `y`. |
+| `kebbie issue report --always` \| `--ask` | Sends each saved bug and wish without asking, or asks again. |
 | `kebbie issue reopen <id>` | Opens a closed one again, noted as come back on this build. |
 | `kebbie issue retry <id>` | Marks one worth trying again. |
 | `kebbie issue close <id> fixed\|wontfix\|duplicate` | Closes one. |
 | `kebbie issue send <id>` | Opens a prefilled GitHub issue in your browser. |
 | `kebbie issue link <id> <number\|url>` | Ties a saved issue to its GitHub issue. |
 
-On the board, the bugs to send wait under Work in one row; `⏎` on it shows them. See [`kebbie issues`](../reference/commands.md#kebbie-issues) for every option.
+On the board, the bugs and wishes to send wait under Work in one row; `⏎` on it shows them. See [`kebbie issues`](../reference/commands.md#kebbie-issues) for every option.
 
 ## Save it
 
@@ -95,7 +95,7 @@ Nobody asks you anything. The board shows one line under Work as soon as the fir
 
 ### When a fixed issue comes back
 
-Reopen it rather than filing a new one; the lead proposes this when what you hit matches a closed issue. A reopened bug is offered for sending again, even one sent or kept here before.
+Reopen it rather than filing a new one; the lead proposes this when what you hit matches a closed issue. A reopened issue is offered for sending again, even one sent or kept here before.
 
 ```bash
 kebbie issue reopen <id>         # records "came back on <version>"
@@ -112,10 +112,10 @@ With `gh` installed and logged in, the update also finds the issues you sent on 
 
 ## Send it to kebbie's maintainers
 
-When you or the lead saves a bug in kebbie you ran into, the board's header counts it, such as `! 2 bugs to send`, and the list waits under Work, below the tasks, folded into one row: `! 2 bugs to send · ⏎ shows them`.
+When you or the lead saves a bug or a wish about kebbie, the board's header counts it, such as `! 2 bugs and 1 wish to send`, and the list waits under Work, below the tasks, folded into one row: `! 2 bugs and 1 wish to send · ⏎ shows them`. A wish goes the same way as a bug, marked as a wish.
 
-1. Select the row with `↓` from the last task, or a click, and press `⏎`. The list opens under **Send to kebbie's maintainers?**, with the first bug selected.
-2. Pick a bug with `↑` `↓` or a click.
+1. Select the row with `↓` from the last task, or a click, and press `⏎`. The list opens under **Send to kebbie's maintainers?**, with the first one selected.
+2. Pick one with `↑` `↓` or a click.
 3. Press `⏎`, or click it again. kebbie shows the report exactly as it would go out and asks `y / n`.
 4. Read it to its end. A long one scrolls with `↓` and `pgdn`, and `y` counts only once you have read to its end.
 5. Answer:
@@ -123,10 +123,10 @@ When you or the lead saves a bug in kebbie you ran into, the board's header coun
    | Key | What it does |
    | --- | --- |
    | `y` | Sends it, as long as the issue is unchanged since you read it; an edit in between sends nothing and asks you to read it again. kebbie answers the reports endpoint's proof-of-work challenge (about a second), signs the report with this install's key and records the report's id in the issue, so it is never sent twice. |
-   | `n` | Keeps it on this machine only, and the board stops offering it. `n` in the list does the same for the selected bug without opening it. |
+   | `n` | Keeps it on this machine only, and the board stops offering it. `n` in the list does the same for the selected one without opening it. |
    | `esc` | Decides later. |
 
-Every report sent, from the board, from `kebbie issue report` or unasked, adds a line under messages on the board: `Sent bug <id> to kebbie's maintainers as report <report>: "<title>", redacted; kebbie issue report <id> shows the text that went.`
+Every report sent, from the board, from `kebbie issue report` or unasked, adds a line under messages on the board: `Sent bug <id> to kebbie's maintainers as report <report>: "<title>", redacted; kebbie issue report <id> shows the text that went.`, or `Sent wish <id> …` for a wish.
 
 - If you want back to the tasks, press `esc` in the list to fold it into its row, then `esc` or `↑` again. The board remembers whether the list shows.
 - If you work in a terminal, run `kebbie issue report <id>`. It prints the same text and asks `y/N`.
@@ -136,14 +136,14 @@ Every report sent, from the board, from `kebbie issue report` or unasked, adds a
 The endpoint takes 5 reports from one install in 5 minutes. kebbie paces a batch to that, so you answer once:
 
 1. Open the list and press `a`, or run `kebbie issue report --all` in your own terminal.
-2. Read the reports to their end. kebbie shows each one exactly as it would go out, and `y` sends those; a bug saved while the window is open waits for the next batch.
+2. Read the reports to their end. kebbie shows each one exactly as it would go out, and `y` sends those; one saved while the window is open waits for the next batch.
 3. Press `y`. The first 5 go at once, then 5 more every 5 minutes. If the endpoint still answers that it is busy, kebbie waits 5 minutes and carries on.
 
-On the board the batch goes in the background, each send a line under messages. When it ends, kebbie names the bugs it sent, those already sent, and any that failed with why. Run it again for the ones left; no bug goes twice, even when two batches or the board and a terminal send at once. While a batch goes, `a` on the board says so and starts no second one. `--all` leaves out a bug you kept on this machine or opened on GitHub; `kebbie issue report <id>` sends one of those.
+On the board the batch goes in the background, each send a line under messages. When it ends, kebbie names the ones it sent, those already sent, and any that failed with why. Run it again for the ones left; none goes twice, even when two batches or the board and a terminal send at once. While a batch goes, `a` on the board says so and starts no second one. `--all` leaves out one you kept on this machine or opened on GitHub; `kebbie issue report <id>` sends one of those.
 
 ### What the report holds
 
-The report holds the title, the text, kebbie's version and commit, and the OS and architecture. No environment, file or repo content is added. Before you see it, kebbie replaces:
+The report holds whether it is a bug or a wish, the title, the text, kebbie's version and commit, and the OS and architecture. No environment, file or repo content is added. Before you see it, kebbie replaces:
 
 | In the text | Becomes |
 | --- | --- |
@@ -161,18 +161,17 @@ The report holds the title, the text, kebbie's version and commit, and the OS an
 ### Who sends and what is offered
 
 - Only you can send: kebbie refuses it, and the board's `y`, to the lead, tasks and sandboxed processes.
-- Wishes are not offered; open one on GitHub yourself if you like, as below.
-- A bug already sent with `kebbie issue send`, linked to a GitHub issue, closed or kept here is not offered either, until it is reopened.
+- A bug or wish already sent with `kebbie issue send`, linked to a GitHub issue, closed or kept here is not offered either, until it is reopened.
 - The install key is made on the first report and kept in `report/install-key.json` in the state directory, readable by you alone. The project's maintainers see that key as the report's sender. A key they have not seen before waits until they let it through, so the first report from a new install may take a while to be read.
 
-### Choose how bugs go out
+### Choose how bugs and wishes go out
 
 `[report] text` in config.toml decides:
 
 | Value | What happens |
 | --- | --- |
 | `"ask"` (default) | As above, every time. |
-| `"always"` | kebbie sends each bug you or the lead saves within a minute, redacted the same way, without asking. Each send is a line under messages, so you still see what went. |
+| `"always"` | kebbie sends each bug or wish you or the lead saves within a minute, redacted the same way, without asking. Each send is a line under messages, so you still see what went. |
 | `"never"` | The board never offers one; `kebbie issue report <id>` still sends one when you ask. |
 
 > **Note:** The `"always"` key alone does nothing. Run `kebbie issue report --always` in your own terminal to arm it, and `kebbie issue report --ask` to go back to being asked. The lead can write config.toml but cannot arm it; `kebbie doctor` says when the key is set and not armed.
@@ -217,7 +216,7 @@ Without `signals = true` it is not sent and no install id is made. `[report] sig
 
 ## Or open a GitHub issue yourself
 
-The report above is how a bug reaches kebbie's maintainers. A GitHub issue is an optional alternative, and nothing in kebbie opens one for you: not the keeper, not an update, not the lead or a task.
+The report above is how a bug or wish reaches kebbie's maintainers. A GitHub issue is an optional alternative, and nothing in kebbie opens one for you: not the keeper, not an update, not the lead or a task.
 
 kebbie refuses `kebbie issue send` and `kebbie issue link` to the lead, tasks and sandboxed processes. The lead never suggests a GitHub issue unless you ask for one; then it tells you to run this yourself.
 

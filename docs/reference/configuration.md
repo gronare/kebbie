@@ -238,7 +238,7 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
 | `report.signals` | not set (off) | config.toml only | Whether kebbie sends its maintainers error signals when kebbie itself fails, and the daily install signal. `kebbie setup` asks. |
-| `report.text` | `"ask"` | config.toml only | What happens to a bug in kebbie you ran into, once you or the lead saved it: `"ask"`, `"always"` or `"never"`. |
+| `report.text` | `"ask"` | config.toml only | What happens to a bug or wish about kebbie, once you or the lead saved it: `"ask"`, `"always"` or `"never"`. |
 | `report.enabled` | none | config.toml only | The older single switch, still read: `false` means `signals = false` and `text = "never"`, unless those keys are set. |
 | `report.inbox_token` | none | config.toml only | For kebbie's maintainers: the `kha_` token the issues endpoint issued. |
 | `issues.propose` | `true` | config.toml only | Whether the lead proposes saving a [kebbie issue](../how-to/report-a-problem-with-kebbie.md) when kebbie itself cost something. |
@@ -259,7 +259,7 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 - `"always"`: once you arm it with `kebbie issue report --always` in your own terminal, kebbie sends it, redacted the same way, without asking, and says so under messages. Until then, or after `kebbie issue report --ask`, it asks as with `"ask"`.
 - `"never"`: it stays on this machine. `kebbie issue report <id>` still sends one when you ask.
 
-`report.inbox_token`: the keeper then files each report the endpoint lets through, and each error signal at least three installs reported on one day, as a kebbie issue every 10 minutes, each with a line under messages on the board, `New bug report: <title>`, that is for you and not the lead, and `kebbie doctor` counts the reports in quarantine. `kebbie config` shows only whether it is set.
+`report.inbox_token`: the keeper then files each report the endpoint lets through, and each error signal at least three installs reported on one day, as a kebbie issue every 10 minutes, each with a line under messages on the board, `New bug report: <title>` (`New wish report: <title>` for a wish), that is for you and not the lead, and `kebbie doctor` counts the reports in quarantine. `kebbie config` shows only whether it is set.
 
 `issues.propose`: the lead proposes one at a calm moment between rounds, and saves it on your yes. `false` keeps the lead from holding, proposing or filing them; it saves one only when you ask it to. It takes effect when the lead next restarts (`L` on the board).
 

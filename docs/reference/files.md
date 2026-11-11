@@ -130,7 +130,7 @@ A `comments/` file holds the comment as GitHub gave it (author, text, file and l
 | `routines/` | One file per routine, `<id>.json`. `lock` keeps two schedulers from starting the same run. |
 | `backlog.json` | The backlog the lead saved on its last refresh. |
 | `board-messages` | The board's memory of whether the messages panel is folded. |
-| `board-reports` | Whether the bugs to send show as a list or folded into their row. |
+| `board-reports` | Whether the bugs and wishes to send show as a list or folded into their row. |
 | `edit/` | The commit message or routine prompt open in your editor, as a new file of yours alone, removed when the editor closes. |
 | `cell-size` | The terminal cell size a board in a normal pane last measured, for the popup board's images. |
 | `usage.json` | Plan usage from the status line. |

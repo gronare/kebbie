@@ -10,11 +10,12 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - hub.commands sets what a machine takes through the hub, answers and pushes by default, and only from your account.
 - A new device's first command waits on the machine until you approve it under N or with kebbie hub devices; update the hub first.
 - hub.trust and hub.auto_approve set which devices a machine takes commands from, and when a waiting one is let in.
+- A wish about kebbie goes to its maintainers the way a bug does, under the same report.text choice.
 
 ### Fixed
 - A Codex task runs git add and git commit in its worktree without asking you to let them out of the sandbox, and the lead no longer recommends letting git through for good.
 - A reopened bug that went to kebbie's maintainers before is offered and sent again.
-- kebbie issue report says why a wish, another install's report or a bug already sent cannot go, instead of asking.
+- kebbie issue report says why another install's report or one already sent cannot go, instead of asking.
 - kebbie issue show names the report a bug went as, also when saving the issue failed after the send.
 - task.profile = "none" and review.profile = "none" mean the built-in task and reviewer, not a profile named none.
 - review.second = "always none" is refused, instead of running a second opinion from a profile named none.

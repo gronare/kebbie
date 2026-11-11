@@ -700,11 +700,62 @@ fn with_text_always_a_bug_goes_out_unasked_redacted_and_each_send_is_a_line_unde
     assert!(!stored[0].report.text.contains("/Users/ada") && !stored[0].report.text.contains("acme"), "{}", stored[0].report.text);
     let line = crate::messages::load_in(&user).pop().unwrap();
     assert_eq!((line.from.as_str(), line.to.as_str(), line.kind.as_deref()), ("kebbie", crate::messages::USER_LABEL, Some(report::SENT_KIND)));
-    assert_eq!(line.text, report::sent_line(&number, &id, "push in <repo> hid git's error"));
+    assert_eq!(line.text, report::sent_line(&number, "bug", &id, "push in <repo> hid git's error"));
     assert!(line.text.starts_with(&format!("Sent bug {id} to kebbie's maintainers as report {number}: \"push in <repo> hid git's error\"")), "{}", line.text);
     assert!(report::send_unasked_in(&user, always, &hub.url, &|| panic!("nothing waits, so nothing is scrubbed"), now()).unwrap().is_empty(), "a sent bug goes once");
     report::arm_in(&user, &crate::permit::Caller::User, false, always, now()).unwrap();
     assert!(!report::armed(&user), "kebbie issue report --ask disarms it");
+}
+
+fn reported_wish(state: &Path) -> String {
+    let issue = crate::issues::Issue { id: "b2c3d4".to_string(), kind: "wish".to_string(), title: "let shop's board sort by repo".to_string(), ..crate::issues::find(&crate::issues::dir(state), &reported_bug(state)).unwrap() };
+    crate::issues::save(&crate::issues::dir(state), &issue).unwrap();
+    issue.id
+}
+
+#[test]
+fn a_wish_goes_signed_and_redacted_as_a_wish_under_ask_always_and_never_and_files_as_one_at_the_maintainer() {
+    use crate::config::ReportText;
+    use crate::hub::{inbox, report};
+    use crate::permit::Caller;
+    use crate::report_wire::ReportKind;
+    let hub = FakeIssues::start(8);
+    let scrub = || report::Scrub::new(Some("/Users/ada".to_string()), vec!["shop".to_string()]);
+    let private = |text: &str| ["/Users/ada", "shop", "acme"].iter().any(|private| text.contains(private));
+
+    let asked = crate::sh::test_dir("report-wish-ask");
+    let id = reported_wish(&asked);
+    assert!(report::offers(&asked, true).iter().any(|issue| issue.id == id), "a wish waits on the board");
+    assert!(report::send_unasked_in(&asked, ReportText::Ask, &hub.url, &|| panic!("ask sends nothing unasked"), now()).unwrap().is_empty());
+    let read = report::payload(&crate::issues::find(&crate::issues::dir(&asked), &id).unwrap(), &scrub()).digest();
+    let sent = report::send_in(&asked, &Caller::User, &id, &hub.url, &scrub(), &read, now()).unwrap();
+    assert!(sent.contains(&format!("Sent wish {id} to kebbie's maintainers as report ")), "{sent}");
+
+    let always = crate::sh::test_dir("report-wish-always");
+    let id = reported_wish(&always);
+    report::arm_in(&always, &Caller::User, true, ReportText::Always, now()).unwrap();
+    let notes = report::send_unasked_in(&always, ReportText::Always, &hub.url, &scrub, now()).unwrap();
+    assert!(notes.iter().any(|note| note.starts_with(&format!("reports: sent wish {id} to kebbie's maintainers"))), "{notes:?}");
+
+    let never = crate::sh::test_dir("report-wish-never");
+    let id = reported_wish(&never);
+    report::arm_in(&never, &Caller::User, true, ReportText::Always, now()).unwrap();
+    assert!(report::send_unasked_in(&never, ReportText::Never, &hub.url, &|| panic!("never sends nothing unasked"), now()).unwrap().is_empty());
+    let read = report::payload(&crate::issues::find(&crate::issues::dir(&never), &id).unwrap(), &scrub()).digest();
+    report::send_in(&never, &Caller::User, &id, &hub.url, &scrub(), &read, now()).expect("kebbie issue report still sends one on request");
+
+    let stored = hub.quarantined();
+    let wishes: Vec<_> = stored.iter().filter(|stored| stored.report.kind == Some(ReportKind::Wish)).collect();
+    assert_eq!(wishes.len(), 3, "{stored:?}");
+    assert!(wishes.iter().all(|stored| stored.report.title == "let <repo>'s board sort by repo" && !private(&stored.report.text)), "{wishes:?}");
+
+    let maintainer = crate::sh::test_dir("report-wish-maintainer");
+    let token = crate::report_wire::fake::TOKEN.to_string();
+    hub.allow(&report::install_key(&asked).unwrap().public());
+    inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
+    let arrived = crate::issues::load(&crate::issues::dir(&maintainer));
+    assert_eq!(arrived.iter().map(|issue| issue.kind.as_str()).collect::<Vec<_>>(), ["wish"]);
+    assert_eq!(crate::messages::load_in(&maintainer).pop().unwrap().text, "New wish report: let <repo>'s board sort by repo");
 }
 
 #[test]

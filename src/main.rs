@@ -395,14 +395,15 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
                                   without your Submit (kebbie update looks the issues up with gh, and the keeper
                                   rechecks each open one filed on older code against the new commits and closes
                                   the ones they plainly fix)
-  kebbie issue report <id>        show a bug in kebbie you ran into as it would go to kebbie's maintainers (paths under
+  kebbie issue report <id>        show a bug or wish about kebbie as it would go to kebbie's maintainers (paths under
                                   your home as ~, no repo names, remote URLs or tokens) and send it on your y, signed with
                                   this install's key; the board counts each new one in its header and lists them under
                                   Work ([report] text = \"never\" hides the offer); sent once, and the issue keeps the report's id
-  kebbie issue report --all       show every bug waiting to go and send them all on one y, 5 at once and then 5 every
-                                  5 minutes, waiting out a busy endpoint; says which went, which had gone and which failed
+  kebbie issue report --all       show every bug and wish waiting to go and send them all on one y, 5 at once and
+                                  then 5 every 5 minutes, waiting out a busy endpoint; says which went, which had gone
+                                  and which failed
   kebbie issue report --always | --ask
-                                  in your own terminal: let kebbie send each bug you run into without asking, redacted,
+                                  in your own terminal: let kebbie send each bug or wish saved here without asking, redacted,
                                   each send a line under messages (with [report] text = \"always\" in config.toml);
                                   --ask asks again before every one
   kebbie update                   update everything to this machine's channel ([update] channel: release, the

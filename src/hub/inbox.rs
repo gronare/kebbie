@@ -83,7 +83,7 @@ fn pull_into(state: &Path, ledger: &mut Ledger, url: &str, token: &str, now: u64
             if let std::collections::btree_map::Entry::Vacant(slot) = ledger.filed.entry(received.id) {
                 let issue = issues::file_report_in(&dir, received.id, &received.report, now)?;
                 notes.push(format!("reports: filed kebbie issue {issue} from report {}", received.id));
-                announce(state, &issues::find(&dir, &issue).map(|filed| filed.title).unwrap_or_default());
+                announce(state, received.report.kind().key(), &issues::find(&dir, &issue).map(|filed| filed.title).unwrap_or_default());
                 slot.insert(issue);
                 save(state, ledger)?;
             }
@@ -117,7 +117,7 @@ fn pull_signals(state: &Path, ledger: &mut Ledger, client: &Client, notes: &mut 
                 }
                 Ok(issues::Filed::New { id, title }) => {
                     notes.push(format!("signals: filed kebbie issue {id} from signal {}", received.id));
-                    announce(state, &title);
+                    announce(state, "bug", &title);
                     ledger.signals.insert(id);
                     save(state, ledger)?;
                 }
@@ -133,8 +133,8 @@ fn pull_signals(state: &Path, ledger: &mut Ledger, client: &Client, notes: &mut 
     }
 }
 
-fn announce(state: &Path, title: &str) {
-    let _ = crate::messages::log_for_user_in(state, &format!("New bug report: {title}"), FILED_KIND);
+fn announce(state: &Path, kind: &str, title: &str) {
+    let _ = crate::messages::log_for_user_in(state, &format!("New {kind} report: {title}"), FILED_KIND);
 }
 
 pub fn tick(state: &Path) -> Result<Vec<String>> {

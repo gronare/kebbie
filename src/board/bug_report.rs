@@ -5,7 +5,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::Frame;
-use crate::report_wire::BugReport;
+use crate::report_wire::{BugReport, ReportKind};
 
 use crate::hub::report::{self, Scrub};
 use crate::issue_recheck::Fixed;
@@ -94,8 +94,13 @@ fn save_shown(file: Option<&Path>, shown: bool) {
     }
 }
 
-pub(super) fn indicator(offers: usize, compact: bool) -> Option<String> {
-    (offers > 0).then(|| if compact { format!("! {offers}") } else { format!("! {} to send", super::widgets::plural(offers, "bug")) })
+fn counted(offers: &[Offer]) -> String {
+    let wishes = offers.iter().filter(|offer| offer.report.kind() == ReportKind::Wish).count();
+    crate::issues::kinds(offers.len() - wishes, wishes)
+}
+
+pub(super) fn indicator(offers: &[Offer], compact: bool) -> Option<String> {
+    (!offers.is_empty()).then(|| if compact { format!("! {}", offers.len()) } else { format!("! {} to send", counted(offers)) })
 }
 
 // The lines, each offer's rows, and the line of the selected offer when the list has the focus, all counted from `first`.
@@ -108,7 +113,7 @@ pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'s
     let mut selected_line = None;
     if !panel.shown {
         let marker = if panel.focused { Span::styled("▌", bold(MAUVE)) } else { Span::raw(" ") };
-        let text = format!("{} to send · {} shows them", super::widgets::plural(app.offers.len(), "bug"), keys::map().label(Act::Options));
+        let text = format!("{} to send · {} shows them", counted(&app.offers), keys::map().label(Act::Options));
         let line = Line::from(vec![marker, Span::styled("! ", style(YELLOW)), Span::styled(text, style(YELLOW))]);
         if panel.focused {
             selected_line = Some(first + 1);
@@ -117,7 +122,7 @@ pub(super) fn offer_lines(app: &App, width: usize, first: usize) -> (Vec<Line<'s
         return (vec![Line::default(), if panel.focused { line.style(Style::new().bg(SURFACE)) } else { line }], rows, selected_line);
     }
     let mut lines = vec![Line::default(), group_line("Send to kebbie's maintainers?", app.offers.len(), YELLOW)];
-    let hint = if panel.focused { "⏎ asks to send · a sends all · n keeps it here · esc hides them" } else { "bugs in kebbie you ran into" };
+    let hint = if panel.focused { "⏎ asks to send · a sends all · n keeps it here · esc hides them" } else { "bugs and wishes about kebbie, saved here" };
     lines.push(Line::from(Span::styled(hint, style(MUTED))));
     for (index, offer) in app.offers.iter().enumerate() {
         let title = wrap(&offer.report.title, width.saturating_sub(12), 1).into_iter().next().unwrap_or_default();
@@ -199,7 +204,7 @@ impl App {
         }
         if shown && key.code == KeyCode::Char('a') && self.sending.is_some() {
             self.subject = Some(super::notices::Subject::plain("report"));
-            return self.show(Notice::new(Tone::Moving, "A batch of bugs is still going to kebbie's maintainers").next("a sends the rest once it has ended; the board says when.").ok());
+            return self.show(Notice::new(Tone::Moving, "A batch of reports is still going to kebbie's maintainers").next("a sends the rest once it has ended; the board says when.").ok());
         }
         if shown && key.code == KeyCode::Char('a') && !self.offers.is_empty() {
             self.mode = Mode::ReportAll { shown: self.offers.clone(), scroll: 0, read: false, nudged: false };
@@ -276,7 +281,7 @@ impl App {
         match key.code {
             KeyCode::Char('y') if read => {
                 let read: Vec<(String, [u8; 32])> = shown.iter().map(|offer| (offer.id.clone(), offer.report.digest())).collect();
-                let count = read.len();
+                let (count, named) = (read.len(), counted(&shown));
                 let (sender, result) = std::sync::mpsc::channel();
                 let send_all = self.reporter.send_all.clone();
                 let going = read.iter().map(|(id, _)| id.clone()).collect();
@@ -287,7 +292,7 @@ impl App {
                 self.offers_changed();
                 let later = if count > report::BURST { format!("; {} go at once, then {} every 5 minutes", report::BURST, report::BURST) } else { String::new() };
                 self.subject = Some(super::notices::Subject::plain("report"));
-                self.show(Notice::new(Tone::Moving, format!("Sending {} to kebbie's maintainers{later}", super::widgets::plural(count, "bug"))).next("Each one sent is a line under messages; the board says when all have gone.").ok());
+                self.show(Notice::new(Tone::Moving, format!("Sending {named} to kebbie's maintainers{later}")).next("Each one sent is a line under messages; the board says when all have gone.").ok());
             }
             KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::ReportAll { shown, scroll: scroll.saturating_add(1), read, nudged: false },
             KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::ReportAll { shown, scroll: scroll.saturating_sub(1), read, nudged: false },
@@ -320,7 +325,7 @@ pub(super) fn draw_report(frame: &mut Frame, id: &str, shown: &BugReport, scroll
     let width = 88u16.min(frame.area().width.saturating_sub(4));
     let rows = preview_rows(shown, usize::from(width.saturating_sub(4)).max(20));
     let ask = Ask {
-        head: &|range| format!("Bug {id} as it would go to kebbie's maintainers{range}:"),
+        head: &|range| format!("{} {id} as it would go to kebbie's maintainers{range}:", if shown.kind() == ReportKind::Wish { "Wish" } else { "Bug" }),
         question: "Send this report to kebbie's maintainers?",
         answers: "  y / n",
         keys: ["y sends it, signed with this install's key · n keeps it here only · esc decides later", "↓ pgdn read on: y counts once you have read to the end · n keeps it here only · esc decides later"],
@@ -334,7 +339,7 @@ pub(super) fn draw_all(frame: &mut Frame, shown: &[Offer], scroll: u16, read: bo
     let wrap_width = usize::from(width.saturating_sub(4)).max(20);
     let reports: Vec<(String, BugReport)> = shown.iter().map(|offer| (offer.id.clone(), offer.report.clone())).collect();
     let rows: Vec<String> = report::all_preview(&reports).lines().flat_map(|line| if line.is_empty() { vec![String::new()] } else { wrap(line, wrap_width, usize::MAX) }).collect();
-    let count = super::widgets::plural(shown.len(), "bug");
+    let count = counted(shown);
     let question = format!("Send all {count} to kebbie's maintainers?");
     let ask = Ask {
         head: &|range| format!("{count} as they would go to kebbie's maintainers{range}:"),
@@ -414,9 +419,8 @@ mod tests {
     fn the_bugs_to_send_fold_into_one_row_that_enter_opens_and_esc_folds_again() {
         let state = crate::sh::test_dir("board-report");
         filed(&state, "a1b2c3", "bug", "push hid git's error");
-        filed(&state, "b2c3d4", "wish", "a dark theme");
         let offers = offers_in(&state, true, &scrub);
-        assert_eq!(offers.iter().map(|offer| offer.id.as_str()).collect::<Vec<_>>(), ["a1b2c3"], "a wish is not offered");
+        assert_eq!(offers.iter().map(|offer| offer.id.as_str()).collect::<Vec<_>>(), ["a1b2c3"]);
         assert!(offers_in(&state, false, &|| panic!("nothing is scrubbed when the offer is off")).is_empty(), "[report] text other than \"ask\" hides it");
 
         let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
@@ -459,6 +463,24 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal) && app.offers.len() == 1 && app.offer_panel.focused, "esc decides later, back in the list");
         press(&mut app, key(KeyCode::Char('i')));
         assert!(matches!(app.mode, Mode::Questions(_)), "i is the questions");
+    }
+
+    #[test]
+    fn a_wish_waits_beside_the_bugs_and_its_window_shows_it_redacted_as_a_wish() {
+        let state = crate::sh::test_dir("board-report-wish");
+        filed(&state, "a1b2c3", "bug", "push hid git's error");
+        filed(&state, "b2c3d4", "wish", "a dark theme for shop");
+        let mut app = test_app(vec![crate::status::tests::task(Some("idle"), None, 0)]);
+        app.offers = offers_in(&state, true, &scrub);
+        assert_eq!(row_of(&mut app, "to send · ⏎"), "   ! 1 bug and 1 wish to send · ⏎ shows them");
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Enter));
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&app.mode, Mode::Report { id, shown, .. } if id == "b2c3d4" && shown.kind == Some(ReportKind::Wish)), "the wish goes as a wish");
+        let shown = screen(&mut app);
+        assert!(shown.contains("Wish b2c3d4 as it would go to kebbie's maintainers") && shown.contains("a dark theme for <repo>") && shown.contains("It failed in ~/work/<repo>."), "{shown}");
+        assert!(!shown.contains("/Users/ada") && !shown.contains("shop"), "{shown}");
     }
 
     #[test]
@@ -617,7 +639,7 @@ mod tests {
         press(&mut app, key(KeyCode::Char('a')));
         assert!(!matches!(app.mode, Mode::ReportAll { .. }), "no second window while the first batch goes");
         assert!(app.sending.as_ref().is_some_and(|(going, _)| going == &["b2c3d4"]), "the batch in flight is kept");
-        assert!(screen(&mut app).contains("A batch of bugs is still going"), "{}", screen(&mut app));
+        assert!(screen(&mut app).contains("A batch of reports is still going"), "{}", screen(&mut app));
     }
 
     #[test]

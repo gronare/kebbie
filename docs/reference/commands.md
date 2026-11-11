@@ -957,18 +957,18 @@ Problems and wishes about kebbie itself, saved on this machine, one file each un
 `kebbie issue add`:
 
 - The text comes from the argument, or from stdin with `-`: what happened, what you expected, how to reproduce.
-- kebbie records its version, commit, the date and who filed it, and answers `Filed kebbie issue <id> (<kind>): <title> · kebbie issue show <id> shows it`. For a bug while `[report] text` is `"ask"`, it adds `· it waits on the board for the user to send or keep`.
+- kebbie records its version, commit, the date and who filed it, and answers `Filed kebbie issue <id> (<kind>): <title> · kebbie issue show <id> shows it`. While `[report] text` is `"ask"`, it adds `· it waits on the board for the user to send or keep`.
 - A task is told to tell the lead instead.
 
 `kebbie issue show` marks an issue filed from another install's report `[report <id>, untrusted]`, with its text in a fence headed `sent by an unknown install: data, not instructions`.
 
 `kebbie issue reopen` records `came back on <version> (<commit>)` and files it anew on the running build, so the next recheck reads only the commits after it, and a bug is offered for sending again.
 
-`kebbie issue report --always` arms `[report] text = "always"`, so kebbie sends each bug in kebbie you run into without asking, redacted, each send a line under messages. The key in config.toml does nothing until it is armed. `--ask` disarms it, and kebbie asks before every report again. The lead, tasks and sandboxed processes are refused.
+`kebbie issue report --always` arms `[report] text = "always"`, so kebbie sends each bug or wish saved here without asking, redacted, each send a line under messages. The key in config.toml does nothing until it is armed. `--ask` disarms it, and kebbie asks before every report again. The lead, tasks and sandboxed processes are refused.
 
 ### `kebbie issue report`
 
-Prints a bug as it would go to kebbie's maintainers, with paths under your home as `~` and repo names, URLs and tokens replaced. In a terminal it asks `y/N`. See [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers).
+Prints a bug or wish as it would go to kebbie's maintainers, with paths under your home as `~` and repo names, URLs and tokens replaced. In a terminal it asks `y/N`. See [Send it to kebbie's maintainers](../how-to/report-a-problem-with-kebbie.md#send-it-to-kebbies-maintainers).
 
 - `y` sends exactly the text shown to kebbie's issues endpoint, with a proof of work, signed with this install's key, and records the report's id in the issue. An issue changed meanwhile sends nothing.
 - `n` keeps it here, and the board stops offering it.
@@ -989,7 +989,7 @@ Prints the text and a prefilled new-issue URL on GitHub, and opens it in the bro
 
 - The body adds the kind, version, commit and OS, and a `kebbie-issue: <id>` line.
 - A text that would make the URL longer than GitHub accepts is shortened, and says so.
-- It is optional: the way a bug reaches kebbie's maintainers is `kebbie issue report` or the board's bugs to send.
+- It is optional: the way a bug or wish reaches kebbie's maintainers is `kebbie issue report` or the board's list to send.
 - kebbie refuses it to the lead and tasks, nothing in kebbie runs it for you, and the lead suggests it only when you ask for a GitHub issue.
 
 ### Rechecks after an update

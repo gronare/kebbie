@@ -282,10 +282,10 @@ pub fn doctor(state: &Path, settings: &crate::config::Report, now: u64) -> Check
     let name = "maintainers".to_string();
     let armed = crate::hub::report::armed(state);
     let text = match settings.text() {
-        crate::config::ReportText::Ask => "each bug you run into in kebbie is shown to you and goes to its maintainers only on your yes ([report] text = \"ask\")",
-        crate::config::ReportText::Always if armed => "each bug you run into in kebbie goes to its maintainers redacted, without asking, each send a line under messages ([report] text = \"always\", armed)",
-        crate::config::ReportText::Always => "[report] text = \"always\" is set but not armed, so each bug you run into is still shown to you and sent only on your yes",
-        crate::config::ReportText::Never => "the bugs you run into in kebbie stay on this machine ([report] text = \"never\")",
+        crate::config::ReportText::Ask => "each bug or wish about kebbie saved here is shown to you and goes to its maintainers only on your yes ([report] text = \"ask\")",
+        crate::config::ReportText::Always if armed => "each bug or wish about kebbie saved here goes to its maintainers redacted, without asking, each send a line under messages ([report] text = \"always\", armed)",
+        crate::config::ReportText::Always => "[report] text = \"always\" is set but not armed, so each bug or wish saved here is still shown to you and sent only on your yes",
+        crate::config::ReportText::Never => "the bugs and wishes about kebbie saved here stay on this machine ([report] text = \"never\")",
     };
     let unarmed = settings.text() == crate::config::ReportText::Always && !armed;
     let arm = || vec![format!("run {} in your own terminal to send them without asking", crate::hub::report::ARM_COMMAND)];
@@ -479,7 +479,7 @@ mod tests {
         assert!(crate::messages::load_in(&state).is_empty());
         let off = crate::config::Report { signals: Some(false), ..Default::default() };
         let check = doctor(&state, &off, NOW);
-        assert!(check.level == Level::Ok && check.fact.starts_with("error signals and the install signal off ([report] signals = false); each bug you run into in kebbie is shown to you and goes to its maintainers only on your yes"), "{}", check.fact);
+        assert!(check.level == Level::Ok && check.fact.starts_with("error signals and the install signal off ([report] signals = false); each bug or wish about kebbie saved here is shown to you and goes to its maintainers only on your yes"), "{}", check.fact);
     }
 
     #[test]

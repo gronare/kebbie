@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 // Every domain string, length prefix and field order below is checked byte for byte by the reports endpoint's verifier; tests/fixtures/report-wire pins them.
 pub const REPORT_DOMAIN: &[u8] = b"kebbie-report-v1";
+pub const KIND_REPORT_DOMAIN: &[u8] = b"kebbie-report-v2";
 pub const REPORT_SIGN_DOMAIN: &[u8] = b"kebbie-report-sign-v1";
 pub const REPORT_POW_DOMAIN: &[u8] = b"kebbie-report-pow-v1";
 pub const SIGNAL_DOMAIN: &[u8] = b"kebbie-signal-v1";
@@ -72,8 +73,30 @@ fn field(bytes: &mut Vec<u8>, text: &str) {
     bytes.extend(text.as_bytes());
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReportKind {
+    Bug,
+    Wish,
+}
+
+impl ReportKind {
+    pub fn of(kind: &str) -> ReportKind {
+        if kind == "wish" { ReportKind::Wish } else { ReportKind::Bug }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ReportKind::Bug => "bug",
+            ReportKind::Wish => "wish",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BugReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ReportKind>,
     pub title: String,
     pub text: String,
     pub version: String,
@@ -81,8 +104,16 @@ pub struct BugReport {
 }
 
 impl BugReport {
+    // A report without a kind is a bug from a kebbie before kinds, signed over the v1 bytes; with one, the kind leads under its own domain.
     pub fn bytes(&self) -> Vec<u8> {
-        let mut bytes = REPORT_DOMAIN.to_vec();
+        let mut bytes = match self.kind {
+            None => REPORT_DOMAIN.to_vec(),
+            Some(kind) => {
+                let mut bytes = KIND_REPORT_DOMAIN.to_vec();
+                field(&mut bytes, kind.key());
+                bytes
+            }
+        };
         for text in [&self.title, &self.text, &self.version, &self.os] {
             field(&mut bytes, text);
         }
@@ -91,6 +122,10 @@ impl BugReport {
 
     pub fn digest(&self) -> [u8; 32] {
         Sha256::digest(self.bytes()).into()
+    }
+
+    pub fn kind(&self) -> ReportKind {
+        self.kind.unwrap_or(ReportKind::Bug)
     }
 }
 
@@ -373,7 +408,7 @@ mod tests {
     }
 
     fn report() -> BugReport {
-        BugReport { title: "push hid git's error".to_string(), text: "Ran kebbie push; nothing showed.".to_string(), version: "0.26.0 (e58e84a)".to_string(), os: "macos aarch64".to_string() }
+        BugReport { kind: None, title: "push hid git's error".to_string(), text: "Ran kebbie push; nothing showed.".to_string(), version: "0.26.0 (e58e84a)".to_string(), os: "macos aarch64".to_string() }
     }
 
     #[test]
@@ -413,7 +448,12 @@ mod tests {
         assert_eq!(URL_SAFE_NO_PAD.encode(built.signals.bytes()), text("signal_bytes"));
         assert!(verifies(&built.key.0, SIGNAL_SIGN_DOMAIN, &challenge.nonce.0, &built.signals.digest(), &built.signature.0));
         let inbox: ReportInbox = serde_json::from_str(&text("inbox")).unwrap();
-        assert_eq!((inbox.quarantined, inbox.reports[0].id, inbox.reports[0].key, inbox.reports[0].received_at, &inbox.reports[0].report), (2, 1, Bytes32(key.public()), 1_793_000_000, &report.report));
+        assert_eq!((inbox.quarantined, inbox.reports[0].id, inbox.reports[0].key, inbox.reports[0].received_at, &inbox.reports[0].report), (2, 1, Bytes32(key.public()), 1_793_000_000, &BugReport { kind: Some(ReportKind::Bug), ..report.report.clone() }));
+        let wish: ReportUpload = serde_json::from_str(&text("wish_upload")).unwrap();
+        assert_eq!(wish.report.kind, Some(ReportKind::Wish));
+        let built = ReportUpload { signature: Bytes64(key.sign(&challenge.nonce.0, &wish.report)), key: Bytes32(key.public()), counter: solve(&challenge.nonce.0, &wish.report.digest(), challenge.difficulty), report: wish.report.clone(), challenge };
+        assert_eq!(serde_json::to_string(&built).unwrap(), text("wish_upload"));
+        assert_eq!((URL_SAFE_NO_PAD.encode(built.report.bytes()), URL_SAFE_NO_PAD.encode(built.report.digest())), (text("wish_bytes"), text("wish_digest")));
     }
 
     #[test]
@@ -444,6 +484,14 @@ mod tests {
             change(&mut changed);
             assert!(!verifies(&key.public(), REPORT_SIGN_DOMAIN, &nonce, &changed.digest(), &signature));
         }
+        let wish = BugReport { kind: Some(ReportKind::Wish), ..report() };
+        let wished = key.sign(&nonce, &wish);
+        assert!(verifies(&key.public(), REPORT_SIGN_DOMAIN, &nonce, &wish.digest(), &wished));
+        for changed in [BugReport { kind: Some(ReportKind::Bug), ..wish.clone() }, BugReport { kind: None, ..wish.clone() }] {
+            assert!(!verifies(&key.public(), REPORT_SIGN_DOMAIN, &nonce, &changed.digest(), &wished), "the kind is signed: {:?}", changed.kind);
+            assert_ne!(changed.digest(), wish.digest(), "and worked for");
+        }
+        assert!(wish.bytes().starts_with(b"kebbie-report-v2\0\0\0\x04wish") && report().bytes().starts_with(b"kebbie-report-v1\0\0\0\x14push"), "a report without a kind keeps the bytes a kebbie before kinds signed");
         let moved = BugReport { title: "ab".to_string(), text: "c".to_string(), ..report() };
         assert_ne!(moved.bytes(), BugReport { title: "a".to_string(), text: "bc".to_string(), ..report() }.bytes(), "fields are length-prefixed");
     }

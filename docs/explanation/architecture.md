@@ -94,7 +94,7 @@ Some of kebbie's work runs on a clock rather than on a command. The keeper runs 
 | minute | Closes tasks whose commits are on the default branch as done. See [`kebbie done --landed`](../reference/commands.md#kebbie-done---landed). |
 | minute | Starts due [routines](routines.md)' runs as tasks. |
 | minute | Rebases tasks that follow main when it moves. See [`kebbie follow`](../reference/commands.md#kebbie-follow-name-onoff). |
-| minute | With `[report] text = "always"` armed, sends the bugs in kebbie you ran into to kebbie's maintainers. |
+| minute | With `[report] text = "always"` armed, sends the bugs and wishes about kebbie saved here to kebbie's maintainers. |
 
 ## Updates and reports on a slower clock
 

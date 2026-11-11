@@ -21,7 +21,7 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
     let accept: usize = app.tasks.iter().map(super::steps::to_accept).sum();
     let mut spans = vec![Span::styled("kebbie", bold(MAUVE)), Span::raw(if compact { "  " } else { "   " })];
     if compact {
-        let offers = super::bug_report::indicator(app.offers.len(), true);
+        let offers = super::bug_report::indicator(&app.offers, true);
         if let Some(pill_text) = app.update_pill() {
             spans.extend(pill(pill_text.split(' ').next().unwrap_or_default().to_string(), MAUVE, true));
         }
@@ -45,7 +45,7 @@ fn pills(app: &App, compact: bool) -> Vec<Span<'static>> {
         spans.extend(pill(format!("⧗ {ci} CI running"), YELLOW, true));
     }
     spans.extend(pill(format!("? {}", plural(questions, "question")), YELLOW, questions > 0));
-    if let Some(offers) = super::bug_report::indicator(app.offers.len(), false) {
+    if let Some(offers) = super::bug_report::indicator(&app.offers, false) {
         spans.extend(pill(offers, YELLOW, true));
     }
     if !app.stale.is_empty() {

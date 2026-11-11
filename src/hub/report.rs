@@ -2,7 +2,7 @@ use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
-use crate::report_wire::{BugReport, Bytes32, Bytes64, InstallKey, MAX_TEXT_BYTES, MAX_TITLE_CHARS, ReportAccepted, ReportChallenge, ReportUpload, solve};
+use crate::report_wire::{BugReport, Bytes32, Bytes64, InstallKey, MAX_TEXT_BYTES, MAX_TITLE_CHARS, ReportAccepted, ReportChallenge, ReportKind, ReportUpload, solve};
 use serde::{Deserialize, Serialize};
 
 use super::http::{CALL, Client, HubError};
@@ -324,7 +324,7 @@ fn shortened(text: &str, limit: usize) -> String {
 // Exactly what goes out: the user reads this before saying yes, and the hub gets nothing else.
 pub fn payload(issue: &Issue, scrub: &Scrub) -> BugReport {
     let title: String = redact(&issue.title, scrub).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_TITLE_CHARS).collect();
-    BugReport { title, text: shortened(&redact(&issue.body, scrub), MAX_TEXT_BYTES), version: issue.built(), os: issues::os() }
+    BugReport { kind: Some(ReportKind::of(&issue.kind)), title, text: shortened(&redact(&issue.body, scrub), MAX_TEXT_BYTES), version: issue.built(), os: issues::os() }
 }
 
 pub fn preview(report: &BugReport) -> String {
@@ -420,16 +420,16 @@ fn attempt(state: &Path, issue: &mut Issue, report: BugReport, url: &str, now: u
     issue.sent = Some(issues::today(now));
     if let Err(error) = issues::save(&issues::dir(state), issue) {
         let kept = if ledgered.is_ok() { "kebbie will not send it again" } else { "kebbie could not record that either, so do not send it again" };
-        return Err(Refused::Other(format!("Bug {} went to kebbie's maintainers as report {id}, but saving the issue failed ({error}); {kept}", issue.id)));
+        return Err(Refused::Other(format!("{} {} went to kebbie's maintainers as report {id}, but saving the issue failed ({error}); {kept}", capitalized(&issue.kind), issue.id)));
     }
-    let _ = crate::messages::log_for_user_in(state, &sent_line(&id, &issue.id, &title), SENT_KIND);
+    let _ = crate::messages::log_for_user_in(state, &sent_line(&id, &issue.kind, &issue.id, &title), SENT_KIND);
     Ok(id)
 }
 
 pub const SENT_KIND: &str = "report-sent";
 const LEDGER: &str = "sent";
 
-// Appended the moment the hub takes a report, apart from the issue file, so a failed save of the issue never offers the bug again.
+// Appended the moment the hub takes a report, apart from the issue file, so a failed save of the issue never offers it again.
 fn record_sent(state: &Path, issue: &str, report: &str) -> Result<()> {
     let path = dir(state).join(LEDGER);
     crate::state::append_to(&path).and_then(|mut file| writeln!(file, "{issue} {report}")).map_err(|error| format!("{}: {error}", path.display()))
@@ -448,7 +448,7 @@ fn sent_known(state: &Path, mut all: Vec<Issue>) -> Vec<Issue> {
     all
 }
 
-// A bug that came back is a new report to make, so the send before it stops counting; the lock keeps a send's line from landing mid-rewrite.
+// An issue that came back is a new report to make, so the send before it stops counting; the lock keeps a send's line from landing mid-rewrite.
 pub fn forget_sent(state: &Path, issue: &str) -> Result<Option<String>> {
     let _lock = SendLock::take(state)?;
     let path = dir(state).join(LEDGER);
@@ -468,7 +468,7 @@ pub fn find_sent(state: &Path, id: &str) -> Result<Issue> {
     Ok(sent_known(state, vec![issue]).remove(0))
 }
 
-// Held from a bug's last read to its report id being saved, so two sends on this machine never post the same bug.
+// Held from an issue's last read to its report id being saved, so two sends on this machine never post the same issue.
 struct SendLock(std::fs::File);
 
 impl SendLock {
@@ -501,9 +501,9 @@ enum Skip {
 impl Skip {
     fn refusal(self, id: &str) -> String {
         match self {
-            Skip::Already(report) => format!("Bug {id} went to kebbie's maintainers already, as report {report}"),
-            Skip::Changed => format!("Bug {id} changed since you read it, so nothing was sent; read it again with kebbie issue report {id}"),
-            Skip::NotOurs => format!("{id} is a wish or another install's report; only a bug you ran into goes to kebbie's maintainers"),
+            Skip::Already(report) => format!("kebbie issue {id} went to kebbie's maintainers already, as report {report}"),
+            Skip::Changed => format!("kebbie issue {id} changed since you read it, so nothing was sent; read it again with kebbie issue report {id}"),
+            Skip::NotOurs => format!("{id} is another install's report or error signals; only a bug or wish saved on this machine goes to kebbie's maintainers"),
             Skip::Missing(error) => error,
         }
     }
@@ -511,7 +511,7 @@ impl Skip {
     fn why(self, id: &str) -> String {
         match self {
             Skip::Already(report) => format!("went already, as report {report}"),
-            Skip::NotOurs => "a wish or another install's report; only a bug you ran into goes".to_string(),
+            Skip::NotOurs => "another install's report or error signals; only a bug or wish saved here goes".to_string(),
             Skip::Changed => format!("it changed since you read it; kebbie issue report {id} shows it again"),
             Skip::Missing(error) => error,
         }
@@ -526,7 +526,7 @@ fn sendable(issue: &Issue) -> std::result::Result<(), Skip> {
     }
 }
 
-// The bug as it stands now, if it is still the one the user read and nothing has sent it.
+// The issue as it stands now, if it is still the one the user read and nothing has sent it.
 fn ready(state: &Path, id: &str, read: &[u8; 32], scrub: &Scrub) -> std::result::Result<(Issue, BugReport), Skip> {
     let issue = find_sent(state, id).map_err(Skip::Missing)?;
     sendable(&issue)?;
@@ -537,8 +537,8 @@ fn ready(state: &Path, id: &str, read: &[u8; 32], scrub: &Scrub) -> std::result:
     Ok((issue, report))
 }
 
-pub fn sent_line(report: &str, issue: &str, title: &str) -> String {
-    format!("Sent bug {issue} to kebbie's maintainers as report {report}: \"{title}\", redacted; kebbie issue report {issue} shows the text that went.")
+pub fn sent_line(report: &str, kind: &str, issue: &str, title: &str) -> String {
+    format!("Sent {kind} {issue} to kebbie's maintainers as report {report}: \"{title}\", redacted; kebbie issue report {issue} shows the text that went.")
 }
 
 // The digest is of the report the user read; anything else that would go out instead is refused.
@@ -547,7 +547,7 @@ pub fn send_in(state: &Path, caller: &Caller, id: &str, url: &str, scrub: &Scrub
     let _lock = SendLock::take(state)?;
     let (mut issue, report) = ready(state, id, read, scrub).map_err(|skip| skip.refusal(id))?;
     let sent = deliver(state, &mut issue, report, url, now)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent bug {} to kebbie's maintainers as report {sent}", issue.id)).next("It stays on this machine too; after each update the keeper rechecks it and closes it once a commit plainly fixes it.").ok()
+    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Sent {} {} to kebbie's maintainers as report {sent}", issue.kind, issue.id)).next(format!("It stays on this machine too; after each update the keeper rechecks it and closes it once a commit plainly {} it.", if issue.kind == "wish" { "builds" } else { "fixes" })).ok()
 }
 
 // The endpoint takes 5 signed reports per install key in a fixed 5-minute window; a refused try counts too, so a wait spans a whole window.
@@ -568,8 +568,12 @@ pub struct Batch {
     pub failed: Vec<(String, String)>,
 }
 
-fn bugs(count: usize) -> String {
-    if count == 1 { "1 bug".to_string() } else { format!("{count} bugs") }
+fn reports(count: usize) -> String {
+    if count == 1 { "1 report".to_string() } else { format!("{count} reports") }
+}
+
+fn capitalized(kind: &str) -> String {
+    kind.chars().take(1).flat_map(char::to_uppercase).chain(kind.chars().skip(1)).collect()
 }
 
 fn minutes(wait: std::time::Duration) -> String {
@@ -587,10 +591,10 @@ impl Batch {
 
     pub fn notice(&self) -> Result<String> {
         let headline = match (self.sent.len(), self.failed.len()) {
-            (0, 0) => "Sent nothing: every bug had gone to kebbie's maintainers already".to_string(),
-            (sent, 0) => format!("Sent {} to kebbie's maintainers", bugs(sent)),
-            (0, failed) => format!("Sent none of {} to kebbie's maintainers", bugs(failed)),
-            (sent, failed) => format!("Sent {} to kebbie's maintainers; {failed} did not go", bugs(sent)),
+            (0, 0) => "Sent nothing: every one had gone to kebbie's maintainers already".to_string(),
+            (sent, 0) => format!("Sent {} to kebbie's maintainers", reports(sent)),
+            (0, failed) => format!("Sent none of {} to kebbie's maintainers", reports(failed)),
+            (sent, failed) => format!("Sent {} to kebbie's maintainers; {failed} did not go", reports(sent)),
         };
         let tone = if self.failed.is_empty() { crate::notice::Tone::Done } else { crate::notice::Tone::Failed };
         let mut notice = crate::notice::Notice::new(tone, headline);
@@ -630,7 +634,7 @@ pub fn send_all_in(state: &Path, caller: &Caller, read: &[(String, [u8; 32])], u
                 let until = recent[0] + WINDOW;
                 let left = until.saturating_duration_since((pace.clock)());
                 if !left.is_zero() {
-                    (pace.say)(&format!("Sent {}; the endpoint takes {BURST} per 5 minutes, so the next goes in {}…", bugs(batch.sent.len()), minutes(left)));
+                    (pace.say)(&format!("Sent {}; the endpoint takes {BURST} per 5 minutes, so the next goes in {}…", reports(batch.sent.len()), minutes(left)));
                     (pace.wait)(left);
                 }
                 recent.pop_front();
@@ -647,14 +651,14 @@ pub fn send_all_in(state: &Path, caller: &Caller, read: &[(String, [u8; 32])], u
             match attempt(state, &mut issue, report, url, now) {
                 Ok(sent) => {
                     recent.push_back((pace.clock)());
-                    (pace.say)(&format!("Sent bug {} as report {sent}.", issue.id));
+                    (pace.say)(&format!("Sent {} {} as report {sent}.", issue.kind, issue.id));
                     batch.sent.push((issue.id.clone(), sent));
                     break;
                 }
                 Err(Refused::Busy) if waits < WAITS => {
                     drop(lock);
                     waits += 1;
-                    (pace.say)(&format!("The reports endpoint is busy; waiting {} before bug {} goes…", minutes(WINDOW), issue.id));
+                    (pace.say)(&format!("The reports endpoint is busy; waiting {} before {} {} goes…", minutes(WINDOW), issue.kind, issue.id));
                     (pace.wait)(WINDOW);
                     recent.clear();
                 }
@@ -697,14 +701,14 @@ pub fn arm_in(state: &Path, caller: &Caller, on: bool, text: crate::config::Repo
         if file.exists() {
             std::fs::remove_file(&file).map_err(|error| format!("{}: {error}", file.display()))?;
         }
-        return Ok("kebbie now shows you each bug before it goes to its maintainers, and sends it only on your yes.".to_string());
+        return Ok("kebbie now shows you each bug or wish before it goes to its maintainers, and sends it only on your yes.".to_string());
     }
     crate::permit::user_only_as(caller, "Letting kebbie send reports to its maintainers without asking")?;
     crate::state::write(&file, issues::today(now))?;
     Ok(if text == crate::config::ReportText::Always {
-        format!("kebbie now sends each bug you run into to its maintainers without asking, redacted, and each send is a line under messages. {DISARM_COMMAND} stops it.")
+        format!("kebbie now sends each bug or wish you or the lead saves to its maintainers without asking, redacted, and each send is a line under messages. {DISARM_COMMAND} stops it.")
     } else {
-        format!("Armed, but [report] text is \"{}\" in config.toml; with text = \"always\" there, kebbie sends bug reports without asking. {DISARM_COMMAND} disarms it.", text.key())
+        format!("Armed, but [report] text is \"{}\" in config.toml; with text = \"always\" there, kebbie sends bugs and wishes without asking. {DISARM_COMMAND} disarms it.", text.key())
     })
 }
 
@@ -729,7 +733,7 @@ pub fn send_unasked_in(state: &Path, text: crate::config::ReportText, url: &str,
         let Some(mut issue) = find_sent(state, &waited.id).ok().filter(offered) else { continue };
         let report = payload(&issue, &scrub);
         let sent = deliver(state, &mut issue, report, url, now)?;
-        notes.push(format!("reports: sent bug {} to kebbie's maintainers as report {sent}, as [report] text = \"always\" says", issue.id));
+        notes.push(format!("reports: sent {} {} to kebbie's maintainers as report {sent}, as [report] text = \"always\" says", issue.kind, issue.id));
     }
     Ok(notes)
 }
@@ -748,7 +752,7 @@ pub fn decline_in(state: &Path, caller: &Caller, id: &str, now: u64) -> Result<S
     let mut issue = issues::find(&dir, id)?;
     issue.declined = Some(issues::today(now));
     issues::save(&dir, &issue)?;
-    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Kept bug {} on this machine only", issue.id)).next(format!("kebbie issue report {} sends it to kebbie's maintainers later.", issue.id)).ok()
+    crate::notice::Notice::new(crate::notice::Tone::Done, format!("Kept {} {} on this machine only", issue.kind, issue.id)).next(format!("kebbie issue report {} sends it to kebbie's maintainers later.", issue.id)).ok()
 }
 
 fn answered_yes() -> bool {
@@ -821,8 +825,13 @@ fn left_out(issue: &Issue) -> bool {
     issue.is_open() && issue.disposition().left_out()
 }
 
+fn counted(waiting: &[&Issue]) -> String {
+    let wishes = waiting.iter().filter(|issue| issue.kind == "wish").count();
+    issues::kinds(waiting.len() - wishes, wishes)
+}
+
 pub fn all_preview(reports: &[(String, BugReport)]) -> String {
-    reports.iter().map(|(id, report)| format!("── bug {id} ──\n{}", preview(report))).collect::<Vec<_>>().join("\n\n")
+    reports.iter().map(|(id, report)| format!("── {} {id} ──\n{}", report.kind().key(), preview(report))).collect::<Vec<_>>().join("\n\n")
 }
 
 pub fn cli_all() -> Result<String> {
@@ -843,15 +852,15 @@ pub fn cli_all() -> Result<String> {
     }
     let aside = aside.join("\n");
     if waiting.is_empty() {
-        return crate::notice::Notice::new(crate::notice::Tone::Done, "No bug waits to go to kebbie's maintainers").next(if aside.is_empty() { "kebbie issues lists the bugs on this machine.".to_string() } else { aside }).ok();
+        return crate::notice::Notice::new(crate::notice::Tone::Done, "Nothing waits to go to kebbie's maintainers").next(if aside.is_empty() { "kebbie issues lists the bugs and wishes on this machine.".to_string() } else { aside }).ok();
     }
     let scrub = Scrub::current();
     let reports: Vec<(String, BugReport)> = waiting.iter().map(|issue| (issue.id.clone(), payload(issue, &scrub))).collect();
     let aside = if aside.is_empty() { String::new() } else { format!("\n\n{aside}") };
     let question = Question {
         shown: format!("{}{aside}", all_preview(&reports)),
-        elsewhere: format!("These are the {} as they would go to kebbie's maintainers at {}. Run kebbie issue report --all in your own terminal to answer y or n.", bugs(reports.len()), settings.url()),
-        goes: format!("These {} go to kebbie's maintainers at {}, each signed with this install's key; {BURST} go at once, then {BURST} every 5 minutes.", bugs(reports.len()), settings.url()),
+        elsewhere: format!("These are the {} as they would go to kebbie's maintainers at {}. Run kebbie issue report --all in your own terminal to answer y or n.", counted(&waiting), settings.url()),
+        goes: format!("These {} go to kebbie's maintainers at {}, each signed with this install's key; {BURST} go at once, then {BURST} every 5 minutes.", counted(&waiting), settings.url()),
         ask: format!("Send all {}?", reports.len()),
     };
     match put(question) {
@@ -981,14 +990,16 @@ mod tests {
     #[test]
     fn the_payload_is_the_redacted_issue_with_its_version_and_os_and_nothing_else() {
         let report = payload(&bug("push in shop hid an error", "Saw it in /Users/ada/shop."), &scrub());
-        assert_eq!(report, BugReport { title: "push in <repo> hid an error".to_string(), text: "Saw it in ~/<repo>.".to_string(), version: "0.26.0 (e58e84a)".to_string(), os: issues::os() });
+        assert_eq!(report, BugReport { kind: Some(ReportKind::Bug), title: "push in <repo> hid an error".to_string(), text: "Saw it in ~/<repo>.".to_string(), version: "0.26.0 (e58e84a)".to_string(), os: issues::os() });
         assert_eq!(preview(&report), format!("push in <repo> hid an error\nkebbie 0.26.0 (e58e84a) · {}\n\nSaw it in ~/<repo>.", issues::os()));
         let long = payload(&bug(&"t".repeat(300), &"å".repeat(MAX_TEXT_BYTES)), &scrub());
         assert!(long.check().is_ok() && long.text.ends_with("(shortened)") && long.title.chars().count() == MAX_TITLE_CHARS, "{} {}", long.text.len(), long.title.len());
+        let wish = payload(&Issue { kind: "wish".to_string(), ..bug("sort shop's tasks by repo", "In /Users/ada/shop, token ghp_abcdefghijklmnop1234.") }, &scrub());
+        assert_eq!((wish.kind, wish.title.as_str(), wish.text.as_str()), (Some(ReportKind::Wish), "sort <repo>'s tasks by repo", "In ~/<repo>, token <token>."), "a wish is redacted as a bug is");
     }
 
     #[test]
-    fn only_an_open_bug_kebbie_filed_here_and_not_yet_decided_is_offered() {
+    fn only_an_open_bug_or_wish_kebbie_filed_here_and_not_yet_decided_is_offered() {
         let state = crate::sh::test_dir("report-offers");
         let dir = issues::dir(&state);
         let wish = Issue { id: "bbbbbb".to_string(), kind: "wish".to_string(), ..bug("a wish", "") };
@@ -1001,7 +1012,7 @@ mod tests {
         for issue in [bug("offered", ""), wish, sent, declined, incoming, closed, on_github, opened_for_github] {
             issues::save(&dir, &issue).unwrap();
         }
-        assert_eq!(offers(&state, true).iter().map(|issue| issue.title.as_str()).collect::<Vec<_>>(), ["offered"]);
+        assert_eq!(offers(&state, true).iter().map(|issue| issue.title.as_str()).collect::<Vec<_>>(), ["offered", "a wish"]);
         assert!(offers(&state, false).is_empty(), "[report] enabled = false offers nothing");
     }
 
@@ -1097,7 +1108,7 @@ mod tests {
         let sent_at = sent_at.borrow();
         assert!(sent_at.windows(BURST + 1).all(|run| run[BURST] - run[0] >= WINDOW), "never more than {BURST} in a window: {sent_at:?}");
         assert!(ids.iter().all(|id| issues::find(&dir, id).unwrap().report.is_some()));
-        assert!(batch.sent.len() == 8 && Batch { sent: vec![("b00000".to_string(), "1".to_string())], ..Batch::default() }.notice().unwrap().contains("Sent 1 bug to kebbie's maintainers"));
+        assert!(batch.sent.len() == 8 && Batch { sent: vec![("b00000".to_string(), "1".to_string())], ..Batch::default() }.notice().unwrap().contains("Sent 1 report to kebbie's maintainers"));
 
         let again = send_all_in(&state, &Caller::User, &read, &url, &scrub(), &pace, NOW).unwrap();
         assert!(again.sent.is_empty() && again.failed.is_empty() && again.already.len() == 9, "{again:?}");
@@ -1147,19 +1158,19 @@ mod tests {
     }
 
     #[test]
-    fn kebbie_issue_report_says_why_a_bug_cannot_go_instead_of_asking() {
+    fn kebbie_issue_report_says_why_an_issue_cannot_go_instead_of_asking() {
         let state = crate::sh::test_dir("report-cli-unsendable");
         let dir = issues::dir(&state);
-        let wish = Issue { id: "bbbbbb".to_string(), kind: "wish".to_string(), ..bug("a wish", "") };
+        let signals = Issue { id: "bbbbbb".to_string(), source: Some("error signals".to_string()), ..bug("board.render: panic", "") };
         let incoming = Issue { id: "eeeeee".to_string(), source: Some("report 9".to_string()), ..bug("from a report", "") };
-        for issue in [bug("t", "it broke"), wish, incoming] {
+        for issue in [bug("t", "it broke"), signals, incoming] {
             issues::save(&dir, &issue).unwrap();
         }
         record_sent(&state, "a1b2c3", "5").unwrap();
         let never = |_: Question| -> Answer { panic!("asked about a bug that cannot go") };
         for id in ["bbbbbb", "eeeeee"] {
             let refused = report_in(&state, &Caller::User, id, "http://127.0.0.1:9", &scrub(), &never, NOW).unwrap_err();
-            assert!(refused.contains("only a bug you ran into goes"), "{refused}");
+            assert!(refused.contains("only a bug or wish saved on this machine goes"), "{refused}");
         }
         let shown = report_in(&state, &Caller::User, "a1b2c3", "http://127.0.0.1:9", &scrub(), &never, NOW).unwrap();
         assert!(shown.starts_with("t\nkebbie 0.26.0") && shown.ends_with("went to kebbie's maintainers already, as report 5."), "{shown}");
@@ -1230,7 +1241,7 @@ mod tests {
         assert_eq!(waited.get(), WAITS);
         assert!(batch.sent.is_empty() && batch.failed.len() == 2 && batch.failed[0].1.contains("stayed busy after 3 waits") && batch.failed[1].1.contains("not tried"), "{batch:?}");
         let told = batch.notice().unwrap_err();
-        assert!(told.contains("Sent none of 2 bugs") && told.contains("kebbie issue report --all sends the ones left"), "{told}");
+        assert!(told.contains("Sent none of 2 reports") && told.contains("kebbie issue report --all sends the ones left"), "{told}");
         assert!(issues::find(&dir, "d00000").unwrap().report.is_none());
     }
 
