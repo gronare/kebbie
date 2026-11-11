@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use kebbie_hub_api::{DeviceListView, HubInfo, Inbox, ResultStored, ResultUpload};
-use kebbie_hub_protocol::{AccountKey, Answer, AppliedCommands, CommandResult, DeviceList, Dropped, Envelope, Header, Id, Kind, ListedDevice, Machine, Outcome, Payload, PushApproval, Reason, Refusal, Role, TrustedDevice, authorize, seal};
+use kebbie_hub_protocol::{AccountKey, Answer, AppliedCommands, CommandResult, DeviceList, Dropped, Envelope, Header, Id, Kind, ListedDevice, Machine, Outcome, Payload, PromptAnswer, PushApproval, Reason, Refusal, Role, TrustedDevice, authorize, seal};
 use serde::{Deserialize, Serialize};
 
 use super::http::{CALL, Client, HubError, LONG_POLL};
@@ -17,7 +17,7 @@ pub const WAIT: u64 = 25;
 const LEDGER: &str = "applied.json";
 const BRIDGE: &str = "commands.json";
 const LOCK: &str = "commands.lock";
-const ACCEPTS: [Kind; 2] = [Kind::Answer, Kind::Push];
+pub const ACCEPTS: [Kind; 3] = [Kind::Answer, Kind::Push, Kind::PromptAnswer];
 const IDLE: u64 = 60;
 const MAX_BACKOFF: u64 = 300;
 pub const STOPPED: &str = "kebbie stopped while applying it; check the board";
@@ -55,6 +55,7 @@ pub type Done = (Outcome, String);
 pub struct Hands<'a> {
     pub answer: &'a dyn Fn(&Caller, &Answer) -> Done,
     pub push: &'a dyn Fn(&Caller, &PushApproval) -> Done,
+    pub prompt: &'a dyn Fn(&Caller, &PromptAnswer) -> Done,
     pub announce: &'a dyn Fn(&str),
     pub relay: &'a dyn Fn(),
 }
@@ -175,7 +176,8 @@ pub fn handle(dir: &Path, identity: &Identity, devices: &[TrustedDevice], envelo
             let done = match &accepted.payload {
                 Payload::Answer(answer) => (hands.answer)(&caller, answer),
                 Payload::Push(push) => (hands.push)(&caller, push),
-                _ => (Outcome::Refused { reason: Reason::NotAllowed }, "This machine takes answers and pushes only".to_string()),
+                Payload::PromptAnswer(prompt) => (hands.prompt)(&caller, prompt),
+                _ => (Outcome::Refused { reason: Reason::NotAllowed }, "This machine takes answers, pushes and prompt answers only".to_string()),
             };
             Handled::Applied(result(&header.id, done))
         }
@@ -306,6 +308,16 @@ pub fn answered(caller: &Caller, answer: &Answer) -> Done {
     }
 }
 
+pub fn chose(outcome: std::result::Result<String, crate::menu::Unchosen>) -> Done {
+    use crate::menu::Unchosen;
+    match outcome {
+        Ok(text) => (Outcome::Done, plain(&text)),
+        Err(Unchosen::Gone(text)) => (Outcome::Refused { reason: Reason::AlreadySettled }, plain(&text)),
+        Err(Unchosen::NotAllowed(text)) => (Outcome::Refused { reason: Reason::NotAllowed }, plain(&text)),
+        Err(Unchosen::Failed(text)) => (Outcome::Failed, plain(&text)),
+    }
+}
+
 pub fn pushed(outcome: crate::tasks::DevicePush) -> Done {
     use crate::tasks::DevicePush;
     match outcome {
@@ -351,7 +363,8 @@ fn serve(state: &Path, dir: &Path) {
         }
     };
     let told = |line: &str| announce(state, line);
-    let hands = Hands { answer: &answered, push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address)), announce: &told, relay: &relay };
+    let prompt = |caller: &Caller, answer: &PromptAnswer| chose(crate::menu::choose_as(caller, &answer.address, &answer.key, &answer.prompt));
+    let hands = Hands { answer: &answered, push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address)), prompt: &prompt, announce: &told, relay: &relay };
     let mut failures = 0;
     let mut checked: Option<(bool, u64)> = None;
     while !crate::keeper::stopping() {
@@ -410,13 +423,14 @@ mod tests {
     struct Seen {
         answers: RefCell<Vec<(Caller, Answer)>>,
         pushes: RefCell<Vec<(Caller, PushApproval)>>,
+        prompts: RefCell<Vec<(Caller, PromptAnswer)>>,
         told: RefCell<Vec<String>>,
         relays: Cell<u32>,
     }
 
     impl Seen {
         fn new() -> Seen {
-            Seen { answers: RefCell::new(Vec::new()), pushes: RefCell::new(Vec::new()), told: RefCell::new(Vec::new()), relays: Cell::new(0) }
+            Seen { answers: RefCell::new(Vec::new()), pushes: RefCell::new(Vec::new()), prompts: RefCell::new(Vec::new()), told: RefCell::new(Vec::new()), relays: Cell::new(0) }
         }
     }
 
@@ -429,9 +443,13 @@ mod tests {
             seen.pushes.borrow_mut().push((caller.clone(), push.clone()));
             (Outcome::Done, "Pushed 9f3c2a1 to main".to_string())
         };
+        let prompt = |caller: &Caller, prompt: &PromptAnswer| {
+            seen.prompts.borrow_mut().push((caller.clone(), prompt.clone()));
+            (Outcome::Done, "Chose it".to_string())
+        };
         let announce = |line: &str| seen.told.borrow_mut().push(line.to_string());
         let relay = || seen.relays.set(seen.relays.get() + 1);
-        run(&Hands { answer: &answer, push: &push, announce: &announce, relay: &relay })
+        run(&Hands { answer: &answer, push: &push, prompt: &prompt, announce: &announce, relay: &relay })
     }
 
     fn answer() -> Payload {
@@ -546,8 +564,8 @@ mod tests {
                 seen.answers.borrow_mut().push((Caller::User, Answer { address: String::new(), question: String::new(), choice: None, comment: String::new() }));
                 panic!("kebbie stopped here")
             };
-            let (push, announce, relay) = (|_: &Caller, _: &PushApproval| unreachable!(), |_: &str| {}, || {});
-            round(&phone.dir, 0, &Hands { answer: &answer, push: &push, announce: &announce, relay: &relay }, &now)
+            let (push, prompt, announce, relay) = (|_: &Caller, _: &PushApproval| unreachable!(), |_: &Caller, _: &PromptAnswer| unreachable!(), |_: &str| {}, || {});
+            round(&phone.dir, 0, &Hands { answer: &answer, push: &push, prompt: &prompt, announce: &announce, relay: &relay }, &now)
         }));
         assert!(crashed.is_err());
         assert_eq!(seen.answers.borrow().len(), 1, "applied once, then cut off before it was recorded");
@@ -602,6 +620,39 @@ mod tests {
         assert_eq!(changes(&first, &second), ["'iPhone Duo' can no longer answer and push here"]);
         assert_eq!(changes(&second, &second.with(listed.clone())), ["'iPhone Duo' can now answer and push here"]);
         assert_eq!(changes(&first, &first.without(&listed.device)), ["'iPhone Duo' can no longer answer and push here"]);
+    }
+
+    fn prompt_answer(key: &str) -> Payload {
+        Payload::PromptAnswer(PromptAnswer { address: "hub@kebbie".to_string(), prompt: "3f2a9c1d".to_string(), key: key.to_string() })
+    }
+
+    #[test]
+    fn a_listed_phones_prompt_answer_is_applied_as_the_user_from_that_phone_and_refused_once_ten_minutes_passed() {
+        let phone = Phone::connected();
+        let seen = Seen::new();
+        phone.round(&seen);
+        let sent = phone.send(&prompt_answer("y"));
+        assert_eq!(sent.header.exp - sent.header.at, 600, "a screen prompt is momentary");
+        phone.round(&seen);
+        let device = phone.phone.device.clone().unwrap();
+        assert_eq!(seen.prompts.borrow().as_slice(), [(Caller::Hub { device: device.to_string(), name: "browser".to_string() }, PromptAnswer { address: "hub@kebbie".to_string(), prompt: "3f2a9c1d".to_string(), key: "y".to_string() })]);
+        assert_eq!(phone.result(&sent).text, "Chose it");
+        assert_eq!(seen.relays.get(), 1, "the board goes out again at once");
+
+        let late = phone.send(&prompt_answer("esc"));
+        with_hands(&seen, |hands| round(&phone.dir, 0, hands, &|| now() + 601)).unwrap();
+        assert_eq!(phone.result(&late).outcome, Outcome::Refused { reason: Reason::Expired });
+        assert_eq!(seen.prompts.borrow().len(), 1, "nothing chosen after ten minutes");
+        assert!(ACCEPTS.contains(&Kind::PromptAnswer));
+    }
+
+    #[test]
+    fn a_choice_the_screen_no_longer_offers_is_settled_and_a_text_option_or_unknown_key_not_allowed() {
+        use crate::menu::Unchosen;
+        assert_eq!(chose(Ok("Chose \"1. Yes\" in hub@kebbie's prompt; the menu is gone.".to_string())), (Outcome::Done, "Chose \"1. Yes\" in hub@kebbie's prompt; the menu is gone.".to_string()));
+        assert_eq!(chose(Err(Unchosen::Gone("The prompt 3f2a9c1d is not on the task's screen any more".to_string()))).0, Outcome::Refused { reason: Reason::AlreadySettled });
+        assert_eq!(chose(Err(Unchosen::NotAllowed("\"3. Type something.\" takes the user's own words".to_string()))).0, Outcome::Refused { reason: Reason::NotAllowed });
+        assert_eq!(chose(Err(Unchosen::Failed("could not confirm the menu went away".to_string()))).0, Outcome::Failed);
     }
 
     #[test]

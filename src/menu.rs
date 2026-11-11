@@ -248,9 +248,24 @@ fn current(pane: &Pane, sent: &mut Sent) -> Result<Option<Menu>> {
     Ok(parse_for(&(sent.read)(pane.pane)?, pane.agent))
 }
 
-pub fn choose_with(caller: &Caller, state: &Path, panes: &[Pane], choice: &str, id: &str, sent: &mut Sent) -> Result<String> {
-    if !matches!(caller, Caller::User | Caller::Lead) {
-        return Err(format!("answering an agent's prompt in a task is the user's or the lead's on the user's word; {} cannot", crate::permit::describe(caller)));
+#[derive(Debug, PartialEq)]
+pub enum Unchosen {
+    NotAllowed(String),
+    Gone(String),
+    Failed(String),
+}
+
+impl From<Unchosen> for String {
+    fn from(unchosen: Unchosen) -> String {
+        match unchosen {
+            Unchosen::NotAllowed(text) | Unchosen::Gone(text) | Unchosen::Failed(text) => text,
+        }
+    }
+}
+
+pub fn choose_with(caller: &Caller, state: &Path, panes: &[Pane], choice: &str, id: &str, sent: &mut Sent) -> std::result::Result<String, Unchosen> {
+    if !matches!(caller, Caller::User | Caller::Lead | Caller::Hub { .. }) {
+        return Err(Unchosen::NotAllowed(format!("answering an agent's prompt in a task is the user's or the lead's on the user's word; {} cannot", crate::permit::describe(caller))));
     }
     let mut unread = Vec::new();
     let mut found = None;
@@ -266,33 +281,34 @@ pub fn choose_with(caller: &Caller, state: &Path, panes: &[Pane], choice: &str, 
     }
     let Some((pane, menu)) = found else {
         if !unread.is_empty() {
-            return Err(format!("The prompt {id} was not found: kebbie {}; try again", unread.join("; ")));
+            return Err(Unchosen::Failed(format!("The prompt {id} was not found: kebbie {}; try again", unread.join("; "))));
         }
-        return Err(format!("The prompt {id} is not on the task's screen any more: the prompt changed or is gone; read it again (kebbie tells the lead about a new one)"));
+        return Err(Unchosen::Gone(format!("The prompt {id} is not on the task's screen any more: the prompt changed or is gone; read it again (kebbie tells the lead about a new one)")));
     };
     let keyed = menu.options.iter().position(|label| key_of(label, pane.agent) == Some(choice)).map(|at| at + 1);
     let choice: usize = choice.parse().ok().or(keyed).filter(|choice| (1..=menu.options.len()).contains(choice))
-        .ok_or_else(|| format!("kebbie choose takes the option's number, 1 to {}, or the key it shows in brackets", menu.options.len()))?;
+        .ok_or_else(|| Unchosen::NotAllowed(format!("kebbie choose takes the option's number, 1 to {}, or the key it shows in brackets", menu.options.len())))?;
     let label = &menu.options[choice - 1];
     if takes_text(label) {
-        return Err(format!("\"{choice}. {label}\" takes the user's own words, which kebbie never types; it is answered in {}'s Space", pane.address));
+        return Err(Unchosen::NotAllowed(format!("\"{choice}. {label}\" takes the user's own words, which kebbie never types; it is answered in {}'s Space", pane.address)));
     }
+    let failed = Unchosen::Failed;
     let chose = format!("{choice}. {label}");
     let pressed = match keys(&menu, choice) {
         Keys::Digit(digit) => {
-            (sent.send)(pane.pane, &[digit.as_str()])?;
+            (sent.send)(pane.pane, &[digit.as_str()]).map_err(failed)?;
             digit
         }
         Keys::Arrows(arrows) => {
             if !arrows.is_empty() {
-                (sent.send)(pane.pane, &arrows.iter().map(String::as_str).collect::<Vec<_>>())?;
+                (sent.send)(pane.pane, &arrows.iter().map(String::as_str).collect::<Vec<_>>()).map_err(failed)?;
                 (sent.pause)();
-                let moved = current(pane, sent)?;
+                let moved = current(pane, sent).map_err(failed)?;
                 if !moved.is_some_and(|moved| fingerprint(pane.address, &moved) == id && moved.focused == choice - 1) {
-                    return Err(format!("Sent {} to move to \"{chose}\" in {}, but the focus moved elsewhere or the menu changed; read it again", arrows.join(" "), pane.address));
+                    return Err(failed(format!("Sent {} to move to \"{chose}\" in {}, but the focus moved elsewhere or the menu changed; read it again", arrows.join(" "), pane.address)));
                 }
             }
-            (sent.send)(pane.pane, &["enter"])?;
+            (sent.send)(pane.pane, &["enter"]).map_err(failed)?;
             [arrows, vec!["enter".to_string()]].concat().join(" ")
         }
     };
@@ -304,7 +320,7 @@ pub fn choose_with(caller: &Caller, state: &Path, panes: &[Pane], choice: &str, 
             return Ok(format!("Chose \"{chose}\" in {}'s prompt; the menu is gone.", pane.address));
         }
     }
-    Err(format!("Sent {pressed} for \"{chose}\" in {}, but could not confirm the menu went away; see its Space", pane.address))
+    Err(failed(format!("Sent {pressed} for \"{chose}\" in {}, but could not confirm the menu went away; see its Space", pane.address)))
 }
 
 pub fn choose(task: Option<&str>, choice: Option<&str>, id: Option<&str>) -> Result<String> {
@@ -313,8 +329,41 @@ pub fn choose(task: Option<&str>, choice: Option<&str>, id: Option<&str>) -> Res
     let sessions = crate::peers::sessions()?;
     let found = crate::peers::resolve(task, "", &sessions)?;
     let panes: Vec<Pane> = found.iter().filter(|session| session.task.is_some()).filter_map(|session| Some(Pane { address: &session.address, pane: session.pane.as_deref()?, agent: session.agent.unwrap_or(Agent::Claude) })).collect();
+    choose_in(&crate::permit::caller(), &panes, choice, id).map_err(String::from)
+}
+
+fn choose_in(caller: &Caller, panes: &[Pane], choice: &str, id: &str) -> std::result::Result<String, Unchosen> {
+    let state = crate::lead::state_dir().map_err(Unchosen::Failed)?;
     let mut sent = Sent { read: &mut crate::herdr::read_agent, send: &mut crate::herdr::send_keys, pause: &mut || std::thread::sleep(Duration::from_millis(500)) };
-    choose_with(&crate::permit::caller(), &crate::lead::state_dir()?, &panes, choice, id, &mut sent)
+    choose_with(caller, &state, panes, choice, id, &mut sent)
+}
+
+// The user's choice from a trusted device, made through the same choose as the board's and the lead's; the lead gets a copy naming the device.
+pub fn choose_as(caller: &Caller, address: &str, key: &str, id: &str) -> std::result::Result<String, Unchosen> {
+    let sessions = crate::peers::sessions().map_err(Unchosen::Failed)?;
+    let copy = |text: &str| {
+        let _lock = crate::messages::Lock::take(true)?;
+        crate::messages::copy_to_lead_locked(text, None, &sessions)
+    };
+    choose_for(caller, address, id, &sessions, |panes| choose_in(caller, panes, key, id), copy)
+}
+
+fn choose_for(caller: &Caller, address: &str, id: &str, sessions: &[crate::peers::Session], choose: impl FnOnce(&[Pane]) -> std::result::Result<String, Unchosen>, copy: impl FnOnce(&str) -> Result<()>) -> std::result::Result<String, Unchosen> {
+    let panes: Vec<Pane> = sessions.iter().filter(|session| session.address == address && session.task.is_some()).filter_map(|session| Some(Pane { address: &session.address, pane: session.pane.as_deref()?, agent: session.agent.unwrap_or(Agent::Claude) })).collect();
+    if panes.is_empty() {
+        return Err(Unchosen::Gone(format!("{address} has no running session now, so its prompt is gone")));
+    }
+    let chose = choose(&panes)?;
+    if let Caller::Hub { name, .. } = caller
+        && let Err(error) = copy(&hub_copy(address, id, name, &chose))
+    {
+        eprintln!("Could not copy the choice to the lead: {error}");
+    }
+    Ok(chose)
+}
+
+fn hub_copy(address: &str, id: &str, device: &str, chose: &str) -> String {
+    format!("The user answered {address}'s prompt {id} from {device}, so it needs nothing from you: {chose}")
 }
 
 #[cfg(test)]
@@ -427,14 +476,14 @@ mod tests {
             let mut read = |_: &str| { if let Some(next) = screens.next() { last = next; } Ok(last.clone()) };
             let mut send = |_: &str, keys: &[&str]| { sent.push(keys.join(" ")); Ok(()) };
             let panes = [Pane { address: "hub@kebbie", pane: "w1C:p1", agent: Agent::Codex }];
-            let result = choose_with(&Caller::Lead, &state, &panes, choice, &id, &mut Sent { read: &mut read, send: &mut send, pause: &mut || {} });
+            let result = choose_with(&Caller::Lead, &state, &panes, choice, &id, &mut Sent { read: &mut read, send: &mut send, pause: &mut || {} }).map_err(String::from);
             assert!(result.is_ok(), "{choice}: {result:?}");
             assert_eq!(sent, [digit], "{choice}: Codex's list takes a digit as its option whatever the focus (tui/src/bottom_pane/list_selection_view.rs)");
         }
         let mut read = |_: &str| Ok(CODEX_APPROVAL.to_string());
         let mut send = |_: &str, _: &[&str]| Ok(());
         let panes = [Pane { address: "hub@kebbie", pane: "w1C:p1", agent: Agent::Codex }];
-        let refused = choose_with(&Caller::Lead, &state, &panes, "q", &id, &mut Sent { read: &mut read, send: &mut send, pause: &mut || {} });
+        let refused = choose_with(&Caller::Lead, &state, &panes, "q", &id, &mut Sent { read: &mut read, send: &mut send, pause: &mut || {} }).map_err(String::from);
         assert!(refused.unwrap_err().contains("1 to 3, or the key it shows in brackets"));
         let _ = fs::remove_dir_all(state);
     }
@@ -534,6 +583,11 @@ mod tests {
     }
 
     fn chosen_in(state: &Path, caller: Caller, screens: &[&str], choice: &str, id: &str) -> (Result<String>, Vec<Vec<String>>) {
+        let (result, sent) = unchosen_in(state, caller, screens, choice, id);
+        (result.map_err(String::from), sent)
+    }
+
+    fn unchosen_in(state: &Path, caller: Caller, screens: &[&str], choice: &str, id: &str) -> (std::result::Result<String, Unchosen>, Vec<Vec<String>>) {
         let mut screens = screens.iter().map(|screen| Some(screen.to_string()));
         let mut last = String::new();
         let mut sent = Vec::new();
@@ -594,12 +648,58 @@ mod tests {
         let mut read = |_: &str| { reads += 1; if reads == 1 { Ok(PERMISSION.to_string()) } else { Err("herdr pane read failed".to_string()) } };
         let mut send = |_: &str, _: &[&str]| Ok(());
         let panes = [Pane { address: "billing@ios", pane: "w2:p1", agent: Agent::Claude }];
-        let result = choose_with(&Caller::Lead, &state, &panes, "1", &id, &mut Sent { read: &mut read, send: &mut send, pause: &mut || {} });
+        let result = choose_with(&Caller::Lead, &state, &panes, "1", &id, &mut Sent { read: &mut read, send: &mut send, pause: &mut || {} }).map_err(String::from);
         assert!(result.unwrap_err().contains("could not confirm"), "a read herdr refused is not a menu gone");
         let mut read = |_: &str| Err("herdr pane read failed".to_string());
         let mut send = |_: &str, _: &[&str]| Ok(());
-        let result = choose_with(&Caller::Lead, &state, &panes, "1", &id, &mut Sent { read: &mut read, send: &mut send, pause: &mut || {} });
+        let result = choose_with(&Caller::Lead, &state, &panes, "1", &id, &mut Sent { read: &mut read, send: &mut send, pause: &mut || {} }).map_err(String::from);
         assert!(result.unwrap_err().contains("could not read its pane w2:p1"), "a pane herdr cannot read is not a changed prompt");
         let _ = fs::remove_dir_all(state);
+    }
+
+    fn phone() -> Caller {
+        Caller::Hub { device: "dev_01".to_string(), name: "iPhone Duo".to_string() }
+    }
+
+    #[test]
+    fn the_user_from_a_trusted_device_chooses_only_a_plain_option_of_the_prompt_on_screen_now() {
+        let state = crate::sh::test_dir("menu-hub");
+        let id = fingerprint("billing@ios", &parse_for(PERMISSION, Agent::Claude).unwrap());
+        let (result, sent) = unchosen_in(&state, phone(), &[PERMISSION, "⏺ Copied"], "3", &id);
+        assert!(result.is_ok() && sent == [vec!["3".to_string()]], "{result:?}");
+        let (result, sent) = unchosen_in(&state, phone(), &[&PERMISSION.replace("logo.png", "icon.png")], "1", &id);
+        assert!(matches!(result, Err(Unchosen::Gone(_))) && sent.is_empty(), "a prompt that changed since the phone saw it is settled: {result:?}");
+        let asked = "Which way?\n❯ 1. Sidekiq\n  2. Solid Queue\n  3. Type something.\n";
+        let asked_id = fingerprint("billing@ios", &parse_for(asked, Agent::Claude).unwrap());
+        let (result, sent) = unchosen_in(&state, phone(), &[asked], "3", &asked_id);
+        assert!(matches!(result, Err(Unchosen::NotAllowed(_))) && sent.is_empty(), "an option that takes text is never typed from a phone: {result:?}");
+        let (result, sent) = unchosen_in(&state, phone(), &[PERMISSION], "y", &id);
+        assert!(matches!(result, Err(Unchosen::NotAllowed(_))) && sent.is_empty(), "a key no option has: {result:?}");
+        let (result, _) = unchosen_in(&state, Caller::Task("billing@ios".to_string()), &[PERMISSION], "1", &id);
+        assert!(matches!(result, Err(Unchosen::NotAllowed(_))));
+        let _ = fs::remove_dir_all(state);
+    }
+
+    fn task_session(address: &str) -> crate::peers::Session {
+        crate::peers::Session { address: address.to_string(), task: Some(address.to_string()), pane: Some(format!("{address}-pane")), status: Some("blocked".to_string()), agent: Some(Agent::Codex), asks: None }
+    }
+
+    #[test]
+    fn a_choice_from_a_trusted_device_goes_to_that_tasks_pane_and_the_lead_gets_a_copy_naming_the_device() {
+        let sessions = [task_session("hub@kebbie"), task_session("billing@ios")];
+        let copies = RefCell::new(Vec::new());
+        let copy = |text: &str| { copies.borrow_mut().push(text.to_string()); Ok(()) };
+        let result = choose_for(&phone(), "hub@kebbie", "3f2a9c1d", &sessions, |panes| {
+            assert_eq!(panes.iter().map(|pane| (pane.address, pane.pane, pane.agent)).collect::<Vec<_>>(), [("hub@kebbie", "hub@kebbie-pane", Agent::Codex)]);
+            Ok("Chose \"1. Yes, proceed (y)\" in hub@kebbie's prompt; the menu is gone.".to_string())
+        }, copy);
+        assert!(result.is_ok());
+        assert_eq!(copies.borrow().as_slice(), ["The user answered hub@kebbie's prompt 3f2a9c1d from iPhone Duo, so it needs nothing from you: Chose \"1. Yes, proceed (y)\" in hub@kebbie's prompt; the menu is gone."]);
+        let refused = choose_for(&phone(), "hub@kebbie", "3f2a9c1d", &sessions, |_| Err(Unchosen::Gone("gone".to_string())), |_: &str| -> Result<()> { panic!("no copy for a choice not made") });
+        assert_eq!(refused, Err(Unchosen::Gone("gone".to_string())));
+        let lead = choose_for(&Caller::Lead, "hub@kebbie", "3f2a9c1d", &sessions, |_| Ok("Chose".to_string()), |_: &str| -> Result<()> { panic!("the lead chose it itself") });
+        assert!(lead.is_ok());
+        let none = choose_for(&phone(), "mail@shop", "3f2a9c1d", &sessions, |_| panic!("no pane to choose in"), |_: &str| Ok(()));
+        assert!(matches!(none, Err(Unchosen::Gone(_))), "{none:?}");
     }
 }

@@ -239,6 +239,7 @@ pub fn build(items: &[status::Item], checkouts: &[status::Checkout], routines: V
         next: Some(next),
         counts: Some(counts),
         later: Some(items.iter().filter_map(later).collect()),
+        accepts: Some(super::commands::ACCEPTS.to_vec()),
     }
 }
 
@@ -454,6 +455,7 @@ pub(crate) mod tests {
         assert_eq!(shown.title.as_deref(), Some("Clarify machine removal"));
         assert_eq!(shown.next_for_you.as_deref(), Some("answer Codex's prompt in its Space or through the lead"));
         assert!(!serde_json::to_string(&board).unwrap().contains("/Users/u"), "no local path leaves the machine");
+        assert_eq!(board.accepts.as_deref(), Some([kebbie_hub_protocol::Kind::Answer, kebbie_hub_protocol::Kind::Push, kebbie_hub_protocol::Kind::PromptAnswer].as_slice()), "the phone offers a prompt's options only to a machine that takes the answer");
         let mut claude = item.clone();
         claude.agent.as_mut().unwrap().kind = crate::agent::Agent::Claude;
         let numbered = crate::menu::parse_for("Bash command\n  cp a b\nDo you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude what to do differently (esc)\n", crate::agent::Agent::Claude).unwrap();
