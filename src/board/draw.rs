@@ -35,7 +35,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     let area = full.inner(Margin { horizontal: 2, vertical: 1 });
     let fold = if app.page == Page::Work { app.fold } else { Fold::Hidden };
     let lead_line = app.lead_line_for(area.width as usize).filter(|_| app.page == Page::Work);
-    let hub_line = app.hub_banner.clone().filter(|_| app.page == Page::Work).map(|plan| format!("{plan} · {} hub", keys::map().label(keys::Act::Hub)));
+    let hub_line = app.hub_banner.clone().filter(|_| app.page == Page::Work).map(|refusal| format!("{refusal} · {} hub", keys::map().label(keys::Act::Hub)));
     let context_line = app.context_line_for(area.width as usize).filter(|_| app.page == Page::Work);
     let banners = [lead_line.map(|line| (line, MAUVE, keys::Act::RestartLead)), context_line.map(|line| (line, PEACH, keys::Act::RestartLead)), hub_line.map(|line| (line, YELLOW, keys::Act::Hub))].into_iter().flatten().collect::<Vec<_>>();
     let [top, _, lead_area, body, messages_area, bottom] = Layout::vertical([

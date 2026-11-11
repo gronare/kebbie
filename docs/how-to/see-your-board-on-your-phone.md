@@ -112,11 +112,11 @@ It shows the hub, the machine's name, the account whose key the machine pinned w
 
 The keeper posts the board when it changes and once a minute while nothing does, so the phone can tell that the machine is awake. A machine not heard from for three minutes shows as asleep. The hub keeps a board a day at most, so the once-a-minute post keeps an awake machine's board fresh, and a machine that has slept longer shows as asleep with when it was last seen.
 
-## When the subscription lapses
+## When the hub has not enabled answering
 
-The kebbie hub is free and runs without plans. A hub its operator runs with plans (`kebbie-hub --plans on`) keeps taking the machine's board while the account's subscription is not active, so the phone keeps showing it.
+A hub can leave answering off for an account. It still takes the machine's board, so the phone keeps showing it.
 
-A hub that refuses the board for a lapsed subscription answers so, and kebbie then says `Your kebbie hub subscription isn't active:` with the link to start it: in a line on the board, in the `H` window, in `kebbie hub status` and in `kebbie doctor`. Everything on the machine keeps working, and the board goes out again with the next post once the subscription is active.
+A hub that refuses the board answers so, and kebbie then says `This hub has not enabled answering for your account:` with the hub's link: in a line on the board, in the `H` window, in `kebbie hub status` and in `kebbie doctor`. Everything on the machine keeps working, and the board goes out again with the next post once the hub enables answering for the account.
 
 ## Scripts: join with a code
 

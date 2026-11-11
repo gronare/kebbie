@@ -5,6 +5,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ## Unreleased
 
 ### What's new
+- When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
 
 ### Fixed
 - A reopened bug that went to kebbie's maintainers before is offered and sent again.

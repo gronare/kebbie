@@ -20,12 +20,12 @@ pub struct Relay {
     pub fingerprint: Option<String>,
     pub error: Option<String>,
     pub error_at: Option<u64>,
-    pub plan_inactive: bool,
+    pub not_enabled: bool,
 }
 
 impl Relay {
-    pub fn inactive_plan(&self) -> Option<&str> {
-        self.error.as_deref().filter(|_| self.plan_inactive)
+    pub fn not_enabled_error(&self) -> Option<&str> {
+        self.error.as_deref().filter(|_| self.not_enabled)
     }
 }
 
@@ -43,13 +43,13 @@ struct Stored {
 
 impl From<Stored> for Relay {
     fn from(stored: Stored) -> Relay {
-        Relay { rev: stored.rev, posted_at: stored.posted_at, fingerprint: stored.fingerprint, error: stored.error, error_at: stored.error_at, plan_inactive: stored.plan_inactive.is_some() }
+        Relay { rev: stored.rev, posted_at: stored.posted_at, fingerprint: stored.fingerprint, error: stored.error, error_at: stored.error_at, not_enabled: stored.plan_inactive.is_some() }
     }
 }
 
 impl From<Relay> for Stored {
     fn from(relay: Relay) -> Stored {
-        let plan_inactive = relay.inactive_plan().map(str::to_string);
+        let plan_inactive = relay.not_enabled_error().map(str::to_string);
         Stored { rev: relay.rev, posted_at: relay.posted_at, fingerprint: relay.fingerprint, error: relay.error, error_at: relay.error_at, plan_inactive }
     }
 }
@@ -88,7 +88,7 @@ pub fn seal_board(identity: &Identity, board: &Board, rev: u64, now: u64) -> Res
 }
 
 fn failed(dir: &Path, relay: &mut Relay, error: &HubError, now: u64) -> String {
-    relay.plan_inactive = matches!(error, HubError::PlanInactive { .. });
+    relay.not_enabled = matches!(error, HubError::NotEnabled { .. });
     relay.error = Some(error.to_string());
     relay.error_at = Some(now);
     let _ = save(dir, relay);
@@ -133,7 +133,7 @@ pub fn relay_at(dir: &Path, board: &Board, now: u64) -> Result<Option<u64>> {
     relay.fingerprint = Some(print);
     relay.error = None;
     relay.error_at = None;
-    relay.plan_inactive = false;
+    relay.not_enabled = false;
     save(dir, &relay)?;
     keep_move(dir, &client);
     Ok(Some(stored.rev))
@@ -144,15 +144,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_relay_file_says_a_lapsed_plan_as_before_and_one_written_before_still_loads() {
-        let plan = "The subscription is not active".to_string();
-        let written = serde_json::json!({ "rev": 7, "posted_at": 10, "fingerprint": "ab", "error": plan, "error_at": 20, "plan_inactive": plan });
+    fn a_relay_file_keeps_a_refusal_where_older_kebbies_read_it_and_one_written_before_still_loads() {
+        let refusal = "This hub has not enabled answering for your account".to_string();
+        let written = serde_json::json!({ "rev": 7, "posted_at": 10, "fingerprint": "ab", "error": refusal, "error_at": 20, "plan_inactive": refusal });
         let relay: Relay = serde_json::from_value(written.clone()).unwrap();
-        assert_eq!(relay.inactive_plan(), Some(plan.as_str()));
-        assert_eq!(serde_json::to_value(&relay).unwrap(), written, "an older kebbie reads the lapsed plan where it wrote it");
+        assert_eq!(relay.not_enabled_error(), Some(refusal.as_str()));
+        assert_eq!(serde_json::to_value(&relay).unwrap(), written, "an older kebbie reads the refusal where it wrote it");
         let posted = serde_json::json!({ "rev": 7, "posted_at": 10, "fingerprint": "ab", "error": null, "error_at": null });
         let relay: Relay = serde_json::from_value(posted.clone()).unwrap();
-        assert_eq!((relay.plan_inactive, relay.inactive_plan()), (false, None));
+        assert_eq!((relay.not_enabled, relay.not_enabled_error()), (false, None));
         assert_eq!(serde_json::to_value(&relay).unwrap(), posted);
     }
 }

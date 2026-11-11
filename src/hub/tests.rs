@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use kebbie_hub::{Config, Hub, serve};
+use kebbie_hub::{CommandGate, Config, Hub, Refusal, serve};
 use kebbie_hub_fakes::browser::Browser;
 use kebbie_hub_protocol::{Board, Id, Kind};
 
@@ -29,10 +29,14 @@ impl TestHub {
     }
 
     pub(crate) fn start_with(configure: impl FnOnce(&mut Config)) -> TestHub {
+        TestHub::start_gated(configure, None)
+    }
+
+    fn start_gated(configure: impl FnOnce(&mut Config), gate: Option<CommandGate>) -> TestHub {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
         let mut config = Config::new(crate::sh::test_dir("hub-data"));
         configure(&mut config);
-        let hub = Hub::open(config).unwrap();
+        let hub = Hub::open_with(config, gate).unwrap();
         let listener = runtime.block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         runtime.spawn(serve(listener, Arc::clone(&hub), std::future::pending()));
@@ -749,11 +753,18 @@ fn the_board_offers_a_bug_with_text_ask_and_with_always_until_it_is_armed() {
 }
 
 pub(crate) fn open_hub(configure: impl FnOnce(&mut Config)) -> TestHub {
-    TestHub::start_with(|config| {
-        config.connect_interval = 0;
-        config.rate = kebbie_hub::RateLimit { burst: 10_000, per_minute: 100_000 };
-        configure(config);
-    })
+    open_gated_hub(configure, None)
+}
+
+fn open_gated_hub(configure: impl FnOnce(&mut Config), gate: Option<CommandGate>) -> TestHub {
+    TestHub::start_gated(
+        |config| {
+            config.connect_interval = 0;
+            config.rate = kebbie_hub::RateLimit { burst: 10_000, per_minute: 100_000 };
+            configure(config);
+        },
+        gate,
+    )
 }
 
 pub(crate) fn member(hub: &TestHub) -> Browser {
@@ -885,24 +896,18 @@ fn an_own_hub_is_tested_before_it_is_saved_once_and_never_through_a_linked_confi
 }
 
 #[test]
-fn a_lapsed_plan_still_posts_the_board_and_status_and_doctor_say_nothing_of_it() {
-    let hub = open_hub(|config| {
-        config.plans = true;
-        config.billing_url = Some("https://billing.example.com/start".to_string());
-    });
+fn a_hub_that_refuses_commands_still_takes_the_board_and_status_and_doctor_say_nothing_of_it() {
+    let hub = open_gated_hub(|_| {}, Some(Box::new(|_, _| Err(Refusal { url: Some("https://hub.example.com/account".to_string()) }))));
     let mut browser = member(&hub);
-    let account = hub.runtime.block_on(browser.account()).unwrap().account;
-    hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Active, None).unwrap();
     let state = connected_state(&hub, &mut browser);
-    hub.hub.store().set_plan(&account, kebbie_hub_api::PlanStatus::Inactive, None).unwrap();
-    let rev = relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap().expect("reading the board is free, so a lapsed plan posts it");
+    let rev = relay::relay(&state, &board_of(&[asking("refunds", "shop")]), now()).unwrap().expect("the gate covers commands only, so the board goes out");
     assert_eq!(hub.boards(&mut browser)[0].0, rev);
     let relayed = relay::load(&state);
-    assert_eq!((relayed.plan_inactive, relayed.error), (false, None));
+    assert_eq!((relayed.not_enabled, relayed.error), (false, None));
     let shown = super::status_text(&state, Some("mac"), now()).unwrap();
-    assert!(shown.contains("board:    rev") && !shown.contains("subscription"), "{shown}");
+    assert!(shown.contains("board:    rev") && !shown.contains("not enabled"), "{shown}");
     let check = super::doctor(&state, Some("mac"), now(), |_| Ok(()));
-    assert!(check.level == crate::doctor::Level::Ok && !check.fact.contains("subscription"), "{}", check.fact);
+    assert!(check.level == crate::doctor::Level::Ok && !check.fact.contains("not enabled"), "{}", check.fact);
 }
 
 type Approve<'a> = Box<dyn FnOnce(&str) + 'a>;

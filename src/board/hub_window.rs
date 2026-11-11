@@ -509,8 +509,8 @@ fn overview(window: &Window, leaving: bool) -> Vec<Line<'static>> {
         lines.push(Line::from(first));
         lines.push(text(format!("  {said}")));
     }
-    if relay.plan_inactive {
-        lines.push(muted("Everything here keeps working; the board goes out again once it is active."));
+    if relay.not_enabled {
+        lines.push(muted("Everything here keeps working; the board goes out again once the hub enables it."));
     }
     lines.extend(window.told.iter().map(muted));
     lines.push(Line::default());
@@ -849,15 +849,15 @@ mod tests {
     #[test]
     fn the_dot_is_red_with_the_reason_when_posts_fail_and_amber_before_the_first() {
         let now = crate::messages::now();
-        let plan = "Your kebbie hub subscription isn't active: https://billing.example.com/start".to_string();
-        let mut app = opened(joined(relay::Relay { posted_at: Some(now - 600), plan_inactive: true, error: Some(plan.clone()), error_at: Some(now - 5), ..Default::default() }));
+        let refusal = "This hub has not enabled answering for your account: https://example.com".to_string();
+        let mut app = opened(joined(relay::Relay { posted_at: Some(now - 600), not_enabled: true, error: Some(refusal.clone()), error_at: Some(now - 5), ..Default::default() }));
         let shown = screen(&mut app, 110, 40);
         assert!(shown.contains("● mac on kebbie.example.com\n") || shown.contains("● mac on kebbie.example.com "), "{shown}");
-        assert!(shown.contains(&format!("  {plan}")) && shown.contains("Everything here keeps working"), "{shown}");
+        assert!(shown.contains(&format!("  {refusal}")) && shown.contains("Everything here keeps working"), "{shown}");
         assert_eq!(colour_of(&mut app, "● mac"), RED);
-        app.hub_banner = Some(plan.clone());
+        app.hub_banner = Some(refusal.clone());
         press(&mut app, key(KeyCode::Esc));
-        assert!(screen(&mut app, 110, 40).contains(&format!("{plan} · H hub")), "the board shows a lapsed plan too");
+        assert!(screen(&mut app, 110, 40).contains(&format!("{refusal} · H hub")), "the board shows the refusal too");
 
         let mut app = opened(joined(relay::Relay { posted_at: Some(now - 600), error: Some("could not reach the hub: connection refused".to_string()), error_at: Some(now - 120), ..Default::default() }));
         assert!(screen(&mut app, 110, 40).contains("  Board not sent: the hub can't be reached (2 min ago)"));

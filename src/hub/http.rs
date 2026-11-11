@@ -13,7 +13,7 @@ pub const LONG_POLL: Duration = Duration::from_secs(35);
 #[derive(Clone, Debug, PartialEq)]
 pub enum HubError {
     Status { status: u16, code: String },
-    PlanInactive { url: Option<String> },
+    NotEnabled { url: Option<String> },
     Transport(String),
     Redirect(String),
 }
@@ -22,7 +22,7 @@ impl HubError {
     pub fn status(&self) -> Option<u16> {
         match self {
             HubError::Status { status, .. } => Some(*status),
-            HubError::PlanInactive { .. } => Some(402),
+            HubError::NotEnabled { .. } => Some(402),
             _ => None,
         }
     }
@@ -37,8 +37,8 @@ impl fmt::Display for HubError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HubError::Status { status, code } => write!(formatter, "the hub answered {status} {code}"),
-            HubError::PlanInactive { url: Some(url) } => write!(formatter, "Your kebbie hub subscription isn't active: {url}"),
-            HubError::PlanInactive { url: None } => formatter.write_str("Your kebbie hub subscription isn't active"),
+            HubError::NotEnabled { url: Some(url) } => write!(formatter, "This hub has not enabled answering for your account: {url}"),
+            HubError::NotEnabled { url: None } => formatter.write_str("This hub has not enabled answering for your account"),
             HubError::Transport(message) => write!(formatter, "could not reach the hub: {message}"),
             HubError::Redirect(message) => write!(formatter, "the hub's redirect was not followed: {message}"),
         }
@@ -118,7 +118,7 @@ impl Client {
             let body = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
             let code = body["error"].as_str().map(str::to_string).unwrap_or_else(|| response.status().canonical_reason().unwrap_or("error").to_string());
             if status == 402 && code == kebbie_hub_api::PLAN_INACTIVE {
-                return Err(HubError::PlanInactive { url: body["url"].as_str().map(str::to_string) });
+                return Err(HubError::NotEnabled { url: body["url"].as_str().map(str::to_string) });
             }
             return Err(HubError::Status { status, code });
         }

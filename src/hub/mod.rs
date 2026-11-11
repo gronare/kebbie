@@ -278,8 +278,8 @@ pub fn board_line(relay: &relay::Relay, pinned: bool, now: u64) -> (Sent, String
         return (Sent::Failed, format!("Board not sent: {UNREAD}; {RECONNECT}"));
     }
     let failed_last = relay.error_at.is_some_and(|failed| relay.posted_at.is_none_or(|posted| failed >= posted));
-    if let Some(plan) = relay.inactive_plan() {
-        return (Sent::Failed, plan.to_string());
+    if let Some(refusal) = relay.not_enabled_error() {
+        return (Sent::Failed, refusal.to_string());
     }
     match (&relay.error, relay.posted_at) {
         (Some(error), _) if failed_last => {
@@ -459,8 +459,8 @@ pub fn doctor(state: &Path, configured: Option<&str>, now: u64, reach: impl FnOn
     if identity.account.is_none() {
         return check(Level::Warn, name, format!("{fact}; {UNREAD}"), vec![format!("{RECONNECT}, and open the link it shows")]);
     }
-    if let Some(plan) = relay.inactive_plan() {
-        return check(Level::Warn, name, format!("{fact}; {plan}"), vec!["everything on this machine keeps working; the board goes out again once the subscription is active".to_string()]);
+    if let Some(refusal) = relay.not_enabled_error() {
+        return check(Level::Warn, name, format!("{fact}; {refusal}"), vec!["everything on this machine keeps working; the board goes out again once the hub enables answering for your account".to_string()]);
     }
     if let Some(error) = &relay.error {
         return check(Level::Warn, name, format!("{fact}; last post failed {}: {error}", ago(relay.error_at, now)), vec!["kebbie hub status; the keeper retries by itself".to_string()]);

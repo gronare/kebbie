@@ -11,7 +11,7 @@ A board you quit in the lead Space starts again the next time you press `prefix+
 | Status line, top | The page tabs, `1 Work  2 Areas  3 Routines  , Settings`, then counts and markers, below. |
 | Lead line, under the status line | Whether the lead still runs an old kebbie, while it counts as stale. |
 | Context line, under it | While the lead's context is 85% full or more: `The lead's context is N% full · L to restart it fresh`. |
-| Hub line, under it | While the hub refuses the board for a lapsed subscription: `Your kebbie hub subscription isn't active: <link> · H hub`. |
+| Hub line, under it | While the hub refuses the board because it has not enabled answering for your account: `This hub has not enabled answering for your account: <link> · H hub`. |
 | Work, left | Tasks from every repo with a worktree pool, grouped, in the order of [`board.groups`](configuration.md). |
 | Backlog, right | Vault notes in progress, under ONGOING, and the items from the configured sources, by priority. |
 | Messages, bottom | What sessions tell each other, newest last. |
@@ -675,7 +675,7 @@ Connected, it looks like this:
 
 - The first line names the machine by its name and the hub without its scheme. While `[machine] name` differs from the name the hub has, it shows the new name with `renaming on the hub…` until the keeper's next post renames it.
 - The dot is green with how long ago the board went out, and amber before the first post.
-- It is red with why the board did not go out and how long ago on the line under it: a lapsed subscription with its link, a hub that can't be reached, or what the hub answered.
+- It is red with why the board did not go out and how long ago on the line under it: a hub that has not enabled answering for your account, with its link, a hub that can't be reached, or what the hub answered.
 - A machine that holds no account key, because it was approved by its typed code or joined with a join code, posts no board. The dot is red, the line under it says no browser can read the board, and in place of where to sign in the window says to connect it from the link, `kebbie hub leave`, then `kebbie hub connect`.
 
 | Key | Action |
