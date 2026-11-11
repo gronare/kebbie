@@ -1815,7 +1815,9 @@ dependencies = [
 name = "kebbie"
 version = "0.37.0"
 dependencies = [
+ "base64 0.23.1",
  "crossterm",
+ "ed25519-dalek",
  "image",
  "kebbie-hub",
  "kebbie-hub-api",

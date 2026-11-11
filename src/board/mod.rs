@@ -64,7 +64,7 @@ use crate::fetch::Fetcher;
 use crate::herdr;
 use crate::keys::{self, Act, Ctx};
 use crate::messages::Message;
-use kebbie_hub_protocol::BugReport;
+use crate::report_wire::BugReport;
 use crate::notice::{Notice, Tone};
 use crate::permit;
 use crate::peers;

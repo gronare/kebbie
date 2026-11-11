@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_api::{Bytes32, Bytes64, ReportChallenge, SignalUpload, SignalsAccepted};
-use kebbie_hub_protocol::{ErrorSignals, MAX_SIGNAL_COUNT, MAX_SIGNAL_ROWS, Name, SignalCount, SignalKind, solve};
+use crate::report_wire::{Bytes32, Bytes64, ErrorSignals, MAX_COMMIT_CHARS, MAX_SIGNAL_COUNT, MAX_SIGNAL_ROWS, Name, ReportChallenge, SignalCount, SignalKind, SignalUpload, SignalsAccepted, solve};
 use serde::{Deserialize, Serialize};
 
 use crate::doctor::{Check, Level};
@@ -141,7 +140,7 @@ fn fold(texts: &[String]) -> Folded {
     let mut folded = Folded::new();
     for line in texts.iter().flat_map(|text| text.lines()) {
         let Ok(counted) = serde_json::from_str::<Counted>(line) else { continue };
-        let commit_ok = counted.commit.as_ref().is_none_or(|commit| commit.as_str().len() <= kebbie_hub_protocol::MAX_COMMIT_CHARS && commit.as_str().chars().all(|character| character.is_ascii_hexdigit()));
+        let commit_ok = counted.commit.as_ref().is_none_or(|commit| commit.as_str().len() <= MAX_COMMIT_CHARS && commit.as_str().chars().all(|character| character.is_ascii_hexdigit()));
         if !commit_ok || counted.count == 0 {
             continue;
         }

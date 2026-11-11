@@ -432,7 +432,7 @@ pub fn start() -> Result<String> {
 
 pub fn stop_in(dir: &Path, timeout: Duration) -> Result<String> {
     let Some(running) = holder(dir) else { return Ok("keeper: not running".to_string()) };
-    let pid = running.pid.ok_or_else(|| crate::signals::internal("keeper.lock", kebbie_hub_protocol::SignalKind::CorruptState, "keeper: one runs, but its lock names no pid"))?;
+    let pid = running.pid.ok_or_else(|| crate::signals::internal("keeper.lock", crate::report_wire::SignalKind::CorruptState, "keeper: one runs, but its lock names no pid"))?;
     // SAFETY: a signal to the pid that holds the keeper's lock, read from that lock.
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
     if wait_for(|| holder(dir).is_none(), timeout) {

@@ -2,8 +2,7 @@ use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_api::{Bytes32, Bytes64, ReportAccepted, ReportChallenge, ReportUpload};
-use kebbie_hub_protocol::{BugReport, InstallKey, MAX_TEXT_BYTES, MAX_TITLE_CHARS, solve};
+use crate::report_wire::{BugReport, Bytes32, Bytes64, InstallKey, MAX_TEXT_BYTES, MAX_TITLE_CHARS, ReportAccepted, ReportChallenge, ReportUpload, solve};
 use serde::{Deserialize, Serialize};
 
 use super::http::{CALL, Client, HubError};
@@ -361,7 +360,7 @@ pub fn install_key(state: &Path) -> Result<InstallKey> {
             let kept: KeyFile = serde_json::from_str(&text).map_err(|error| format!("{}: {error}", file.display()))?;
             let key = InstallKey::from_bytes(kept.secret.0);
             if key.public() != kept.public.0 {
-                return Err(crate::signals::internal("report.install-key", kebbie_hub_protocol::SignalKind::CorruptState, format!("{}: the public key does not match the secret one; move the file away and kebbie makes a new one", file.display())));
+                return Err(crate::signals::internal("report.install-key", crate::report_wire::SignalKind::CorruptState, format!("{}: the public key does not match the secret one; move the file away and kebbie makes a new one", file.display())));
             }
             Ok(key)
         }

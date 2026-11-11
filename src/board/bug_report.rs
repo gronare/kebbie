@@ -5,7 +5,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::Frame;
-use kebbie_hub_protocol::BugReport;
+use crate::report_wire::BugReport;
 
 use crate::hub::report::{self, Scrub};
 use crate::issue_recheck::Fixed;
@@ -525,8 +525,8 @@ mod tests {
     }
 
     #[test]
-    fn y_at_the_end_sends_the_selected_bug_to_the_hub_and_it_leaves_the_list() {
-        let hub = crate::hub::tests::TestHub::start_with(|config| config.report_difficulty = 8);
+    fn y_at_the_end_sends_the_selected_bug_to_the_maintainers_and_it_leaves_the_list() {
+        let hub = crate::report_wire::fake::FakeIssues::start(8);
         let state = crate::sh::test_dir("board-report-send");
         filed(&state, "a1b2c3", "bug", "push hid git's error");
         filed(&state, "b2c3d4", "bug", "the board froze on resize");
@@ -547,7 +547,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::Working { .. }));
         settle(&mut app);
         let sent = issues::find(&issues::dir(&state), "b2c3d4").unwrap();
-        assert!(sent.report.is_some(), "the hub took it: {:?} {}", app.toast.as_ref().map(|toast| toast.notice.headline.clone()), screen(&mut app));
+        assert!(sent.report.is_some(), "the endpoint took it: {:?} {}", app.toast.as_ref().map(|toast| toast.notice.headline.clone()), screen(&mut app));
         app.offers = offers_in(&state, true, &scrub);
         app.offers_changed();
         let shown = screen(&mut app);

@@ -53,6 +53,7 @@ mod recover;
 mod release;
 mod repo;
 mod report;
+mod report_wire;
 mod restart;
 mod review;
 mod rules_check;

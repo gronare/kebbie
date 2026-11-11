@@ -12,6 +12,7 @@ use super::board::tests::asking;
 use super::board::build;
 use super::identity;
 use super::relay::{self, HEARTBEAT};
+use crate::report_wire::fake::FakeIssues;
 use crate::status::tests::task;
 
 pub(crate) const WAIT: Duration = Duration::from_secs(15);
@@ -394,7 +395,7 @@ fn reported_bug(state: &Path) -> String {
 fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key_is_allowed() {
     use crate::hub::{inbox, report};
     use crate::permit::Caller;
-    let hub = TestHub::start_with(|config| config.report_difficulty = 8);
+    let hub = FakeIssues::start(8);
     let user = crate::sh::test_dir("report-user");
     let id = reported_bug(&user);
     let scrub = report::Scrub::new(Some("/Users/ada".to_string()), vec!["shop".to_string()]);
@@ -409,14 +410,14 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
     assert!(again.contains(&format!("already, as report {number}")), "{again}");
 
     let maintainer = crate::sh::test_dir("report-maintainer");
-    let token = hub.hub.mint_admin_token("maintainer", kebbie_hub::store::AdminScope::Reports).unwrap().unwrap();
+    let token = crate::report_wire::fake::TOKEN.to_string();
     let settings = crate::config::Report { inbox_token: Some(token.clone()), ..Default::default() };
     assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "an unknown install's report waits in quarantine");
     let check = inbox::doctor(&maintainer, &settings, now()).unwrap();
     assert!(check.level == crate::doctor::Level::Warn && check.fact.contains("1 reports wait in quarantine"), "{}", check.fact);
 
     let key = report::install_key(&user).unwrap().public();
-    hub.hub.store().set_key_status(&key, kebbie_hub::store::KeyStatus::Allowed, now()).unwrap();
+    hub.allow(&key);
     let notes = inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert_eq!(crate::messages::load_in(&maintainer).iter().map(|line| (line.kind.as_deref(), line.text.as_str())).collect::<Vec<_>>(), [(Some(inbox::FILED_KIND), "New bug report: push in <repo> hid git's error")]);
@@ -429,16 +430,15 @@ fn a_bug_the_user_sends_reaches_the_maintainers_kebbie_as_one_issue_once_its_key
         assert!(!issue.body.contains(private) && !issue.title.contains(private), "{private} reached the maintainer: {issue:?}");
     }
     assert!(report::offers(&maintainer, true).is_empty(), "a report from elsewhere is never offered back");
-    assert!(hub.hub.store().reports(kebbie_hub::store::KeyStatus::Allowed, 0, true, 10).unwrap().is_empty(), "the routine acked it");
+    assert!(hub.unacked_allowed().is_empty(), "the routine acked it");
     assert_eq!(inbox::doctor(&maintainer, &settings, now()).unwrap().level, crate::doctor::Level::Ok);
 
-    let database = rusqlite::Connection::open(hub.hub.config().database()).unwrap();
-    database.execute("UPDATE reports SET acked_at = NULL", []).unwrap();
+    hub.lose_acks();
     assert!(inbox::pull(&maintainer, &hub.url, &token, now()).unwrap().is_empty(), "a report whose ack was lost is acked again, not filed again");
     assert_eq!(crate::issues::load(&crate::issues::dir(&maintainer)).len(), 1);
-    assert!(hub.hub.store().reports(kebbie_hub::store::KeyStatus::Allowed, 0, true, 10).unwrap().is_empty());
+    assert!(hub.unacked_allowed().is_empty());
 
-    database.execute("UPDATE reports SET acked_at = NULL", []).unwrap();
+    hub.lose_acks();
     std::fs::remove_file(maintainer.join("report/inbox.json")).unwrap();
     inbox::pull(&maintainer, &hub.url, &token, now()).unwrap();
     assert_eq!(crate::issues::load(&crate::issues::dir(&maintainer)).len(), 1, "a crash before the ledger was written files the report no second time");
@@ -498,8 +498,8 @@ fn the_reports_routine_runs_every_ten_minutes_and_doctor_says_nothing_without_a_
 }
 
 #[test]
-fn a_hub_that_asks_for_more_work_than_kebbie_does_gets_nothing() {
-    let hub = TestHub::start_with(|config| config.report_difficulty = crate::hub::report::MAX_WORK + 1);
+fn an_endpoint_that_asks_for_more_work_than_kebbie_does_gets_nothing() {
+    let hub = FakeIssues::start(crate::hub::report::MAX_WORK + 1);
     let user = crate::sh::test_dir("report-greedy");
     let id = reported_bug(&user);
     let scrub = crate::hub::report::Scrub::default();
@@ -674,7 +674,7 @@ fn an_account_pinned_while_the_rename_is_on_its_way_is_kept() {
 #[test]
 fn with_text_always_a_bug_goes_out_unasked_redacted_and_each_send_is_a_line_under_messages() {
     use crate::hub::report;
-    let hub = TestHub::start_with(|config| config.report_difficulty = 8);
+    let hub = FakeIssues::start(8);
     let user = crate::sh::test_dir("report-always");
     let id = reported_bug(&user);
     let scrub = || report::Scrub::new(Some("/Users/ada".to_string()), vec!["shop".to_string()]);
@@ -689,7 +689,7 @@ fn with_text_always_a_bug_goes_out_unasked_redacted_and_each_send_is_a_line_unde
     let notes = report::send_unasked_in(&user, always, &hub.url, &scrub, now()).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");
     let number = crate::issues::find(&crate::issues::dir(&user), &id).unwrap().report.expect("the issue keeps the report's id");
-    let stored = hub.hub.store().reports(kebbie_hub::store::KeyStatus::Quarantine, 0, false, 10).unwrap();
+    let stored = hub.quarantined();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].report.title, "push in <repo> hid git's error");
     assert!(!stored[0].report.text.contains("/Users/ada") && !stored[0].report.text.contains("acme"), "{}", stored[0].report.text);
@@ -705,7 +705,7 @@ fn with_text_always_a_bug_goes_out_unasked_redacted_and_each_send_is_a_line_unde
 #[test]
 fn a_bug_the_user_sends_is_a_line_under_messages_too() {
     use crate::hub::report;
-    let hub = TestHub::start_with(|config| config.report_difficulty = 8);
+    let hub = FakeIssues::start(8);
     let user = crate::sh::test_dir("report-line");
     let id = reported_bug(&user);
     let scrub = report::Scrub::default();
@@ -716,9 +716,9 @@ fn a_bug_the_user_sends_is_a_line_under_messages_too() {
 }
 
 #[test]
-fn error_signals_reach_the_hub_as_counts_signed_with_the_install_key() {
-    use kebbie_hub_protocol::{Name, SignalKind};
-    let hub = TestHub::start_with(|config| config.report_difficulty = 8);
+fn error_signals_reach_the_endpoint_as_counts_signed_with_the_install_key() {
+    use crate::report_wire::{Name, SignalKind};
+    let hub = FakeIssues::start(8);
     let user = crate::sh::test_dir("signals-hub");
     for _ in 0..3 {
         crate::signals::record_in(&user, &Name::new("keeper.push").unwrap(), SignalKind::InternalError);
@@ -726,14 +726,14 @@ fn error_signals_reach_the_hub_as_counts_signed_with_the_install_key() {
     let url = hub.url.clone();
     let notes = crate::signals::tick_in(&user, true, now(), &mut |signals| crate::signals::send(&user, &url, signals)).unwrap();
     assert_eq!(notes.len(), 1, "{notes:?}");
-    let rows = hub.hub.store().signal_rows(0).unwrap();
+    let rows = hub.signal_rows();
     assert_eq!(rows.iter().map(|row| (row.component.as_str(), row.kind.as_str(), row.count, row.vetted)).collect::<Vec<_>>(), [("keeper.push", "internal-error", 3, false)]);
     assert_eq!((rows[0].os.as_str(), rows[0].arch.as_str(), rows[0].version.as_str()), (std::env::consts::OS, std::env::consts::ARCH, env!("CARGO_PKG_VERSION")));
     let key = crate::hub::report::install_key(&user).unwrap().public();
-    hub.hub.store().set_key_status(&key, kebbie_hub::store::KeyStatus::Allowed, now()).unwrap();
+    hub.allow(&key);
     crate::signals::record_in(&user, &Name::new("keeper.push").unwrap(), SignalKind::InternalError);
     crate::signals::tick_in(&user, true, now() + crate::signals::DAY, &mut |signals| crate::signals::send(&user, &url, signals)).unwrap();
-    assert!(hub.hub.store().signal_rows(0).unwrap().iter().any(|row| row.vetted && row.count == 1), "the key a report was allowed for counts its signals as vetted");
+    assert!(hub.signal_rows().iter().any(|row| row.vetted && row.count == 1), "the key a report was allowed for counts its signals as vetted");
 }
 
 #[test]

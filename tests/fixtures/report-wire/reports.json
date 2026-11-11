@@ -1,0 +1,23 @@
+{
+  "counter": 15736,
+  "difficulty": 12,
+  "digest": "iUbyAoW1SDlIJg3SVNPs9sF1uhbdS4V_AsYt4CmPcgc",
+  "hash": "AAv_4artbNue953oNXQA9ojcHZ4a4samY_T3CxODOL4",
+  "hash_zero_bits": 12,
+  "install_public": "r8EfOtZzLDqQcSIJXnJaqP1DA4EgTTEqmD_FfHq3W5E",
+  "install_secret": "bG8lcd3sqDTK8vh2kLhdj4oVe20qL9uN41BW7UrE-l8",
+  "nonce": "EKI8Y7jlbhbZg__Z5l1-XrOj3QXDQHPMb2HnM2Q3HJc",
+  "pow_domain": "kebbie-report-pow-v1",
+  "report": {
+    "os": "macos aarch64",
+    "text": "Ran kebbie push in ~/work/app.\nGot: nothing, and no error.\nExpected: git's refusal.",
+    "title": "kebbie push hid git's error",
+    "version": "0.26.0 (e58e84a)"
+  },
+  "report_bytes": "a2ViYmllLXJlcG9ydC12MQAAABtrZWJiaWUgcHVzaCBoaWQgZ2l0J3MgZXJyb3IAAABTUmFuIGtlYmJpZSBwdXNoIGluIH4vd29yay9hcHAuCkdvdDogbm90aGluZywgYW5kIG5vIGVycm9yLgpFeHBlY3RlZDogZ2l0J3MgcmVmdXNhbC4AAAAQMC4yNi4wIChlNThlODRhKQAAAA1tYWNvcyBhYXJjaDY0",
+  "report_domain": "kebbie-report-v1",
+  "short_counter": 15735,
+  "short_zero_bits": 0,
+  "sign_domain": "kebbie-report-sign-v1",
+  "signature": "4e7FR4m7xx9DoKZ9T5AJhVS47dt4Jk1YwzysyXSwjoPkB6TKhk8S1HokSb0cbhugqJU4LG6__ZcobT3zjMS0DA"
+}

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_api::ReportInbox;
+use crate::report_wire::ReportInbox;
 use serde::{Deserialize, Serialize};
 
 use super::http::{CALL, Client, HubError};

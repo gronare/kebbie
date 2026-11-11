@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_api::ReportChallenge;
-use kebbie_hub_protocol::{Name, solve};
+use crate::report_wire::{Name, ReportChallenge, solve};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -143,7 +142,7 @@ mod tests {
         let wire = serde_json::to_value(&install).unwrap();
         assert_eq!(keys(&wire), ["arch", "channel", "id", "os", "version"]);
         assert_eq!((wire["version"].as_str(), wire["os"].as_str(), wire["arch"].as_str(), wire["channel"].as_str()), (Some(env!("CARGO_PKG_VERSION")), Some(std::env::consts::OS), Some(std::env::consts::ARCH), Some("main")));
-        let challenge = ReportChallenge { nonce: kebbie_hub_api::Bytes32([1; 32]), difficulty: 0, expires: NOW, tag: kebbie_hub_api::Bytes32([2; 32]) };
+        let challenge = ReportChallenge { nonce: crate::report_wire::Bytes32([1; 32]), difficulty: 0, expires: NOW, tag: crate::report_wire::Bytes32([2; 32]) };
         let upload = serde_json::to_value(Upload { install: &install, challenge, counter: 7 }).unwrap();
         assert_eq!(keys(&upload), ["challenge", "counter", "install"], "no key and no signature go with it");
     }
