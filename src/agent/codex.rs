@@ -1093,6 +1093,46 @@ mod tests {
     }
 
     #[test]
+    fn git_stages_and_commits_in_a_linked_worktree_inside_codexs_sandbox_with_the_sandbox_on_or_off() {
+        let path: Vec<PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
+        let Some(codex) = crate::doctor::which("codex", &path) else {
+            eprintln!("skipped: no codex on PATH to run its sandbox");
+            return;
+        };
+        let base = crate::sh::test_dir("codex-commits").canonicalize().unwrap();
+        let main = base.join("app");
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |dir: &Path, args: &[&str]| assert!(std::process::Command::new("git").current_dir(dir).args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).output().unwrap().status.success(), "git {args:?}");
+        git(&main, &["init", "-q", "-b", "main"]);
+        std::fs::write(main.join("a.rs"), "a").unwrap();
+        git(&main, &["add", "a.rs"]);
+        git(&main, &["commit", "-qm", "a"]);
+        git(&main, &["worktree", "add", "-q", "../wt1.app", "-b", "task"]);
+        let worktree = base.join("wt1.app");
+        let git_dir = crate::sandbox::git_dir_of(&worktree);
+        let commit = |file: &str, config: &[String]| {
+            let script = format!("echo x > {file} && git add {file} && git -c user.name=t -c user.email=t@t commit -qm {file}");
+            let run = std::process::Command::new(&codex).current_dir(&worktree).arg("sandbox").args(config).args(["--", "sh", "-c", &script]).output().unwrap();
+            (run.status.success(), String::from_utf8_lossy(&run.stderr).to_string())
+        };
+        let on = ["-c".to_string(), format!("default_permissions={}", toml_string(PERMISSIONS)), "-c".to_string(), permission_profile(&crate::sandbox::Policy::default(), Some(&git_dir), cfg!(target_os = "macos")), "-c".to_string(), "features.network_proxy=true".to_string()];
+        let (staged, said) = commit("on.rs", &on);
+        assert!(staged, "a sandboxed task stages and commits without leaving the sandbox, so it never asks: {said}");
+        let workspace = ["-c".to_string(), "sandbox_mode=\"workspace-write\"".to_string()];
+        let off: Vec<String> = workspace.iter().cloned().chain(unsandboxed_args(&crate::sandbox::Policy::default(), Some(&git_dir), &[])).collect();
+        let (staged, said) = commit("off.rs", &off);
+        assert!(staged, "with task.sandbox off, kebbie's writable roots let the user's workspace-write commit: {said}");
+        assert!(!commit("bare.rs", &workspace).0, "Codex's own workspace-write keeps a worktree's git dir read-only, which is what made a task ask to run git add");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_tasks_role_runs_git_in_the_sandbox_and_never_asks_to_leave_it_for_git() {
+        let role = include_str!("../../roles/task.md");
+        assert!(role.contains("Git in your worktree runs inside the sandbox") && role.contains("run `git add`, `git commit`, `git rebase`, `git restore` and the like as they are, and never ask to run them outside the sandbox"), "a role that only says .git is the user's reads to Codex as asking before every git add");
+    }
+
+    #[test]
     fn an_unsandboxed_codex_task_commits_and_reaches_the_network_under_the_users_own_sandbox_mode() {
         let args = start_args(None, &profile(None, None), &files(false, Some(Path::new(TMP)), &["~/code".to_string()]), &Session::New("x".to_string()));
         let [roots] = value_of(&args, "sandbox_workspace_write.writable_roots")[..] else { panic!("one list: {args:?}") };

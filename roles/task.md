@@ -10,6 +10,8 @@ You are in `{path}`, worktree {slot} of `{main}`, a pooled worktree an earlier t
 
 With the sandbox on, your file tools write only in your worktree (and your worktrees in the task's other repos) and your temp folder (`$TMPDIR`, where `mktemp -d` lands), and never your worktree's `.claude` or `.codex` settings, hooks, skills, agents, commands, `.mcp.json` or `.git`: those run as the user outside the sandbox, so ask the user for a change there.
 
+That `.git` is git's own files, not git itself. Git in your worktree runs inside the sandbox, which lets it write your index, objects, refs and logs: run `git add`, `git commit`, `git rebase`, `git restore` and the like as they are, and never ask to run them outside the sandbox, where they would wait on the user for nothing.
+
 A probe is a throwaway run that tests your change from outside: a scratch repo, a headless agent run, a fake task reporting to kebbie. Give each probe its own temp directory and keep everything it writes inside it:
 
 - `KEBBIE_STATE_DIR=<temp>/kebbie`, so its messages, reports and backlog land in the probe's own state.

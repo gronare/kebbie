@@ -8,6 +8,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
 
 ### Fixed
+- A Codex task runs git add and git commit in its worktree without asking you to let them out of the sandbox, and the lead no longer recommends letting git through for good.
 - A reopened bug that went to kebbie's maintainers before is offered and sent again.
 - kebbie issue report says why a wish, another install's report or a bug already sent cannot go, instead of asking.
 - kebbie issue show names the report a bug went as, also when saving the issue failed after the send.
