@@ -17,9 +17,19 @@ pub struct Slot {
     pub path: PathBuf,
     pub task: Option<String>,
     pub free: bool,
+    pub head: Option<String>,
 }
 
 pub fn slots(repo: &Path) -> Result<Vec<Slot>> {
+    listed(repo, true)
+}
+
+// The slots on a task's branch, which are never free, without reading whether each placeholder is clean.
+pub fn task_slots(repo: &Path) -> Result<Vec<Slot>> {
+    Ok(listed(repo, false)?.into_iter().filter(|slot| slot.task.is_some()).collect())
+}
+
+fn listed(repo: &Path, read_free: bool) -> Result<Vec<Slot>> {
     let mut list = Vec::new();
     for worktree in worktrees(repo)? {
         let Some(number) = slot_number(repo, &worktree.path) else { continue };
@@ -27,9 +37,9 @@ pub fn slots(repo: &Path) -> Result<Vec<Slot>> {
             continue;
         }
         let placeholder = worktree.branch.as_deref().is_none_or(|branch| branch == format!("wt{number}"));
-        let free = placeholder && is_clean(&worktree.path).unwrap_or(false);
+        let free = placeholder && read_free && is_clean(&worktree.path).unwrap_or(false);
         let task = if placeholder { None } else { worktree.branch };
-        list.push(Slot { number, path: worktree.path, task, free });
+        list.push(Slot { number, path: worktree.path, task, free, head: worktree.head });
     }
     list.sort_by_key(|slot| slot.number);
     Ok(list)
@@ -37,7 +47,7 @@ pub fn slots(repo: &Path) -> Result<Vec<Slot>> {
 
 pub fn find_task(repo: &Path, name: Option<&str>, cwd: &Path) -> Result<Slot> {
     let wanted = name.map(slug).transpose()?;
-    let found = slots(repo)?.into_iter().find(|slot| match &wanted {
+    let found = task_slots(repo)?.into_iter().find(|slot| match &wanted {
         Some(task) => slot.task.as_ref() == Some(task),
         None => slot.task.is_some() && cwd.starts_with(&slot.path),
     });
@@ -62,7 +72,7 @@ pub(super) fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
     if let Some(git_dir) = crate::repo::git_dir_of(&path) {
         crate::sandbox::deny_new_slot(&crate::lead::roles_dir()?, &name_of(repo), &git_dir.canonicalize().unwrap_or(git_dir))?;
     }
-    Ok(Slot { number, path, task: None, free: true })
+    Ok(Slot { number, path, task: None, free: true, head: None })
 }
 
 pub fn list(cwd: &Path) -> Result<Vec<Value>> {
@@ -408,6 +418,21 @@ mod tests {
         assert!(slots(&dir).unwrap()[0].free, "the wt<N> placeholder branch is free");
         git(&slot.path, &["switch", "--quiet", "billing"]).unwrap();
         git(&dir, &["branch", "-D", "wt1"]).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_task_slots_and_find_task_list_the_pool_without_a_git_status_in_any_placeholder() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let free = create_slot(&dir, "HEAD").unwrap();
+        let mut listed = Vec::new();
+        let gits = crate::sh::spawned::gits_during(|| {
+            listed = task_slots(&dir).unwrap();
+            assert_eq!(find_task(&dir, Some("billing"), &dir).unwrap().path, slot.path);
+        });
+        assert_eq!(gits.iter().filter(|run| run.starts_with("status")).count(), 0, "a status per placeholder on every message flush and menu tick is what this list leaves out: {gits:?}");
+        assert_eq!(listed.iter().map(|slot| (slot.task.as_deref(), slot.free, slot.path.clone())).collect::<Vec<_>>(), [(Some("billing"), false, slot.path.clone())]);
+        git(&dir, &["worktree", "remove", "--force", &free.path.to_string_lossy()]).unwrap();
         cleanup(dir, origin, &slot);
     }
 }

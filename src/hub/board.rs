@@ -294,8 +294,7 @@ pub fn attachments(items: &[status::Item], state: &Path) -> Vec<Attachment> {
 }
 
 pub fn gather(state: &Path, now: u64) -> crate::sh::Result<(Board, Vec<Attachment>)> {
-    let items = status::gather()?;
-    let checkouts = status::checkouts()?;
+    let (items, checkouts) = status::gather_with_checkouts()?;
     let mut board = build(&items, &checkouts, routines(state, now), crate::permit::away_since_in(state), &seen(&items));
     let (backlog, bodies) = super::backlog::gather(state);
     board.backlog = Some(backlog);

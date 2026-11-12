@@ -1006,6 +1006,13 @@ const RESTART_STATE: &str = "KEBBIE_BOARD_STATE";
 const SCREEN_KEPT: &str = "KEBBIE_BOARD_SCREEN_KEPT";
 const RENEW_HOLD: Duration = Duration::from_secs(5);
 
+const IDLE_REDRAW: Duration = Duration::from_secs(1);
+
+// The plain board redraws at once on what changes it and once a second for its ages and countdowns; a window or another page redraws on every pass.
+fn redraw_due(changed: bool, plain: bool, drawn_at: Option<Instant>, now: Instant) -> bool {
+    changed || !plain || drawn_at.is_none_or(|at| now.duration_since(at) >= IDLE_REDRAW)
+}
+
 fn built(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().filter(|metadata| metadata.len() > 0).and_then(|metadata| metadata.modified().ok())
 }
@@ -1132,6 +1139,7 @@ pub fn run(overlay: bool) -> Result<String> {
     let graphics = GraphicsEnv::current();
     (app.graphics, app.cell_guessed) = graphics.startup();
     app.viewer = image_viewer(std::env::consts::OS, &|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
+    let (mut changed, mut drawn_at) = (true, None);
     let result = (|| -> Result<()> {
         while !app.quit {
             if let Mode::EditMessage(editor) = &mut app.mode {
@@ -1145,11 +1153,14 @@ pub fn run(overlay: bool) -> Result<String> {
             app.poll_agent_install();
             while let Ok(updates) = update_notices.try_recv() {
                 app.updates = updates;
+                changed = true;
             }
             while let Ok((at, stale)) = restarter.try_recv() {
                 (app.stale_at, app.stale) = (at, stale);
+                changed = true;
             }
             while let Ok(update) = snapshots.try_recv() {
+                changed = true;
                 match update {
                     Ok(snapshot) => {
                         let previous = app.selected_task().map(|item| (item.name, item.place));
@@ -1210,9 +1221,10 @@ pub fn run(overlay: bool) -> Result<String> {
             if let Some(results) = &app.detail_results {
                 while let Ok((path, detail)) = results.try_recv() {
                     app.details.insert(path, std::rc::Rc::new(detail));
+                    changed = true;
                 }
             }
-            app.take_images();
+            changed |= app.take_images();
             app.areas.tick();
             app.routines.tick();
             let mut repos: Vec<PathBuf> = app.tasks.iter().filter_map(|item| item.repo.clone()).chain(app.areas.repos()).collect();
@@ -1223,17 +1235,21 @@ pub fn run(overlay: bool) -> Result<String> {
                 app.areas.refresh();
             }
             app.fetch_failures = fetcher.failures();
-            app.away = permit::away_since().is_some();
+            if changed {
+                app.away = permit::away_since().is_some();
+            }
             if matches!(app.graphics, Graphics::Pending { wanted: true }) {
                 (app.graphics, app.cell_guessed) = graphics.resolve(Picker::from_query_stdio().ok());
                 app.images.clear();
+                changed = true;
             }
             let size = ratatui::crossterm::terminal::size().unwrap_or_default();
             repaint |= seen.replace(size).is_some_and(|before| before != size);
             if hold.is_some_and(|until| app.loaded || Instant::now() >= until) {
                 hold = None;
             }
-            if hold.is_none() && resize.draw_now(size, Instant::now()) {
+            let now = Instant::now();
+            if hold.is_none() && redraw_due(changed || repaint, app.page == Page::Work && matches!(app.mode, Mode::Normal), drawn_at, now) && resize.draw_now(size, now) {
                 let every_cell = std::mem::take(&mut repaint);
                 terminal.draw(|frame| {
                     draw(frame, &mut app);
@@ -1241,6 +1257,7 @@ pub fn run(overlay: bool) -> Result<String> {
                         terminal::write_every_cell(frame.buffer_mut());
                     }
                 }).map_err(|error| error.to_string())?;
+                (changed, drawn_at) = (false, Some(now));
             }
             if app.may_restart() && ((std::mem::take(&mut app.restart_after_update) && rebuild.changed()) || rebuild.ready()) {
                 let error = rebuild.restart(&app);
@@ -1248,6 +1265,7 @@ pub fn run(overlay: bool) -> Result<String> {
             }
             let wait = if app.page == Page::Areas && app.areas.waiting() { 20 } else { 250 };
             if event::poll(Duration::from_millis(wait)).map_err(|error| error.to_string())? {
+                changed = true;
                 match event::read().map_err(|error| error.to_string())? {
                     Event::Resize(..) => repaint = true,
                     Event::Key(key) if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) => repaint = true,
@@ -1450,6 +1468,18 @@ mod tests {
         assert!(!resize.draw_now((120, 50), at(1900)));
         assert!(resize.draw_now((80, 40), at(2000)), "back to the drawn size before it settled draws at once, nothing moved");
         assert!(!resize.draw_now((120, 50), at(2100)), "and the next change waits its own second");
+    }
+
+    #[test]
+    fn the_plain_board_redraws_at_once_on_a_change_and_otherwise_once_a_second_and_a_window_on_every_pass() {
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        assert!(redraw_due(false, true, None, at(0)), "the first frame draws");
+        assert!(!redraw_due(false, true, Some(at(0)), at(250)), "a quiet board is not drawn four times a second");
+        assert!(!redraw_due(false, true, Some(at(0)), at(750)));
+        assert!(redraw_due(false, true, Some(at(0)), at(1000)), "ages and notices still move once a second");
+        assert!(redraw_due(true, true, Some(at(0)), at(10)), "a key, a snapshot or a resize draws at once");
+        assert!(redraw_due(false, false, Some(at(0)), at(10)), "a window or another page draws on every pass, as its countdowns and waits need");
     }
 
     #[test]

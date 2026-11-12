@@ -120,7 +120,7 @@ fn rules_check_wanted(message: &Message, session: &Session) -> bool {
 fn heard(address: &str, since: u64) -> bool {
     let Some((task, repo)) = address.split_once('@') else { return false };
     let Some(repo) = crate::repo::checkout_named(repo) else { return false };
-    crate::tasks::slots(&repo).ok().and_then(|slots| slots.into_iter().find(|slot| slot.task.as_deref() == Some(task)))
+    crate::tasks::task_slots(&repo).ok().and_then(|slots| slots.into_iter().find(|slot| slot.task.as_deref() == Some(task)))
         .and_then(|slot| crate::tasks::transcript(&repo, &slot)).and_then(|(agent, file)| Some((agent, fs::read_to_string(file).ok()?)))
         .is_some_and(|(agent, text)| typed_by_user_since(agent, &text, since))
 }

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::repo::{main_checkout, name_of};
+use crate::repo::{main_checkout_of, name_of};
 use crate::sh::Result;
 
 pub fn dir() -> PathBuf {
@@ -19,7 +19,7 @@ pub fn repos_dir() -> PathBuf {
 
 // A worktree shares its main checkout's file, since the file is named after the main checkout's folder.
 pub fn repo_file_in(dir: &Path, repo: &Path) -> PathBuf {
-    let main = main_checkout(repo).unwrap_or_else(|_| repo.to_path_buf());
+    let main = main_checkout_of(repo).unwrap_or_else(|| repo.to_path_buf());
     dir.join(format!("{}.toml", name_of(&main)))
 }
 

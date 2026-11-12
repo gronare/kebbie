@@ -72,9 +72,8 @@ impl SecondShown {
     }
 }
 
-pub fn second_shown(address: &str, path: &Path, upstream: &str) -> Option<SecondShown> {
-    let head = git(path, &["rev-parse", "HEAD"]).ok()?;
-    second_shown_in(&crate::lead::state_location().ok()?, address, |sha| tasks::same_code(path, upstream, sha, &head))
+pub fn second_shown(address: &str, path: &Path, tips: &tasks::StepTips) -> Option<SecondShown> {
+    second_shown_in(&crate::lead::state_location().ok()?, address, |sha| tasks::same_code(path, &tips.upstream, sha, &tips.head))
 }
 
 // The profile that read it is the record's by line, or the asking marker's payload while it reads.
@@ -198,6 +197,10 @@ impl Shown {
 pub fn shown(address: &str, path: &Path, upstream: &str) -> Option<Shown> {
     let head = git(path, &["rev-parse", "HEAD"]).ok()?;
     shown_by(&crate::lead::state_location().ok()?, address, |verdict| holds(verdict, path, upstream, &head))
+}
+
+pub fn shown_at(address: &str, path: &Path, tips: &tasks::StepTips) -> Option<Shown> {
+    shown_by(&crate::lead::state_location().ok()?, address, |verdict| holds(verdict, path, &tips.upstream, &tips.head))
 }
 
 fn holds(verdict: &Verdict, path: &Path, upstream: &str, head: &str) -> bool {

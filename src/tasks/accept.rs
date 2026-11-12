@@ -86,6 +86,11 @@ pub(crate) struct Open {
 pub(crate) fn open_commits(path: &Path, upstream: &str) -> Result<Vec<Open>> {
     let tips = git(path, &["rev-parse", upstream, "HEAD"])?;
     let (shas, head) = tips.split_once('\n').ok_or_else(|| format!("git rev-parse {upstream} HEAD printed one sha"))?;
+    open_commits_at(path, &super::StepTips { upstream: shas.to_string(), head: head.to_string() })
+}
+
+pub(crate) fn open_commits_at(path: &Path, tips: &super::StepTips) -> Result<Vec<Open>> {
+    let (shas, head) = (tips.upstream.as_str(), tips.head.as_str());
     let (raw, base) = cached(&RAW, (shas, head), || {
         let raw = commit_codes(path, &["--reverse", &format!("{shas}..{head}")])?;
         let base = if raw.is_empty() { String::new() } else { git(path, &["merge-base", head, shas])? };
@@ -170,9 +175,10 @@ pub fn unaccepted(commits: &[(String, bool)], take: usize, steps: &super::plan::
 }
 
 // The task's unaccepted commits as the board shows them; None when every one is accepted.
-pub fn unaccepted_at(state: &Path, address: &str, path: &Path, upstream: &str) -> Option<Unaccepted> {
-    let commits = accepted_at(state, address, path, upstream).ok()?;
-    unaccepted(&commits, commits.len(), &super::plan::read_now(state, path, upstream, address))
+pub fn unaccepted_at(state: &Path, address: &str, path: &Path, tips: &super::StepTips) -> Option<Unaccepted> {
+    let accepted = codes_in(state, address);
+    let commits: Vec<(String, bool)> = open_commits_at(path, tips).ok()?.into_iter().map(|open| (open.sha, accepted.contains(&open.key))).collect();
+    unaccepted(&commits, commits.len(), &super::plan::read_at(state, path, address, tips, false))
 }
 
 // With task.require_accept on, a push takes only accepted commits; the first that is not is named with how to accept it.

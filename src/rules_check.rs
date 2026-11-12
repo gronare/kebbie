@@ -210,9 +210,8 @@ pub fn shown_in(state: &Path, address: &str, current: impl Fn(&str) -> bool) -> 
     fs::read_to_string(file(state, address, "lead")).is_ok_and(|sha| current(sha.trim())).then_some(Shown::Lead)
 }
 
-pub fn shown(state: &Path, address: &str, path: &Path, upstream: &str) -> Option<Shown> {
-    let head = git(path, &["rev-parse", "HEAD"]).ok()?;
-    shown_in(state, address, checked_as(path, upstream, &head))
+pub fn shown(state: &Path, address: &str, path: &Path, tips: &crate::tasks::StepTips) -> Option<Shown> {
+    shown_in(state, address, checked_as(path, &tips.upstream, &tips.head))
 }
 
 // A rules check reads the commits, not only the code they make, so its word holds only while the commits are the ones it read.
@@ -605,7 +604,8 @@ mod tests {
         let state = state_of(&dir);
         fs::create_dir_all(super::dir(&state)).unwrap();
         fs::write(verdict_file(&state, "billing@app"), review::record("verdict: changes\n\n- commit abc1234 makes two changes; rule 2.\n", &head()).unwrap()).unwrap();
-        let broken = |state: &Path| (shown(state, "billing@app", &slot.path, &upstream), asked_in(state, "billing@app", checked_as(&slot.path, &upstream, &head())).unwrap());
+        let tips = || crate::tasks::StepTips { upstream: git(&slot.path, &["rev-parse", &upstream]).unwrap(), head: head() };
+        let broken = |state: &Path| (shown(state, "billing@app", &slot.path, &tips()), asked_in(state, "billing@app", checked_as(&slot.path, &upstream, &head())).unwrap());
         assert!(matches!(broken(&state), (Some(Shown::Broken(1)), Asked::Broken(_))), "the break stands on the commits it read");
         land_on_main(&dir, &upstream, |_| ());
         git(&slot.path, &[&ada[..], &["rebase", "--quiet", &upstream]].concat()).unwrap();

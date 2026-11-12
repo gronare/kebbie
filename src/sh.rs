@@ -9,6 +9,8 @@ pub fn quote(text: &str) -> String {
 
 fn command(program: &str, args: &[&str], cwd: Option<&Path>) -> Command {
     let mut command = Command::new(program);
+    #[cfg(test)]
+    spawned::note(program, args);
     if program == "git" {
         command.args(crate::repo::unhooked(cwd, args));
     } else {
@@ -157,6 +159,24 @@ pub fn test_dir(name: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+// Every program a test thread starts, by its arguments, so a test can count the gits a read runs.
+#[cfg(test)]
+pub mod spawned {
+    use std::cell::RefCell;
+
+    thread_local!(static RUNS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) });
+
+    pub fn note(program: &str, args: &[&str]) {
+        RUNS.with(|runs| runs.borrow_mut().push(format!("{program} {}", args.join(" "))));
+    }
+
+    pub fn gits_during(work: impl FnOnce()) -> Vec<String> {
+        let before = RUNS.with(|runs| runs.borrow().len());
+        work();
+        RUNS.with(|runs| runs.borrow()[before..].iter().filter_map(|run| run.strip_prefix("git ")).map(str::to_string).collect())
+    }
 }
 
 pub fn run_visibly(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<()> {

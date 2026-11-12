@@ -75,9 +75,9 @@ pub(super) fn spawn_refresher(board_pane: Option<String>) -> (Receiver<std::resu
             if config::sources().is_ok_and(|sources| sources.contains(&Source::Vault)) {
                 crate::backlog::fetch_vault_bodies();
             }
-            let snapshot = status::gather().and_then(|items| {
+            let snapshot = status::gather_with_checkouts().map(|(items, checkouts)| {
                 let questions = questions::open_now(&messages::load()).into_iter().cloned().collect();
-                Ok(Snapshot { checkouts: status::checkouts()?, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), comments: crate::comments::board(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto), lead_context: usage::lead_context(), devices: lead::state_dir().map(|state| crate::hub::devices::requests(&state, messages::now())).unwrap_or_default() })
+                Snapshot { checkouts, items, messages: messages::recent(200), questions, offers: super::bug_report::load_offers(), comments: crate::comments::board(), fixed: super::bug_report::load_fixed(), usage: usage::load(), ongoing: load_ongoing(), lead_chat: board_pane.as_deref().and_then(lead::chat_hidden), restart_auto: config::restart_settings().map_or(true, |(auto, _)| auto), lead_context: usage::lead_context(), devices: lead::state_dir().map(|state| crate::hub::devices::requests(&state, messages::now())).unwrap_or_default() }
             });
             if snapshot_tx.send(snapshot).is_err() {
                 return;

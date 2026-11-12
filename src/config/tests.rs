@@ -241,8 +241,11 @@ fn a_worktree_reads_the_repo_config_named_after_its_main_checkout() {
     let worktree = root.join("wt1.app");
     crate::repo::git(&dir, &["worktree", "add", "--quiet", "--detach", &worktree.to_string_lossy()]).unwrap();
     let repos = root.join("repos");
-    assert_eq!(repo_file_in(&repos, &worktree), repos.join("app.toml"));
-    assert_eq!(repo_file_in(&repos, &dir), repos.join("app.toml"));
+    let gits = crate::sh::spawned::gits_during(|| {
+        assert_eq!(repo_file_in(&repos, &worktree), repos.join("app.toml"));
+        assert_eq!(repo_file_in(&repos, &dir), repos.join("app.toml"));
+    });
+    assert_eq!(gits, Vec::<String>::new(), "the board resolves settings for every task on every refresh, so naming the file runs no git");
     std::fs::remove_dir_all(root).unwrap();
 }
 

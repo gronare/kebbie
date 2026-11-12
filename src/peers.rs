@@ -10,7 +10,7 @@ use crate::lead::install_root;
 use crate::repo::{main_checkout, name_of, setup_note};
 use crate::sh::Result;
 use crate::status::LEAD_LABEL;
-use crate::tasks::slots;
+use crate::tasks::task_slots;
 
 // An agent session that can be told things: a task in a repo (task@repo) or the lead; agent is the one running, or the one a task's record names while none runs.
 #[derive(Clone)]
@@ -54,7 +54,7 @@ pub fn sessions() -> Result<Vec<Session>> {
     }
     let repos: BTreeSet<PathBuf> = workspaces.iter().filter_map(|workspace| workspace["worktree"]["repo_root"].as_str()).map(PathBuf::from).collect();
     for repo in &repos {
-        for slot in slots(repo)? {
+        for slot in task_slots(repo)? {
             let Some(task) = slot.task else { continue };
             let workspace = workspaces.iter().find(|workspace| workspace["worktree"]["checkout_path"].as_str() == slot.path.to_str())
                 .and_then(|workspace| workspace["workspace_id"].as_str());
@@ -76,7 +76,7 @@ pub fn sessions() -> Result<Vec<Session>> {
 // Who runs this: the task whose worktree holds cwd, or the lead by its herdr Space.
 pub fn me(cwd: &Path) -> Option<String> {
     if let Ok(repo) = main_checkout(cwd)
-        && let Some(task) = slots(&repo).ok()?.into_iter().find(|slot| slot.task.is_some() && cwd.starts_with(&slot.path)).and_then(|slot| slot.task)
+        && let Some(task) = task_slots(&repo).ok()?.into_iter().find(|slot| slot.task.is_some() && cwd.starts_with(&slot.path)).and_then(|slot| slot.task)
     {
         return Some(address(&task, &name_of(&repo)));
     }

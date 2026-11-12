@@ -11,8 +11,24 @@ use crate::vault_snapshot::Snapshot;
 // The vault as notes-vault-mcp sees it: the snapshot its server answers where it has one, else its local SQLite index, read-only; the index alone knows the checkouts its hooks saw.
 pub struct Index {
     db: Option<Connection>,
+    path: Option<PathBuf>,
     snapshot: Option<Arc<Snapshot>>,
-    bodies: std::cell::OnceCell<std::collections::HashMap<String, String>>,
+    bodies: std::cell::OnceCell<Arc<Bodies>>,
+}
+
+type Bodies = std::collections::HashMap<String, String>;
+
+// The index file and its write-ahead log as they stand; while neither moves, the bodies read from it hold.
+type Identity = [Option<(std::time::SystemTime, u64)>; 2];
+
+type Kept = std::collections::HashMap<PathBuf, (Identity, Arc<Bodies>)>;
+
+static BODIES: std::sync::Mutex<Option<Kept>> = std::sync::Mutex::new(None);
+
+fn identity(path: &Path) -> Identity {
+    let wal = PathBuf::from(format!("{}-wal", path.display()));
+    let stamp = |file: &Path| std::fs::metadata(file).ok().and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+    [stamp(path), stamp(&wal)]
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -171,17 +187,21 @@ impl Index {
     pub fn open() -> Result<Self> {
         let snapshot = crate::lead::state_location().ok().and_then(|state| crate::vault_snapshot::current(&state));
         match snapshot {
-            Some(snapshot) => Ok(Self::of_snapshot(snapshot, index_path().and_then(|path| connect(&path)).ok())),
+            Some(snapshot) => {
+                let local = index_path().and_then(|path| Ok((connect(&path)?, path))).ok();
+                let path = local.as_ref().map(|(_, path)| path.clone());
+                Ok(Self { path, ..Self::of_snapshot(snapshot, local.map(|(db, _)| db)) })
+            }
             None => Self::at(&index_path()?),
         }
     }
 
     pub fn at(path: &Path) -> Result<Self> {
-        Ok(Self { db: Some(connect(path)?), snapshot: None, bodies: Default::default() })
+        Ok(Self { db: Some(connect(path)?), path: Some(path.to_path_buf()), snapshot: None, bodies: Default::default() })
     }
 
     pub fn of_snapshot(snapshot: Arc<Snapshot>, local: Option<Connection>) -> Self {
-        Self { db: local, snapshot: Some(snapshot), bodies: Default::default() }
+        Self { db: local, path: None, snapshot: Some(snapshot), bodies: Default::default() }
     }
 
     fn db(&self) -> Result<&Connection> {
@@ -233,13 +253,32 @@ impl Index {
             .collect()
     }
 
-    // A note's whole markdown, which only the local index holds.
-    // notes_fts.key is UNINDEXED, so any lookup by key scans every body: read them all in that one scan and answer the rest from memory.
+    // A note's whole markdown from the local index; notes_fts.key is UNINDEXED, so a lookup by key scans every body, and one scan is kept for every Index on the file until it changes.
     pub fn body(&self, key: &str) -> Option<String> {
-        self.bodies.get_or_init(|| {
-            let Ok(db) = self.db() else { return Default::default() };
-            rows(db, "SELECT key, body FROM notes_fts WHERE body IS NOT NULL", None, |row| Ok((text(row, 0), text(row, 1)))).unwrap_or_default().into_iter().collect()
-        }).get(key).cloned()
+        self.bodies.get_or_init(|| self.all_bodies()).get(key).cloned()
+    }
+
+    fn all_bodies(&self) -> Arc<Bodies> {
+        let scan = || -> Option<Arc<Bodies>> {
+            let rows = rows(self.db().ok()?, "SELECT key, body FROM notes_fts WHERE body IS NOT NULL", None, |row| Ok((text(row, 0), text(row, 1)))).ok()?;
+            Some(Arc::new(rows.into_iter().collect()))
+        };
+        let Some(path) = &self.path else { return scan().unwrap_or_default() };
+        let before = identity(path);
+        if let Some((_, bodies)) = BODIES.lock().ok().and_then(|held| held.as_ref()?.get(path).filter(|(seen, _)| *seen == before).cloned()) {
+            return bodies;
+        }
+        let Some(bodies) = scan() else { return Default::default() };
+        if identity(path) == before
+            && let Ok(mut held) = BODIES.lock()
+        {
+            let kept = held.get_or_insert_with(Default::default);
+            if kept.len() >= 8 {
+                kept.clear();
+            }
+            kept.insert(path.clone(), (before, bodies.clone()));
+        }
+        bodies
     }
 
     // The opening the snapshot carries for an open task; the index has none and its readers cut one from the body.
@@ -567,6 +606,34 @@ The payload says amount.');
         assert_eq!(index.status_of("Projects/x.md'; DROP TABLE notes; --"), None, "keys are bound, never spliced");
         assert!(index.db().unwrap().execute("INSERT INTO notes VALUES ('y', 1, 'x')", []).is_err(), "read-only");
         assert!(index.areas().is_err(), "a schema without the columns is an error, not a panic");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_index_on_an_unchanged_file_reuses_the_bodies_already_read_and_a_changed_file_is_read_again() {
+        let dir = crate::sh::test_dir("vault-bodies");
+        let path = dir.join("index.sqlite");
+        Connection::open(&path).unwrap().execute_batch("CREATE VIRTUAL TABLE notes_fts USING fts5(body, key UNINDEXED); INSERT INTO notes_fts (key, body) VALUES ('Projects/a.md', 'first');").unwrap();
+        assert_eq!(Index::at(&path).unwrap().body("Projects/a.md").as_deref(), Some("first"));
+        let stamped = std::fs::metadata(&path).unwrap().modified().unwrap();
+        Connection::open(&path).unwrap().execute_batch("UPDATE notes_fts SET body = 'secnd' WHERE key = 'Projects/a.md';").unwrap();
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(stamped).unwrap();
+        assert_eq!(Index::at(&path).unwrap().body("Projects/a.md").as_deref(), Some("first"), "the board opens an Index several times a refresh, and a file of the same time and size is not scanned again");
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(stamped + std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(Index::at(&path).unwrap().body("Projects/a.md").as_deref(), Some("secnd"), "a changed index is read again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_read_refused_by_a_lock_is_not_kept_for_the_next_index_on_the_same_file() {
+        let dir = crate::sh::test_dir("vault-bodies-locked");
+        let path = dir.join("index.sqlite");
+        Connection::open(&path).unwrap().execute_batch("CREATE VIRTUAL TABLE notes_fts USING fts5(body, key UNINDEXED); INSERT INTO notes_fts (key, body) VALUES ('Projects/a.md', 'first');").unwrap();
+        let writer = Connection::open(&path).unwrap();
+        writer.execute_batch("BEGIN EXCLUSIVE; UPDATE notes_fts SET body = 'held' WHERE key = 'Projects/a.md';").unwrap();
+        assert_eq!(Index::at(&path).unwrap().body("Projects/a.md"), None, "the locked index answers nothing");
+        writer.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(Index::at(&path).unwrap().body("Projects/a.md").as_deref(), Some("first"), "a refused read must not stand for the file until it next changes");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

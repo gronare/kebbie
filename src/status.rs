@@ -8,7 +8,7 @@ use crate::herdr;
 use crate::messages::{self, Message};
 use crate::peers;
 use crate::phase::{Phase, Why};
-use crate::repo::{ahead_behind, changed_count, default_branch, git, name_of, pooled_checkouts, uncommitted};
+use crate::repo::{changed_count, default_branch, git, name_of, pooled_checkouts, uncommitted};
 use crate::sh::Result;
 use crate::tasks::{self, slots};
 
@@ -697,9 +697,12 @@ impl Item {
 
 // Files the task changed since it left the default branch, and how many of them the review has marked read
 // (marks are "path<TAB>content hash" lines, kept per worktree by the review split).
-fn review_progress(path: &Path, upstream: &str) -> Option<(usize, usize)> {
-    let base = fork_point(path, upstream).ok()?;
-    let mut files: Vec<String> = git(path, &["diff", "--name-only", &base]).ok()?.lines().map(str::to_string).collect();
+fn review_progress(path: &Path, shas: &Shas, uncommitted: Option<&[String]>) -> Option<(usize, usize)> {
+    let base = fork_point_at(path, shas).ok()?;
+    let mut files: Vec<String> = match uncommitted.filter(|_| base == shas.tips.head) {
+        Some(uncommitted) => uncommitted.to_vec(),
+        None => git(path, &["diff", "--name-only", &base]).ok()?.lines().map(str::to_string).collect(),
+    };
     files.extend(git(path, &["ls-files", "--others", "--exclude-standard"]).ok()?.lines().map(str::to_string));
     if files.is_empty() {
         return None;
@@ -817,32 +820,56 @@ pub(crate) fn title_of(state: &Path, address: &str, seen: Option<&str>, repo: &s
     kept
 }
 
+// The shas everything a task's commits show stands on, so a read keyed on them is read once until one of them moves.
+#[derive(Clone, Debug)]
+struct Shas {
+    tips: tasks::StepTips,
+    local: Option<String>,
+}
+
+impl Shas {
+    fn read(path: &Path, upstream: &str) -> Result<Shas> {
+        let tips = git(path, &["rev-parse", upstream, "HEAD"])?;
+        let (upstream_sha, head) = tips.split_once('\n').ok_or_else(|| format!("git rev-parse {upstream} HEAD printed one sha"))?;
+        let local = upstream.split_once('/').and_then(|(_, branch)| git(path, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).ok());
+        Ok(Shas { tips: tasks::StepTips { upstream: upstream_sha.to_string(), head: head.to_string() }, local })
+    }
+}
+
 // The task's own commits start where it left the default branch, local or remote, whichever is newer; local commits not pushed yet are not the task's.
 pub fn fork_point(path: &Path, upstream: &str) -> Result<String> {
-    let local = upstream.split_once('/').map(|(_, branch)| branch).filter(|branch| git(path, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok());
-    let mut args = vec!["merge-base", "HEAD", upstream];
-    args.extend(local);
-    git(path, &args)
+    fork_point_at(path, &Shas::read(path, upstream)?)
+}
+
+fn fork_point_at(path: &Path, shas: &Shas) -> Result<String> {
+    let mut args = vec!["merge-base", shas.tips.head.as_str(), shas.tips.upstream.as_str()];
+    args.extend(shas.local.as_deref());
+    crate::repo::git_fixed(path, &args)
 }
 
 // The task's commits not yet on the default branch, so one pushed rebased elsewhere stops counting before its Claude rebases, from the fork point.
 // Ahead, behind, changed and the uncommitted files; a worktree git cannot read fails here alone, so its row shows the error and the rest of the board reads on.
-fn git_counts(path: &Path, upstream: &str) -> Result<(usize, usize, usize, Vec<String>)> {
-    let (_, behind) = ahead_behind(path, upstream)?;
-    Ok((own_commits(path, upstream)?, behind, changed_count(path)?, uncommitted(path)?))
+fn git_counts(path: &Path, shas: &Shas) -> Result<(usize, usize, usize, Vec<String>)> {
+    let (_, behind) = crate::repo::ahead_behind_at(path, &shas.tips.head, &shas.tips.upstream)?;
+    Ok((own_commits_at(path, shas)?, behind, changed_count(path)?, uncommitted(path)?))
 }
 
 fn own_commits(path: &Path, upstream: &str) -> Result<usize> {
-    let open = tasks::open_commits(path, upstream)?;
-    let Ok(base) = fork_point(path, upstream) else { return Ok(open.len()) };
-    let own = git(path, &["rev-list", &format!("{base}..HEAD")])?;
+    own_commits_at(path, &Shas::read(path, upstream)?)
+}
+
+fn own_commits_at(path: &Path, shas: &Shas) -> Result<usize> {
+    let open = tasks::open_commits_at(path, &shas.tips)?;
+    let Ok(base) = fork_point_at(path, shas) else { return Ok(open.len()) };
+    let own = crate::repo::git_fixed(path, &["rev-list", &format!("{base}..{}", shas.tips.head)])?;
     Ok(open.iter().filter(|commit| own.lines().any(|sha| sha == commit.sha)).count())
 }
 
-fn built(path: &Path, upstream: &str) -> Built {
-    let Ok(base) = fork_point(path, upstream) else { return Built::default() };
-    let files = git(path, &["diff", "--name-only", &base, "HEAD"]).map(|out| out.lines().map(str::to_string).collect()).unwrap_or_default();
-    let first_at = git(path, &["log", "--reverse", "--format=%ct", &format!("{base}..HEAD")]).ok().and_then(|out| out.lines().next()?.trim().parse().ok());
+fn built(path: &Path, shas: &Shas) -> Built {
+    let Ok(base) = fork_point_at(path, shas) else { return Built::default() };
+    let head = shas.tips.head.as_str();
+    let files = crate::repo::git_fixed(path, &["diff", "--name-only", &base, head]).map(|out| out.lines().map(str::to_string).collect()).unwrap_or_default();
+    let first_at = crate::repo::git_fixed(path, &["log", "--reverse", "--format=%ct", &format!("{base}..{head}")]).ok().and_then(|out| out.lines().next()?.trim().parse().ok());
     Built { files, first_at }
 }
 
@@ -884,17 +911,14 @@ pub(crate) fn known_repos(workspaces: &[Value], pooled: Vec<PathBuf>) -> BTreeSe
         .map(|repo| repo.canonicalize().unwrap_or(repo)).collect()
 }
 
-// The main checkout of every repo kebbie knows: leftover uncommitted files there, and its worktree pool.
-pub fn checkouts() -> Result<Vec<Checkout>> {
-    Ok(known_repos(&herdr::workspaces()?, pooled_checkouts()).iter().filter_map(|repo| {
-        let pool = slots(repo).ok()?;
-        Some(Checkout {
-            name: name_of(repo),
-            changed: changed_count(repo).ok()?,
-            free_slots: pool.iter().filter(|slot| slot.free).count(),
-            busy_slots: pool.iter().filter(|slot| !slot.free).count(),
-        })
-    }).collect())
+// The main checkout of a repo kebbie knows: leftover uncommitted files there, and its worktree pool.
+fn checkout_of(repo: &Path, pool: &[tasks::Slot]) -> Option<Checkout> {
+    Some(Checkout {
+        name: name_of(repo),
+        changed: changed_count(repo).ok()?,
+        free_slots: pool.iter().filter(|slot| slot.free).count(),
+        busy_slots: pool.iter().filter(|slot| !slot.free).count(),
+    })
 }
 
 // Every task in a pooled worktree of a repo kebbie knows, then every other Claude session, sorted by what they need.
@@ -938,7 +962,19 @@ fn configured_profile_of(repo: &Path) -> Option<String> {
 
 pub fn gather() -> Result<Vec<Item>> {
     let workspaces = herdr::workspaces()?;
-    let agents: Vec<Value> = herdr::agents()?.into_iter().filter(|agent| crate::agent::Agent::of(agent).is_some()).collect();
+    let agents = herdr::agents()?;
+    Ok(gather_in(&workspaces, agents, known_repos(&workspaces, pooled_checkouts()), crate::lead::state_dir().ok(), false).0)
+}
+
+// The tasks and the main checkouts in one read, each repo's worktrees listed once for both.
+pub fn gather_with_checkouts() -> Result<(Vec<Item>, Vec<Checkout>)> {
+    let workspaces = herdr::workspaces()?;
+    let agents = herdr::agents()?;
+    Ok(gather_in(&workspaces, agents, known_repos(&workspaces, pooled_checkouts()), crate::lead::state_dir().ok(), true))
+}
+
+fn gather_in(workspaces: &[Value], agents: Vec<Value>, repos: BTreeSet<PathBuf>, state: Option<PathBuf>, with_checkouts: bool) -> (Vec<Item>, Vec<Checkout>) {
+    let agents: Vec<Value> = agents.into_iter().filter(|agent| crate::agent::Agent::of(agent).is_some()).collect();
     let label_of = |id: &str| {
         workspaces.iter().find(|workspace| workspace["workspace_id"] == id)
             .and_then(|workspace| workspace["label"].as_str()).unwrap_or(id).to_string()
@@ -947,27 +983,31 @@ pub fn gather() -> Result<Vec<Item>> {
         workspaces.iter().find(|workspace| workspace["worktree"]["checkout_path"].as_str() == path.to_str())
             .and_then(|workspace| workspace["workspace_id"].as_str()).map(str::to_string)
     };
-    let repos = known_repos(&workspaces, pooled_checkouts());
 
     let began = messages::now();
     let log = messages::load();
-    let state = crate::lead::state_dir().ok();
     let reports = messages::latest_reports(&log);
     let questions = crate::questions::open_now(&log);
     let mut items = Vec::new();
     let mut task_workspaces = BTreeSet::new();
     let mut every_pool_read = true;
     let mut configured_profiles = BTreeMap::new();
+    let mut checkouts = Vec::new();
     for repo in &repos {
-        let (Ok(upstream), Ok(pool)) = (default_branch(repo), slots(repo)) else {
+        let pool = if with_checkouts { slots(repo) } else { tasks::task_slots(repo) };
+        if with_checkouts && let Ok(pool) = &pool {
+            checkouts.extend(checkout_of(repo, pool));
+        }
+        let (Ok(upstream), Ok(pool)) = (default_branch(repo), pool) else {
             every_pool_read = false;
             continue;
         };
+        let tips = crate::repo::branch_tips(repo, &upstream).ok();
         let config = crate::config::resolve(Some(repo)).ok();
         let steps_on = config.as_ref().is_some_and(|config| config.settings.steps.value);
         let configured_profile = config.and_then(|config| config.settings.profile.value);
         configured_profiles.insert(repo.clone(), configured_profile.clone());
-        let upstream_sha = steps_on.then(|| crate::repo::git(repo, &["rev-parse", &upstream]).ok()).flatten();
+        let upstream_sha = tips.as_ref().filter(|_| steps_on).map(|(sha, _)| sha.clone());
         let accept_required = tasks::accept_required(repo);
         for slot in pool {
             let Some(task) = slot.task else { continue };
@@ -981,13 +1021,20 @@ pub fn gather() -> Result<Vec<Item>> {
                 .map(|agent| agent_from(&crate::agent::codex::read_question(agent, &address)));
             let agent_title = agent.as_ref().map(|agent| agent.title.clone());
             let working = agent.as_ref().is_some_and(|agent| agent.status == "working");
-            let ((ahead, behind, changed, uncommitted_files), error) = match git_counts(&slot.path, &upstream) {
+            let shas = match (&tips, &slot.head) {
+                (Some((upstream_sha, local)), Some(head)) => Ok(Shas { tips: tasks::StepTips { upstream: upstream_sha.clone(), head: head.clone() }, local: local.clone() }),
+                _ => Shas::read(&slot.path, &upstream),
+            };
+            let counts = shas.as_ref().map_err(String::clone).and_then(|shas| git_counts(&slot.path, shas));
+            let read_files = counts.as_ref().ok().map(|(_, _, _, files)| files.clone());
+            let ((ahead, behind, changed, uncommitted_files), error) = match counts {
                 Ok(counts) => (counts, None),
                 Err(error) => ((0, 0, 0, Vec::new()), Some(error)),
             };
+            let shas = shas.ok();
             let uncommitted = uncommitted_files.len();
-            let approved = ahead > 0 && tasks::approved(&slot.path, &upstream, &address);
-            let head = crate::repo::git(&slot.path, &["rev-parse", "HEAD"]).ok();
+            let approved = ahead > 0 && shas.as_ref().is_some_and(|shas| tasks::approved_at(&slot.path, &shas.tips, &address));
+            let head = shas.as_ref().map(|shas| shas.tips.head.clone());
             let tokens = workspace.as_ref().and_then(|id| herdr::workspace_tokens(id).ok()).unwrap_or_default();
             let server = tokens["server"].is_string();
             let steps = match (state.as_deref(), &upstream_sha, &head) {
@@ -995,10 +1042,10 @@ pub fn gather() -> Result<Vec<Item>> {
                 _ => tasks::Steps::default(),
             };
             let mut item = Item {
-                review: review_progress(&slot.path, &upstream),
-                verdict: crate::review::shown(&address, &slot.path, &upstream),
-                second: crate::review::second_shown(&address, &slot.path, &upstream),
-                rules: state.as_deref().and_then(|state| crate::rules_check::shown(state, &address, &slot.path, &upstream)),
+                review: shas.as_ref().and_then(|shas| review_progress(&slot.path, shas, read_files.as_deref())),
+                verdict: shas.as_ref().and_then(|shas| crate::review::shown_at(&address, &slot.path, &shas.tips)),
+                second: shas.as_ref().and_then(|shas| crate::review::second_shown(&address, &slot.path, &shas.tips)),
+                rules: state.as_deref().zip(shas.as_ref()).and_then(|(state, shas)| crate::rules_check::shown(state, &address, &slot.path, &shas.tips)),
                 permit: crate::permit::of(&address, &name_of(repo)),
                 follows: tasks::follows(&address),
                 bypass: tasks::bypasses(&address),
@@ -1027,11 +1074,11 @@ pub fn gather() -> Result<Vec<Item>> {
                 push_left: state.as_deref().and_then(|state| tasks::push_left(state, &address)),
                 staged: state.as_deref().is_some_and(|state| tasks::staged(state, repo, &address)),
                 steps,
-                to_accept: state.as_deref().filter(|_| accept_required && ahead > 0).and_then(|state| tasks::unaccepted_at(state, &address, &slot.path, &upstream)),
+                to_accept: state.as_deref().filter(|_| accept_required && ahead > 0).zip(shas.as_ref()).and_then(|(state, shas)| tasks::unaccepted_at(state, &address, &slot.path, &shas.tips)),
                 parked: state.as_deref().and_then(|state| tasks::park_of(state, &address, began)),
                 assessment: state.as_deref().and_then(|state| crate::assessment::word_in(state, &address)),
                 recipe: state.as_deref().and_then(|state| crate::recipe::load(state, &address)),
-                built: if ahead > 0 { built(&slot.path, &upstream) } else { Built::default() },
+                built: match shas.as_ref().filter(|_| ahead > 0) { Some(shas) => built(&slot.path, shas), None => Built::default() },
                 phase: None,
                 title: state.as_deref().and_then(|state| title_of(state, &address, agent_title.as_deref(), &name_of(repo), &task, &name_of(&slot.path))),
                 name: task,
@@ -1110,7 +1157,7 @@ pub fn gather() -> Result<Vec<Item>> {
     }
     // A task's halves in different repos sit together within a group, after what needs you most.
     items.sort_by(|one, other| (!one.is_task(), one.group(), one.urgency(), &one.name).cmp(&(!other.is_task(), other.group(), other.urgency(), &other.name)));
-    Ok(items)
+    (items, checkouts)
 }
 
 #[cfg(test)]
@@ -1570,10 +1617,11 @@ pub(crate) mod tests {
         std::fs::write(dir.join("y.rb"), "some content here\n").unwrap();
         git(&["add", "y.rb"]);
         git(&["commit", "-q", "-m", "y"]);
-        assert_eq!(git_counts(&dir, "main"), Ok((0, 0, 0, Vec::new())));
+        let shas = Shas::read(&dir, "main").unwrap();
+        assert_eq!(git_counts(&dir, &shas), Ok((0, 0, 0, Vec::new())));
         git(&["rm", "-q", "--cached", "y.rb"]);
         git(&["update-index", "--add", "--cacheinfo", "100644,1234567890123456789012345678901234567890,x.rb"]);
-        let error = git_counts(&dir, "main").unwrap_err();
+        let error = git_counts(&dir, &shas).unwrap_err();
         assert!(error.contains("unable to read"), "{error}");
         let mut broken = task(Some("idle"), Some("ready"), 0);
         broken.git.as_mut().unwrap().error = Some(error);
@@ -1972,7 +2020,7 @@ pub(crate) mod tests {
         assert_eq!((shown["kind"].clone(), shown["group"].clone(), shown["after"][0]["address"].clone(), shown["after"][0]["state"].clone()), (json!("queued"), json!("QUEUED"), json!("billing@api"), json!("ci running")));
         assert!(shown["git"].is_null() && shown["path"].is_null() && shown["workspace"].is_null(), "no worktree, no Space");
         let source = include_str!("status.rs");
-        let gather = &source[source.find("\npub fn gather(").unwrap()..];
+        let gather = &source[source.find("\nfn gather_in(").unwrap()..];
         assert!(gather[..gather.find("\n}\n").unwrap()].contains("tasks::waits_shown(state, &items)"), "kebbie status and the board list them");
         std::fs::remove_dir_all(state).unwrap();
     }
@@ -2123,7 +2171,7 @@ pub(crate) mod tests {
         pick(&dir, &fourth);
         git(&dir, &["push", "--quiet", "origin", "HEAD"]).unwrap();
         git(&dir, &["fetch", "--quiet", "origin"]).unwrap();
-        assert_eq!((ahead_behind(&slot.path, &upstream).unwrap().0, own_commits(&slot.path, &upstream).unwrap()), (2, 1), "the branch still holds fourth, the row counts fifth");
+        assert_eq!((crate::repo::ahead_behind(&slot.path, &upstream).unwrap().0, own_commits(&slot.path, &upstream).unwrap()), (2, 1), "the branch still holds fourth, the row counts fifth");
         cleanup(dir, origin, &slot);
     }
 
@@ -2143,11 +2191,67 @@ pub(crate) mod tests {
         }
         git(&dir, &["checkout", "--quiet", "-b", "task"]).unwrap();
         commit("the task's own");
-        assert_eq!(ahead_behind(&dir, "origin/main").unwrap().0, 4, "what a push would land");
+        assert_eq!(crate::repo::ahead_behind(&dir, "origin/main").unwrap().0, 4, "what a push would land");
         assert_eq!(own_commits(&dir, "origin/main").unwrap(), 1);
-        assert_eq!(review_progress(&dir, "origin/main").map(|(_, files)| files), Some(1));
+        assert_eq!(review_progress(&dir, &Shas::read(&dir, "origin/main").unwrap(), None).map(|(_, files)| files), Some(1));
         git(&dir, &["branch", "--quiet", "-D", "main"]).unwrap();
         assert_eq!(own_commits(&dir, "origin/main").unwrap(), 4, "without a local main the remote one is the fork point");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn refreshed(dir: &Path, state: &Path) -> (Vec<String>, Vec<Item>, Vec<Checkout>) {
+        let mut read = (Vec::new(), Vec::new());
+        let gits = crate::sh::spawned::gits_during(|| read = gather_in(&[], Vec::new(), BTreeSet::from([dir.to_path_buf()]), Some(state.to_path_buf()), true));
+        (gits, read.0, read.1)
+    }
+
+    fn with_a_free_slot(dir: &Path) -> PathBuf {
+        let free = crate::repo::slot_path(dir, 9);
+        git(dir, &["worktree", "add", "--quiet", "--detach", &free.to_string_lossy(), "HEAD"]).unwrap();
+        free
+    }
+
+    #[test]
+    fn a_refresh_lists_each_pool_once_for_its_tasks_and_its_checkout_and_takes_each_head_from_that_list() {
+        use crate::tasks::test_support::*;
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        let free = with_a_free_slot(&dir);
+        let state = state_of(&dir);
+        let (gits, items, checkouts) = refreshed(&dir, &state);
+        assert_eq!(gits.iter().filter(|run| run.starts_with("worktree list")).count(), 1, "{gits:#?}");
+        assert!(!gits.iter().any(|run| run.starts_with("rev-parse")), "{gits:#?}");
+        assert_eq!(checkouts.iter().map(|checkout| (checkout.free_slots, checkout.busy_slots)).collect::<Vec<_>>(), [(1, 1)]);
+        let billing = items.iter().find(|item| item.name == "billing").unwrap();
+        assert_eq!(billing.git.as_ref().map(|git| (git.ahead, git.head.clone())), Some((1, git(&slot.path, &["rev-parse", "HEAD"]).ok())));
+        git(&dir, &["worktree", "remove", "--force", &free.to_string_lossy()]).unwrap();
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn a_refresh_reads_commits_again_only_once_head_or_the_default_branch_moves_and_the_working_tree_every_time() {
+        use crate::tasks::test_support::*;
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let state = state_of(&dir);
+        let (kept, address) = (crate::lead::state_location().unwrap(), peers::address("billing", &name_of(&dir)));
+        tasks::record_approval(&kept, &address, &tasks::fingerprint_at(&slot.path, &upstream, "HEAD").unwrap()).unwrap();
+        crate::state::write(&crate::review::verdict_file(&kept, &address), crate::review::record("verdict: ok", &git(&dir, &["rev-parse", "HEAD"]).unwrap()).unwrap()).unwrap();
+        let reads_commits = |gits: &[String]| gits.iter().filter(|run| ["merge-base", "rev-list", "log", "rev-parse", "show-ref", "diff -U0"].iter().any(|commits| run.starts_with(commits))).cloned().collect::<Vec<_>>();
+        let shown = |items: &[Item]| items.iter().find(|item| item.name == "billing").map(|item| (item.git.as_ref().map(|git| (git.ahead, git.behind, git.changed)), item.built.files.clone(), item.review)).unwrap();
+        let (first, items, _) = refreshed(&dir, &state);
+        assert!(!reads_commits(&first).is_empty());
+        let billing = items.iter().find(|item| item.name == "billing").unwrap();
+        assert_eq!((billing.git.as_ref().map(|git| git.approved), billing.verdict.as_ref().map(|shown| shown.stale)), (Some(true), Some(true)), "the approval and the verdict on other code are read from the commits too");
+        assert_eq!(shown(&items), (Some((1, 0, 0)), vec!["d".to_string()], Some((0, 1))));
+        std::fs::write(slot.path.join("draft"), "draft").unwrap();
+        let (again, items, _) = refreshed(&dir, &state);
+        assert_eq!(reads_commits(&again), Vec::<String>::new(), "nothing a task's commits show moved, so no git reads them again");
+        assert_eq!(shown(&items), (Some((1, 0, 1)), vec!["d".to_string()], Some((0, 2))), "an untracked file is read on every refresh");
+        commit(&slot.path, "e", "fifth");
+        let (_, items, _) = refreshed(&dir, &state);
+        assert_eq!(shown(&items), (Some((2, 0, 1)), vec!["d".to_string(), "e".to_string()], Some((0, 3))), "a new HEAD is read afresh");
+        upstream_commit(&dir, "elsewhere", "x", "someone else's work");
+        let (_, items, _) = refreshed(&dir, &state);
+        assert_eq!(shown(&items).0, Some((2, 1, 1)), "a moved default branch is read afresh");
+        cleanup(dir, origin, &slot);
     }
 }

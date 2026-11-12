@@ -1210,7 +1210,7 @@ mod tests {
         let record = Record { session: Some("019b3136-fdf0".to_string()), agent: Some("codex".to_string()), ..Record::default() };
         crate::state::write(&file, record_text(&record)).unwrap();
         keep_rollout(&file, "019b3136-fdf0", &rollout).unwrap();
-        let slot = Slot { number: 1, path: state.join("wt1.app"), task: Some("billing".to_string()), free: false };
+        let slot = Slot { number: 1, path: state.join("wt1.app"), task: Some("billing".to_string()), free: false, head: None };
         assert_eq!(transcript_in(&file, &state, &slot, "billing"), Some((Agent::Codex, rollout.clone())), "the kept path, without a walk of Codex's sessions");
         keep_rollout(&file, "another", &state.join("other.jsonl")).unwrap();
         assert_eq!(parse_record(&std::fs::read_to_string(&file).unwrap()).rollout.as_deref(), rollout.to_str(), "a rollout found for a session the record no longer names is not kept");

@@ -613,8 +613,9 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("list") => table(&cwd),
         Some("status") if arguments.flag("--json") => {
-            let items: Vec<serde_json::Value> = status::gather()?.iter().map(status::Item::to_json).collect();
-            let checkouts: Vec<serde_json::Value> = status::checkouts()?.iter().map(status::Checkout::to_json).collect();
+            let (items, checkouts) = status::gather_with_checkouts()?;
+            let items: Vec<serde_json::Value> = items.iter().map(status::Item::to_json).collect();
+            let checkouts: Vec<serde_json::Value> = checkouts.iter().map(status::Checkout::to_json).collect();
             let comments: Vec<serde_json::Value> = comments::board().iter().map(comments::Comment::to_json).collect();
             serde_json::to_string_pretty(&serde_json::json!({ "away_since": permit::away_since(), "items": items, "checkouts": checkouts, "comments": comments })).map_err(|error| error.to_string())
         }

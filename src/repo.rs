@@ -5,10 +5,47 @@ use crate::sh::{Result, run, run_visibly, succeeds};
 pub struct Worktree {
     pub path: PathBuf,
     pub branch: Option<String>,
+    pub head: Option<String>,
 }
 
 pub fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     run("git", args, Some(cwd))
+}
+
+type Fixed = std::sync::Mutex<Option<std::collections::HashMap<(PathBuf, Vec<String>), String>>>;
+
+static FIXED: Fixed = std::sync::Mutex::new(None);
+
+// Only for a read whose every revision is a full sha: what it prints cannot change, so it is kept for the process (cleared when the map is full).
+pub fn git_fixed(cwd: &Path, args: &[&str]) -> Result<String> {
+    let key = (cwd.to_path_buf(), args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>());
+    if let Some(found) = FIXED.lock().ok().and_then(|held| held.as_ref().and_then(|map| map.get(&key).cloned())) {
+        return Ok(found);
+    }
+    let read = git(cwd, args)?;
+    if let Ok(mut held) = FIXED.lock() {
+        let map = held.get_or_insert_with(Default::default);
+        if map.len() >= 2048 {
+            map.clear();
+        }
+        map.insert(key, read.clone());
+    }
+    Ok(read)
+}
+
+pub fn is_sha(rev: &str) -> bool {
+    matches!(rev.len(), 40 | 64) && rev.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+// What the default branch and its local namesake point at, read in one git for a whole pool: refs are shared by every worktree of a repo.
+pub fn branch_tips(repo: &Path, upstream: &str) -> Result<(String, Option<String>)> {
+    let remote = format!("refs/remotes/{upstream}");
+    let local = upstream.split_once('/').map(|(_, branch)| format!("refs/heads/{branch}"));
+    let mut args = vec!["for-each-ref", "--format=%(refname)%09%(objectname)", remote.as_str()];
+    args.extend(local.as_deref());
+    let listed = git(repo, &args)?;
+    let sha_of = |name: &str| listed.lines().find_map(|line| line.strip_prefix(name)?.strip_prefix('\t')).map(str::to_string);
+    Ok((sha_of(&remote).ok_or_else(|| format!("{upstream} names no commit in {}", repo.display()))?, local.as_deref().and_then(sha_of)))
 }
 
 // A sandboxed task writes its worktree, hooks and fsmonitor included through a hooksPath like husky's, so kebbie's own git there runs neither.
@@ -106,17 +143,21 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
     let mut list = Vec::new();
     let mut path: Option<PathBuf> = None;
     let mut branch: Option<String> = None;
+    let mut head: Option<String> = None;
     for line in git(repo, &["worktree", "list", "--porcelain"])?.lines().chain(std::iter::once("")) {
         if let Some(value) = line.strip_prefix("worktree ") {
             path = Some(PathBuf::from(value));
             branch = None;
+            head = None;
+        } else if let Some(value) = line.strip_prefix("HEAD ") {
+            head = Some(value.to_string()).filter(|sha| is_sha(sha) && sha.bytes().any(|byte| byte != b'0'));
         } else if let Some(value) = line.strip_prefix("branch ") {
             branch = Some(value.trim_start_matches("refs/heads/").to_string());
         } else if line.is_empty()
             && let Some(path) = path.take()
         {
             let branch = branch.take().or_else(|| rebasing_branch(&path));
-            list.push(Worktree { path, branch });
+            list.push(Worktree { path, branch, head: head.take() });
         }
     }
     Ok(list)
@@ -166,7 +207,14 @@ pub fn rebase_in_progress(path: &Path) -> bool {
 }
 
 pub fn ahead_behind(path: &Path, upstream: &str) -> Result<(usize, usize)> {
-    let counts = git(path, &["rev-list", "--left-right", "--count", &format!("HEAD...{upstream}")])?;
+    counted(&git(path, &["rev-list", "--left-right", "--count", &format!("HEAD...{upstream}")])?)
+}
+
+pub fn ahead_behind_at(path: &Path, head: &str, upstream: &str) -> Result<(usize, usize)> {
+    counted(&git_fixed(path, &["rev-list", "--left-right", "--count", &format!("{head}...{upstream}")])?)
+}
+
+fn counted(counts: &str) -> Result<(usize, usize)> {
     let mut numbers = counts.split_whitespace().map(|count| count.parse::<usize>().unwrap_or(0));
     Ok((numbers.next().unwrap_or(0), numbers.next().unwrap_or(0)))
 }

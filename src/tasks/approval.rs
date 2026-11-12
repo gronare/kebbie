@@ -3,15 +3,28 @@ use std::path::{Path, PathBuf};
 use crate::config;
 use crate::lead::state_dir;
 use crate::peers;
-use crate::repo::{ahead_behind, checkout_named, default_branch, git, main_checkout, name_of};
+use crate::repo::{ahead_behind, checkout_named, default_branch, git, is_sha, main_checkout, name_of};
 use crate::sh::Result;
 use super::pool::{find_task, task_of};
 
 // The change rev makes where it left upstream, without context or line numbers, so a clean rebase, a reworded message or a squash keeps it.
 fn code(path: &Path, upstream: &str, rev: &str) -> Result<String> {
-    let base = git(path, &["merge-base", rev, upstream])?;
-    let diff = git(path, &["diff", "-U0", "--no-color", "--no-ext-diff", &base, rev])?;
-    Ok(hashed(changed_lines(&diff).as_bytes()))
+    once_for_shas(&CODES, path, upstream, rev, || {
+        let base = git(path, &["merge-base", rev, upstream])?;
+        let diff = git(path, &["diff", "-U0", "--no-color", "--no-ext-diff", &base, rev])?;
+        Ok(hashed(changed_lines(&diff).as_bytes()))
+    })
+}
+
+static CODES: super::accept::Cached<String> = std::sync::Mutex::new(None);
+static FINGERPRINTS: super::accept::Cached<String> = std::sync::Mutex::new(None);
+
+// What two full shas make never changes, so the board reads it once however often it refreshes.
+fn once_for_shas(cache: &super::accept::Cached<String>, path: &Path, upstream: &str, rev: &str, read: impl FnOnce() -> Result<String>) -> Result<String> {
+    if !(is_sha(upstream) && is_sha(rev)) {
+        return read();
+    }
+    super::accept::cached(cache, (&format!("{}\t{upstream}", path.display()), rev), read)
 }
 
 // A -U0 diff without its index and hunk lines, so the same change reads alike wherever it sits in the file.
@@ -40,6 +53,10 @@ pub(super) fn fingerprint(path: &Path, upstream: &str) -> Result<String> {
 }
 
 pub(crate) fn fingerprint_at(path: &Path, upstream: &str, rev: &str) -> Result<String> {
+    once_for_shas(&FINGERPRINTS, path, upstream, rev, || fingerprint_now(path, upstream, rev))
+}
+
+fn fingerprint_now(path: &Path, upstream: &str, rev: &str) -> Result<String> {
     let range = format!("{upstream}..{rev}");
     let log = git(path, &["log", "--reverse", "-p", "-U0", "--no-color", "--no-ext-diff", "--format=%x00%B%x01", &range])?;
     let commits: Vec<String> = log.split('\0').skip(1).map(|commit| {
@@ -173,6 +190,11 @@ pub fn awaits_check(address: &str) -> bool {
 pub fn approved(path: &Path, upstream: &str, address: &str) -> bool {
     let Ok(state) = state_dir() else { return false };
     approval_file(&state, address).exists() && fingerprint(path, upstream).is_ok_and(|current| approval_holds(&state, address, &current))
+}
+
+pub fn approved_at(path: &Path, tips: &super::StepTips, address: &str) -> bool {
+    let Ok(state) = state_dir() else { return false };
+    approval_file(&state, address).exists() && fingerprint_at(path, &tips.upstream, &tips.head).is_ok_and(|current| approval_holds(&state, address, &current))
 }
 
 #[cfg(test)]

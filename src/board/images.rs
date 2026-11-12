@@ -233,12 +233,15 @@ impl App {
         }
     }
 
-    pub(super) fn take_images(&mut self) {
-        let Some(results) = &self.image_results else { return };
+    pub(super) fn take_images(&mut self) -> bool {
+        let Some(results) = &self.image_results else { return false };
+        let mut took = false;
         while let Ok((path, decoded)) = results.try_recv() {
             self.images.retain(|(drawn, _, _), _| *drawn != path);
             self.decoded.insert(path, decoded);
+            took = true;
         }
+        took
     }
 }
 
