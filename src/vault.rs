@@ -97,6 +97,10 @@ fn plugin_options() -> Value {
         .find(|(name, _)| name.starts_with("vault@")).map(|(_, config)| config["options"].clone()).unwrap_or_default()
 }
 
+pub fn root() -> Option<PathBuf> {
+    setting("VAULT_PATH", &plugin_options()).map(|root| expand(&root))
+}
+
 // mindin names its index after the vault: sha1 of the local root, or of endpoint + bucket + prefix.
 pub fn index_name(options: &Value) -> Option<String> {
     let seed = match setting("VAULT_PATH", options) {

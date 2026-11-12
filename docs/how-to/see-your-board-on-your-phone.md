@@ -2,7 +2,7 @@
 
 Follow your tasks from your phone through a [kebbie hub](https://github.com/gronare/kebbie-hub): every task grouped as on the board, a task's steps under its row, and the questions waiting for you with their options.
 
-It works on any phone or browser you sign in on with your passkey. Every device reads; one where you allow changes also answers questions, chooses on an agent's prompt and pushes.
+It works on any phone or browser you sign in on with your passkey. Every device reads, the backlog included; one where you allow changes also answers questions, chooses on an agent's prompt, pushes, adds ideas and starts backlog items.
 
 ![H connects this machine to a hub: the card with the code to check on the page and the link to open](../assets/clips/hub-connect.webp)
 
@@ -10,7 +10,7 @@ It works on any phone or browser you sign in on with your passkey. Every device 
 
 Every board the machine sends is end-to-end encrypted to your account's key and signed by the machine. Only your passkeys unlock that key, so the hub relays the board without being able to read it.
 
-The hub cannot act on the machine by itself: the machine takes an answer, a prompt choice or a push only from a device your account's key signed and the machine approved, and only the kinds [`hub.commands`](../reference/configuration.md#keys) allows. The board carries task names, repo names, summaries and questions, never a local path, a host name or a dev server address.
+The hub cannot act on the machine by itself: the machine takes an answer, a prompt choice, a push, an idea or a start only from a device your account's key signed and the machine approved, and only the kinds [`hub.commands`](../reference/configuration.md#keys) allows. The board carries task names, repo names, summaries and questions, never a local path, a host name or a dev server address.
 
 ## What you need
 
@@ -107,9 +107,22 @@ The task shows the answer as sent, then the machine's own reply once it applied 
 
 What reaches a machine is its own choice, set by [`hub.commands`](../reference/configuration.md#keys) in its config.toml. **Machines** says it under each one: `takes answers and pushes`, `takes answers, not pushes` or `takes nothing from the hub`.
 
-- If a machine takes answers but not pushes, its task says `Not pushed: devbox takes answers, not pushes. Push at the machine, or allow pushes in its kebbie settings.`
+- If a machine takes answers but not pushes, its task says `Not pushed: devbox takes no pushes from the hub. Push at the machine, or allow pushes in its kebbie settings.`
 - If you turn the switch off, the device sends nothing; the setting stays in that browser alone.
 - If the hub has not enabled answering for your account, the task says so instead.
+
+### Work the backlog from your phone
+
+**Backlog** lists each machine's backlog as its board's Backlog column shows it, with whether an item is to write, drafting or ready and how many of its questions wait on you. Open an item to read it in full. A device that makes changes also:
+
+- **Adds an idea.** Tap **New idea**, write it and pick the machine. It is filed as `kebbie backlog add` files it, and the lead writes it out, hearing that it came from your phone.
+- **Answers an open question.** Pick the question on the item and write your answer. It waits with the lead until the lead folds it into the item, on the phone and on the board's card alike.
+- **Starts the item.** The machine starts it as `g` on the board does: the item is the task's prompt, and the lead picks how the task goes.
+
+- If questions still wait on you, the start is refused and says how many; start it again to start it anyway.
+- If the question changed on the item since you read it, the answer is refused; read the item again.
+- If the item is already running as a task, or left the backlog, the machine says so.
+- A note in a vault two machines share is the same item on both; start it from one.
 
 ### Approve a new device on the machine
 

@@ -125,15 +125,15 @@ pub(super) const START_AT_LABEL: &str = "Start at: 15:00, tomorrow 09:00, fri 09
 
 #[allow(clippy::too_many_arguments)]
 #[derive(Default)]
-pub(super) struct StartWith<'a> {
-    pub(super) backlog: Option<&'a str>,
-    pub(super) at: Option<&'a str>,
-    pub(super) anyway: bool,
-    pub(super) recipe: Option<&'a str>,
-    pub(super) mode: Option<&'a str>,
+pub(crate) struct StartWith<'a> {
+    pub(crate) backlog: Option<&'a str>,
+    pub(crate) at: Option<&'a str>,
+    pub(crate) anyway: bool,
+    pub(crate) recipe: Option<&'a str>,
+    pub(crate) mode: Option<&'a str>,
 }
 
-pub(super) fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, with: &StartWith) -> Result<String> {
+pub(crate) fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, with: &StartWith) -> Result<String> {
     let dir = crate::lead::state_dir()?.join("starts");
     crate::state::private_dir(&dir)?;
     let log = dir.join(format!("{}.log", name.replace('/', "-")));
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn a_task_started_from_the_board_runs_as_its_own_process_with_the_name_prompt_and_item_as_arguments() {
         let source = include_str!("input.rs");
-        let start = &source[source.find("\npub(super) fn start_in_background(").unwrap()..];
+        let start = &source[source.find("\npub(crate) fn start_in_background(").unwrap()..];
         let body = &start[..start.find("\n}\n").unwrap()];
         assert!(body.contains("start_command(") && !body.contains("\"-c\""), "arguments go as argv, never through a shell: {body}");
         assert!(body.contains("process_group(0)"));

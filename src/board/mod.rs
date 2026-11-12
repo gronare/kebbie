@@ -41,6 +41,8 @@ mod agent_updates;
 mod update_window;
 pub(crate) mod widgets;
 
+pub(crate) use input::{StartWith, start_in_background};
+
 use std::collections::HashMap;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -77,7 +79,7 @@ use crate::status::{Checkout, Group, Item};
 use crate::tasks;
 use crate::usage::Usage;
 use crate::{lead, update};
-use columns::suggested_name;
+pub(crate) use columns::suggested_name;
 use detail::Detail;
 use draw::draw;
 use editor::MessageEditor;

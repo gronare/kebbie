@@ -199,6 +199,9 @@ impl Asked {
             }
             Payload::Push(push) => Asked { kind: Kind::Push, task: task(&push.address), said: None },
             Payload::PromptAnswer(prompt) => Asked { kind: Kind::PromptAnswer, task: task(&prompt.address), said: None },
+            Payload::Idea(idea) => Asked { kind: Kind::Idea, task: String::new(), said: Some(short(&idea.text)) },
+            Payload::ItemAnswer(answer) => Asked { kind: Kind::ItemAnswer, task: item(&answer.item), said: Some(short(&answer.answer)) },
+            Payload::StartItem(start) => Asked { kind: Kind::StartItem, task: item(&start.item), said: None },
             other => Asked { kind: other.kind(), task: String::new(), said: None },
         }
     }
@@ -208,12 +211,15 @@ impl Asked {
             Kind::Answer => format!("answer to {}", self.task),
             Kind::Push => format!("push of {}", self.task),
             Kind::PromptAnswer => format!("choice on {}'s prompt", self.task),
+            Kind::Idea => "idea for the backlog".to_string(),
+            Kind::ItemAnswer => format!("answer on the backlog item {}", self.task),
+            Kind::StartItem => format!("start of the backlog item {}", self.task),
             other => other.name().to_string(),
         }
     }
 
     pub fn described(&self) -> String {
-        let article = if self.kind == Kind::Answer { "an" } else { "a" };
+        let article = if matches!(self.kind, Kind::Answer | Kind::ItemAnswer | Kind::Idea) { "an" } else { "a" };
         match &self.said {
             Some(said) => format!("{article} {}, {said:?}", self.noun()),
             None => format!("{article} {}", self.noun()),
@@ -223,6 +229,15 @@ impl Asked {
     pub fn its(&self) -> String {
         format!("its {}", self.noun())
     }
+}
+
+fn short(text: &str) -> String {
+    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if words.chars().count() <= 60 { words } else { format!("{}…", words.chars().take(59).collect::<String>()) }
+}
+
+fn item(key: &kebbie_hub_protocol::ItemKey) -> String {
+    key.as_str().split_once(':').map_or(key.as_str(), |(_, rest)| rest).to_string()
 }
 
 pub fn question_label(question: &str, choice: usize) -> Option<String> {

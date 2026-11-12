@@ -187,9 +187,14 @@ fn hub_url(table: &Table) -> Result<Option<String>> {
 
 fn hub_commands(table: &Table) -> Result<Option<HubCommands>> {
     let Some(hub) = subtable(table, "hub", "hub")? else { return Ok(None) };
-    match text(hub, "commands", "hub.commands")?.as_deref() {
+    const CHOICES: &str = "list any of \"answer\", \"push\", \"prompt\", \"idea\" and \"start\", as in [\"answer\", \"prompt\"]";
+    match hub.get("commands") {
         None => Ok(None),
-        Some(given) => HubCommands::ALL.into_iter().find(|mode| mode.key() == given).map(Some).ok_or_else(|| format!("hub.commands: \"{given}\" is not a choice; use \"answer-and-push\", \"answer\" or \"off\"")),
+        Some(value) if value.is_array() => HubCommands::from_keys(&strings(value, "hub.commands")?).map(Some).map_err(|given| format!("hub.commands: \"{given}\" is not a kind of command; {CHOICES}")),
+        Some(_) => {
+            let given = text(hub, "commands", "hub.commands")?.unwrap_or_default();
+            HubCommands::from_word(&given).map(Some).ok_or_else(|| format!("hub.commands: \"{given}\" is not a choice; {CHOICES}"))
+        }
     }
 }
 

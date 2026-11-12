@@ -374,23 +374,32 @@ fn lead_text(who: &str, line: &str, priority: &str, place: &str) -> String {
     format!("{who} added a quick item to the backlog: \"{}\"{priority}. Write it out now with the skill `{SKILL}` from what you know (your conversation with the user, the code, the notes), show the user the written item, and save it {place}. If it reached you only now, say that it waited for you.", line.trim())
 }
 
+// Where an item is filed and how the lead hears of it: the backlog folder, kebbie's state and the lead's inbox.
+pub struct Shelf<'a> {
+    pub dir: &'a Path,
+    pub state: &'a Path,
+    pub tell: &'a dyn Fn(&str) -> Result<()>,
+}
+
 // Files one item where new items go: an item file without the vault, the lead's to file with it. A quick one-liner goes to the lead to write out.
 pub fn file_item(sources: &[Source], filing: &Filing, from_lead: bool) -> Result<String> {
+    let (dir, state) = (dir(), crate::lead::state_dir()?);
+    file_item_on(&Shelf { dir: &dir, state: &state, tell: &|text| crate::messages::to_lead(crate::messages::ToLead::BacklogItem, text) }, sources, filing, from_lead)
+}
+
+pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lead: bool) -> Result<String> {
     let filed = crate::issues::today(crate::messages::now());
     match crate::config::filing(sources) {
         Some(Source::Local) => {
-            let (path, item) = add_in(&dir(), filing, &filed)?;
+            let (path, item) = add_in(shelf.dir, filing, &filed)?;
             let mut shown = Notice::new(Tone::Done, "Added to the backlog").detail("item", format!("\"{}\" [{}]", item.title, item.priority)).detail("ref", item.reference()).detail("file", path.display().to_string());
             if item.to_write() {
                 if from_lead {
-                    if let Ok(state) = crate::lead::state_dir() {
-                        mark_told(&state, std::slice::from_ref(&item.stem));
-                    }
+                    mark_told(shelf.state, std::slice::from_ref(&item.stem));
                     shown = shown.next(format!("Write it out now with the skill {SKILL}, in that file."));
                 } else {
-                    let told = crate::messages::to_lead(crate::messages::ToLead::BacklogItem, &lead_text(filing.by, filing.line, &item.priority, &format!("in its file {}", path.display())));
-                    if told.is_ok() && let Ok(state) = crate::lead::state_dir() {
-                        mark_told(&state, std::slice::from_ref(&item.stem));
+                    if (shelf.tell)(&lead_text(filing.by, filing.line, &item.priority, &format!("in its file {}", path.display()))).is_ok() {
+                        mark_told(shelf.state, std::slice::from_ref(&item.stem));
                     }
                     shown = shown.next("The lead writes it out; it waits for the lead when none runs.");
                 }
@@ -402,15 +411,14 @@ pub fn file_item(sources: &[Source], filing: &Filing, from_lead: bool) -> Result
             if from_lead {
                 return Notice::new(Tone::You, "Not added: new items go to the vault here").you(format!("Write it as a task note in the vault with the skill {SKILL}.")).err();
             }
-            let state = crate::lead::state_dir()?;
-            let id = crate::backlog_kept::keep(&state, filing.line, &item.priority, &item.repo, crate::messages::now())?;
+            let id = crate::backlog_kept::keep(shelf.state, filing.line, &item.priority, &item.repo, crate::messages::now())?;
             let filed = format!("Then run `kebbie backlog filed {}{id}`, so the row kebbie keeps for it on the board gives way to your note.", crate::backlog_kept::PREFIX);
             let text = if item.to_write() {
                 format!("{} {filed}", lead_text(filing.by, filing.line, &item.priority, "as a task note in the vault's backlog"))
             } else {
                 format!("{} filed a written-out backlog item; file it as a task note in the vault's backlog as it stands (title \"{}\", priority {}, repo {}). {filed}\n\n{}", filing.by, item.title, item.priority, if item.repo.is_empty() { "not given" } else { &item.repo }, item.body)
             };
-            crate::messages::to_lead(crate::messages::ToLead::BacklogItem, &text)?;
+            (shelf.tell)(&text)?;
             Notice::new(Tone::Moving, "Sent to the lead").next("It writes the item out and files it in the vault. Its row waits here until the note replaces it.").ok()
         }
         None => Notice::new(Tone::You, "Not added: no backlog takes new items").you(format!("List \"local\" or \"vault\" under [board.backlog] sources in {}.", crate::config::path().display())).err(),

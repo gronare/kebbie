@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, AutoApprove, Channel, HubCommands, HubTrust, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Settings, PERMISSION_MODES};
+use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, AutoApprove, Channel, HubTrust, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Settings, PERMISSION_MODES};
 use crate::repo::main_checkout;
 use crate::sh::Result;
 use crate::status::Group;
@@ -142,8 +142,8 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
         "The machine's one name: your phone shows it through the hub, and kebbie claims vault notes under it; kebbie hub connect and kebbie hub join use it, set it from --name or ask for it when unset. A task started from a vault note writes it with the task's name into the note's kebbie frontmatter key, and kebbie on another machine sharing the vault shows the note as worked on at this name and asks before starting it; the default is the host's short name. config.toml only.");
     key("hub.url", format!("{:?}", hub_url.value), hub_url.layer, Kind::Text, Scope::Machine,
         "The hub kebbie hub connect and the board's hub window connect this machine to: the kebbie hub unless set, or your own kebbie hub at an https address (http only on this machine). Choosing your own hub there sets it; the hub a machine is connected to stays in kebbie's state with its keys, so changing this key later moves nothing (kebbie hub move does). config.toml only.");
-    key("hub.commands", format!("{:?}", hub_commands.value.key()), hub_commands.layer, Kind::Choice(HubCommands::ALL.map(HubCommands::key).to_vec()), Scope::Machine,
-        "What this machine takes from your devices through the hub: \"answer-and-push\" takes answers to questions, choices on an agent's prompt and pushes; \"answer\" takes answers and prompt choices, and refuses a push; \"off\" takes nothing, and the board still posts. A command counts only from a device hub.trust lets in. config.toml only.");
+    key("hub.commands", quoted(&hub_commands.value.keys()), hub_commands.layer, Kind::List, Scope::Machine,
+        "What this machine takes from your devices through the hub, as a list of kinds: \"answer\" takes answers to a task's questions and to a backlog item's open questions; \"push\" pushes a task; \"prompt\" picks a choice on an agent's prompt; \"idea\" adds an idea to the backlog, as kebbie backlog add does; \"start\" starts a backlog item as a task, as g on the board does. Unset, it takes all five; [] takes nothing, and the board still posts. The earlier single words still read: \"answer-and-push\" is [\"answer\", \"push\", \"prompt\"], \"answer\" is [\"answer\", \"prompt\"] and \"off\" is []. A command counts only from a device hub.trust lets in. config.toml only.");
     key("hub.trust", format!("{:?}", hub_trust.value.key()), hub_trust.layer, Kind::Choice(HubTrust::ALL.map(HubTrust::key).to_vec()), Scope::Machine,
         "Which of your devices this machine takes commands from: \"device\" takes them from each device you approve on this machine, and a new device's first command waits here until you approve it (N on the board, or kebbie hub devices approve <name>) or hub.auto_approve lets it in; \"account\" takes them from any device signed in to the account this machine is connected to, with nothing to approve. Every command names the device that sent it, and kebbie hub devices lists them. config.toml only.");
     key("hub.auto_approve", format!("{:?}", hub_auto_approve.value.key()), hub_auto_approve.layer, Kind::Choice(AutoApprove::ALL.map(AutoApprove::key).to_vec()), Scope::Machine,

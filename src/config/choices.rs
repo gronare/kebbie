@@ -80,23 +80,73 @@ impl AgentUpdates {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum HubCommands {
-    #[default]
-    AnswerAndPush,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HubCommand {
     Answer,
-    Off,
+    Push,
+    Prompt,
+    Idea,
+    Start,
 }
 
-impl HubCommands {
-    pub const ALL: [HubCommands; 3] = [HubCommands::AnswerAndPush, HubCommands::Answer, HubCommands::Off];
+impl HubCommand {
+    pub const ALL: [HubCommand; 5] = [HubCommand::Answer, HubCommand::Push, HubCommand::Prompt, HubCommand::Idea, HubCommand::Start];
 
     pub fn key(self) -> &'static str {
         match self {
-            HubCommands::AnswerAndPush => "answer-and-push",
-            HubCommands::Answer => "answer",
-            HubCommands::Off => "off",
+            HubCommand::Answer => "answer",
+            HubCommand::Push => "push",
+            HubCommand::Prompt => "prompt",
+            HubCommand::Idea => "idea",
+            HubCommand::Start => "start",
         }
+    }
+
+    fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+// The kinds of command this machine takes from the hub; the three single words of earlier versions still read as the sets they named.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HubCommands(u8);
+
+impl Default for HubCommands {
+    fn default() -> Self {
+        HubCommands::of(&HubCommand::ALL)
+    }
+}
+
+impl HubCommands {
+    pub const OFF: HubCommands = HubCommands(0);
+
+    pub fn of(commands: &[HubCommand]) -> HubCommands {
+        HubCommands(commands.iter().fold(0, |bits, command| bits | command.bit()))
+    }
+
+    pub fn takes(self, command: HubCommand) -> bool {
+        self.0 & command.bit() != 0
+    }
+
+    pub fn taken(self) -> Vec<HubCommand> {
+        HubCommand::ALL.into_iter().filter(|command| self.takes(*command)).collect()
+    }
+
+    pub fn keys(self) -> Vec<&'static str> {
+        self.taken().into_iter().map(HubCommand::key).collect()
+    }
+
+    pub fn from_word(word: &str) -> Option<HubCommands> {
+        match word {
+            "answer-and-push" => Some(HubCommands::of(&[HubCommand::Answer, HubCommand::Push, HubCommand::Prompt])),
+            "answer" => Some(HubCommands::of(&[HubCommand::Answer, HubCommand::Prompt])),
+            "off" => Some(HubCommands::OFF),
+            _ => None,
+        }
+    }
+
+    pub fn from_keys(keys: &[String]) -> std::result::Result<HubCommands, String> {
+        keys.iter().map(|key| HubCommand::ALL.into_iter().find(|command| command.key() == key).ok_or_else(|| key.clone())).collect::<std::result::Result<Vec<_>, _>>().map(|commands| HubCommands::of(&commands))
     }
 }
 

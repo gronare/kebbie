@@ -149,7 +149,7 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 | `notify.command` | none | config.toml only | The shell command kebbie runs when something needs you. Unset sends nothing. See [Notify command](#notify-command). |
 | `vault.command` | none | config.toml only | The vault command kebbie runs for task notes, log lines and the board's snapshot, before its own arguments, such as `"uvx mindin"`. |
 | `hub.url` | the kebbie hub, `https://hub.kebbie.dev` | config.toml only | The [kebbie hub](../how-to/see-your-board-on-your-phone.md) `kebbie hub connect` and the board's `H` window connect this machine to. |
-| `hub.commands` | `"answer-and-push"` | config.toml only | What this machine takes from your devices through the hub: `"answer-and-push"`, `"answer"` or `"off"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
+| `hub.commands` | all five kinds | config.toml only | What this machine takes from your devices through the hub: a list of `"answer"`, `"push"`, `"prompt"`, `"idea"` and `"start"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
 | `hub.trust` | `"device"` | config.toml only | Which of your devices this machine takes commands from: `"device"`, each device you approve here, or `"account"`, any device signed in to your account. |
 | `hub.auto_approve` | `"24h"` | config.toml only | When a device waiting under `hub.trust = "device"` is let in: `"24h"` after its first command unless you deny it, or `"never"`, only when you approve it. |
 
@@ -174,16 +174,24 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 - The hub a machine is connected to stays with its keys in [`hub/`](files.md#the-state-directory), so a change here moves nothing. `kebbie hub move` moves it, and so does a permanent redirect (308) to another port or to `https` on the same host.
 - `kebbie config` shows it, and `hub.connected` with the hub this machine posts to.
 
-`hub.commands` says what this machine takes from your devices through the hub. A command counts only from a device `hub.trust` lets in, below.
+`hub.commands` lists the kinds of command this machine takes from your devices through the hub. A command counts only from a device `hub.trust` lets in, below.
 
-| Value | Answers to questions | Choices on an agent's prompt | Pushes |
-| --- | --- | --- | --- |
-| `"answer-and-push"` | taken | taken | taken |
-| `"answer"` | taken | taken | refused |
-| `"off"` | refused | refused | refused |
+| Kind | What the machine takes |
+| --- | --- |
+| `"answer"` | Answers to a task's questions and to a backlog item's open questions. |
+| `"push"` | Pushes of a task. |
+| `"prompt"` | Choices on an agent's prompt. |
+| `"idea"` | Ideas, added to the backlog as `kebbie backlog add` adds them. |
+| `"start"` | Starts of a backlog item as a task, as `g` on the board starts one. |
 
-- The board still posts with `"off"`, and your phone shows each machine's choice under Machines.
-- A refused command gets an answer that names it, such as `Not pushed: devbox takes answers, not pushes. Push at the machine, or allow pushes in its kebbie settings.`
+```toml
+[hub]
+commands = ["answer", "prompt", "idea"]
+```
+
+- Unset, the machine takes all five. `[]` takes nothing, and the board still posts; your phone shows each machine's choice under Machines.
+- The single words of earlier versions still read: `"answer-and-push"` is `["answer", "push", "prompt"]`, `"answer"` is `["answer", "prompt"]` and `"off"` is `[]`.
+- A refused command gets an answer that names it, such as `Not pushed: devbox takes no pushes from the hub. Push at the machine, or allow pushes in its kebbie settings.`
 - A change counts from the next command; `kebbie hub status` shows it on its `commands:` line.
 
 `hub.trust` says which of your devices this machine takes commands from. Every command names the device that sent it, and [`kebbie hub devices`](commands.md#kebbie-hub-devices) lists them.

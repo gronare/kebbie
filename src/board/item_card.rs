@@ -418,10 +418,7 @@ pub(super) fn send_answer(state: &Path, card: &mut ItemCard, answer: &str, tell:
     let question = card.questions().get(card.pick).cloned().ok_or("This item has no open question to answer.")?;
     let given = Answer { item: card.entry.reference.clone(), question: question.text.clone(), answer: answer.to_string(), at: crate::messages::now() };
     crate::backlog_kept::answer(state, given.clone())?;
-    tell(&format!(
-        "The user answered an open question on the backlog item \"{}\" ({}). Question: \"{}\" Answer: \"{}\". Fold the answer into the item with the skill `{}` and take the question out.",
-        card.entry.title, card.wherein(), question.text, answer, crate::backlog_file::SKILL,
-    ))?;
+    tell(&crate::backlog_kept::answer_text("The user", &card.entry.title, &card.wherein(), &question.text, answer))?;
     card.answers.retain(|other| other.question != given.question);
     card.answers.push(given);
     card.pick = card.next_open(card.pick);

@@ -516,14 +516,20 @@ fn the_update_channel_is_release_unless_the_machine_config_says_main() {
 }
 
 #[test]
-fn hub_commands_takes_answers_and_pushes_unless_the_machine_config_says_answer_or_off() {
-    assert_eq!(settings(&Worktree::default(), &Machine::default()).hub_commands, Setting { value: HubCommands::AnswerAndPush, layer: Layer::Default });
-    assert_eq!(settings(&Worktree::default(), &machine("[hub]\ncommands = \"answer\"\n")).hub_commands, Setting { value: HubCommands::Answer, layer: Layer::Machine });
-    assert_eq!(machine("[hub]\ncommands = \"off\"\n").hub_commands, Some(HubCommands::Off));
-    assert!(parse_machine("[hub]\ncommands = \"push\"\n", "config.toml").unwrap_err().contains("hub.commands: \"push\" is not a choice; use \"answer-and-push\", \"answer\" or \"off\""));
+fn hub_commands_takes_every_kind_unless_the_machine_config_lists_some_and_still_reads_the_old_words() {
+    use HubCommand::{Answer, Idea, Prompt, Push, Start};
+    assert_eq!(settings(&Worktree::default(), &Machine::default()).hub_commands, Setting { value: HubCommands::of(&HubCommand::ALL), layer: Layer::Default });
+    assert_eq!(settings(&Worktree::default(), &machine("[hub]\ncommands = [\"idea\", \"answer\"]\n")).hub_commands, Setting { value: HubCommands::of(&[Answer, Idea]), layer: Layer::Machine });
+    assert_eq!(machine("[hub]\ncommands = []\n").hub_commands, Some(HubCommands::OFF));
+    for (word, kinds) in [("answer-and-push", vec![Answer, Push, Prompt]), ("answer", vec![Answer, Prompt]), ("off", vec![])] {
+        assert_eq!(machine(&format!("[hub]\ncommands = {word:?}\n")).hub_commands.map(HubCommands::taken), Some(kinds), "{word}");
+    }
+    assert!(!HubCommands::from_word("answer-and-push").unwrap().takes(Start), "a machine set to the old word takes no new kind until its config lists it");
+    assert!(parse_machine("[hub]\ncommands = \"push\"\n", "config.toml").unwrap_err().contains("hub.commands: \"push\" is not a choice; list any of \"answer\", \"push\", \"prompt\", \"idea\" and \"start\""));
+    assert!(parse_machine("[hub]\ncommands = [\"answer\", \"merge\"]\n", "config.toml").unwrap_err().contains("hub.commands: \"merge\" is not a kind of command"));
     let entry = entries(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) }).into_iter().find(|entry| entry.key == "hub.commands").expect("kebbie config edit lists hub.commands");
-    assert_eq!((entry.value.as_str(), entry.kind, entry.scope), ("\"answer-and-push\"", Kind::Choice(vec!["answer-and-push", "answer", "off"]), Scope::Machine));
-    assert!(entry.about.starts_with("What this machine takes from your devices through the hub: \"answer-and-push\" takes answers to questions, choices on an agent's prompt and pushes; \"answer\" takes answers and prompt choices, and refuses a push; \"off\" takes nothing, and the board still posts. A command counts only from a device hub.trust lets in."), "{}", entry.about);
+    assert_eq!((entry.value.as_str(), entry.kind, entry.scope), ("[\"answer\", \"push\", \"prompt\", \"idea\", \"start\"]", Kind::List, Scope::Machine));
+    assert!(entry.about.starts_with("What this machine takes from your devices through the hub, as a list of kinds:") && entry.about.contains("\"answer-and-push\" is [\"answer\", \"push\", \"prompt\"]"), "{}", entry.about);
 }
 
 #[test]

@@ -7,7 +7,9 @@ What each kebbie release brings, one line per change, as you would tell someone 
 ### What's new
 - When a hub refuses the board, kebbie says the hub has not enabled answering for your account, with the hub's link.
 - The phone answers an agent's prompt on a task's screen with one tap, while that prompt still shows; update the hub first.
-- hub.commands sets what a machine takes through the hub, answers and pushes by default, and only from your account.
+- hub.commands lists what a machine takes through the hub, every kind by default, and only from your account.
+- Your phone shows the backlog with each item in full; update the hub first.
+- From your phone you add an idea, answer an item's open questions and start an item as a task.
 - A new device's first command waits on the machine until you approve it under N or with kebbie hub devices; update the hub first.
 - hub.trust and hub.auto_approve set which devices a machine takes commands from, and when a waiting one is let in.
 - A wish about kebbie goes to its maintainers the way a bug does, under the same report.text choice.

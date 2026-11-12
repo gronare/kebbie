@@ -106,6 +106,10 @@ pub fn answer(state: &Path, given: Answer) -> Result<()> {
     write_answers(state, &answers)
 }
 
+pub fn answer_text(who: &str, title: &str, wherein: &str, question: &str, answer: &str) -> String {
+    format!("{who} answered an open question on the backlog item \"{title}\" ({wherein}). Question: \"{question}\" Answer: \"{answer}\". Fold the answer into the item with the skill `{}` and take the question out.", crate::backlog_file::SKILL)
+}
+
 // An answer leaves once its question is gone from the item: the lead has folded it in.
 pub fn settle(state: &Path, item: &str, open: &[Question]) -> Vec<Answer> {
     let answers = answers_in(state);

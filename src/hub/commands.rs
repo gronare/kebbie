@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use kebbie_hub_api::{HubInfo, Inbox, ResultStored, ResultUpload};
-use kebbie_hub_protocol::{AccountKey, Answer, AppliedCommands, CommandResult, Dropped, Envelope, Header, Id, Kind, Machine, Outcome, Payload, PromptAnswer, PushApproval, Reason, Refusal, Trust, VerifiedDevice, authorize, seal};
+use kebbie_hub_protocol::{AccountKey, Answer, AppliedCommands, CommandResult, Dropped, Envelope, Header, Id, Idea, ItemAnswer, Kind, Machine, Outcome, Payload, PromptAnswer, PushApproval, Reason, Refusal, StartItem, Trust, VerifiedDevice, authorize, seal};
 use serde::{Deserialize, Serialize};
 
 use super::devices::{self, Asked, Locked, Policy};
 use super::http::{CALL, Client, HubError, LONG_POLL};
 use super::identity::{self, Identity};
-use crate::config::HubCommands;
+use crate::config::{HubCommand, HubCommands};
 use crate::notice::Notice;
 use crate::permit::Caller;
 use crate::sh::Result;
@@ -62,6 +62,9 @@ pub struct Hands<'a> {
     pub answer: &'a dyn Fn(&Caller, &Answer) -> Done,
     pub push: &'a dyn Fn(&Caller, &PushApproval) -> Done,
     pub prompt: &'a dyn Fn(&Caller, &PromptAnswer) -> Done,
+    pub idea: &'a dyn Fn(&Caller, &Idea) -> Done,
+    pub item_answer: &'a dyn Fn(&Caller, &ItemAnswer) -> Done,
+    pub start_item: &'a dyn Fn(&Caller, &StartItem) -> Done,
     pub relay: &'a dyn Fn(),
     pub notify: &'a dyn Fn(&str),
 }
@@ -110,22 +113,26 @@ pub fn save_bridge(dir: &Path, bridge: &Bridge) -> Result<()> {
 
 // What hub.commands lets this machine take, as the board's accepts and authorize's gate.
 pub fn accepts(policy: HubCommands) -> Vec<Kind> {
-    match policy {
-        HubCommands::AnswerAndPush => vec![Kind::Answer, Kind::Push, Kind::PromptAnswer],
-        HubCommands::Answer => vec![Kind::Answer, Kind::PromptAnswer],
-        HubCommands::Off => Vec::new(),
-    }
+    policy.taken().into_iter().flat_map(|command| match command {
+        HubCommand::Answer => vec![Kind::Answer, Kind::ItemAnswer],
+        HubCommand::Push => vec![Kind::Push],
+        HubCommand::Prompt => vec![Kind::PromptAnswer],
+        HubCommand::Idea => vec![Kind::Idea],
+        HubCommand::Start => vec![Kind::StartItem],
+    }).collect()
 }
 
 // A kind hub.commands leaves out, named with what the machine takes and where the user can do it instead.
 fn not_taken(kind: Kind, machine: &str, accepts: &[Kind]) -> String {
     let (refused, act, allow) = match kind {
         Kind::Push => ("Not pushed", "Push", "pushes"),
-        Kind::PromptAnswer => ("Not chosen", "Choose", "answers"),
-        Kind::Answer => ("Not answered", "Answer", "answers"),
+        Kind::PromptAnswer => ("Not chosen", "Choose", "prompt choices"),
+        Kind::Answer | Kind::ItemAnswer => ("Not answered", "Answer", "answers"),
+        Kind::Idea => ("Not added", "Add it", "ideas"),
+        Kind::StartItem => ("Not started", "Start it", "starts"),
         other => return format!("Not done: {machine} takes no {} from the hub", other.name()),
     };
-    let takes = if accepts.is_empty() { "takes nothing from the hub" } else { "takes answers, not pushes" };
+    let takes = if accepts.is_empty() { "takes nothing from the hub".to_string() } else { format!("takes no {allow} from the hub") };
     format!("{refused}: {machine} {takes}. {act} at the machine, or allow {allow} in its kebbie settings.")
 }
 
@@ -191,6 +198,9 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
                 Payload::Answer(answer) => (hands.answer)(&caller, answer),
                 Payload::Push(push) => (hands.push)(&caller, push),
                 Payload::PromptAnswer(prompt) => (hands.prompt)(&caller, prompt),
+                Payload::Idea(idea) => (hands.idea)(&caller, idea),
+                Payload::ItemAnswer(answer) => (hands.item_answer)(&caller, answer),
+                Payload::StartItem(start) => (hands.start_item)(&caller, start),
                 _ => (Outcome::Refused { reason: Reason::NotAllowed }, not_taken(header.kind, &identity.name, accepts)),
             };
             Handled::Applied(result(header, done))
@@ -286,7 +296,7 @@ pub fn round(dir: &Path, wait: u64, accepts: &[Kind], policy: Policy, hands: &Ha
     Ok(notes)
 }
 
-fn plain(text: &str) -> String {
+pub(super) fn plain(text: &str) -> String {
     let notice = Notice::read(text, false);
     let mut said = notice.headline;
     for more in [notice.next, notice.you].into_iter().flatten() {
@@ -366,7 +376,7 @@ fn keeper_hands<T>(state: &Path, run: impl FnOnce(&Hands) -> T) -> T {
     let notify = |text: &str| {
         crate::notify::send(state, &crate::notify::Notice::from(crate::notify::Event::Device, "kebbie", text.to_string()));
     };
-    run(&Hands { answer: &answered, push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address)), prompt: &prompt, relay: &relay, notify: &notify })
+    run(&Hands { answer: &answered, push: &|caller, push| pushed(crate::tasks::push_as(caller, &push.address)), prompt: &prompt, idea: &super::backlog::idea, item_answer: &super::backlog::item_answer, start_item: &super::backlog::start_item, relay: &relay, notify: &notify })
 }
 
 // The keeper's thread for one identity directory: it idles while the machine has no pinned account or the hub takes no commands, and long-polls otherwise.
@@ -479,21 +489,26 @@ mod tests {
         crate::messages::now()
     }
 
+    fn word(word: &str) -> HubCommands {
+        HubCommands::from_word(word).unwrap()
+    }
+
     struct Seen {
         answers: RefCell<Vec<(Caller, Answer)>>,
         pushes: RefCell<Vec<(Caller, PushApproval)>>,
         prompts: RefCell<Vec<(Caller, PromptAnswer)>>,
+        backlog: RefCell<Vec<(Caller, Payload)>>,
         relays: Cell<u32>,
         told: RefCell<Vec<String>>,
     }
 
     impl Seen {
         fn new() -> Seen {
-            Seen { answers: RefCell::new(Vec::new()), pushes: RefCell::new(Vec::new()), prompts: RefCell::new(Vec::new()), relays: Cell::new(0), told: RefCell::new(Vec::new()) }
+            Seen { answers: RefCell::new(Vec::new()), pushes: RefCell::new(Vec::new()), prompts: RefCell::new(Vec::new()), backlog: RefCell::new(Vec::new()), relays: Cell::new(0), told: RefCell::new(Vec::new()) }
         }
 
         fn applied(&self) -> usize {
-            self.answers.borrow().len() + self.pushes.borrow().len() + self.prompts.borrow().len()
+            self.answers.borrow().len() + self.pushes.borrow().len() + self.prompts.borrow().len() + self.backlog.borrow().len()
         }
     }
 
@@ -510,9 +525,21 @@ mod tests {
             seen.prompts.borrow_mut().push((caller.clone(), prompt.clone()));
             (Outcome::Done, "Chose it".to_string())
         };
+        let idea = |caller: &Caller, idea: &Idea| {
+            seen.backlog.borrow_mut().push((caller.clone(), Payload::Idea(idea.clone())));
+            (Outcome::Done, "Sent to the lead".to_string())
+        };
+        let item_answer = |caller: &Caller, answer: &ItemAnswer| {
+            seen.backlog.borrow_mut().push((caller.clone(), Payload::ItemAnswer(answer.clone())));
+            (Outcome::Done, "With the lead".to_string())
+        };
+        let start_item = |caller: &Caller, start: &StartItem| {
+            seen.backlog.borrow_mut().push((caller.clone(), Payload::StartItem(start.clone())));
+            if start.anyway { (Outcome::Done, "Starting retry-red-runs@web".to_string()) } else { (Outcome::Refused { reason: Reason::QuestionsOpen { blocking: 2 } }, "Not started: 2 questions wait on you".to_string()) }
+        };
         let relay = || seen.relays.set(seen.relays.get() + 1);
         let notify = |text: &str| seen.told.borrow_mut().push(text.to_string());
-        run(&Hands { answer: &answer, push: &push, prompt: &prompt, relay: &relay, notify: &notify })
+        run(&Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, relay: &relay, notify: &notify })
     }
 
     fn answer() -> Payload {
@@ -574,7 +601,7 @@ mod tests {
         let mut account = Account::connected();
         let seen = Seen::new();
         let sent = account.send(&answer());
-        account.round(&seen, HubCommands::AnswerAndPush);
+        account.round(&seen, word("answer-and-push"));
         assert_eq!(seen.answers.borrow().as_slice(), [(account.caller(), Answer { address: "refunds@shop".to_string(), question: "q1".to_string(), choice: Some(0), comment: String::new() })]);
         assert_eq!(seen.relays.get(), 1, "the board goes out again at once");
         let result = account.result(&sent);
@@ -585,12 +612,12 @@ mod tests {
         let mut lost = bridge(&account.dir);
         lost.inbox_seq = 0;
         save_bridge(&account.dir, &lost).unwrap();
-        let notes = account.round(&seen, HubCommands::AnswerAndPush);
+        let notes = account.round(&seen, word("answer-and-push"));
         assert_eq!(seen.answers.borrow().len(), 1, "a command that comes again is never applied twice: {notes:?}");
         assert_eq!(seen.relays.get(), 1);
 
         let pushed = account.send(&push());
-        account.round(&seen, HubCommands::AnswerAndPush);
+        account.round(&seen, word("answer-and-push"));
         assert_eq!(seen.pushes.borrow().len(), 1);
         assert_eq!(account.result(&pushed).text, "Pushed 9f3c2a1 to main");
         for file in [LEDGER, BRIDGE] {
@@ -604,15 +631,15 @@ mod tests {
         let mut account = Account::connected();
         let seen = Seen::new();
         let pushed = account.send(&push());
-        account.round(&seen, HubCommands::Answer);
+        account.round(&seen, word("answer"));
         let refused = account.result(&pushed);
-        assert_eq!((refused.outcome, refused.text.as_str()), (Outcome::Refused { reason: Reason::NotAllowed }, "Not pushed: mac takes answers, not pushes. Push at the machine, or allow pushes in its kebbie settings."));
+        assert_eq!((refused.outcome, refused.text.as_str()), (Outcome::Refused { reason: Reason::NotAllowed }, "Not pushed: mac takes no pushes from the hub. Push at the machine, or allow pushes in its kebbie settings."));
         let answered = account.send(&answer());
-        account.round(&seen, HubCommands::Answer);
+        account.round(&seen, word("answer"));
         assert_eq!(account.result(&answered).outcome, Outcome::Done, "answers still go through");
 
         let off = account.send(&answer());
-        account.round(&seen, HubCommands::Off);
+        account.round(&seen, HubCommands::OFF);
         assert_eq!(account.result(&off).text, "Not answered: mac takes nothing from the hub. Answer at the machine, or allow answers in its kebbie settings.");
         assert!(seen.pushes.borrow().is_empty() && seen.answers.borrow().len() == 1, "only the allowed answer was applied");
     }
@@ -623,7 +650,7 @@ mod tests {
         let seen = Seen::new();
         let soon = account.browser.seal_command(&account.identity.machine, &answer(), now(), Some(60)).unwrap();
         account.hub.runtime.block_on(account.browser.send_command(&soon)).unwrap();
-        with_hands(&seen, |hands| round(&account.dir, 0, &accepts(HubCommands::AnswerAndPush), ACCOUNT, hands, &|| now() + 120)).unwrap();
+        with_hands(&seen, |hands| round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, hands, &|| now() + 120)).unwrap();
         assert_eq!(account.result(&soon).outcome, Outcome::Refused { reason: Reason::Expired });
         assert!(seen.applied() == 0 && seen.relays.get() == 0, "nothing was applied");
     }
@@ -639,12 +666,13 @@ mod tests {
                 panic!("kebbie stopped here")
             };
             let (push, prompt, relay, notify) = (|_: &Caller, _: &PushApproval| unreachable!(), |_: &Caller, _: &PromptAnswer| unreachable!(), || {}, |_: &str| {});
-            round(&account.dir, 0, &accepts(HubCommands::AnswerAndPush), ACCOUNT, &Hands { answer: &answer, push: &push, prompt: &prompt, relay: &relay, notify: &notify }, &now)
+            let (idea, item_answer, start_item) = (|_: &Caller, _: &Idea| unreachable!(), |_: &Caller, _: &ItemAnswer| unreachable!(), |_: &Caller, _: &StartItem| unreachable!());
+            round(&account.dir, 0, &accepts(word("answer-and-push")), ACCOUNT, &Hands { answer: &answer, push: &push, prompt: &prompt, idea: &idea, item_answer: &item_answer, start_item: &start_item, relay: &relay, notify: &notify }, &now)
         }));
         assert!(crashed.is_err());
         assert_eq!(seen.answers.borrow().len(), 1, "applied once, then cut off before it was recorded");
         assert!(ledger(&account.dir).started.contains_key(&sent.header.id));
-        account.round(&seen, HubCommands::AnswerAndPush);
+        account.round(&seen, word("answer-and-push"));
         assert_eq!(seen.answers.borrow().len(), 1, "not applied a second time");
         let result = account.result(&sent);
         assert_eq!((result.outcome, result.text.as_str()), (Outcome::Failed, STOPPED));
@@ -699,11 +727,11 @@ mod tests {
         }
 
         fn handle(&self, seen: &Seen, policy: Policy, envelope: &Envelope, at: u64) -> Handled {
-            with_hands(seen, |hands| handle(&self.dir, &self.identity, &self.account, &accepts(HubCommands::AnswerAndPush), policy, envelope, hands, at)).unwrap()
+            with_hands(seen, |hands| handle(&self.dir, &self.identity, &self.account, &accepts(word("answer-and-push")), policy, envelope, hands, at)).unwrap()
         }
 
         fn release(&self, seen: &Seen, policy: Policy, at: u64) -> Vec<Handled> {
-            with_hands(seen, |hands| release(&self.dir, &self.identity, &self.account, &accepts(HubCommands::AnswerAndPush), policy, hands, at)).unwrap().into_iter().map(|(_, handled)| handled).collect()
+            with_hands(seen, |hands| release(&self.dir, &self.identity, &self.account, &accepts(word("answer-and-push")), policy, hands, at)).unwrap().into_iter().map(|(_, handled)| handled).collect()
         }
 
         fn state(&self, phone: &Phone) -> Option<State> {
@@ -868,11 +896,11 @@ mod tests {
         let mut account = Account::connected();
         let seen = Seen::new();
         let sent = account.send(&answer());
-        account.round_under(&seen, HubCommands::AnswerAndPush, DEVICE);
+        account.round_under(&seen, word("answer-and-push"), DEVICE);
         assert_eq!(seen.applied(), 0, "held, not applied");
         let name = account.browser.device_name.clone();
         devices::answer(&account.dir, &name, Decision::Approve, now()).unwrap();
-        account.round_under(&seen, HubCommands::AnswerAndPush, DEVICE);
+        account.round_under(&seen, word("answer-and-push"), DEVICE);
         assert_eq!(seen.answers.borrow().as_slice().iter().map(|(caller, _)| caller.clone()).collect::<Vec<_>>(), [account.caller()]);
         let result = account.result(&sent);
         assert_eq!((result.outcome, result.text.as_str(), result.device.clone()), (Outcome::Done, "Answered", sent.header.from.clone()));
@@ -880,16 +908,68 @@ mod tests {
 
     #[test]
     fn hub_commands_drives_what_the_machine_takes_and_names_what_it_refuses() {
-        assert_eq!(accepts(HubCommands::AnswerAndPush), [Kind::Answer, Kind::Push, Kind::PromptAnswer]);
-        assert_eq!(accepts(HubCommands::Answer), [Kind::Answer, Kind::PromptAnswer]);
-        assert!(accepts(HubCommands::Off).is_empty());
-        assert_eq!(accepts(HubCommands::default()), accepts(HubCommands::AnswerAndPush), "answer-and-push unless set");
-        let off = accepts(HubCommands::Off);
+        assert_eq!(accepts(HubCommands::default()), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer, Kind::Idea, Kind::StartItem], "every kind unless set");
+        assert_eq!(accepts(word("answer-and-push")), [Kind::Answer, Kind::ItemAnswer, Kind::Push, Kind::PromptAnswer]);
+        assert_eq!(accepts(word("answer")), [Kind::Answer, Kind::ItemAnswer, Kind::PromptAnswer]);
+        assert_eq!(accepts(HubCommands::of(&[HubCommand::Idea, HubCommand::Start])), [Kind::Idea, Kind::StartItem]);
+        assert!(accepts(HubCommands::OFF).is_empty());
+        let off = accepts(HubCommands::OFF);
         assert_eq!(not_taken(Kind::Push, "devbox", &off), "Not pushed: devbox takes nothing from the hub. Push at the machine, or allow pushes in its kebbie settings.");
-        assert_eq!(not_taken(Kind::PromptAnswer, "devbox", &off), "Not chosen: devbox takes nothing from the hub. Choose at the machine, or allow answers in its kebbie settings.");
-        assert_eq!(not_taken(Kind::Start, "devbox", &accepts(HubCommands::AnswerAndPush)), "Not done: devbox takes no start from the hub");
-        assert_eq!(crate::hub::commands_line(HubCommands::Answer), "commands: answers and prompt choices; pushes off (hub.commands = \"answer\")");
-        assert_eq!(crate::hub::commands_line(HubCommands::Off), "commands: off (hub.commands = \"off\")");
+        assert_eq!(not_taken(Kind::PromptAnswer, "devbox", &off), "Not chosen: devbox takes nothing from the hub. Choose at the machine, or allow prompt choices in its kebbie settings.");
+        assert_eq!(not_taken(Kind::StartItem, "devbox", &accepts(word("answer"))), "Not started: devbox takes no starts from the hub. Start it at the machine, or allow starts in its kebbie settings.");
+        assert_eq!(not_taken(Kind::Idea, "devbox", &accepts(word("answer"))), "Not added: devbox takes no ideas from the hub. Add it at the machine, or allow ideas in its kebbie settings.");
+        assert_eq!(not_taken(Kind::Start, "devbox", &accepts(word("answer-and-push"))), "Not done: devbox takes no start from the hub");
+        assert_eq!(crate::hub::commands_line(word("answer")), "commands: answer, prompt (hub.commands = [\"answer\", \"prompt\"])");
+        assert_eq!(crate::hub::commands_line(HubCommands::OFF), "commands: off (hub.commands = [])");
+    }
+
+    fn idea() -> Payload {
+        Payload::Idea(Idea { text: "Rerun a flaky red run once".to_string(), repo: Some("web".to_string()) })
+    }
+
+    fn item_answer() -> Payload {
+        Payload::ItemAnswer(ItemAnswer { item: kebbie_hub_protocol::ItemKey::parse("vault:Projects/retry.md").unwrap(), index: 0, question: "Which red runs count as flaky?".to_string(), answer: "Only e2e".to_string() })
+    }
+
+    fn start_item(anyway: bool) -> Payload {
+        Payload::StartItem(StartItem { item: kebbie_hub_protocol::ItemKey::parse("vault:Projects/retry.md").unwrap(), anyway })
+    }
+
+    #[test]
+    fn the_phones_idea_answer_and_start_go_in_as_the_user_from_that_device_and_their_results_reach_the_browser() {
+        let mut account = Account::connected();
+        let seen = Seen::new();
+        let sent = [idea(), item_answer(), start_item(false), start_item(true)].map(|payload| account.send(&payload));
+        account.round(&seen, HubCommands::default());
+        let applied: Vec<(Caller, Kind)> = seen.backlog.borrow().iter().map(|(caller, payload)| (caller.clone(), payload.kind())).collect();
+        assert_eq!(applied, [Kind::Idea, Kind::ItemAnswer, Kind::StartItem, Kind::StartItem].map(|kind| (account.caller(), kind)));
+        let results: Vec<(Outcome, String)> = sent.iter().map(|envelope| account.result(envelope)).map(|result| (result.outcome, result.text)).collect();
+        assert_eq!(results[0], (Outcome::Done, "Sent to the lead".to_string()));
+        assert_eq!(results[1], (Outcome::Done, "With the lead".to_string()));
+        assert_eq!(results[2], (Outcome::Refused { reason: Reason::QuestionsOpen { blocking: 2 } }, "Not started: 2 questions wait on you".to_string()), "the count reaches the browser");
+        assert_eq!(results[3], (Outcome::Done, "Starting retry-red-runs@web".to_string()));
+        assert_eq!(seen.relays.get(), 1, "the board goes out again at once");
+    }
+
+    #[test]
+    fn a_backlog_kind_hub_commands_leaves_out_is_refused_and_a_new_devices_waits_like_any_other() {
+        let mut account = Account::connected();
+        let seen = Seen::new();
+        let sent = [idea(), start_item(true)].map(|payload| account.send(&payload));
+        account.round(&seen, HubCommands::of(&[HubCommand::Answer, HubCommand::Idea]));
+        assert_eq!(account.result(&sent[0]).outcome, Outcome::Done);
+        let refused = account.result(&sent[1]);
+        assert_eq!((refused.outcome, refused.text.as_str()), (Outcome::Refused { reason: Reason::NotAllowed }, "Not started: mac takes no starts from the hub. Start it at the machine, or allow starts in its kebbie settings."));
+        assert_eq!(seen.backlog.borrow().len(), 1, "only the idea was applied");
+
+        let machine = Machine::new();
+        let phone = machine.phone("iPhone 16");
+        let held = phone.send(&machine.account, &machine.identity, &item_answer(), now());
+        assert_eq!(machine.handle(&seen, DEVICE, &held, now()), Handled::Held(phone.id().clone()));
+        assert_eq!(ledger(&machine.dir).held[&held.header.id].asked.described(), "an answer on the backlog item Projects/retry.md, \"Only e2e\"");
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
+        assert!(matches!(machine.release(&seen, DEVICE, now()).as_slice(), [Handled::Applied(_)]));
+        assert_eq!(seen.backlog.borrow().len(), 2, "approved, it goes in");
     }
 
     #[test]
@@ -898,13 +978,13 @@ mod tests {
         let seen = Seen::new();
         let sent = account.send(&prompt_answer("y"));
         assert_eq!(sent.header.exp - sent.header.at, 600, "a screen prompt is momentary");
-        account.round(&seen, HubCommands::AnswerAndPush);
+        account.round(&seen, word("answer-and-push"));
         assert_eq!(seen.prompts.borrow().as_slice(), [(account.caller(), PromptAnswer { address: "hub@kebbie".to_string(), prompt: "3f2a9c1d".to_string(), key: "y".to_string() })]);
         assert_eq!(account.result(&sent).text, "Chose it");
         assert_eq!(seen.relays.get(), 1, "the board goes out again at once");
 
         let late = account.send(&prompt_answer("esc"));
-        with_hands(&seen, |hands| round(&account.dir, 0, &accepts(HubCommands::Answer), ACCOUNT, hands, &|| now() + 601)).unwrap();
+        with_hands(&seen, |hands| round(&account.dir, 0, &accepts(word("answer")), ACCOUNT, hands, &|| now() + 601)).unwrap();
         assert_eq!(account.result(&late).outcome, Outcome::Refused { reason: Reason::Expired });
         assert_eq!(seen.prompts.borrow().len(), 1, "nothing chosen after ten minutes");
     }

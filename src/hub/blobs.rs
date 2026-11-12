@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use kebbie_hub_protocol::{BlobRef, Board, CardRef, Id, seal_blob, seal_blob_with};
+use kebbie_hub_protocol::{BACKLOG_BODY_MEDIA_TYPE, BlobRef, Board, CardRef, Id, ItemKey, seal_blob, seal_blob_with};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -20,12 +20,20 @@ const NONCE_LEN: usize = 12;
 pub enum Attachment {
     Plan { address: String, text: String, at: Option<u64> },
     Card { address: String, text: String, sha: String, current: bool },
+    Backlog { item: ItemKey, text: String },
 }
 
 impl Attachment {
     fn text(&self) -> &str {
         match self {
-            Attachment::Plan { text, .. } | Attachment::Card { text, .. } => text,
+            Attachment::Plan { text, .. } | Attachment::Card { text, .. } | Attachment::Backlog { text, .. } => text,
+        }
+    }
+
+    fn media_type(&self) -> &'static str {
+        match self {
+            Attachment::Backlog { .. } => BACKLOG_BODY_MEDIA_TYPE,
+            Attachment::Plan { .. } | Attachment::Card { .. } => MEDIA_TYPE,
         }
     }
 }
@@ -56,8 +64,8 @@ fn save(dir: &Path, cache: &Cache) {
     }
 }
 
-fn content_hash(text: &str) -> String {
-    hex(&Sha256::new().chain_update(MEDIA_TYPE).chain_update([0]).chain_update(text).finalize())
+fn content_hash(media_type: &str, text: &str) -> String {
+    hex(&Sha256::new().chain_update(media_type).chain_update([0]).chain_update(text).finalize())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -81,11 +89,11 @@ pub fn attach(dir: &Path, board: &Board, attachments: &[Attachment], now: u64, p
     let mut stopped = cache.refused_at.is_some();
     let mut board = board.clone();
     for attachment in attachments {
-        let hash = content_hash(attachment.text());
+        let hash = content_hash(attachment.media_type(), attachment.text());
         let kept = match cache.blobs.get(&hash).or_else(|| before.blobs.get(&hash)).cloned() {
             Some(kept) if now.saturating_sub(kept.put_at) < REPUT || stopped => Some(kept),
             Some(kept) => {
-                let ciphertext = nonce_of(&kept.nonce).and_then(|nonce| Some(seal_blob_with(attachment.text().as_bytes(), MEDIA_TYPE, decode_key(&kept.blob.key)?, nonce).1));
+                let ciphertext = nonce_of(&kept.nonce).and_then(|nonce| Some(seal_blob_with(attachment.text().as_bytes(), attachment.media_type(), decode_key(&kept.blob.key)?, nonce).1));
                 match ciphertext.map(|ciphertext| put(&kept.blob.id, &ciphertext)) {
                     Some(Ok(())) => Some(Kept { put_at: now, ..kept }),
                     Some(Err(error)) => {
@@ -97,7 +105,7 @@ pub fn attach(dir: &Path, board: &Board, attachments: &[Attachment], now: u64, p
             }
             None if stopped => None,
             None => {
-                let (blob, ciphertext) = seal_blob(attachment.text().as_bytes(), MEDIA_TYPE);
+                let (blob, ciphertext) = seal_blob(attachment.text().as_bytes(), attachment.media_type());
                 let nonce = hex(&ciphertext[..NONCE_LEN]);
                 match put(&blob.id, &ciphertext) {
                     Ok(()) => Some(Kept { blob, nonce, put_at: now }),
@@ -145,6 +153,12 @@ fn stop(cache: &mut Cache, stopped: &mut bool, error: &HubError, now: u64) {
 fn place(board: &mut Board, attachment: &Attachment, blob: &BlobRef) {
     let address = match attachment {
         Attachment::Plan { address, .. } | Attachment::Card { address, .. } => address,
+        Attachment::Backlog { item, .. } => {
+            if let Some(row) = board.backlog.iter_mut().flatten().find(|row| &row.item == item) {
+                row.body = Some(blob.clone());
+            }
+            return;
+        }
     };
     let Some(item) = board.items.iter_mut().find(|item| &item.address == address) else { return };
     match attachment {
@@ -155,5 +169,6 @@ fn place(board: &mut Board, attachment: &Attachment, blob: &BlobRef) {
             }
         }
         Attachment::Card { sha, current, .. } => item.card = Some(CardRef { sha: sha.clone(), current: *current, blob: blob.clone() }),
+        Attachment::Backlog { .. } => {}
     }
 }

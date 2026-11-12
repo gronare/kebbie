@@ -241,6 +241,7 @@ pub fn build(items: &[status::Item], checkouts: &[status::Checkout], routines: V
         later: Some(items.iter().filter_map(later).collect()),
         accepts: Some(super::commands::accepts(crate::config::hub_commands())),
         devices: None,
+        backlog: None,
     }
 }
 
@@ -295,7 +296,10 @@ pub fn attachments(items: &[status::Item], state: &Path) -> Vec<Attachment> {
 pub fn gather(state: &Path, now: u64) -> crate::sh::Result<(Board, Vec<Attachment>)> {
     let items = status::gather()?;
     let checkouts = status::checkouts()?;
-    Ok((build(&items, &checkouts, routines(state, now), crate::permit::away_since_in(state), &seen(&items)), attachments(&items, state)))
+    let mut board = build(&items, &checkouts, routines(state, now), crate::permit::away_since_in(state), &seen(&items));
+    let (backlog, bodies) = super::backlog::gather(state);
+    board.backlog = Some(backlog);
+    Ok((board, attachments(&items, state).into_iter().chain(bodies).collect()))
 }
 
 #[cfg(test)]
@@ -456,7 +460,7 @@ pub(crate) mod tests {
         assert_eq!(shown.title.as_deref(), Some("Clarify machine removal"));
         assert_eq!(shown.next_for_you.as_deref(), Some("answer Codex's prompt in its Space or through the lead"));
         assert!(!serde_json::to_string(&board).unwrap().contains("/Users/u"), "no local path leaves the machine");
-        assert_eq!(board.accepts.as_deref(), Some([kebbie_hub_protocol::Kind::Answer, kebbie_hub_protocol::Kind::Push, kebbie_hub_protocol::Kind::PromptAnswer].as_slice()), "the phone offers a prompt's options only to a machine that takes the answer");
+        assert!(board.accepts.as_deref().is_some_and(|kinds| kinds.contains(&kebbie_hub_protocol::Kind::PromptAnswer)), "the phone offers a prompt's options only to a machine that takes the answer");
         let mut claude = item.clone();
         claude.agent.as_mut().unwrap().kind = crate::agent::Agent::Claude;
         let numbered = crate::menu::parse_for("Bash command\n  cp a b\nDo you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude what to do differently (esc)\n", crate::agent::Agent::Claude).unwrap();

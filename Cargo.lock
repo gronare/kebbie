@@ -1746,7 +1746,7 @@ dependencies = [
 [[package]]
 name = "kebbie-hub"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kebbie-hub?rev=67636b871845e7336255dd2aba30ce9e3c9e4a79#67636b871845e7336255dd2aba30ce9e3c9e4a79"
+source = "git+https://github.com/gronare/kebbie-hub?rev=75362445002b91a3bb07705416bc3c8b854913ba#75362445002b91a3bb07705416bc3c8b854913ba"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -1776,7 +1776,7 @@ dependencies = [
 [[package]]
 name = "kebbie-hub-api"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kebbie-hub?rev=67636b871845e7336255dd2aba30ce9e3c9e4a79#67636b871845e7336255dd2aba30ce9e3c9e4a79"
+source = "git+https://github.com/gronare/kebbie-hub?rev=75362445002b91a3bb07705416bc3c8b854913ba#75362445002b91a3bb07705416bc3c8b854913ba"
 dependencies = [
  "base64 0.23.1",
  "kebbie-hub-protocol",
@@ -1787,7 +1787,7 @@ dependencies = [
 [[package]]
 name = "kebbie-hub-fakes"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kebbie-hub?rev=67636b871845e7336255dd2aba30ce9e3c9e4a79#67636b871845e7336255dd2aba30ce9e3c9e4a79"
+source = "git+https://github.com/gronare/kebbie-hub?rev=75362445002b91a3bb07705416bc3c8b854913ba#75362445002b91a3bb07705416bc3c8b854913ba"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -1807,7 +1807,7 @@ dependencies = [
 [[package]]
 name = "kebbie-hub-protocol"
 version = "0.1.0"
-source = "git+https://github.com/gronare/kebbie-hub?rev=67636b871845e7336255dd2aba30ce9e3c9e4a79#67636b871845e7336255dd2aba30ce9e3c9e4a79"
+source = "git+https://github.com/gronare/kebbie-hub?rev=75362445002b91a3bb07705416bc3c8b854913ba#75362445002b91a3bb07705416bc3c8b854913ba"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",

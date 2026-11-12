@@ -1,3 +1,4 @@
+pub mod backlog;
 pub mod blobs;
 pub mod board;
 pub mod card;
@@ -329,13 +330,9 @@ pub fn status_text(state: &Path, configured: Option<&str>, now: u64) -> Result<S
 }
 
 pub fn commands_line(policy: crate::config::HubCommands) -> String {
-    use crate::config::HubCommands;
-    let takes = match policy {
-        HubCommands::AnswerAndPush => "answers, prompt choices and pushes",
-        HubCommands::Answer => "answers and prompt choices; pushes off",
-        HubCommands::Off => "off",
-    };
-    format!("commands: {takes} (hub.commands = {:?})", policy.key())
+    let keys = policy.keys();
+    let takes = if keys.is_empty() { "off".to_string() } else { keys.join(", ") };
+    format!("commands: {takes} (hub.commands = [{}])", keys.iter().map(|key| format!("{key:?}")).collect::<Vec<_>>().join(", "))
 }
 
 // Nothing here proves the new address is the same hub, so no token goes there until the user has chosen it.
