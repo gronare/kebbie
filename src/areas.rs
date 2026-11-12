@@ -84,7 +84,7 @@ fn count(text: &str) -> usize {
 fn repo_state(repo: &Path) -> Result<RepoState> {
     let upstream = default_branch(repo)?;
     let branch = upstream.trim_start_matches("origin/").to_string();
-    let counts = git(repo, &["rev-list", "--left-right", "--count", &format!("refs/heads/{branch}...{upstream}")])?;
+    let counts = git(repo, &["rev-list", "--left-right", "--count", &format!("refs/heads/{branch}...{}", crate::repo::tracking(&upstream))])?;
     let mut numbers = counts.split_whitespace().map(count);
     let (ahead, behind) = (numbers.next().unwrap_or(0), numbers.next().unwrap_or(0));
     let release = git(repo, &["describe", "--tags", "--long", &format!("refs/heads/{branch}")]).ok().as_deref().and_then(described).map(|(tag, since)| Release {

@@ -180,12 +180,12 @@ fn numstat(text: &str, into: &mut Vec<(String, u64, u64)>) {
 // What kebbie measures of the task's whole work since it started: its open commits and the steps it pushed already.
 pub fn facts(state: &Path, address: &str, worktree: &Path, upstream: &str) -> Result<Facts> {
     let mut files = Vec::new();
-    numstat(&git(worktree, &["diff", "--numstat", &format!("{upstream}...HEAD")])?, &mut files);
+    numstat(&git(worktree, &["diff", "--numstat", &format!("{}...HEAD", crate::repo::tracking(upstream))])?, &mut files);
     let pushed = pushed_in(state, address);
     for sha in &pushed {
         numstat(&git(worktree, &["show", "--numstat", "--format=", sha]).unwrap_or_default(), &mut files);
     }
-    let open = git(worktree, &["rev-list", "--count", &format!("{upstream}..HEAD")])?.parse::<usize>().unwrap_or(0);
+    let open = git(worktree, &["rev-list", "--count", &format!("{}..HEAD", crate::repo::tracking(upstream))])?.parse::<usize>().unwrap_or(0);
     Ok(Facts { files, commits: open + pushed.len() })
 }
 
@@ -296,7 +296,7 @@ pub fn run(cwd: &Path) -> Result<String> {
 fn assess(state: &Path, repo: &Path, worktree: &Path, address: &str) -> Result<String> {
     let upstream = default_branch(repo)?;
     let settings = config::resolve(Some(repo))?.settings;
-    let open = git(worktree, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..HEAD")])?;
+    let open = git(worktree, &["log", "--reverse", "--format=%h %s", &format!("{}..HEAD", crate::repo::tracking(&upstream))])?;
     let pushed = pushed_log(state, address, worktree);
     let input = brief(address, worktree, &upstream, &facts(state, address, worktree, &upstream)?, &pushed, &open);
     let root = crate::lead::install_root()?;

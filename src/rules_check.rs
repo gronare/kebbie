@@ -62,7 +62,7 @@ fn trailer_key(line: &str) -> Option<&str> {
 
 // Each commit of the task that breaks the form, as "<sha> <subject>: <what is missing>".
 pub fn form_breaks(path: &Path, upstream: &str) -> Result<Vec<String>> {
-    let log = git(path, &["log", "--reverse", "--format=%x00%h%x01%B", &format!("{upstream}..HEAD")])?;
+    let log = git(path, &["log", "--reverse", "--format=%x00%h%x01%B", &format!("{}..HEAD", crate::repo::tracking(upstream))])?;
     Ok(log.split('\0').skip(1).filter_map(|commit| {
         let (sha, message) = commit.split_once('\u{1}')?;
         let what = form_break(message)?;
@@ -306,7 +306,7 @@ fn check(state: &Path, repo: &Path, slot: &Slot, address: &str, upstream: &str, 
     let rules = &settings.rules_skill.value;
     let rules_file = review::rules_file(rules, &slot.path, &kebbie).ok_or(format!("kebbie found no file for the rules skill `{rules}`"))?;
     let claude = crate::trusted_spawn::claude_from_keeper()?;
-    let commits = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
+    let commits = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{}..{sha}", crate::repo::tracking(upstream))])?;
     let docs = if settings.docs_required.value { Some(review::docs_brief(&slot.path, upstream, sha, &kebbie.join("skills/keep-docs/SKILL.md"))?) } else { None };
     let quoted = review::quoted_rules(rules);
     let input = brief(address, &slot.path, upstream, sha, &commits, rules, &rules_file, quoted.as_deref(), docs.as_deref());

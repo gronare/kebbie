@@ -32,7 +32,7 @@ pub fn land(cwd: &Path, name: Option<&str>) -> Result<String> {
     if !rebase_or_hand_over(&slot, &upstream, "kebbie tried to land this task")? {
         return Notice::new(Tone::Moving, format!("Not landed yet: it conflicts with {main}")).next("Its Claude resolves the rebase and reports back; push it then.").detail("task", task).err();
     }
-    let commits = git(&slot.path, &["log", "--oneline", &format!("{upstream}..HEAD")])?;
+    let commits = git(&slot.path, &["log", "--oneline", &format!("{}..HEAD", crate::repo::tracking(&upstream))])?;
     Notice::new(Tone::Done, format!("Rebased onto {main} and ready to push")).next(format!("Push it with: kebbie push {task}")).detail("commits", commits).ok()
 }
 
@@ -90,9 +90,10 @@ pub(super) fn update(path: &Path, upstream: &str) -> Result<Updated> {
 fn update_in(path: &Path, upstream: &str, options: &[&str], from: Option<&str>) -> Result<Updated> {
     let _alone = rebase_alone(path)?;
     let touched = overlap(path, upstream, from)?;
+    let tracked = crate::repo::tracking(upstream);
     let rebase: Vec<&str> = match from {
-        Some(from) => vec!["rebase", "--quiet", "--onto", upstream, from],
-        None => vec!["rebase", "--quiet", upstream],
+        Some(from) => vec!["rebase", "--quiet", "--onto", &tracked, from],
+        None => vec!["rebase", "--quiet", &tracked],
     };
     match rebase_writing(path, options, &rebase) {
         Ok(_) if touched.is_empty() => Ok(Updated::Clean),
@@ -168,6 +169,7 @@ fn refused(path: &Path, upstream: &str, error: &str) -> String {
 
 // The task's own commits that reached upstream, a push of its first commits among them, are no one else's changes, so they never count as overlap.
 fn overlap(path: &Path, upstream: &str, since: Option<&str>) -> Result<Vec<Touched>> {
+    let upstream = &crate::repo::tracking(upstream);
     let base = git(path, &["merge-base", "HEAD", upstream])?;
     let mine: BTreeSet<String> = git(path, &["log", "--format=", "--name-only", "--no-renames", &format!("{}..HEAD", since.unwrap_or(&base))])?.lines().filter(|line| !line.is_empty()).map(str::to_string).collect();
     let own: BTreeSet<String> = super::accept::commit_codes(path, &[&format!("{base}..HEAD")])?.into_iter().map(|(_, code)| code).collect();
@@ -409,7 +411,7 @@ pub(super) fn device_push(state: &Path, caller: &Caller, repo: &Path, slot: &Slo
         Some(Work::Conflict) => DevicePush::Conflict { files: files(), main },
         Some(Work::Tests) => DevicePush::Tests { files: files(), main },
         Some(Work::Turn | Work::Ci) => DevicePush::Queued(said),
-        None => match git(repo, &["rev-parse", "--short=7", &upstream]) {
+        None => match git(repo, &["rev-parse", "--short=7", &crate::repo::tracking(&upstream)]) {
             Ok(short) => DevicePush::Pushed { short, main },
             Err(_) => DevicePush::Failed(said),
         },
@@ -606,7 +608,7 @@ fn prepare(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, through: Thr
         Through::All => (update(&slot.path, &upstream)?, None),
         Through::First { .. } => {
             let sha = through_sha(&slot.path, &upstream, through)?;
-            if crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &upstream, &sha], Some(&slot.path)) {
+            if crate::sh::succeeds("git", &["merge-base", "--is-ancestor", &crate::repo::tracking(&upstream), &sha], Some(&slot.path)) {
                 (Updated::Clean, Some(Out { sha, rebased: false }))
             } else {
                 let first = open_shas(&slot.path, &upstream)?.into_iter().next().unwrap_or_else(|| sha.clone());
@@ -671,8 +673,8 @@ fn went_out(repo: &Path, slot: &Slot, upstream: &str, through: Through, out: &Ou
     let sha = out.sha.clone();
     let keep_open = matches!(through, Through::First { .. });
     let rest = if keep_open { git(&slot.path, &["rev-list", "--count", &format!("{}..HEAD", through_sha(&slot.path, upstream, through)?)])?.parse::<usize>().unwrap_or(0) } else { 0 };
-    let pushed = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
-    let shas: Vec<String> = git(&slot.path, &["rev-list", "--reverse", &format!("{upstream}..{sha}")])?.lines().map(str::to_string).collect();
+    let pushed = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{}..{sha}", crate::repo::tracking(upstream))])?;
+    let shas: Vec<String> = git(&slot.path, &["rev-list", "--reverse", &format!("{}..{sha}", crate::repo::tracking(upstream))])?.lines().map(str::to_string).collect();
     let note = started_file(task_of(slot), repo).ok().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| crate::task_note::items(&text).into_iter().next());
     let target = upstream.trim_start_matches("origin/").to_string();
     Ok(Went { sha, keep_open, rest, pushed, shas, note, target })
@@ -937,7 +939,7 @@ fn pushable_through(path: &Path, upstream: &str, rev: &str, keep_open: bool) -> 
 
 // Fast-forwards the default branch on origin to sha; the remote-tracking branch follows.
 pub(super) fn push_prefix(path: &Path, upstream: &str, sha: &str, state: &Path) -> Result<usize> {
-    let count = git(path, &["rev-list", "--count", &format!("{upstream}..{sha}")])?.parse::<usize>().map_err(|error| error.to_string())?;
+    let count = git(path, &["rev-list", "--count", &format!("{}..{sha}", crate::repo::tracking(upstream))])?.parse::<usize>().map_err(|error| error.to_string())?;
     let target = format!("{sha}:refs/heads/{}", upstream.trim_start_matches("origin/"));
     crate::repo::push_from(path, &[&target], state)?;
     Ok(count)

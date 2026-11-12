@@ -10,8 +10,8 @@ use super::pool::{find_task, task_of};
 // The change rev makes where it left upstream, without context or line numbers, so a clean rebase, a reworded message or a squash keeps it.
 fn code(path: &Path, upstream: &str, rev: &str) -> Result<String> {
     once_for_shas(&CODES, path, upstream, rev, || {
-        let base = git(path, &["merge-base", rev, upstream])?;
-        let diff = git(path, &["diff", "-U0", "--no-color", "--no-ext-diff", &base, rev])?;
+        let base = git(path, &["merge-base", rev, &crate::repo::tracking(upstream)])?;
+        let diff = git(path, &["diff", "-U0", "--no-color", "--no-ext-diff", "--text", "--no-textconv", &base, rev])?;
         Ok(hashed(changed_lines(&diff).as_bytes()))
     })
 }
@@ -57,8 +57,8 @@ pub(crate) fn fingerprint_at(path: &Path, upstream: &str, rev: &str) -> Result<S
 }
 
 fn fingerprint_now(path: &Path, upstream: &str, rev: &str) -> Result<String> {
-    let range = format!("{upstream}..{rev}");
-    let log = git(path, &["log", "--reverse", "-p", "-U0", "--no-color", "--no-ext-diff", "--format=%x00%B%x01", &range])?;
+    let range = format!("{}..{rev}", crate::repo::tracking(upstream));
+    let log = git(path, &["log", "--reverse", "-p", "-U0", "--no-color", "--no-ext-diff", "--text", "--no-textconv", "--format=%x00%B%x01", &range])?;
     let commits: Vec<String> = log.split('\0').skip(1).map(|commit| {
         let (message, changes) = commit.split_once('\u{1}').unwrap_or((commit, ""));
         let mut hasher = Fnv::default();
@@ -161,9 +161,9 @@ pub fn rules_check(cwd: &Path) -> Result<Option<String>> {
     let rules = config::resolve(Some(&repo))?.settings.rules_skill.value;
     let sha = git(&slot.path, &["rev-parse", "--short", "HEAD"])?;
     Ok(Some(format!(
-        "{address}{READY_AT}{sha}: check its commits against {} (git -C {} log -p {upstream}..HEAD). When they hold, run \
+        "{address}{READY_AT}{sha}: check its commits against {} (git -C {} log -p {}..HEAD). When they hold, run \
          kebbie -C {} approve {task}; when one breaks a rule, kebbie tell {address} which commit and what to fix.",
-        config::rules_named(&rules), slot.path.display(), repo.display()
+        config::rules_named(&rules), slot.path.display(), crate::repo::tracking(&upstream), repo.display()
     )))
 }
 
@@ -215,6 +215,49 @@ mod tests {
         let said = approved_said("billing@app", &crate::repo::uncommitted(&slot.path).unwrap());
         assert!(said.starts_with("Approved billing@app's commits") && said.contains("uncommitted file (d) still keep it from Ready to push") && said.contains("push the commits alone"), "{said}");
         assert!(!approved_said("billing@app", &[]).contains("uncommitted"));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_fingerprint_reads_file_contents_whatever_the_attributes_say() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        std::fs::write(dir.join(".git/info/attributes"), "* -diff\n").unwrap();
+        let before = (git(&slot.path, &["rev-parse", "HEAD"]).unwrap(), fingerprint(&slot.path, &upstream).unwrap());
+        std::fs::write(slot.path.join("d"), "changed").unwrap();
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "--no-edit", "-a"]).unwrap();
+        let after = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        assert_ne!(fingerprint(&slot.path, &upstream).unwrap(), before.1, "a changed line takes the approval back");
+        assert!(!same_code(&slot.path, &upstream, &before.0, &after), "a changed line is other code");
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_fingerprint_stands_on_the_stored_commits_whatever_replace_refs_say() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let approved = fingerprint(&slot.path, &upstream).unwrap();
+        let head = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        std::fs::write(slot.path.join("d"), "other").unwrap();
+        git(&slot.path, &["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "--amend", "--no-edit", "-a"]).unwrap();
+        let other = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        git(&slot.path, &["reset", "--quiet", "--hard", &head]).unwrap();
+        git(&slot.path, &["replace", &head, &other]).unwrap();
+        assert_eq!(fingerprint(&slot.path, &upstream).unwrap(), approved);
+        assert!(!same_code(&slot.path, &upstream, &head, &other));
+        cleanup(dir, origin, &slot);
+    }
+
+    #[test]
+    fn the_task_is_read_against_the_remote_tracking_branch_when_a_branch_or_tag_shares_its_name() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        let approved = fingerprint(&slot.path, &upstream).unwrap();
+        let open = crate::tasks::accept::open_commits(&slot.path, &upstream).unwrap();
+        for namesake in [format!("refs/heads/{upstream}"), format!("refs/tags/{upstream}")] {
+            git(&dir, &["update-ref", &namesake, "billing"]).unwrap();
+            assert_eq!(fingerprint(&slot.path, &upstream).unwrap(), approved, "{namesake}");
+            assert_eq!(ahead_behind(&slot.path, &upstream).unwrap(), (1, 0), "{namesake}");
+            assert_eq!(crate::tasks::accept::open_commits(&slot.path, &upstream).unwrap(), open, "{namesake}");
+            git(&dir, &["update-ref", "-d", &namesake]).unwrap();
+        }
         cleanup(dir, origin, &slot);
     }
 

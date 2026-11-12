@@ -443,7 +443,7 @@ pub(crate) fn start_args(mode: Option<&str>, profile: &Profile, files: &super::T
 // Codex's read-only sandbox is the reviewer's boundary: no write and no network for its commands, none of the user's config, rules, MCP servers or plugins, and no session file beside the task's.
 pub(crate) fn reviewer_args(reviewer: &super::Reviewer) -> Vec<String> {
     let mut args: Vec<String> = ["exec", "--sandbox", "read-only", "--ignore-user-config", "--ignore-rules", "--ephemeral", "--color", "never", "-c", NO_UPDATE_CHECK].map(str::to_string).to_vec();
-    args.extend(["-c".to_string(), format!("shell_environment_policy.set={{{}}}", crate::review::NO_FSMONITOR.iter().map(|(name, value)| format!("{name}={}", toml_string(value))).collect::<Vec<_>>().join(","))]);
+    args.extend(["-c".to_string(), format!("shell_environment_policy.set={{{}}}", crate::review::READER_ENV.iter().map(|(name, value)| format!("{name}={}", toml_string(value))).collect::<Vec<_>>().join(","))]);
     args.extend(["--output-last-message".to_string(), reviewer.answer.to_string_lossy().to_string()]);
     if let Some(model) = reviewer.model {
         args.extend(["--model".to_string(), model.to_string()]);

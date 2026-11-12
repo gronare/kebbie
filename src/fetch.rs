@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -101,7 +101,7 @@ pub fn shared(repo: &Path, attempt: impl FnMut() -> Result<(), String>) -> Resul
 }
 
 fn fetch(repo: &Path) -> Result<(), String> {
-    let mut command = Command::new("git");
+    let mut command = crate::sh::git_command();
     command.args(["fetch", "--quiet", "--no-tags"]).current_dir(repo).stdin(Stdio::null()).stdout(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
     if std::env::var_os("GIT_SSH_COMMAND").is_none() {
         command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
@@ -236,7 +236,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kebbie-fetch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (origin, clone) = (dir.join("origin"), dir.join("clone"));
-        let git = |cwd: &Path, args: &[&str]| assert!(Command::new("git").args(args).current_dir(cwd).output().unwrap().status.success(), "{args:?}");
+        let git = |cwd: &Path, args: &[&str]| assert!(std::process::Command::new("git").args(args).current_dir(cwd).output().unwrap().status.success(), "{args:?}");
         std::fs::create_dir_all(&origin).unwrap();
         git(&origin, &["init", "--quiet", "--bare"]);
         git(&dir, &["clone", "--quiet", origin.to_str().unwrap(), "clone"]);

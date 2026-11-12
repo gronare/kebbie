@@ -125,7 +125,7 @@ fn commit_text(repo: &Path, sha: &str) -> String {
     if !crate::sh::succeeds("git", &["cat-file", "-e", &format!("{sha}^{{commit}}")], Some(repo)) {
         let _ = crate::repo::git(repo, &["fetch", "--quiet", "origin", sha]);
     }
-    let shown = crate::sh::run_untrimmed("git", &["show", "--format=fuller", "--no-color", sha], Some(repo)).unwrap_or_else(|error| format!("git show {sha} failed: {error}"));
+    let shown = crate::sh::run_untrimmed("git", &["show", "--format=fuller", "--no-color", "--no-ext-diff", "--text", "--no-textconv", sha], Some(repo)).unwrap_or_else(|error| format!("git show {sha} failed: {error}"));
     if shown.len() <= COMMIT_BUDGET {
         return shown;
     }

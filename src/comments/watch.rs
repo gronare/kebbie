@@ -314,7 +314,7 @@ fn comment_of(watch: &Watch, item: Found, now: u64) -> Comment {
 
 // The hunk of the commit's diff that holds the commented line, cut to a window around it.
 pub(super) fn hunk(repo: &Path, sha: &str, path: &str, line: Option<u64>) -> String {
-    let diff = crate::sh::run_untrimmed("git", &["show", "--format=", "--no-color", sha, "--", path], Some(repo)).unwrap_or_default();
+    let diff = crate::sh::run_untrimmed("git", &["show", "--format=", "--no-color", "--no-ext-diff", "--text", "--no-textconv", sha, "--", path], Some(repo)).unwrap_or_default();
     pick_hunk(&diff, line)
 }
 
@@ -367,7 +367,7 @@ fn settle_fixes(state: &Path) -> Vec<String> {
 fn fixed_by(comment: &Comment) -> Option<String> {
     let upstream = crate::repo::default_branch(&comment.repo).ok()?;
     let grep = format!("--grep={}", super::addresses_line(comment));
-    let found = crate::repo::git(&comment.repo, &["log", "--fixed-strings", &grep, "--format=%H", "-n", "1", &upstream]).ok()?;
+    let found = crate::repo::git(&comment.repo, &["log", "--fixed-strings", &grep, "--format=%H", "-n", "1", &crate::repo::tracking(&upstream)]).ok()?;
     Some(found.trim().to_string()).filter(|sha| !sha.is_empty())
 }
 

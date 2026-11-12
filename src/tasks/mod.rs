@@ -112,7 +112,7 @@ fn following(repo: &Path, upstream: &str, staged: &[stage::Entry]) -> Result<Str
     if git(repo, &["branch", "--show-current"])? != local {
         return Ok(format!("{name} left as is (not on {local})"));
     }
-    if git_writing(repo, &["merge", "--quiet", "--ff-only", upstream]).is_ok() {
+    if git_writing(repo, &["merge", "--quiet", "--ff-only", &crate::repo::tracking(upstream)]).is_ok() {
         return Ok(format!("{name} fast-forwarded to {local}"));
     }
     if staged.is_empty() {

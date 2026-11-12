@@ -88,6 +88,7 @@ fn ancestor(path: &Path, sha: &str, of: &str) -> bool {
 }
 
 fn in_upstream(path: &Path, sha: &str, upstream: &str) -> bool {
+    let upstream = &crate::repo::tracking(upstream);
     ancestor(path, sha, upstream) || git(path, &["cherry", upstream, sha, &format!("{sha}^")]).is_ok_and(|line| line.starts_with('-'))
 }
 
@@ -113,6 +114,7 @@ fn made(path: &Path, upstream: &str) -> Option<Made> {
 
 // A branch rebased or reset onto main after its work landed keeps none of its commits, so those it made are looked for on main instead.
 pub(super) fn landed(path: &Path, upstream: &str) -> Result<bool> {
+    let upstream = &crate::repo::tracking(upstream);
     let Some(made) = made(path, upstream) else { return Ok(false) };
     if !made.commits.iter().any(|sha| ancestor(path, sha, "HEAD")) {
         return Ok(ancestor(path, "HEAD", upstream) && made.commits.iter().any(|sha| in_upstream(path, sha, upstream)));
@@ -130,6 +132,7 @@ pub(super) fn landed(path: &Path, upstream: &str) -> Result<bool> {
 
 // The first commit on main since the task began that touches a file its commits touch: never later than the landing, so a report it cannot place counts as made after it.
 fn landed_at(path: &Path, upstream: &str) -> Option<u64> {
+    let upstream = &crate::repo::tracking(upstream);
     let made = made(path, upstream)?;
     let mut files: Vec<String> = made.commits.iter().filter_map(|sha| git(path, &["show", "--name-only", "--format=", sha]).ok()).flat_map(|names| names.lines().map(str::to_string).collect::<Vec<_>>()).collect();
     files.sort();

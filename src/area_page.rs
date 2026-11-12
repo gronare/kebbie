@@ -518,7 +518,7 @@ impl Page {
             Some(Act::Permit) => self.show(permit::toggle_repo(&repo::name_of(&repo))),
             Some(Act::Push) => match &area.git {
                 Some(git) if git.ahead > 0 => {
-                    let commits = commits_between(&repo, &format!("{}..refs/heads/{}", git.upstream, git.branch));
+                    let commits = commits_between(&repo, &format!("{}..refs/heads/{}", crate::repo::tracking(&git.upstream), git.branch));
                     self.mode = Mode::Push(PushWindow { repo, branch: git.branch.clone(), tag: None, commits, done: Vec::new(), next: None });
                 }
                 Some(git) => self.show(Ok(format!("{} is level with {}; nothing to push.", git.branch, git.upstream))),
@@ -960,7 +960,7 @@ fn run_script(repo: PathBuf, steps: Vec<Step>, next: Option<Next>) -> After {
         Ok(done) => match steps.iter().find_map(|step| match step { Step::Push { branch, tag } => Some((branch.clone(), tag.clone())), _ => None }) {
             Some((branch, tag)) => {
                 let upstream = repo::default_branch(&repo).unwrap_or_else(|_| format!("origin/{branch}"));
-                let commits = commits_between(&repo, &format!("{upstream}..refs/heads/{branch}"));
+                let commits = commits_between(&repo, &format!("{}..refs/heads/{branch}", crate::repo::tracking(&upstream)));
                 After::Push(PushWindow { repo, branch, tag, commits, done, next })
             }
             None => After::Show(Ok(done.iter().map(|line| format!("✓ {line}")).collect::<Vec<_>>().join("\n")), next),

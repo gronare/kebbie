@@ -129,6 +129,11 @@ fn common_dir(dot_git: &Path) -> Option<PathBuf> {
     common.canonicalize().ok()
 }
 
+// A remote-tracking branch like origin/main by its full ref, so a branch, tag or git-dir file of the same short name never stands in for it; a sha, a full ref or a name without a remote stays as it is.
+pub fn tracking(upstream: &str) -> String {
+    if is_sha(upstream) || upstream.starts_with("refs/") || !upstream.contains('/') { upstream.to_string() } else { format!("refs/remotes/{upstream}") }
+}
+
 // origin/HEAD is unset in some older clones.
 pub fn default_branch(repo: &Path) -> Result<String> {
     let listed = git(repo, &["for-each-ref", "--format=%(refname)%09%(symref:short)", "refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master"]).unwrap_or_default();
@@ -140,27 +145,33 @@ pub fn default_branch(repo: &Path) -> Result<String> {
 }
 
 pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
-    let mut list = Vec::new();
+    Ok(listed_worktrees(&crate::sh::run_untrimmed("git", &["worktree", "list", "--porcelain", "-z"], Some(repo))?))
+}
+
+// Fields end in NUL and an entry in an empty field, so a path holding a newline stays one path; a path listed twice keeps its first entry.
+fn listed_worktrees(listed: &str) -> Vec<Worktree> {
+    let mut list: Vec<Worktree> = Vec::new();
     let mut path: Option<PathBuf> = None;
     let mut branch: Option<String> = None;
     let mut head: Option<String> = None;
-    for line in git(repo, &["worktree", "list", "--porcelain"])?.lines().chain(std::iter::once("")) {
-        if let Some(value) = line.strip_prefix("worktree ") {
+    for field in listed.split('\0') {
+        if let Some(value) = field.strip_prefix("worktree ") {
             path = Some(PathBuf::from(value));
             branch = None;
             head = None;
-        } else if let Some(value) = line.strip_prefix("HEAD ") {
+        } else if let Some(value) = field.strip_prefix("HEAD ") {
             head = Some(value.to_string()).filter(|sha| is_sha(sha) && sha.bytes().any(|byte| byte != b'0'));
-        } else if let Some(value) = line.strip_prefix("branch ") {
+        } else if let Some(value) = field.strip_prefix("branch ") {
             branch = Some(value.trim_start_matches("refs/heads/").to_string());
-        } else if line.is_empty()
+        } else if field.is_empty()
             && let Some(path) = path.take()
+            && !list.iter().any(|known| known.path == path)
         {
             let branch = branch.take().or_else(|| rebasing_branch(&path));
             list.push(Worktree { path, branch, head: head.take() });
         }
     }
-    Ok(list)
+    list
 }
 
 // A rebase detaches HEAD until it finishes; the branch it rebuilds is named in its head-name file.
@@ -207,11 +218,11 @@ pub fn rebase_in_progress(path: &Path) -> bool {
 }
 
 pub fn ahead_behind(path: &Path, upstream: &str) -> Result<(usize, usize)> {
-    counted(&git(path, &["rev-list", "--left-right", "--count", &format!("HEAD...{upstream}")])?)
+    counted(&git(path, &["rev-list", "--left-right", "--count", &format!("HEAD...{}", tracking(upstream))])?)
 }
 
 pub fn ahead_behind_at(path: &Path, head: &str, upstream: &str) -> Result<(usize, usize)> {
-    counted(&git_fixed(path, &["rev-list", "--left-right", "--count", &format!("{head}...{upstream}")])?)
+    counted(&git_fixed(path, &["rev-list", "--left-right", "--count", &format!("{head}...{}", tracking(upstream))])?)
 }
 
 fn counted(counts: &str) -> Result<(usize, usize)> {
@@ -227,7 +238,7 @@ pub fn push_as_user(path: &Path, refspecs: &[&str]) -> Result<()> {
 pub fn push_from(path: &Path, refspecs: &[&str], state: &Path) -> Result<()> {
     let hooks = push_hooks(path)?;
     let token = crate::push_block::Token::new(state)?;
-    let mut command = std::process::Command::new("git");
+    let mut command = crate::sh::git_command();
     command.args(&hooks).args(crate::push_block::unblock_args(path)?).args(["push", "--quiet", "origin"]).args(refspecs).current_dir(path).stdin(std::process::Stdio::null())
         .env("GIT_TERMINAL_PROMPT", "0").env(crate::push_block::TOKEN_VAR, &token.value);
     if std::env::var_os("GIT_SSH_COMMAND").is_none() {
@@ -639,6 +650,33 @@ mod tests {
         assert!(git(&task, &["-c", "user.name=t", "-c", "user.email=t@t", "cherry-pick", "main"]).is_err());
         assert_eq!(branch_of(&task).as_deref(), Some("billing"), "a cherry-pick keeps HEAD on the branch");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_worktree_path_holding_newlines_stays_one_worktree() {
+        let dir = crate::sh::test_dir("worktree-newline");
+        let main = dir.join("app");
+        std::fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "--quiet", "--initial-branch=main"]).unwrap();
+        git(&main, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "--allow-empty", "-m", "one"]).unwrap();
+        let head = git(&main, &["rev-parse", "HEAD"]).unwrap();
+        let listed_elsewhere = dir.join("elsewhere");
+        let odd = dir.join(format!("wt1\n\nworktree {}\nHEAD {head}\nbranch refs/heads/main\n", listed_elsewhere.display()));
+        git(&main, &["worktree", "add", "--quiet", "-b", "billing", odd.to_str().unwrap()]).unwrap();
+        let list = worktrees(&main).unwrap();
+        assert_eq!(list.len(), 2, "{:?}", list.iter().map(|worktree| &worktree.path).collect::<Vec<_>>());
+        assert!(list.iter().all(|worktree| worktree.path != listed_elsewhere));
+        let found = list.iter().find(|worktree| worktree.path.file_name() == odd.file_name()).unwrap();
+        assert_eq!(found.branch.as_deref(), Some("billing"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_worktree_listed_twice_keeps_its_first_entry() {
+        let sha = "1".repeat(40);
+        let list = listed_worktrees(&format!("worktree /w/app\0HEAD {sha}\0branch refs/heads/main\0\0worktree /w/app\0HEAD {}\0branch refs/heads/other\0\0", "2".repeat(40)));
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].branch.as_deref(), list[0].head.as_deref()), (Some("main"), Some(sha.as_str())));
     }
 
     #[test]

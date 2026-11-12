@@ -22,6 +22,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A backlog row shows whether the item is to write, drafting or waits on your answers, and g asks once before starting one that waits.
 
 ### Fixed
+- Approvals, accepted commits and reviews read the stored commits against the remote-tracking branch, with file contents as text, so they match what a push sends.
 - The board and the keeper read each task's git state with about a third of the git calls, and redraw the board only when something on it changes.
 - A board that restarts on a rebuilt kebbie no longer leaves finished child processes behind as zombies.
 - The board and the keeper read vault backlog notes in one pass over the vault index, so they no longer hold a CPU core busy while the backlog is long.

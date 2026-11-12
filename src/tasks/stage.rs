@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde_json::{Value, json};
 
@@ -13,7 +13,7 @@ use crate::notice::{Notice, Tone};
 use crate::peers;
 use crate::permit::Caller;
 use crate::phase::{self, Event};
-use crate::repo::{ahead_behind, default_branch, git, git_writing, main_checkout, name_of, rebase_in_progress, uncommitted};
+use crate::repo::{ahead_behind, default_branch, git, git_writing, main_checkout, name_of, rebase_in_progress, tracking, uncommitted};
 use crate::sh::Result;
 use super::intent::{self, By, Through, Work};
 use super::line::Turnstile;
@@ -114,7 +114,7 @@ fn prune(state: &Path, repo: &Path) -> Vec<String> {
         return Vec::new();
     }
     let Ok(upstream) = default_branch(repo) else { return Vec::new() };
-    let Ok(ahead) = commits(repo, &format!("{upstream}..HEAD")) else { return Vec::new() };
+    let Ok(ahead) = commits(repo, &format!("{}..HEAD", tracking(&upstream))) else { return Vec::new() };
     let mut on_main = Vec::new();
     for sha in ahead {
         match patch_id(repo, &sha) {
@@ -211,7 +211,7 @@ fn restage_in(state: &Path, log: &[messages::Message], now: u64, opted: &dyn Fn(
 // The commits on local main that are neither on origin nor a staged task's: the user's own, which kebbie never rewrites.
 fn foreign(repo: &Path, upstream: &str, entries: &[Entry]) -> Result<Vec<String>> {
     let mut own = Vec::new();
-    for sha in commits(repo, &format!("{upstream}..HEAD"))? {
+    for sha in commits(repo, &format!("{}..HEAD", tracking(upstream)))? {
         let patch = patch_id(repo, &sha)?;
         if !patch.is_some_and(|patch| entries.iter().any(|entry| entry.patches.contains(&patch))) {
             own.push(sha[..7.min(sha.len())].to_string());
@@ -237,7 +237,7 @@ pub(super) fn follow_staged(repo: &Path, upstream: &str, entries: &[Entry]) -> R
     if !uncommitted(repo)?.is_empty() {
         return Ok(format!("{name} keeps what is staged on {local}, not rebased onto {upstream}: it has uncommitted changes"));
     }
-    if git_writing(repo, &["rebase", "--quiet", upstream]).is_ok() {
+    if git_writing(repo, &["rebase", "--quiet", &tracking(upstream)]).is_ok() {
         return Ok(format!("{name} rebased what is staged on {local} onto {upstream}"));
     }
     let _ = git_writing(repo, &["rebase", "--abort"]);
@@ -246,11 +246,11 @@ pub(super) fn follow_staged(repo: &Path, upstream: &str, entries: &[Entry]) -> R
 
 // None for a merge or a commit that changes nothing: neither has a patch to match.
 fn patch_id(path: &Path, sha: &str) -> Result<Option<String>> {
-    let shown = crate::sh::run_untrimmed("git", &["show", "--no-color", "--no-ext-diff", "--no-merges", sha], Some(path))?;
+    let shown = crate::sh::run_untrimmed("git", &["show", "--no-color", "--no-ext-diff", "--text", "--no-textconv", "--no-merges", sha], Some(path))?;
     if shown.trim().is_empty() {
         return Ok(None);
     }
-    let mut child = Command::new("git").args(["patch-id", "--stable"]).current_dir(path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().map_err(|error| format!("git patch-id: {error}"))?;
+    let mut child = crate::sh::git_command().args(["patch-id", "--stable"]).current_dir(path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().map_err(|error| format!("git patch-id: {error}"))?;
     child.stdin.take().ok_or("git patch-id: no input")?.write_all(shown.as_bytes()).map_err(|error| format!("git patch-id: {error}"))?;
     let output = child.wait_with_output().map_err(|error| format!("git patch-id: {error}"))?;
     Ok(String::from_utf8_lossy(&output.stdout).split_whitespace().next().map(str::to_string))
@@ -273,7 +273,7 @@ enum Stuck {
 // Main loses the commits whose patch is in `drop` and gains `add` on top; anything that does not apply leaves main exactly as it was.
 fn replay(repo: &Path, upstream: &str, drop: &[String], add: &[String]) -> Result<std::result::Result<(), Stuck>> {
     let before = git(repo, &["rev-parse", "HEAD"])?;
-    let own = commits(repo, &format!("{upstream}..HEAD"))?;
+    let own = commits(repo, &format!("{}..HEAD", tracking(upstream)))?;
     let mut dropped = Vec::new();
     for sha in &own {
         if patch_id(repo, sha)?.is_some_and(|patch| drop.contains(&patch)) {
@@ -321,7 +321,7 @@ fn checkout_ready(repo: &Path, local: &str, refused: &str) -> Result<()> {
     if busy || rebase_in_progress(repo) {
         return Notice::new(Tone::NotNow, format!("{refused}: a rebase, merge or cherry-pick is under way in {name}")).you("Finish or abort it first.").err();
     }
-    if !git(repo, &["rev-list", "--merges", &format!("{}..HEAD", default_branch(repo)?)])?.is_empty() {
+    if !git(repo, &["rev-list", "--merges", &format!("{}..HEAD", crate::repo::tracking(&default_branch(repo)?))])?.is_empty() {
         return Notice::new(Tone::NotNow, format!("{refused}: {local} has a merge on it, which kebbie does not rewrite")).you(format!("Push or reset {local} yourself first.")).err();
     }
     Ok(())
@@ -383,12 +383,12 @@ pub(super) fn stage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, 
     let follow = super::follow_upstream(repo, &upstream, &entries)?;
     let earlier = entries.iter().find(|entry| entry.address == address).map(|entry| entry.patches.clone()).unwrap_or_default();
     let mut on_main = Vec::new();
-    for sha in commits(repo, &format!("{upstream}..HEAD"))? {
+    for sha in commits(repo, &format!("{}..HEAD", tracking(&upstream)))? {
         on_main.extend(patch_id(repo, &sha)?);
     }
     let mut add = Vec::new();
     let mut patches = Vec::new();
-    for sha in commits(&slot.path, &format!("{upstream}..HEAD"))? {
+    for sha in commits(&slot.path, &format!("{}..HEAD", tracking(&upstream)))? {
         let Some(patch) = patch_id(&slot.path, &sha)? else { continue };
         if !on_main.contains(&patch) || earlier.contains(&patch) {
             add.push(sha);
@@ -415,7 +415,7 @@ pub(super) fn stage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot, 
             return Notice::new(Tone::Moving, format!("{refused}: it conflicts with local {local}")).next(format!("Its Claude rebases it onto {local}; when it reports ready, kebbie puts it on {local} again. {local} is as it was.")).detail("task", &task).ok();
         }
     }
-    for sha in commits(repo, &format!("{upstream}..HEAD"))?.iter().rev().take(add.len()) {
+    for sha in commits(repo, &format!("{}..HEAD", tracking(&upstream)))?.iter().rev().take(add.len()) {
         if let Some(patch) = patch_id(repo, sha)?.filter(|patch| !patches.contains(patch)) {
             patches.push(patch);
         }
@@ -461,7 +461,7 @@ pub(super) fn unstage_in(state: &Path, caller: &Caller, repo: &Path, slot: &Slot
         return Notice::new(Tone::You, format!("{refused}: {}", foreign_note(&local, &own))).detail("task", &task).err();
     }
     let mut present = false;
-    for sha in commits(repo, &format!("{upstream}..HEAD"))? {
+    for sha in commits(repo, &format!("{}..HEAD", tracking(&upstream)))? {
         present |= patch_id(repo, &sha)?.is_some_and(|patch| entry.patches.contains(&patch));
     }
     let after: Vec<String> = entries.iter().skip_while(|staged| staged.address != address).skip(1).map(|staged| staged.task.clone()).collect();
@@ -532,6 +532,21 @@ mod tests {
     use crate::phase::Phase;
     use crate::tasks::landed::{World, pass};
     use crate::tasks::test_support::*;
+
+    #[test]
+    fn a_patch_id_reads_file_contents_whatever_the_attributes_say() {
+        let (dir, origin, slot, _) = task_with_a_commit("billing");
+        git(&slot.path, &["config", "diff.forged.textconv", "sed s/sixth/fifth/"]).unwrap();
+        let fourth = git(&slot.path, &["rev-parse", "HEAD"]).unwrap();
+        let fifth = commit(&slot.path, "d", "fifth");
+        git(&slot.path, &["reset", "--quiet", "--hard", &fourth]).unwrap();
+        let sixth = commit(&slot.path, "d", "sixth");
+        for attributes in ["* -diff\n", "* diff=forged\n"] {
+            std::fs::write(dir.join(".git/info/attributes"), attributes).unwrap();
+            assert_ne!(patch_id(&slot.path, &fifth).unwrap(), patch_id(&slot.path, &sixth).unwrap(), "two different changes to one file with {attributes}");
+        }
+        cleanup(dir, origin, &slot);
+    }
 
     struct Staging {
         dir: PathBuf,

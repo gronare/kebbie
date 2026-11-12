@@ -324,7 +324,7 @@ fn tracked(root: &Path, base: &str, path: &str) -> bool {
 }
 
 pub fn diff_argv(root: &Path, base: &str, path: &str, commit: Option<&str>) -> Vec<String> {
-    let mut argv: Vec<String> = ["git", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff"].map(str::to_string).to_vec();
+    let mut argv: Vec<String> = ["git", "--no-replace-objects", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--text", "--no-textconv"].map(str::to_string).to_vec();
     match commit {
         Some(sha) => argv.extend([format!("{sha}^"), sha.to_string(), "--".into(), path.to_string()]),
         None if tracked(root, base, path) => argv.extend([base.to_string(), "--".into(), path.to_string()]),
@@ -453,6 +453,22 @@ pub mod tests {
         assert!(whole.contains("+one") && whole.contains("+four"), "{whole}");
         fs::write(repo.slot.join("e"), "fresh\n").unwrap();
         assert!(diff_argv(&repo.slot, &base, "e", None).contains(&"--no-index".to_string()));
+        let _ = fs::remove_dir_all(&repo.root);
+    }
+
+    #[test]
+    fn the_diff_shows_the_stored_contents_whatever_the_attributes_or_replace_refs_say() {
+        let repo = repo("diff-stored");
+        let base = resolve_base(&repo.slot, "fork");
+        let shown = |argv: Vec<String>| String::from_utf8_lossy(&std::process::Command::new(&argv[0]).args(&argv[1..]).current_dir(&repo.slot).output().unwrap().stdout).to_string();
+        fs::write(repo.root.join("app/.git/info/attributes"), "* -diff\n").unwrap();
+        let forged_tree = sh(&repo.slot, &["rev-parse", &format!("{}^^{{tree}}", repo.shas[0])]);
+        let forged = sh(&repo.slot, &["commit-tree", &forged_tree, "-p", &format!("{}^", repo.shas[0]), "-m", "Change a"]);
+        sh(&repo.slot, &["replace", &repo.shas[0], &forged]);
+        let own = shown(diff_argv(&repo.slot, &base, "a", Some(&repo.shas[0])));
+        assert!(own.contains("+one"), "{own}");
+        let whole = shown(diff_argv(&repo.slot, &base, "a", None));
+        assert!(whole.contains("+one"), "{whole}");
         let _ = fs::remove_dir_all(&repo.root);
     }
 

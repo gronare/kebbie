@@ -68,7 +68,7 @@ pub(super) fn create_slot(repo: &Path, upstream: &str) -> Result<Slot> {
         number += 1;
     }
     let path = slot_path(repo, number);
-    git(repo, &["worktree", "add", "--detach", &path.to_string_lossy(), upstream])?;
+    git(repo, &["worktree", "add", "--detach", &path.to_string_lossy(), &crate::repo::tracking(upstream)])?;
     if let Some(git_dir) = crate::repo::git_dir_of(&path) {
         crate::sandbox::deny_new_slot(&crate::lead::roles_dir()?, &name_of(repo), &git_dir.canonicalize().unwrap_or(git_dir))?;
     }
@@ -98,7 +98,7 @@ pub fn list(cwd: &Path) -> Result<Vec<Value>> {
 
 // -D because callers have already checked the commits are on upstream; git's -d checks the main checkout's local branch, which is still behind right after a push.
 pub(super) fn release(repo: &Path, slot: &Slot, upstream: &str) -> Result<Option<String>> {
-    git_writing(&slot.path, &["switch", "--quiet", "--detach", upstream])?;
+    git_writing(&slot.path, &["switch", "--quiet", "--detach", &crate::repo::tracking(upstream)])?;
     clear_tmp(&slot.path);
     git(repo, &["branch", "-D", task_of(slot)])?;
     let folders = config::resolve(Some(repo)).map(|loaded| loaded.settings.clean_on_release.value).unwrap_or_else(|_| vec!["target".to_string()]);
@@ -230,7 +230,7 @@ pub fn move_work(cwd: &Path, name: &str, files: &[String], pane: Option<&str>, f
     } else if !existing {
         git(&repo, &["branch", &task]).map_err(stashed)?;
         if ahead_behind(&repo, &upstream)?.0 > 0 {
-            git_writing(&repo, &["reset", "--quiet", "--keep", &upstream]).map_err(stashed)?;
+            git_writing(&repo, &["reset", "--quiet", "--keep", &crate::repo::tracking(&upstream)]).map_err(stashed)?;
         }
     }
 

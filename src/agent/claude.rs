@@ -456,7 +456,7 @@ pub(crate) fn reviewer_args(reviewer: &super::Reviewer) -> Vec<String> {
 
 pub(crate) fn reviewer_settings(kebbie: &str, sandbox: bool) -> String {
     let mut written = json!({ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": format!("{} hook --review", crate::sh::quote(kebbie)) }] }] } });
-    written["env"] = crate::review::NO_FSMONITOR.iter().map(|(name, value)| (name.to_string(), json!(value))).collect::<serde_json::Map<String, Value>>().into();
+    written["env"] = crate::review::READER_ENV.iter().map(|(name, value)| (name.to_string(), json!(value))).collect::<serde_json::Map<String, Value>>().into();
     if sandbox {
         written["sandbox"] = crate::sandbox::reader_block();
     }
@@ -850,6 +850,7 @@ mod tests {
         assert_eq!(off.get("sandbox"), None);
         for settings in [&on, &off] {
             assert_eq!((&settings["env"]["GIT_CONFIG_COUNT"], &settings["env"]["GIT_CONFIG_KEY_0"], &settings["env"]["GIT_CONFIG_VALUE_0"]), (&json!("1"), &json!("core.fsmonitor"), &json!("false")), "a repo's fsmonitor command never runs as the reviewer");
+            assert_eq!(settings["env"]["GIT_NO_REPLACE_OBJECTS"], json!("1"), "the reviewer reads objects as they are stored");
         }
     }
 }

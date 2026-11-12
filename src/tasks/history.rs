@@ -13,7 +13,7 @@ pub struct Commit {
 pub fn commits(path: &Path) -> Result<Vec<Commit>> {
     let upstream = default_branch(&main_checkout(path)?)?;
     let open = super::accept::open_commits(path, &upstream)?;
-    let log = git(path, &["log", "--reverse", "--format=%H%x00%B%x1e", &format!("{upstream}..HEAD")])?;
+    let log = git(path, &["log", "--reverse", "--format=%H%x00%B%x1e", &format!("{}..HEAD", crate::repo::tracking(&upstream))])?;
     Ok(log.split('\x1e').filter_map(|entry| {
         let (sha, message) = entry.trim_start().split_once('\0')?;
         Some(Commit { sha: sha.to_string(), message: message.trim().to_string() })
@@ -25,7 +25,7 @@ fn commit_like(path: &Path, tree: &str, parent: &str, like: &str, message: &str)
     let author = git(path, &["show", "-s", "--format=%an%x00%ae%x00%aI", like])?;
     let mut fields = author.split('\0');
     let (name, email, date) = (fields.next().unwrap_or_default(), fields.next().unwrap_or_default(), fields.next().unwrap_or_default());
-    let output = std::process::Command::new("git")
+    let output = crate::sh::git_command()
         .args(crate::repo::unhooked(Some(path), &["commit-tree", tree, "-p", parent, "-m", message]))
         .env("GIT_AUTHOR_NAME", name).env("GIT_AUTHOR_EMAIL", email).env("GIT_AUTHOR_DATE", date)
         .current_dir(path).output().map_err(|error| error.to_string())?;
@@ -58,12 +58,12 @@ pub fn squash(path: &Path, message: &str) -> Result<()> {
 // A one-off Claude with no tools, settings, hooks or MCP, run outside the repo, so it only writes text.
 pub fn draft_squash_message(path: &Path) -> Result<String> {
     let upstream = default_branch(&main_checkout(path)?)?;
-    let range = format!("{}..HEAD", super::accept::rest_base(path, &upstream).unwrap_or(upstream));
+    let range = format!("{}..HEAD", super::accept::rest_base(path, &upstream).unwrap_or_else(|| crate::repo::tracking(&upstream)));
     let input = format!(
         "Commit messages, oldest first:\n\n{}\n\nDiff stat:\n{}\n\nDiff:\n{}",
         git(path, &["log", "--reverse", "--format=%B%n---", &range])?,
         git(path, &["diff", "--stat", &range])?,
-        git(path, &["diff", &range])?.chars().take(60_000).collect::<String>(),
+        git(path, &["diff", "--no-ext-diff", "--text", "--no-textconv", &range])?.chars().take(60_000).collect::<String>(),
     );
     let mut child = std::process::Command::new("claude")
         .args(["-p", "--setting-sources", "", "--strict-mcp-config", "--tools", "", "--model", "sonnet", "--no-session-persistence", "--disable-slash-commands",

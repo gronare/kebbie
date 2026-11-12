@@ -1,7 +1,7 @@
 use std::fs;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde_json::{Value, json};
 
@@ -479,7 +479,7 @@ pub fn forget(task: &str, repo: &Path) {
 }
 
 fn git_with(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git").args(crate::repo::unhooked(Some(cwd), args)).current_dir(cwd).env("GIT_INDEX_FILE", index)
+    let output = crate::sh::git_command().args(crate::repo::unhooked(Some(cwd), args)).current_dir(cwd).env("GIT_INDEX_FILE", index)
         .env("GIT_AUTHOR_NAME", "kebbie").env("GIT_AUTHOR_EMAIL", "kebbie@localhost").env("GIT_COMMITTER_NAME", "kebbie").env("GIT_COMMITTER_EMAIL", "kebbie@localhost")
         .stdin(Stdio::null()).output().map_err(|error| format!("git: {error}"))?;
     if !output.status.success() {

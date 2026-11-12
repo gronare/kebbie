@@ -535,7 +535,7 @@ fn review(repo: &Path, slot: &Slot, address: &str, state: &Path, which: Which) -
     let upstream = default_branch(repo)?;
     let sha = git(&slot.path, &["rev-parse", "HEAD"])?;
     let settings = config::resolve(Some(repo))?.settings;
-    let open = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..{sha}")])?;
+    let open = git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{}..{sha}", crate::repo::tracking(&upstream))])?;
     let pushed = crate::assessment::pushed_log(state, address, &slot.path);
     let commits = if pushed.is_empty() { open } else { format!("{pushed}\n{open}") };
     let said = tasks::transcript(repo, slot).and_then(|(agent, file)| Some(agent.user_messages(&fs::read_to_string(file).ok()?))).unwrap_or_default();
@@ -894,11 +894,11 @@ pub fn read_only(command: &str) -> bool {
     words.all(|word| !(word.starts_with("--ou") || word.starts_with("--ext")))
 }
 
-// A repo's diff.external and textconv drivers run as the reviewer and rewrite what it reads, and no config value turns them off.
-pub const NO_DRIVERS: [&str; 2] = ["--no-ext-diff", "--no-textconv"];
+// A repo's diff.external and textconv drivers and its diff attributes rewrite what the reviewer reads, and no config value turns them off.
+pub const NO_DRIVERS: [&str; 3] = ["--no-ext-diff", "--no-textconv", "--text"];
 
-// A repo's core.fsmonitor is a command git diff runs; the reviewer's command line cannot carry -c, so its environment turns it off.
-pub const NO_FSMONITOR: [(&str, &str); 3] = [("GIT_CONFIG_COUNT", "1"), ("GIT_CONFIG_KEY_0", "core.fsmonitor"), ("GIT_CONFIG_VALUE_0", "false")];
+// The reviewer's command line cannot carry -c, so its environment turns off the repo's core.fsmonitor command and its replace refs.
+pub const READER_ENV: [(&str, &str); 4] = [("GIT_CONFIG_COUNT", "1"), ("GIT_CONFIG_KEY_0", "core.fsmonitor"), ("GIT_CONFIG_VALUE_0", "false"), ("GIT_NO_REPLACE_OBJECTS", "1")];
 
 // The flags go right after the subcommand, so a `--` later in the command keeps them options.
 pub fn without_drivers(command: &str) -> String {
@@ -1023,7 +1023,7 @@ pub fn is_doc(path: &str, worktree: &Path) -> bool {
 
 // The docs check for a repo with docs.required, from the branch's own diff and the worktree's docs index.
 pub fn docs_brief(worktree: &Path, upstream: &str, sha: &str, keep_docs: &Path) -> Result<String> {
-    let changed = git(worktree, &["diff", "--name-only", &format!("{upstream}...{sha}")])?;
+    let changed = git(worktree, &["diff", "--name-only", &format!("{}...{sha}", crate::repo::tracking(upstream))])?;
     let touched: Vec<&str> = changed.lines().filter(|path| is_doc(path, worktree)).collect();
     let index = Some(DOCS_INDEX).filter(|index| worktree.join(index).is_file());
     Ok(docs_check(&touched, index, keep_docs))
@@ -1479,7 +1479,7 @@ mod tests {
         let reviewer = Reviewer { model: Some("gpt-6.1-sol"), effort: Some("high"), settings: Path::new("/s.json"), prompt: Path::new("/kebbie/skills/review/SKILL.md"), rules: Some(Path::new("/rules")), docs: None, answer: Path::new("/state/roles/billing@app.second.answer") };
         let (program, args) = crate::agent::Agent::Codex.reviewer_command(&reviewer);
         assert_eq!(program, "codex");
-        assert_eq!(args, ["exec", "--sandbox", "read-only", "--ignore-user-config", "--ignore-rules", "--ephemeral", "--color", "never", "-c", "check_for_update_on_startup=false", "-c", "shell_environment_policy.set={GIT_CONFIG_COUNT=\"1\",GIT_CONFIG_KEY_0=\"core.fsmonitor\",GIT_CONFIG_VALUE_0=\"false\"}", "--output-last-message", "/state/roles/billing@app.second.answer", "--model", "gpt-6.1-sol", "-c", "model_reasoning_effort=\"high\"", "-"]);
+        assert_eq!(args, ["exec", "--sandbox", "read-only", "--ignore-user-config", "--ignore-rules", "--ephemeral", "--color", "never", "-c", "check_for_update_on_startup=false", "-c", "shell_environment_policy.set={GIT_CONFIG_COUNT=\"1\",GIT_CONFIG_KEY_0=\"core.fsmonitor\",GIT_CONFIG_VALUE_0=\"false\",GIT_NO_REPLACE_OBJECTS=\"1\"}", "--output-last-message", "/state/roles/billing@app.second.answer", "--model", "gpt-6.1-sol", "-c", "model_reasoning_effort=\"high\"", "-"]);
         assert!(!args.iter().any(|arg| arg == "--add-dir" || arg.contains("bypass") || arg == "workspace-write"), "an --add-dir would be writable; the read-only sandbox reads the rules where they are");
         let dir = crate::sh::test_dir("codex-reviewer-input");
         fs::write(dir.join("SKILL.md"), "Read every commit.\n").unwrap();
@@ -1685,9 +1685,9 @@ mod tests {
 
     #[test]
     fn the_reviewers_git_reads_never_run_the_repos_diff_drivers() {
-        assert_eq!(without_drivers("git diff origin/main...HEAD -- src/a.rs"), "git diff --no-ext-diff --no-textconv origin/main...HEAD -- src/a.rs");
-        assert_eq!(without_drivers("  git\tlog"), "  git\tlog --no-ext-diff --no-textconv");
-        assert_eq!(without_drivers("git show HEAD "), "git show --no-ext-diff --no-textconv HEAD ");
+        assert_eq!(without_drivers("git diff origin/main...HEAD -- src/a.rs"), "git diff --no-ext-diff --no-textconv --text origin/main...HEAD -- src/a.rs");
+        assert_eq!(without_drivers("  git\tlog"), "  git\tlog --no-ext-diff --no-textconv --text");
+        assert_eq!(without_drivers("git show HEAD "), "git show --no-ext-diff --no-textconv --text HEAD ");
         let repo = crate::sh::test_dir("review-drivers");
         let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(&repo).output().unwrap();
         git(&["init", "--quiet"]);
@@ -1707,6 +1707,26 @@ mod tests {
             let read: Value = serde_json::from_str(&guard(&json!({ "tool_input": { "command": command } }).to_string())).unwrap();
             let text = shown(read["hookSpecificOutput"]["updatedInput"]["command"].as_str().unwrap());
             assert!(!text.contains("FORGED") && (text.contains("+after") || text.contains("+before")), "{command}: {text}");
+        }
+        std::fs::remove_dir_all(repo).unwrap();
+    }
+
+    #[test]
+    fn the_reviewers_git_reads_show_file_contents_whatever_the_attributes_say() {
+        let repo = crate::sh::test_dir("review-attributes");
+        let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(&repo).output().unwrap();
+        git(&["init", "--quiet"]);
+        std::fs::write(repo.join("f"), "before\n").unwrap();
+        git(&["add", "."]);
+        git(&["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "a"]);
+        std::fs::write(repo.join("f"), "after\n").unwrap();
+        git(&["-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-am", "b"]);
+        std::fs::write(repo.join(".git/info/attributes"), "* -diff\n").unwrap();
+        for command in ["git diff HEAD~1", "git log -p -1", "git show HEAD"] {
+            let read: Value = serde_json::from_str(&guard(&json!({ "tool_input": { "command": command } }).to_string())).unwrap();
+            let words: Vec<String> = read["hookSpecificOutput"]["updatedInput"]["command"].as_str().unwrap().split_whitespace().skip(1).map(str::to_string).collect();
+            let text = String::from_utf8_lossy(&git(&words.iter().map(String::as_str).collect::<Vec<_>>()).stdout).to_string();
+            assert!(text.contains("+after"), "{command}: {text}");
         }
         std::fs::remove_dir_all(repo).unwrap();
     }
@@ -1812,7 +1832,7 @@ mod tests {
     fn the_reviewers_settings_hold_only_the_guard_hook() {
         let settings: Value = serde_json::from_str(&guard_settings("/bin/kebbie", false)).unwrap();
         assert_eq!(settings.as_object().unwrap().keys().collect::<Vec<_>>(), ["env", "hooks"], "no permissions or model of its own: the command line decides those");
-        assert_eq!(settings["env"].as_object().unwrap().len(), NO_FSMONITOR.len(), "the env only turns off the repo's fsmonitor");
+        assert_eq!(settings["env"].as_object().unwrap().len(), READER_ENV.len(), "the env only turns off the repo's fsmonitor and replace refs");
         assert_eq!(settings["hooks"].as_object().unwrap().keys().collect::<Vec<_>>(), ["PreToolUse"]);
     }
 

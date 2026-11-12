@@ -337,7 +337,7 @@ pub fn ready(repo: &Path) -> Result<String> {
     if !is_clean(repo)? {
         return Err(format!("{} has uncommitted changes", name_of(repo)));
     }
-    let behind = git(repo, &["rev-list", "--count", &format!("{branch}..{upstream}")])?;
+    let behind = git(repo, &["rev-list", "--count", &format!("{branch}..{}", crate::repo::tracking(&upstream))])?;
     if behind != "0" {
         return Err(format!("{branch} is {behind} behind {upstream}; pull first"));
     }

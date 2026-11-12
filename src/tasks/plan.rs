@@ -148,7 +148,7 @@ pub struct Tips {
 }
 
 fn tips_of(task: &Task) -> Result<Tips> {
-    let shas = git(task.path, &["rev-parse", task.upstream, "HEAD"])?;
+    let shas = git(task.path, &["rev-parse", &crate::repo::tracking(task.upstream), "HEAD"])?;
     let (upstream, head) = shas.split_once('\n').ok_or_else(|| format!("git rev-parse {} HEAD printed one sha", task.upstream))?;
     Ok(Tips { upstream: upstream.to_string(), head: head.to_string() })
 }
@@ -321,7 +321,7 @@ fn write_as(caller: &Caller, state: &Path, task: &Task, titles: &[String]) -> Re
         Some(plan) => current(state, task, plan, false).map(|(steps, seen)| (steps.pushed, seen))?,
         None => (0, Vec::new()),
     };
-    let base = git(task.path, &["rev-parse", task.upstream])?;
+    let base = git(task.path, &["rev-parse", &crate::repo::tracking(task.upstream)])?;
     let old = old.map(|plan| Plan { seen, ..plan });
     save(state, task.address, &rewritten(old.as_ref(), pushed, &base, titles)?)
 }

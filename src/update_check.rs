@@ -171,7 +171,7 @@ pub fn installed(places: &Places) -> Vec<Component> {
 
 // A fetch must never wait on a password or a passphrase, as the board runs it unseen.
 pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let mut command = Command::new("git");
+    let mut command = crate::sh::git_command();
     command.args(args).current_dir(dir).stdin(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
     if std::env::var_os("GIT_SSH_COMMAND").is_none() {
         command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");

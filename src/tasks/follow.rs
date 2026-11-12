@@ -149,7 +149,7 @@ pub(super) fn step(state: &Path, slot: &Slot, address: &str, waiting: Option<boo
     if ahead_behind(&slot.path, &upstream)?.1 == 0 {
         return Ok(Step::Current);
     }
-    let pair = format!("{} {}", git(&slot.path, &["rev-parse", &upstream])?, git(&slot.path, &["rev-parse", "HEAD"])?);
+    let pair = format!("{} {}", git(&slot.path, &["rev-parse", &crate::repo::tracking(&upstream)])?, git(&slot.path, &["rev-parse", "HEAD"])?);
     if fs::read_to_string(handed_file(state, address)).is_ok_and(|seen| seen.trim() == pair) {
         return Ok(Step::Waits("its conflict with this upstream is handed over"));
     }

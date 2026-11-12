@@ -7,8 +7,15 @@ pub fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
+// Every git kebbie runs reads objects as they are stored, so what it checks is what a push sends.
+pub fn git_command() -> Command {
+    let mut command = Command::new("git");
+    command.env("GIT_NO_REPLACE_OBJECTS", "1");
+    command
+}
+
 fn command(program: &str, args: &[&str], cwd: Option<&Path>) -> Command {
-    let mut command = Command::new(program);
+    let mut command = if program == "git" { git_command() } else { Command::new(program) };
     #[cfg(test)]
     spawned::note(program, args);
     if program == "git" {
@@ -135,12 +142,20 @@ pub fn adopt_children() {
 
 // ps and not pgrep: pgrep leaves out a child that has already exited, which is the zombie this is for.
 pub fn children_of(parent: u32) -> Vec<libc::pid_t> {
-    let Ok(listed) = run("ps", &["-axo", "pid=,ppid="], None) else { return Vec::new() };
-    listed.lines().filter_map(|line| {
+    listed_children(parent).map(|(children, _)| children).unwrap_or_default()
+}
+
+// The ps that lists them is a child too, reaped before the list is read, so its pid is left out.
+fn listed_children(parent: u32) -> Option<(Vec<libc::pid_t>, u32)> {
+    let lister = Command::new("ps").args(["-axo", "pid=,ppid="]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let own = lister.id();
+    let output = lister.wait_with_output().ok().filter(|output| output.status.success())?;
+    let children = String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| {
         let mut fields = line.split_whitespace();
-        let pid = fields.next()?.parse().ok()?;
-        (fields.next()?.parse::<u32>().ok()? == parent).then_some(pid)
-    }).collect()
+        let pid: u32 = fields.next()?.parse().ok()?;
+        (fields.next()?.parse::<u32>().ok()? == parent && pid != own).then_some(pid as libc::pid_t)
+    }).collect();
+    Some((children, own))
 }
 
 pub fn adopt(pids: Vec<libc::pid_t>) {
@@ -187,6 +202,27 @@ pub fn run_visibly(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_children_listed_for_adoption_leave_out_the_listing_process() {
+        let (children, lister) = listed_children(std::process::id()).unwrap();
+        assert!(!children.contains(&(lister as libc::pid_t)), "the ps that listed {children:?} is not among them");
+    }
+
+    #[test]
+    fn every_git_reads_objects_without_replacements() {
+        let dir = test_dir("no-replace");
+        let git = |args: &[&str]| run("git", &[&["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"], args].concat(), Some(&dir)).unwrap();
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "stored"]);
+        let stored = git(&["rev-parse", "HEAD"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "other"]);
+        let other = git(&["rev-parse", "HEAD"]);
+        git(&["replace", &stored, &other]);
+        assert_eq!(git(&["log", "-1", "--format=%s", &stored]), "stored");
+        let direct = git_command().args(["log", "-1", "--format=%s", &stored]).current_dir(&dir).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&direct.stdout).trim(), "stored");
+    }
 
     #[test]
     fn a_program_that_will_not_start_is_the_outer_error_and_a_failing_one_the_inner() {

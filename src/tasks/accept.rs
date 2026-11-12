@@ -40,7 +40,7 @@ pub(crate) fn set_in(state: &Path, address: &str, code: &str, on: bool) -> Resul
 
 // Each commit's own change against its parent, without its message, line numbers or context, so a clean rebase or a reword keeps it and a changed line does not.
 pub(crate) fn commit_codes(path: &Path, args: &[&str]) -> Result<Vec<(String, String)>> {
-    let log = git(path, &[&["log", "-p", "-U0", "--no-color", "--no-ext-diff", "--format=%x00%H"], args].concat())?;
+    let log = git(path, &[&["log", "-p", "-U0", "--no-color", "--no-ext-diff", "--text", "--no-textconv", "--format=%x00%H"], args].concat())?;
     Ok(log.split('\0').skip(1).map(|commit| {
         let (sha, changes) = commit.split_once('\n').unwrap_or((commit, ""));
         (sha.trim().to_string(), hashed(changed_lines(changes).trim().as_bytes()))
@@ -84,7 +84,7 @@ pub(crate) struct Open {
 
 // The task's commits not yet on the default branch, oldest first: a commit whose change reached it since the fork point, by a push of the first commits rebased elsewhere or any other road, is left out once per landed copy, as git rebase drops it; changeless commits always count.
 pub(crate) fn open_commits(path: &Path, upstream: &str) -> Result<Vec<Open>> {
-    let tips = git(path, &["rev-parse", upstream, "HEAD"])?;
+    let tips = git(path, &["rev-parse", &crate::repo::tracking(upstream), "HEAD"])?;
     let (shas, head) = tips.split_once('\n').ok_or_else(|| format!("git rev-parse {upstream} HEAD printed one sha"))?;
     open_commits_at(path, &super::StepTips { upstream: shas.to_string(), head: head.to_string() })
 }
@@ -229,7 +229,7 @@ pub fn listing_at(path: &Path) -> Option<serde_json::Value> {
 
 fn listing(state: &Path, task: &Task) -> Result<serde_json::Value> {
     let commits = accepted_at(state, &task.address, &task.path, &task.upstream)?;
-    let subjects = git(&task.path, &["log", "--format=%H%x09%s", &format!("{}..HEAD", task.upstream)])?;
+    let subjects = git(&task.path, &["log", "--format=%H%x09%s", &format!("{}..HEAD", crate::repo::tracking(&task.upstream))])?;
     let subject = |sha: &str| subjects.lines().find_map(|line| line.strip_prefix(sha).and_then(|rest| rest.strip_prefix('\t'))).unwrap_or_default().to_string();
     let listed: Vec<serde_json::Value> = commits.iter().map(|(sha, accepted)| serde_json::json!({ "sha": sha, "subject": subject(sha), "accepted": accepted })).collect();
     Ok(serde_json::json!({ "task": task.address, "last_accepted": last_of_run(&commits), "commits": listed }))
@@ -280,6 +280,21 @@ mod tests {
 
     fn task(slot: &crate::tasks::Slot, upstream: &str) -> Task {
         Task { path: slot.path.clone(), upstream: upstream.to_string(), address: "billing@app".to_string() }
+    }
+
+    #[test]
+    fn a_commits_code_reads_file_contents_whatever_the_attributes_say() {
+        let (dir, origin, slot, upstream) = task_with_a_commit("billing");
+        git(&slot.path, &["config", "diff.forged.textconv", "echo same"]).unwrap();
+        commit(&slot.path, "d", "fifth");
+        commit(&slot.path, "d", "sixth");
+        for attributes in ["* -diff\n", "* diff=forged\n"] {
+            std::fs::write(dir.join(".git/info/attributes"), attributes).unwrap();
+            let codes: Vec<String> = commit_codes(&slot.path, &[&format!("{upstream}..HEAD")]).unwrap().into_iter().map(|(_, code)| code).collect();
+            assert_eq!(codes.len(), 3);
+            assert_ne!(codes[0], codes[1], "two different changes to one file are two codes with {attributes}");
+        }
+        cleanup(dir, origin, &slot);
     }
 
     #[test]

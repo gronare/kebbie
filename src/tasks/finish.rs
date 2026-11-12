@@ -20,7 +20,7 @@ pub fn reset(cwd: &Path, name: Option<&str>) -> Result<String> {
     let slot = find_task(&repo, name, cwd)?;
     let task = task_of(&slot).to_string();
     let upstream = default_branch(&repo)?;
-    let discarded = git(&slot.path, &["log", "--format=%h %s", &format!("{upstream}..HEAD")]).unwrap_or_default();
+    let discarded = git(&slot.path, &["log", "--format=%h %s", &format!("{}..HEAD", crate::repo::tracking(&upstream))]).unwrap_or_default();
     let items = forget_start(&task, &repo).map(|text| crate::task_note::items(&text)).unwrap_or_default();
     let state = state_dir()?;
     let address = peers::address(&task, &name_of(&repo));
@@ -99,7 +99,7 @@ pub(super) fn close_task(cwd: &Path, name: Option<&str>, vault: Option<&crate::v
     let address = peers::address(task_of(&slot), &name_of(&repo));
     let state = crate::lead::state_dir()?;
     let landed = landed.map(str::to_string).or_else(|| crate::ci::load(&state, &address).map(|watch| watch.pushed.commits).filter(|commits| !commits.is_empty()))
-        .or_else(|| git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{upstream}..HEAD")]).ok().filter(|commits| !commits.is_empty()));
+        .or_else(|| git(&slot.path, &["log", "--reverse", "--format=%h %s", &format!("{}..HEAD", crate::repo::tracking(&upstream))]).ok().filter(|commits| !commits.is_empty()));
     let mut finished = finish(&repo, &slot, &upstream, &crate::lead::state_dir()?, vault)?;
     if let Some(said) = said {
         finished = finished.detail("note", said);
@@ -220,6 +220,7 @@ impl Drop for Closing {
 
 // The branch's commits whose change upstream lacks, as "sha subject"; empty when every change landed, however it was cherry-picked or squashed.
 pub(super) fn missing_from(path: &Path, upstream: &str) -> Result<Vec<String>> {
+    let upstream = &crate::repo::tracking(upstream);
     let unmatched: Vec<String> = git(path, &["cherry", "-v", "--abbrev", upstream, "HEAD"])?.lines()
         .filter_map(|line| line.strip_prefix("+ ")).map(str::to_string).collect();
     if unmatched.is_empty() {

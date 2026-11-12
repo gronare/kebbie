@@ -324,7 +324,7 @@ fn the_review_guard_denies_every_command_but_a_plain_git_read() {
     assert_eq!(decision["hookSpecificOutput"]["permissionDecision"], "deny");
     let allow = lab.run_with_stdin(&["hook", "--review"], r#"{"tool_input":{"command":"git log -p origin/main..HEAD"}}"#);
     let passed: serde_json::Value = serde_json::from_str(&stdout(&allow)).unwrap();
-    assert_eq!(passed["hookSpecificOutput"]["updatedInput"]["command"], "git log --no-ext-diff --no-textconv -p origin/main..HEAD", "a plain read runs without the repo's diff drivers");
+    assert_eq!(passed["hookSpecificOutput"]["updatedInput"]["command"], "git log --no-ext-diff --no-textconv --text -p origin/main..HEAD", "a plain read runs without the repo's diff drivers or diff attributes");
     assert_eq!(passed["hookSpecificOutput"].get("permissionDecision"), None);
     let garbage = lab.run_with_stdin(&["hook", "--review"], "not json at all");
     assert!(stdout(&garbage).contains("\"deny\""), "unreadable input is refused");

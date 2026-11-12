@@ -829,7 +829,7 @@ struct Shas {
 
 impl Shas {
     fn read(path: &Path, upstream: &str) -> Result<Shas> {
-        let tips = git(path, &["rev-parse", upstream, "HEAD"])?;
+        let tips = git(path, &["rev-parse", &crate::repo::tracking(upstream), "HEAD"])?;
         let (upstream_sha, head) = tips.split_once('\n').ok_or_else(|| format!("git rev-parse {upstream} HEAD printed one sha"))?;
         let local = upstream.split_once('/').and_then(|(_, branch)| git(path, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).ok());
         Ok(Shas { tips: tasks::StepTips { upstream: upstream_sha.to_string(), head: head.to_string() }, local })
