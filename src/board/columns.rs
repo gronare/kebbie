@@ -10,7 +10,7 @@ use super::card::card_hint;
 use super::detail::unfolded_lines;
 use super::steps::{accept_wanted, step_lines, to_accept_note};
 use crate::config::OngoingAt;
-use super::{App, BacklogRow, Column, Hit};
+use super::{App, BacklogRow, Column, Hit, item_card};
 use super::widgets::{BLUE, FAINT, GREEN, MAUVE, MUTED, PEACH, RED, SUBTEXT, SURFACE, TEAL, TEXT, YELLOW, bold, card_text, chips, column_title, cut, group_line, options_hint, plural, row, style, wrap};
 
 pub(super) fn group_color(group: Group) -> Color {
@@ -118,6 +118,32 @@ pub fn suggested_name(title: &str) -> String {
     const FILLER: [&str; 12] = ["a", "an", "the", "and", "of", "for", "to", "on", "in", "with", "s", "before"];
     tasks::ascii_fold(&title.to_lowercase()).split(|character: char| !character.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty() && !FILLER.contains(word)).take(4).collect::<Vec<_>>().join("-")
+}
+
+// One word of a row's right field in its own colour, such as a backlog item's questions waiting on the user.
+fn tinted(mut line: Line<'static>, tint: Option<(String, Color)>) -> Line<'static> {
+    let Some((word, color)) = tint else { return line };
+    let Some(last) = line.spans.pop() else { return line };
+    match last.content.split_once(word.as_str()) {
+        Some((before, after)) => {
+            let (before, after) = (before.to_string(), after.to_string());
+            line.spans.extend([Span::styled(before, last.style), Span::styled(word, last.style.fg(color)), Span::styled(after, last.style)]);
+        }
+        None => line.spans.push(last),
+    }
+    line
+}
+
+fn key_hint(pairs: &[(String, &str)]) -> Line<'static> {
+    let mut spans = vec![Span::raw("   ")];
+    for (index, (key, label)) in pairs.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" · ", style(MUTED)));
+        }
+        spans.push(Span::styled(key.clone(), style(MAUVE)));
+        spans.push(Span::styled(format!(" {label}"), style(MUTED)));
+    }
+    Line::from(spans).style(Style::new().bg(SURFACE))
 }
 
 // The selected row with its whole name, wrapped, and the facts on its first line.
@@ -381,18 +407,26 @@ pub(super) fn backlog_lines(app: &App, width: usize) -> (Vec<Line<'static>>, usi
         let start = lines.len();
         if selected && focused {
             lines.extend(wrapped_row(icon, &entry.title, &entry.age, width));
-            let mut facts = vec![(entry.area.clone(), TEAL), (if entry.source == "linear" { entry.reference.clone() } else { "vault note".to_string() }, SUBTEXT)];
+            let kind = match entry.source.as_str() { "linear" => entry.reference.clone(), "local" => "local item".to_string(), "kept" => "kept by kebbie".to_string(), _ => "vault note".to_string() };
+            let mut facts = vec![(entry.area.clone(), TEAL), (kind, SUBTEXT)];
             if !entry.age.is_empty() {
                 facts.push((format!("{} old", entry.age), SUBTEXT));
             }
             lines.push(chips(facts));
-            if !entry.summary.is_empty() {
-                lines.extend(card_text("about", &entry.summary, FAINT, width, 2));
+            let about = item_card::about(entry);
+            if !about.is_empty() {
+                lines.extend(card_text("about", &about, FAINT, width, 2));
             }
-            lines.extend(card_text("starts as", &suggested_name(&entry.title), FAINT, width, 2));
-            lines.push(options_hint());
+            if !entry.shape.kept {
+                lines.extend(card_text("starts as", &suggested_name(&entry.title), FAINT, width, 2));
+            }
+            lines.push(if item_card::has_card(entry) { key_hint(&[(keys::map().label(Act::Options), "card"), (keys::map().label(Act::Go), "start")]) } else { options_hint() });
         } else {
-            lines.push(row(selected, focused, icon, &entry.title, None, &entry.age, width));
+            let (facts, tint) = item_card::row_facts(entry);
+            lines.push(tinted(row(selected, focused, icon, &entry.title, None, &facts, width), tint));
+            if let Some(working) = item_card::lead_line(entry) {
+                lines.extend(wanted_lines(working, MUTED, false, width));
+            }
         }
         rows.push((start, lines.len(), Hit::Entry(index)));
     }
@@ -520,7 +554,7 @@ mod tests {
         press(&mut app, key(KeyCode::Char('y')));
         assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::ClaimedName(entry), buffer, .. } if entry.reference == "Projects/web-billing.md" && buffer == "web-billing"), "y asks for the task's name, and the start passes --anyway");
         app.mode = Mode::Normal;
-        app.backlog.entries = vec![crate::backlog::Entry { source: "vault".to_string(), title: "web billing".to_string(), priority: "high".to_string(), area: "web".to_string(), reference: "Projects/web-billing.md".to_string(), summary: String::new(), age: String::new() }];
+        app.backlog.entries = vec![crate::backlog::Entry { source: "vault".to_string(), title: "web billing".to_string(), priority: "high".to_string(), area: "web".to_string(), reference: "Projects/web-billing.md".to_string(), summary: String::new(), age: String::new(), shape: Default::default() }];
         app.backlog_selected = 2;
         app.act(Act::Go);
         assert!(matches!(app.mode, Mode::ConfirmClaimed { .. }), "the same note in the Backlog column asks too");
@@ -552,12 +586,48 @@ mod tests {
         assert!(app.column == Column::Work && app.work_selected == 0, "a note with a task goes to it");
     }
 
+    #[test]
+    fn each_backlog_row_says_its_state_and_the_selected_one_its_card_or_options() {
+        use crate::backlog::Entry;
+        use crate::backlog_file::{Shape, State};
+        let mut app = test_app(Vec::new());
+        let item = |title: &str, reference: &str, source: &str, age: &str, shape: Shape| Entry { source: source.to_string(), title: title.to_string(), priority: "high".to_string(), area: "web".to_string(), reference: reference.to_string(), summary: "You stay signed in when you reload a page.".to_string(), age: age.to_string(), shape };
+        app.backlog.entries = vec![
+            item("Rounding per invoice", "Projects/rounding.md", "vault", "3 d", Shape { state: Some(State::Drafting), waiting: 2, ..Shape::default() }),
+            item("Retry a failed CI push", "Projects/retry.md", "vault", "0 d", Shape { state: Some(State::Drafting), ..Shape::default() }),
+            item("Session drops on reload", "Projects/session.md", "vault", "6 d", Shape { state: Some(State::Ready), ..Shape::default() }),
+            item("ci push retry flaky", "kept:abc123", "kept", "0 d", Shape { state: Some(State::ToWrite), kept: true, ..Shape::default() }),
+        ];
+        app.backlog_selected = 2;
+        let (rows, buffer) = render(&mut app, 124, 30);
+        let screen = rows.join("\n");
+        for wanted in ["Rounding per invoice", "2 questions · 3 d", "drafting · 0 d", "the lead is writing it out from the code, the", "Session drops on reload", "to write · 0 d", "the lead files it in the vault"] {
+            assert!(screen.contains(wanted), "{wanted}:\n{screen}");
+        }
+        let (x, y) = find(&rows, "2 questions · 3 d")[0];
+        assert!(coloured(&buffer[(x as u16, y as u16)], (0xf9, 0xe2, 0xaf)) && !coloured(&buffer[(x as u16 + 12, y as u16)], (0xf9, 0xe2, 0xaf)), "the questions alone are yellow");
+        app.column = Column::Backlog;
+        app.backlog_selected = 0;
+        let screen = render(&mut app, 124, 30).0.join("\n");
+        assert!(screen.contains("drafting: 2 questions wait on you before it") && screen.contains("⏎ card · g start") && screen.contains("vault note"), "{screen}");
+        app.backlog_selected = 2;
+        let screen = render(&mut app, 124, 30).0.join("\n");
+        assert!(screen.contains("You stay signed in when you reload a page.") && screen.contains("starts as"), "a ready item's about is its goal: {screen}");
+        app.backlog_selected = 3;
+        let screen = render(&mut app, 124, 30).0.join("\n");
+        assert!(screen.contains("kept by kebbie") && screen.contains("to write: the lead writes it out and files it") && screen.contains("⏎ options") && !screen.contains("starts as"), "{screen}");
+        press(&mut app, key(KeyCode::Char('g')));
+        assert!(matches!(app.mode, Mode::Normal) && app.notice.as_ref().is_some_and(|(text, _)| text.contains("has yet to write it out")), "a kept row has nothing to start yet");
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Options(_)), "a kept row has no card: ⏎ is its options");
+    }
+
     fn two_notes_and_two_entries(app: &mut crate::board::App) {
         app.ongoing = vec![
             Ongoing { key: "Projects/search-filters.md".to_string(), title: "search filters".to_string(), area: "web".to_string(), task: Some("search-filters@web".to_string()), claim: None, ..Ongoing::default() },
             Ongoing { key: "Projects/docs-refresh.md".to_string(), title: "docs refresh".to_string(), area: "shop".to_string(), task: None, claim: None, ..Ongoing::default() },
         ];
-        let entry = |title: &str, reference: &str| crate::backlog::Entry { source: "vault".to_string(), title: title.to_string(), priority: "high".to_string(), area: "web".to_string(), reference: reference.to_string(), summary: String::new(), age: String::new() };
+        let entry = |title: &str, reference: &str| crate::backlog::Entry { source: "vault".to_string(), title: title.to_string(), priority: "high".to_string(), area: "web".to_string(), reference: reference.to_string(), summary: String::new(), age: String::new(), shape: Default::default() };
         app.backlog.entries = vec![entry("nightly import", "Projects/nightly.md"), entry("price alerts", "Projects/alerts.md")];
     }
 

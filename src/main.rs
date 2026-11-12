@@ -6,6 +6,7 @@ mod areas;
 mod assessment;
 mod backlog;
 mod backlog_file;
+mod backlog_kept;
 mod changes;
 mod board;
 mod ci;
@@ -190,8 +191,10 @@ const USAGE: &str = "kebbie: herding coding agents in herdr
   kebbie statusline               Claude Code's statusLine command: reads its JSON on stdin and keeps the plan's session
                                   and week usage for the board; prints nothing, so Claude Code shows no extra line
   kebbie backlog [save]           show the backlog the board shows; save reads the lead's JSON array on stdin
-  kebbie backlog add [--priority <p>] \"<Title> — <summary> (<area>)\"
-                                  add an item to the local backlog (backlog.md next to the machine config)
+  kebbie backlog add [--priority <p>] [--repo <repo>] \"<Title>\" [-]
+                                  add a backlog item: a short one the lead writes out, or with - the
+                                  written-out item's sections on stdin
+  kebbie backlog filed <kept:id>  the lead filed the item kebbie kept a row for: the row gives way to its note
   kebbie link <name> <item>       tie a running task to a backlog item or project note, as start --backlog does:
                                   done tells the lead to close it, reset puts it back in the backlog
   kebbie land [name]              rebase a task onto the default branch without pushing; on a conflict, its Claude
@@ -689,7 +692,8 @@ fn run(arguments: &Arguments) -> Result<String> {
         }
         Some("messages") => messages::run(),
         Some("backlog") if arguments.positional(1) == Some("save") => backlog::save(),
-        Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), &arguments.rest(2).join(" ")),
+        Some("backlog") if arguments.positional(1) == Some("filed") => backlog_file::filed(arguments.positional(2).unwrap_or_default()),
+        Some("backlog") if arguments.positional(1) == Some("add") => backlog_file::add(arguments.value("--priority"), arguments.value("--repo"), arguments.rest(2), arguments.flag("-")),
         Some("backlog") => backlog::show(),
         Some("land") => tasks::land(&cwd, name),
         Some("follow") => tasks::follow(&cwd, arguments.rest(1)),

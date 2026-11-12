@@ -875,9 +875,9 @@ mod tests {
     }
 
     #[test]
-    fn the_lead_takes_an_idea_in_as_a_draft_and_starts_or_files_it_on_yes() {
+    fn the_lead_writes_an_idea_out_as_an_item_and_starts_or_files_it_on_yes() {
         let role = role_text(include_str!("../roles/lead.md"), "/opt/kebbie/kebbie", &[Source::Vault], false, true);
-        for needed in ["## Taking in ideas", "Draft it as a task note", "start it now as a task, file it in the backlog", "status `backlog`", "--backlog <the note's path>", "stays a plain task", "kebbie -C <repo> link <task>"] {
+        for needed in ["## Taking in ideas", "Write it out with the skill `kebbie:write-backlog-item`", "start it now as a task, file it in the backlog", "task note in the vault's Projects/", "--backlog <the note's path>", "stays a plain task", "kebbie -C <repo> link <task>"] {
             assert!(role.contains(needed), "{needed}");
         }
     }

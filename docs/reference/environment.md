@@ -6,7 +6,7 @@ The variables kebbie reads, the ones it sets for the commands it runs, and how t
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `KEBBIE_CONFIG` | `$XDG_CONFIG_HOME/kebbie/config.toml`, else `~/.config/kebbie/config.toml` | The machine config. The local `backlog.md` is read next to it. |
+| `KEBBIE_CONFIG` | `$XDG_CONFIG_HOME/kebbie/config.toml`, else `~/.config/kebbie/config.toml` | The machine config. The local `backlog/` folder is read next to it. |
 | `KEBBIE_REPOS_DIR` | `$XDG_CONFIG_HOME/kebbie/repos`, else `~/.config/kebbie/repos` | The folder of repo configs. |
 | `KEBBIE_PROFILES_DIR` | `$XDG_CONFIG_HOME/kebbie/profiles`, else `~/.config/kebbie/profiles` | The folder of [profiles](configuration.md#profiles). |
 | `KEBBIE_STATE_DIR` | `$XDG_STATE_HOME/kebbie`, else `~/.local/state/kebbie` | The state directory. Point it at a temp directory for a throwaway run. |

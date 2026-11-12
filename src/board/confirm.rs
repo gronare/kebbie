@@ -248,7 +248,7 @@ mod tests {
         assert!(matches!(&app.mode, Mode::Message(text) if text.contains("\"soonish\" is not a time")), "a time kebbie cannot read is refused on the board");
         app.mode = Mode::Normal;
         app.column = crate::board::Column::Backlog;
-        app.backlog.entries = vec![crate::backlog::Entry { source: "vault".to_string(), title: "Nightly import".to_string(), priority: "high".to_string(), area: "web".to_string(), reference: "Projects/nightly.md".to_string(), summary: String::new(), age: String::new() }];
+        app.backlog.entries = vec![crate::backlog::Entry { source: "vault".to_string(), title: "Nightly import".to_string(), priority: "high".to_string(), area: "web".to_string(), reference: "Projects/nightly.md".to_string(), summary: String::new(), age: String::new(), shape: Default::default() }];
         app.backlog_selected = 0;
         app.handle_normal(key(KeyCode::Char('l')));
         assert!(matches!(&app.mode, Mode::Input { purpose: Purpose::BacklogLaterName(entry), buffer, .. } if entry.reference == "Projects/nightly.md" && buffer == "nightly-import"));

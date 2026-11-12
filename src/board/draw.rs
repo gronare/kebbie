@@ -130,8 +130,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     let mut modal_hits = Vec::new();
+    if let Mode::ItemCard(card) = &mut app.mode {
+        super::item_card::draw_item_card(frame, card);
+    }
     match &app.mode {
-        Mode::Normal => {}
+        Mode::Normal | Mode::ItemCard(_) => {}
         Mode::Options(index) => modal_hits = draw_options(frame, app, *index),
         Mode::ReviewMenu(menu) => modal_hits = super::send_review::draw_review_menu(frame, menu),
         Mode::Questions(_) => modal_hits = draw_questions(frame, app),
@@ -307,7 +310,7 @@ mod tests {
         no_escape_reaches_the_terminal(&buffer, "a result window");
         app.mode = Mode::Normal;
         app.column = Column::Backlog;
-        app.backlog.entries.push(Entry { source: "local".to_string(), title: format!("entry {ESCAPES}"), priority: "high".to_string(), area: "app".to_string(), reference: "local:x".to_string(), summary: format!("about {ESCAPES}"), age: "3 d".to_string() });
+        app.backlog.entries.push(Entry { source: "local".to_string(), title: format!("entry {ESCAPES}"), priority: "high".to_string(), area: "app".to_string(), reference: "local:x".to_string(), summary: format!("about {ESCAPES}"), age: "3 d".to_string(), shape: Default::default() });
         let (_, buffer) = render(&mut app, 170, 40);
         no_escape_reaches_the_terminal(&buffer, "the backlog column");
     }

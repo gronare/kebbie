@@ -446,16 +446,25 @@ fn a_symlinked_repo_config_loads_and_doctor_shows_its_target() {
 }
 
 #[test]
-fn the_local_backlog_file_is_written_next_to_the_machine_config() {
+fn the_local_backlog_holds_one_file_per_item_next_to_the_machine_config() {
     let lab = Lab::new("backlog");
     let added = lab.run(&["backlog", "add", "--priority", "high", "Fix login — the session drops (app)"]);
     assert!(added.status.success(), "{}", stderr(&added));
-    let file = lab.root.join("backlog.md");
-    assert!(stdout(&added).contains("item: \"Fix login\" [high]"), "{}", stdout(&added));
-    assert!(fs::read_to_string(&file).unwrap().ends_with("- [high] Fix login — the session drops (app)\n"));
+    let file = lab.root.join("backlog/fix-login.md");
+    assert!(stdout(&added).contains("item: \"Fix login\" [high]") && stdout(&added).contains("ref: local:fix-login"), "{}", stdout(&added));
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(text.starts_with("+++\ntitle = \"Fix login\"\npriority = \"high\"\nrepo = \"app\"\nstatus = \"draft\"\n") && text.contains("## Background\n\nTo write: the lead writes this item out") && text.contains("\"Fix login — the session drops (app)\""), "{text}");
     let twice = lab.run(&["backlog", "add", "Fix login"]);
     assert!(!twice.status.success() && stderr(&twice).contains("already in the backlog"));
     assert!(!lab.run(&["backlog", "add", "--priority", "soon", "Other"]).status.success());
+    let body = "## Background\n\nIt drops.\n\n## Goal\n\nStay signed in.\n\n## What we know\n\nsrc/session.rs\n\n## Open questions\n\n- [ ] Keep old cookies?\n\n## Out of scope\n\nSSO.\n\n## Source\n\nThe user, today.\n";
+    let written = lab.run_with_stdin(&["backlog", "add", "--repo", "app", "Keep sessions", "-"], body);
+    assert!(written.status.success(), "{}", stderr(&written));
+    assert!(fs::read_to_string(lab.root.join("backlog/keep-sessions.md")).unwrap().contains("status = \"backlog\"\n"));
+    let half = lab.run_with_stdin(&["backlog", "add", "Half", "-"], "## Background\n\nOnly this.\n");
+    assert!(!half.status.success() && stderr(&half).contains("not written out"), "{}", stderr(&half));
+    let shown = stdout(&lab.run(&["backlog"]));
+    assert!(shown.contains("Fix login  (local:fix-login · app)  to write") && shown.contains("Keep sessions  (local:keep-sessions · app)  drafting"), "{shown}");
 }
 
 #[test]

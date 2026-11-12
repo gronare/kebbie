@@ -40,6 +40,10 @@ impl App {
                 buffer.push_str(&text);
                 None
             }
+            Mode::ItemCard(card) if card.typing.is_some() => {
+                card.typing.get_or_insert_default().push_str(&text);
+                None
+            }
             Mode::EditMessage(editor) => {
                 editor.text.insert_str(&text);
                 None

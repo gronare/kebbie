@@ -51,7 +51,7 @@ The script opens the setup guide. Its steps are on the left; `↑` `↓` choose,
 1. **This machine.** Keep the name it offers, or type one, such as `mac`. Your phone and your other machines show it.
 2. **Agents.** Each agent kebbie found has a row: its version, whether it is signed in and whether kebbie's plugin is in it. Claude Code stays ticked. Untick Codex for now, or keep it, as in [Run a task with Codex](how-to/run-a-task-with-codex.md#set-up-codex). If Claude Code reads `not signed in`, run `claude auth login`.
 3. **Vault.** Keep **No vault**. [Connect the vault](how-to/connect-the-vault.md) later if you keep notes in one.
-4. **Backlog.** Keep **Local file**: new ideas go to a `backlog.md` beside kebbie's config.
+4. **Backlog.** Keep **Local file**: new items go to a `backlog/` folder beside kebbie's config, one file each.
 5. **Error signals.** Read what a signal holds, below. **No, keep them off** is preselected; choose **Yes, turn them on** to send them.
 6. **Review and apply.** Read the list of what it writes, grouped by tool: kebbie's own config, kebbie's plugin in each agent you ticked, herdr's three keys, and the `kebbie doctor` warnings setup fixes itself, such as starting the keeper. Then press `⏎`.
 

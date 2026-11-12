@@ -11,6 +11,11 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A new device's first command waits on the machine until you approve it under N or with kebbie hub devices; update the hub first.
 - hub.trust and hub.auto_approve set which devices a machine takes commands from, and when a waiting one is let in.
 - A wish about kebbie goes to its maintainers the way a bug does, under the same report.text choice.
+- The lead writes every short backlog item out in full, with background, goal and open questions, the moment it is added.
+- The local backlog is a folder with one file per item; an old backlog.md moves into it once and stays as a backup.
+- Backlog sources take local or vault, not both: new items go to the vault when it is listed, and kebbie doctor says so for an older config.
+- ⏎ on a backlog item opens its card, where you answer its open questions; o opens its options.
+- A backlog row shows whether the item is to write, drafting or waits on your answers, and g asks once before starting one that waits.
 
 ### Fixed
 - A Codex task runs git add and git commit in its worktree without asking you to let them out of the sandbox, and the lead no longer recommends letting git through for good.

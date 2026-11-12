@@ -270,9 +270,9 @@ pub fn lead_keeps_note(note: Option<&str>, kebbie: &str) -> String {
 pub fn noticed_section(choice: AlsoNoticed, vault: bool, kebbie: &str) -> String {
     let intro = "As you work you will notice things outside this task: a bug nearby, a stale doc, a refactor worth doing.";
     let file = if vault {
-        "file it in the vault's backlog with the vault's `backlog_add` tool: its area, one line, a priority and this task as the source".to_string()
+        format!("file it in the vault's backlog as a task note written out by the skill `{}`, with this task as its Source", crate::backlog_file::SKILL)
     } else {
-        format!("file it with `{kebbie} backlog add --priority <priority> \"<Title> — <summary> (<area>)\"`")
+        format!("write it out by the skill `{}`, with this task as its Source, and file it with `{kebbie} backlog add --priority <priority> --repo <repo> \"<Title>\" -`, the item's sections on stdin", crate::backlog_file::SKILL)
     };
     let failed = "`not filed` when filing fails, so the lead files it";
     match choice {
@@ -343,7 +343,8 @@ fn role_values(task: &str, place: &Place, peers: &str) -> Result<Vec<(&'static s
     let codex_vault = place.agent == crate::agent::Agent::Codex && crate::agent::codex_setup::found_server(&crate::agent::codex_setup::read_config(crate::agent::codex::home().as_deref())).is_some();
     let (plan, vault, tools) = vault_parts(place.agent, codex_vault, &crate::config::sources().unwrap_or_default(), place.note, &kebbie, task, &plans);
     let settings = crate::config::resolve(Some(place.repo))?.settings;
-    let noticed = noticed_section(settings.also_noticed.value, tools && crate::vault_cli::detect().is_some(), &kebbie);
+    let in_vault = crate::config::filing(&settings.sources.value) == Some(crate::config::Source::Vault);
+    let noticed = noticed_section(settings.also_noticed.value, in_vault && tools && crate::vault_cli::detect().is_some(), &kebbie);
     let docs = docs_line(place.agent, settings.docs_required.value);
     let steps = steps_section(settings.steps.value, &kebbie);
     let mut values = vec![("address", me.clone()), ("task", task.to_string()), ("repo", repo), ("noticed", noticed), ("steps", steps), ("kebbie", kebbie), ("peers", peers), ("plan", plan), ("vault", vault), ("docs", docs)];
@@ -636,15 +637,16 @@ mod tests {
                 assert!(role.contains("## What you notice outside your task\n\nAs you work you will notice things outside this task") && !role.contains("{noticed}"), "{role}");
                 assert!(role.contains("under **Also noticed** on your sign-off card") && role.contains("the **Also noticed** list when you noticed anything outside the task"), "{role}");
                 assert!(role.contains("`not filed` when filing fails, so the lead files it"), "{role}");
-                let filed_in_vault = role.contains("the vault's `backlog_add` tool");
-                let filed_locally = role.contains("`/bin/kebbie backlog add --priority <priority>");
+                assert!(role.contains("written out by the skill `kebbie:write-backlog-item`") || role.contains("write it out by the skill `kebbie:write-backlog-item`"), "{role}");
+                let filed_in_vault = role.contains("file it in the vault's backlog as a task note");
+                let filed_locally = role.contains("`/bin/kebbie backlog add --priority <priority> --repo <repo> \"<Title>\" -`");
                 assert_eq!((filed_in_vault, filed_locally), (vault, !vault), "{choice:?} with the vault {vault}: {role}");
             }
         }
         let backlog = role(AlsoNoticed::Backlog, true);
         assert!(backlog.contains("Keep your commits to this task's change") && backlog.contains("done when everything you noticed is filed and listed") && !backlog.contains("ask --option \"fix"), "{backlog}");
         let fix = role(AlsoNoticed::Fix, false);
-        assert!(fix.contains("fix it in this session as a commit of its own, apart from the task's commits") && fix.contains("Anything bigger, file it with"), "{fix}");
+        assert!(fix.contains("fix it in this session as a commit of its own, apart from the task's commits") && fix.contains("Anything bigger, write it out by the skill"), "{fix}");
         let ask = role(AlsoNoticed::Ask, false);
         assert!(ask.contains("/bin/kebbie ask --option \"fix: fix it in this task, as a commit of its own\" --option \"file: file it for later\" --option \"leave: leave it as it is\" --recommend <n>"), "{ask}");
         assert!(ask.contains("before you change anything for it") && ask.contains("has the user's answer"), "{ask}");

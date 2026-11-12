@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::config::{self, Source};
 use crate::sh::Result;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Entry {
     pub source: String,
     pub title: String,
@@ -18,6 +18,7 @@ pub struct Entry {
     pub reference: String,
     pub summary: String,
     pub age: String,
+    pub shape: crate::backlog_file::Shape,
 }
 
 pub struct Backlog {
@@ -53,6 +54,7 @@ fn entry(value: &Value) -> Option<Entry> {
         reference: text(value, "ref"),
         summary: text(value, "summary"),
         age: text(value, "age"),
+        shape: Default::default(),
     })
 }
 
@@ -61,7 +63,8 @@ pub fn load() -> Backlog {
     let value: Value = file().ok().and_then(|path| fs::read_to_string(path).ok()).and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
     let mut entries: Vec<Entry> = value["entries"].as_array().into_iter().flatten().filter_map(entry).filter(|entry| entry.source != "local").collect();
     if sources.contains(&Source::Local) {
-        entries.extend(crate::backlog_file::read(&crate::backlog_file::path()));
+        crate::backlog_file::migrate_once();
+        entries.extend(crate::backlog_file::read(&crate::backlog_file::dir()));
     }
     let index = crate::vault::Index::open().ok();
     if let Some(index) = index.as_ref().filter(|_| sources.contains(&Source::Vault)) {
@@ -70,8 +73,87 @@ pub fn load() -> Backlog {
     }
     let status = |key: &str| index.as_ref().map_or(Some("backlog".to_string()), |index| index.status_of(key));
     entries = still_backlog(entries, status, &crate::tasks::started_items());
+    if let Ok(state) = crate::lead::state_dir() {
+        if config::filing(&sources) == Some(Source::Vault) {
+            let now = crate::messages::now();
+            entries.extend(crate::backlog_kept::kept_in(&state).iter().map(|kept| kept.entry(now)));
+        }
+        for entry in &mut entries {
+            shape(entry, index.as_ref(), &state);
+        }
+    }
     sort(&mut entries, |entry| index.as_ref().filter(|_| entry.source == "vault").and_then(|index| index.changed_at(&entry.reference)));
     Backlog { updated: value["updated"].as_u64(), entries }
+}
+
+fn bodies_file(state: &Path) -> PathBuf {
+    state.join("backlog-bodies.json")
+}
+
+// A vault note's markdown: the local index holds it, else kebbie's copy read through the vault command while the note has not changed since.
+pub fn vault_body(index: Option<&crate::vault::Index>, state: &Path, key: &str) -> Option<String> {
+    if let Some(body) = index.and_then(|index| index.body(key)) {
+        return Some(body);
+    }
+    let cached: Value = fs::read_to_string(bodies_file(state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+    let changed = index.and_then(|index| index.changed_at(key));
+    let kept = &cached[key];
+    (changed.is_none() || kept["mtime"].as_f64() == changed).then(|| kept["body"].as_str().map(str::to_string)).flatten()
+}
+
+// Fills kebbie's copy of the vault backlog notes the index has no body for; the board's refresher runs it, away from the screen.
+pub fn fetch_vault_bodies() {
+    static REFUSED: std::sync::Mutex<Vec<(String, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+    let (Ok(state), Ok(index)) = (crate::lead::state_dir(), crate::vault::Index::open()) else { return };
+    let Some(cli) = crate::vault_cli::cli() else { return };
+    let mut cached: Value = fs::read_to_string(bodies_file(&state)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_else(|| json!({}));
+    let mut refused = REFUSED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    refused.retain(|(_, at)| at.elapsed() < std::time::Duration::from_secs(300));
+    let mut changed = false;
+    for [key, ..] in index.backlog().unwrap_or_default() {
+        if index.body(&key).is_some() || refused.iter().any(|(held, _)| *held == key) {
+            continue;
+        }
+        let mtime = index.changed_at(&key);
+        if mtime.is_some() && cached[&key]["mtime"].as_f64() == mtime {
+            continue;
+        }
+        match cli.read_body(&key) {
+            Ok(body) => {
+                cached[&key] = json!({ "mtime": mtime, "body": body });
+                changed = true;
+            }
+            Err(_) => refused.push((key, std::time::Instant::now())),
+        }
+    }
+    if changed {
+        let _ = crate::state::write(&bodies_file(&state), cached.to_string());
+    }
+}
+
+// An item's state, its questions waiting on the user and the answers of theirs still with the lead.
+fn shape(entry: &mut Entry, index: Option<&crate::vault::Index>, state: &Path) {
+    let (state_now, body, filed) = match entry.source.as_str() {
+        "local" => match crate::backlog_file::find(&entry.reference) {
+            Some((_, item)) => (item.state(), item.body, item.filed),
+            None => return,
+        },
+        "vault" => {
+            let drafting = index.and_then(|index| index.status_of(&entry.reference)).as_deref() == Some("draft");
+            match vault_body(index, state, &entry.reference) {
+                Some(body) => (crate::backlog_file::state_of(drafting, false, &body), body, String::new()),
+                None if drafting => (crate::backlog_file::State::Drafting, String::new(), String::new()),
+                None => return,
+            }
+        }
+        _ => return,
+    };
+    let open = crate::backlog_file::questions_in(&body);
+    let answered: Vec<String> = crate::backlog_kept::settle(state, &entry.reference, &open).into_iter().map(|answer| answer.question).collect();
+    entry.shape = crate::backlog_file::shape_of(state_now, &body, &answered, &filed);
+    if entry.summary.is_empty() && state_now == crate::backlog_file::State::Ready {
+        entry.summary = crate::backlog_file::first_line(&body);
+    }
 }
 
 // Backlog notes the lead's last snapshot does not have yet: filed since, or put back by a reset.
@@ -84,6 +166,7 @@ fn missing_notes(entries: &[Entry], notes: &[[String; 6]], today: i64) -> Vec<En
         reference: key.clone(),
         summary: summary.clone(),
         age: days_since(date, today).map_or(String::new(), |days| format!("{days} d")),
+        shape: Default::default(),
     }).collect()
 }
 
@@ -119,11 +202,11 @@ fn sort(entries: &mut [Entry], changed_at: impl Fn(&Entry) -> Option<f64>) {
     }
 }
 
-// An item a running task came from, or a vault note closed since the snapshot, leaves the Backlog column without waiting for a refresh; a reset task's note shows again even while it still reads active.
+// An item a running task came from, or a vault note closed since the snapshot, leaves the Backlog column without waiting for a refresh; a reset task's note shows again even while it still reads active. A task started before local items were files names its item local:<Title>.
 fn still_backlog(entries: Vec<Entry>, status: impl Fn(&str) -> Option<String>, running: &HashSet<String>) -> Vec<Entry> {
     entries.into_iter()
-        .filter(|entry| !running.contains(&entry.reference))
-        .filter(|entry| entry.source != "vault" || matches!(status(&entry.reference).as_deref(), Some("backlog" | "active")))
+        .filter(|entry| !running.contains(&entry.reference) && !(entry.source == "local" && running.contains(&crate::backlog_file::reference(&entry.title))))
+        .filter(|entry| entry.source != "vault" || matches!(status(&entry.reference).as_deref(), Some("backlog" | "active" | "draft")))
         .collect()
 }
 
@@ -159,13 +242,13 @@ pub fn fetched(sources: &[Source]) -> Vec<Source> {
     sources.iter().copied().filter(|source| *source != Source::Local).collect()
 }
 
-fn local_file() -> String {
-    crate::backlog_file::path().display().to_string()
+fn local_dir() -> String {
+    crate::backlog_file::dir().display().to_string()
 }
 
 fn wanted(source: Source) -> &'static str {
     match source {
-        Source::Local => "the local backlog file",
+        Source::Local => "the local backlog folder",
         Source::Vault => "the vault backlog",
         Source::Linear => "my open Linear issues",
     }
@@ -173,7 +256,7 @@ fn wanted(source: Source) -> &'static str {
 
 fn reference(source: Source) -> &'static str {
     match source {
-        Source::Local => "`local:` and the title",
+        Source::Local => "`local:` and the item's file name",
         Source::Vault => "the vault path",
         Source::Linear => "the Linear id",
     }
@@ -192,11 +275,11 @@ pub fn freshness(sources: &[Source], updated: Option<u64>) -> String {
 }
 
 pub fn not_configured() -> String {
-    format!("No backlog source is configured; set [board.backlog] sources = [\"local\"] (or \"vault\", \"linear\", in any combination) in {}.", config::path().display())
+    format!("No backlog source is configured; set [board.backlog] sources = [\"local\"] (or [\"vault\"], with \"linear\" beside either) in {}.", config::path().display())
 }
 
 fn nothing_to_refresh(sources: &[Source]) -> String {
-    if sources.contains(&Source::Local) { format!("The Backlog column reads {} as it changes; there is nothing for the lead to refresh.", local_file()) } else { not_configured() }
+    if sources.contains(&Source::Local) { format!("The Backlog column reads {} as it changes; there is nothing for the lead to refresh.", local_dir()) } else { not_configured() }
 }
 
 pub fn refresh_label(sources: &[Source]) -> String {
@@ -204,10 +287,11 @@ pub fn refresh_label(sources: &[Source]) -> String {
 }
 
 pub fn empty_text(sources: &[Source]) -> String {
+    let adds = config::filing(sources).is_some();
     match (sources.contains(&Source::Local), fetched(sources).is_empty()) {
         (false, true) => not_configured(),
-        (true, true) => format!("Empty. a adds an item, or write one in {}: {}", local_file(), crate::backlog_file::FORMAT),
-        (local, false) => format!("Empty. R asks the lead to fill it from {}{}.", from(sources), if local { "; a adds an item" } else { "" }),
+        (true, true) => format!("Empty. n adds an item, which the lead writes out, or put a file of your own in {}.", local_dir()),
+        (_, false) => format!("Empty. R asks the lead to fill it from {}{}.", from(sources), if adds { "; n adds an item" } else { "" }),
     }
 }
 
@@ -229,6 +313,10 @@ pub fn task_prompt(entry: &Entry, sources: &[Source], vault: bool) -> String {
         "vault" if vault => format!("Work on the vault note {reference} (\"{}\"); kebbie has made it this task's note. Read it with the vault tools first, then ask me what you need decided with kebbie ask, one question at a time, before you plan; then write the plan into that note and put it to me with kebbie ask --plan vault:{reference}, and write no code until I approve it.", entry.title, reference = entry.reference),
         "linear" if sources.contains(&Source::Linear) => format!("Work on Linear issue {}: {}. Read the issue first, then ask me what you need decided with kebbie ask, one question at a time, before you plan; then put the plan to me with kebbie ask --plan, written where your role says, and write no code until I approve it.", entry.reference, entry.title),
         "vault" if sources.contains(&Source::Vault) => format!("Work on the vault note {reference} (\"{}\"). Read it with the vault tools first and set its status to active, then ask me what you need decided with kebbie ask, one question at a time, before you plan; then write the plan into that note and put it to me with kebbie ask --plan vault:{reference}, and write no code until I approve it.", entry.title, reference = entry.reference),
+        "local" => match crate::backlog_file::find(&entry.reference) {
+            Some((path, item)) => format!("Work on the backlog item \"{}\" ({}). Here it is in full:\n\n{}\n\nAsk me what you need decided with kebbie ask, one question at a time, before you plan, starting with its open questions; then put the plan to me with kebbie ask --plan, written where your role says, and write no code until I approve it.", item.title, path.display(), item.body),
+            None => format!("Work on: {}. {} Ask me what you need decided with kebbie ask, one question at a time, before you plan; then put the plan to me with kebbie ask --plan, written where your role says, and write no code until I approve it.", entry.title, entry.summary),
+        },
         _ => format!("Work on: {}. {} Ask me what you need decided with kebbie ask, one question at a time, before you plan; then put the plan to me with kebbie ask --plan, written where your role says, and write no code until I approve it.", entry.title, entry.summary),
     }
 }
@@ -236,34 +324,40 @@ pub fn task_prompt(entry: &Entry, sources: &[Source], vault: bool) -> String {
 // The title of a backlog item by its reference, from the lead's snapshot or the vault index, whatever its status now.
 pub fn title_of(item: &str) -> Option<String> {
     if let Some(title) = local_title(item) {
-        return Some(title.to_string());
+        return Some(title);
     }
     let value: Value = file().ok().and_then(|path| fs::read_to_string(path).ok()).and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default();
     let cached = value["entries"].as_array().into_iter().flatten().filter_map(entry).find(|entry| entry.reference == item).map(|entry| entry.title);
     cached.or_else(|| crate::vault::Index::open().ok()?.title_of(item))
 }
 
-fn local_title(item: &str) -> Option<&str> {
-    item.strip_prefix(crate::backlog_file::PREFIX)
+// A local item by its reference: its title from its file, or the reference's own words once the file is gone.
+fn local_title(item: &str) -> Option<String> {
+    let rest = item.strip_prefix(crate::backlog_file::PREFIX)?;
+    Some(crate::backlog_file::find(item).map_or_else(|| rest.to_string(), |(_, found)| found.title))
+}
+
+fn local_file_of(item: &str) -> String {
+    crate::backlog_file::find(item).map_or_else(local_dir, |(path, _)| path.display().to_string())
 }
 
 pub fn reset_notice(item: &str) -> String {
     match local_title(item) {
-        Some(title) => format!(" Nobody works on the backlog item \"{title}\" now; its line in {} shows in the Backlog column again.", local_file()),
+        Some(title) => format!(" Nobody works on the backlog item \"{title}\" now; its file {} shows in the Backlog column again.", local_file_of(item)),
         None => format!(" Nobody works on {item} now: set it back to backlog."),
     }
 }
 
 pub fn done_notice(task: &str, item: &str) -> String {
     match local_title(item) {
-        Some(title) => format!("{task} is done and its commits are on the default branch. It came from the backlog item \"{title}\": log it, then delete its line from {}, or reword the line when work is left.", local_file()),
+        Some(title) => format!("{task} is done and its commits are on the default branch. It came from the backlog item \"{title}\": log it, then delete its file {}, or rewrite the item to what is left when work is left.", local_file_of(item)),
         None => format!("{task} is done and its commits are on the default branch. It came from {item}: log it, then close {item}, or update it when work is left."),
     }
 }
 
 fn role_wanted(source: Source) -> &'static str {
     match source {
-        Source::Local => "the local backlog file",
+        Source::Local => "the local backlog folder",
         Source::Vault => "the vault backlog (the vault's backlog tool)",
         Source::Linear => "the user's open Linear issues (assigned to them, not done; Linear's MCP)",
     }
@@ -293,12 +387,12 @@ const KEPT_TASKS: &str = "Every task kebbie starts has its own note in the vault
 
 fn local_role() -> String {
     format!(
-        "The Backlog column reads `{}` as it changes. One item per line: `{}`, where the priority is `urgent`, `high`, `medium` or `low` (none when left out), \
-         the summary and area are optional, and the area is the folder name of the repo the work happens in. You keep this file: add new work with \
-         `kebbie backlog add --priority <priority> \"<Title> — <summary> (<area>)\"`, change a priority or reword an item in place, and delete an item's line once its task is pushed or the user drops it. \
-         The title is the item's reference (`local:<Title>` to `kebbie start --backlog`), so keep titles unique and leave the title of an item a task runs as it is. \
-         Lines that are not items are the user's; leave them as they are.",
-        local_file(), crate::backlog_file::FORMAT,
+        "The Backlog column reads `{dir}` as it changes: one markdown file per item, its header naming the title, priority, repo and status. \
+         You keep this folder: file new work as under Taking in ideas, change a priority or rewrite an item in its file, and delete an item's file once its task is pushed or the user drops it. \
+         An item's reference is `local:` and its file name without `.md` (to `kebbie start --backlog`); `kebbie backlog add` prints it, and the file name stays when the title changes.\n\n\
+         `kebbie backlog` marks each item that is not ready: `to write`, a short item the user added (with `n` on the board, `kebbie backlog add`, or a file of their own) or one moved from the old one-file backlog, and `drafting`, one you are writing out or whose questions wait for the user. \
+         When you read the backlog (at your start, at a briefing, when finding work) and it lists an item to write, write it out by the skill `{skill}` in its own file and tell the user you did.",
+        dir = local_dir(), skill = crate::backlog_file::SKILL,
     )
 }
 
@@ -313,66 +407,57 @@ fn fetched_role(sources: &[Source], also: bool) -> String {
     )
 }
 
-struct Intake {
-    draft: &'static str,
-    start: &'static str,
-    file: &'static str,
+struct Filed {
+    save: &'static str,
     grown: &'static str,
     reference: &'static str,
 }
 
-fn intake_for(source: Source) -> Intake {
+fn filed_in(source: Source) -> Filed {
     match source {
-        Source::Local => Intake {
-            draft: "one line for the local backlog: `- [priority] Title — one-line summary (area)`",
-            start: "add it with `kebbie backlog add`, then start the task",
-            file: "add it with `kebbie backlog add`",
-            grown: "add a line for it with `kebbie backlog add`",
-            reference: "\"local:<Title>\"",
-        },
-        Source::Vault => Intake {
-            draft: "a task note for the vault's Projects/: title, area, priority, a one-line summary, and a body of problem, solution from the user's side, decisions, test decisions and what is out of scope",
-            start: "write the note with the vault tools, status `active`, then start the task",
-            file: "write the note with the vault tools, status `backlog`",
-            grown: "write a task note for it in the vault's Projects/ with status `active`",
+        Source::Vault => Filed {
+            save: "write it as a task note in the vault's Projects/ with the vault tools",
+            grown: "write a task note for it in the vault's Projects/ by the skill, status `active`",
             reference: "<the note's path>",
         },
-        Source::Linear => Intake {
-            draft: "a Linear issue: title, priority, team, and a description of the problem, the change from the user's side and what done looks like",
-            start: "create the issue with Linear's MCP, assigned to the user and in progress, then start the task",
-            file: "create the issue with Linear's MCP, assigned to the user",
-            grown: "create a Linear issue for it, assigned to the user and in progress",
-            reference: "<the issue id>",
+        _ => Filed {
+            save: "save it with `kebbie backlog add --priority <priority> --repo <repo> \"<Title>\" -`, the item's sections on stdin",
+            grown: "write an item for it by the skill and save it with `kebbie backlog add`",
+            reference: "<the ref kebbie backlog add printed>",
         },
     }
 }
 
 fn intake_role(sources: &[Source], vault: bool) -> String {
-    let Some(first) = sources.first() else {
+    let skill = crate::backlog_file::SKILL;
+    let Some(source) = config::filing(sources) else {
         return format!(
             "When the user brings an idea rather than a task to start, draft a task prompt for it, show it, and start it with `kebbie start` on yes. \
-             No backlog source is configured, so there is nowhere to file it: say so, and that `[board.backlog] sources` in {} turns one on.",
+             No backlog takes new items, so there is nowhere to file it: say so, and that `\"local\"` or `\"vault\"` under `[board.backlog] sources` in {} turns one on.",
             config::path().display(),
         );
     };
-    let Intake { draft, start, file, grown, reference } = intake_for(*first);
+    let Filed { save, grown, reference } = filed_in(source);
+    let start = if vault && source == Source::Vault {
+        "start it with the written item as its prompt, as under Starting a task: `kebbie start <name> \"<prompt>\" --repo <repo>`; kebbie makes the task's note from it".to_string()
+    } else {
+        format!("file it the same way, then start it with a prompt written as under Starting a task: `kebbie start <name> \"<prompt>\" --repo <repo> --backlog {reference}`")
+    };
+    let steps = format!(
+        "Every item in the backlog is written out by the skill `{skill}`, whoever files it, at the moment it is filed: it reads what bears on the work first, keeps the item the user's intent, and puts what you could not find out under Open questions.\n\n\
+         When the user brings an idea rather than a task to start, take it in:\n\n\
+         1. Write it out with the skill `{skill}`.\n\
+         2. Show the user the item, and ask with the AskUserQuestion tool: start it now as a task, file it in the backlog, or change it first.\n\
+         3. On file: {save}. On start: {start}. On change: rewrite it and ask again.\n\n\
+         The idea is taken in when the user has picked start or file and the item exists.\n\n\
+         A short item the user adds outside this chat (`n` on the board, `kebbie backlog add`, a file of their own) reaches you as a message from kebbie, or as `to write` in `kebbie backlog`: write it out by the skill at once and save it where it is, then show the user the written item. \
+         An item's questions belong to the item: they stay under its Open questions, never in `kebbie ask` and never under Needs you. The user answers them on the item's card on the board, and kebbie brings you each answer with its question: fold the answer into the item and take the question out; the item is ready once no question blocks it.",
+    );
     if vault {
-        let file = if *first == Source::Vault { "write a task note with the vault tools in Projects/, status `backlog`" } else { file };
-        let backlog = if *first == Source::Vault { String::new() } else { format!(", or `--backlog {reference}` once it is filed") };
-        return format!(
-            "When the user brings an idea rather than a task to start, take it in:\n\n\
-             1. Draft it as {draft}. Read what bears on it first (the area's notes, the code, the tasks that touch it), so the draft names the real problem and the repo.\n\
-             2. Show the user the draft, and ask with the AskUserQuestion tool: start it now as a task, file it in the backlog, or change it first.\n\
-             3. On start: start it with a prompt written as under Starting a task: `kebbie start <name> \"<prompt>\" --repo <repo>`{backlog}. On file: {file}. On change: redraft and ask again.\n\n\
-             The idea is taken in when the user has picked start or file and the task or the item exists.\n\n{KEPT_TASKS}",
-        );
+        return format!("{steps}\n\n{KEPT_TASKS}");
     }
     format!(
-        "When the user brings an idea rather than a task to start, take it in:\n\n\
-         1. Draft it as {draft}. Read what bears on it first (the area's notes, the code, the tasks that touch it), so the draft names the real problem and the repo.\n\
-         2. Show the user the draft, and ask with the AskUserQuestion tool: start it now as a task, file it in the backlog, or change it first.\n\
-         3. On start: {start} with a prompt written as under Starting a task: `kebbie start <name> \"<prompt>\" --repo <repo> --backlog {reference}`. On file: {file}. On change: redraft and ask again.\n\n\
-         The idea is taken in when the user has picked start or file and the item exists.\n\n\
+        "{steps}\n\n\
          A task started without a backlog item stays a plain task. When it grows into a project (it spans sessions or carries decisions), {grown}, and link it: \
          `kebbie -C <repo> link <task> {reference}`. A linked task counts as started from that item: kebbie tells you when it is done, so you log it and close or update the item, \
          and a reset puts the item back in the backlog.",
@@ -406,9 +491,12 @@ pub fn show() -> Result<String> {
     if backlog.entries.is_empty() {
         return Ok(empty_text(&sources));
     }
-    let mut lines = vec![if fetched(&sources).is_empty() { format!("from {}", local_file()) } else { format!("updated {}", age(backlog.updated)) }];
+    let mut lines = vec![if fetched(&sources).is_empty() { format!("from {}", local_dir()) } else { format!("updated {}", age(backlog.updated)) }];
     for entry in &backlog.entries {
-        lines.push(format!("  [{}] {}  ({} · {})", entry.priority, entry.title, entry.source, entry.area));
+        let item = (entry.source == "local").then(|| crate::backlog_file::find(&entry.reference)).flatten();
+        let state = item.as_ref().map(|(_, item)| item.state()).filter(|state| *state != crate::backlog_file::State::Ready).map_or(String::new(), |state| format!("  {}", state.word()));
+        let file = item.as_ref().map_or(String::new(), |(path, _)| format!("  {}", path.display()));
+        lines.push(format!("  [{}] {}  ({} · {}){state}{file}", entry.priority, entry.title, entry.reference, entry.area));
     }
     Ok(lines.join("\n"))
 }
@@ -418,7 +506,7 @@ mod tests {
     use super::*;
 
     fn entry(source: &str) -> Entry {
-        Entry { source: source.to_string(), title: "Fix it".to_string(), priority: "high".to_string(), area: "app".to_string(), reference: "ABC-1".to_string(), summary: "It broke.".to_string(), age: "3 d".to_string() }
+        Entry { source: source.to_string(), title: "Fix it".to_string(), priority: "high".to_string(), area: "app".to_string(), reference: "ABC-1".to_string(), summary: "It broke.".to_string(), age: "3 d".to_string(), shape: Default::default() }
     }
 
     #[test]
@@ -433,7 +521,7 @@ mod tests {
         let none = refresh_prompt(&[]).unwrap_err();
         assert!(none.starts_with("No backlog source is configured") && none.contains("[board.backlog] sources"));
         let local = refresh_prompt(&[Source::Local]).unwrap_err();
-        assert!(local.contains("reads") && local.contains("backlog.md") && local.contains("nothing for the lead to refresh"), "{local}");
+        assert!(local.contains("reads") && local.contains("backlog") && local.contains("nothing for the lead to refresh"), "{local}");
         assert_eq!(refresh_prompt(&[Source::Local, Source::Vault]).unwrap(), vault, "the lead never saves the local file's items");
     }
 
@@ -444,29 +532,29 @@ mod tests {
         assert_eq!(from(&[Source::Local, Source::Linear]), "Linear");
         assert!(refresh_label(&[Source::Local]).contains("nothing for the lead to refresh"));
         assert_eq!(refresh_label(&[Source::Local, Source::Vault]), "the lead fetches the vault again");
-        assert!(empty_text(&[Source::Local]).starts_with("Empty. a adds an item, or write one in ") && empty_text(&[Source::Local]).ends_with(crate::backlog_file::FORMAT));
-        assert_eq!(empty_text(&[Source::Vault]), "Empty. R asks the lead to fill it from the vault.");
-        assert_eq!(empty_text(&[Source::Local, Source::Vault]), "Empty. R asks the lead to fill it from the vault; a adds an item.");
+        assert!(empty_text(&[Source::Local]).starts_with("Empty. n adds an item, which the lead writes out, or put a file of your own in "), "{}", empty_text(&[Source::Local]));
+        assert_eq!(empty_text(&[Source::Vault]), "Empty. R asks the lead to fill it from the vault; n adds an item.");
+        assert_eq!(empty_text(&[Source::Linear]), "Empty. R asks the lead to fill it from Linear.", "Linear is only read, so nothing is added to it");
         assert!(empty_text(&[]).starts_with("No backlog source is configured"));
     }
 
     #[test]
     fn a_reset_or_finished_local_item_is_told_by_its_title_and_file() {
         let reset = reset_notice("local:Fix login");
-        assert!(reset.contains("\"Fix login\"") && reset.contains("backlog.md") && !reset.contains("set it back"), "{reset}");
+        assert!(reset.contains("\"Fix login\"") && reset.contains("its file") && reset.contains("backlog") && !reset.contains("set it back"), "{reset}");
         assert_eq!(reset_notice("Projects/x.md"), " Nobody works on Projects/x.md now: set it back to backlog.");
         let done = done_notice("login", "local:Fix login");
-        assert!(done.starts_with("login is done") && done.contains("delete its line from") && done.contains("\"Fix login\""), "{done}");
+        assert!(done.starts_with("login is done") && done.contains("delete its file") && done.contains("rewrite the item to what is left") && done.contains("\"Fix login\""), "{done}");
         let note = done_notice("login", "Projects/x.md");
         assert!(note.contains("It came from Projects/x.md: log it, then close Projects/x.md, or update it when work is left."), "{note}");
     }
 
     #[test]
     fn a_local_item_leaves_the_backlog_while_its_task_runs() {
-        let items = crate::backlog_file::entries("- [high] Fix login (app)\n- Other\n");
-        let running = HashSet::from([crate::backlog_file::reference("Fix login")]);
-        let kept: Vec<String> = still_backlog(items, |_| None, &running).into_iter().map(|entry| entry.title).collect();
-        assert_eq!(kept, ["Other"], "a local item needs no vault status to stay");
+        let item = |title: &str| Entry { source: "local".to_string(), title: title.to_string(), reference: crate::backlog_file::reference(&crate::backlog_file::stem_for(title, |_| false)), ..entry("local") };
+        let running = HashSet::from([crate::backlog_file::reference("fix-login"), crate::backlog_file::reference("Older one")]);
+        let kept: Vec<String> = still_backlog(vec![item("Fix login"), item("Other"), item("Older one")], |_| None, &running).into_iter().map(|entry| entry.title).collect();
+        assert_eq!(kept, ["Other"], "a local item needs no vault status to stay, and a task started from its title before the move still holds it");
     }
 
     #[test]
@@ -477,11 +565,13 @@ mod tests {
         let Role { finding, backlog, intake, .. } = role_texts(&[Source::Vault], false);
         assert_eq!(finding, "the vault backlog by priority");
         assert!(!backlog.contains("Linear") && backlog.contains("`source` (`vault`)") && !backlog.contains("backlog.md"));
-        assert!(intake.contains("task note for the vault's Projects/") && intake.contains("--backlog <the note's path>") && !intake.contains("Linear") && !intake.contains("local:"));
+        assert!(intake.contains("task note in the vault's Projects/") && intake.contains("--backlog <the note's path>") && !intake.contains("Linear") && !intake.contains("local:"), "{intake}");
         let Role { finding, backlog, intake, .. } = role_texts(&[], false);
         assert!(!finding.contains("Linear") && !backlog.contains("Linear") && backlog.contains("No backlog source") && intake.contains("nowhere to file it"));
         assert!(role_texts(&[Source::Linear, Source::Vault], false).backlog.contains("Linear issues (assigned to them, not done; Linear's MCP) and the vault backlog"));
-        assert!(role_texts(&[Source::Linear, Source::Vault], false).intake.contains("Draft it as a Linear issue"), "the first source listed takes the ideas in");
+        let linear_first = role_texts(&[Source::Linear, Source::Vault], false).intake;
+        assert!(linear_first.contains("task note in the vault's Projects/") && !linear_first.contains("Linear issue"), "Linear is only read; new items go to the vault: {linear_first}");
+        assert!(role_texts(&[Source::Linear], false).intake.contains("nowhere to file it"));
     }
 
     #[test]
@@ -489,7 +579,7 @@ mod tests {
         let on = role_texts(&[Source::Vault], true);
         assert!(!on.after_push.contains("log_append") && on.after_push.contains("kebbie has written the repo's log line") && !on.after_push.contains("area note"), "kebbie logs each push; no area-note chore rides on it: {}", on.after_push);
         assert!(on.vault_work.contains("kebbie keeps each task's note") && !on.vault_work.contains("repo log, the user's"), "{}", on.vault_work);
-        assert!(!on.intake.contains("plain task") && on.intake.contains("Every task kebbie starts has its own note in the vault") && !on.intake.contains("status `active`"), "{}", on.intake);
+        assert!(!on.intake.contains("plain task") && on.intake.contains("Every task kebbie starts has its own note in the vault") && !on.intake.contains("status `active`") && on.intake.contains("kebbie makes the task's note from it"), "{}", on.intake);
         let off = role_texts(&[Source::Vault], false);
         assert!(off.after_push.contains("log_append") && off.intake.contains("plain task"), "without the vault plugin the lead logs as before");
         assert!(task_prompt(&entry("vault"), &[Source::Vault], true).contains("kebbie has made it this task's note") && !task_prompt(&entry("vault"), &[Source::Vault], true).contains("set its status"));
@@ -499,13 +589,16 @@ mod tests {
     fn with_the_local_source_the_lead_keeps_the_file_itself() {
         let Role { finding, backlog, intake, .. } = role_texts(&[Source::Local], false);
         assert!(finding.starts_with("the local backlog"));
-        for needed in ["backlog.md", "kebbie backlog add --priority", "delete an item's line once its task is pushed", "`local:<Title>`", "leave them as they are"] {
+        for needed in ["one markdown file per item", "delete an item's file once its task is pushed", "`local:` and its file name", "`to write`", "`drafting`", "write it out by the skill `kebbie:write-backlog-item` in its own file and tell the user you did"] {
             assert!(backlog.contains(needed), "{needed}: {backlog}");
         }
         assert!(!backlog.contains("kebbie backlog save") && !backlog.contains("vault") && !backlog.contains("Linear"), "{backlog}");
-        assert!(intake.contains("--backlog \"local:<Title>\"") && intake.contains("kebbie -C <repo> link <task> \"local:<Title>\"") && !intake.contains("vault"), "{intake}");
-        let both = role_texts(&[Source::Local, Source::Vault], false).backlog;
-        assert!(both.contains("backlog.md") && both.contains("The board's Backlog tab also shows what you save") && both.contains("`source` (`vault`)") && !both.contains("`local`)"), "{both}");
+        assert!(intake.contains("kebbie backlog add --priority <priority> --repo <repo> \"<Title>\" -") && intake.contains("--backlog <the ref kebbie backlog add printed>") && intake.contains("kebbie -C <repo> link <task> <the ref kebbie backlog add printed>") && !intake.contains("vault"), "{intake}");
+        for needed in ["Write it out with the skill `kebbie:write-backlog-item`", "A short item the user adds outside this chat", "never in `kebbie ask` and never under Needs you", "fold the answer into the item"] {
+            assert!(intake.contains(needed), "{needed}: {intake}");
+        }
+        let local_and_linear = role_texts(&[Source::Local, Source::Linear], false).backlog;
+        assert!(local_and_linear.contains("one markdown file per item") && local_and_linear.contains("The board's Backlog tab also shows what you save") && local_and_linear.contains("`source` (`linear`)"), "{local_and_linear}");
     }
 
     #[test]

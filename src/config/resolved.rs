@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, AutoApprove, Channel, HubCommands, HubTrust, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
+use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, AutoApprove, Channel, HubCommands, HubTrust, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -110,7 +110,7 @@ fn or_default<T>(setting: Option<Setting<T>>, value: T) -> Setting<T> {
 pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
     let optional = |setting: Option<Setting<String>>| or_default(setting.map(|setting| Setting { value: Some(setting.value), layer: setting.layer }), None);
     Settings {
-        sources: or_default(pick(None, machine.sources.as_ref()), vec![Source::Local]),
+        sources: or_default(pick(None, machine.sources.as_ref()).map(|setting| Setting { value: read_sources(&setting.value), layer: setting.layer }), vec![Source::Local]),
         groups: pick(None, machine.groups.as_ref()).map_or(Setting { value: Group::ALL.to_vec(), layer: Layer::Default }, |setting| Setting { value: group_order(&setting.value), layer: setting.layer }),
         ongoing: or_default(pick(None, machine.ongoing.as_ref()), OngoingAt::default()),
         setup_skill: or_default(pick(repo.setup_skill.as_ref(), machine.worktree.setup_skill.as_ref()), DEFAULT_SETUP_SKILL.to_string()),

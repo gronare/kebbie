@@ -580,22 +580,33 @@ pub fn comments(watch: &Setting<bool>, days: u64, target: impl FnOnce() -> std::
     }
 }
 
-pub fn backlog(sources: &[Source], vault_source: impl Fn() -> Result<String, String>, local_file: &Path) -> Vec<Check> {
+pub fn backlog(sources: &[Source], vault_source: impl Fn() -> Result<String, String>, local_dir: &Path) -> Vec<Check> {
     if sources.is_empty() {
         return vec![ok("backlog", "no source configured; set [board.backlog] sources to fill the board's Backlog tab").brief("no backlog source")];
     }
     sources.iter().map(|source| match source {
-        Source::Local if local_file.exists() => {
-            let items = crate::backlog_file::read(local_file).len();
-            ok("backlog local", format!("{}: {items} items", local_file.display())).brief(format!("{items} backlog items"))
+        Source::Local if local_dir.exists() => {
+            let items = crate::backlog_file::items(local_dir);
+            let to_write = items.iter().filter(|item| item.state() == crate::backlog_file::State::ToWrite).count();
+            let waiting = if to_write == 0 { String::new() } else { format!(", {to_write} for the lead to write out") };
+            ok("backlog local", format!("{}: {} items{waiting}", local_dir.display(), items.len())).brief(format!("{} backlog items", items.len()))
         }
-        Source::Local => ok("backlog local", format!("{} is created by the first item (the board's a, or kebbie backlog add)", local_file.display())).brief("local backlog"),
+        Source::Local => ok("backlog local", format!("{} is created by the first item (the board's n, or kebbie backlog add)", local_dir.display())).brief("local backlog"),
         Source::Vault => match vault_source() {
             Ok(source) => ok("backlog vault", source).brief("backlog"),
             Err(error) => warn("backlog vault", error, one("open a Claude session with the vault plugin once; the Areas page reads its index")),
         },
         Source::Linear => ok("backlog linear", "the lead reads Linear through a Linear MCP server in Claude (not checked here)").brief("Linear backlog"),
     }).collect()
+}
+
+// An older config that lists both reads as the vault alone; the local folder stays on disk, unread.
+pub fn mixed_sources(listed: &[Source], local_dir: &Path, config: &Path) -> Option<Check> {
+    crate::config::mixes_local_and_vault(listed).then(|| {
+        let kept: Vec<String> = crate::config::read_sources(listed).iter().map(|source| format!("{:?}", source.key())).collect();
+        warn("backlog sources", format!("board.backlog.sources lists \"local\" and \"vault\": new items go to the vault, and {} is no longer read (kebbie leaves it as it is)", local_dir.display()),
+            one(format!("set sources = [{}] under [board.backlog] in {}, after moving what you still want from that folder into the vault", kept.join(", "), config.display())))
+    })
 }
 
 fn plugin_ids<'a>(installed: Option<&'a Value>, prefix: &'a str) -> impl Iterator<Item = (&'a String, &'a Value)> {
@@ -623,7 +634,7 @@ pub fn linear_mcp(installed: Option<&Value>, claude: Option<&Value>) -> Option<S
 
 pub fn unused_sources(sources: &[Source], vault: Option<String>, linear: Option<String>, config: &Path) -> Vec<Check> {
     let suggest = |source: Source| {
-        let names: Vec<String> = sources.iter().chain([&source]).map(|source| format!("{:?}", source.key())).collect();
+        let names: Vec<String> = sources.iter().filter(|listed| source != Source::Vault || **listed != Source::Local).chain([&source]).map(|source| format!("{:?}", source.key())).collect();
         one(format!("to use it, set sources = [{}] under [board.backlog] in {}", names.join(", "), config.display()))
     };
     let mut checks = Vec::new();
@@ -969,7 +980,9 @@ pub fn checks(env: &Env) -> Vec<Check> {
     if reached || crate::hub::identity::load(&env.kebbie_state).ok().flatten().is_some() {
         checks.push(machine_name(&settings.machine_name, &env.config));
     }
-    checks.extend(backlog(&settings.sources.value, crate::vault::source, &env.config.with_file_name("backlog.md")));
+    let local_dir = env.config.with_file_name("backlog");
+    checks.extend(config::load_machine(&env.config).ok().and_then(|machine| machine.sources).and_then(|listed| mixed_sources(&listed, &local_dir, &env.config)));
+    checks.extend(backlog(&settings.sources.value, crate::vault::source, &local_dir));
     let claude = read_json(&env.claude_dir.join(".claude.json")).or_else(|| read_json(&env.home.join(".claude.json")));
     let vault = vault_plugin(installed.as_ref(), |file| std::fs::read_to_string(file).ok());
     checks.extend(unused_sources(&settings.sources.value, vault, linear_mcp(installed.as_ref(), claude.as_ref()), &env.config));
@@ -1398,10 +1411,16 @@ mod tests {
         let local = backlog(&[Source::Local], || unreachable!(), nowhere);
         assert!(local[0].level == Level::Ok && local[0].fact.contains("is created by the first item"), "{:?}", local[0]);
         let dir = std::env::temp_dir().join(format!("kebbie-doctor-local-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("backlog.md"), "# Mine\n- [high] One (app)\n- Two\n").unwrap();
-        assert!(backlog(&[Source::Local], || unreachable!(), &dir.join("backlog.md"))[0].fact.ends_with("backlog.md: 2 items"));
+        std::fs::create_dir_all(dir.join("backlog")).unwrap();
+        std::fs::write(dir.join("backlog/one.md"), "+++\ntitle = \"One\"\n+++\n\nshort\n").unwrap();
+        std::fs::write(dir.join("backlog/two.md"), "Two, by hand\n").unwrap();
+        assert!(backlog(&[Source::Local], || unreachable!(), &dir.join("backlog"))[0].fact.ends_with("backlog: 2 items, 2 for the lead to write out"));
         std::fs::remove_dir_all(dir).unwrap();
+        let config = Path::new("/home/u/.config/kebbie/config.toml");
+        let mixed = mixed_sources(&[Source::Local, Source::Vault, Source::Linear], Path::new("/home/u/.config/kebbie/backlog"), config).unwrap();
+        assert!(mixed.level == Level::Warn && mixed.fact.contains("new items go to the vault, and /home/u/.config/kebbie/backlog is no longer read"), "{mixed:?}");
+        assert_eq!(mixed.fix, ["set sources = [\"vault\", \"linear\"] under [board.backlog] in /home/u/.config/kebbie/config.toml, after moving what you still want from that folder into the vault"]);
+        assert!(mixed_sources(&[Source::Vault, Source::Linear], nowhere, config).is_none());
     }
 
     #[test]
@@ -1421,7 +1440,7 @@ mod tests {
         let found = unused_sources(&[Source::Local], Some("vault@gronare".to_string()), Some("the MCP server Linear".to_string()), config);
         assert_eq!(found.len(), 2);
         assert_eq!((found[0].name.as_str(), found[0].level), ("backlog vault", Level::Ok));
-        assert_eq!(found[0].fix, ["to use it, set sources = [\"local\", \"vault\"] under [board.backlog] in /home/u/.config/kebbie/config.toml"]);
+        assert_eq!(found[0].fix, ["to use it, set sources = [\"vault\"] under [board.backlog] in /home/u/.config/kebbie/config.toml"], "the vault takes the local folder's place");
         assert_eq!(found[1].fix, ["to use it, set sources = [\"local\", \"linear\"] under [board.backlog] in /home/u/.config/kebbie/config.toml"]);
         assert!(unused_sources(&[Source::Vault, Source::Linear], Some("vault@gronare".to_string()), Some("x".to_string()), config).is_empty(), "an enabled source is not suggested");
         assert!(unused_sources(&[Source::Local], None, None, config).is_empty());

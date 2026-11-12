@@ -62,7 +62,7 @@ impl App {
                 self.mode = Mode::Input { purpose: Purpose::BacklogPriority(text), label, buffer: String::new() };
             }
             Purpose::BacklogPriority(item) => {
-                let result = crate::backlog_file::add(Some(&text), &item);
+                let result = crate::backlog_file::file_item(&self.sources, &crate::backlog_file::Filing { priority: &text, repo: "", line: &item, body: None, by: "The user" }, false);
                 self.subject = Some(super::notices::Subject::plain("backlog"));
                 if result.is_ok() {
                     self.backlog = backlog::load();
@@ -71,7 +71,7 @@ impl App {
             }
             Purpose::BacklogName(entry) | Purpose::ClaimedName(entry) | Purpose::BacklogLaterAt(entry, _) if entry.area.is_empty() => {
                 self.subject = Some(super::notices::Subject::plain("start"));
-                self.show(Notice::new(Tone::You, "Not started: kebbie cannot tell which repo it is in").you("Add the repo's folder name as (area) at the end of its backlog line.").detail("item", &entry.title).ok());
+                self.show(Notice::new(Tone::You, "Not started: kebbie cannot tell which repo it is in").you("Name the repo the work happens in: its folder name as repo in the item's header, or as the area of its note.").detail("item", &entry.title).ok());
             }
             Purpose::TaskName => {
                 let label = "What should Claude do? (optional)".to_string();

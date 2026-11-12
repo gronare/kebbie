@@ -10,7 +10,7 @@ Give every task a note in your vault, such as [mindin](https://mindin.dev), and 
 
 2. Choose where the vault lives: **Your own server**, **S3 bucket** or **Local folder**, and fill in its fields, such as the address `https://vault.example.com`. The place in use is preselected, such as `Your own server  https://vault.example.com · signed in`. Press `⏎`.
 
-3. To list the vault's backlog notes on the board, tick Vault in the Backlog step. The first source ticked is where the lead files new ideas.
+3. To list the vault's backlog notes on the board and file new items there, tick Vault in the Backlog step. It takes the local file's place.
 
 4. On the last step, read the `mindin` and `vault` lines and press `⏎`. When the place is new, `mindin setup` runs first, in the terminal: a server opens the browser to sign you in, and S3 asks for its access key and secret. The guide then writes `vault.command` to kebbie's `config.toml`, installs the vault plugin in Claude Code and adds `[mcp_servers.vault]` to Codex's `config.toml` when you ticked Codex.
 

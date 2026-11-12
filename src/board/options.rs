@@ -143,7 +143,7 @@ pub(super) fn ongoing_choices(note: &Ongoing) -> Vec<Choice> {
 pub(super) fn ongoing_entry(note: &Ongoing) -> Entry {
     Entry {
         source: "vault".to_string(), title: note.title.clone(), priority: "none".to_string(), area: note.area.clone(),
-        reference: note.key.clone(), summary: String::new(), age: String::new(),
+        reference: note.key.clone(), summary: String::new(), age: String::new(), shape: Default::default(),
     }
 }
 
@@ -153,8 +153,8 @@ pub(super) fn backlog_choices(sources: &[Source]) -> Vec<Choice> {
         choice(Act::StartAt, "Start at…", "the same, at a time you type: it waits under Queued until then"),
         choice(Act::Refresh, "Refresh the backlog", &backlog::refresh_label(sources)),
     ];
-    if sources.contains(&Source::Local) {
-        choices.push(choice(Act::New, "Add an item", "a title and a priority, appended to the local backlog file"));
+    if crate::config::filing(sources).is_some() {
+        choices.push(choice(Act::New, "Add an item", "a line and a priority; the lead writes it out"));
     }
     choices
 }
@@ -293,10 +293,11 @@ mod tests {
     use crate::board::widgets::{GREEN, TEAL};
 
     #[test]
-    fn the_backlog_column_adds_an_item_only_with_the_local_source() {
+    fn the_backlog_column_adds_an_item_where_new_items_are_filed() {
         let keys = |sources: &[Source]| backlog_choices(sources).iter().map(|choice| choice.key).collect::<String>();
         assert_eq!(keys(&[Source::Local]), "glRn");
-        assert_eq!(keys(&[Source::Vault, Source::Linear]), "glR");
+        assert_eq!(keys(&[Source::Vault, Source::Linear]), "glRn", "with the vault the lead files it there");
+        assert_eq!(keys(&[Source::Linear]), "glR", "Linear is only read");
     }
 
     #[test]

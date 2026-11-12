@@ -28,6 +28,22 @@ impl Source {
     }
 }
 
+// Where new backlog items and task notes are written: the vault when it is listed, else the local folder; Linear is only read.
+pub fn filing(sources: &[Source]) -> Option<Source> {
+    [Source::Vault, Source::Local].into_iter().find(|source| sources.contains(source))
+}
+
+pub fn mixes_local_and_vault(sources: &[Source]) -> bool {
+    sources.contains(&Source::Local) && sources.contains(&Source::Vault)
+}
+
+// A config written before the two were exclusive lists both: it reads as the vault alone.
+pub fn read_sources(listed: &[Source]) -> Vec<Source> {
+    listed.iter().copied().filter(|source| *source != Source::Local || !mixes_local_and_vault(listed)).collect()
+}
+
+pub const MIXED_SOURCES: &str = "\"local\" and \"vault\" are two places to file the same items: list one of them (Linear can sit beside either)";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Channel {
     Main,

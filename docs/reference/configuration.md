@@ -34,12 +34,12 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 | Key | Default | Where | What it does |
 | --- | --- | --- | --- |
-| `board.backlog.sources` | `["local"]` | config.toml only | Where the Backlog column finds work: a list of `"local"`, `"vault"`, `"linear"`. See [Backlog sources](#backlog-sources). |
+| `board.backlog.sources` | `["local"]` | config.toml only | Where the Backlog column finds work and new items are written: `"local"` or `"vault"`, and `"linear"` beside either. See [Backlog sources](#backlog-sources). |
 | `board.backlog.ongoing` | `"top"` | config.toml only | Where the Backlog column shows ONGOING, the vault notes in progress: `"top"`, `"bottom"` or `"hidden"`. |
 | `board.groups` | the order below | config.toml only | The order of the Work column's groups. |
 | `[keys]` | the board's own | config.toml only | The board's keys by action, a table of strings, as `inbox = "I"`. See [Board](board.md#keys-in-configtoml). |
 
-- `board.backlog.sources`: the first source is where the lead files new ideas. `[]` turns the backlog off.
+- `board.backlog.sources`: new items are written to `"local"` or `"vault"`, so a list holds one of them; Linear is only read. A config that lists both reads as the vault alone, and `kebbie doctor` says so. `[]` turns the backlog off.
 - `board.backlog.ongoing`: above the backlog items, below them, or not at all. Hidden, a note another machine claims still asks before it starts here.
 - `board.groups`: a list of `"needs-you"`, `"working"`, `"in-review"`, `"ready-to-push"`, `"ci-running"`, `"waiting-for-work"`, `"queued"`, by default in that order. Groups the list leaves out follow in the default order, so `["ready-to-push"]` moves only Ready to push to the top. A name not in the list is an error that names the valid ones.
 - `[keys]`: [Board](board.md#keys-in-configtoml) has the actions and the rules. `kebbie config` shows each key in effect and why an entry was ignored.
@@ -87,7 +87,7 @@ The Where column says which file may set a key: `either`, `config.toml only` or 
 
 `task.also_noticed` covers things such as a bug nearby, a stale doc or a refactor. See [Decide what a task does with what it notices](../how-to/decide-what-a-task-does-with-what-it-notices.md).
 
-- `"backlog"` files it: in the vault's backlog with the vault plugin, else with `kebbie backlog add`.
+- `"backlog"` writes it out as a [backlog item](../how-to/fill-the-backlog.md#what-a-written-out-item-holds) and files it where new items go: in the vault's backlog, or with `kebbie backlog add`.
 - `"fix"` fixes a small one beside the code it is changing, in a commit of its own, and files the rest.
 - `"ask"` puts each to you with `kebbie ask` first.
 - Each is listed under Also noticed on the sign-off card. Under `"backlog"` and `"ask"`, the reviewer counts a change outside the task as a finding.
@@ -267,7 +267,7 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 
 | Source | Items |
 | --- | --- |
-| `"local"` | The local backlog file, `backlog.md` next to the machine config. See [Files](files.md#the-local-backlog-file). |
+| `"local"` | The local backlog, `backlog/` next to the machine config, one file per item. See [Files](files.md#the-local-backlog). |
 | `"vault"` | The vault's backlog notes. Needs the vault plugin. |
 | `"linear"` | Your open Linear issues, read by the lead through a Linear MCP server. |
 

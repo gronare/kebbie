@@ -132,6 +132,7 @@ const WORK: Sheet = Sheet {
             bind(&[Act::Chat], "message its Claude", "message it"),
             bind(&[Act::Card], "its question, or its card", "question or card"),
             bind(&[Act::StartAt], "start it later", "start later"),
+            bind(&[Act::ItemOptions], "a backlog item's options", "item options"),
         ]),
         group("PUSH", &[
             bind(&[Act::Push], "push, or take it out of the line", "push"),
@@ -256,6 +257,7 @@ fn acts_on(act: Act, sheet: &Sheet, lead: bool) -> bool {
 fn in_backlog(act: Act) -> Option<(&'static str, &'static str)> {
     match act {
         Act::New => Some(("new backlog item", "new item")),
+        Act::Options => Some(("its card: sections and questions", "its card")),
         Act::Go => Some(("start it as a task", "start it")),
         _ => None,
     }
@@ -487,7 +489,7 @@ mod tests {
         let (rows, buffer) = render(&mut app, 150, 40);
         let screen = rows.join("\n");
         assert!(screen.contains("╭ keys · work ─"), "{screen}");
-        for (left, right) in [("MOVE AROUND", "THE SELECTED TASK"), ("WAITING ON YOU", "p         push, or take it out of the line"), ("N         next: what needs you, in order", "v         send to review"), ("↑ ↓ j k   move", "⏎         options, each one explained")] {
+        for (left, right) in [("MOVE AROUND", "THE SELECTED TASK"), ("WAITING ON YOU", "PUSH"), ("N         next: what needs you, in order", "p         push, or take it out of the line"), ("i         inbox: questions, one at a time", "v         send to review"), ("↑ ↓ j k   move", "⏎         options, each one explained"), ("h         hide or show the lead's chat", "o         a backlog item's options")] {
             let row = row_with(&rows, left);
             assert!(row.contains(right) && row.find(left) < row.find(right), "{left} sits left of {right}: {row}");
         }
@@ -612,7 +614,7 @@ mod tests {
         press(&mut app, key(KeyCode::Char('?')));
         let (rows, _) = render(&mut app, 150, 40);
         let screen = rows.join("\n");
-        assert!(screen.contains("keys · work") && screen.contains("n         new backlog item") && screen.contains("g         start it as a task") && !screen.contains("go to its Space"), "{screen}");
+        assert!(screen.contains("keys · work") && screen.contains("n         new backlog item") && screen.contains("g         start it as a task") && screen.contains("⏎         its card: sections and questions") && screen.contains("o         a backlog item's options") && !screen.contains("go to its Space"), "{screen}");
         let (rows, _) = render(&mut app, 80, 40);
         let screen = rows.join("\n");
         assert!(screen.contains("g     start it") && screen.contains("n         new item"), "{screen}");

@@ -11,6 +11,7 @@ mod hub_window;
 pub(crate) mod images;
 mod inbox;
 mod input;
+mod item_card;
 pub(crate) mod keys_window;
 mod link;
 mod message_log;
@@ -128,6 +129,7 @@ enum Mode {
     Report { id: String, shown: Box<BugReport>, scroll: u16, read: bool, nudged: bool },
     ReportAll { shown: Vec<bug_report::Offer>, scroll: u16, read: bool, nudged: bool },
     NoteCard { key: String, scroll: u16, nudged: bool },
+    ItemCard(Box<item_card::ItemCard>),
     Comment { id: u64, scroll: u16, nudged: bool },
     Help(keys_window::Scroll),
     Hub(Box<hub_window::Window>),
@@ -222,6 +224,7 @@ struct App {
     installer: agent_updates::Install,
     filter: Option<(Column, String)>,
     ctrl_c: Option<Instant>,
+    go_again: Option<(String, Instant)>,
     notice: Option<(String, Instant)>,
     lead_chat: Option<bool>,
     restart_auto: bool,
@@ -301,8 +304,15 @@ impl App {
         self.ongoing.get(note).filter(|_| self.shown(Column::Backlog, self.backlog_selected)).cloned()
     }
 
+    // In the Backlog column ⏎ opens a card: an ongoing note's, or the item's; a row with no card has its options.
     fn open_options(&mut self) {
-        if self.column != Column::Backlog || !self.open_note_card() {
+        if self.column != Column::Backlog || self.open_note_card() {
+            if self.column != Column::Backlog {
+                self.mode = Mode::Options(0);
+            }
+            return;
+        }
+        if !self.selected_entry().is_some_and(|entry| self.open_item_card(entry)) {
             self.mode = Mode::Options(0);
         }
     }
@@ -619,6 +629,7 @@ impl App {
             Mode::Report { id, shown, scroll, read, .. } => self.confirm_report(id, shown, scroll, read, key, cancels),
             Mode::ReportAll { shown, scroll, read, .. } => self.confirm_report_all(shown, scroll, read, key, cancels),
             Mode::NoteCard { key: note, scroll, .. } => self.handle_note_card(note, scroll, key, cancels),
+            Mode::ItemCard(card) => self.handle_item_card(card, key, terminal),
             Mode::Comment { id, scroll, .. } => self.handle_comment_window(id, scroll, key, cancels),
             Mode::ConfirmReset { path, name, .. } => self.confirm_reset(path, name, key, cancels),
             Mode::ConfirmDone { path, name, .. } => self.confirm_done(path, name, key, cancels),
@@ -714,6 +725,7 @@ impl App {
                     self.open_options();
                 }
             }
+            Act::ItemOptions if ctx == Ctx::Backlog && self.backlog_len() > 0 && self.shown(Column::Backlog, self.backlog_selected) => self.mode = Mode::Options(0),
             Act::Refresh => self.refresh_backlog(),
             Act::Away => {
                 self.subject = Some(notices::Subject::plain("away"));
@@ -725,7 +737,7 @@ impl App {
                 let buffer = self.filter_of(self.column).unwrap_or_default().to_string();
                 self.mode = Mode::Filter { buffer };
             }
-            Act::New if ctx == Ctx::Backlog && self.sources.contains(&Source::Local) => self.act(Act::New),
+            Act::New if ctx == Ctx::Backlog && crate::config::filing(&self.sources).is_some() => self.act(Act::New),
             Act::Card if ctx == Ctx::Work => self.act(Act::Card),
             Act::New => self.mode = Mode::Input { purpose: Purpose::TaskName, label: "New task: name".to_string(), buffer: String::new() },
             other if self.choices().iter().any(|choice| choice.act == Some(other)) => self.act(other),
@@ -769,12 +781,14 @@ impl App {
         match self.column {
             Column::Backlog => match act {
                 Act::Go => {
-                    if let Some(entry) = self.selected_entry().filter(|entry| !self.ask_if_claimed(entry)) {
-                        let buffer = suggested_name(&entry.title);
-                        self.mode = Mode::Input { purpose: Purpose::BacklogName(entry), label: "Start as task: name".to_string(), buffer };
+                    if let Some(entry) = self.selected_entry() {
+                        self.start_entry(entry);
                     }
                 }
                 Act::StartAt => {
+                    if self.selected_entry().is_some_and(|entry| entry.shape.kept) {
+                        return self.say("Not started: the lead has yet to write it out and file it in the vault".to_string());
+                    }
                     if let Some(entry) = self.selected_entry() {
                         let buffer = suggested_name(&entry.title);
                         self.mode = Mode::Input { purpose: Purpose::BacklogLaterName(entry), label: "Start later as task: name".to_string(), buffer };
@@ -782,7 +796,7 @@ impl App {
                 }
                 Act::Refresh => self.refresh_backlog(),
                 Act::New => {
-                    let label = "Add to the backlog: title (— summary and (area) optional)".to_string();
+                    let label = "Add to the backlog: a line, the lead writes it out".to_string();
                     self.mode = Mode::Input { purpose: Purpose::BacklogItem, label, buffer: String::new() };
                 }
                 _ => {}
@@ -1060,7 +1074,7 @@ impl App {
             graphics: Graphics::Off, images: HashMap::new(), cell_guessed: false, viewer: None, decoded: HashMap::new(), image_requests: None, image_results: None, plans: HashMap::new(),
             updates: Vec::new(), updater: std::sync::Arc::new(|| update::run(&crate::doctor::Env::current().claude_dir, false, &crate::release::Request::Channel).map(|outcome| outcome.details.join("\n"))), update: None, progress_file: None, recheck: None, stale: Vec::new(), stale_at: 0, restart_after_update: false,
             agent_offer: None, agent_mode: std::sync::Arc::new(|| config::agent_updates_in(&config::path())), installer: agent_updates::default_install(),
-            filter: None, ctrl_c: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_context: None, devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
+            filter: None, ctrl_c: None, go_again: None, notice: None, lead_chat: None, restart_auto: true, lead_restarter: std::sync::Arc::new(crate::lead_restart::restart_now), lead_fresh_starter: std::sync::Arc::new(crate::lead_restart::fresh_now), lead_checker: std::sync::Arc::new(crate::lead::restart_refusal), lead_context: None, devices: Vec::new(), subject: None, shown: None, toast: None, hub_paths: None, hub_banner: None,
             comments: Vec::new(), comment_panel: Default::default(), comment_dir: None, copier: comments::default_copier(), reopener: comments::default_reopener(), pusher: None,
         }
     }
@@ -1150,6 +1164,12 @@ pub fn run(overlay: bool) -> Result<String> {
                             app.sources = sources;
                         }
                         app.backlog = backlog::load();
+                        if let (Mode::ItemCard(card), Ok(state)) = (&mut app.mode, crate::lead::state_dir()) {
+                            card.reload(&state);
+                        }
+                        if app.sources.contains(&Source::Local) {
+                            crate::backlog_file::tell_new_drafts();
+                        }
                         let kept = app.selected_message().filter(|_| app.message_back > 0).map(|message| message.id.clone());
                         app.messages = snapshot.messages;
                         if let Some(index) = kept.and_then(|id| app.messages.iter().position(|message| message.id == id)) {

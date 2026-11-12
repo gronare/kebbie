@@ -71,6 +71,11 @@ fn home() -> PathBuf {
     std::env::var("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
+// A backlog note, or one the lead is writing out as one: a draft with a priority is a backlog item in the making, not a task under way.
+pub fn backlog_item(status: &str, priority: &str) -> bool {
+    status == "backlog" || (status == "draft" && !priority.trim().is_empty())
+}
+
 pub fn expand(path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
         Some(rest) => home().join(rest),
@@ -195,21 +200,21 @@ impl Index {
     // Every live backlog note: key, title, summary, priority, area link and date.
     pub fn backlog(&self) -> Result<Vec<[String; 6]>> {
         if let Some(snapshot) = &self.snapshot {
-            return Ok(snapshot.notes.iter().filter(|entry| entry.note.status == "backlog").map(|entry| {
+            return Ok(snapshot.notes.iter().filter(|entry| backlog_item(&entry.note.status, &entry.note.priority)).map(|entry| {
                 let note = &entry.note;
                 [note.key.clone(), note.title.clone(), note.summary.clone(), note.priority.clone(), note.area.clone(), entry.date.clone()]
             }).collect());
         }
-        rows(self.db()?, "SELECT key, title, summary, priority, area, date FROM notes WHERE status = 'backlog' AND valid = 1 AND folder NOT IN ('Archive', 'Log')", None, |row| Ok([0, 1, 2, 3, 4, 5].map(|column| text(row, column))))
+        rows(self.db()?, "SELECT key, title, summary, priority, area, date FROM notes WHERE (status = 'backlog' OR (status = 'draft' AND COALESCE(priority, '') != '')) AND valid = 1 AND folder NOT IN ('Archive', 'Log')", None, |row| Ok([0, 1, 2, 3, 4, 5].map(|column| text(row, column))))
     }
 
     pub fn ongoing(&self) -> Result<Vec<Note>> {
         if let Some(snapshot) = &self.snapshot {
-            let mut entries: Vec<&crate::vault_snapshot::Entry> = snapshot.notes.iter().filter(|entry| entry.role == "task" && ["active", "draft"].contains(&entry.note.status.as_str())).collect();
+            let mut entries: Vec<&crate::vault_snapshot::Entry> = snapshot.notes.iter().filter(|entry| entry.role == "task" && ["active", "draft"].contains(&entry.note.status.as_str()) && !backlog_item(&entry.note.status, &entry.note.priority)).collect();
             entries.sort_by(|one, other| other.mtime.total_cmp(&one.mtime).then_with(|| one.note.key.cmp(&other.note.key)));
             return Ok(entries.into_iter().map(|entry| entry.note.clone()).collect());
         }
-        rows(self.db()?, &format!("SELECT {NOTE_COLUMNS} FROM notes WHERE folder = 'Projects' AND status IN ('active', 'draft') AND valid = 1 ORDER BY mtime DESC, key"), None, note)
+        rows(self.db()?, &format!("SELECT {NOTE_COLUMNS} FROM notes WHERE folder = 'Projects' AND (status = 'active' OR (status = 'draft' AND COALESCE(priority, '') = '')) AND valid = 1 ORDER BY mtime DESC, key"), None, note)
     }
 
     // Every note's claim, by key; an index from a server without claims has no claim column and reads as none.

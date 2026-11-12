@@ -16,6 +16,7 @@ pub enum Ctx {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Act {
     Options,
+    ItemOptions,
     Move,
     Switch,
     WorkPage,
@@ -96,8 +97,8 @@ const ALL: &[Ctx] = &[Work, Backlog, Areas, Routines];
 const PAGES: &[Ctx] = &[Work, Backlog, Areas, Routines, Settings];
 
 impl Act {
-    pub const EVERY: [Act; 50] = [
-        Act::Options, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
+    pub const EVERY: [Act; 51] = [
+        Act::Options, Act::ItemOptions, Act::Move, Act::Switch, Act::WorkPage, Act::AreasPage, Act::RoutinesPage, Act::SettingsPage, Act::Lead, Act::HideChat, Act::Messages, Act::Hub, Act::Help, Act::Inbox, Act::Next, Act::New, Act::Go, Act::Chat,
         Act::Review, Act::Card, Act::Server, Act::Worker, Act::SendReview, Act::Permit, Act::Rebase, Act::Follow, Act::Tidy, Act::Push, Act::Stage, Act::Done, Act::DismissCi, Act::RerunCi, Act::Park, Act::Reset, Act::Drop, Act::StartAt, Act::Refresh, Act::Away,
         Act::Update, Act::RestartLead, Act::Filter, Act::AreaRefresh, Act::Log, Act::Edit, Act::Pause, Act::Delete, Act::Fullscreen, Act::OpenImage, Act::Back, Act::Close, Act::Quit,
     ];
@@ -105,6 +106,7 @@ impl Act {
     pub fn id(self) -> &'static str {
         match self {
             Act::Options => "options",
+            Act::ItemOptions => "item_options",
             Act::Move => "move",
             Act::Switch => "switch",
             Act::WorkPage => "work_page",
@@ -209,6 +211,7 @@ impl Act {
             Act::Pause => Default::Char('p'),
             Act::Delete => Default::Char('D'),
             Act::Close => Default::Char('q'),
+            Act::ItemOptions => Default::Char('o'),
         }
     }
 
@@ -219,7 +222,9 @@ impl Act {
 
 // One table for every key on the board: the handlers, the option menus, ? help, the hint line and the mouse all read it.
 pub const TABLE: &[Binding] = &[
-    Binding { act: Act::Options, on: BOARD, help: "options for the selected task or backlog item; an ongoing note's card", hint: Hint::Both },
+    Binding { act: Act::Options, on: &[Work], help: "options for the selected task", hint: Hint::Both },
+    Binding { act: Act::Options, on: &[Backlog], help: "the selected item's card: its sections and open questions, which you answer there; an ongoing note's card; on a row kebbie keeps or a Linear issue, its options", hint: Hint::Both },
+    Binding { act: Act::ItemOptions, on: &[Backlog], help: "options for the selected backlog item, each one explained", hint: Hint::No },
     Binding { act: Act::Options, on: &[Areas], help: "actions for the selected area (in the detail: run the selected action)", hint: Hint::Both },
     Binding { act: Act::Switch, on: BOARD, help: "switch between work and backlog", hint: Hint::No },
     Binding { act: Act::Options, on: &[Routines], help: "options for the selected routine (on a narrow board: open it, then options)", hint: Hint::No },
@@ -238,7 +243,7 @@ pub const TABLE: &[Binding] = &[
     Binding { act: Act::Hub, on: BOARD, help: "the kebbie hub, to see this board on your phone: not connected, choose the kebbie hub or your own and connect through the browser (a link, a code to check and a QR code); connected, this machine on its hub, when the board last went out and where to sign in to see it, n to rename it, l to leave", hint: Hint::No },
     Binding { act: Act::Filter, on: BOARD, help: "filter the selected column: type part of a name, ⏎ keeps it, esc clears it", hint: Hint::No },
     Binding { act: Act::New, on: &[Work], help: "new task", hint: Hint::No },
-    Binding { act: Act::New, on: &[Backlog], help: "in the Backlog column: a new item in the local backlog (a new task without the local source)", hint: Hint::No },
+    Binding { act: Act::New, on: &[Backlog], help: "in the Backlog column: a new item, one line the lead writes out (a new task when no backlog takes new items)", hint: Hint::No },
     Binding { act: Act::Go, on: BOARD, help: "go to the task's Space, or start the backlog item", hint: Hint::No },
     Binding { act: Act::Chat, on: &[Work], help: "chat: message the task's Claude", hint: Hint::No },
     Binding { act: Act::Review, on: &[Work], help: "open the task's review next to its Claude, or go to the one already open", hint: Hint::No },
@@ -506,8 +511,9 @@ mod tests {
         let keys = Keys::defaults();
         let at = |ctx, code| keys.act(ctx, &KeyEvent::from(code));
         for ctx in [Work, Backlog, Areas] {
-            assert_eq!((at(ctx, KeyCode::Char('f')), at(ctx, KeyCode::Char('o'))), (None, None), "{ctx:?}");
+            assert_eq!(at(ctx, KeyCode::Char('f')), None, "{ctx:?}");
         }
+        assert_eq!((at(Work, KeyCode::Char('o')), at(Backlog, KeyCode::Char('o')), at(Areas, KeyCode::Char('o'))), (None, Some(Act::ItemOptions), None), "in the Backlog column o is an item's options, as ⏎ opens its card");
         assert_eq!(at(Card, KeyCode::Char('f')), Some(Act::Fullscreen));
         assert_eq!(at(Card, KeyCode::Char('o')), Some(Act::OpenImage));
         assert_eq!(at(Card, KeyCode::Char('p')), Some(Act::Push));

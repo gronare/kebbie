@@ -29,7 +29,7 @@ The lead
 - [Let the lead push](how-to/let-the-lead-push.md): per task, or every reviewed task in a repo.
 - [Work while you are away](how-to/work-while-away.md): away mode and the summary when you are back.
 - [Get notifications](how-to/get-notifications.md): ntfy, macOS or any shell command.
-- [Fill the backlog](how-to/fill-the-backlog.md): local file, vault and Linear.
+- [Fill the backlog](how-to/fill-the-backlog.md): a local folder or the vault, Linear beside either, and items the lead writes out.
 - [Add a routine](how-to/add-a-routine.md): a check kebbie runs on a schedule as a task.
 - [Manage a cluster from a scheduled task](how-to/manage-a-cluster-from-a-scheduled-task.md): a limited kubeconfig per level, a profile for each and routines on them.
 

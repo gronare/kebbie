@@ -50,6 +50,10 @@ fn table_for<'a>(root: &'a mut dyn TableLike, path: &[&str], key: &str) -> Resul
 
 // Only the key's value changes, keeping its trailing comment: every other line, comment and the order stay as they were.
 pub fn set(text: &str, key: &str, value: &Set) -> Result<String> {
+    if let (Set::List(items), "board.backlog.sources") = (value, key)
+        && items.iter().any(|item| item == "local") && items.iter().any(|item| item == "vault") {
+        return Err(format!("board.backlog.sources: {}", crate::config::MIXED_SOURCES));
+    }
     let mut document = document(text)?;
     let (path, leaf) = split(key);
     let table = table_for(document.as_table_mut(), &path, key)?;
@@ -117,6 +121,9 @@ mod tests {
         let changed = set(FILE, "board.backlog.sources", &Set::List(vec!["vault".to_string()])).unwrap();
         assert!(changed.starts_with(FILE) && changed.ends_with("\n[board.backlog]\nsources = [\"vault\"]\n"), "{changed}");
         assert_eq!(changed.parse::<toml::Table>().unwrap()["board"]["backlog"]["sources"][0].as_str(), Some("vault"));
+        let mixed = set(FILE, "board.backlog.sources", &Set::List(vec!["local".to_string(), "linear".to_string(), "vault".to_string()])).unwrap_err();
+        assert!(mixed.contains("list one of them"), "{mixed}");
+        assert!(set(FILE, "board.backlog.sources", &Set::List(vec!["local".to_string(), "linear".to_string()])).is_ok());
         assert_eq!(set("", "machine.name", &Set::Text("mac".to_string())).unwrap(), "[machine]\nname = \"mac\"\n");
         assert!(set("task = 3\n", "task.sandbox", &Set::Bool(true)).unwrap_err().contains("task is not a table"));
     }

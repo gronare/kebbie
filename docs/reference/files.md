@@ -8,7 +8,7 @@ Where kebbie keeps its config, state and the files it ships, and what each file 
 | --- | --- | --- |
 | Machine config | `~/.config/kebbie/config.toml` | `KEBBIE_CONFIG`, `XDG_CONFIG_HOME` |
 | Repo configs | `~/.config/kebbie/repos/<repo>.toml` | `KEBBIE_REPOS_DIR`, `XDG_CONFIG_HOME` |
-| Local backlog | `backlog.md` next to the machine config | follows the machine config |
+| Local backlog | `backlog/` next to the machine config, one file per item | follows the machine config |
 | State directory | `~/.local/state/kebbie` | `KEBBIE_STATE_DIR`, `XDG_STATE_HOME` |
 | The lead's working directory | `lead` in the state directory | `KEBBIE_LEAD_DIR` |
 | Install link | `~/.local/share/kebbie/current`, written by herdr's startup | none: kebbie reads it under `~/.local/share` |
@@ -129,6 +129,10 @@ A `comments/` file holds the comment as GitHub gave it (author, text, file and l
 | `keeper.log` | What the keeper did: starts, exits, routine errors and restarts. Past 256 KB it moves to `keeper.log.1`. |
 | `routines/` | One file per routine, `<id>.json`. `lock` keeps two schedulers from starting the same run. |
 | `backlog.json` | The backlog the lead saved on its last refresh. |
+| `backlog-told` | The local items to write out that the lead has been told of, one file name per line. |
+| `backlog-kept.json` | The rows kebbie keeps for short items while the lead files them in the vault. |
+| `backlog-answers.json` | Your answers to items' open questions, kept until the lead folds each one in. |
+| `backlog-bodies.json` | kebbie's copy of the vault backlog notes' text, when the vault index on this machine holds none. |
 | `board-messages` | The board's memory of whether the messages panel is folded. |
 | `board-reports` | Whether the bugs and wishes to send show as a list or folded into their row. |
 | `edit/` | The commit message or routine prompt open in your editor, as a new file of yours alone, removed when the editor closes. |
@@ -194,23 +198,60 @@ A `routines/` file holds when the scheduler first saw the routine, when its last
 
 When the machine was connected from its link, `identity.json` also holds the account key it pinned, with the account's id, the key's version, its public keys, their two fingerprints and when it was pinned.
 
-## The local backlog file
+## The local backlog
 
-`backlog.md` next to the machine config. kebbie reads it as it changes and only appends to it; other lines are yours.
-
-One item per line:
+`backlog/` next to the machine config, one markdown file per item: TOML between `+++` lines, then the item's sections.
 
 ```markdown
-- [high] Fix login — the session drops on reload (app)
-- Write the release notes (web)
++++
+title = "Fix login"
+priority = "high"
+repo = "app"
+status = "backlog"
+filed = "2026-11-12"
++++
+
+## Background
+
+Reloading a page signs you out.
+
+## Goal
+
+You stay signed in across reloads.
+
+## What we know
+
+The session cookie is set in src/session.rs.
+
+## Open questions
+
+- [ ] Should sessions from before the fix keep working?
+
+## Out of scope
+
+Single sign-on.
+
+## Source
+
+The user, 2026-11-12: "Fix login — the session drops on reload (app)"
 ```
 
-| Part | Rule |
+| Field | Rule |
 | --- | --- |
-| `[priority]` | `urgent`, `high`, `medium` or `low`. Optional. |
-| Title | Required. kebbie knows the item by its title, so keep titles unique. |
-| ` — summary` | Optional. |
-| `(area)` | The folder name of the repo the work happens in. Optional, but starting the item as a task needs it. |
+| `title` | Required. |
+| `priority` | `urgent`, `high`, `medium` or `low`. Optional. |
+| `repo` | The folder name of the repo the work happens in. Starting the item as a task needs it. |
+| `status` | `draft` for an item the lead has yet to write out, `drafting` while it writes one out, `backlog` once it is written. |
+| `filed` | The day it was added. |
+
+The item's reference is `local:` and its file name without `.md`, such as `local:fix-login`. The file name stays when the title changes.
+
+`kebbie backlog` marks an item that is not ready:
+
+- `to write`: its status is `draft`, or a section is missing. A file you write without the `+++` header counts as one, titled by its first line.
+- `drafting`: its status is `drafting`, or an open question starts with `- [ ] `, which blocks the start until you answer it. A plain `- ` question is settled during the work.
+
+A `backlog.md` from an earlier version moves into the folder the first time kebbie reads it: each item line becomes an item to write, and the file stays beside it as `backlog.md.bak`.
 
 ## The issue file
 

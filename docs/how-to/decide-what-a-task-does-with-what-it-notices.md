@@ -4,7 +4,7 @@ Choose with `task.also_noticed` what a task does with things it notices outside 
 
 | Value | The task |
 | --- | --- |
-| `"backlog"` (default) | Leaves them alone and files each one: in the vault's backlog with the vault plugin, else in the local backlog with `kebbie backlog add`. |
+| `"backlog"` (default) | Leaves them alone and files each one, written out as a backlog item: in the vault's backlog when the vault takes new items, else with `kebbie backlog add`. |
 | `"fix"` | Fixes a small one beside the code it is changing, in a commit of its own, and files the rest. |
 | `"ask"` | Puts each one to you with `kebbie ask` before it changes anything for it: fix it, file it or leave it. |
 

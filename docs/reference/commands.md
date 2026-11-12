@@ -494,7 +494,7 @@ The task's commits not yet pushed are its next steps, in order. A commit beyond 
 | `kebbie peers` | Who you are and the other task sessions, with what each is doing. |
 | `kebbie messages` | The sessions' messages, live. `--print` prints the last 30. |
 | `kebbie backlog` | The backlog the board shows. |
-| `kebbie backlog add [--priority <p>] "<Title> — <summary> (<area>)"` | Append an item to the local backlog file. See [Files](files.md#the-local-backlog-file). |
+| `kebbie backlog add [--priority <p>] [--repo <repo>] "<line>" [-]` | Add a backlog item where new items go. A line alone is a short item the lead writes out in full; with `-`, the written-out item's sections come on stdin. See [Fill the backlog](../how-to/fill-the-backlog.md#add-an-item). |
 
 `kebbie profiles` shows each profile with what it is for, what it is about, and its agent, model, effort, permission mode and skills. Under a profile that runs Codex, a `codex:` line gives the Codex binary, its version and whether kebbie's plugin is installed. A file that does not load is listed as ignored, with the reason. `--json` gives one object per profile, and `{"error": …}` for an ignored file.
 
@@ -719,7 +719,7 @@ Safe to run again. Yours alone: a task cannot run it. In a terminal it is a guid
 | This machine | How your phone and other machines show this one, from `machine.name` or the host's short name. | `machine.name` |
 | Agents | One row per agent kebbie supports, Claude Code and Codex: the version found or `not found` (greyed), `signed in` or `not signed in: run claude auth login` (or `codex login`), and `kebbie's plugin current`, `out of date` or `missing`. Tick the ones kebbie uses; every agent found is ticked, and Claude Code stays on, as it runs the lead and the reviewer. | Each ticked agent's plugin and approval rules; an unticked Codex loses kebbie's plugin |
 | Vault | Where the vault lives: `Hosted mindin` (`coming soon`, not yet selectable), `Your own server` with its address, `S3 bucket` with its endpoint, bucket and optional prefix and region, `Local folder` with its path, or `None`. The choice in use is preselected from the vault's `status`, such as `Your own server  https://vault.example.com · signed in`. Under the list, `runs` names the command kebbie runs the vault with. See [Setup chooses where the vault lives](../explanation/vault.md#setup-chooses-where-the-vault-lives). | `mindin setup` when the place changes, `vault.command`, and the vault in each ticked agent |
-| Backlog | Local, vault and Linear, in any combination; the first is where the lead files new ideas. | `board.backlog.sources` |
+| Backlog | Local file or vault, one of them, where new items are written; Linear can be ticked beside either. | `board.backlog.sources` |
 | Error signals | Turn them on or keep them off; No is preselected. `--yes` leaves it unset. | `report.signals` |
 | Review and apply | Every write, grouped by tool. | Everything, on `⏎` |
 
@@ -1014,6 +1014,7 @@ These run from hooks, the herdr plugin and kebbie's own processes. You do not ru
 | `kebbie hook codex <event>` | kebbie's Codex plugin, for `session-start`, `prompt` and `stop`. Reads the hook's JSON on stdin and prints nothing outside a kebbie task's worktree. |
 | `kebbie statusline` | Claude Code's `statusLine` command. Keeps the plan's usage for the board and prints nothing. |
 | `kebbie backlog save` | The lead, after refreshing the backlog. Reads a JSON array on stdin. |
+| `kebbie backlog filed <kept:id>` | The lead, once it has filed in the vault an item kebbie kept a row for: the row gives way to the note. |
 | `kebbie messages --unread` | The lead's prompt hook. |
 | `kebbie review --run` | The reviewer process `kebbie review` starts. |
 | `kebbie review --run --rules` | The read-only rules check the keeper starts after a task reports ready. |

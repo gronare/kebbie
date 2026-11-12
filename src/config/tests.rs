@@ -191,7 +191,9 @@ fn reads_the_machine_keys() {
     assert_eq!(config.worktree.dev_server.as_deref(), Some("bin/dev"));
     assert_eq!(machine("[board.backlog]\nsources = []\n").sources, Some(Vec::new()));
     assert_eq!(settings(&Worktree::default(), &machine("[board.backlog]\nsources = []\n")).sources.value, Vec::new(), "an explicit empty list turns the backlog off");
-    assert_eq!(machine("[board.backlog]\nsources = [\"local\", \"vault\"]\n").sources, Some(vec![Source::Local, Source::Vault]));
+    assert_eq!(machine("[board.backlog]\nsources = [\"local\", \"vault\"]\n").sources, Some(vec![Source::Local, Source::Vault]), "an older config that lists both still loads");
+    assert_eq!(settings(&Worktree::default(), &machine("[board.backlog]\nsources = [\"local\", \"linear\", \"vault\"]\n")).sources.value, [Source::Linear, Source::Vault], "with the vault listed, the local folder is not read");
+    assert_eq!((crate::config::filing(&[Source::Linear, Source::Vault]), crate::config::filing(&[Source::Local]), crate::config::filing(&[Source::Linear])), (Some(Source::Vault), Some(Source::Local), None));
 }
 
 #[test]

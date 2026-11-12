@@ -155,7 +155,7 @@ impl Step {
             Step::Name => "How your phone and your other machines show this one. One word, like mac or devbox.",
             Step::Agents => "The agents kebbie found on this machine. Each one you tick gets kebbie's plugin and its approval rules when you apply. Claude Code runs the lead and the reviewer, so it stays on.",
             Step::Vault => "Optional. A note for every task and a log line for every push. Choose where the vault lives; when that changes, kebbie runs mindin setup for it as you apply.",
-            Step::Backlog => "Where work waits. Pick any combination; the first one is where the lead files new ideas.",
+            Step::Backlog => "Where work waits and new items are written: the local file or the vault, one of them. Linear can sit beside either; the lead only reads it.",
             Step::Signals => "Off until you say yes. With them on, when kebbie itself crashes or hits some internal errors, it sends its maintainers an error signal, at most once a day. A signal holds only kebbie's version and commit, your OS and CPU architecture, the part of kebbie that failed, the kind of failure and a count; never your code, paths or text. Once a day it also sends an install signal, so they can count active installs: a random id made for this install, kebbie's version, your OS and CPU architecture and the update channel. Turning them off deletes that id.",
             Step::Review => "Everything kebbie writes or installs, each tool's own files included. Nothing is written until you press ⏎ here.",
         }
@@ -373,7 +373,8 @@ pub struct Answers {
 
 impl Answers {
     fn from(facts: &Facts) -> Answers {
-        let mut sources: Vec<(Source, bool)> = facts.sources.iter().map(|source| (*source, true)).collect();
+        let read = config::read_sources(&facts.sources);
+        let mut sources: Vec<(Source, bool)> = facts.sources.iter().map(|source| (*source, read.contains(source))).collect();
         sources.extend(Source::ALL.into_iter().filter(|source| !facts.sources.contains(source)).map(|source| (source, false)));
         Answers { name: facts.name.clone(), codex: facts.codex.is_some(), sources, vault: Where::from(facts), signals: usize::from(!facts.signals) }
     }
@@ -476,7 +477,7 @@ fn home(path: &Path) -> String {
 
 fn source_line(source: Source) -> (&'static str, &'static str) {
     match source {
-        Source::Local => ("Local file", "backlog.md beside your config"),
+        Source::Local => ("Local file", "an item file each in backlog/ beside your config"),
         Source::Vault => ("Vault", "backlog notes in your notes vault"),
         Source::Linear => ("Linear", "issues from a Linear team, needs an API key"),
     }
@@ -747,8 +748,13 @@ impl Guide {
         match self.step {
             Step::Agents if Agent::ALL.get(at) == Some(&Agent::Codex) && self.facts.codex.is_some() => self.answers.codex = !self.answers.codex,
             Step::Backlog => {
-                if let Some((_, on)) = self.answers.sources.get_mut(at) {
-                    *on = !*on;
+                let Some((source, on)) = self.answers.sources.get(at).copied() else { return };
+                for (other, ticked) in &mut self.answers.sources {
+                    if *other == source {
+                        *ticked = !on;
+                    } else if !on && source != Source::Linear && *other != Source::Linear {
+                        *ticked = false;
+                    }
                 }
             }
             _ => {}
@@ -1412,10 +1418,10 @@ impl Guide {
                 lines.push(Line::from(vec![Span::styled("runs  ", style(MUTED)), Span::styled(self.runner_shown(), style(MUTED))]));
             }
             Step::Backlog => {
-                let first = answers.sources.iter().position(|(_, on)| *on);
+                let filed = config::filing(&answers.chosen_sources());
                 for (at, (source, on)) in answers.sources.iter().enumerate() {
                     let (label, about) = source_line(*source);
-                    let about = if Some(at) == first { format!("{about} · new ideas go here") } else { about.to_string() };
+                    let about = if *on && Some(*source) == filed { format!("{about} · new items go here") } else { about.to_string() };
                     lines.push(self.option(Spot::Check(at), Self::check_mark(*on, true), label.to_string(), about, true));
                 }
             }
@@ -1834,9 +1840,12 @@ mod tests {
         assert!(screen(&guide).contains("( ) Hosted mindin    coming soon") && screen(&guide).contains("▸ (•) None             kebbie keeps tasks without one") && screen(&guide).contains("runs  mindin, installed when you apply"), "{}", screen(&guide));
         press(&mut guide, &[KeyCode::Enter]);
         assert_eq!(guide.step, Step::Backlog);
-        assert!(screen(&guide).contains("[x] Local file  · backlog.md beside your config · new ideas go here"));
-        press(&mut guide, &[KeyCode::Down, KeyCode::Char(' '), KeyCode::Up, KeyCode::Char(' '), KeyCode::Enter]);
-        assert_eq!(guide.answers.chosen_sources(), [Source::Vault], "the first one checked is where the lead files ideas");
+        assert!(screen(&guide).contains("[x] Local file  · an item file each in backlog/ beside your config · new items go here"), "{}", screen(&guide));
+        press(&mut guide, &[KeyCode::Down, KeyCode::Char(' ')]);
+        assert_eq!(guide.answers.chosen_sources(), [Source::Vault], "ticking the vault unticks the local file: new items go to one place");
+        press(&mut guide, &[KeyCode::Down, KeyCode::Char(' ')]);
+        assert_eq!(guide.answers.chosen_sources(), [Source::Vault, Source::Linear], "Linear sits beside either");
+        press(&mut guide, &[KeyCode::Char(' '), KeyCode::Enter]);
         assert_eq!(guide.step, Step::Signals);
         assert!(screen(&guide).contains("never your code, paths or text") && screen(&guide).contains("A bug report with text is always shown to you first"));
         press(&mut guide, &[KeyCode::Enter]);
@@ -1882,7 +1891,7 @@ mod tests {
             "done link ~/.local/bin/kebbie".to_string(),
             "done machine \"mac\"".to_string(),
             "skipped vault no vault; kebbie keeps tasks without one".to_string(),
-            "done backlog local, vault".to_string(),
+            "done backlog vault".to_string(),
             "done signals off".to_string(),
             format!("done plugin installed kebbie@kebbie in Claude Code from {}", lab.machine.home.join(".local/share/kebbie/current").display()),
             "already approvals kebbie gives each Claude task its permissions as it starts it".to_string(),
@@ -1893,7 +1902,7 @@ mod tests {
         ], "each line says what it did in a few words");
         assert_eq!(fake.drawn, 11, "each line is drawn as it finishes");
         assert!(fake.ran.is_empty(), "nothing runs outside the screen without the mindin install");
-        assert_eq!(lab.config(), "[machine]\nname = \"mac\"\n\n[board.backlog]\nsources = [\"local\", \"vault\"]\n\n[report]\nsignals = false\n", "setup never writes [hub] nor how agents update");
+        assert_eq!(lab.config(), "[machine]\nname = \"mac\"\n\n[board.backlog]\nsources = [\"vault\"]\n\n[report]\nsignals = false\n", "setup never writes [hub] nor how agents update");
         assert_eq!(lab.herdr().matches("[[keys.command]]").count(), 3);
         assert!(lab.dir.join("codex/plugins/cache/kebbie-tasks/kebbie/local/hooks/hooks.json").is_file() && lab.dir.join("codex/rules/kebbie.rules").is_file(), "a ticked Codex gets kebbie's plugin and its rules without a question");
         let settings: Value = serde_json::from_str(&std::fs::read_to_string(lab.machine.claude_dir.join("settings.json")).unwrap()).unwrap();
@@ -1903,12 +1912,12 @@ mod tests {
         rerun.facts.codex = Some("0.163.0".to_string());
         rerun.answers.codex = true;
         assert_eq!(rerun.answers.name, "mac");
-        assert_eq!(rerun.answers.chosen_sources(), [Source::Local, Source::Vault]);
+        assert_eq!(rerun.answers.chosen_sources(), [Source::Vault]);
         let shown = screen(&rerun);
         assert!(shown.contains("✓ in place: machine.name is \"mac\"") && shown.lines().any(|line| line.contains("✓") && line.contains("Error signals")), "the rail marks what is in place: {shown}");
         rerun.go(Step::Review);
         let plan = plan(&rerun);
-        for row in ["kebbie already machine \"mac\"", "herdr already keys kebbie's keys are bound in herdr", "kebbie already backlog local, vault", "kebbie already signals off", "Claude Code already plugin kebbie's plugin"] {
+        for row in ["kebbie already machine \"mac\"", "herdr already keys kebbie's keys are bound in herdr", "kebbie already backlog vault", "kebbie already signals off", "Claude Code already plugin kebbie's plugin"] {
             assert!(plan.iter().any(|line| line == row), "{row} missing from {plan:?}");
         }
         assert!(plan.iter().any(|line| line.starts_with("Codex already plugin")) && plan.iter().any(|line| line.starts_with("Codex already approvals")), "{plan:?}");
@@ -1973,9 +1982,9 @@ mod tests {
         guide.go(Step::Backlog);
         press(&mut guide, &[KeyCode::Enter, KeyCode::Char('s')]);
         assert_eq!(guide.step, Step::Review);
-        assert_eq!(guide.answers.chosen_sources(), [Source::Local, Source::Vault], "← and ⏎ keep the boxes ticked");
+        assert_eq!(guide.answers.chosen_sources(), [Source::Vault], "← and ⏎ keep the boxes ticked");
         let plan = plan(&guide);
-        assert!(plan.contains(&"kebbie skipped vault stays as it is".to_string()) && plan.contains(&"kebbie skipped signals stay off".to_string()) && plan.contains(&"kebbie to do backlog local, vault".to_string()), "{plan:?}");
+        assert!(plan.contains(&"kebbie skipped vault stays as it is".to_string()) && plan.contains(&"kebbie skipped signals stay off".to_string()) && plan.contains(&"kebbie to do backlog vault".to_string()), "{plan:?}");
         assert!(plan.iter().all(|row| !row.ends_with(" vault [mcp_servers.vault]") && !row.contains("the vault plugin")), "a skipped vault adds it to no agent: {plan:?}");
         press(&mut guide, &[KeyCode::Left]);
         assert_eq!(guide.step, Step::Signals);
