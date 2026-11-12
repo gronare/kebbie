@@ -126,6 +126,30 @@ pub fn reap(mut child: std::process::Child) -> u32 {
     pid
 }
 
+// A board that execs a rebuilt kebbie loses the threads reaping its children, so the new image waits on every child it inherited.
+pub fn adopt_children() {
+    adopt(children_of(std::process::id()));
+}
+
+// ps and not pgrep: pgrep leaves out a child that has already exited, which is the zombie this is for.
+pub fn children_of(parent: u32) -> Vec<libc::pid_t> {
+    let Ok(listed) = run("ps", &["-axo", "pid=,ppid="], None) else { return Vec::new() };
+    listed.lines().filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        let pid = fields.next()?.parse().ok()?;
+        (fields.next()?.parse::<u32>().ok()? == parent).then_some(pid)
+    }).collect()
+}
+
+pub fn adopt(pids: Vec<libc::pid_t>) {
+    for pid in pids {
+        std::thread::spawn(move || {
+            // SAFETY: waits on a pid this process listed as its own child.
+            unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) };
+        });
+    }
+}
+
 #[cfg(test)]
 pub fn test_dir(name: &str) -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -176,6 +200,33 @@ mod tests {
         assert!(!gone(pid), "a dropped Child stays a zombie, which is what reap is for");
         // SAFETY: waits on our own child so the test leaves no zombie behind.
         unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), 0) };
+    }
+
+    #[test]
+    fn a_child_whose_handle_is_gone_is_reaped_once_adopted() {
+        let orphan = Command::new("true").spawn().unwrap();
+        let pid = orphan.id();
+        drop(orphan);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!gone(pid), "without a handle the exited child stays a zombie");
+        adopt(vec![pid as libc::pid_t]);
+        let waited = std::time::Instant::now();
+        while !gone(pid) && waited.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(gone(pid), "an adopted child is reaped, as a board renewed by exec does with the children it inherits");
+    }
+
+    #[test]
+    fn a_child_that_already_exited_is_still_listed_as_a_child_to_adopt() {
+        let orphan = Command::new("true").spawn().unwrap();
+        let pid = orphan.id();
+        drop(orphan);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let listed = children_of(std::process::id());
+        // SAFETY: waits on our own child so the test leaves no zombie behind.
+        unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), 0) };
+        assert!(listed.contains(&(pid as libc::pid_t)), "a zombie child must be listed, or a board renewed by exec keeps it for life");
     }
 
     #[test]

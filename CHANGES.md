@@ -22,6 +22,7 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - A backlog row shows whether the item is to write, drafting or waits on your answers, and g asks once before starting one that waits.
 
 ### Fixed
+- A board that restarts on a rebuilt kebbie no longer leaves finished child processes behind as zombies.
 - The board and the keeper read vault backlog notes in one pass over the vault index, so they no longer hold a CPU core busy while the backlog is long.
 - A Codex task runs git add and git commit in its worktree without asking you to let them out of the sandbox, and the lead no longer recommends letting git through for good.
 - A reopened bug that went to kebbie's maintainers before is offered and sent again.

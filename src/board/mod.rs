@@ -1083,6 +1083,9 @@ impl App {
 }
 
 pub fn run(overlay: bool) -> Result<String> {
+    if std::env::var_os(RESTART_STATE).is_some() {
+        crate::sh::adopt_children();
+    }
     let sources = config::sources()?;
     let (snapshots, refresh) = spawn_refresher(std::env::var("HERDR_PANE_ID").ok().filter(|_| !overlay));
     spawn_ci_watcher(refresh.clone());
