@@ -12,6 +12,7 @@ use crate::vault_snapshot::Snapshot;
 pub struct Index {
     db: Option<Connection>,
     snapshot: Option<Arc<Snapshot>>,
+    bodies: std::cell::OnceCell<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -176,11 +177,11 @@ impl Index {
     }
 
     pub fn at(path: &Path) -> Result<Self> {
-        Ok(Self { db: Some(connect(path)?), snapshot: None })
+        Ok(Self { db: Some(connect(path)?), snapshot: None, bodies: Default::default() })
     }
 
     pub fn of_snapshot(snapshot: Arc<Snapshot>, local: Option<Connection>) -> Self {
-        Self { db: local, snapshot: Some(snapshot) }
+        Self { db: local, snapshot: Some(snapshot), bodies: Default::default() }
     }
 
     fn db(&self) -> Result<&Connection> {
@@ -233,8 +234,12 @@ impl Index {
     }
 
     // A note's whole markdown, which only the local index holds.
+    // notes_fts.key is UNINDEXED, so any lookup by key scans every body: read them all in that one scan and answer the rest from memory.
     pub fn body(&self, key: &str) -> Option<String> {
-        self.row::<Option<String>>("SELECT body FROM notes_fts WHERE key = ?1", key).flatten()
+        self.bodies.get_or_init(|| {
+            let Ok(db) = self.db() else { return Default::default() };
+            rows(db, "SELECT key, body FROM notes_fts WHERE body IS NOT NULL", None, |row| Ok((text(row, 0), text(row, 1)))).unwrap_or_default().into_iter().collect()
+        }).get(key).cloned()
     }
 
     // The opening the snapshot carries for an open task; the index has none and its readers cut one from the body.
@@ -478,6 +483,8 @@ The payload says amount.');
         assert_eq!(notes[0].area, "kebbie", "the [[link]] reads as the area's stem");
         assert_eq!(index.body("Projects/kebbie-new.md").as_deref(), Some("## Problem\nThe payload says amount."));
         assert_eq!(index.body("Projects/missing.md"), None);
+        Connection::open(&path).unwrap().execute_batch("DELETE FROM notes_fts;").unwrap();
+        assert_eq!(index.body("Projects/kebbie-new.md").as_deref(), Some("## Problem\nThe payload says amount."), "one scan of notes_fts answers every body the index is asked for, since a lookup by its unindexed key scans them all");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
