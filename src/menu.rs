@@ -208,12 +208,42 @@ fn blocked_tasks() -> Result<Vec<Blocked>> {
         .collect())
 }
 
+// What the phone hears of a task's prompt; a prompt kebbie could not read as a menu says where to answer it.
+pub fn phone_said(screen: &str, agent: Agent, asks: Option<&str>) -> String {
+    match (asks, parse_for(screen, agent)) {
+        (Some(asks), _) => format!("{} asks {asks} before it takes the task's prompt.", agent.name()),
+        (None, Some(menu)) => crate::hub::notices::prompt_said(agent.name(), &menu),
+        (None, None) => format!("{} waits on its own prompt; answer it in the task's Space.", agent.name()),
+    }
+}
+
+fn told_addresses(state: &Path) -> Vec<String> {
+    fs::read_dir(told_dir(state)).into_iter().flatten().flatten().map(|entry| entry.file_name().to_string_lossy().to_string()).filter(|name| !name.starts_with('.')).collect()
+}
+
 pub fn tick(state: &Path) -> Result<Vec<String>> {
     let blocked = blocked_tasks()?;
     if blocked.is_empty() && !told_dir(state).exists() {
         return Ok(Vec::new());
     }
-    Ok(pass(state, &blocked, crate::herdr::read_agent, |text| crate::messages::to_lead(crate::messages::ToLead::Prompt, text)))
+    let before = told_addresses(state);
+    let read = std::cell::RefCell::new(None::<(String, String)>);
+    let told = pass(state, &blocked, |pane| {
+        let screen = crate::herdr::read_agent(pane)?;
+        *read.borrow_mut() = Some((pane.to_string(), screen.clone()));
+        Ok(screen)
+    }, |text| {
+        crate::messages::to_lead(crate::messages::ToLead::Prompt, text)?;
+        if let Some((pane, screen)) = read.borrow().as_ref() && let Some(task) = blocked.iter().find(|task| &task.pane == pane) {
+            crate::hub::notices::send(&crate::hub::notices::About::Prompt { address: task.address.clone(), said: phone_said(screen, task.agent, task.asks.as_deref()) }, None);
+        }
+        Ok(())
+    });
+    let after = told_addresses(state);
+    for gone in before.iter().filter(|address| !after.contains(address)) {
+        crate::hub::notices::settle(crate::hub::notices::Subject::Prompt, gone);
+    }
+    Ok(told)
 }
 
 #[derive(Debug, PartialEq)]

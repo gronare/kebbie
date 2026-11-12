@@ -131,6 +131,7 @@ pub(crate) struct StartWith<'a> {
     pub(crate) anyway: bool,
     pub(crate) recipe: Option<&'a str>,
     pub(crate) mode: Option<&'a str>,
+    pub(crate) device: Option<&'a str>,
 }
 
 pub(crate) fn start_in_background(repo: &Path, name: &str, prompt: Option<&str>, with: &StartWith) -> Result<String> {
@@ -163,6 +164,9 @@ fn start_command(kebbie: String, repo: &Path, name: &str, prompt: Option<&str>, 
     }
     if let Some(mode) = with.mode {
         command.args(["--mode", mode]);
+    }
+    if let Some(device) = with.device {
+        command.env(crate::hub::notices::FROM_DEVICE, device);
     }
     if let Some(prompt) = prompt {
         command.arg(prompt);

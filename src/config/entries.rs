@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, AutoApprove, Channel, HubTrust, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Settings, PERMISSION_MODES};
+use super::{load_machine, repos_dir, resolve, shown, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, Channel, HubTrust, Layer, Loaded, OngoingAt, ReportText, ReviewAuto, Second, Settings, PERMISSION_MODES};
 use crate::repo::main_checkout;
 use crate::sh::Result;
 use crate::status::Group;
@@ -54,7 +54,7 @@ fn board_keys(loaded: &Loaded) -> (crate::keys::Keys, Vec<String>) {
 }
 
 fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
-    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, comments_watch, comments_days, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, hub_commands, hub_trust, hub_auto_approve, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
+    let Settings { sources, groups, ongoing, setup_skill, setup_command, dev_server, dev_worker, dev_url, dev_route, stage_on_main, rules_skill, test_commands, also_noticed, permission_mode, profile, sandbox, steps, require_accept, review_model, review_auto, review_profile, review_second, notify_command, vault_command, server_name, worker_name, channel, agent_updates, idle_minutes, auto_restart, ci_watch, comments_watch, comments_days, clean_on_release, docs_required, keeper, recover, machine_name, hub_url, hub_commands, hub_trust, hub_auto_approve, hub_approve_from, report_signals, report_text, report_inbox, propose_issues } = &loaded.settings;
     let names: Vec<&str> = sources.value.iter().map(|source| source.key()).collect();
     let (server_key, worker_key) = (board_keys.char(crate::keys::Act::Server), board_keys.char(crate::keys::Act::Worker));
     let mut entries = Vec::new();
@@ -148,6 +148,8 @@ fn entries_with(loaded: &Loaded, board_keys: &crate::keys::Keys) -> Vec<Entry> {
         "Which of your devices this machine takes commands from: \"device\" takes them from each device you approve on this machine, and a new device's first command waits here until you approve it (N on the board, or kebbie hub devices approve <name>) or hub.auto_approve lets it in; \"account\" takes them from any device signed in to the account this machine is connected to, with nothing to approve. Every command names the device that sent it, and kebbie hub devices lists them. config.toml only.");
     key("hub.auto_approve", format!("{:?}", hub_auto_approve.value.key()), hub_auto_approve.layer, Kind::Choice(AutoApprove::ALL.map(AutoApprove::key).to_vec()), Scope::Machine,
         "What happens to a device that waits for your approval under hub.trust = \"device\": \"24h\" approves it 24 hours after its first command unless you deny it first; \"never\" keeps it waiting until you approve it. A command waits at most its hour, so one sent before the approval expires, and the device says it was not delivered. config.toml only.");
+    key("hub.approve_from", format!("{:?}", hub_approve_from.value.key()), hub_approve_from.layer, Kind::Choice(ApproveFrom::ALL.map(ApproveFrom::key).to_vec()), Scope::Machine,
+        "Where a new device that waits for your approval under hub.trust = \"device\" can be approved: \"devices\" lets a device you approved on this machine approve or deny it too, from the notice that says it is waiting or from the phone's board, as well as N on the board or kebbie hub devices; \"machine\" takes that decision only here, and the phone shows the waiting device without the buttons. Either way a waiting device never approves another. config.toml only.");
     key("report.signals", report_signals.value.to_string(), report_signals.layer, Kind::Bool, Scope::Machine,
         "Whether kebbie sends its maintainers error signals, counts of kebbie's own failures: when kebbie itself fails (a panic, and some internal errors), the keeper sends at most once a day a count per failure with only kebbie's version and commit, the OS and CPU architecture, the component (a fixed name from kebbie's code, such as keeper.push) and the error kind (panic, internal-error, corrupt-state). Never an error message, path, repo, task or host name. Once a day it also sends an install signal: a random id made for this install alone, kebbie's version, the OS and CPU architecture and the update channel. Each error signal is a line under messages on the board. Not set, nothing is sent and no install id is made; kebbie setup asks. true turns both on; false sends none, drops what was counted and deletes the install id; config.toml only.");
     key("report.text", format!("{:?}", report_text.value.key()), report_text.layer, Kind::Choice(ReportText::ALL.map(ReportText::key).to_vec()), Scope::Machine,

@@ -239,7 +239,7 @@ pub fn build(items: &[status::Item], checkouts: &[status::Checkout], routines: V
         next: Some(next),
         counts: Some(counts),
         later: Some(items.iter().filter_map(later).collect()),
-        accepts: Some(super::commands::accepts(crate::config::hub_commands())),
+        accepts: Some(super::commands::accepted(crate::config::hub_commands(), crate::config::hub_approve_from())),
         devices: None,
         backlog: None,
     }

@@ -152,6 +152,7 @@ An assessment with no answer reads as `review not assessed`, a suggestion in eve
 | `hub.commands` | all five kinds | config.toml only | What this machine takes from your devices through the hub: a list of `"answer"`, `"push"`, `"prompt"`, `"idea"` and `"start"`. See [Answer and push from your phone](../how-to/see-your-board-on-your-phone.md#answer-and-push-from-your-phone). |
 | `hub.trust` | `"device"` | config.toml only | Which of your devices this machine takes commands from: `"device"`, each device you approve here, or `"account"`, any device signed in to your account. |
 | `hub.auto_approve` | `"24h"` | config.toml only | When a device waiting under `hub.trust = "device"` is let in: `"24h"` after its first command unless you deny it, or `"never"`, only when you approve it. |
+| `hub.approve_from` | `"devices"` | config.toml only | Where a waiting device can be approved: `"devices"`, also from a device you approved on this machine, or `"machine"`, only here. |
 
 `machine.name`: your phone shows it through the [hub](../how-to/see-your-board-on-your-phone.md#connect-the-machine), and kebbie claims vault notes under it. See [Two machines, one vault](../explanation/vault.md#two-machines-one-vault).
 
@@ -205,6 +206,7 @@ commands = ["answer", "prompt", "idea"]
 - A device you deny stays view only on this machine, and its commands are answered `denied`.
 - A device whose key changed is a new device to approve. Compare the key under Account on the device with the one kebbie shows.
 - `"24h"` for `hub.auto_approve` approves a waiting device 24 hours after its first command unless you deny it first; `"never"` keeps it waiting until you approve it.
+- `"devices"` for `hub.approve_from` lets a device you approved on this machine approve or deny a waiting one, from its notification or the phone's board, as well as `N` and `kebbie hub devices`; `"machine"` takes that decision only here. A waiting device never decides on another. See [Approve a new device from another device](../how-to/see-your-board-on-your-phone.md#approve-a-new-device-from-another-device).
 
 ### CI, updates and the keeper
 

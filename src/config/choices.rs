@@ -187,6 +187,24 @@ impl AutoApprove {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum ApproveFrom {
+    #[default]
+    Devices,
+    Machine,
+}
+
+impl ApproveFrom {
+    pub const ALL: [ApproveFrom; 2] = [ApproveFrom::Devices, ApproveFrom::Machine];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ApproveFrom::Devices => "devices",
+            ApproveFrom::Machine => "machine",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum AlsoNoticed {
     #[default]
     Backlog,

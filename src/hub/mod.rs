@@ -9,6 +9,7 @@ pub mod devices;
 pub mod http;
 pub mod identity;
 pub mod inbox;
+pub mod notices;
 pub mod pair;
 pub mod qr;
 pub mod relay;
@@ -393,6 +394,8 @@ pub fn tick_in(state: &Path, configured: Option<&str>, now: u64, gather: impl Fn
                 Some(gathered) => gathered,
                 None => gathered.insert(gather()?),
             };
+            let _ = devices::settle_due(&dir, devices::Policy::current(), now);
+            notices::items_in(&dir, board, attachments).unwrap_or_default().iter().for_each(|about| notices::send_in(&dir, about));
             let mut board = blobs::attach(&dir, board, attachments, now, blobs::put_with(&identity));
             board.devices = Some(devices::load(&dir).standings(devices::Policy::current(), now));
             relay::relay_at(&dir, &board, now).map(|_| ())

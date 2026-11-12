@@ -883,6 +883,10 @@ fn main() -> ExitCode {
         notify::deliver(&argv[2..]);
         return ExitCode::SUCCESS;
     }
+    if argv.len() > 2 && argv[0] == "notify" && argv[1] == hub::notices::DELIVER {
+        hub::notices::deliver(&argv[2..]);
+        return ExitCode::SUCCESS;
+    }
     let arguments = Arguments::parse();
     if arguments.positional(0) == Some("doctor") {
         return doctor(arguments.flag("--fix"), arguments.flag("--all"), arguments.flag("--plain"));

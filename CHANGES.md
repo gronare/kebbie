@@ -12,6 +12,8 @@ What each kebbie release brings, one line per change, as you would tell someone 
 - From your phone you add an idea, answer an item's open questions and start an item as a task.
 - A new device's first command waits on the machine until you approve it under N or with kebbie hub devices; update the hub first.
 - hub.trust and hub.auto_approve set which devices a machine takes commands from, and when a waiting one is let in.
+- Your phone gets notifications through the hub: a task's question or prompt, the lead's questions on an idea, a new device, ready to push, a red CI and, if you turn it on, a start, each saying the thing itself; update the hub first.
+- A device you approved approves or denies a new one from its notification, unless hub.approve_from = "machine" keeps that at the machine.
 - A wish about kebbie goes to its maintainers the way a bug does, under the same report.text choice.
 - The lead writes every short backlog item out in full, with background, goal and open questions, the moment it is added.
 - The local backlog is a folder with one file per item; an old backlog.md moves into it once and stays as a backup.

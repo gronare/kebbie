@@ -35,7 +35,7 @@ const SECTION_KEYS: [(&str, &[&str]); 18] = [
     ("report", &["signals", "text", "enabled", "inbox_token"]),
     ("issues", &["propose"]),
     ("machine", &["name"]),
-    ("hub", &["url", "commands", "trust", "auto_approve"]),
+    ("hub", &["url", "commands", "trust", "auto_approve", "approve_from"]),
     ("worktree", &["setup_skill", "setup_command", "dev_server", "dev_worker", "dev_url", "dev_route", "stage_on_main", "server_name", "worker_name", "clean_on_release"]),
     ("task", &["rules_skill", "test_commands", "also_noticed", "permission_mode", "profile", "sandbox", "steps", "require_accept"]),
     ("review", &["model", "auto", "profile", "second"]),

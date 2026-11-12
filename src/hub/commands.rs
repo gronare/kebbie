@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use kebbie_hub_api::{HubInfo, Inbox, ResultStored, ResultUpload};
-use kebbie_hub_protocol::{AccountKey, Answer, AppliedCommands, CommandResult, Dropped, Envelope, Header, Id, Idea, ItemAnswer, Kind, Machine, Outcome, Payload, PromptAnswer, PushApproval, Reason, Refusal, StartItem, Trust, VerifiedDevice, authorize, seal};
+use kebbie_hub_protocol::{AccountKey, Answer, AppliedCommands, CommandResult, DeviceDecision, Dropped, Envelope, Header, Id, Idea, ItemAnswer, Kind, Machine, Outcome, Payload, PromptAnswer, PushApproval, Reason, Refusal, StartItem, Trust, VerifiedDevice, authorize, seal};
 use serde::{Deserialize, Serialize};
 
-use super::devices::{self, Asked, Locked, Policy};
+use super::devices::{self, Asked, Decision, Locked, Policy};
 use super::http::{CALL, Client, HubError, LONG_POLL};
 use super::identity::{self, Identity};
-use crate::config::{HubCommand, HubCommands};
+use crate::config::{ApproveFrom, HubCommand, HubCommands};
 use crate::notice::Notice;
 use crate::permit::Caller;
 use crate::sh::Result;
@@ -122,6 +122,43 @@ pub fn accepts(policy: HubCommands) -> Vec<Kind> {
     }).collect()
 }
 
+// What the machine takes with hub.approve_from: a device's decision on another device only under "devices".
+pub fn accepted(policy: HubCommands, from: ApproveFrom) -> Vec<Kind> {
+    let mut kinds = accepts(policy);
+    if from == ApproveFrom::Devices {
+        kinds.push(Kind::DeviceDecision);
+    }
+    kinds
+}
+
+thread_local! {
+    static ACTING: std::cell::RefCell<Option<Id>> = const { std::cell::RefCell::new(None) };
+}
+
+// The device whose command is being applied on this thread, so what it starts never notifies it of its own act.
+pub fn acting() -> Option<Id> {
+    ACTING.with(|acting| acting.borrow().clone())
+}
+
+fn as_device<T>(device: &Id, run: impl FnOnce() -> T) -> T {
+    ACTING.with(|acting| *acting.borrow_mut() = Some(device.clone()));
+    let done = run();
+    ACTING.with(|acting| *acting.borrow_mut() = None);
+    done
+}
+
+fn device_decision(dir: &Path, machine: &str, policy: Policy, decision: &DeviceDecision, now: u64) -> Done {
+    let chosen = if decision.approve { Decision::Approve } else { Decision::Deny };
+    match devices::decide_waiting(dir, &decision.device, &decision.fingerprint, chosen, policy, now) {
+        Ok(Some(device)) => {
+            let held: Vec<Asked> = ledger(dir).held.into_values().filter(|held| held.device == decision.device).map(|held| held.asked).collect();
+            (Outcome::Done, plain(&devices::decided(&device, machine, chosen, &held, policy, true)))
+        }
+        Ok(None) => (Outcome::Refused { reason: Reason::UnknownDevice }, format!("Not decided: no device waits on {machine} with that id and key; it was decided already, or its key changed")),
+        Err(error) => (Outcome::Failed, format!("Not decided: {error}")),
+    }
+}
+
 // A kind hub.commands leaves out, named with what the machine takes and where the user can do it instead.
 fn not_taken(kind: Kind, machine: &str, accepts: &[Kind]) -> String {
     let (refused, act, allow) = match kind {
@@ -130,6 +167,7 @@ fn not_taken(kind: Kind, machine: &str, accepts: &[Kind]) -> String {
         Kind::Answer | Kind::ItemAnswer => ("Not answered", "Answer", "answers"),
         Kind::Idea => ("Not added", "Add it", "ideas"),
         Kind::StartItem => ("Not started", "Start it", "starts"),
+        Kind::DeviceDecision => return format!("Not decided: {machine} takes device approvals only at the machine. Approve or deny it there: N on the board, or kebbie hub devices."),
         other => return format!("Not done: {machine} takes no {} from the hub", other.name()),
     };
     let takes = if accepts.is_empty() { "takes nothing from the hub".to_string() } else { format!("takes no {allow} from the hub") };
@@ -161,8 +199,8 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
     let mut ledger = ledger(dir);
     ledger.applied.prune(now);
     ledger.started.retain(|_, started| started.at + AppliedCommands::KEEP_SECONDS > now);
-    let (outcome, asking) = devices::change(dir, |known| {
-        known.settle(policy, now);
+    let (outcome, asking, approved) = devices::change(dir, |known| {
+        let approved = known.settle(policy, now);
         let asked = std::cell::RefCell::new(Vec::new());
         let trust = |device: &VerifiedDevice, at: u64| -> Trust {
             asked.borrow_mut().push(device.clone());
@@ -170,11 +208,14 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
         };
         let machine = Machine { id: &identity.machine, keys: &secret, account, accepts, trust: &trust };
         let outcome = authorize(&machine, &ledger.applied, envelope, now);
-        let asking: Vec<String> = asked.into_inner().into_iter().filter(|device| known.seen(policy, device, now)).map(|device| device.cert().name.clone()).collect();
-        Ok((outcome, asking))
+        let asking: Vec<(Id, String)> = asked.into_inner().into_iter().filter(|device| known.seen(policy, device, now)).map(|device| (device.id().clone(), device.cert().name.clone())).collect();
+        Ok((outcome, asking, approved))
     })?;
-    for name in asking {
+    devices::settled(dir, &approved);
+    for (device, name) in asking {
         (hands.notify)(&format!("{name} wants to make changes on {}: approve or deny it under N on the board, or with kebbie hub devices", identity.name));
+        let added = devices::clock(now, &crate::recover::local_offset);
+        super::notices::send_in(dir, &super::notices::About::NewDevice { device, name, added, from_devices: accepts.contains(&Kind::DeviceDecision) });
     }
     let handled = match outcome {
         Err(Refusal::Drop(dropped)) => Handled::Dropped(dropped),
@@ -194,15 +235,16 @@ pub fn handle(dir: &Path, identity: &Identity, account: &AccountKey, accepts: &[
             ledger.started.insert(header.id.clone(), Started { from: header.from.clone(), at: now });
             save_ledger(dir, &ledger)?;
             let caller = Caller::Hub { account: account.account.as_str().to_string(), name: verified.device.cert().name.clone() };
-            let done = match &verified.payload {
+            let done = as_device(verified.device.id(), || match &verified.payload {
                 Payload::Answer(answer) => (hands.answer)(&caller, answer),
                 Payload::Push(push) => (hands.push)(&caller, push),
                 Payload::PromptAnswer(prompt) => (hands.prompt)(&caller, prompt),
                 Payload::Idea(idea) => (hands.idea)(&caller, idea),
                 Payload::ItemAnswer(answer) => (hands.item_answer)(&caller, answer),
                 Payload::StartItem(start) => (hands.start_item)(&caller, start),
+                Payload::DeviceDecision(decision) => device_decision(dir, &identity.name, policy, decision, now),
                 _ => (Outcome::Refused { reason: Reason::NotAllowed }, not_taken(header.kind, &identity.name, accepts)),
-            };
+            });
             Handled::Applied(result(header, done))
         }
     };
@@ -398,7 +440,7 @@ fn serve(state: &Path, dir: &Path) {
                 pause(IDLE);
                 continue;
             }
-            match round(dir, WAIT, &accepts(crate::config::hub_commands()), Policy::current(), hands, &crate::messages::now) {
+            match round(dir, WAIT, &accepted(crate::config::hub_commands(), crate::config::hub_approve_from()), Policy::current(), hands, &crate::messages::now) {
                 Ok(notes) => {
                     failures = 0;
                     notes.iter().for_each(|note| log(note));
@@ -448,7 +490,7 @@ pub fn released(dir: &Path, hands: &Hands) -> Result<Vec<String>> {
     }
     let client = Client::new(&identity.url, Some(identity.token()), CALL);
     let mut notes = Vec::new();
-    for (envelope, handled) in release(dir, &identity, &account, &accepts(crate::config::hub_commands()), Policy::current(), hands, crate::messages::now())? {
+    for (envelope, handled) in release(dir, &identity, &account, &accepted(crate::config::hub_commands(), crate::config::hub_approve_from()), Policy::current(), hands, crate::messages::now())? {
         if let Some(result) = handled.result() {
             deliver(&client, &identity, &account, result)?;
         }
@@ -730,6 +772,10 @@ mod tests {
             with_hands(seen, |hands| handle(&self.dir, &self.identity, &self.account, &accepts(word("answer-and-push")), policy, envelope, hands, at)).unwrap()
         }
 
+        fn handle_taking(&self, seen: &Seen, accepts: &[Kind], envelope: &Envelope) -> Handled {
+            with_hands(seen, |hands| handle(&self.dir, &self.identity, &self.account, accepts, DEVICE, envelope, hands, now())).unwrap()
+        }
+
         fn release(&self, seen: &Seen, policy: Policy, at: u64) -> Vec<Handled> {
             with_hands(seen, |hands| release(&self.dir, &self.identity, &self.account, &accepts(word("answer-and-push")), policy, hands, at)).unwrap().into_iter().map(|(_, handled)| handled).collect()
         }
@@ -860,7 +906,7 @@ mod tests {
         let sent = rekeyed.send(&machine.account, &machine.identity, &answer(), now() + 60);
         assert_eq!(machine.handle(&seen, DEVICE, &sent, now() + 60), Handled::Held(phone.id().clone()), "approval holds for the key it was given");
         let device = &devices::load(&machine.dir).devices[phone.id()];
-        assert_eq!((device.state, device.first_seen, device.signing.0), (State::Waiting, now() + 60, rekeyed.key.public()));
+        assert_eq!((device.state, device.first_seen, device.signing.0), (State::Waiting, now() + 60, rekeyed.key.public().signing));
         assert_eq!(seen.told.borrow().len(), 2, "the user is asked again");
     }
 
@@ -921,6 +967,62 @@ mod tests {
         assert_eq!(not_taken(Kind::Start, "devbox", &accepts(word("answer-and-push"))), "Not done: devbox takes no start from the hub");
         assert_eq!(crate::hub::commands_line(word("answer")), "commands: answer, prompt (hub.commands = [\"answer\", \"prompt\"])");
         assert_eq!(crate::hub::commands_line(HubCommands::OFF), "commands: off (hub.commands = [])");
+    }
+
+    fn decision(phone: &Phone, fingerprint: &str, approve: bool) -> Payload {
+        Payload::DeviceDecision(DeviceDecision { device: phone.id().clone(), fingerprint: fingerprint.to_string(), approve })
+    }
+
+    #[test]
+    fn an_approved_device_approves_a_waiting_one_whose_id_and_key_match_and_its_held_command_goes_in() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let devices_too = accepted(word("answer-and-push"), ApproveFrom::Devices);
+        let phone = machine.phone("iPhone 16");
+        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
+        machine.release(&seen, DEVICE, now());
+        crate::hub::notices::SENT.with(|sent| sent.borrow_mut().clear());
+        let tablet = machine.phone("iPad");
+        let held = tablet.send(&machine.account, &machine.identity, &answer(), now());
+        assert_eq!(machine.handle_taking(&seen, &devices_too, &held), Handled::Held(tablet.id().clone()));
+        let told = crate::hub::notices::SENT.with(|sent| sent.borrow().clone());
+        assert!(matches!(told.as_slice(), [(crate::hub::notices::About::NewDevice { device, name, from_devices: true, .. }, None)] if device == tablet.id() && name == "iPad"), "the new device is told to the approved ones, with the tap to approve: {told:?}");
+
+        let wrong = phone.send(&machine.account, &machine.identity, &decision(&tablet, "0000-0000", true), now());
+        let Handled::Applied(refused) = machine.handle_taking(&seen, &devices_too, &wrong) else { panic!("applied as a refusal") };
+        assert_eq!(refused.outcome, Outcome::Refused { reason: Reason::UnknownDevice });
+        assert_eq!(machine.state(&tablet), Some(State::Waiting), "a key that does not match decides nothing");
+
+        let right = phone.send(&machine.account, &machine.identity, &decision(&tablet, &tablet.cert.fingerprint(), true), now());
+        let Handled::Applied(done) = machine.handle_taking(&seen, &devices_too, &right) else { panic!("applied") };
+        assert_eq!(done.outcome, Outcome::Done);
+        assert!(done.text.starts_with("iPad makes changes on mac from now on. Its answer to refunds goes in now."), "{}", done.text);
+        assert_eq!(machine.state(&tablet), Some(State::Approved));
+        assert!(matches!(machine.release(&seen, DEVICE, now()).as_slice(), [Handled::Applied(_)]), "what the approved device held goes in");
+        let again = phone.send(&machine.account, &machine.identity, &decision(&tablet, &tablet.cert.fingerprint(), false), now());
+        assert!(matches!(machine.handle_taking(&seen, &devices_too, &again), Handled::Applied(CommandResult { outcome: Outcome::Refused { reason: Reason::UnknownDevice }, .. })), "a device decided already is no longer waiting");
+    }
+
+    #[test]
+    fn a_waiting_device_never_decides_and_under_approve_from_machine_no_device_does() {
+        let machine = Machine::new();
+        let seen = Seen::new();
+        let phone = machine.phone("iPhone 16");
+        machine.handle(&seen, DEVICE, &phone.send(&machine.account, &machine.identity, &answer(), now()), now());
+        devices::answer(&machine.dir, "iPhone 16", Decision::Approve, now()).unwrap();
+        let (tablet, laptop) = (machine.phone("iPad"), machine.phone("Chrome on Mac"));
+        machine.handle(&seen, DEVICE, &laptop.send(&machine.account, &machine.identity, &answer(), now()), now());
+        let devices_too = accepted(word("answer-and-push"), ApproveFrom::Devices);
+        let from_waiting = tablet.send(&machine.account, &machine.identity, &decision(&laptop, &laptop.cert.fingerprint(), true), now());
+        assert!(matches!(machine.handle_taking(&seen, &devices_too, &from_waiting), Handled::Refused(CommandResult { outcome: Outcome::Refused { reason: Reason::NotApproved }, .. })));
+        let machine_only = accepted(word("answer-and-push"), ApproveFrom::Machine);
+        let refused = phone.send(&machine.account, &machine.identity, &decision(&laptop, &laptop.cert.fingerprint(), true), now());
+        let Handled::Refused(result) = machine.handle_taking(&seen, &machine_only, &refused) else { panic!("refused") };
+        assert_eq!((result.outcome, result.text.as_str()), (Outcome::Refused { reason: Reason::NotAllowed }, "Not decided: mac takes device approvals only at the machine. Approve or deny it there: N on the board, or kebbie hub devices."));
+        assert_eq!(machine.state(&laptop), Some(State::Waiting));
+        assert_eq!(accepted(HubCommands::OFF, ApproveFrom::Devices), [Kind::DeviceDecision], "the board publishes device-decision in accepts only under \"devices\"");
+        assert!(!accepted(HubCommands::default(), ApproveFrom::Machine).contains(&Kind::DeviceDecision));
     }
 
     fn idea() -> Payload {

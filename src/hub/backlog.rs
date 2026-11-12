@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use kebbie_hub_protocol::{BacklogBody, BacklogRow, BacklogState, Home, HomeKind, Idea, ItemAnswer, ItemKey, OpenQuestion, Outcome, Priority, Reason, StartItem};
+use kebbie_hub_protocol::{BacklogBody, BacklogRow, BacklogState, Home, HomeKind, Id, Idea, ItemAnswer, ItemKey, OpenQuestion, Outcome, Priority, Reason, StartItem};
 
 use super::blobs::{Attachment, PLAN_LIMIT};
 use super::commands::{Done, plain};
@@ -259,7 +259,8 @@ fn start_found(found: &Found) -> Result<String> {
     let repo: PathBuf = crate::repo::locate(&found.entry.area)?;
     let name = free_name(&repo, &found.entry.title);
     let prompt = crate::backlog::task_prompt(&found.entry, &crate::config::sources()?, crate::vault_cli::known_on());
-    crate::board::start_in_background(&repo, &name, Some(&prompt), &crate::board::StartWith { backlog: Some(&found.entry.reference), ..Default::default() })?;
+    let device = super::commands::acting();
+    crate::board::start_in_background(&repo, &name, Some(&prompt), &crate::board::StartWith { backlog: Some(&found.entry.reference), device: device.as_ref().map(Id::as_str), ..Default::default() })?;
     Ok(crate::peers::address(&name, &crate::repo::name_of(&repo)))
 }
 

@@ -143,9 +143,38 @@ What it sent goes in at once, and the device makes changes on this machine from 
 - If you press `x` or run `kebbie hub devices deny`, the device stays view only on this machine.
 - If you set `hub.trust = "account"`, every device signed in to your account makes changes at once.
 
+### Approve a new device from another device
+
+A device you already approved on the machine can approve or deny a new one too, with [`hub.approve_from`](../reference/configuration.md#machine) at its default `"devices"`.
+
+1. The approved device gets the notification `iPhone 16 wants to make changes on MacBook`, or opens the waiting device on the board.
+2. Check that the key it shows matches the one under **Account** on the new device.
+3. Tap to approve, or deny it.
+
+The machine takes the decision only when the id and the key match a device that still waits, and lets in what that device held. A waiting device never decides on another. With `hub.approve_from = "machine"`, only `N` on the board and `kebbie hub devices` decide.
+
 ## Notifications
 
-Notifications through the hub are not available in this version: the phone shows the board when you open it, and nothing is pushed to it. To hear when a task needs you, set a [notify command](get-notifications.md) on the machine.
+Each machine sends your devices a notification through the hub when something needs you or moves, sealed to each device so the hub cannot read it. Turn notifications on for the device in the hub's web app and pick which kinds you hear; update the hub first.
+
+| Kind | Title | Text |
+| --- | --- | --- |
+| A task's question | `billing · greenhouse` | `Round VAT per invoice or per line? The lead recommends per invoice: one rounding, on the total.` |
+| An agent's prompt | `wt3 · kebbie` | `Claude asks to run cargo test --workspace. Yes or No.` |
+| The lead's questions on an idea | the item's title | its first question that waits on you, with `(1 of 3)` when there are more |
+| A new device | `iPhone 16 wants to make changes on MacBook` | `Added 14:02. Approve or deny it in kebbie: N on the board.` |
+| Ready to push | `cache · api is ready to push` | what the change does, its commits and the review's word |
+| CI failed | `CI failed on web · app` | the failed job and step, and what kebbie did about it |
+| Started, off unless you turn it on | `Started: Retry flaky red runs` | `On MacBook as retry, recipe feature.` |
+
+Tapping a notification opens the task, the item or the device it is about.
+
+- A device hears only what a machine approved it for: under `hub.trust = "device"`, once it is approved there.
+- A newer notification about the same task, item or device replaces the older one, and one about something settled elsewhere, a question answered, a task pushed, CI green again, a device decided, an item started, goes with the next notification that device gets.
+- A device never hears of what it did itself, such as an item it started.
+- If nothing arrives, `notify.log` in the state directory says why.
+
+To hear on the machine itself, or through a service of your own, set a [notify command](get-notifications.md).
 
 ## Check that it works
 

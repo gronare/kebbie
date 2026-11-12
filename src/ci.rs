@@ -558,6 +558,7 @@ fn green(state: &Path, watch: &Watch, what: String) -> Event {
         text
     };
     forget(state, &watch.address);
+    crate::hub::notices::settle(crate::hub::notices::Subject::Ci, &watch.address);
     notify::send(&watch.repo, &Notice::from(NotifyEvent::CiGreen, &watch.address, format!("{named}: {text}")));
     Event { address: watch.address.clone(), kind: Kind::Green, text }
 }
@@ -627,6 +628,13 @@ fn failed_run(state: &Path, gh: &str, watch: &mut Watch, run: &Run, now: u64) ->
         eprintln!("Could not tell the lead that CI failed: {error}");
     }
     notify::send(&watch.repo, &Notice::from(NotifyEvent::CiFailed, &watch.address, format!("{}: CI failed: {what}", watch.address)));
+    let done = match &pushing {
+        _ if !open => "Its task has ended, so nobody has the log; fix it in a new task".to_string(),
+        Some(who) => format!("kebbie sent its Claude the failing log, and pushes the fix for {who} once it is ready"),
+        None if handed => "kebbie sent the task the failing log; it stays under Needs you".to_string(),
+        None => "It waits under Needs you".to_string(),
+    };
+    crate::hub::notices::send(&crate::hub::notices::About::CiFailed { address: watch.address.clone(), what: what.clone(), done: Some(done) }, None);
     Event { address: watch.address.clone(), kind: Kind::Failed, text }
 }
 

@@ -83,10 +83,14 @@ impl Device {
 
 impl Devices {
     pub fn trust(&self, policy: Policy, device: &VerifiedDevice, now: u64) -> Trust {
+        self.trust_of(policy, device.id(), device.signing(), now)
+    }
+
+    pub fn trust_of(&self, policy: Policy, id: &Id, signing: &[u8; 32], now: u64) -> Trust {
         if policy.trust == HubTrust::Account {
             return Trust::Approved;
         }
-        match self.devices.get(device.id()).filter(|known| known.signing.0 == *device.signing()) {
+        match self.devices.get(id).filter(|known| known.signing.0 == *signing) {
             None => Trust::Waiting,
             Some(known) => match known.standing(policy, now).0 {
                 State::Approved => Trust::Approved,
@@ -108,12 +112,20 @@ impl Devices {
         state == State::Waiting
     }
 
-    pub fn settle(&mut self, policy: Policy, now: u64) {
-        for device in self.devices.values_mut() {
+    // The waiting devices whose day is up are approved; their ids come back so their notices settle as a manual approval's do.
+    pub fn settle(&mut self, policy: Policy, now: u64) -> Vec<Id> {
+        let mut approved = Vec::new();
+        for (id, device) in &mut self.devices {
             if device.state == State::Waiting && policy.trust == HubTrust::Device && device.until(policy).is_some_and(|until| now >= until) {
                 (device.state, device.at) = (State::Approved, device.first_seen + DAY);
+                approved.push(id.clone());
             }
         }
+        approved
+    }
+
+    fn due(&self, policy: Policy, now: u64) -> bool {
+        policy.trust == HubTrust::Device && self.devices.values().any(|device| device.state == State::Waiting && device.until(policy).is_some_and(|until| now >= until))
     }
 
     pub fn standings(&self, policy: Policy, now: u64) -> BTreeMap<Id, DeviceStanding> {
@@ -363,12 +375,43 @@ pub enum Decision {
 }
 
 pub fn decide(dir: &Path, who: &str, decision: Decision, now: u64) -> Result<(Id, Device)> {
-    change(dir, |devices| {
+    let decided = change(dir, |devices| {
         let id = devices.find(who)?;
         let device = devices.devices.get_mut(&id).expect("find returns a known id");
         (device.state, device.at) = (if decision == Decision::Approve { State::Approved } else { State::Denied }, now);
         Ok((id, device.clone()))
-    })
+    })?;
+    let _ = super::notices::settle_in(dir, super::notices::Subject::Device, decided.0.as_str());
+    Ok(decided)
+}
+
+pub fn settled(dir: &Path, approved: &[Id]) {
+    for id in approved {
+        let _ = super::notices::settle_in(dir, super::notices::Subject::Device, id.as_str());
+    }
+}
+
+// The keeper approves a device whose day is up without waiting for its next command, so its notice goes from the other devices on time; the file is written only then.
+pub fn settle_due(dir: &Path, policy: Policy, now: u64) -> Result<()> {
+    if !load(dir).due(policy, now) {
+        return Ok(());
+    }
+    let approved = change(dir, |devices| Ok(devices.settle(policy, now)))?;
+    settled(dir, &approved);
+    Ok(())
+}
+
+// A decision sent from another device names the waiting device by id and the fingerprint its user compared; anything else matches nothing.
+pub fn decide_waiting(dir: &Path, id: &Id, fingerprint: &str, decision: Decision, policy: Policy, now: u64) -> Result<Option<Device>> {
+    let decided = change(dir, |devices| {
+        let Some(device) = devices.devices.get_mut(id).filter(|device| device.fingerprint() == fingerprint && device.standing(policy, now).0 == State::Waiting) else { return Ok(None) };
+        (device.state, device.at) = (if decision == Decision::Approve { State::Approved } else { State::Denied }, now);
+        Ok(Some(device.clone()))
+    })?;
+    if decided.is_some() {
+        let _ = super::notices::settle_in(dir, super::notices::Subject::Device, id.as_str());
+    }
+    Ok(decided)
 }
 
 pub fn decided(device: &Device, machine: &str, decision: Decision, held: &[Asked], policy: Policy, keeper: bool) -> String {

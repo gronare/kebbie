@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, AutoApprove, Channel, HubCommands, HubTrust, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
+use super::{group_order, load_machine, load_repo, path, repo_file, short_hostname, AgentUpdates, AlsoNoticed, ApproveFrom, AutoApprove, Channel, HubCommands, HubTrust, Machine, OngoingAt, ReportText, ReviewAuto, Second, Source, read_sources, Worktree, DEFAULT_HUB_URL, DEFAULT_IDLE_MINUTES, DEFAULT_KEEPER, DEFAULT_PROPOSE_ISSUES, DEFAULT_RECOVER, NONE};
 use crate::sh::Result;
 use crate::status::Group;
 
@@ -83,6 +83,7 @@ pub struct Settings {
     pub hub_commands: Setting<HubCommands>,
     pub hub_trust: Setting<HubTrust>,
     pub hub_auto_approve: Setting<AutoApprove>,
+    pub hub_approve_from: Setting<ApproveFrom>,
     pub report_signals: Setting<bool>,
     pub report_text: Setting<ReportText>,
     pub report_inbox: Setting<bool>,
@@ -154,6 +155,7 @@ pub fn settings(repo: &Worktree, machine: &Machine) -> Settings {
         hub_commands: or_default(pick(None, machine.hub_commands.as_ref()), HubCommands::default()),
         hub_trust: or_default(pick(None, machine.hub_trust.as_ref()), HubTrust::default()),
         hub_auto_approve: or_default(pick(None, machine.hub_auto_approve.as_ref()), AutoApprove::default()),
+        hub_approve_from: or_default(pick(None, machine.hub_approve_from.as_ref()), ApproveFrom::default()),
         report_signals: or_default(pick(None, machine.report.signals.as_ref().or((machine.report.enabled == Some(false)).then_some(&false))), false),
         report_text: or_default(pick(None, machine.report.text.as_ref().or((machine.report.enabled == Some(false)).then_some(&ReportText::Never))), ReportText::Ask),
         report_inbox: or_default(pick(None, machine.report.inbox_token.as_ref().map(|_| &true)), false),

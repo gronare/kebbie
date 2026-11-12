@@ -60,9 +60,21 @@ pub fn report(cwd: &Path, state: Option<&str>, next: Option<&str>, card: Option<
     } else if let Some(event) = crate::notify::Event::of_state(&report.state) {
         let text = if event == crate::notify::Event::Ready { format!("{me} is ready: {summary}") } else { format!("{me} needs you: {}", report.next) };
         crate::notify::send(cwd, &crate::notify::Notice::from(event, &me, text));
+        if event == crate::notify::Event::Ready {
+            crate::hub::notices::send(&ready_notice(cwd, &state, &me, &summary), None);
+        }
     }
     let check = if report.state == "ready" { review_again(cwd) + &crate::assessment::on_ready(cwd) + &rules_check(cwd) } else { String::new() };
     Ok(format!("Reported to the lead and the board as {me}.{kept}{check}"))
+}
+
+fn ready_notice(cwd: &Path, state: &Path, me: &str, summary: &str) -> crate::hub::notices::About {
+    let commits = main_checkout(cwd).and_then(|repo| default_branch(&repo)).and_then(|upstream| crate::repo::ahead_behind(cwd, &upstream)).map_or(0, |(ahead, _)| ahead);
+    let review = match crate::assessment::word_in(state, me) {
+        Some(crate::assessment::Word::Assessing | crate::assessment::Word::NotAssessed) | None => None,
+        Some(word) => Some(word.text()),
+    };
+    crate::hub::notices::About::Ready { address: me.to_string(), does: summary.to_string(), commits, review }
 }
 
 // The tasks a ready task must be pushed after, each as task@repo; a bare name is a task in its own repo.

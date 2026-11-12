@@ -778,6 +778,7 @@ type Log = Option<std::result::Result<Option<String>, String>>;
 
 fn after_push(state: &Path, repo: &Path, slot: &Slot, address: &str, task: &str, went: &Went, vault: &dyn Fn() -> Option<crate::vault_cli::Cli>) -> (Option<crate::vault_cli::Cli>, Log) {
     super::landed::keep_open(state, address, went.keep_open);
+    crate::hub::notices::settle(crate::hub::notices::Subject::Ready, address);
     if went.keep_open && let Err(error) = crate::assessment::note_pushed(state, address, &went.shas) {
         eprintln!("kebbie: the review of {address} may miss its pushed steps: {error}");
     }

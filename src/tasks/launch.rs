@@ -511,6 +511,9 @@ fn launch_new(repo: &Path, task: &str, slot: &Slot, address: &str, place: Launch
     if let Some(item) = backlog.filter(|_| note.is_none()) {
         started_file(task, repo).and_then(|file| crate::state::write(&file, item))?;
     }
+    if let Some(item) = backlog {
+        crate::hub::notices::item_started(address, item);
+    }
     if let Err(error) = messages::announce(task, &name_of(repo)) {
         eprintln!("Could not tell {task}'s other halves it started: {error}");
     }

@@ -331,6 +331,7 @@ pub fn answer_as(caller: &crate::permit::Caller, id: &str, choice: Option<usize>
         }
     };
     messages::copy_to_lead_locked(&answer_copy(message, choice, comment, caller), None, &sessions)?;
+    crate::hub::notices::settle(crate::hub::notices::Subject::Question, &message.from);
     Ok(crate::notice::Notice::new(crate::notice::Tone::Done, "Answered").next(told).detail("task", &message.from).to_string())
 }
 
@@ -389,6 +390,7 @@ fn answer_late(messages: &[Message], id: &str, choice: Option<usize>, comment: &
     };
     messages::append(&json!({ "id": id, "at": messages::now(), "state": "answered" }))?;
     messages::copy_to_lead_locked(&answer_copy(message, choice, comment, caller), None, sessions)?;
+    crate::hub::notices::settle(crate::hub::notices::Subject::Question, &message.from);
     let notice = match closed {
         Closed::Newer { open: true } => crate::notice::Notice::new(crate::notice::Tone::Moving, "Answer held: the task asked a newer question")
             .next(format!("It reaches {} once you answer its newer question.", message.from)),
@@ -421,10 +423,16 @@ pub fn ask(cwd: &Path, options: &[&str], recommend: Option<&str>, plan: Option<&
     messages::copy_to_lead_locked(&question_copy(&message, crate::permit::away_since().is_some()), Some(&id), &sessions)?;
     let (event, said) = if crate::routines::found(&me, &asked.text) { (crate::notify::Event::RoutineFindings, "found and asks") } else { (crate::notify::Event::Question, "asks") };
     crate::notify::send(cwd, &crate::notify::Notice::from(event, &me, format!("{me} {said}: {}", asked.text)));
+    crate::hub::notices::send(&question_notice(&me, &asked, plan.is_some()), None);
     Ok(format!(
         "Asked the user; the question waits for them on the board:\n{}\n{}\nStop your turn now, with this question in one line as your last words; the answer arrives as a message from the user, [from {USER_LABEL}].",
         asked.text, options_text(&asked),
     ))
+}
+
+pub fn question_notice(address: &str, asked: &Asked, plan: bool) -> crate::hub::notices::About {
+    let recommended = asked.options.get(asked.recommend.wrapping_sub(1)).filter(|_| !plan).map(|(label, meaning)| format!("{label}: {meaning}"));
+    crate::hub::notices::About::Question { address: address.to_string(), text: asked.text.clone(), recommended }
 }
 
 fn options_text(asked: &Asked) -> String {

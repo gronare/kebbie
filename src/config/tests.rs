@@ -551,6 +551,18 @@ fn hub_trust_takes_approved_devices_and_auto_approves_after_a_day_unless_the_mac
 }
 
 #[test]
+fn hub_approve_from_lets_approved_devices_decide_unless_the_machine_config_keeps_it_at_the_machine() {
+    let defaults = settings(&Worktree::default(), &Machine::default());
+    assert_eq!(defaults.hub_approve_from, Setting { value: ApproveFrom::Devices, layer: Layer::Default });
+    assert_eq!(settings(&Worktree::default(), &machine("[hub]\napprove_from = \"machine\"\n")).hub_approve_from, Setting { value: ApproveFrom::Machine, layer: Layer::Machine });
+    assert!(parse_machine("[hub]\napprove_from = \"phone\"\n", "config.toml").unwrap_err().contains("hub.approve_from: \"phone\" is not a choice; use \"devices\" or \"machine\""));
+    assert!(unknown_machine("[hub]\napprove_from = \"devices\"\n").is_empty());
+    let entry = entries(&Loaded { machine: PathBuf::from("/c.toml"), repo: None, settings: defaults }).into_iter().find(|entry| entry.key == "hub.approve_from").expect("kebbie config lists hub.approve_from");
+    assert_eq!((entry.value.as_str(), entry.kind, entry.scope), ("\"devices\"", Kind::Choice(vec!["devices", "machine"]), Scope::Machine));
+    assert!(entry.about.starts_with("Where a new device that waits for your approval under hub.trust = \"device\" can be approved:") && entry.about.ends_with("config.toml only."), "{}", entry.about);
+}
+
+#[test]
 fn agent_updates_ask_unless_the_machine_config_says_auto_or_notify_and_a_bad_value_never_stops_kebbie_update() {
     assert_eq!(settings(&Worktree::default(), &Machine::default()).agent_updates, Setting { value: AgentUpdates::Ask, layer: Layer::Default });
     assert_eq!(settings(&Worktree::default(), &machine("[update]\nagents = \"notify\"\n")).agent_updates, Setting { value: AgentUpdates::Notify, layer: Layer::Machine });
@@ -661,7 +673,7 @@ fn sample(entry: &Entry) -> String {
 fn each_keys_scope_is_the_files_that_take_it_and_what_its_text_says() {
     let loaded = Loaded { machine: PathBuf::from("/nowhere/config.toml"), repo: None, settings: settings(&Worktree::default(), &Machine::default()) };
     let all = entries(&loaded);
-    assert_eq!(all.len(), 46);
+    assert_eq!(all.len(), 47);
     for entry in all {
         let (section, field) = entry.key.rsplit_once('.').unwrap();
         let text = format!("[{section}]\n{field} = {}\n", sample(&entry));
