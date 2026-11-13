@@ -239,7 +239,7 @@ pub fn start_on(desk: &Desk, start: &StartItem, run: impl FnOnce(&Found) -> Resu
         return refused(Reason::UnknownRepo, "Not started: kebbie cannot tell which repo it is in. Name the repo in the item's header, or as the area of its note.");
     }
     match run(found) {
-        Ok(task) => (Outcome::Done, format!("Starting {task}: it shows under Work in a moment")),
+        Ok(task) => (Outcome::Done, format!("Starting {task}. It shows under Work in a moment; if it cannot start, a notice says why")),
         Err(error) => (Outcome::Failed, plain(&error)),
     }
 }
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(start_on(&desk(&state, Some(nowhere), &tell), &start(true), never).0, Outcome::Refused { reason: Reason::UnknownRepo });
         let ran = RefCell::new(None);
         let (outcome, text) = start_on(&desk(&state, Some(found("vault")), &tell), &start(true), |found| { *ran.borrow_mut() = Some(found.entry.reference.clone()); Ok("retry-flaky-red-run@web".to_string()) });
-        assert_eq!((outcome, text.as_str()), (Outcome::Done, "Starting retry-flaky-red-run@web: it shows under Work in a moment"));
+        assert_eq!((outcome, text.as_str()), (Outcome::Done, "Starting retry-flaky-red-run@web. It shows under Work in a moment; if it cannot start, a notice says why"));
         assert_eq!(ran.borrow().as_deref(), Some("Projects/retry.md"), "started from the item, as g does");
         assert_eq!(start_on(&desk(&state, Some(found("vault")), &tell), &start(true), |_| Err("kebbie start: no repo".to_string())).0, Outcome::Failed);
     }

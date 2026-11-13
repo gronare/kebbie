@@ -339,9 +339,10 @@ fn told(state: &Path) -> Vec<String> {
     std::fs::read_to_string(told_file(state)).unwrap_or_default().lines().map(str::to_string).collect()
 }
 
-fn mark_told(state: &Path, stems: &[String]) {
-    let mut all = told(state);
-    all.extend(stems.iter().cloned());
+// A stem whose file is gone leaves the list, so it stays as long as the backlog and a new item under an old name is told.
+fn mark_told(state: &Path, dir: &Path, stems: &[String]) {
+    let mut all: Vec<String> = told(state).into_iter().filter(|stem| file(dir, stem).exists()).collect();
+    all.extend(stems.iter().filter(|stem| !all.contains(stem)).cloned().collect::<Vec<_>>());
     let _ = crate::state::write(&told_file(state), all.join("\n") + "\n");
 }
 
@@ -360,7 +361,7 @@ pub fn tell_new_drafts() {
     let listed: Vec<String> = new.iter().map(|item| format!("\"{}\" ({})", item.title, file(&dir, &item.stem).display())).collect();
     let text = format!("The backlog has {} item{} to write out: {}. Write each out now with the skill `{SKILL}` in its own file, show the user the written item, and say it waited for you if it did.", new.len(), if new.len() == 1 { "" } else { "s" }, listed.join("; "));
     if crate::messages::to_lead(crate::messages::ToLead::BacklogItem, &text).is_ok() {
-        mark_told(&state, &new.iter().map(|item| item.stem.clone()).collect::<Vec<_>>());
+        mark_told(&state, &dir, &new.iter().map(|item| item.stem.clone()).collect::<Vec<_>>());
     }
 }
 
@@ -390,11 +391,11 @@ pub fn file_item_on(shelf: &Shelf, sources: &[Source], filing: &Filing, from_lea
             let mut shown = Notice::new(Tone::Done, "Added to the backlog").detail("item", format!("\"{}\" [{}]", item.title, item.priority)).detail("ref", item.reference()).detail("file", path.display().to_string());
             if item.to_write() {
                 if from_lead {
-                    mark_told(shelf.state, std::slice::from_ref(&item.stem));
+                    mark_told(shelf.state, shelf.dir, std::slice::from_ref(&item.stem));
                     shown = shown.next(format!("Write it out now with the skill {SKILL}, in that file."));
                 } else {
                     if (shelf.tell)(&lead_text(filing.by, filing.line, &item.priority, &format!("in its file {}", path.display()))).is_ok() {
-                        mark_told(shelf.state, std::slice::from_ref(&item.stem));
+                        mark_told(shelf.state, shelf.dir, std::slice::from_ref(&item.stem));
                     }
                     shown = shown.next("The lead writes it out; it waits for the lead when none runs.");
                 }
@@ -522,6 +523,11 @@ mod tests {
         let draft = parse("by-hand", "Fix the login\n").unwrap();
         let ready = Item { stem: "ready".to_string(), title: "Ready".to_string(), priority: "low".to_string(), repo: "app".to_string(), status: "backlog".to_string(), filed: String::new(), body: written() };
         assert_eq!(untold(&[draft.clone(), ready.clone()], &[]), std::slice::from_ref(&draft));
+        let (state, dir) = (crate::sh::test_dir("backlog-told-state"), crate::sh::test_dir("backlog-told-dir"));
+        std::fs::write(dir.join("kept.md"), "").unwrap();
+        mark_told(&state, &dir, &["kept".to_string(), "gone".to_string()]);
+        mark_told(&state, &dir, &["kept".to_string()]);
+        assert_eq!(told(&state), ["kept"], "a stem whose file is gone leaves the list, and none is listed twice");
         assert!(untold(&[draft, ready], &["by-hand".to_string()]).is_empty());
     }
 

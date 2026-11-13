@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use kebbie_hub_api::{NoticePosted, NoticeUpload, NotifiedDevice, NotifiedDevices};
-use kebbie_hub_protocol::{AccountKey, Board, Envelope, Header, Id, ItemKey, Kind, MAX_NOTICE_BODY_CHARS, MAX_NOTICE_TITLE_CHARS, MAX_RETRACTS, Notice, NoticeCategory, Payload, Prefix, PublicKeys, Target, Trust, Urgency, seal};
+use kebbie_hub_protocol::{AccountKey, Board, Envelope, Header, Id, ItemKey, Kind, MAX_NOTICE_BODY_CHARS, MAX_NOTICE_BYTES, MAX_NOTICE_TITLE_CHARS, MAX_RETRACTS, Notice, NoticeCategory, Payload, Prefix, PublicKeys, Target, Trust, Urgency, seal};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -16,6 +16,7 @@ pub const DELIVER: &str = "--hub";
 pub const FROM_DEVICE: &str = "KEBBIE_FROM_DEVICE";
 const FILE: &str = "notices.json";
 const LOCK: &str = "notices.lock";
+const RETRY_SECONDS: u64 = 3_600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Subject {
@@ -59,6 +60,7 @@ pub enum About {
     Ready { address: String, does: String, commits: usize, review: Option<String> },
     CiFailed { address: String, what: String, done: Option<String> },
     Started { item: ItemKey, title: String, address: String, recipe: Option<String> },
+    StartFailed { item: ItemKey, title: String, error: String },
 }
 
 fn one_line(text: &str) -> String {
@@ -67,6 +69,16 @@ fn one_line(text: &str) -> String {
 
 fn cut(text: &str, max: usize) -> String {
     if text.chars().count() <= max { text.to_string() } else { format!("{}…", text.chars().take(max - 1).collect::<String>().trim_end()) }
+}
+
+// At a character boundary, so a body of wide characters still fits the protocol's byte limit.
+fn cut_bytes(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let room = max.saturating_sub('…'.len_utf8());
+    let end = (0..=room).rev().find(|at| text.is_char_boundary(*at)).unwrap_or(0);
+    format!("{}…", text[..end].trim_end())
 }
 
 fn sentence(text: &str) -> String {
@@ -98,7 +110,7 @@ impl About {
             About::NewDevice { .. } => NoticeCategory::NewDevice,
             About::Ready { .. } => NoticeCategory::Ready,
             About::CiFailed { .. } => NoticeCategory::CiFailed,
-            About::Started { .. } => NoticeCategory::Started,
+            About::Started { .. } | About::StartFailed { .. } => NoticeCategory::Started,
         }
     }
 
@@ -110,7 +122,7 @@ impl About {
             About::NewDevice { device, .. } => (Subject::Device, device.as_str().to_string()),
             About::Ready { address, .. } => (Subject::Ready, address.clone()),
             About::CiFailed { address, .. } => (Subject::Ci, address.clone()),
-            About::Started { item, .. } => (Subject::Started, item.as_str().to_string()),
+            About::Started { item, .. } | About::StartFailed { item, .. } => (Subject::Started, item.as_str().to_string()),
         }
     }
 
@@ -129,6 +141,7 @@ impl About {
             About::Ready { address, .. } => format!("{} is ready to push", task_title(address)),
             About::CiFailed { address, .. } => format!("CI failed on {}", task_title(address)),
             About::Started { title, .. } => format!("Started: {title}"),
+            About::StartFailed { title, .. } => format!("Not started: {title}"),
         };
         cut(&one_line(&title), MAX_NOTICE_TITLE_CHARS)
     }
@@ -164,6 +177,7 @@ impl About {
                     None => format!("On {machine} as {task}."),
                 }
             }
+            About::StartFailed { error, .. } => format!("{} It stays in the backlog on {machine}.", sentence(error)),
         };
         cut(&body, MAX_NOTICE_BODY_CHARS)
     }
@@ -171,13 +185,21 @@ impl About {
     pub fn open(&self) -> Target {
         match self {
             About::Question { address, .. } | About::Prompt { address, .. } | About::Ready { address, .. } | About::CiFailed { address, .. } | About::Started { address, .. } => Target::Task { address: address.clone() },
-            About::ItemQuestions { item, .. } => Target::Item { item: item.clone() },
+            About::ItemQuestions { item, .. } | About::StartFailed { item, .. } => Target::Item { item: item.clone() },
             About::NewDevice { device, .. } => Target::Device { device: device.clone() },
         }
     }
 
+    // The protocol caps the whole notice in bytes too, so the body gives way until it fits.
     pub fn notice(&self, machine: &str, retract: Vec<String>) -> Notice {
-        Notice { category: self.category(), title: self.title(machine), body: self.body(machine), open: self.open(), retract }
+        let mut notice = Notice { category: self.category(), title: self.title(machine), body: self.body(machine), open: self.open(), retract };
+        while let Ok(size) = serde_json::to_vec(&Payload::Notice(notice.clone())).map(|bytes| bytes.len()) {
+            if size <= MAX_NOTICE_BYTES || notice.body.chars().count() <= 1 {
+                break;
+            }
+            notice.body = cut_bytes(&notice.body, notice.body.len().saturating_sub(size - MAX_NOTICE_BYTES));
+        }
+        notice
     }
 }
 
@@ -218,6 +240,17 @@ pub struct Ledger {
     pub outstanding: BTreeMap<Id, Vec<String>>,
     #[serde(default)]
     pub items: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub later: Vec<Later>,
+}
+
+// A notice the hub could not take this time, sent again on the keeper's next hub round until it is an hour old.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Later {
+    pub about: About,
+    #[serde(default)]
+    pub except: Option<Id>,
+    pub at: u64,
 }
 
 pub fn ledger(dir: &Path) -> Ledger {
@@ -296,60 +329,105 @@ pub struct Delivered {
     pub problems: Vec<String>,
 }
 
-// One sealed notice per set of tags to retract, so each device's retracts ride with it and the rest share one envelope; a refused envelope is logged and dropped with its retracts, never sent again.
+// One sealed notice per set of tags to retract, so each device's retracts ride with it and the rest share one envelope; a refused envelope is logged and dropped with its retracts, never sent again, and one the hub could not take now waits for the next round. The ledger is read before and changed after the posts, never locked across them.
 #[allow(clippy::too_many_arguments)]
 pub fn deliver_in(dir: &Path, identity: &Identity, account: &AccountKey, about: &About, except: Option<&Id>, policy: Policy, wire: &Wire, now: u64) -> Result<Delivered> {
-    let listed = (wire.listed)()?;
+    deliver_from(dir, identity, account, about, except, policy, wire, now, now)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn deliver_from(dir: &Path, identity: &Identity, account: &AccountKey, about: &About, except: Option<&Id>, policy: Policy, wire: &Wire, now: u64, first: u64) -> Result<Delivered> {
+    let later = || change(dir, |ledger| {
+        let subject = about.subject();
+        ledger.later.retain(|kept| kept.about.subject() != subject);
+        ledger.later.push(Later { about: about.clone(), except: except.cloned(), at: first });
+        Ok(())
+    });
+    let listed = match (wire.listed)() {
+        Ok(listed) => listed,
+        Err(error) => {
+            later()?;
+            return Err(error);
+        }
+    };
     let to = recipients(account, &devices::load(dir), policy, &listed, about.category(), except, now);
     if to.is_empty() {
         return Ok(Delivered::default());
     }
     let (subject, name) = about.subject();
     let tag = tag(&identity.machine, subject, &name);
-    change(dir, |ledger| {
-        let mut groups: BTreeMap<Vec<String>, Vec<(Id, PublicKeys)>> = BTreeMap::new();
-        for (device, keys) in to {
-            let retract: Vec<String> = ledger.outstanding.get(&device).into_iter().flatten().filter(|old| **old != tag).take(MAX_RETRACTS).cloned().collect();
-            groups.entry(retract).or_default().push((device, keys));
+    let outstanding = ledger(dir).outstanding;
+    let mut groups: BTreeMap<Vec<String>, Vec<(Id, PublicKeys)>> = BTreeMap::new();
+    for (device, keys) in to {
+        let retract: Vec<String> = outstanding.get(&device).into_iter().flatten().filter(|old| **old != tag).take(MAX_RETRACTS).cloned().collect();
+        groups.entry(retract).or_default().push((device, keys));
+    }
+    let mut delivered = Delivered::default();
+    let mut posted: Vec<(Vec<String>, Vec<Id>, bool)> = Vec::new();
+    let mut again = false;
+    for (retract, group) in groups {
+        let payload = Payload::Notice(about.notice(&identity.name, retract.clone()));
+        if let Err(problem) = payload.validate() {
+            delivered.problems.push(format!("the {} notice was not sent: {problem}", about.category().name()));
+            continue;
         }
-        let mut delivered = Delivered::default();
-        for (retract, group) in groups {
-            let payload = Payload::Notice(about.notice(&identity.name, retract.clone()));
-            if let Err(problem) = payload.validate() {
-                delivered.problems.push(format!("the {} notice was not sent: {problem}", about.category().name()));
+        let mut header = Header::new(Id::new(Prefix::Notice).map_err(|error| error.to_string())?, Kind::Notice, identity.machine.clone(), identity.machine.clone(), now);
+        header.collapse = Some(tag.clone());
+        header.urgency = Some(about.urgency());
+        let envelope = seal(header, &payload, &identity.secret(), &group).map_err(|error| error.to_string())?;
+        let reached = match (wire.post)(&envelope) {
+            Ok(pushes) => {
+                delivered.pushes += pushes;
+                delivered.reached += group.len();
+                true
+            }
+            Err(Unposted::Dropped(problem)) => {
+                delivered.problems.push(problem);
+                false
+            }
+            Err(Unposted::Later(problem)) => {
+                delivered.problems.push(problem);
+                again = true;
                 continue;
             }
-            let mut header = Header::new(Id::new(Prefix::Notice).map_err(|error| error.to_string())?, Kind::Notice, identity.machine.clone(), identity.machine.clone(), now);
-            header.collapse = Some(tag.clone());
-            header.urgency = Some(about.urgency());
-            let envelope = seal(header, &payload, &identity.secret(), &group).map_err(|error| error.to_string())?;
-            let sent = match (wire.post)(&envelope) {
-                Ok(pushes) => {
-                    delivered.pushes += pushes;
-                    delivered.reached += group.len();
-                    true
-                }
-                Err(Unposted::Dropped(problem)) => {
-                    delivered.problems.push(problem);
-                    false
-                }
-                Err(Unposted::Later(problem)) => {
-                    delivered.problems.push(problem);
-                    continue;
-                }
-            };
-            for (device, _) in &group {
-                if sent {
+        };
+        posted.push((retract, group.into_iter().map(|(device, _)| device).collect(), reached));
+    }
+    change(dir, |ledger| {
+        for (retract, group, reached) in &posted {
+            for device in group {
+                if *reached && subject != Subject::Started {
                     ledger.sent.entry(tag.clone()).or_default().insert(device.clone());
                 }
                 if let Some(outstanding) = ledger.outstanding.get_mut(device) {
-                    outstanding.retain(|old| !retract.contains(old) && (!sent || *old != tag));
+                    outstanding.retain(|old| !retract.contains(old) && (!reached || *old != tag));
                 }
             }
-            ledger.outstanding.retain(|_, outstanding| !outstanding.is_empty());
         }
-        Ok(delivered)
-    })
+        ledger.outstanding.retain(|_, outstanding| !outstanding.is_empty());
+        ledger.sent.retain(|tag, _| !tag.starts_with(&format!("{}-", Subject::Started.prefix())));
+        Ok(())
+    })?;
+    if again {
+        later()?;
+    }
+    Ok(delivered)
+}
+
+// The notices that waited, each sent once more; one still not taken waits again until it is an hour old, then it is let go.
+pub fn retry_in(dir: &Path, identity: &Identity, account: &AccountKey, policy: Policy, wire: &Wire, now: u64) -> Vec<String> {
+    if ledger(dir).later.is_empty() {
+        return Vec::new();
+    }
+    let Ok(waiting) = change(dir, |ledger| Ok(std::mem::take(&mut ledger.later))) else { return Vec::new() };
+    let mut problems = Vec::new();
+    for kept in waiting.into_iter().filter(|kept| now < kept.at + RETRY_SECONDS) {
+        match deliver_from(dir, identity, account, &kept.about, kept.except.as_ref(), policy, wire, now, kept.at) {
+            Ok(delivered) => problems.extend(delivered.problems),
+            Err(error) => problems.push(error),
+        }
+    }
+    problems
 }
 
 pub fn listed_from(identity: &Identity) -> Result<Vec<NotifiedDevice>> {
@@ -367,11 +445,16 @@ fn dirs(state: &Path, only: Option<&Path>) -> Vec<PathBuf> {
     }
 }
 
-// The detached half: argv after `notify --hub` is the notice as JSON, then --except <device> and --dir <identity directory> when given.
+// The detached half: argv after `notify --hub` is `-`, with the notice as JSON on stdin so no process listing shows it, then --except <device> and --dir <identity directory> when given.
 pub fn deliver(argv: &[String]) {
     let Ok(state) = crate::lead::state_dir() else { return };
     let log = |text: &str| crate::notify::log_error(&state, &format!("hub notice: {text}"));
-    let Some(about) = argv.first().and_then(|json| serde_json::from_str::<About>(json).ok()) else { return log("unreadable") };
+    let mut json = String::new();
+    if argv.first().map(String::as_str) == Some(FROM_STDIN) {
+        use std::io::Read;
+        let _ = std::io::stdin().take(64 * 1024).read_to_string(&mut json);
+    }
+    let Some(about) = serde_json::from_str::<About>(&json).ok() else { return log("unreadable") };
     let flag = |name: &str| argv.iter().position(|arg| arg == name).and_then(|at| argv.get(at + 1)).cloned();
     let except = flag("--except").and_then(|id| Id::parse(&id).ok());
     let only = flag("--dir").map(PathBuf::from);
@@ -385,6 +468,19 @@ pub fn deliver(argv: &[String]) {
             Err(error) => log(&error),
         }
     }
+}
+
+const FROM_STDIN: &str = "-";
+
+fn deliver_args(except: Option<&Id>, only: Option<&Path>) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = ["notify", DELIVER, FROM_STDIN].map(Into::into).to_vec();
+    if let Some(except) = except {
+        args.extend(["--except".into(), except.as_str().into()]);
+    }
+    if let Some(only) = only {
+        args.extend(["--dir".into(), only.as_os_str().to_os_string()]);
+    }
+    args
 }
 
 #[cfg(test)]
@@ -410,18 +506,18 @@ fn dispatch(about: &About, except: Option<&Id>, only: Option<&Path>) {
             return;
         }
         let (Ok(kebbie), Ok(json)) = (crate::peers::own_exe(), serde_json::to_string(about)) else { return };
+        use std::io::Write;
         use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
         let mut command = Command::new(kebbie);
-        command.args(["notify", DELIVER, &json]);
-        if let Some(except) = except {
-            command.args(["--except", except.as_str()]);
-        }
-        if let Some(only) = only {
-            command.arg("--dir").arg(only);
-        }
-        match command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0).spawn() {
-            Ok(child) => { crate::sh::reap(child); }
+        command.args(deliver_args(except, only));
+        match command.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0).spawn() {
+            Ok(mut child) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(json.as_bytes());
+                }
+                crate::sh::reap(child);
+            }
             Err(error) => crate::notify::log_error(&state, &format!("hub notice: {error}")),
         }
     }
@@ -448,6 +544,17 @@ pub fn item_started(address: &str, reference: &str) {
     settle(Subject::Item, item.as_str());
     let recipe = crate::lead::state_dir().ok().and_then(|state| crate::recipe::load(&state, address)).map(|recipe| crate::recipe::shown_name(&recipe.name).to_string());
     send(&About::Started { item, title: entry.title, address: address.to_string(), recipe }, from_device().as_ref());
+}
+
+// A start the phone asked for that failed in the background: the device that asked hears why, since it was told only that it was starting.
+pub fn item_start_failed(reference: &str, error: &str) {
+    if from_device().is_none() {
+        return;
+    }
+    let root = crate::vault::root();
+    let Some(entry) = crate::backlog::load().entries.into_iter().find(|entry| entry.reference == reference) else { return };
+    let Some(item) = super::backlog::key_of(&entry, root.as_deref()) else { return };
+    send(&About::StartFailed { item, title: entry.title, error: error.to_string() }, None);
 }
 
 #[derive(Deserialize)]
@@ -549,6 +656,27 @@ mod tests {
         let title = About::ItemQuestions { item: item("Projects/a.md"), title: format!("{}\nsecond line", "t".repeat(200)), first: "Q?".to_string(), count: 1 }.title("M");
         assert!(title.chars().count() == MAX_NOTICE_TITLE_CHARS && !title.contains('\n'), "{title}");
         assert_eq!(Payload::Notice(notice).validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_body_of_wide_characters_is_cut_to_the_protocols_byte_limit_at_a_character() {
+        for wide in ["€", "😀", "\""] {
+            let long = About::Question { address: "refunds@shop".to_string(), text: wide.repeat(700), recommended: None };
+            let notice = long.notice(&"M".repeat(64), vec!["q-1".to_string(); MAX_RETRACTS]);
+            assert!(serde_json::to_vec(&Payload::Notice(notice.clone())).unwrap().len() <= MAX_NOTICE_BYTES, "{wide}");
+            assert!(notice.body.ends_with('…'), "{wide}");
+        }
+        assert_eq!(cut_bytes("aé€", 5), "a…", "never inside a character");
+        let failed = About::StartFailed { item: item("Projects/retry.md"), title: "Retry flaky red runs".to_string(), error: "web is not a repo kebbie knows".to_string() };
+        assert_eq!(texts(&failed), ("Not started: Retry flaky red runs".to_string(), "web is not a repo kebbie knows. It stays in the backlog on MacBook.".to_string()));
+        assert_eq!((failed.category(), failed.open()), (NoticeCategory::Started, Target::Item { item: item("Projects/retry.md") }));
+    }
+
+    #[test]
+    fn the_detached_sender_gets_the_notice_on_stdin_never_in_its_arguments() {
+        let device = Id::ulid(Prefix::Device, 1, [2; 10]).unwrap();
+        let args: Vec<String> = deliver_args(Some(&device), Some(Path::new("/state/hub"))).into_iter().map(|arg| arg.to_string_lossy().to_string()).collect();
+        assert_eq!(args, ["notify", DELIVER, "-", "--except", device.as_str(), "--dir", "/state/hub"]);
     }
 
     #[test]
@@ -787,6 +915,45 @@ mod tests {
         let questions = questions.iter().map(|(text, blocks, answer)| OpenQuestion { text: text.to_string(), blocks: *blocks, pending_answer: answer.map(str::to_string) }).collect();
         let written = BacklogBody { background: String::new(), goal: String::new(), what_we_know: String::new(), questions, out_of_scope: String::new(), source: String::new() };
         Attachment::Backlog { item: key.clone(), text: serde_json::to_string(&written).unwrap() }
+    }
+
+    #[test]
+    fn a_notice_the_hub_could_not_take_now_is_sent_on_a_later_round_and_the_lock_is_free_while_posting() {
+        let machine = Machine::new();
+        let phone = machine.phone("iPhone 16", Some(State::Approved));
+        let listing = [listed(&phone, Some(&NoticeCategory::ALL))];
+        let lock_free = || {
+            let file = crate::state::append_to(&machine.dir.join(LOCK)).unwrap();
+            // SAFETY: flock on a descriptor this File owns; dropped at once.
+            (unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) }) == 0
+        };
+        let down = Wire { listed: &|| Ok(listing.to_vec()), post: &|_| { assert!(lock_free(), "no lock across the hub's answer"); Err(Unposted::Later("503".to_string())) } };
+        let delivered = deliver_in(&machine.dir, &machine.identity, &machine.account, &question("refunds@shop"), None, DEVICE, &down, 2_000).unwrap();
+        assert_eq!(delivered.reached, 0);
+        assert_eq!(ledger(&machine.dir).later.len(), 1, "kept for the next round");
+        let unlisted = Wire { listed: &|| Err("offline".to_string()), post: &|_| unreachable!() };
+        assert!(deliver_in(&machine.dir, &machine.identity, &machine.account, &question("refunds@shop"), None, DEVICE, &unlisted, 2_010).is_err());
+        assert_eq!(ledger(&machine.dir).later.len(), 1, "one per subject, the newest");
+        let posted = std::cell::RefCell::new(0);
+        let up = Wire { listed: &|| Ok(listing.to_vec()), post: &|_| { *posted.borrow_mut() += 1; Ok(1) } };
+        assert!(retry_in(&machine.dir, &machine.identity, &machine.account, DEVICE, &up, 2_100).is_empty());
+        assert_eq!((*posted.borrow(), ledger(&machine.dir).later.len()), (1, 0), "sent once, then let go");
+        deliver_in(&machine.dir, &machine.identity, &machine.account, &question("billing@shop"), None, DEVICE, &down, 3_000).unwrap();
+        assert!(retry_in(&machine.dir, &machine.identity, &machine.account, DEVICE, &up, 3_000 + RETRY_SECONDS).is_empty());
+        assert_eq!((*posted.borrow(), ledger(&machine.dir).later.len()), (1, 0), "an hour on, it is let go unsent");
+    }
+
+    #[test]
+    fn a_started_notice_leaves_nothing_to_settle_and_old_started_tags_are_pruned() {
+        let machine = Machine::new();
+        let phone = machine.phone("iPhone 16", Some(State::Approved));
+        change(&machine.dir, |ledger| {
+            ledger.sent.insert(tag(&machine.identity.machine, Subject::Started, "vault:Projects/old.md"), [phone.cert.device.clone()].into_iter().collect());
+            Ok(())
+        }).unwrap();
+        let started = About::Started { item: item("Projects/retry.md"), title: "Retry".to_string(), address: "retry@web".to_string(), recipe: None };
+        assert_eq!(machine.deliver(&[listed(&phone, Some(&NoticeCategory::ALL))], &started, None).len(), 1);
+        assert!(ledger(&machine.dir).sent.is_empty(), "nothing ever settles a start, so nothing is kept for it");
     }
 
     #[test]

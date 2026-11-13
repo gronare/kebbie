@@ -395,7 +395,11 @@ pub struct Begun {
 }
 
 pub fn start(cwd: &Path, name: &str, options: &Start) -> Result<String> {
-    begin(cwd, name, options).map(|begun| begun.said)
+    let begun = begin(cwd, name, options).map(|begun| begun.said);
+    if let (Err(error), Some(item)) = (&begun, options.backlog) {
+        crate::hub::notices::item_start_failed(item, error);
+    }
+    begun
 }
 
 pub fn begin(cwd: &Path, name: &str, options: &Start) -> Result<Begun> {

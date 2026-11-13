@@ -399,6 +399,12 @@ pub fn tick_in(state: &Path, configured: Option<&str>, now: u64, gather: impl Fn
             };
             let _ = devices::settle_due(&dir, devices::Policy::current(), now);
             notices::items_in(&dir, board, attachments).unwrap_or_default().iter().for_each(|about| notices::send_in(&dir, about));
+            if let Some(account) = identity.account.as_ref() {
+                let wire = notices::Wire { listed: &|| notices::listed_from(&identity), post: &|envelope| notices::post_to(&identity, envelope) };
+                for problem in notices::retry_in(&dir, &identity, &account.key, devices::Policy::current(), &wire, now) {
+                    crate::notify::log_error(state, &format!("hub notice: {problem}"));
+                }
+            }
             let mut board = blobs::attach(&dir, board, attachments, now, blobs::put_with(&identity));
             board.devices = Some(devices::load(&dir).standings(devices::Policy::current(), now));
             relay::relay_at(&dir, &board, now).map(|_| ())

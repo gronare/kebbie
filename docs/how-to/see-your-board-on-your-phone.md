@@ -120,6 +120,7 @@ What reaches a machine is its own choice, set by [`hub.commands`](../reference/c
 - **Starts the item.** The machine starts it as `g` on the board does: the item is the task's prompt, and the lead picks how the task goes.
 
 - If questions still wait on you, the start is refused and says how many; start it again to start it anyway.
+- The phone hears `Starting <task>` while the machine starts it. If the start fails, the device that asked gets a `Not started` notification that says why, and the item stays in the backlog.
 - If the question changed on the item since you read it, the answer is refused; read the item again.
 - If the item is already running as a task, or left the backlog, the machine says so.
 - A note in a vault two machines share is the same item on both; start it from one.
@@ -166,12 +167,14 @@ Each machine sends your devices a notification through the hub when something ne
 | Ready to push | `cache · api is ready to push` | what the change does, its commits and the review's word |
 | CI failed | `CI failed on web · app` | the failed job and step, and what kebbie did about it |
 | Started, off unless you turn it on | `Started: Retry flaky red runs` | `On MacBook as retry, recipe feature.` |
+| A start you asked for that failed, under Started | `Not started: Retry flaky red runs` | why, and that it stays in the backlog |
 
 Tapping a notification opens the task, the item or the device it is about.
 
 - A device hears only what a machine approved it for: under `hub.trust = "device"`, once it is approved there.
 - A newer notification about the same task, item or device replaces the older one, and one about something settled elsewhere, a question answered, a task pushed, CI green again, a device decided, an item started, goes with the next notification that device gets.
 - A device never hears of what it did itself, such as an item it started.
+- A notification the hub cannot take at that moment is sent again on the keeper's next rounds, for up to an hour.
 - If nothing arrives, `notify.log` in the state directory says why.
 
 To hear on the machine itself, or through a service of your own, set a [notify command](get-notifications.md).
